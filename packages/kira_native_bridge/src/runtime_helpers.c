@@ -52,6 +52,8 @@ typedef struct {
 } KiraNativeState;
 
 static void (*kira_runtime_invoker_ex)(uint32_t, const KiraBridgeValue *, uint32_t, KiraBridgeValue *) = NULL;
+static void *(*kira_array_alloc_fn)(size_t) = NULL;
+static void (*kira_array_free_fn)(void *, size_t) = NULL;
 static int kira_trace_execution_enabled = -1;
 
 static int kira_trace_enabled(void) {
@@ -74,6 +76,41 @@ static void kira_trace_log(const char *domain, const char *event, const char *fm
 
 KIRA_BRIDGE_EXPORT void kira_set_execution_trace_enabled(uint8_t enabled) {
     kira_trace_execution_enabled = enabled != 0 ? 1 : 0;
+}
+
+KIRA_BRIDGE_EXPORT void kira_hybrid_install_array_allocator(void *(*alloc_fn)(size_t), void (*free_fn)(void *, size_t)) {
+    kira_array_alloc_fn = alloc_fn;
+    kira_array_free_fn = free_fn;
+}
+
+static void *kira_bridge_alloc(size_t size) {
+    if (size == 0) {
+        size = 1;
+    }
+    if (kira_array_alloc_fn != NULL) {
+        return kira_array_alloc_fn(size);
+    }
+    return malloc(size);
+}
+
+static void *kira_bridge_calloc(size_t count, size_t size) {
+    const size_t total = count * size;
+    void *ptr = kira_bridge_alloc(total);
+    if (ptr != NULL) {
+        memset(ptr, 0, total == 0 ? 1 : total);
+    }
+    return ptr;
+}
+
+static void kira_bridge_free(void *ptr, size_t size) {
+    if (ptr == NULL) {
+        return;
+    }
+    if (kira_array_free_fn != NULL) {
+        kira_array_free_fn(ptr, size == 0 ? 1 : size);
+        return;
+    }
+    free(ptr);
 }
 
 KIRA_BRIDGE_EXPORT void kira_native_write_i64(int64_t value) {
@@ -122,10 +159,10 @@ KIRA_BRIDGE_EXPORT void kira_native_print_string(const unsigned char *ptr, size_
 
 KIRA_BRIDGE_EXPORT KiraArray *kira_array_alloc(int64_t len) {
     if (len < 0) return NULL;
-    KiraArray *array = (KiraArray *)malloc(sizeof(KiraArray));
+    KiraArray *array = (KiraArray *)kira_bridge_alloc(sizeof(KiraArray));
     if (array == NULL) return NULL;
     array->len = (size_t)len;
-    array->items = array->len == 0 ? NULL : (KiraBridgeValue *)calloc(array->len, sizeof(KiraBridgeValue));
+    array->items = array->len == 0 ? NULL : (KiraBridgeValue *)kira_bridge_calloc(array->len, sizeof(KiraBridgeValue));
     return array;
 }
 
@@ -142,11 +179,12 @@ KIRA_BRIDGE_EXPORT void kira_array_store(KiraArray *array, int64_t index, const 
 KIRA_BRIDGE_EXPORT void kira_array_append(KiraArray *array, const KiraBridgeValue *value) {
     if (array == NULL || value == NULL) return;
     size_t next_len = array->len + 1;
-    KiraBridgeValue *next_items = (KiraBridgeValue *)malloc(next_len * sizeof(KiraBridgeValue));
+    KiraBridgeValue *next_items = (KiraBridgeValue *)kira_bridge_alloc(next_len * sizeof(KiraBridgeValue));
     if (next_items == NULL) return;
     if (array->items != NULL && array->len != 0) {
         memcpy(next_items, array->items, array->len * sizeof(KiraBridgeValue));
     }
+    kira_bridge_free(array->items, array->len * sizeof(KiraBridgeValue));
     array->items = next_items;
     array->items[array->len] = *value;
     array->len = next_len;

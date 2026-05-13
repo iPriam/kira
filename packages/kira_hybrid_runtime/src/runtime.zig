@@ -268,6 +268,23 @@ fn callNative(self: *HybridRuntime, function_id: u32, args: []const runtime_abi.
     const native_arg_ptrs = try self.allocator.alloc(usize, args.len);
     defer self.allocator.free(native_arg_ptrs);
     @memset(native_arg_ptrs, 0);
+    defer {
+        for (native_arg_ptrs, 0..) |native_ptr, index| {
+            if (native_ptr == 0 or index >= function_decl.param_types.len) continue;
+            const param_type = function_decl.param_types[index];
+            switch (param_type.kind) {
+                .ffi_struct => if (param_type.name) |name| {
+                    self.vm.destroyStructNativeLayout(&self.module, name, native_ptr);
+                },
+                .array => self.vm.destroyArrayNativeLayout(
+                    &self.module,
+                    convertManifestTypeRef(param_type),
+                    native_ptr,
+                ),
+                else => {},
+            }
+        }
+    }
 
     for (args, 0..) |arg, index| {
         try self.vm.pinNativeBoundaryValue(arg);

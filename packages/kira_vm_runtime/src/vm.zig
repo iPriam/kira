@@ -160,16 +160,18 @@ pub const Vm = struct {
         const source: *const ArrayObject = @ptrFromInt(runtime_array_ptr);
         const object = try self.allocator.create(ArrayObject);
         const items = try self.allocator.alloc(runtime_abi.BridgeValue, @max(source.len, 1));
-        const element_ty = try self.arrayElementType(module, array_ty);
         for (items) |*item| item.* = runtime_abi.bridgeValueFromValue(.{ .void = {} });
-        for (source.items[0..source.len], 0..) |item, index| {
-            const value = runtime_abi.bridgeValueToValue(item);
-            items[index] = runtime_abi.bridgeValueFromValue(try self.copyValueToNativeLayout(module, element_ty, value));
-        }
         object.* = .{
             .len = source.len,
             .items = items.ptr,
         };
+        errdefer self.destroyArrayNativeLayout(module, array_ty, @intFromPtr(object));
+
+        const element_ty = try self.arrayElementType(module, array_ty);
+        for (source.items[0..source.len], 0..) |item, index| {
+            const value = runtime_abi.bridgeValueToValue(item);
+            items[index] = runtime_abi.bridgeValueFromValue(try self.copyValueToNativeLayout(module, element_ty, value));
+        }
         return @intFromPtr(object);
     }
 
@@ -211,6 +213,41 @@ pub const Vm = struct {
     pub fn syncStructFromNativeLayout(self: *Vm, module: *const bytecode.Module, type_name: []const u8, runtime_ptr: usize, native_ptr: usize) !void {
         runtime_abi.emitExecutionTrace("BRIDGE", "COPY", "sync native->runtime type={s} src=0x{x} dst=0x{x}", .{ type_name, native_ptr, runtime_ptr });
         try self.copyStructFromNativeLayoutInto(module, type_name, runtime_ptr, native_ptr);
+    }
+
+    pub fn destroyArrayNativeLayout(self: *Vm, module: *const bytecode.Module, array_ty: bytecode.TypeRef, native_array_ptr: usize) void {
+        if (native_array_ptr == 0) return;
+        const object: *ArrayObject = @ptrFromInt(native_array_ptr);
+        const items = object.items[0..@max(object.len, 1)];
+        const element_ty = self.arrayElementType(module, array_ty) catch .{ .kind = .raw_ptr };
+        for (items[0..object.len]) |item| {
+            self.destroyNativeLayoutValue(module, element_ty, runtime_abi.bridgeValueToValue(item));
+        }
+        self.allocator.free(items);
+        self.allocator.destroy(object);
+    }
+
+    pub fn destroyStructNativeLayout(self: *Vm, module: *const bytecode.Module, type_name: []const u8, native_ptr: usize) void {
+        if (native_ptr == 0) return;
+        self.destroyStructNativeLayoutFields(module, type_name, native_ptr);
+        const layout = native_layout.structLayout(module, type_name) catch return;
+        const word_count = @max(1, std.math.divCeil(usize, layout.size, @sizeOf(u64)) catch unreachable);
+        const words: [*]u64 = @ptrFromInt(native_ptr);
+        self.allocator.free(words[0..word_count]);
+    }
+
+    pub fn destroyNativeLayoutValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) void {
+        switch (ty.kind) {
+            .ffi_struct => {
+                if (value == .raw_ptr) {
+                    if (ty.name) |name| self.destroyStructNativeLayout(module, name, value.raw_ptr);
+                }
+            },
+            .array => {
+                if (value == .raw_ptr) self.destroyArrayNativeLayout(module, ty, value.raw_ptr);
+            },
+            else => {},
+        }
     }
 
     fn runFunction(
@@ -1117,6 +1154,7 @@ pub const Vm = struct {
         const word_count = @max(1, std.math.divCeil(usize, layout.size, @sizeOf(u64)) catch unreachable);
         const words = try self.allocator.alloc(u64, word_count);
         @memset(std.mem.sliceAsBytes(words), 0);
+        errdefer self.destroyStructNativeLayout(module, type_name, @intFromPtr(words.ptr));
         try self.copyStructToNativeLayoutInto(module, type_name, runtime_ptr, @intFromPtr(words.ptr));
         return @intFromPtr(words.ptr);
     }
@@ -1130,6 +1168,24 @@ pub const Vm = struct {
         for (type_decl.fields, 0..) |field_decl, index| {
             const offset = try native_layout.fieldOffset(module, type_name, index);
             try helper_impl.writeNativeFieldValue(self, module, field_decl.ty, fields[index], native_ptr + offset);
+        }
+    }
+
+    fn destroyStructNativeLayoutFields(self: *Vm, module: *const bytecode.Module, type_name: []const u8, native_ptr: usize) void {
+        const type_decl = helper_impl.findType(module, type_name) orelse return;
+        for (type_decl.fields, 0..) |field_decl, index| {
+            const offset = native_layout.fieldOffset(module, type_name, index) catch continue;
+            const address = native_ptr + offset;
+            switch (field_decl.ty.kind) {
+                .array => {
+                    const array_ptr = (@as(*const usize, @ptrFromInt(address))).*;
+                    self.destroyArrayNativeLayout(module, field_decl.ty, array_ptr);
+                },
+                .ffi_struct => if (field_decl.ty.name) |nested_name| {
+                    self.destroyStructNativeLayoutFields(module, nested_name, address);
+                },
+                else => {},
+            }
         }
     }
 };
@@ -1232,6 +1288,53 @@ test "materializes native closure struct captures using external metadata" {
     const handle_values: [*]const runtime_abi.Value = @ptrFromInt(pipeline_values[0].raw_ptr);
     try std.testing.expect(handle_values[0] == .integer);
     try std.testing.expectEqual(@as(i64, 65537), handle_values[0].integer);
+}
+
+test "hybrid_native_bridge_materialization_cleanup" {
+    var vm = Vm.init(std.testing.allocator);
+    defer vm.deinit();
+
+    const point_fields = [_]bytecode.Field{
+        .{ .name = "x", .ty = .{ .kind = .integer, .name = "I64" } },
+        .{ .name = "y", .ty = .{ .kind = .integer, .name = "I64" } },
+    };
+    const batch_fields = [_]bytecode.Field{
+        .{ .name = "points", .ty = .{ .kind = .array, .name = "Point" } },
+    };
+    const types = [_]bytecode.TypeDecl{
+        .{ .name = "Point", .fields = @constCast(&point_fields) },
+        .{ .name = "Batch", .fields = @constCast(&batch_fields) },
+    };
+    const module = bytecode.Module{
+        .types = @constCast(&types),
+        .functions = &.{},
+        .entry_function_id = null,
+    };
+
+    const point_ptr = try vm.allocateStruct(&module, "Point");
+    const point_fields_ptr: [*]runtime_abi.Value = @ptrFromInt(point_ptr);
+    point_fields_ptr[0] = .{ .integer = 11 };
+    point_fields_ptr[1] = .{ .integer = 22 };
+
+    const array_ptr = try vm.allocateArray(0);
+    const array_object: *ArrayObject = @ptrFromInt(array_ptr);
+    try vm.heap.appendArrayItem(array_object, .{ .raw_ptr = point_ptr });
+    vm.releaseManagedValue(.{ .raw_ptr = point_ptr });
+
+    const native_array_ptr = try vm.copyArrayToNativeLayout(&module, .{ .kind = .array, .name = "Point" }, array_ptr);
+    vm.destroyArrayNativeLayout(&module, .{ .kind = .array, .name = "Point" }, native_array_ptr);
+
+    const batch_ptr = try vm.allocateStruct(&module, "Batch");
+    const batch_fields_ptr: [*]runtime_abi.Value = @ptrFromInt(batch_ptr);
+    batch_fields_ptr[0] = .{ .raw_ptr = array_ptr };
+    vm.retainManagedValue(.{ .raw_ptr = array_ptr });
+
+    const native_batch_ptr = try vm.copyStructToNativeLayout(&module, "Batch", batch_ptr);
+    vm.destroyStructNativeLayout(&module, "Batch", native_batch_ptr);
+
+    vm.releaseManagedValue(.{ .raw_ptr = batch_ptr });
+    vm.releaseManagedValue(.{ .raw_ptr = array_ptr });
+    try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
 }
 
 test "prints struct values" {
