@@ -1,0 +1,76 @@
+@Runtime
+struct Span {
+    var start: Int
+    var end: Int
+    var advance: Int
+}
+
+@Runtime
+struct Document {
+    var values: [Int]
+    var spans: [Span]
+    var marker: Int
+}
+
+@Runtime
+function scoreValues(values: [Int]) -> Int {
+    var total = 0
+    var index = 0
+    while index < values.count {
+        total = total + values[index] * (index + 1)
+        index = index + 1
+    }
+    return total
+}
+
+@Runtime
+function scoreSpans(spans: [Span]) -> Int {
+    var total = 0
+    var index = 0
+    while index < spans.count {
+        let span = spans[index]
+        total = total + span.start * 5 + span.end * 7 + span.advance * 11 + index * 13
+        index = index + 1
+    }
+    return total
+}
+
+@Native
+function nativeAppendNested(document: Document, base: Int) {
+    document.marker = document.marker + base
+    document.values.append(base + 1)
+    document.values[0] = document.values[0] + base
+    document.spans.append(Span { start: base + 10, end: base + 20, advance: base + 30 })
+    document.spans[0].advance = document.spans[0].advance + base
+    let last = document.spans.count - 1
+    document.spans[last].end = document.spans[last].end + base
+    return
+}
+
+@Main
+@Runtime
+function main() {
+    var document = Document {
+        values: [3, 4],
+        spans: [
+            Span { start: 1, end: 2, advance: 3 }
+        ],
+        marker: 7
+    }
+    let valuesAlias = document.values
+    let spansAlias = document.spans
+
+    nativeAppendNested(document, 100)
+    nativeAppendNested(document, 200)
+
+    print(document.marker)
+    print(valuesAlias.count)
+    print(scoreValues(valuesAlias))
+    print(document.values.count)
+    print(scoreValues(document.values))
+    print(spansAlias.count)
+    print(scoreSpans(spansAlias))
+    print(document.spans.count)
+    print(scoreSpans(document.spans))
+    return
+}

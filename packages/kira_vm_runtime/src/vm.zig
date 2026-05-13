@@ -1087,6 +1087,22 @@ pub const Vm = struct {
                     }
                     try self.copyStructFromNativeLayoutInto(module, nested_name, fields[index].raw_ptr, address);
                 },
+                .array => {
+                    const native_array_ptr = (@as(*const usize, @ptrFromInt(address))).*;
+                    if (native_array_ptr == 0) {
+                        const old = fields[index];
+                        fields[index] = .{ .raw_ptr = 0 };
+                        self.heap.releaseValue(old);
+                        continue;
+                    }
+                    if (fields[index] == .raw_ptr and fields[index].raw_ptr != 0) {
+                        try self.syncArrayFromNativeLayout(module, field_decl.ty, fields[index].raw_ptr, native_array_ptr);
+                        continue;
+                    }
+                    const old = fields[index];
+                    fields[index] = .{ .raw_ptr = try self.copyArrayFromNativeLayout(module, field_decl.ty, native_array_ptr) };
+                    self.heap.releaseValue(old);
+                },
                 else => {
                     const old = fields[index];
                     fields[index] = try helper_impl.readNativeFieldValue(self, module, type_name, field_decl, index, native_ptr);

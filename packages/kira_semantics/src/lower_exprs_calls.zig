@@ -289,6 +289,17 @@ pub fn lowerCallExpr(
                 } };
                 return;
             }
+            if (object_type.kind == .array) {
+                try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
+                    .severity = .@"error",
+                    .code = "KSEM101",
+                    .title = "unsupported array method",
+                    .message = try std.fmt.allocPrint(ctx.allocator, "Array method '{s}' is not supported.", .{member.member}),
+                    .labels = &.{diagnostics.primaryLabel(node.span, "unsupported array method")},
+                    .help = "Use `array.append(value)` for growth; resizing, pop, and remove are not part of the supported array surface.",
+                });
+                return error.DiagnosticsEmitted;
+            }
             if (object_type.kind != .native_state_view) {
                 if (try resolveMethodMemberOrNull(ctx, object_type, member.member, node.span)) |resolved_method| {
                     const dispatched = try buildDispatchedMethodCallExpr(ctx, resolved_method, object, object_type, node, imports, scope, function_headers);

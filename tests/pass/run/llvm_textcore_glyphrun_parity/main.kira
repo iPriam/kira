@@ -1,0 +1,302 @@
+struct FontMetrics {
+    var ascender: Int
+    var descender: Int
+    var lineGap: Int
+    var capHeight: Int
+    var xHeight: Int
+    var underlinePosition: Int
+    var underlineThickness: Int
+}
+
+struct GlyphPosition {
+    var x: Int
+    var y: Int
+    var advanceX: Int
+    var advanceY: Int
+    var offsetX: Int
+    var offsetY: Int
+    var bearingX: Int
+    var bearingY: Int
+}
+
+struct GlyphInfo {
+    var glyphId: Int
+    var codepoint: Int
+    var clusterIndex: Int
+    var fontIndex: Int
+    var position: GlyphPosition
+}
+
+struct GlyphRun {
+    var fontId: Int
+    var startGlyph: Int
+    var glyphCount: Int
+    var glyphs: [GlyphInfo]
+    var metrics: FontMetrics
+    var totalAdvance: Int
+}
+
+struct ClusterInfo {
+    var startGlyph: Int
+    var endGlyph: Int
+    var byteStart: Int
+    var byteEnd: Int
+    var advance: Int
+    var direction: Int
+}
+
+struct FontFallbackRun {
+    var fontId: Int
+    var startGlyph: Int
+    var endGlyph: Int
+    var score: Int
+}
+
+struct TextLine {
+    var lineIndex: Int
+    var startCluster: Int
+    var endCluster: Int
+    var runs: [GlyphRun]
+    var clusters: [ClusterInfo]
+    var baseline: Int
+    var width: Int
+    var height: Int
+}
+
+struct TextStyle {
+    var size: Int
+    var weight: Int
+    var slant: Int
+    var letterSpacing: Int
+    var fallback: FontFallbackRun
+}
+
+struct TextLayout {
+    var lines: [TextLine]
+    var style: TextStyle
+    var fallbackRuns: [FontFallbackRun]
+    var totalWidth: Int
+    var totalHeight: Int
+}
+
+struct TextMeasurement {
+    var layout: TextLayout
+    var glyphCount: Int
+    var clusterCount: Int
+    var lineCount: Int
+    var checksumSeed: Int
+}
+
+function pos(base: Int) -> GlyphPosition {
+    return GlyphPosition {
+        x: base + 1,
+        y: base + 2,
+        advanceX: base + 3,
+        advanceY: base + 4,
+        offsetX: base + 5,
+        offsetY: base + 6,
+        bearingX: base + 7,
+        bearingY: base + 8
+    }
+}
+
+function metrics(base: Int) -> FontMetrics {
+    return FontMetrics {
+        ascender: base + 11,
+        descender: base + 12,
+        lineGap: base + 13,
+        capHeight: base + 14,
+        xHeight: base + 15,
+        underlinePosition: base + 16,
+        underlineThickness: base + 17
+    }
+}
+
+function glyph(base: Int, cluster: Int, font: Int) -> GlyphInfo {
+    return GlyphInfo {
+        glyphId: base + 101,
+        codepoint: base + 202,
+        clusterIndex: cluster,
+        fontIndex: font,
+        position: pos(base + 300)
+    }
+}
+
+function cluster(base: Int, startGlyph: Int, endGlyph: Int) -> ClusterInfo {
+    return ClusterInfo {
+        startGlyph: startGlyph,
+        endGlyph: endGlyph,
+        byteStart: base + 31,
+        byteEnd: base + 32,
+        advance: base + 33,
+        direction: base + 34
+    }
+}
+
+function fallback(base: Int) -> FontFallbackRun {
+    return FontFallbackRun {
+        fontId: base + 41,
+        startGlyph: base + 42,
+        endGlyph: base + 43,
+        score: base + 44
+    }
+}
+
+function makeRun(base: Int, font: Int) -> GlyphRun {
+    return GlyphRun {
+        fontId: font,
+        startGlyph: base + 1,
+        glyphCount: 4,
+        glyphs: [
+            glyph(base + 10, base + 100, font),
+            glyph(base + 20, base + 101, font),
+            glyph(base + 30, base + 102, font),
+            glyph(base + 40, base + 103, font)
+        ],
+        metrics: metrics(base + 500),
+        totalAdvance: base + 900
+    }
+}
+
+function makeLine(base: Int, lineIndex: Int) -> TextLine {
+    return TextLine {
+        lineIndex: lineIndex,
+        startCluster: base + 1,
+        endCluster: base + 4,
+        runs: [
+            makeRun(base + 1000, lineIndex + 10),
+            makeRun(base + 2000, lineIndex + 20)
+        ],
+        clusters: [
+            cluster(base + 3000, 0, 1),
+            cluster(base + 3100, 1, 2),
+            cluster(base + 3200, 2, 3),
+            cluster(base + 3300, 3, 4)
+        ],
+        baseline: base + 401,
+        width: base + 402,
+        height: base + 403
+    }
+}
+
+function makeMeasurement() -> TextMeasurement {
+    return TextMeasurement {
+        layout: TextLayout {
+            lines: [
+                makeLine(10000, 0),
+                makeLine(20000, 1),
+                makeLine(30000, 2)
+            ],
+            style: TextStyle {
+                size: 17,
+                weight: 600,
+                slant: 3,
+                letterSpacing: 2,
+                fallback: fallback(70000)
+            },
+            fallbackRuns: [
+                fallback(71000),
+                fallback(72000),
+                fallback(73000)
+            ],
+            totalWidth: 888001,
+            totalHeight: 999002
+        },
+        glyphCount: 24,
+        clusterCount: 12,
+        lineCount: 3,
+        checksumSeed: 12345
+    }
+}
+
+function scorePosition(position: GlyphPosition) -> Int {
+    return position.x + position.y * 2 + position.advanceX * 3 + position.advanceY * 4 + position.offsetX * 5 + position.offsetY * 6 + position.bearingX * 7 + position.bearingY * 8
+}
+
+function scoreGlyph(g: GlyphInfo) -> Int {
+    return g.glyphId * 3 + g.codepoint * 5 + g.clusterIndex * 7 + g.fontIndex * 11 + scorePosition(g.position)
+}
+
+function scoreCluster(c: ClusterInfo) -> Int {
+    return c.startGlyph * 13 + c.endGlyph * 17 + c.byteStart * 19 + c.byteEnd * 23 + c.advance * 29 + c.direction * 31
+}
+
+function pickGlyph(run: GlyphRun, index: Int) -> GlyphInfo {
+    return run.glyphs[index]
+}
+
+function pickPosition(g: GlyphInfo) -> GlyphPosition {
+    return g.position
+}
+
+function pickCluster(line: TextLine, index: Int) -> ClusterInfo {
+    return line.clusters[index]
+}
+
+function rewriteGlyphCopy(g: GlyphInfo) -> GlyphInfo {
+    var copy = g
+    copy.glyphId = copy.glyphId + 700000
+    copy.position.x = copy.position.x + 800000
+    return copy
+}
+
+function lineScore(line: TextLine, dynamicRun: Int, dynamicGlyph: Int) -> Int {
+    let firstGlyph = line.runs[0].glyphs[0]
+    let middleGlyph = line.runs[dynamicRun].glyphs[dynamicGlyph]
+    let lastGlyph = line.runs[1].glyphs[line.runs[1].glyphs.count - 1]
+    let returnedGlyph = pickGlyph(line.runs[dynamicRun], dynamicGlyph)
+    let returnedPosition = pickPosition(returnedGlyph)
+    let firstCluster = line.clusters[0]
+    let middleCluster = pickCluster(line, dynamicGlyph)
+    let lastCluster = line.clusters[line.clusters.count - 1]
+    var copiedGlyph = middleGlyph
+    copiedGlyph.clusterIndex = copiedGlyph.clusterIndex + 500000
+    var copiedPosition = middleGlyph.position
+    copiedPosition.advanceX = copiedPosition.advanceX + 600000
+    let mutatedCopy = rewriteGlyphCopy(middleGlyph)
+
+    var checksum = line.lineIndex * 37 + line.startCluster * 41 + line.endCluster * 43
+    checksum = checksum + line.baseline * 47 + line.width * 53 + line.height * 59
+    checksum = checksum + scoreGlyph(firstGlyph)
+    checksum = checksum + scoreGlyph(middleGlyph)
+    checksum = checksum + scoreGlyph(lastGlyph)
+    checksum = checksum + scoreGlyph(returnedGlyph)
+    checksum = checksum + scorePosition(returnedPosition)
+    checksum = checksum + scoreCluster(firstCluster)
+    checksum = checksum + scoreCluster(middleCluster)
+    checksum = checksum + scoreCluster(lastCluster)
+    checksum = checksum + copiedGlyph.clusterIndex
+    checksum = checksum + copiedPosition.advanceX
+    checksum = checksum + mutatedCopy.glyphId + mutatedCopy.position.x
+    checksum = checksum + middleGlyph.clusterIndex + middleGlyph.position.advanceX
+    checksum = checksum + line.runs[0].metrics.ascender + line.runs[1].metrics.underlineThickness
+    checksum = checksum + line.runs[dynamicRun].totalAdvance
+    return checksum
+}
+
+function measurementScore(measurement: TextMeasurement) -> Int {
+    let layout = measurement.layout
+    var checksum = measurement.checksumSeed + measurement.glyphCount * 61 + measurement.clusterCount * 67 + measurement.lineCount * 71
+    checksum = checksum + layout.totalWidth + layout.totalHeight
+    checksum = checksum + layout.style.size * 73 + layout.style.weight * 79 + layout.style.slant * 83 + layout.style.letterSpacing * 89
+    checksum = checksum + layout.style.fallback.fontId + layout.style.fallback.score
+    checksum = checksum + layout.fallbackRuns[0].fontId + layout.fallbackRuns[1].startGlyph + layout.fallbackRuns[2].endGlyph
+
+    var index = 0
+    while index < layout.lines.count {
+        let dynamicRun = index % 2
+        let dynamicGlyph = index + 1
+        let line = layout.lines[index]
+        checksum = checksum + lineScore(line, dynamicRun, dynamicGlyph)
+        checksum = checksum + layout.lines[index].runs[dynamicRun].glyphs[dynamicGlyph].position.offsetY
+        index = index + 1
+    }
+    return checksum
+}
+
+@Main
+function main() {
+    let measurement = makeMeasurement()
+    print(measurementScore(measurement))
+    return
+}

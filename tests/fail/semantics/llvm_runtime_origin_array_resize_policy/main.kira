@@ -1,0 +1,18 @@
+@Runtime
+function makeValues() -> [Int] {
+    return [1, 2]
+}
+
+@Native
+function nativeResize(values: [Int]) {
+    values.resize(4)
+    return
+}
+
+@Main
+@Runtime
+function main() {
+    let values = makeValues()
+    nativeResize(values)
+    return
+}

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <string.h>
 
 #if defined(_WIN32)
 #define KIRA_BRIDGE_EXPORT __declspec(dllexport)
@@ -141,8 +142,11 @@ KIRA_BRIDGE_EXPORT void kira_array_store(KiraArray *array, int64_t index, const 
 KIRA_BRIDGE_EXPORT void kira_array_append(KiraArray *array, const KiraBridgeValue *value) {
     if (array == NULL || value == NULL) return;
     size_t next_len = array->len + 1;
-    KiraBridgeValue *next_items = (KiraBridgeValue *)realloc(array->items, next_len * sizeof(KiraBridgeValue));
+    KiraBridgeValue *next_items = (KiraBridgeValue *)malloc(next_len * sizeof(KiraBridgeValue));
     if (next_items == NULL) return;
+    if (array->items != NULL && array->len != 0) {
+        memcpy(next_items, array->items, array->len * sizeof(KiraBridgeValue));
+    }
     array->items = next_items;
     array->items[array->len] = *value;
     array->len = next_len;

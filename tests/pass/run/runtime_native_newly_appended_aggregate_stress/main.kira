@@ -1,0 +1,117 @@
+@Runtime
+struct StressPair {
+    var first: Int
+    var second: Int
+}
+
+@Runtime
+struct StressLeaf {
+    var a: Int
+    var b: Int
+    var c: Int
+}
+
+@Runtime
+struct StressNode {
+    var stamp: Int
+    var pair: StressPair
+    var numbers: [Int]
+    var leaves: [StressLeaf]
+}
+
+@Runtime
+function scoreLeaves(leaves: [StressLeaf]) -> Int {
+    var total = 0
+    var index = 0
+    while index < leaves.count {
+        let leaf = leaves[index]
+        total = total + leaf.a * 5 + leaf.b * 7 + leaf.c * 11 + index * 13
+        index = index + 1
+    }
+    return total
+}
+
+@Runtime
+function scoreNumbers(numbers: [Int]) -> Int {
+    var total = 0
+    var index = 0
+    while index < numbers.count {
+        total = total + numbers[index] * (index + 17)
+        index = index + 1
+    }
+    return total
+}
+
+@Runtime
+function scoreNodes(nodes: [StressNode]) -> Int {
+    var total = 0
+    var index = 0
+    while index < nodes.count {
+        let node = nodes[index]
+        total = total + node.stamp * 19 + node.pair.first * 23 + node.pair.second * 29 + scoreNumbers(node.numbers) * 31 + scoreLeaves(node.leaves) * 37 + index * 41
+        index = index + 1
+    }
+    return total
+}
+
+@Native
+function nativeStress(nodes: [StressNode], base: Int) -> Int {
+    let start = nodes.count
+    nodes.append(StressNode {
+        stamp: base + 101,
+        pair: StressPair { first: base + 201, second: base + 301 },
+        numbers: [base + 401, base + 402],
+        leaves: [
+            StressLeaf { a: base + 501, b: base + 502, c: base + 503 },
+            StressLeaf { a: base + 511, b: base + 512, c: base + 513 }
+        ]
+    })
+    nodes.append(StressNode {
+        stamp: base + 111,
+        pair: StressPair { first: base + 211, second: base + 311 },
+        numbers: [base + 411, base + 412, base + 413],
+        leaves: [
+            StressLeaf { a: base + 521, b: base + 522, c: base + 523 }
+        ]
+    })
+
+    nodes[start].stamp = nodes[start].stamp + 1000
+    nodes[start].pair.second = nodes[start].pair.second + 2000
+    nodes[start].numbers[0] = nodes[start].numbers[0] + 3000
+    nodes[start].numbers.append(base + 499)
+    nodes[start].leaves[1].b = nodes[start].leaves[1].b + 4000
+    nodes[start].leaves.append(StressLeaf { a: base + 599, b: base + 598, c: base + 597 })
+    nodes[start].leaves[2].c = nodes[start].leaves[2].c + 5000
+
+    nodes[start + 1].stamp = nodes[start + 1].stamp + 6000
+    nodes[start + 1].pair.first = nodes[start + 1].pair.first + 7000
+    nodes[start + 1].numbers[2] = nodes[start + 1].numbers[2] + 8000
+    nodes[start + 1].leaves[0].a = nodes[start + 1].leaves[0].a + 9000
+
+    return nodes[start].stamp + nodes[start].pair.second + nodes[start].numbers[2] + nodes[start].leaves[2].c + nodes[start + 1].stamp + nodes[start + 1].pair.first + nodes[start + 1].numbers[2] + nodes[start + 1].leaves[0].a
+}
+
+@Main
+@Runtime
+function main() {
+    var nodes: [StressNode] = [
+        StressNode {
+            stamp: 3,
+            pair: StressPair { first: 13, second: 23 },
+            numbers: [31, 32],
+            leaves: [StressLeaf { a: 41, b: 42, c: 43 }]
+        }
+    ]
+    let alias = nodes
+
+    print(nativeStress(nodes, 10000))
+    print(nativeStress(nodes, 20000))
+    print(nativeStress(nodes, 30000))
+    print(nodes.count)
+    print(alias.count)
+    print(scoreNodes(nodes))
+    print(scoreNodes(alias))
+    print(nodes[1].leaves[2].c)
+    print(alias[6].pair.first)
+    return
+}

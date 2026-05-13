@@ -1,0 +1,87 @@
+@Runtime
+struct SyncInner {
+    var left: Int
+    var right: Int
+}
+
+@Runtime
+struct SyncElement {
+    var id: Int
+    var inner: SyncInner
+    var tail: Int
+}
+
+@Runtime
+function scoreElements(elements: [SyncElement]) -> Int {
+    var total = 0
+    var index = 0
+    while index < elements.count {
+        let element = elements[index]
+        total = total + element.id * 3 + element.inner.left * 5 + element.inner.right * 7 + element.tail * 11 + index * 13
+        index = index + 1
+    }
+    return total
+}
+
+@Native
+function helperScore(element: SyncElement) -> Int {
+    return element.id * 17 + element.inner.left * 19 + element.inner.right * 23 + element.tail * 29
+}
+
+@Native
+function helperReturn(element: SyncElement) -> SyncElement {
+    return element
+}
+
+@Native
+function nativeAppendAndMutate(elements: [SyncElement], base: Int) -> Int {
+    let start = elements.count
+    elements.append(SyncElement {
+        id: base + 101,
+        inner: SyncInner { left: base + 201, right: base + 301 },
+        tail: base + 401
+    })
+    elements.append(SyncElement {
+        id: base + 102,
+        inner: SyncInner { left: base + 202, right: base + 302 },
+        tail: base + 402
+    })
+    elements.append(SyncElement {
+        id: base + 103,
+        inner: SyncInner { left: base + 203, right: base + 303 },
+        tail: base + 403
+    })
+
+    elements[start].id = elements[start].id + 1000
+    elements[start].inner.left = elements[start].inner.left + 2000
+    elements[start + 1].inner.right = elements[start + 1].inner.right + 3000
+    elements[start + 2].tail = elements[start + 2].tail + 4000
+
+    var local = elements[start]
+    local.id = local.id + 5000
+    local.inner.left = local.inner.left + 6000
+
+    var nested = elements[start + 1].inner
+    nested.right = nested.right + 7000
+
+    let helper = helperScore(elements[start + 2])
+    let returned = helperReturn(elements[start])
+    return helper + returned.id * 31 + returned.inner.left * 37 + returned.inner.right * 41 + returned.tail * 43 + local.id + local.inner.left + nested.right
+}
+
+@Main
+@Runtime
+function main() {
+    var elements: [SyncElement] = [
+        SyncElement { id: 11, inner: SyncInner { left: 111, right: 1111 }, tail: 11111 }
+    ]
+
+    print(nativeAppendAndMutate(elements, 10000))
+    print(elements.count)
+    print(scoreElements(elements))
+    print(elements[1].id)
+    print(elements[1].inner.left)
+    print(elements[2].inner.right)
+    print(elements[3].tail)
+    return
+}

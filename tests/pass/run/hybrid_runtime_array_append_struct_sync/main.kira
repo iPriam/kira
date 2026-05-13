@@ -1,0 +1,69 @@
+@Runtime
+struct RuntimeNested {
+    var x: Int
+    var y: Int
+}
+
+@Runtime
+struct RuntimeItem {
+    var x: Int
+    var nested: RuntimeNested
+}
+
+@Runtime
+function scoreValues(values: [Int]) -> Int {
+    var total = 0
+    var index = 0
+    while index < values.count {
+        total = total + values[index] * (index + 1)
+        index = index + 1
+    }
+    return total
+}
+
+@Runtime
+function scoreItems(items: [RuntimeItem]) -> Int {
+    var total = 0
+    var index = 0
+    while index < items.count {
+        let item = items[index]
+        total = total + item.x * 3 + item.nested.x * 5 + item.nested.y * 7 + index * 11
+        index = index + 1
+    }
+    return total
+}
+
+@Native
+function nativeAppendBoth(values: [Int], items: [RuntimeItem], base: Int) {
+    values.append(base + 100)
+    values[0] = values[0] + base
+
+    items.append(RuntimeItem {
+        x: base + 1100,
+        nested: RuntimeNested {
+            x: base + 2100,
+            y: base + 3100
+        }
+    })
+    items[0].x = items[0].x + base
+    return
+}
+
+@Main
+@Runtime
+function main() {
+    var values: [Int] = [1, 2]
+    var items: [RuntimeItem] = [
+        RuntimeItem { x: 5, nested: RuntimeNested { x: 50, y: 500 } },
+        RuntimeItem { x: 6, nested: RuntimeNested { x: 60, y: 600 } }
+    ]
+
+    nativeAppendBoth(values, items, 10)
+    nativeAppendBoth(values, items, 20)
+
+    print(values.count)
+    print(scoreValues(values))
+    print(items.count)
+    print(scoreItems(items))
+    return
+}

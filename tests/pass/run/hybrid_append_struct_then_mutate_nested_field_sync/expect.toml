@@ -1,0 +1,11 @@
+backends = ["hybrid"]
+
+[phases.check]
+result = "pass"
+
+[phases.build]
+result = "pass"
+
+[phases.run]
+result = "pass"
+stdout = "2740020\n4\n1012220\n11101\n12201\n13302\n14403\n"

@@ -1,0 +1,58 @@
+@Native
+struct NativePolicyInner {
+    var left: Int
+    var right: Int
+}
+
+@Native
+struct NativePolicyElement {
+    var id: Int
+    var inner: NativePolicyInner
+    var tail: Int
+}
+
+@Native
+function scoreNativePolicy(elements: [NativePolicyElement]) -> Int {
+    var total = 0
+    var index = 0
+    while index < elements.count {
+        let element = elements[index]
+        total = total + element.id * 3 + element.inner.left * 5 + element.inner.right * 7 + element.tail * 11 + index * 13
+        index = index + 1
+    }
+    return total
+}
+
+@Native
+function appendNativePolicy(elements: [NativePolicyElement], base: Int) {
+    let start = elements.count
+    elements.append(NativePolicyElement {
+        id: base + 1,
+        inner: NativePolicyInner { left: base + 2, right: base + 3 },
+        tail: base + 4
+    })
+    elements.append(NativePolicyElement {
+        id: base + 5,
+        inner: NativePolicyInner { left: base + 6, right: base + 7 },
+        tail: base + 8
+    })
+    elements[start].id = elements[start].id + 100
+    elements[start].inner.left = elements[start].inner.left + 200
+    elements[start + 1].inner.right = elements[start + 1].inner.right + 300
+    return
+}
+
+@Main
+@Native
+function main() {
+    var elements: [NativePolicyElement] = [
+        NativePolicyElement { id: 9, inner: NativePolicyInner { left: 19, right: 29 }, tail: 39 }
+    ]
+    appendNativePolicy(elements, 4000)
+    print(elements.count)
+    print(scoreNativePolicy(elements))
+    print(elements[1].id)
+    print(elements[1].inner.left)
+    print(elements[2].inner.right)
+    return
+}

@@ -1,0 +1,31 @@
+@Runtime
+function scoreValues(values: [Int]) -> Int {
+    var total = 0
+    var index = 0
+    while index < values.count {
+        total = total + values[index] * (index + 1)
+        index = index + 1
+    }
+    return total
+}
+
+@Native
+function nativeAppendAndMutate(values: [Int], base: Int) {
+    values.append(base)
+    values[1] = values[1] + base
+    return
+}
+
+@Main
+@Runtime
+function main() {
+    var values: [Int] = [7, 8]
+    let alias = values
+    nativeAppendAndMutate(values, 50)
+    nativeAppendAndMutate(values, 60)
+    print(values.count)
+    print(alias.count)
+    print(scoreValues(values))
+    print(scoreValues(alias))
+    return
+}

@@ -1,0 +1,95 @@
+@Runtime
+struct SyncPoint {
+    var x: Int
+    var y: Int
+}
+
+@Runtime
+struct SyncBucket {
+    var label: Int
+    var values: [Int]
+    var points: [SyncPoint]
+    var marker: Int
+}
+
+@Runtime
+function scoreValues(values: [Int]) -> Int {
+    var total = 0
+    var index = 0
+    while index < values.count {
+        total = total + values[index] * (index + 3)
+        index = index + 1
+    }
+    return total
+}
+
+@Runtime
+function scorePoints(points: [SyncPoint]) -> Int {
+    var total = 0
+    var index = 0
+    while index < points.count {
+        let point = points[index]
+        total = total + point.x * 7 + point.y * 11 + index * 13
+        index = index + 1
+    }
+    return total
+}
+
+@Runtime
+function scoreBuckets(buckets: [SyncBucket]) -> Int {
+    var total = 0
+    var index = 0
+    while index < buckets.count {
+        let bucket = buckets[index]
+        total = total + bucket.label * 17 + scoreValues(bucket.values) * 19 + scorePoints(bucket.points) * 23 + bucket.marker * 29 + index * 31
+        index = index + 1
+    }
+    return total
+}
+
+@Native
+function nativeAppendNestedArrays(buckets: [SyncBucket], base: Int) {
+    buckets.append(SyncBucket {
+        label: base + 1,
+        values: [base + 11, base + 12, base + 13],
+        points: [
+            SyncPoint { x: base + 21, y: base + 22 },
+            SyncPoint { x: base + 31, y: base + 32 }
+        ],
+        marker: base + 41
+    })
+
+    let index = buckets.count - 1
+    buckets[index].values[1] = buckets[index].values[1] + 1000
+    buckets[index].values.append(base + 99)
+    buckets[index].points[0].x = buckets[index].points[0].x + 2000
+    buckets[index].points[1].y = buckets[index].points[1].y + 3000
+    buckets[index].points.append(SyncPoint { x: base + 77, y: base + 88 })
+    buckets[index].points[2].x = buckets[index].points[2].x + 4000
+    buckets[index].marker = buckets[index].marker + 5000
+    return
+}
+
+@Main
+@Runtime
+function main() {
+    var buckets: [SyncBucket] = [
+        SyncBucket {
+            label: 5,
+            values: [51, 52],
+            points: [SyncPoint { x: 61, y: 62 }],
+            marker: 71
+        }
+    ]
+
+    nativeAppendNestedArrays(buckets, 8000)
+    print(buckets.count)
+    print(buckets[1].values.count)
+    print(buckets[1].points.count)
+    print(scoreBuckets(buckets))
+    print(buckets[1].values[1])
+    print(buckets[1].points[0].x)
+    print(buckets[1].points[1].y)
+    print(buckets[1].points[2].x)
+    return
+}
