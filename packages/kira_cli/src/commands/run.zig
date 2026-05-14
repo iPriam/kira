@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const bytecode = @import("kira_bytecode");
 const build = @import("kira_build");
 const build_def = @import("kira_build_definition");
 const diagnostics = @import("kira_diagnostics");
@@ -55,8 +56,10 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
     switch (backend) {
         .vm => {
             const bytecode_artifact = findBytecode(result.artifacts) orelse return error.MissingBytecodeArtifact;
-            const module = try system.readBytecode(bytecode_artifact.path);
-            var vm = vm_runtime.Vm.init(allocator);
+            const runtime_allocator = std.heap.smp_allocator;
+            const module = try bytecode.Module.readFromFile(runtime_allocator, bytecode_artifact.path);
+            var vm = vm_runtime.Vm.init(runtime_allocator);
+            defer vm.deinit();
             var original_cwd = try std.Io.Dir.cwd().openDir(std.Options.debug_io, ".", .{});
             defer {
                 if (input.project_root) |_| std.process.setCurrentDir(std.Options.debug_io, original_cwd) catch {};
@@ -68,6 +71,8 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
                 try std.process.setCurrentDir(std.Options.debug_io, dir);
             }
             try vm.runMain(&module, stdout);
+            if (runtimeMemoryReportEnabled()) vm.emitMemoryReport("vm");
+            if (runtimeMemoryDetailEnabled()) vm.emitMemoryDetail();
         },
         .llvm_native => {
             const executable = findExecutable(result.artifacts) orelse return error.MissingExecutableArtifact;
@@ -75,8 +80,9 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
         },
         .hybrid => {
             const manifest_artifact = findHybridManifest(result.artifacts) orelse return error.MissingHybridManifestArtifact;
-            const manifest = try hybrid_runtime.loadHybridModule(allocator, manifest_artifact.path);
-            var runtime = try hybrid_runtime.HybridRuntime.init(allocator, manifest);
+            const runtime_allocator = std.heap.smp_allocator;
+            const manifest = try hybrid_runtime.loadHybridModule(runtime_allocator, manifest_artifact.path);
+            var runtime = try hybrid_runtime.HybridRuntime.init(runtime_allocator, manifest);
             defer runtime.deinit();
             var original_cwd = try std.Io.Dir.cwd().openDir(std.Options.debug_io, ".", .{});
             defer {
@@ -97,6 +103,8 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
                 }
                 return err;
             };
+            if (runtimeMemoryReportEnabled()) runtime.vm.emitMemoryReport("hybrid");
+            if (runtimeMemoryDetailEnabled()) runtime.vm.emitMemoryDetail();
         },
     }
 }
@@ -160,6 +168,20 @@ fn parseArgs(args: []const []const u8) !ParsedArgs {
 fn timingsEnvEnabled() bool {
     if (!builtin.link_libc) return false;
     const raw = std.c.getenv("KIRA_TIMINGS") orelse return false;
+    const value = std.mem.span(raw);
+    return value.len != 0 and !std.mem.eql(u8, value, "0") and !std.mem.eql(u8, value, "false");
+}
+
+fn runtimeMemoryReportEnabled() bool {
+    if (!builtin.link_libc) return false;
+    const raw = std.c.getenv("KIRA_RUNTIME_MEMORY_REPORT") orelse return false;
+    const value = std.mem.span(raw);
+    return value.len != 0 and !std.mem.eql(u8, value, "0") and !std.mem.eql(u8, value, "false");
+}
+
+fn runtimeMemoryDetailEnabled() bool {
+    if (!builtin.link_libc) return false;
+    const raw = std.c.getenv("KIRA_RUNTIME_MEMORY_DETAIL") orelse return false;
     const value = std.mem.span(raw);
     return value.len != 0 and !std.mem.eql(u8, value, "0") and !std.mem.eql(u8, value, "false");
 }

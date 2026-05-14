@@ -19,6 +19,11 @@ const ObjectKind = union(enum) {
     string_bytes: []u8,
 };
 
+pub const ObjectOrigin = enum {
+    runtime_alloc,
+    native_materialize,
+};
+
 pub const StructFieldsObject = struct {
     type_name: []const u8,
     fields: []runtime_abi.Value,
@@ -27,7 +32,27 @@ pub const StructFieldsObject = struct {
 const ObjectRecord = struct {
     ref_count: usize,
     pin_count: usize = 0,
+    origin: ObjectOrigin = .runtime_alloc,
     kind: ObjectKind,
+};
+
+pub const HeapStats = struct {
+    arrays_current: usize = 0,
+    arrays_peak: usize = 0,
+    arrays_allocated: usize = 0,
+    arrays_freed: usize = 0,
+    closures_current: usize = 0,
+    closures_peak: usize = 0,
+    closures_allocated: usize = 0,
+    closures_freed: usize = 0,
+    structs_current: usize = 0,
+    structs_peak: usize = 0,
+    structs_allocated: usize = 0,
+    structs_freed: usize = 0,
+    strings_current: usize = 0,
+    strings_peak: usize = 0,
+    strings_allocated: usize = 0,
+    strings_freed: usize = 0,
 };
 
 const PinFrame = struct {
@@ -38,6 +63,7 @@ pub const Heap = struct {
     allocator: std.mem.Allocator,
     objects: std.AutoHashMap(usize, ObjectRecord),
     pin_frames: std.ArrayListUnmanaged(PinFrame) = .empty,
+    stats: HeapStats = .{},
 
     pub fn init(allocator: std.mem.Allocator) Heap {
         return .{
@@ -59,16 +85,22 @@ pub const Heap = struct {
     pub fn registerArray(self: *Heap, object: *ArrayObject) !usize {
         const ptr = @intFromPtr(object);
         try self.objects.put(ptr, .{ .ref_count = 1, .kind = .{ .array = object } });
+        self.recordAlloc(.array);
         return ptr;
     }
 
     pub fn registerClosure(self: *Heap, object: *ClosureObject) !usize {
         const ptr = @intFromPtr(object);
         try self.objects.put(ptr, .{ .ref_count = 1, .kind = .{ .closure = object } });
+        self.recordAlloc(.closure);
         return ptr;
     }
 
     pub fn registerStruct(self: *Heap, type_name: []const u8, fields: []runtime_abi.Value) !usize {
+        return self.registerStructWithOrigin(type_name, fields, .runtime_alloc);
+    }
+
+    pub fn registerStructWithOrigin(self: *Heap, type_name: []const u8, fields: []runtime_abi.Value, origin: ObjectOrigin) !usize {
         var owned_fields = fields;
         if (owned_fields.len == 0) {
             self.allocator.free(owned_fields);
@@ -76,10 +108,11 @@ pub const Heap = struct {
             owned_fields[0] = .{ .void = {} };
         }
         const ptr = @intFromPtr(owned_fields.ptr);
-        try self.objects.put(ptr, .{ .ref_count = 1, .kind = .{ .struct_fields = .{
+        try self.objects.put(ptr, .{ .ref_count = 1, .origin = origin, .kind = .{ .struct_fields = .{
             .type_name = type_name,
             .fields = owned_fields,
         } } });
+        self.recordAlloc(.struct_fields);
         return ptr;
     }
 
@@ -90,6 +123,7 @@ pub const Heap = struct {
         }
         const ptr = @intFromPtr(bytes.ptr);
         try self.objects.put(ptr, .{ .ref_count = 1, .kind = .{ .string_bytes = bytes } });
+        self.recordAlloc(.string_bytes);
     }
 
     pub fn beginBoundaryPinScope(self: *Heap) !void {
@@ -115,6 +149,54 @@ pub const Heap = struct {
 
     pub fn count(self: *const Heap) usize {
         return self.objects.count();
+    }
+
+    pub fn emitCurrentTypeReport(self: *const Heap) void {
+        const TypeStats = struct {
+            current: usize = 0,
+            ref_total: usize = 0,
+            pin_total: usize = 0,
+            zero_ref_pinned: usize = 0,
+            runtime_alloc: usize = 0,
+            native_materialize: usize = 0,
+        };
+        var counts = std.StringHashMap(TypeStats).init(std.heap.page_allocator);
+        defer counts.deinit();
+
+        var iterator = self.objects.iterator();
+        while (iterator.next()) |entry| {
+            switch (entry.value_ptr.kind) {
+                .struct_fields => |value| {
+                    const result = counts.getOrPut(value.type_name) catch continue;
+                    if (!result.found_existing) result.value_ptr.* = .{};
+                    result.value_ptr.current += 1;
+                    result.value_ptr.ref_total += entry.value_ptr.ref_count;
+                    result.value_ptr.pin_total += entry.value_ptr.pin_count;
+                    if (entry.value_ptr.ref_count == 0 and entry.value_ptr.pin_count != 0) result.value_ptr.zero_ref_pinned += 1;
+                    switch (entry.value_ptr.origin) {
+                        .runtime_alloc => result.value_ptr.runtime_alloc += 1,
+                        .native_materialize => result.value_ptr.native_materialize += 1,
+                    }
+                },
+                .array, .closure, .string_bytes => {},
+            }
+        }
+
+        var count_iterator = counts.iterator();
+        while (count_iterator.next()) |entry| {
+            std.debug.print(
+                "Kira runtime memory detail: structType={s} current={d} refTotal={d} pinTotal={d} zeroRefPinned={d} runtimeAlloc={d} nativeMaterialize={d}\n",
+                .{
+                    entry.key_ptr.*,
+                    entry.value_ptr.current,
+                    entry.value_ptr.ref_total,
+                    entry.value_ptr.pin_total,
+                    entry.value_ptr.zero_ref_pinned,
+                    entry.value_ptr.runtime_alloc,
+                    entry.value_ptr.native_materialize,
+                },
+            );
+        }
     }
 
     pub fn retainValue(self: *Heap, value: runtime_abi.Value) void {
@@ -203,6 +285,7 @@ pub const Heap = struct {
             return;
         }
         const removed = self.objects.fetchRemove(ptr) orelse return;
+        self.recordFree(removed.value.kind);
         self.destroy(removed.value.kind);
     }
 
@@ -237,7 +320,61 @@ pub const Heap = struct {
         record_ptr.pin_count -= 1;
         if (record_ptr.pin_count != 0 or record_ptr.ref_count != 0) return;
         const removed = self.objects.fetchRemove(ptr) orelse return;
+        self.recordFree(removed.value.kind);
         self.destroy(removed.value.kind);
+    }
+
+    const StatsKind = enum {
+        array,
+        closure,
+        struct_fields,
+        string_bytes,
+    };
+
+    fn recordAlloc(self: *Heap, kind: StatsKind) void {
+        switch (kind) {
+            .array => {
+                self.stats.arrays_current += 1;
+                self.stats.arrays_allocated += 1;
+                self.stats.arrays_peak = @max(self.stats.arrays_peak, self.stats.arrays_current);
+            },
+            .closure => {
+                self.stats.closures_current += 1;
+                self.stats.closures_allocated += 1;
+                self.stats.closures_peak = @max(self.stats.closures_peak, self.stats.closures_current);
+            },
+            .struct_fields => {
+                self.stats.structs_current += 1;
+                self.stats.structs_allocated += 1;
+                self.stats.structs_peak = @max(self.stats.structs_peak, self.stats.structs_current);
+            },
+            .string_bytes => {
+                self.stats.strings_current += 1;
+                self.stats.strings_allocated += 1;
+                self.stats.strings_peak = @max(self.stats.strings_peak, self.stats.strings_current);
+            },
+        }
+    }
+
+    fn recordFree(self: *Heap, kind: ObjectKind) void {
+        switch (kind) {
+            .array => {
+                if (self.stats.arrays_current > 0) self.stats.arrays_current -= 1;
+                self.stats.arrays_freed += 1;
+            },
+            .closure => {
+                if (self.stats.closures_current > 0) self.stats.closures_current -= 1;
+                self.stats.closures_freed += 1;
+            },
+            .struct_fields => {
+                if (self.stats.structs_current > 0) self.stats.structs_current -= 1;
+                self.stats.structs_freed += 1;
+            },
+            .string_bytes => {
+                if (self.stats.strings_current > 0) self.stats.strings_current -= 1;
+                self.stats.strings_freed += 1;
+            },
+        }
     }
 
     fn destroy(self: *Heap, kind: ObjectKind) void {

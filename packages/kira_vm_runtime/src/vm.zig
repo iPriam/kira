@@ -12,6 +12,19 @@ const ClosureObject = ownership.ClosureObject;
 
 const NativeStateBox = extern struct { type_id: u64, payload: usize, runtime_payload: usize };
 
+const NativeLayoutStats = struct {
+    arrays_current: usize = 0,
+    arrays_peak: usize = 0,
+    arrays_allocated: usize = 0,
+    arrays_freed: usize = 0,
+    structs_current: usize = 0,
+    structs_peak: usize = 0,
+    structs_allocated: usize = 0,
+    structs_freed: usize = 0,
+    native_state_recovers: usize = 0,
+    native_state_materializations: usize = 0,
+};
+
 pub const NativeCallHook = *const fn (?*anyopaque, u32, []const runtime_abi.Value) anyerror!runtime_abi.Value;
 pub const ResolveFunctionHook = *const fn (?*anyopaque, u32) anyerror!usize;
 
@@ -20,19 +33,71 @@ pub const Hooks = struct { context: ?*anyopaque = null, call_native: ?NativeCall
 pub const Vm = struct {
     allocator: std.mem.Allocator,
     heap: ownership.Heap,
+    native_layout_stats: NativeLayoutStats = .{},
+    native_state_materialized_types: std.StringHashMap(usize),
     last_error_buffer: [256]u8 = [_]u8{0} ** 256,
     last_error_len: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) Vm {
-        return .{ .allocator = allocator, .heap = ownership.Heap.init(allocator) };
+        return .{
+            .allocator = allocator,
+            .heap = ownership.Heap.init(allocator),
+            .native_state_materialized_types = std.StringHashMap(usize).init(allocator),
+        };
     }
 
     pub fn deinit(self: *Vm) void {
         self.heap.deinit();
+        self.native_state_materialized_types.deinit();
     }
 
     pub fn managedObjectCount(self: *const Vm) usize {
         return self.heap.count();
+    }
+
+    pub fn emitMemoryReport(self: *const Vm, label: []const u8) void {
+        const heap_stats = self.heap.stats;
+        const native_stats = self.native_layout_stats;
+        std.debug.print(
+            "Kira runtime memory report ({s}): heap arrays current={d} peak={d} allocated={d} freed={d} structs current={d} peak={d} allocated={d} freed={d} closures current={d} peak={d} allocated={d} freed={d} strings current={d} peak={d} allocated={d} freed={d} nativeArrays current={d} peak={d} allocated={d} freed={d} nativeStructs current={d} peak={d} allocated={d} freed={d} nativeStateRecovers={d} nativeStateMaterializations={d}\n",
+            .{
+                label,
+                heap_stats.arrays_current,
+                heap_stats.arrays_peak,
+                heap_stats.arrays_allocated,
+                heap_stats.arrays_freed,
+                heap_stats.structs_current,
+                heap_stats.structs_peak,
+                heap_stats.structs_allocated,
+                heap_stats.structs_freed,
+                heap_stats.closures_current,
+                heap_stats.closures_peak,
+                heap_stats.closures_allocated,
+                heap_stats.closures_freed,
+                heap_stats.strings_current,
+                heap_stats.strings_peak,
+                heap_stats.strings_allocated,
+                heap_stats.strings_freed,
+                native_stats.arrays_current,
+                native_stats.arrays_peak,
+                native_stats.arrays_allocated,
+                native_stats.arrays_freed,
+                native_stats.structs_current,
+                native_stats.structs_peak,
+                native_stats.structs_allocated,
+                native_stats.structs_freed,
+                native_stats.native_state_recovers,
+                native_stats.native_state_materializations,
+            },
+        );
+    }
+
+    pub fn emitMemoryDetail(self: *const Vm) void {
+        self.heap.emitCurrentTypeReport();
+        var iterator = self.native_state_materialized_types.iterator();
+        while (iterator.next()) |entry| {
+            std.debug.print("Kira runtime memory detail: nativeStateType={s} materialized={d}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+        }
     }
 
     pub fn releaseManagedValue(self: *Vm, value: runtime_abi.Value) void {
@@ -109,10 +174,17 @@ pub const Vm = struct {
         const function_decl = module.findFunctionById(function_id);
         const native_slots: [*]const runtime_abi.BridgeValue = @ptrFromInt(native_ptr + 16);
         const closure = try self.allocator.create(ClosureObject);
+        errdefer self.allocator.destroy(closure);
         const captures = try self.allocator.alloc(runtime_abi.Value, capture_count);
         for (captures) |*capture| capture.* = .{ .void = {} };
+        var initialized: usize = 0;
+        errdefer {
+            self.heap.releaseSlots(captures[0..initialized]);
+            self.allocator.free(captures);
+        }
         for (0..capture_count) |index| {
             var capture_value = runtime_abi.bridgeValueToValue(native_slots[index]);
+            var capture_is_owned = false;
             if (function_decl) |decl| {
                 const param_index = decl.param_count - @as(u32, @intCast(capture_count)) + @as(u32, @intCast(index));
                 const capture_ty = decl.local_types[param_index];
@@ -121,6 +193,7 @@ pub const Vm = struct {
                         self.rememberError("native closure capture type is missing a name");
                         return error.RuntimeFailure;
                     }, capture_value.raw_ptr) };
+                    capture_is_owned = true;
                 }
             } else if (external_capture_types) |capture_types| {
                 if (index >= capture_types.len) {
@@ -133,9 +206,15 @@ pub const Vm = struct {
                         self.rememberError("native closure capture type is missing a name");
                         return error.RuntimeFailure;
                     }, capture_value.raw_ptr) };
+                    capture_is_owned = true;
                 }
             }
-            self.heap.assignBorrowed(&captures[index], capture_value);
+            if (capture_is_owned) {
+                self.heap.assignOwned(&captures[index], capture_value);
+            } else {
+                self.heap.assignBorrowed(&captures[index], capture_value);
+            }
+            initialized += 1;
         }
         closure.* = .{
             .function_id = function_id,
@@ -165,6 +244,7 @@ pub const Vm = struct {
             .len = source.len,
             .items = items.ptr,
         };
+        self.recordNativeArrayAlloc();
         errdefer self.destroyArrayNativeLayout(module, array_ty, @intFromPtr(object));
 
         const element_ty = try self.arrayElementType(module, array_ty);
@@ -178,12 +258,19 @@ pub const Vm = struct {
     pub fn copyArrayFromNativeLayout(self: *Vm, module: *const bytecode.Module, array_ty: bytecode.TypeRef, native_array_ptr: usize) anyerror!usize {
         const source: *const ArrayObject = @ptrFromInt(native_array_ptr);
         const object = try self.allocator.create(ArrayObject);
+        errdefer self.allocator.destroy(object);
         const items = try self.allocator.alloc(runtime_abi.BridgeValue, @max(source.len, 1));
         const element_ty = try self.arrayElementType(module, array_ty);
         for (items) |*item| item.* = runtime_abi.bridgeValueFromValue(.{ .void = {} });
+        var initialized: usize = 0;
+        errdefer {
+            for (items[0..initialized]) |item| self.heap.releaseValue(runtime_abi.bridgeValueToValue(item));
+            self.allocator.free(items);
+        }
         for (source.items[0..source.len], 0..) |item, index| {
             const value = runtime_abi.bridgeValueToValue(item);
             items[index] = runtime_abi.bridgeValueFromValue(try self.copyValueFromNativeLayout(module, element_ty, value));
+            initialized += 1;
         }
         object.* = .{
             .len = source.len,
@@ -195,16 +282,23 @@ pub const Vm = struct {
     pub fn syncArrayFromNativeLayout(self: *Vm, module: *const bytecode.Module, array_ty: bytecode.TypeRef, runtime_array_ptr: usize, native_array_ptr: usize) anyerror!void {
         const source: *const ArrayObject = @ptrFromInt(native_array_ptr);
         const destination: *ArrayObject = @ptrFromInt(runtime_array_ptr);
-        const old_items = destination.items[0..@max(destination.len, 1)];
-        for (old_items[0..destination.len]) |item| self.heap.releaseValue(runtime_abi.bridgeValueToValue(item));
 
         const items = try self.allocator.alloc(runtime_abi.BridgeValue, @max(source.len, 1));
         const element_ty = try self.arrayElementType(module, array_ty);
         for (items) |*item| item.* = runtime_abi.bridgeValueFromValue(.{ .void = {} });
+        var initialized: usize = 0;
+        errdefer {
+            for (items[0..initialized]) |item| self.heap.releaseValue(runtime_abi.bridgeValueToValue(item));
+            self.allocator.free(items);
+        }
         for (source.items[0..source.len], 0..) |item, index| {
             const value = runtime_abi.bridgeValueToValue(item);
             items[index] = runtime_abi.bridgeValueFromValue(try self.copyValueFromNativeLayout(module, element_ty, value));
+            initialized += 1;
         }
+
+        const old_items = destination.items[0..@max(destination.len, 1)];
+        for (old_items[0..destination.len]) |item| self.heap.releaseValue(runtime_abi.bridgeValueToValue(item));
         self.allocator.free(old_items);
         destination.len = source.len;
         destination.items = items.ptr;
@@ -225,6 +319,7 @@ pub const Vm = struct {
         }
         self.allocator.free(items);
         self.allocator.destroy(object);
+        self.recordNativeArrayFree();
     }
 
     pub fn destroyStructNativeLayout(self: *Vm, module: *const bytecode.Module, type_name: []const u8, native_ptr: usize) void {
@@ -234,6 +329,7 @@ pub const Vm = struct {
         const word_count = @max(1, std.math.divCeil(usize, layout.size, @sizeOf(u64)) catch unreachable);
         const words: [*]u64 = @ptrFromInt(native_ptr);
         self.allocator.free(words[0..word_count]);
+        self.recordNativeStructFree();
     }
 
     pub fn destroyNativeLayoutValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) void {
@@ -446,7 +542,11 @@ pub const Vm = struct {
                         return error.RuntimeFailure;
                     }
                     const payload: [*]runtime_abi.BridgeValue = @ptrFromInt(state_value.raw_ptr);
-                    payload[@intCast(value.field_index)] = runtime_abi.bridgeValueFromValue(registers[value.src]);
+                    const field_index: usize = @intCast(value.field_index);
+                    const old = runtime_abi.bridgeValueToValue(payload[field_index]);
+                    self.heap.retainValue(registers[value.src]);
+                    payload[field_index] = runtime_abi.bridgeValueFromValue(registers[value.src]);
+                    self.heap.releaseValue(old);
                     _ = value.field_ty;
                 },
                 .c_string_to_string => |value| {
@@ -791,12 +891,17 @@ pub const Vm = struct {
     }
 
     fn recoverNativeState(self: *Vm, module: *const bytecode.Module, type_name: []const u8, state_token: usize, expected_type_id: u64) !usize {
+        self.native_layout_stats.native_state_recovers += 1;
         const box: *NativeStateBox = @ptrFromInt(state_token);
         if (box.type_id != expected_type_id) {
             self.rememberError("nativeRecover used a userdata token for the wrong state type");
             return error.RuntimeFailure;
         }
         if (box.runtime_payload == 0 and box.payload != 0) {
+            self.native_layout_stats.native_state_materializations += 1;
+            const result = try self.native_state_materialized_types.getOrPut(type_name);
+            if (!result.found_existing) result.value_ptr.* = 0;
+            result.value_ptr.* += 1;
             box.runtime_payload = try self.materializeNativeStatePayload(module, type_name, box.payload);
         }
         if (box.runtime_payload == 0) {
@@ -1096,10 +1201,17 @@ pub const Vm = struct {
             return error.RuntimeFailure;
         };
         const fields = try self.allocator.alloc(runtime_abi.Value, type_decl.fields.len);
+        for (fields) |*field| field.* = .{ .void = {} };
+        var initialized: usize = 0;
+        errdefer {
+            for (fields[0..initialized]) |field| self.heap.releaseValue(field);
+            self.allocator.free(fields);
+        }
         for (type_decl.fields, 0..) |field_decl, index| {
             fields[index] = try helper_impl.readNativeFieldValue(self, module, type_name, field_decl, index, native_ptr);
+            initialized += 1;
         }
-        return self.heap.registerStruct(type_name, fields);
+        return self.heap.registerStructWithOrigin(type_name, fields, .native_materialize);
     }
 
     fn copyStructFromNativeLayoutInto(self: *Vm, module: *const bytecode.Module, type_name: []const u8, runtime_ptr: usize, native_ptr: usize) anyerror!void {
@@ -1154,6 +1266,7 @@ pub const Vm = struct {
         const word_count = @max(1, std.math.divCeil(usize, layout.size, @sizeOf(u64)) catch unreachable);
         const words = try self.allocator.alloc(u64, word_count);
         @memset(std.mem.sliceAsBytes(words), 0);
+        self.recordNativeStructAlloc();
         errdefer self.destroyStructNativeLayout(module, type_name, @intFromPtr(words.ptr));
         try self.copyStructToNativeLayoutInto(module, type_name, runtime_ptr, @intFromPtr(words.ptr));
         return @intFromPtr(words.ptr);
@@ -1187,6 +1300,28 @@ pub const Vm = struct {
                 else => {},
             }
         }
+    }
+
+    fn recordNativeArrayAlloc(self: *Vm) void {
+        self.native_layout_stats.arrays_current += 1;
+        self.native_layout_stats.arrays_allocated += 1;
+        self.native_layout_stats.arrays_peak = @max(self.native_layout_stats.arrays_peak, self.native_layout_stats.arrays_current);
+    }
+
+    fn recordNativeArrayFree(self: *Vm) void {
+        if (self.native_layout_stats.arrays_current > 0) self.native_layout_stats.arrays_current -= 1;
+        self.native_layout_stats.arrays_freed += 1;
+    }
+
+    fn recordNativeStructAlloc(self: *Vm) void {
+        self.native_layout_stats.structs_current += 1;
+        self.native_layout_stats.structs_allocated += 1;
+        self.native_layout_stats.structs_peak = @max(self.native_layout_stats.structs_peak, self.native_layout_stats.structs_current);
+    }
+
+    fn recordNativeStructFree(self: *Vm) void {
+        if (self.native_layout_stats.structs_current > 0) self.native_layout_stats.structs_current -= 1;
+        self.native_layout_stats.structs_freed += 1;
     }
 };
 
@@ -1288,6 +1423,10 @@ test "materializes native closure struct captures using external metadata" {
     const handle_values: [*]const runtime_abi.Value = @ptrFromInt(pipeline_values[0].raw_ptr);
     try std.testing.expect(handle_values[0] == .integer);
     try std.testing.expectEqual(@as(i64, 65537), handle_values[0].integer);
+
+    try std.testing.expectEqual(@as(usize, 2), vm.heap.stats.structs_current);
+    vm.releaseManagedValue(.{ .raw_ptr = closure_ptr });
+    try std.testing.expectEqual(@as(usize, 0), vm.heap.stats.structs_current);
 }
 
 test "hybrid_native_bridge_materialization_cleanup" {
@@ -1335,6 +1474,241 @@ test "hybrid_native_bridge_materialization_cleanup" {
     vm.releaseManagedValue(.{ .raw_ptr = batch_ptr });
     vm.releaseManagedValue(.{ .raw_ptr = array_ptr });
     try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
+}
+
+test "hybrid_native_bridge_repeated_materialization_cleanup" {
+    var vm = Vm.init(std.testing.allocator);
+    defer vm.deinit();
+
+    const point_fields = [_]bytecode.Field{
+        .{ .name = "x", .ty = .{ .kind = .integer, .name = "I64" } },
+        .{ .name = "y", .ty = .{ .kind = .integer, .name = "I64" } },
+    };
+    const batch_fields = [_]bytecode.Field{
+        .{ .name = "points", .ty = .{ .kind = .array, .name = "Point" } },
+        .{ .name = "weights", .ty = .{ .kind = .array, .name = "I64" } },
+    };
+    const types = [_]bytecode.TypeDecl{
+        .{ .name = "Point", .fields = @constCast(&point_fields) },
+        .{ .name = "Batch", .fields = @constCast(&batch_fields) },
+    };
+    const module = bytecode.Module{
+        .types = @constCast(&types),
+        .functions = &.{},
+        .entry_function_id = null,
+    };
+
+    for (0..200) |iteration| {
+        const points_ptr = try vm.allocateArray(0);
+        const points: *ArrayObject = @ptrFromInt(points_ptr);
+        const weights_ptr = try vm.allocateArray(0);
+        const weights: *ArrayObject = @ptrFromInt(weights_ptr);
+
+        for (0..12) |index| {
+            const point_ptr = try vm.allocateStruct(&module, "Point");
+            const fields: [*]runtime_abi.Value = @ptrFromInt(point_ptr);
+            fields[0] = .{ .integer = @intCast(iteration + index) };
+            fields[1] = .{ .integer = @intCast((iteration + 1) * (index + 1)) };
+            try vm.heap.appendArrayItem(points, .{ .raw_ptr = point_ptr });
+            vm.releaseManagedValue(.{ .raw_ptr = point_ptr });
+            try vm.heap.appendArrayItem(weights, .{ .integer = @intCast(index) });
+        }
+
+        const native_points = try vm.copyArrayToNativeLayout(&module, .{ .kind = .array, .name = "Point" }, points_ptr);
+        vm.destroyArrayNativeLayout(&module, .{ .kind = .array, .name = "Point" }, native_points);
+        const native_weights = try vm.copyArrayToNativeLayout(&module, .{ .kind = .array, .name = "I64" }, weights_ptr);
+        vm.destroyArrayNativeLayout(&module, .{ .kind = .array, .name = "I64" }, native_weights);
+
+        const batch_ptr = try vm.allocateStruct(&module, "Batch");
+        const batch_fields_ptr: [*]runtime_abi.Value = @ptrFromInt(batch_ptr);
+        batch_fields_ptr[0] = .{ .raw_ptr = points_ptr };
+        batch_fields_ptr[1] = .{ .raw_ptr = weights_ptr };
+        vm.retainManagedValue(.{ .raw_ptr = points_ptr });
+        vm.retainManagedValue(.{ .raw_ptr = weights_ptr });
+        const native_batch = try vm.copyStructToNativeLayout(&module, "Batch", batch_ptr);
+        vm.destroyStructNativeLayout(&module, "Batch", native_batch);
+
+        vm.releaseManagedValue(.{ .raw_ptr = batch_ptr });
+        vm.releaseManagedValue(.{ .raw_ptr = points_ptr });
+        vm.releaseManagedValue(.{ .raw_ptr = weights_ptr });
+        try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
+    }
+}
+
+test "hybrid_runtime_array_append_cleanup_stress" {
+    var vm = Vm.init(std.testing.allocator);
+    defer vm.deinit();
+
+    const module = bytecode.Module{
+        .types = &.{},
+        .functions = &.{},
+        .entry_function_id = null,
+    };
+
+    for (0..300) |iteration| {
+        const array_ptr = try vm.allocateArray(0);
+        const array: *ArrayObject = @ptrFromInt(array_ptr);
+        for (0..64) |index| {
+            try vm.heap.appendArrayItem(array, .{ .integer = @intCast(iteration + index) });
+        }
+
+        const native_array_ptr = try vm.copyArrayToNativeLayout(&module, .{ .kind = .array, .name = "I64" }, array_ptr);
+        const native_array: *ArrayObject = @ptrFromInt(native_array_ptr);
+        for (0..32) |index| {
+            const old_items = native_array.items[0..@max(native_array.len, 1)];
+            const new_len = native_array.len + 1;
+            const new_items = try vm.allocator.alloc(runtime_abi.BridgeValue, new_len);
+            for (old_items[0..native_array.len], 0..) |item, item_index| {
+                new_items[item_index] = item;
+            }
+            new_items[native_array.len] = runtime_abi.bridgeValueFromValue(.{ .integer = @intCast(index) });
+            vm.allocator.free(old_items);
+            native_array.items = new_items.ptr;
+            native_array.len = new_len;
+        }
+        try vm.syncArrayFromNativeLayout(&module, .{ .kind = .array, .name = "I64" }, array_ptr, native_array_ptr);
+        vm.destroyArrayNativeLayout(&module, .{ .kind = .array, .name = "I64" }, native_array_ptr);
+        vm.releaseManagedValue(.{ .raw_ptr = array_ptr });
+        try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
+    }
+}
+
+test "hybrid_recursive_aggregate_sync_cleanup_stress" {
+    var vm = Vm.init(std.testing.allocator);
+    defer vm.deinit();
+
+    const point_fields = [_]bytecode.Field{
+        .{ .name = "x", .ty = .{ .kind = .integer, .name = "I64" } },
+        .{ .name = "y", .ty = .{ .kind = .integer, .name = "I64" } },
+    };
+    const row_fields = [_]bytecode.Field{
+        .{ .name = "points", .ty = .{ .kind = .array, .name = "Point" } },
+    };
+    const scene_fields = [_]bytecode.Field{
+        .{ .name = "rows", .ty = .{ .kind = .array, .name = "Row" } },
+    };
+    const types = [_]bytecode.TypeDecl{
+        .{ .name = "Point", .fields = @constCast(&point_fields) },
+        .{ .name = "Row", .fields = @constCast(&row_fields) },
+        .{ .name = "Scene", .fields = @constCast(&scene_fields) },
+    };
+    const module = bytecode.Module{
+        .types = @constCast(&types),
+        .functions = &.{},
+        .entry_function_id = null,
+    };
+
+    for (0..150) |iteration| {
+        const rows_ptr = try vm.allocateArray(0);
+        const rows: *ArrayObject = @ptrFromInt(rows_ptr);
+        for (0..5) |row_index| {
+            const points_ptr = try vm.allocateArray(0);
+            const points: *ArrayObject = @ptrFromInt(points_ptr);
+            for (0..8) |point_index| {
+                const point_ptr = try vm.allocateStruct(&module, "Point");
+                const fields: [*]runtime_abi.Value = @ptrFromInt(point_ptr);
+                fields[0] = .{ .integer = @intCast(iteration + row_index) };
+                fields[1] = .{ .integer = @intCast(point_index) };
+                try vm.heap.appendArrayItem(points, .{ .raw_ptr = point_ptr });
+                vm.releaseManagedValue(.{ .raw_ptr = point_ptr });
+            }
+
+            const row_ptr = try vm.allocateStruct(&module, "Row");
+            const row_fields_ptr: [*]runtime_abi.Value = @ptrFromInt(row_ptr);
+            row_fields_ptr[0] = .{ .raw_ptr = points_ptr };
+            vm.retainManagedValue(.{ .raw_ptr = points_ptr });
+            try vm.heap.appendArrayItem(rows, .{ .raw_ptr = row_ptr });
+            vm.releaseManagedValue(.{ .raw_ptr = row_ptr });
+            vm.releaseManagedValue(.{ .raw_ptr = points_ptr });
+        }
+
+        const scene_ptr = try vm.allocateStruct(&module, "Scene");
+        const scene_fields_ptr: [*]runtime_abi.Value = @ptrFromInt(scene_ptr);
+        scene_fields_ptr[0] = .{ .raw_ptr = rows_ptr };
+        vm.retainManagedValue(.{ .raw_ptr = rows_ptr });
+
+        const native_scene = try vm.copyStructToNativeLayout(&module, "Scene", scene_ptr);
+        for (0..10) |_| {
+            try vm.syncStructFromNativeLayout(&module, "Scene", scene_ptr, native_scene);
+        }
+        vm.destroyStructNativeLayout(&module, "Scene", native_scene);
+
+        vm.releaseManagedValue(.{ .raw_ptr = scene_ptr });
+        vm.releaseManagedValue(.{ .raw_ptr = rows_ptr });
+        try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
+    }
+}
+
+test "hybrid_native_state_field_set_releases_replaced_managed_values" {
+    var vm = Vm.init(std.testing.allocator);
+    defer vm.deinit();
+
+    const handle_fields = [_]bytecode.Field{
+        .{ .name = "id", .ty = .{ .kind = .integer, .name = "I64" } },
+    };
+    const state_fields = [_]bytecode.Field{
+        .{ .name = "handle", .ty = .{ .kind = .ffi_struct, .name = "Handle" } },
+    };
+    const types = [_]bytecode.TypeDecl{
+        .{ .name = "Handle", .fields = @constCast(&handle_fields) },
+        .{ .name = "State", .fields = @constCast(&state_fields) },
+    };
+    const local_types = [_]bytecode.TypeRef{
+        .{ .kind = .raw_ptr, .name = "RawPtr" },
+    };
+    const instructions = [_]bytecode.Instruction{
+        .{ .load_local = .{ .dst = 0, .local = 0 } },
+        .{ .recover_native_state = .{ .dst = 1, .state = 0, .type_name = "State", .type_id = 77 } },
+        .{ .alloc_struct = .{ .dst = 2, .type_name = "Handle" } },
+        .{ .native_state_field_set = .{
+            .state = 1,
+            .field_index = 0,
+            .src = 2,
+            .field_ty = .{ .kind = .ffi_struct, .name = "Handle" },
+        } },
+        .{ .ret = .{} },
+    };
+    const module = bytecode.Module{
+        .types = @constCast(&types),
+        .functions = &.{
+            .{
+                .id = 0,
+                .name = "replaceHandle",
+                .param_count = 1,
+                .register_count = 3,
+                .local_count = 1,
+                .local_types = @constCast(&local_types),
+                .instructions = @constCast(&instructions),
+            },
+        },
+        .entry_function_id = null,
+    };
+
+    const native_payload = try vm.allocator.alloc(runtime_abi.BridgeValue, 1);
+    native_payload[0] = runtime_abi.bridgeValueFromValue(.{ .raw_ptr = 0 });
+    const box = try vm.allocator.create(NativeStateBox);
+    box.* = .{
+        .type_id = 77,
+        .payload = @intFromPtr(native_payload.ptr),
+        .runtime_payload = 0,
+    };
+    defer {
+        if (box.runtime_payload != 0) {
+            const runtime_payload: [*]runtime_abi.BridgeValue = @ptrFromInt(box.runtime_payload);
+            vm.heap.releaseValue(runtime_abi.bridgeValueToValue(runtime_payload[0]));
+            vm.allocator.free(runtime_payload[0..1]);
+        }
+        vm.allocator.free(native_payload);
+        vm.allocator.destroy(box);
+    }
+
+    var buffer: [16]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    for (0..200) |_| {
+        const result = try vm.runFunctionById(&module, 0, &.{.{ .raw_ptr = @intFromPtr(box) }}, &writer, .{});
+        vm.releaseManagedValue(result);
+        try std.testing.expectEqual(@as(usize, 1), vm.heap.count());
+    }
 }
 
 test "prints struct values" {

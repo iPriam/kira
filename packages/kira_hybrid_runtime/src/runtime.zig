@@ -12,6 +12,8 @@ pub const HybridRuntime = struct {
     module: bytecode.Module,
     vm: vm_runtime.Vm,
     bridge: native_bridge.NativeBridge,
+    pending_callback_return_values: std.ArrayListUnmanaged(runtime_abi.Value) = .empty,
+    pending_callback_native_structs: std.ArrayListUnmanaged(NativeStructReturn) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, manifest: hybrid.HybridModuleManifest) !HybridRuntime {
         var bridge = native_bridge.NativeBridge.init(allocator);
@@ -28,6 +30,9 @@ pub const HybridRuntime = struct {
     }
 
     pub fn deinit(self: *HybridRuntime) void {
+        self.cleanupPendingCallbackReturns();
+        self.pending_callback_return_values.deinit(self.allocator);
+        self.pending_callback_native_structs.deinit(self.allocator);
         self.vm.deinit();
         self.bridge.deinit();
     }
@@ -61,6 +66,14 @@ pub const HybridRuntime = struct {
         });
         const runtime_args = try self.allocator.alloc(runtime_abi.Value, args.len);
         defer self.allocator.free(runtime_args);
+        const materialized_args = try self.allocator.alloc(bool, args.len);
+        defer self.allocator.free(materialized_args);
+        @memset(materialized_args, false);
+        defer {
+            for (materialized_args, 0..) |materialized, index| {
+                if (materialized) self.vm.releaseManagedValue(runtime_args[index]);
+            }
+        }
         const native_arg_ptrs = try self.allocator.alloc(usize, args.len);
         defer self.allocator.free(native_arg_ptrs);
         @memset(native_arg_ptrs, 0);
@@ -96,6 +109,7 @@ pub const HybridRuntime = struct {
                     null;
                 defer if (capture_types) |items| self.allocator.free(items);
                 runtime_args[index] = .{ .raw_ptr = try self.vm.materializeNativeClosure(&self.module, runtime_args[index].raw_ptr, capture_types) };
+                materialized_args[index] = true;
                 continue;
             }
             if (local_ty.kind != .ffi_struct or runtime_args[index] != .raw_ptr or runtime_args[index].raw_ptr == 0) continue;
@@ -105,11 +119,8 @@ pub const HybridRuntime = struct {
                 local_ty.name orelse return error.RuntimeFailure,
                 runtime_args[index].raw_ptr,
             ) };
+            materialized_args[index] = true;
         }
-        for (runtime_args) |value| {
-            try self.vm.pinNativeBoundaryValue(value);
-        }
-
         const result = try self.vm.runFunctionById(&self.module, function_decl.id, runtime_args, context.writer, .{
             .context = @as(?*anyopaque, @ptrCast(context)),
             .call_native = nativeCallHook(@TypeOf(context.*)),
@@ -125,18 +136,28 @@ pub const HybridRuntime = struct {
                 runtime_args[index].raw_ptr,
                 native_ptr,
             );
-            self.vm.releaseManagedValue(runtime_args[index]);
         }
 
         var bridge_result = runtime_abi.bridgeValueFromValue(result);
-        try self.vm.pinNativeBoundaryValue(result);
         if (function_decl.return_type.kind == .ffi_struct and result == .raw_ptr and result.raw_ptr != 0) {
-            bridge_result = runtime_abi.bridgeValueFromValue(.{ .raw_ptr = try self.vm.lowerStructToNativeLayout(
+            const type_name = function_decl.return_type.name orelse return error.RuntimeFailure;
+            const native_result = try self.vm.lowerStructToNativeLayout(
                 &self.module,
-                function_decl.return_type.name orelse return error.RuntimeFailure,
+                type_name,
                 result.raw_ptr,
-            ) });
+            );
+            errdefer self.vm.destroyStructNativeLayout(&self.module, type_name, native_result);
+            try self.pending_callback_native_structs.append(self.allocator, .{
+                .type_name = type_name,
+                .ptr = native_result,
+            });
+            bridge_result = runtime_abi.bridgeValueFromValue(.{ .raw_ptr = native_result });
+        } else {
+            self.vm.retainManagedValue(result);
+            errdefer self.vm.releaseManagedValue(result);
+            try self.pending_callback_return_values.append(self.allocator, result);
         }
+        self.trimPendingCallbackReturns();
         if (out_result) |ptr| ptr.* = bridge_result;
         self.vm.releaseManagedValue(result);
         runtime_abi.emitExecutionTrace("CALLBACK", "RETURN", "runtime->native fn={s}({d}) tag={s}", .{
@@ -146,11 +167,39 @@ pub const HybridRuntime = struct {
         });
     }
 
+    fn cleanupPendingCallbackReturns(self: *HybridRuntime) void {
+        for (self.pending_callback_native_structs.items) |item| {
+            self.vm.destroyStructNativeLayout(&self.module, item.type_name, item.ptr);
+        }
+        self.pending_callback_native_structs.clearRetainingCapacity();
+        for (self.pending_callback_return_values.items) |value| {
+            self.vm.releaseManagedValue(value);
+        }
+        self.pending_callback_return_values.clearRetainingCapacity();
+    }
+
+    fn trimPendingCallbackReturns(self: *HybridRuntime) void {
+        const max_pending_callback_returns = 256;
+        while (self.pending_callback_native_structs.items.len > max_pending_callback_returns) {
+            const item = self.pending_callback_native_structs.orderedRemove(0);
+            self.vm.destroyStructNativeLayout(&self.module, item.type_name, item.ptr);
+        }
+        while (self.pending_callback_return_values.items.len > max_pending_callback_returns) {
+            const value = self.pending_callback_return_values.orderedRemove(0);
+            self.vm.releaseManagedValue(value);
+        }
+    }
+
     fn resolveFunctionPointer(self: *HybridRuntime, function_id: u32) !usize {
         const function_decl = findFunction(self.manifest.functions, function_id) orelse return error.UnknownFunction;
         if (function_decl.execution != .native or function_decl.exported_name == null) return error.UnsupportedExecutableFeature;
         return self.bridge.resolveImplementationPointer(function_id);
     }
+};
+
+const NativeStructReturn = struct {
+    type_name: []const u8,
+    ptr: usize,
 };
 
 fn RuntimeContext(comptime Writer: type) type {
