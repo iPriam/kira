@@ -1,0 +1,14 @@
+struct Mesh {
+    let id: Int
+}
+
+function consume(mesh: Mesh) -> Int {
+    return mesh.id
+}
+
+@Main
+function main() {
+    var mesh = Mesh { id: 7 }
+    print(consume(move mesh))
+    return
+}

@@ -1,0 +1,17 @@
+struct Mesh {
+    let id: Int
+}
+
+function makeMesh() -> Mesh {
+    return Mesh { id: 11 }
+}
+
+function consume(mesh: Mesh) -> Int {
+    return mesh.id
+}
+
+@Main
+function main() {
+    print(consume(makeMesh()))
+    return
+}

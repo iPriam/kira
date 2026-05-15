@@ -23,6 +23,14 @@ pub const ConstructConstraint = struct {
     construct_name: []const u8,
 };
 
+pub const OwnershipMode = enum(u8) {
+    owned,
+    borrow_read,
+    borrow_mut,
+    move,
+    copy,
+};
+
 pub const Program = struct {
     constructs: []Construct = &.{},
     construct_implementations: []ConstructImplementation = &.{},
@@ -123,7 +131,9 @@ pub const Function = struct {
     is_extern: bool = false,
     foreign: ?ForeignFunction = null,
     param_types: []const ValueType = &.{},
+    param_ownership: []const OwnershipMode = &.{},
     return_type: ValueType = .{ .kind = .void },
+    return_ownership: OwnershipMode = .owned,
     register_count: u32,
     local_count: u32,
     local_types: []const ValueType,

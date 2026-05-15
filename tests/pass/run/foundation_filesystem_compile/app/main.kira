@@ -1,8 +1,9 @@
 import Foundation
 
 @Main
+@Native
 function main() {
-    let file = openFile("tests/pass/run/foundation_filesystem_compile/app/sample.txt")
+    let file = openFile("app/sample.txt")
     let contents = file.readAll()
     let text: String = contents.text
     file.close()

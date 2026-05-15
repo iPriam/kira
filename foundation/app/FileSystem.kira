@@ -50,14 +50,14 @@ struct DirectoryListing {
 }
 
 @Native
-function openFile(path: String) -> File {
+function openFile(path: borrow String) -> File {
     return File {
         handle: fs_open_read(path)
     }
 }
 
 @Native
-function readFile(path: String) -> FileContents {
+function readFile(path: borrow String) -> FileContents {
     let result = fs_read_file(path)
     let contents = FileContents {
         ok: result.ok
@@ -69,22 +69,22 @@ function readFile(path: String) -> FileContents {
 }
 
 @Native
-function writeFile(path: String, text: String) -> Bool {
+function writeFile(path: borrow String, text: borrow String) -> Bool {
     return fs_write_file(path, text)
 }
 
 @Native
-function fileExists(path: String) -> Bool {
+function fileExists(path: borrow String) -> Bool {
     return fs_file_exists(path)
 }
 
 @Native
-function fileSize(path: String) -> U64 {
+function fileSize(path: borrow String) -> U64 {
     return fs_file_size(path)
 }
 
 @Native
-function listDirectory(path: String) -> DirectoryListing {
+function listDirectory(path: borrow String) -> DirectoryListing {
     return DirectoryListing {
         handle: fs_list_directory(path)
     }

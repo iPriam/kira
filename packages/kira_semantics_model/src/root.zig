@@ -32,6 +32,7 @@ pub const ConstructForm = hir.ConstructForm;
 pub const Function = hir.Function;
 pub const Parameter = hir.Parameter;
 pub const Capture = hir.Capture;
+pub const OwnershipMode = types.OwnershipMode;
 pub const Statement = hir.Statement;
 pub const MatchStatement = hir.MatchStatement;
 pub const MatchArm = hir.MatchArm;

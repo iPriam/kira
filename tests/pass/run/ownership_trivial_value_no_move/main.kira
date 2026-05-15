@@ -1,0 +1,11 @@
+function add(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+@Main
+function main() {
+    let x = 1
+    let y = add(x, x)
+    print(y)
+    return
+}

@@ -211,18 +211,23 @@ pub fn lowerProgramWithOptions(
                 const annotation_info = try shared.resolveFunctionAnnotations(&ctx, function_decl.annotations);
                 const foreign = try shared.resolveForeignFunction(&ctx, function_decl.annotations, function_decl.span);
                 var param_types = std.array_list.Managed(model.ResolvedType).init(allocator);
+                var param_ownership = std.array_list.Managed(model.OwnershipMode).init(allocator);
                 for (function_decl.params) |param| {
+                    try param_ownership.append(shared.ownershipModeFromSyntax(param.type_expr));
                     if (param.type_expr) |type_expr| {
                         try param_types.append(try shared.typeFromSyntax(&ctx, type_expr.*));
                     } else {
                         try param_types.append(.{ .kind = .unknown });
                     }
                 }
+                const return_ownership = shared.ownershipModeFromSyntax(function_decl.return_type);
                 try function_headers.put(allocator, function_decl.name, .{
                     .id = @as(u32, @intCast(function_headers.count())),
                     .params = try param_types.toOwnedSlice(),
+                    .param_ownership = try param_ownership.toOwnedSlice(),
                     .execution = if (foreign != null and annotation_info.execution == .inherited) .native else annotation_info.execution,
                     .return_type = if (function_decl.return_type) |return_type| try shared.typeFromSyntax(&ctx, return_type.*) else .{ .kind = .unknown },
+                    .return_ownership = return_ownership,
                     .is_extern = foreign != null,
                     .foreign = foreign,
                     .span = function_decl.span,
@@ -271,7 +276,7 @@ pub fn lowerProgramWithOptions(
         if (!function_decl.is_extern) continue;
         const header = function_headers.get(function_decl.name) orelse continue;
         const empty_statements = try allocator.alloc(model.Statement, 0);
-        const params = try lowerImportedParams(allocator, function_decl.params);
+        const params = try lowerImportedParams(allocator, function_decl.params, function_decl.param_ownership);
         try functions.append(.{
             .id = header.id,
             .name = try allocator.dupe(u8, function_decl.name),
@@ -283,6 +288,7 @@ pub fn lowerProgramWithOptions(
             .params = params,
             .locals = &.{},
             .return_type = function_decl.return_type,
+            .return_ownership = function_decl.return_ownership,
             .body = empty_statements,
             .span = header.span,
         });
@@ -470,10 +476,16 @@ pub fn lowerFunction(
         }
 
         const param_type = try shared.typeFromSyntaxChecked(ctx, param.type_expr.?.*);
+        const param_ownership = shared.ownershipModeFromSyntax(param.type_expr);
+        const local_ownership: model.OwnershipMode = switch (param_ownership) {
+            .borrow_read, .borrow_mut => param_ownership,
+            .owned, .move, .copy => .owned,
+        };
         try scope.put(ctx.allocator, param.name, .{
             .id = next_local_id,
             .ty = param_type,
             .storage = .immutable,
+            .ownership = local_ownership,
             .initialized = true,
             .decl_span = param.span,
         });
@@ -481,12 +493,14 @@ pub fn lowerFunction(
             .id = next_local_id,
             .name = try ctx.allocator.dupe(u8, param.name),
             .ty = param_type,
+            .ownership = param_ownership,
             .span = param.span,
         });
         try locals.append(.{
             .id = next_local_id,
             .name = try ctx.allocator.dupe(u8, param.name),
             .ty = param_type,
+            .ownership = local_ownership,
             .is_param = true,
             .span = param.span,
         });
@@ -521,6 +535,18 @@ pub fn lowerFunction(
         return error.DiagnosticsEmitted;
     }
 
+    const explicit_return_ownership = shared.ownershipModeFromSyntax(function_decl.return_type);
+    if (explicit_return_ownership == .borrow_read or explicit_return_ownership == .borrow_mut) {
+        try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
+            .severity = .@"error",
+            .code = "KSEM112",
+            .title = "returned borrow is not supported yet",
+            .message = "Borrowed return types are reserved, but this compiler slice does not validate returned-borrow lifetimes yet.",
+            .labels = &.{diagnostics.primaryLabel(function_decl.return_type.?.ownership.span, "borrowed return type is not implemented yet")},
+            .help = "Return an owned value for now. Returned borrows will be enabled with input-borrow lifetime validation.",
+        });
+        return error.DiagnosticsEmitted;
+    }
     const explicit_return_type = if (function_decl.return_type) |return_type| try shared.typeFromSyntaxChecked(ctx, return_type.*) else model.ResolvedType{ .kind = .unknown };
     const body = if (function_decl.body) |syntax_body|
         try exprs.lowerBlockStatements(ctx, syntax_body, imports, &scope, &locals, &next_local_id, function_headers, 0, explicit_return_type)
@@ -557,6 +583,7 @@ pub fn lowerFunction(
         .params = try params.toOwnedSlice(),
         .locals = try locals.toOwnedSlice(),
         .return_type = return_type,
+        .return_ownership = explicit_return_ownership,
         .body = body,
         .span = function_decl.span,
     };
@@ -881,6 +908,7 @@ fn defaultExprSpan(expr: syntax.ast.Expr) source_pkg.Span {
         .native_state => |node| node.span,
         .native_user_data => |node| node.span,
         .native_recover => |node| node.span,
+        .ownership => |node| node.span,
         .unary => |node| node.span,
         .binary => |node| node.span,
         .conditional => |node| node.span,
@@ -970,13 +998,14 @@ fn qualifiedLeafText(name: []const u8) []const u8 {
     return name[index + 1 ..];
 }
 
-fn lowerImportedParams(allocator: std.mem.Allocator, param_types: []const model.ResolvedType) ![]model.Parameter {
+fn lowerImportedParams(allocator: std.mem.Allocator, param_types: []const model.ResolvedType, param_ownership: []const model.OwnershipMode) ![]model.Parameter {
     var params = std.array_list.Managed(model.Parameter).init(allocator);
     for (param_types, 0..) |param_type, index| {
         try params.append(.{
             .id = @as(u32, @intCast(index)),
             .name = try std.fmt.allocPrint(allocator, "arg_{d}", .{index}),
             .ty = param_type,
+            .ownership = if (index < param_ownership.len) param_ownership[index] else .owned,
             .span = .{ .start = 0, .end = 0 },
         });
     }

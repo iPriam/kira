@@ -5,7 +5,9 @@ const runtime_abi = @import("kira_runtime_abi");
 pub const ImportedFunction = struct {
     name: []const u8,
     params: []const model.ResolvedType = &.{},
+    param_ownership: []const model.OwnershipMode = &.{},
     return_type: model.ResolvedType = .{ .kind = .unknown },
+    return_ownership: model.OwnershipMode = .owned,
     execution: runtime_abi.FunctionExecution = .inherited,
     is_extern: bool = false,
     foreign: ?model.ForeignFunction = null,

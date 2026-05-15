@@ -51,18 +51,18 @@ struct RenderPipelineDescriptor {
     var shaderResources: [ShaderResourceDescriptor]
 }
 
-function attributeScore(attr: VertexAttributeDescriptor) -> Int {
+function attributeScore(attr: borrow VertexAttributeDescriptor) -> Int {
     return attr.location * 1000 + attr.format * 100 + attr.offset * 10 + attr.bufferIndex
 }
 
-function blendScore(blend: BlendDescriptor) -> Int {
+function blendScore(blend: borrow BlendDescriptor) -> Int {
     if blend.enabled {
         return blend.preset * 100 + blend.srcFactor * 10 + blend.dstFactor
     }
     return blend.preset
 }
 
-function depthScore(depth: DepthStencilDescriptor) -> Int {
+function depthScore(depth: borrow DepthStencilDescriptor) -> Int {
     var score = depth.compare * 100 + depth.bias
     if depth.enabled {
         score = score + 7
@@ -73,7 +73,7 @@ function depthScore(depth: DepthStencilDescriptor) -> Int {
     return score
 }
 
-function shiftAttribute(attr: VertexAttributeDescriptor, delta: Int) -> VertexAttributeDescriptor {
+function shiftAttribute(attr: borrow VertexAttributeDescriptor, delta: Int) -> VertexAttributeDescriptor {
     var next = attr
     next.offset = next.offset + delta
     next.location = next.location + 10
@@ -111,7 +111,7 @@ function makeDescriptor() -> RenderPipelineDescriptor {
     }
 }
 
-function checksumDescriptor(descriptor: RenderPipelineDescriptor) -> Int {
+function checksumDescriptor(descriptor: borrow RenderPipelineDescriptor) -> Int {
     var checksum = descriptor.vertexLayout.stride * 13 + descriptor.vertexLayout.stepMode
     var i = 0
     while i < 4 {

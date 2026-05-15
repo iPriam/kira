@@ -1,0 +1,19 @@
+struct Mesh {
+    let id: Int
+}
+
+function consume(mesh: Mesh) -> Int {
+    return mesh.id
+}
+
+function inspect(mesh: borrow Mesh) -> Int {
+    return mesh.id
+}
+
+@Main
+function main() {
+    var mesh = Mesh { id: 3 }
+    print(consume(move mesh))
+    print(inspect(mesh))
+    return
+}

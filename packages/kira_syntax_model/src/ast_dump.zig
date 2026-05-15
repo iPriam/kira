@@ -259,8 +259,15 @@ fn dumpExpr(writer: anytype, expr: ast.Expr, depth: usize) anyerror!void {
             try indent(writer, depth);
             try writer.writeAll("NativeRecover\n");
             try indent(writer, depth + 1);
-            try writer.print("Type {s}\n", .{typeExprText(value.state_type.*)});
+            try writer.writeAll("Type ");
+            try dumpTypeExprInline(writer, value.state_type.*);
+            try writer.writeAll("\n");
             try dumpExpr(writer, value.value.*, depth + 1);
+        },
+        .ownership => |value| {
+            try indent(writer, depth);
+            try writer.print("Ownership {s}\n", .{@tagName(value.op)});
+            try dumpExpr(writer, value.operand.*, depth + 1);
         },
         .unary => |value| {
             try indent(writer, depth);
@@ -306,14 +313,47 @@ fn dumpExpr(writer: anytype, expr: ast.Expr, depth: usize) anyerror!void {
     }
 }
 
-fn typeExprText(ty: ast.TypeExpr) []const u8 {
-    return switch (ty) {
-        .named => |value| qualifiedNameText(value),
-        .generic => |value| qualifiedNameText(value.base),
-        .any => "any",
-        .array => "Array",
-        .function => "Function",
-    };
+fn dumpTypeExprInline(writer: anytype, ty: ast.TypeExpr) anyerror!void {
+    switch (ty) {
+        .named => |value| try writer.writeAll(qualifiedNameText(value)),
+        .generic => |value| {
+            try writer.writeAll(qualifiedNameText(value.base));
+            try writer.writeAll("<");
+            for (value.args, 0..) |arg, index| {
+                if (index != 0) try writer.writeAll(", ");
+                try dumpTypeExprInline(writer, arg.*);
+            }
+            try writer.writeAll(">");
+        },
+        .ownership => |value| {
+            switch (value.mode) {
+                .owned => {},
+                .borrow_read => try writer.writeAll("borrow "),
+                .borrow_mut => try writer.writeAll("borrow mut "),
+                .move => try writer.writeAll("move "),
+                .copy => try writer.writeAll("copy "),
+            }
+            try dumpTypeExprInline(writer, value.target.*);
+        },
+        .any => |value| {
+            try writer.writeAll("any ");
+            try dumpTypeExprInline(writer, value.target.*);
+        },
+        .array => |value| {
+            try writer.writeAll("[");
+            try dumpTypeExprInline(writer, value.element_type.*);
+            try writer.writeAll("]");
+        },
+        .function => |value| {
+            try writer.writeAll("(");
+            for (value.params, 0..) |param, index| {
+                if (index != 0) try writer.writeAll(", ");
+                try dumpTypeExprInline(writer, param.*);
+            }
+            try writer.writeAll(") -> ");
+            try dumpTypeExprInline(writer, value.result.*);
+        },
+    }
 }
 
 fn qualifiedNameText(name: ast.QualifiedName) []const u8 {

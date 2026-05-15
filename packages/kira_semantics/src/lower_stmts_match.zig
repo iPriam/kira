@@ -250,6 +250,7 @@ fn appendPatternLocal(
         .id = local_id,
         .ty = ty,
         .storage = .immutable,
+        .ownership = .owned,
         .initialized = true,
         .decl_span = span,
     });
@@ -257,6 +258,7 @@ fn appendPatternLocal(
         .id = local_id,
         .name = try ctx.allocator.dupe(u8, name),
         .ty = ty,
+        .ownership = .owned,
         .span = span,
     });
     return local_id;

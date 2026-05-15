@@ -1,0 +1,13 @@
+backends = ["hybrid", "vm", "llvm"]
+
+[phases.check]
+result = "fail"
+diagnostic_code = "KSEM112"
+diagnostic_title = "returned borrow is not supported yet"
+stage = "semantics"
+
+[phases.build]
+result = "blocked"
+
+[phases.run]
+result = "blocked"

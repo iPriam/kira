@@ -29,7 +29,7 @@ function main() {
         height: 480
         window_title: "Kira Sokol Triangle"
     }
-    sokol.sapp_run(desc)
+    sokol.sapp_run(move desc)
     return
 }
 
@@ -40,7 +40,7 @@ function init(user_data: RawPtr): Void {
     let desc = sokol.sg_desc {
         environment: sokol.sglue_environment()
     }
-    sokol.sg_setup(desc)
+    sokol.sg_setup(move desc)
 
     let shader_desc = sokol.sg_shader_desc {
         vertex_func: sokol.sg_shader_function {
@@ -70,12 +70,12 @@ void main() {
 }"
         }
     }
-    state.shader = sokol.sg_make_shader(shader_desc)
+    state.shader = sokol.sg_make_shader(move shader_desc)
 
     let pipeline_desc = sokol.sg_pipeline_desc {
         shader: state.shader
     }
-    state.pipeline = sokol.sg_make_pipeline(pipeline_desc)
+    state.pipeline = sokol.sg_make_pipeline(move pipeline_desc)
     return
 }
 
@@ -86,7 +86,7 @@ function frame(user_data: RawPtr): Void {
     let pass = sokol.sg_pass {
         swapchain: sokol.sglue_swapchain()
     }
-    sokol.sg_begin_pass(pass)
+    sokol.sg_begin_pass(move pass)
     sokol.sg_apply_viewport(0, 0, state.viewport_width, state.viewport_height, true)
     sokol.sg_apply_pipeline(state.pipeline)
     sokol.sg_draw(0, 3, 1)

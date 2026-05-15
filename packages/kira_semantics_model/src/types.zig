@@ -19,6 +19,14 @@ pub const Type = enum {
     unknown,
 };
 
+pub const OwnershipMode = enum {
+    owned,
+    borrow_read,
+    borrow_mut,
+    move,
+    copy,
+};
+
 pub const ConstructConstraint = struct {
     construct_name: []const u8,
 

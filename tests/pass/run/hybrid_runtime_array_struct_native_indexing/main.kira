@@ -20,21 +20,21 @@ function makeRuntimeItems() -> [RuntimeItem] {
 }
 
 @Native
-function nativeScore(items: [RuntimeItem], i: Int) -> Int {
+function nativeScore(items: borrow [RuntimeItem], i: Int) -> Int {
     let item = items[i]
     let nested = items[i].nested
     return items[i].x + items[i].nested.x + item.x + nested.y + items[0].nested.x + items[2].x
 }
 
 @Native
-function nativeMutate(items: [RuntimeItem], i: Int) {
+function nativeMutate(items: borrow mut [RuntimeItem], i: Int) {
     items[i].x = 55
     items[i].nested.x = 707
     return
 }
 
 @Runtime
-function runtimeScore(items: [RuntimeItem], i: Int) -> Int {
+function runtimeScore(items: borrow [RuntimeItem], i: Int) -> Int {
     let item = items[i]
     let nested = items[i].nested
     return items[i].x + items[i].nested.x + item.x + nested.y + items[0].nested.x + items[2].x
@@ -43,7 +43,7 @@ function runtimeScore(items: [RuntimeItem], i: Int) -> Int {
 @Main
 @Runtime
 function main() {
-    let items = makeRuntimeItems()
+    var items = makeRuntimeItems()
     print(runtimeScore(items, 1))
     print(nativeScore(items, 1))
     nativeMutate(items, 1)

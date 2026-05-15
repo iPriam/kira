@@ -187,6 +187,13 @@ Agents must assume LLVM compatibility is required by default.
 
 Agents should assume Kira commands are run from the repository/project root. Do not `cd` into or depend on a `.kira/` working directory.
 
+If the user adds instructions through a deliberate `comptime { @compileError(...) }` blocker, treat that blocker as an explicit user message and follow it exactly.
+
+- Do not classify the blocker as corruption, an unstable worktree mutation, or a broken migration artifact.
+- Do not remove the blocker just to make the build pass unless the blocker's own instructions say removal is allowed.
+- If the blocker says to validate sibling projects, validate the sibling projects first, report the exact commands and results, and only then remove it.
+- This rule exists because the user may not be able to send another live message while the agent is running, so `comptime @compileError` blockers are a valid way for the user to communicate mandatory instructions inside the repo.
+
 Before finishing a task, check:
 
 1. Does the VM path still work?

@@ -10,7 +10,58 @@ const cloneQualifiedName = Parser.cloneQualifiedName;
 const tokenDescription = parent.tokenDescription;
 const unexpectedTokenLabel = parent.unexpectedTokenLabel;
 const expectedTokenHelp = parent.expectedTokenHelp;
+
+fn isOwnershipUnaryOperandStart(kind: syntax.TokenKind) bool {
+    return switch (kind) {
+        .identifier,
+        .integer,
+        .float,
+        .string,
+        .kw_true,
+        .kw_false,
+        .minus,
+        .bang,
+        => true,
+        else => false,
+    };
+}
+
+fn looksLikeOwnershipUnary(self: *Parser) bool {
+    if (!self.at(.identifier)) return false;
+    const keyword = self.peek().lexeme;
+    if (!(std.mem.eql(u8, keyword, "move") or std.mem.eql(u8, keyword, "copy"))) return false;
+    return isOwnershipUnaryOperandStart(self.peekNext().kind);
+}
+
 pub fn parseTypeExpr(self: *Parser) anyerror!*syntax.ast.TypeExpr {
+    if (self.at(.identifier) and std.mem.eql(u8, self.peek().lexeme, "borrow")) {
+        const start = self.advance().span.start;
+        const mode: syntax.ast.OwnershipMode = if (self.at(.identifier) and std.mem.eql(u8, self.peek().lexeme, "mut")) blk: {
+            _ = self.advance();
+            break :blk .borrow_mut;
+        } else .borrow_read;
+        const target = try self.parseTypeExpr();
+        const node = try self.allocator.create(syntax.ast.TypeExpr);
+        node.* = .{ .ownership = .{
+            .mode = mode,
+            .target = target,
+            .span = source_pkg.Span.init(start, typeSpan(target.*).end),
+        } };
+        return node;
+    }
+
+    if (self.at(.identifier) and (std.mem.eql(u8, self.peek().lexeme, "move") or std.mem.eql(u8, self.peek().lexeme, "copy"))) {
+        const token = self.advance();
+        const target = try self.parseTypeExpr();
+        const node = try self.allocator.create(syntax.ast.TypeExpr);
+        node.* = .{ .ownership = .{
+            .mode = if (std.mem.eql(u8, token.lexeme, "move")) .move else .copy,
+            .target = target,
+            .span = source_pkg.Span.init(token.span.start, typeSpan(target.*).end),
+        } };
+        return node;
+    }
+
     if (self.at(.identifier) and std.mem.eql(u8, self.peek().lexeme, "any")) {
         const start = self.advance().span.start;
         const target = try self.parseTypeExpr();
@@ -278,6 +329,18 @@ pub fn parseFactor(self: *Parser) anyerror!*syntax.ast.Expr {
 }
 
 pub fn parseUnary(self: *Parser) anyerror!*syntax.ast.Expr {
+    if (looksLikeOwnershipUnary(self)) {
+        const token = self.advance();
+        const operand = try self.parseUnary();
+        const node = try self.allocator.create(syntax.ast.Expr);
+        node.* = .{ .ownership = .{
+            .op = if (std.mem.eql(u8, token.lexeme, "move")) .move else .copy,
+            .operand = operand,
+            .span = source_pkg.Span.init(token.span.start, exprSpan(operand.*).end),
+        } };
+        return node;
+    }
+
     if (self.match(.minus) or self.match(.bang)) {
         const operator = self.previous();
         const operand = try self.parseUnary();

@@ -1,0 +1,15 @@
+struct Counter {
+    var value: Int
+}
+
+function increment(counter: borrow mut Counter) {
+    counter.value = counter.value + 1
+    return
+}
+
+@Main
+function main() {
+    let counter = Counter { value: 0 }
+    increment(counter)
+    return
+}

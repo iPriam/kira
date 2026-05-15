@@ -3,7 +3,7 @@ class HandlerBox {
     let onValue: (Int) -> Void
 }
 
-function invokeLater(callback: () -> Void) {
+function invokeLater(callback: borrow () -> Void) {
     callback()
     return
 }
@@ -13,7 +13,7 @@ function sayHi() {
     return
 }
 
-function trigger(box: HandlerBox) {
+function trigger(box: borrow HandlerBox) {
     box.onDone()
     box.onValue(42)
     return
@@ -30,7 +30,7 @@ function main() {
     printer(7)
     invokeLater(callback)
 
-    let box: HandlerBox = HandlerBox(callback, printer)
+    let box: HandlerBox = HandlerBox(move callback, move printer)
     trigger(box)
     return
 }

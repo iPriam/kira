@@ -78,7 +78,7 @@ pub fn buildTextLlvmIr(
         if (!shouldLowerFunction(function_decl.execution, request.mode) or function_decl.is_extern) continue;
         const register_types = try inferRegisterTypes(allocator, request.program.*, function_decl);
         defer allocator.free(register_types);
-        const base_variant = parent.FunctionVariant{ .function_id = function_decl.id, .param_types = function_decl.param_types, .local_types = function_decl.local_types, .return_type = function_decl.return_type, .register_types = register_types, .symbol_name = symbol_names.get(function_decl.id) orelse return error.MissingFunctionDeclaration };
+        const base_variant = parent.FunctionVariant{ .function_id = function_decl.id, .param_types = function_decl.param_types, .param_ownership = function_decl.param_ownership, .local_types = function_decl.local_types, .return_type = function_decl.return_type, .return_ownership = function_decl.return_ownership, .register_types = register_types, .symbol_name = symbol_names.get(function_decl.id) orelse return error.MissingFunctionDeclaration };
         const body = try buildTextFunctionBody(allocator, request, &plan, &symbol_names, &globals, function_decl, base_variant, string_counter);
         string_counter += countStringConstants(function_decl);
         try function_bodies.append(body);
@@ -207,6 +207,9 @@ pub fn buildTextFunctionBody(
     const local_owns_contents = try allocator.alloc(bool, variant.local_types.len);
     defer allocator.free(local_owns_contents);
     @memset(local_owns_contents, false);
+    const local_owned_values = try allocator.alloc(bool, variant.local_types.len);
+    defer allocator.free(local_owned_values);
+    @memset(local_owned_values, false);
     for (variant.local_types, 0..) |local_type, index| {
         const storage_type = try llvmLocalStorageTypeText(allocator, request.program, local_type);
         try writer.writeAll("  %local");
@@ -595,19 +598,52 @@ pub fn buildTextFunctionBody(
                 try writer.print("{d}", .{value.src});
                 try writer.writeAll(", ptr %local");
                 try writer.print("{d}\n", .{value.local});
+                if (register_owned_ptr[value.src]) {
+                    switch (variant.local_types[value.local].kind) {
+                        .array, .raw_ptr, .string => {
+                            local_owned_values[value.local] = true;
+                            register_escaped[value.src] = true;
+                        },
+                        else => {},
+                    }
+                }
+                if (register_local_ptr[value.src]) |source_local| {
+                    switch (variant.local_types[value.local].kind) {
+                        .array, .raw_ptr, .string => switch (variant.local_types[source_local].kind) {
+                            .array, .raw_ptr, .string => {
+                                if (local_owned_values[source_local]) {
+                                    local_owned_values[source_local] = false;
+                                    local_owned_values[value.local] = true;
+                                }
+                            },
+                            else => {},
+                        },
+                        else => {},
+                    }
+                }
             },
             .load_local => |value| {
                 try writer.writeAll("  %r");
                 try writer.print("{d}", .{value.dst});
-                if (function_decl.local_types[value.local].kind == .ffi_struct) {
-                    try writer.writeAll(" = load i64, ptr %local");
-                    try writer.print("{d}\n", .{value.local});
-                    register_local_ptr[value.dst] = value.local;
-                } else {
-                    try writer.writeAll(" = load ");
-                    try writer.writeAll(llvmValueTypeText(function_decl.local_types[value.local]));
-                    try writer.writeAll(", ptr %local");
-                    try writer.print("{d}\n", .{value.local});
+                switch (function_decl.local_types[value.local].kind) {
+                    .ffi_struct => {
+                        try writer.writeAll(" = load i64, ptr %local");
+                        try writer.print("{d}\n", .{value.local});
+                        register_local_ptr[value.dst] = value.local;
+                    },
+                    .array, .raw_ptr, .string => {
+                        try writer.writeAll(" = load ");
+                        try writer.writeAll(llvmValueTypeText(function_decl.local_types[value.local]));
+                        try writer.writeAll(", ptr %local");
+                        try writer.print("{d}\n", .{value.local});
+                        register_local_ptr[value.dst] = value.local;
+                    },
+                    else => {
+                        try writer.writeAll(" = load ");
+                        try writer.writeAll(llvmValueTypeText(function_decl.local_types[value.local]));
+                        try writer.writeAll(", ptr %local");
+                        try writer.print("{d}\n", .{value.local});
+                    },
                 }
             },
             .local_ptr => |value| {
@@ -769,6 +805,13 @@ pub fn buildTextFunctionBody(
                     temp_index,
                     value.src,
                 });
+                if (register_local_ptr[value.src]) |source_local| {
+                    switch (variant.local_types[source_local].kind) {
+                        .ffi_struct => local_owns_contents[source_local] = false,
+                        .array, .raw_ptr, .string => local_owned_values[source_local] = false,
+                        else => {},
+                    }
+                }
             },
             .c_string_to_string => |value| {
                 try writer.print("  %cstring.ptr.{d} = inttoptr i64 %r{d} to ptr\n", .{ value.dst, value.src });
@@ -879,6 +922,13 @@ pub fn buildTextFunctionBody(
                     value.src, value.index, temp_index,
                 });
                 if (register_owned_ptr[value.src]) register_escaped[value.src] = true;
+                if (register_local_ptr[value.src]) |source_local| {
+                    switch (variant.local_types[source_local].kind) {
+                        .ffi_struct => local_owns_contents[source_local] = false,
+                        .array, .raw_ptr, .string => local_owned_values[source_local] = false,
+                        else => {},
+                    }
+                }
             },
             .array_append => |value| {
                 const temp_index = temp_counter;
@@ -929,6 +979,13 @@ pub fn buildTextFunctionBody(
                     value.src, temp_index,
                 });
                 if (register_owned_ptr[value.src]) register_escaped[value.src] = true;
+                if (register_local_ptr[value.src]) |source_local| {
+                    switch (variant.local_types[source_local].kind) {
+                        .ffi_struct => local_owns_contents[source_local] = false,
+                        .array, .raw_ptr, .string => local_owned_values[source_local] = false,
+                        else => {},
+                    }
+                }
             },
             .enum_tag => |value| try enum_ops.emitEnumTag(writer, value),
             .enum_payload => |value| try enum_ops.emitEnumPayload(writer, value),
@@ -1030,6 +1087,13 @@ pub fn buildTextFunctionBody(
                     else => return error.UnsupportedExecutableFeature,
                 }
                 if (register_owned_ptr[value.src]) register_escaped[value.src] = true;
+                if (register_local_ptr[value.src]) |source_local| {
+                    switch (variant.local_types[source_local].kind) {
+                        .ffi_struct => local_owns_contents[source_local] = false,
+                        .array, .raw_ptr, .string => local_owned_values[source_local] = false,
+                        else => {},
+                    }
+                }
             },
             .copy_indirect => |value| {
                 const struct_type_name = typeRefName(value.type_name);
@@ -1039,6 +1103,15 @@ pub fn buildTextFunctionBody(
                 try writer.print("  store {s} %copy.val.{d}, ptr %copy.dst.{d}\n", .{ struct_type_name, value.dst_ptr, value.dst_ptr });
                 if (register_local_ptr[value.dst_ptr]) |local_index| {
                     if (register_owned_ptr[value.src_ptr]) local_owns_contents[local_index] = true;
+                    if (register_local_ptr[value.src_ptr]) |source_local| {
+                        if (local_owns_contents[source_local]) {
+                            local_owns_contents[source_local] = false;
+                            local_owns_contents[local_index] = true;
+                        }
+                    }
+                }
+                if (register_local_ptr[value.src_ptr]) |source_local| {
+                    if (local_owns_contents[source_local]) local_owns_contents[source_local] = false;
                 }
             },
             .branch => |value| {
@@ -1134,7 +1207,7 @@ pub fn buildTextFunctionBody(
                 try writeIndirectCallInstruction(writer, request, symbol_names, request.program, register_types, value);
             },
             .ret => |value| {
-                try emitFunctionCleanup(allocator, writer, request.program, variant.local_types, local_owns_contents, owned_values.items, register_escaped, value.src);
+                try emitFunctionCleanup(allocator, writer, request.program, variant.local_types, local_owns_contents, local_owned_values, owned_values.items, register_escaped, register_local_ptr, value.src, &temp_counter);
                 if (value.src) |src| {
                     try writer.writeAll("  ret ");
                     try writer.writeAll(llvmValueTypeText(function_decl.return_type));
@@ -1149,7 +1222,7 @@ pub fn buildTextFunctionBody(
         }
     }
     if (!block_terminated) {
-        try emitFunctionCleanup(allocator, writer, request.program, variant.local_types, local_owns_contents, owned_values.items, register_escaped, null);
+        try emitFunctionCleanup(allocator, writer, request.program, variant.local_types, local_owns_contents, local_owned_values, owned_values.items, register_escaped, register_local_ptr, null, &temp_counter);
         try writer.writeAll("  ret void\n");
     }
     try writer.writeAll("}\n");
@@ -1222,20 +1295,25 @@ fn emitFunctionCleanup(
     program: *const ir.Program,
     local_types: []const ir.ValueType,
     local_owns_contents: []const bool,
+    local_owned_values: []const bool,
     owned_values: []const OwnedValue,
     register_escaped: []const bool,
+    register_local_ptr: []const ?usize,
     returned_reg: ?u32,
+    cleanup_temp_counter: *usize,
 ) !void {
     for (owned_values) |owned| {
         if (returned_reg != null and returned_reg.? == owned.reg) continue;
         if (register_escaped[owned.reg]) continue;
+        const cleanup_temp = cleanup_temp_counter.*;
+        cleanup_temp_counter.* += 1;
         switch (owned.kind) {
             .array => {
                 const release_fn = try arrayElementDestroySymbol(allocator, program, owned.ty);
                 defer if (release_fn) |name| allocator.free(name);
-                try writer.print("  %cleanup.array.ptr.{d} = inttoptr i64 %r{d} to ptr\n", .{ owned.reg, owned.reg });
+                try writer.print("  %cleanup.array.ptr.{d} = inttoptr i64 %r{d} to ptr\n", .{ cleanup_temp, owned.reg });
                 try writer.writeAll("  call void @\"kira_array_release\"(ptr ");
-                try writer.print("%cleanup.array.ptr.{d}, ptr ", .{owned.reg});
+                try writer.print("%cleanup.array.ptr.{d}, ptr ", .{cleanup_temp});
                 if (release_fn) |name| {
                     try writeLlvmSymbol(writer, name);
                 } else {
@@ -1244,24 +1322,51 @@ fn emitFunctionCleanup(
                 try writer.writeAll(")\n");
             },
             .heap_ptr => {
-                try writer.print("  %cleanup.heap.ptr.{d} = load ptr, ptr %cleanup.heap.slot.{d}\n", .{ owned.reg, owned.reg });
-                try writer.print("  call void @free(ptr %cleanup.heap.ptr.{d})\n", .{owned.reg});
+                try writer.print("  %cleanup.heap.ptr.{d} = load ptr, ptr %cleanup.heap.slot.{d}\n", .{ cleanup_temp, owned.reg });
+                try writer.print("  call void @free(ptr %cleanup.heap.ptr.{d})\n", .{cleanup_temp});
             },
             .raw_heap => {
-                try writer.print("  %cleanup.raw.ptr.{d} = inttoptr i64 %r{d} to ptr\n", .{ owned.reg, owned.reg });
-                try writer.print("  call void @free(ptr %cleanup.raw.ptr.{d})\n", .{owned.reg});
+                try writer.print("  %cleanup.raw.ptr.{d} = inttoptr i64 %r{d} to ptr\n", .{ cleanup_temp, owned.reg });
+                try writer.print("  call void @free(ptr %cleanup.raw.ptr.{d})\n", .{cleanup_temp});
             },
         }
     }
 
+    const returned_local = if (returned_reg) |reg|
+        if (reg < register_local_ptr.len) register_local_ptr[reg] else null
+    else
+        null;
+
     for (local_types, 0..) |local_type, index| {
-        if (local_type.kind != .ffi_struct) continue;
-        if (!local_owns_contents[index]) continue;
-        const release_name = try releaseContentsSymbolName(allocator, local_type.name orelse return error.UnsupportedExecutableFeature);
-        defer allocator.free(release_name);
-        try writer.writeAll("  call void ");
-        try writeLlvmSymbol(writer, release_name);
-        try writer.print("(ptr %local.storage.{d})\n", .{index});
+        if (returned_local != null and returned_local.? == index) continue;
+        switch (local_type.kind) {
+            .ffi_struct => {
+                if (!local_owns_contents[index]) continue;
+                const release_name = try releaseContentsSymbolName(allocator, local_type.name orelse return error.UnsupportedExecutableFeature);
+                defer allocator.free(release_name);
+                try writer.writeAll("  call void ");
+                try writeLlvmSymbol(writer, release_name);
+                try writer.print("(ptr %local.storage.{d})\n", .{index});
+            },
+            .array => {
+                if (!local_owned_values[index]) continue;
+                const release_fn = try arrayElementDestroySymbol(allocator, program, local_type);
+                defer if (release_fn) |name| allocator.free(name);
+                const cleanup_temp = cleanup_temp_counter.*;
+                cleanup_temp_counter.* += 1;
+                try writer.print("  %cleanup.local.array.val.{d} = load i64, ptr %local{d}\n", .{ cleanup_temp, index });
+                try writer.print("  %cleanup.local.array.ptr.{d} = inttoptr i64 %cleanup.local.array.val.{d} to ptr\n", .{ cleanup_temp, cleanup_temp });
+                try writer.writeAll("  call void @\"kira_array_release\"(ptr ");
+                try writer.print("%cleanup.local.array.ptr.{d}, ptr ", .{cleanup_temp});
+                if (release_fn) |name| {
+                    try writeLlvmSymbol(writer, name);
+                } else {
+                    try writer.writeAll("null");
+                }
+                try writer.writeAll(")\n");
+            },
+            else => {},
+        }
     }
 }
 

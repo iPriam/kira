@@ -1,5 +1,5 @@
 @Runtime
-function scoreValues(values: [Int]) -> Int {
+function scoreValues(values: borrow [Int]) -> Int {
     var total = 0
     var index = 0
     while index < values.count {
@@ -10,7 +10,7 @@ function scoreValues(values: [Int]) -> Int {
 }
 
 @Native
-function nativeAppendAndMutate(values: [Int], base: Int) {
+function nativeAppendAndMutate(values: borrow mut [Int], base: Int) {
     values.append(base)
     values[1] = values[1] + base
     return

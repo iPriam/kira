@@ -1,4 +1,4 @@
-function printLine(text: String) {
+function printLine(text: borrow String) {
     print(text);
     return;
 }

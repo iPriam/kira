@@ -20,7 +20,7 @@ struct StressNode {
 }
 
 @Runtime
-function scoreLeaves(leaves: [StressLeaf]) -> Int {
+function scoreLeaves(leaves: borrow [StressLeaf]) -> Int {
     var total = 0
     var index = 0
     while index < leaves.count {
@@ -32,7 +32,7 @@ function scoreLeaves(leaves: [StressLeaf]) -> Int {
 }
 
 @Runtime
-function scoreNumbers(numbers: [Int]) -> Int {
+function scoreNumbers(numbers: borrow [Int]) -> Int {
     var total = 0
     var index = 0
     while index < numbers.count {
@@ -43,7 +43,7 @@ function scoreNumbers(numbers: [Int]) -> Int {
 }
 
 @Runtime
-function scoreNodes(nodes: [StressNode]) -> Int {
+function scoreNodes(nodes: borrow [StressNode]) -> Int {
     var total = 0
     var index = 0
     while index < nodes.count {
@@ -55,7 +55,7 @@ function scoreNodes(nodes: [StressNode]) -> Int {
 }
 
 @Native
-function nativeStress(nodes: [StressNode], base: Int) -> Int {
+function nativeStress(nodes: borrow mut [StressNode], base: Int) -> Int {
     let start = nodes.count
     nodes.append(StressNode {
         stamp: base + 101,

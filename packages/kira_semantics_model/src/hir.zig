@@ -4,6 +4,7 @@ const symbols = @import("symbols.zig");
 const Type = @import("types.zig").Type;
 const ResolvedType = @import("types.zig").ResolvedType;
 const ConstructConstraint = @import("types.zig").ConstructConstraint;
+const OwnershipMode = @import("types.zig").OwnershipMode;
 const ffi = @import("ffi.zig");
 
 pub const Program = struct {
@@ -76,7 +77,9 @@ pub const GeneratedFunction = struct {
     name: []const u8,
     overridable: bool,
     params: []const ResolvedType = &.{},
+    param_ownership: []const OwnershipMode = &.{},
     return_type: ResolvedType = .{ .kind = .unknown },
+    return_ownership: OwnershipMode = .owned,
     source_annotation: []const u8 = "",
     span: source_pkg.Span,
 };
@@ -174,6 +177,7 @@ pub const Function = struct {
     params: []Parameter,
     locals: []symbols.LocalSymbol,
     return_type: ResolvedType,
+    return_ownership: OwnershipMode = .owned,
     body: []Statement,
     span: source_pkg.Span,
 };
@@ -182,6 +186,7 @@ pub const Parameter = struct {
     id: u32,
     name: []const u8,
     ty: ResolvedType,
+    ownership: OwnershipMode = .owned,
     span: source_pkg.Span,
 };
 

@@ -26,17 +26,21 @@ function makeCell(base: Int) -> Cell {
 }
 
 function makeGrid() -> Grid {
-    let row0 = Row { cells: [makeCell(1), makeCell(2), makeCell(3)], rowWeight: 100 }
-    let row1 = Row { cells: [makeCell(4), makeCell(5), makeCell(6)], rowWeight: 200 }
-    let row2 = Row { cells: [makeCell(7), makeCell(8), makeCell(9)], rowWeight: 300 }
-    return Grid { rows: [row0, row1, row2], version: 42 }
+    return Grid {
+        rows: [
+            Row { cells: [makeCell(1), makeCell(2), makeCell(3)], rowWeight: 100 },
+            Row { cells: [makeCell(4), makeCell(5), makeCell(6)], rowWeight: 200 },
+            Row { cells: [makeCell(7), makeCell(8), makeCell(9)], rowWeight: 300 }
+        ],
+        version: 42
+    }
 }
 
-function cellScore(cell: Cell) -> Int {
+function cellScore(cell: borrow Cell) -> Int {
     return cell.primary.id * 1000 + cell.primary.weight * 100 + cell.secondary.id * 10 + cell.secondary.weight
 }
 
-function rowScore(row: Row) -> Int {
+function rowScore(row: borrow Row) -> Int {
     var score = row.rowWeight
     var i = 0
     while i < 3 {
@@ -46,20 +50,20 @@ function rowScore(row: Row) -> Int {
     return score
 }
 
-function mutateCopy(cell: Cell, delta: Int) -> Cell {
+function mutateCopy(cell: borrow Cell, delta: Int) -> Cell {
     var copy = cell
     copy.primary.weight = copy.primary.weight + delta
     copy.secondary.id = copy.secondary.id + 20
     return copy
 }
 
-function returnedNestedCopy(grid: Grid, rowIndex: Int, cellIndex: Int) -> Cell {
+function returnedNestedCopy(grid: borrow Grid, rowIndex: Int, cellIndex: Int) -> Cell {
     let row = grid.rows[rowIndex]
     let cell = row.cells[cellIndex]
     return mutateCopy(cell, 7)
 }
 
-function gridScore(grid: Grid) -> Int {
+function gridScore(grid: borrow Grid) -> Int {
     var score = grid.version
     var i = 0
     while i < 3 {

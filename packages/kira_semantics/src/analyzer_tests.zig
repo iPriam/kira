@@ -303,7 +303,7 @@ test "allows struct methods and constant members" {
             "    let x: Float = 0.0;\n" ++
             "    let y: Float = 0.0;\n" ++
             "    let zero: Point = Point(x: 0.0, y: 0.0);\n" ++
-            "    function distanceTo(other: Point) -> Float { return x + other.x; }\n" ++
+            "    function distanceTo(other: borrow Point) -> Float { return x + other.x; }\n" ++
             "}\n" ++
             "@Main function entry() { let start = Point.zero; let end = Point { x: 2.0, y: 3.0 }; print(end.distanceTo(other: start)); return; }",
         &diags,

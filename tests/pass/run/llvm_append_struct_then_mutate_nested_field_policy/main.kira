@@ -12,7 +12,7 @@ struct NativePolicyElement {
 }
 
 @Native
-function scoreNativePolicy(elements: [NativePolicyElement]) -> Int {
+function scoreNativePolicy(elements: borrow [NativePolicyElement]) -> Int {
     var total = 0
     var index = 0
     while index < elements.count {
@@ -24,7 +24,7 @@ function scoreNativePolicy(elements: [NativePolicyElement]) -> Int {
 }
 
 @Native
-function appendNativePolicy(elements: [NativePolicyElement], base: Int) {
+function appendNativePolicy(elements: borrow mut [NativePolicyElement], base: Int) {
     let start = elements.count
     elements.append(NativePolicyElement {
         id: base + 1,

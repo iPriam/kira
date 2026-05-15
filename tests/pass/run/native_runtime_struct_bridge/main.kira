@@ -11,7 +11,7 @@ function makeCounter(start: Int) -> Counter {
 }
 
 @Native
-function readAndBump(counter: Counter) -> Int {
+function readAndBump(counter: borrow Counter) -> Int {
     var next = counter
     next.count = next.count + 5
     return next.count

@@ -280,6 +280,7 @@ fn registerExpr(ctx: *shared.Context, expr: *syntax.ast.Expr) anyerror!void {
             try registerTypeExpr(ctx, node.state_type.*);
             try registerExpr(ctx, node.value);
         },
+        .ownership => |node| try registerExpr(ctx, node.operand),
         .unary => |node| try registerExpr(ctx, node.operand),
         .binary => |node| {
             try registerExpr(ctx, node.lhs);
@@ -328,6 +329,7 @@ fn registerTypeExpr(ctx: *shared.Context, ty: syntax.ast.TypeExpr) anyerror!void
             for (info.params) |param| try registerTypeExpr(ctx, param.*);
             try registerTypeExpr(ctx, info.result.*);
         },
+        .ownership => |info| try registerTypeExpr(ctx, info.target.*),
         .any => |info| try registerTypeExpr(ctx, info.target.*),
         .named => {},
     }
@@ -391,6 +393,7 @@ fn enumDefaultSpan(expr: syntax.ast.Expr) source_pkg.Span {
         .native_state => |node| node.span,
         .native_user_data => |node| node.span,
         .native_recover => |node| node.span,
+        .ownership => |node| node.span,
         .unary => |node| node.span,
         .binary => |node| node.span,
         .conditional => |node| node.span,

@@ -2,11 +2,11 @@ struct Vec2 {
     var x: Float = 0.0
     var y: Float = 0.0
 
-    function add(other: Vec2) -> Vec2 {
+    function add(other: borrow Vec2) -> Vec2 {
         return Vec2(x + other.x, y + other.y)
     }
 
-    function subtract(other: Vec2) -> Vec2 {
+    function subtract(other: borrow Vec2) -> Vec2 {
         return Vec2(x - other.x, y - other.y)
     }
 
@@ -18,7 +18,7 @@ struct Vec2 {
         return Vec2(x / scale, y / scale)
     }
 
-    function dot(other: Vec2) -> Float {
+    function dot(other: borrow Vec2) -> Float {
         return x * other.x + y * other.y
     }
 
@@ -40,11 +40,11 @@ struct Vec3 {
     var y: Float = 0.0
     var z: Float = 0.0
 
-    function add(other: Vec3) -> Vec3 {
+    function add(other: borrow Vec3) -> Vec3 {
         return Vec3(x + other.x, y + other.y, z + other.z)
     }
 
-    function subtract(other: Vec3) -> Vec3 {
+    function subtract(other: borrow Vec3) -> Vec3 {
         return Vec3(x - other.x, y - other.y, z - other.z)
     }
 
@@ -56,11 +56,11 @@ struct Vec3 {
         return Vec3(x / scale, y / scale, z / scale)
     }
 
-    function dot(other: Vec3) -> Float {
+    function dot(other: borrow Vec3) -> Float {
         return x * other.x + y * other.y + z * other.z
     }
 
-    function cross(other: Vec3) -> Vec3 {
+    function cross(other: borrow Vec3) -> Vec3 {
         return Vec3(
             y * other.z - z * other.y,
             z * other.x - x * other.z,
@@ -87,11 +87,11 @@ struct Vec4 {
     var z: Float = 0.0
     var w: Float = 0.0
 
-    function add(other: Vec4) -> Vec4 {
+    function add(other: borrow Vec4) -> Vec4 {
         return Vec4(x + other.x, y + other.y, z + other.z, w + other.w)
     }
 
-    function subtract(other: Vec4) -> Vec4 {
+    function subtract(other: borrow Vec4) -> Vec4 {
         return Vec4(x - other.x, y - other.y, z - other.z, w - other.w)
     }
 
@@ -103,7 +103,7 @@ struct Vec4 {
         return Vec4(x / scale, y / scale, z / scale, w / scale)
     }
 
-    function dot(other: Vec4) -> Float {
+    function dot(other: borrow Vec4) -> Float {
         return x * other.x + y * other.y + z * other.z + w * other.w
     }
 
@@ -152,7 +152,7 @@ struct Rect {
         return y + height
     }
 
-    function contains(point: Point) -> Bool {
+    function contains(point: borrow Point) -> Bool {
         return point.x >= minX() && point.x <= maxX() && point.y >= minY() && point.y <= maxY()
     }
 }
@@ -175,7 +175,7 @@ struct Mat4 {
     var m32: Float = 0.0
     var m33: Float = 1.0
 
-    function multiply(other: Mat4) -> Mat4 {
+    function multiply(other: borrow Mat4) -> Mat4 {
         return Mat4 {
             m00: m00 * other.m00 + m01 * other.m10 + m02 * other.m20 + m03 * other.m30
             m01: m00 * other.m01 + m01 * other.m11 + m02 * other.m21 + m03 * other.m31
@@ -196,7 +196,7 @@ struct Mat4 {
         }
     }
 
-    function translate(offset: Vec3) -> Mat4 {
+    function translate(offset: borrow Vec3) -> Mat4 {
         return self * Mat4 {
             m03: offset.x
             m13: offset.y
@@ -204,7 +204,7 @@ struct Mat4 {
         }
     }
 
-    function scale(amount: Vec3) -> Mat4 {
+    function scale(amount: borrow Vec3) -> Mat4 {
         return self * Mat4 {
             m00: amount.x
             m11: amount.y
@@ -212,7 +212,7 @@ struct Mat4 {
         }
     }
 
-    function rotate(axis: Vec3, radians: Float) -> Mat4 {
+    function rotate(axis: borrow Vec3, radians: Float) -> Mat4 {
         return self * quaternionFromAxisAngle(axis, radians).toMat4()
     }
 }
@@ -223,7 +223,7 @@ struct Quaternion {
     var z: Float = 0.0
     var w: Float = 1.0
 
-    function multiply(other: Quaternion) -> Quaternion {
+    function multiply(other: borrow Quaternion) -> Quaternion {
         return Quaternion(
             w * other.x + x * other.w + y * other.z - z * other.y,
             w * other.y - x * other.z + y * other.w + z * other.x,
@@ -274,15 +274,15 @@ function mat4Identity() -> Mat4 {
     return Mat4()
 }
 
-function mat4Translate(offset: Vec3) -> Mat4 {
+function mat4Translate(offset: borrow Vec3) -> Mat4 {
     return mat4Identity().translate(offset)
 }
 
-function mat4Scale(amount: Vec3) -> Mat4 {
+function mat4Scale(amount: borrow Vec3) -> Mat4 {
     return mat4Identity().scale(amount)
 }
 
-function mat4Rotate(axis: Vec3, radians: Float) -> Mat4 {
+function mat4Rotate(axis: borrow Vec3, radians: Float) -> Mat4 {
     return mat4Identity().rotate(axis, radians)
 }
 
@@ -300,7 +300,7 @@ function mat4Perspective(fieldOfViewY: Float, aspect: Float, nearPlane: Float, f
     }
 }
 
-function mat4LookAt(eye: Vec3, target: Vec3, up: Vec3) -> Mat4 {
+function mat4LookAt(eye: borrow Vec3, target: borrow Vec3, up: borrow Vec3) -> Mat4 {
     let forward = eye.subtract(target).normalize()
     let right = up.cross(forward).normalize()
     let correctedUp = forward.cross(right)
@@ -320,7 +320,7 @@ function mat4LookAt(eye: Vec3, target: Vec3, up: Vec3) -> Mat4 {
     }
 }
 
-function quaternionFromAxisAngle(axis: Vec3, radians: Float) -> Quaternion {
+function quaternionFromAxisAngle(axis: borrow Vec3, radians: Float) -> Quaternion {
     let normalizedAxis = axis.normalize()
     let halfAngle = radians * 0.5
     let s = sinApprox(halfAngle)

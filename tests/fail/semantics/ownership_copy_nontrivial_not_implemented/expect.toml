@@ -1,0 +1,13 @@
+backends = ["hybrid", "vm", "llvm"]
+
+[phases.check]
+result = "fail"
+diagnostic_code = "KSEM116"
+diagnostic_title = "non-trivial copy is not implemented yet"
+stage = "semantics"
+
+[phases.build]
+result = "blocked"
+
+[phases.run]
+result = "blocked"

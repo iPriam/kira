@@ -11,7 +11,7 @@ struct RuntimeItem {
 }
 
 @Runtime
-function scoreValues(values: [Int]) -> Int {
+function scoreValues(values: borrow [Int]) -> Int {
     var total = 0
     var index = 0
     while index < values.count {
@@ -22,7 +22,7 @@ function scoreValues(values: [Int]) -> Int {
 }
 
 @Runtime
-function scoreItems(items: [RuntimeItem]) -> Int {
+function scoreItems(items: borrow [RuntimeItem]) -> Int {
     var total = 0
     var index = 0
     while index < items.count {
@@ -34,7 +34,7 @@ function scoreItems(items: [RuntimeItem]) -> Int {
 }
 
 @Native
-function nativeAppendBoth(values: [Int], items: [RuntimeItem], base: Int) {
+function nativeAppendBoth(values: borrow mut [Int], items: borrow mut [RuntimeItem], base: Int) {
     values.append(base + 100)
     values[0] = values[0] + base
 

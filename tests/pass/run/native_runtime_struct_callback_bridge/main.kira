@@ -12,7 +12,7 @@ function bump(counter: Counter) -> Counter {
 
 @Native
 function invokeCallback(callback: (Counter) -> Counter, counter: Counter) -> Int {
-    let next = callback(counter)
+    let next = callback(move counter)
     return next.count
 }
 
@@ -20,6 +20,6 @@ function invokeCallback(callback: (Counter) -> Counter, counter: Counter) -> Int
 @Native
 function main() {
     let counter = Counter { count: 3 }
-    print(invokeCallback(bump, counter))
+    print(invokeCallback(bump, move counter))
     return
 }

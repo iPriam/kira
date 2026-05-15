@@ -1,0 +1,15 @@
+struct Mesh {
+    let id: Int
+}
+
+function inspect(mesh: borrow Mesh) -> Int {
+    return mesh.id
+}
+
+@Main
+function main() {
+    let mesh = Mesh { id: 1 }
+    print(inspect(mesh))
+    print(inspect(mesh))
+    return
+}

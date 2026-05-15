@@ -276,7 +276,7 @@ pub fn lowerCallExpr(
                     return error.DiagnosticsEmitted;
                 }
                 const element_type = if (object_type.name) |name| try shared.resolvedTypeFromText(name) else model.ResolvedType{ .kind = .unknown };
-                const value = try lowerCallArgument(ctx, node.args[0].value, element_type, imports, scope, function_headers orelse return error.DiagnosticsEmitted, node.span);
+                const value = try lowerCallArgument(ctx, node.args[0].value, element_type, .owned, "array.append", imports, scope, function_headers orelse return error.DiagnosticsEmitted, node.span);
                 const args = try ctx.allocator.alloc(*model.Expr, 2);
                 args[0] = object;
                 args[1] = value;
@@ -393,7 +393,7 @@ pub fn lowerCallExpr(
             }
             var args = std.array_list.Managed(*model.Expr).init(ctx.allocator);
             for (node.args, 0..) |arg, index| {
-                try args.append(try lowerCallArgument(ctx, arg.value, resolved_header.params[index], imports, scope, headers, node.span));
+                try args.append(try lowerCallArgument(ctx, arg.value, resolved_header.params[index], shared.paramOwnership(resolved_header, index), callee_name, imports, scope, headers, node.span));
             }
             if (trailing_callback_type) |callback_type| {
                 try args.append(try lowerTrailingCallbackValue(ctx, node, callback_type, imports, scope, headers));
@@ -481,7 +481,7 @@ pub fn lowerCallExpr(
             }
             var args = std.array_list.Managed(*model.Expr).init(ctx.allocator);
             for (node.args, 0..) |arg, index| {
-                try args.append(try lowerCallArgument(ctx, arg.value, signature.params[index], imports, scope, function_headers.?, node.span));
+                try args.append(try lowerCallArgument(ctx, arg.value, signature.params[index], .owned, "callable value", imports, scope, function_headers.?, node.span));
             }
             lowered.* = .{ .call_value = .{
                 .callee = callee,

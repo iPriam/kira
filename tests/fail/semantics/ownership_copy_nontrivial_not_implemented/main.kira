@@ -1,0 +1,14 @@
+struct Mesh {
+    let id: Int
+}
+
+function duplicate(mesh: copy Mesh) -> Int {
+    return mesh.id
+}
+
+@Main
+function main() {
+    let mesh = Mesh { id: 4 }
+    print(duplicate(copy mesh))
+    return
+}

@@ -11,8 +11,10 @@ const resolveExecution = parent.resolveExecution;
 pub const FunctionVariant = struct {
     function_id: u32,
     param_types: []const ir.ValueType,
+    param_ownership: []const ir.OwnershipMode = &.{},
     local_types: []const ir.ValueType,
     return_type: ir.ValueType,
+    return_ownership: ir.OwnershipMode = .owned,
     register_types: []const ir.ValueType,
     symbol_name: []const u8,
 };
@@ -37,6 +39,7 @@ pub const Plan = struct {
     pub fn deinit(self: *Plan) void {
         for (self.variants) |variant| {
             self.allocator.free(variant.param_types);
+            self.allocator.free(variant.param_ownership);
             self.allocator.free(variant.local_types);
             self.allocator.free(variant.register_types);
             self.allocator.free(variant.symbol_name);
@@ -96,6 +99,8 @@ fn ensureVariant(
     const function_decl = functionById(program.*, function_id) orelse return error.UnknownFunction;
     const owned_params = try dupTypeSlice(allocator, param_types);
     errdefer allocator.free(owned_params);
+    const owned_param_ownership = try dupOwnershipSlice(allocator, function_decl.param_ownership);
+    errdefer allocator.free(owned_param_ownership);
     const owned_locals = try dupTypeSlice(allocator, function_decl.local_types);
     errdefer allocator.free(owned_locals);
     for (owned_params, 0..) |param_type, index| {
@@ -108,8 +113,10 @@ fn ensureVariant(
         .variant = .{
             .function_id = function_id,
             .param_types = owned_params,
+            .param_ownership = owned_param_ownership,
             .local_types = owned_locals,
             .return_type = function_decl.return_type,
+            .return_ownership = function_decl.return_ownership,
             .register_types = &.{},
             .symbol_name = symbol_name,
         },
@@ -265,6 +272,12 @@ fn specializationSymbolName(allocator: std.mem.Allocator, function_decl: ir.Func
 
 fn dupTypeSlice(allocator: std.mem.Allocator, src: []const ir.ValueType) ![]ir.ValueType {
     const out = try allocator.alloc(ir.ValueType, src.len);
+    @memcpy(out, src);
+    return out;
+}
+
+fn dupOwnershipSlice(allocator: std.mem.Allocator, src: []const ir.OwnershipMode) ![]ir.OwnershipMode {
+    const out = try allocator.alloc(ir.OwnershipMode, src.len);
     @memcpy(out, src);
     return out;
 }

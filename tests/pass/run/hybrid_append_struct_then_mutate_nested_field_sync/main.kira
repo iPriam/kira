@@ -12,7 +12,7 @@ struct SyncElement {
 }
 
 @Runtime
-function scoreElements(elements: [SyncElement]) -> Int {
+function scoreElements(elements: borrow [SyncElement]) -> Int {
     var total = 0
     var index = 0
     while index < elements.count {
@@ -24,7 +24,7 @@ function scoreElements(elements: [SyncElement]) -> Int {
 }
 
 @Native
-function helperScore(element: SyncElement) -> Int {
+function helperScore(element: borrow SyncElement) -> Int {
     return element.id * 17 + element.inner.left * 19 + element.inner.right * 23 + element.tail * 29
 }
 
@@ -34,7 +34,7 @@ function helperReturn(element: SyncElement) -> SyncElement {
 }
 
 @Native
-function nativeAppendAndMutate(elements: [SyncElement], base: Int) -> Int {
+function nativeAppendAndMutate(elements: borrow mut [SyncElement], base: Int) -> Int {
     let start = elements.count
     elements.append(SyncElement {
         id: base + 101,

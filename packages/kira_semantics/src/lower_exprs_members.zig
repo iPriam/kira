@@ -450,7 +450,7 @@ pub fn lowerResolvedMethodCall(
             var args = std.array_list.Managed(*model.Expr).init(ctx.allocator);
             try args.append(receiver);
             for (node.args, 0..) |arg, index| {
-                try args.append(try lowerCallArgument(ctx, arg.value, resolved_header.params[index + 1], imports, scope, headers, node.span));
+                try args.append(try lowerCallArgument(ctx, arg.value, resolved_header.params[index + 1], shared.paramOwnership(resolved_header, index + 1), method_decl.full_name, imports, scope, headers, node.span));
             }
             if (trailing_callback_type) |callback_type| {
                 try args.append(try lowerTrailingCallbackValue(ctx, node, callback_type, imports, scope, headers));
@@ -486,7 +486,8 @@ pub fn lowerResolvedMethodCall(
         var args = std.array_list.Managed(*model.Expr).init(ctx.allocator);
         try args.append(receiver);
         for (node.args, 0..) |arg, index| {
-            try args.append(try lowerExpectedValue(ctx, arg.value, resolved_imported.params[index + 1], imports, scope, function_headers orelse return error.DiagnosticsEmitted, node.span));
+            const ownership = if (index + 1 < resolved_imported.param_ownership.len) resolved_imported.param_ownership[index + 1] else model.OwnershipMode.owned;
+            try args.append(try lowerCallArgument(ctx, arg.value, resolved_imported.params[index + 1], ownership, method_decl.full_name, imports, scope, function_headers orelse return error.DiagnosticsEmitted, node.span));
         }
         if (trailing_callback_type) |callback_type| {
             try args.append(try lowerTrailingCallbackValue(ctx, node, callback_type, imports, scope, function_headers orelse return error.DiagnosticsEmitted));
@@ -537,7 +538,8 @@ pub fn lowerVirtualMethodCall(
 
     var args = std.array_list.Managed(*model.Expr).init(ctx.allocator);
     for (node.args, 0..) |arg, index| {
-        try args.append(try lowerCallArgument(ctx, arg.value, method_decl.params[index], imports, scope, function_headers orelse return error.DiagnosticsEmitted, node.span));
+        const ownership = if (index < method_decl.param_ownership.len) method_decl.param_ownership[index] else model.OwnershipMode.owned;
+        try args.append(try lowerCallArgument(ctx, arg.value, method_decl.params[index], ownership, method_decl.full_name, imports, scope, function_headers orelse return error.DiagnosticsEmitted, node.span));
     }
     if (trailing_callback_type) |callback_type| {
         try args.append(try lowerTrailingCallbackValue(ctx, node, callback_type, imports, scope, function_headers orelse return error.DiagnosticsEmitted));
@@ -631,6 +633,7 @@ pub fn lowerCallbackBlockValue(
             .id = next_local_id,
             .ty = param_ty,
             .storage = .immutable,
+            .ownership = .owned,
             .initialized = true,
             .decl_span = param.span,
         });
@@ -638,12 +641,14 @@ pub fn lowerCallbackBlockValue(
             .id = next_local_id,
             .name = try ctx.allocator.dupe(u8, param.name),
             .ty = param_ty,
+            .ownership = .owned,
             .span = param.span,
         });
         try locals.append(.{
             .id = next_local_id,
             .name = try ctx.allocator.dupe(u8, param.name),
             .ty = param_ty,
+            .ownership = .owned,
             .is_param = true,
             .span = param.span,
         });

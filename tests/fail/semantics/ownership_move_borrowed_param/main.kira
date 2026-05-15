@@ -1,0 +1,19 @@
+struct Mesh {
+    let id: Int
+}
+
+function consume(mesh: Mesh) {
+    return
+}
+
+function bad(mesh: borrow Mesh) {
+    consume(move mesh)
+    return
+}
+
+@Main
+function main() {
+    let mesh = Mesh { id: 9 }
+    bad(mesh)
+    return
+}

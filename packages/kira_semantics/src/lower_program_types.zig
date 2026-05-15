@@ -146,8 +146,10 @@ pub fn registerImportedFunctionHeaders(
         try function_headers.put(ctx.allocator, function_decl.name, .{
             .id = @as(u32, @intCast(function_headers.count())),
             .params = function_decl.params,
+            .param_ownership = function_decl.param_ownership,
             .execution = if (function_decl.execution == .inherited) .native else function_decl.execution,
             .return_type = function_decl.return_type,
+            .return_ownership = function_decl.return_ownership,
             .is_extern = true,
             .foreign = function_decl.foreign,
             .span = .{ .start = 0, .end = 0 },
@@ -511,7 +513,9 @@ pub fn appendDeclaredImportedMethods(
             .receiver_type_name = try ctx.allocator.dupe(u8, owner_type_name),
             .receiver_offset = 0,
             .params = if (function_decl.params.len > 0) function_decl.params[1..] else &.{},
+            .param_ownership = if (function_decl.param_ownership.len > 0) function_decl.param_ownership[1..] else &.{},
             .return_type = function_decl.return_type,
+            .return_ownership = function_decl.return_ownership,
             .span = .{ .start = 0, .end = 0 },
         });
     }
@@ -544,7 +548,9 @@ pub fn appendGeneratedAnnotationMethods(
                 .generated_by = try ctx.allocator.dupe(u8, header.decl.name),
                 .overridable = function_decl.overridable,
                 .params = function_decl.params,
+                .param_ownership = function_decl.param_ownership,
                 .return_type = function_decl.return_type,
+                .return_ownership = function_decl.return_ownership,
                 .span = function_decl.span,
             });
         }
@@ -830,7 +836,9 @@ pub fn makeDeclaredMethodMember(
     function_decl: syntax.ast.FunctionDecl,
 ) !shared.MethodMember {
     var params = std.array_list.Managed(model.ResolvedType).init(ctx.allocator);
+    var param_ownership = std.array_list.Managed(model.OwnershipMode).init(ctx.allocator);
     for (function_decl.params) |param| {
+        try param_ownership.append(shared.ownershipModeFromSyntax(param.type_expr));
         if (param.type_expr) |type_expr| {
             try params.append(try shared.typeFromSyntaxChecked(ctx, type_expr.*));
         } else {
@@ -843,7 +851,9 @@ pub fn makeDeclaredMethodMember(
         .receiver_type_name = try ctx.allocator.dupe(u8, owner_type_name),
         .receiver_offset = 0,
         .params = try params.toOwnedSlice(),
+        .param_ownership = try param_ownership.toOwnedSlice(),
         .return_type = if (function_decl.return_type) |return_type| try shared.typeFromSyntaxChecked(ctx, return_type.*) else .{ .kind = .unknown },
+        .return_ownership = shared.ownershipModeFromSyntax(function_decl.return_type),
         .span = function_decl.span,
     };
 }
@@ -859,8 +869,11 @@ pub fn registerTypeMethodHeaders(
         const annotation_info = try shared.resolveFunctionAnnotations(ctx, function_decl.annotations);
         const foreign = try shared.resolveForeignFunction(ctx, function_decl.annotations, function_decl.span);
         var param_types = std.array_list.Managed(model.ResolvedType).init(ctx.allocator);
+        var param_ownership = std.array_list.Managed(model.OwnershipMode).init(ctx.allocator);
         try param_types.append(.{ .kind = .named, .name = type_decl.name });
+        try param_ownership.append(.borrow_read);
         for (function_decl.params) |param| {
+            try param_ownership.append(shared.ownershipModeFromSyntax(param.type_expr));
             if (param.type_expr) |type_expr| {
                 try param_types.append(try shared.typeFromSyntaxChecked(ctx, type_expr.*));
             } else {
@@ -871,8 +884,10 @@ pub fn registerTypeMethodHeaders(
         try function_headers.put(ctx.allocator, method_name, .{
             .id = @as(u32, @intCast(function_headers.count())),
             .params = try param_types.toOwnedSlice(),
+            .param_ownership = try param_ownership.toOwnedSlice(),
             .execution = if (foreign != null and annotation_info.execution == .inherited) .native else annotation_info.execution,
             .return_type = if (function_decl.return_type) |return_type| try shared.typeFromSyntaxChecked(ctx, return_type.*) else .{ .kind = .unknown },
+            .return_ownership = shared.ownershipModeFromSyntax(function_decl.return_type),
             .is_extern = foreign != null,
             .foreign = foreign,
             .span = function_decl.span,
@@ -908,12 +923,18 @@ pub fn lowerMethodFunction(
         .segments = self_segments,
         .span = function_decl.span,
     } };
+    const borrowed_self_type_expr = try ctx.allocator.create(syntax.ast.TypeExpr);
+    borrowed_self_type_expr.* = .{ .ownership = .{
+        .mode = .borrow_read,
+        .target = self_type_expr,
+        .span = function_decl.span,
+    } };
 
     var params = std.array_list.Managed(syntax.ast.ParamDecl).init(ctx.allocator);
     try params.append(.{
         .annotations = &.{},
         .name = "self",
-        .type_expr = self_type_expr,
+        .type_expr = borrowed_self_type_expr,
         .span = function_decl.span,
     });
     try params.appendSlice(function_decl.params);

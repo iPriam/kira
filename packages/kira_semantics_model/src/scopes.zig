@@ -1,13 +1,18 @@
 const std = @import("std");
 const source_pkg = @import("kira_source");
-const ResolvedType = @import("types.zig").ResolvedType;
+const types = @import("types.zig");
+const ResolvedType = types.ResolvedType;
+const OwnershipMode = types.OwnershipMode;
 const FieldStorage = @import("hir.zig").FieldStorage;
 
 pub const LocalBinding = struct {
     id: u32,
     ty: ResolvedType,
     storage: FieldStorage,
+    ownership: OwnershipMode = .owned,
     initialized: bool = true,
+    moved: bool = false,
+    move_span: ?source_pkg.Span = null,
     decl_span: source_pkg.Span,
 };
 

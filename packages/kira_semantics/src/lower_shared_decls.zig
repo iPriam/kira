@@ -108,7 +108,9 @@ pub fn lowerGeneratedFunctions(ctx: *Context, source_name: []const u8, members: 
         switch (generated_member.member) {
             .function_decl => |function_decl| {
                 var params = std.array_list.Managed(model.ResolvedType).init(ctx.allocator);
+                var param_ownership = std.array_list.Managed(model.OwnershipMode).init(ctx.allocator);
                 for (function_decl.params) |param| {
+                    try param_ownership.append(parent.ownershipModeFromSyntax(param.type_expr));
                     if (param.type_expr) |type_expr| {
                         try params.append(try typeFromSyntaxChecked(ctx, type_expr.*));
                     } else {
@@ -119,7 +121,9 @@ pub fn lowerGeneratedFunctions(ctx: *Context, source_name: []const u8, members: 
                     .name = try ctx.allocator.dupe(u8, function_decl.name),
                     .overridable = generated_member.overridable,
                     .params = try params.toOwnedSlice(),
+                    .param_ownership = try param_ownership.toOwnedSlice(),
                     .return_type = if (function_decl.return_type) |return_type| try typeFromSyntaxChecked(ctx, return_type.*) else .{ .kind = .unknown },
+                    .return_ownership = parent.ownershipModeFromSyntax(function_decl.return_type),
                     .source_annotation = try ctx.allocator.dupe(u8, source_name),
                     .span = generated_member.span,
                 });

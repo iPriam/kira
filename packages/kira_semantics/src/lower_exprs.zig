@@ -49,6 +49,7 @@ pub const functionTypeFromResolvedSignature = types.functionTypeFromResolvedSign
 pub const functionTypeFromHeader = types.functionTypeFromHeader;
 pub const isCallableValueExpr = types.isCallableValueExpr;
 pub const lowerCallArgument = types.lowerCallArgument;
+pub const lowerOwnershipExpr = types.lowerOwnershipExpr;
 pub const lowerExpectedValue = types.lowerExpectedValue;
 pub const lowerAssignmentTarget = types.lowerAssignmentTarget;
 pub const lowerCallbackArgument = types.lowerCallbackArgument;
@@ -72,6 +73,7 @@ pub const resolveArrayElementType = types.resolveArrayElementType;
 pub const flattenCalleeName = types.flattenCalleeName;
 pub const flattenMemberExpr = types.flattenMemberExpr;
 pub const flattenMemberExprPath = types.flattenMemberExprPath;
+const emitUseAfterMove = types.emitUseAfterMove;
 pub const lowerEnumVariantExprExpected = lowerEnumVariantExprExpectedInternal;
 
 fn tryLowerArrayCountMemberExpr(object: *model.Expr, member_name: []const u8, span: source_pkg.Span) ?model.Expr {
@@ -129,6 +131,7 @@ pub fn lowerStatement(
                 .id = local_id,
                 .name = try ctx.allocator.dupe(u8, node.name),
                 .ty = declaration.ty,
+                .ownership = .owned,
                 .span = node.span,
             });
             break :blk .{ .let_stmt = .{
@@ -207,6 +210,7 @@ pub fn lowerStatement(
                 .id = local_id,
                 .name = try ctx.allocator.dupe(u8, node.binding_name),
                 .ty = binding_ty,
+                .ownership = .owned,
                 .span = node.span,
             });
             break :blk .{ .for_stmt = .{
@@ -319,6 +323,8 @@ fn markInitializedFromAssignment(scope: *model.Scope, target: model.Expr) !void 
             while (iterator.next()) |entry| {
                 if (entry.value_ptr.id != node.local_id) continue;
                 entry.value_ptr.initialized = true;
+                entry.value_ptr.moved = false;
+                entry.value_ptr.move_span = null;
                 return;
             }
         },
@@ -336,13 +342,21 @@ fn cloneScope(allocator: std.mem.Allocator, scope: model.Scope) !model.Scope {
 }
 
 fn mergeIfInitialization(scope: *model.Scope, then_scope: model.Scope, else_scope: ?model.Scope) void {
-    const resolved_else = else_scope orelse return;
     var iterator = scope.entries.iterator();
     while (iterator.next()) |entry| {
         const then_binding = then_scope.get(entry.key_ptr.*) orelse continue;
+        if (then_binding.id == entry.value_ptr.id and then_binding.moved) {
+            entry.value_ptr.moved = true;
+            entry.value_ptr.move_span = then_binding.move_span;
+        }
+        const resolved_else = else_scope orelse continue;
         const else_binding = resolved_else.get(entry.key_ptr.*) orelse continue;
         if (then_binding.id != entry.value_ptr.id or else_binding.id != entry.value_ptr.id) continue;
         entry.value_ptr.initialized = entry.value_ptr.initialized or (then_binding.initialized and else_binding.initialized);
+        if (else_binding.moved) {
+            entry.value_ptr.moved = true;
+            entry.value_ptr.move_span = else_binding.move_span;
+        }
     }
 }
 
@@ -352,6 +366,10 @@ fn mergeSwitchInitialization(scope: *model.Scope, case_scopes: []const model.Sco
     while (iterator.next()) |entry| {
         const default_binding = resolved_default.get(entry.key_ptr.*) orelse continue;
         if (default_binding.id != entry.value_ptr.id or !default_binding.initialized) continue;
+        if (default_binding.moved) {
+            entry.value_ptr.moved = true;
+            entry.value_ptr.move_span = default_binding.move_span;
+        }
 
         var initialized_in_all_cases = true;
         for (case_scopes) |case_scope| {
@@ -359,6 +377,10 @@ fn mergeSwitchInitialization(scope: *model.Scope, case_scopes: []const model.Sco
                 initialized_in_all_cases = false;
                 break;
             };
+            if (case_binding.id == entry.value_ptr.id and case_binding.moved) {
+                entry.value_ptr.moved = true;
+                entry.value_ptr.move_span = case_binding.move_span;
+            }
             if (case_binding.id != entry.value_ptr.id or !case_binding.initialized) {
                 initialized_in_all_cases = false;
                 break;
@@ -636,12 +658,19 @@ pub fn lowerExpr(
         .native_recover => |node| {
             lowered.* = try lowerNativeRecoverExpr(ctx, node, imports, scope, function_headers);
         },
+        .ownership => |node| {
+            return try lowerOwnershipExpr(ctx, node, imports, scope, function_headers);
+        },
         .identifier => |node| {
             const name = node.name.segments[0].text;
             if (try shared.resolveLocalOrCapture(ctx, scope.*, name, node.span)) |resolution| {
                 const binding = resolution.binding;
                 if (!binding.initialized) {
                     try emitUninitializedLocalUse(ctx, name, node.span, binding.decl_span);
+                    return error.DiagnosticsEmitted;
+                }
+                if (binding.moved) {
+                    try emitUseAfterMove(ctx, name, node.span, binding.move_span);
                     return error.DiagnosticsEmitted;
                 }
                 lowered.* = .{ .local = .{

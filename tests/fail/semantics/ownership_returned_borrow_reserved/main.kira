@@ -1,0 +1,14 @@
+struct Mesh {
+    let id: Int
+}
+
+function first(mesh: borrow Mesh) -> borrow Mesh {
+    return mesh
+}
+
+@Main
+function main() {
+    let mesh = Mesh { id: 1 }
+    first(mesh)
+    return
+}

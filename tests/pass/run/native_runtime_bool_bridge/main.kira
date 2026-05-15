@@ -4,13 +4,13 @@ struct FlagBox {
 }
 
 @Runtime
-function setFlag(box: FlagBox) {
+function setFlag(box: borrow mut FlagBox) {
     box.value = true
     return
 }
 
 @Native
-function readFlag(box: FlagBox) -> Bool {
+function readFlag(box: borrow FlagBox) -> Bool {
     return box.value
 }
 

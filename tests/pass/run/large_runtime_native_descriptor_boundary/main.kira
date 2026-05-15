@@ -49,7 +49,7 @@ function makeRuntimeDescriptor() -> NativeDescriptor {
 }
 
 @Runtime
-function runtimeDescriptorScore(descriptor: NativeDescriptor) -> Int {
+function runtimeDescriptorScore(descriptor: borrow NativeDescriptor) -> Int {
     var checksum = descriptor.stride
     var i = 0
     while i < 3 {
@@ -77,12 +77,12 @@ function runtimeDescriptorScore(descriptor: NativeDescriptor) -> Int {
 }
 
 @Native
-function nativeBoundaryBounceScore(descriptor: NativeDescriptor) -> Int {
+function nativeBoundaryBounceScore(descriptor: borrow NativeDescriptor) -> Int {
     return runtimeDescriptorScore(descriptor)
 }
 
 @Native
-function nativeScalarProbe(descriptor: NativeDescriptor) -> Int {
+function nativeScalarProbe(descriptor: borrow NativeDescriptor) -> Int {
     return descriptor.stride + descriptor.depth.compare
 }
 

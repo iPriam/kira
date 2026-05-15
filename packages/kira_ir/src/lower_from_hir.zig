@@ -303,7 +303,9 @@ fn lowerFunction(
                 .calling_convention = foreign.calling_convention,
             } else null,
             .param_types = try lowerParamTypes(allocator, program, function_decl.params),
+            .param_ownership = try lowerParamOwnership(allocator, function_decl.params),
             .return_type = try lowerResolvedType(program, function_decl.return_type),
+            .return_ownership = lowerOwnershipMode(function_decl.return_ownership),
             .register_count = 0,
             .local_count = 0,
             .local_types = &.{},
@@ -348,7 +350,9 @@ fn lowerFunction(
         .is_extern = false,
         .foreign = null,
         .param_types = try lowerParamTypes(allocator, program, function_decl.params),
+        .param_ownership = try lowerParamOwnership(allocator, function_decl.params),
         .return_type = try lowerResolvedType(program, function_decl.return_type),
+        .return_ownership = lowerOwnershipMode(function_decl.return_ownership),
         .register_count = lowerer.next_register,
         .local_count = lowerer.next_local,
         .local_types = try lowerAllLocalTypesBoxed(allocator, program, function_decl.locals, lowerer.hidden_local_types.items, boxed_locals),
@@ -414,7 +418,9 @@ fn lowerGeneratedCallbackFunction(
         .is_extern = false,
         .foreign = null,
         .param_types = try lowerCallbackParamTypes(allocator, program, callback),
+        .param_ownership = try lowerCallbackParamOwnership(allocator, callback),
         .return_type = try lowerResolvedType(program, callback.return_type),
+        .return_ownership = .owned,
         .register_count = lowerer.next_register,
         .local_count = lowerer.next_local,
         .local_types = try lowerCallbackLocalTypes(allocator, program, callback, local_remap, callback_local_count, lowerer.hidden_local_types.items, boxed_locals),
@@ -633,6 +639,12 @@ fn lowerParamTypes(allocator: std.mem.Allocator, program: model.Program, params:
     return lowered;
 }
 
+fn lowerParamOwnership(allocator: std.mem.Allocator, params: []const model.Parameter) ![]const ir.OwnershipMode {
+    const lowered = try allocator.alloc(ir.OwnershipMode, params.len);
+    for (params, 0..) |param, index| lowered[index] = lowerOwnershipMode(param.ownership);
+    return lowered;
+}
+
 fn lowerCallbackParamTypes(allocator: std.mem.Allocator, program: model.Program, callback: model.hir.CallbackExpr) ![]ir.ValueType {
     const lowered = try allocator.alloc(ir.ValueType, callback.params.len + callback.captures.len);
     for (callback.params, 0..) |param, index| {
@@ -642,6 +654,20 @@ fn lowerCallbackParamTypes(allocator: std.mem.Allocator, program: model.Program,
         lowered[callback.params.len + index] = if (capture.by_ref) .{ .kind = .raw_ptr, .name = "CaptureCell" } else try lowerResolvedType(program, capture.ty);
     }
     return lowered;
+}
+
+fn lowerCallbackParamOwnership(allocator: std.mem.Allocator, callback: model.hir.CallbackExpr) ![]const ir.OwnershipMode {
+    const lowered = try allocator.alloc(ir.OwnershipMode, callback.params.len + callback.captures.len);
+    for (callback.params, 0..) |param, index| lowered[index] = lowerOwnershipMode(param.ownership);
+    for (callback.captures, 0..) |capture, index| {
+        _ = capture;
+        lowered[callback.params.len + index] = .borrow_read;
+    }
+    return lowered;
+}
+
+fn lowerOwnershipMode(mode: model.OwnershipMode) ir.OwnershipMode {
+    return @enumFromInt(@intFromEnum(mode));
 }
 
 const lowerResolvedTypeSlice = type_impl.lowerResolvedTypeSlice;
@@ -1428,7 +1454,9 @@ fn cloneFunction(allocator: std.mem.Allocator, function_decl: ir.Function) !ir.F
             .calling_convention = foreign.calling_convention,
         } else null,
         .param_types = try cloneValueTypeSlice(allocator, function_decl.param_types),
+        .param_ownership = try cloneOwnershipModeSlice(allocator, function_decl.param_ownership),
         .return_type = function_decl.return_type,
+        .return_ownership = function_decl.return_ownership,
         .register_count = function_decl.register_count,
         .local_count = function_decl.local_count,
         .local_types = try cloneValueTypeSlice(allocator, function_decl.local_types),
@@ -1439,6 +1467,13 @@ fn cloneFunction(allocator: std.mem.Allocator, function_decl: ir.Function) !ir.F
 fn cloneValueTypeSlice(allocator: std.mem.Allocator, items: []const ir.ValueType) ![]const ir.ValueType {
     if (items.len == 0) return &.{};
     const cloned = try allocator.alloc(ir.ValueType, items.len);
+    @memcpy(cloned, items);
+    return cloned;
+}
+
+fn cloneOwnershipModeSlice(allocator: std.mem.Allocator, items: []const ir.OwnershipMode) ![]const ir.OwnershipMode {
+    if (items.len == 0) return &.{};
+    const cloned = try allocator.alloc(ir.OwnershipMode, items.len);
     @memcpy(cloned, items);
     return cloned;
 }

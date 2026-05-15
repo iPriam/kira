@@ -49,7 +49,7 @@ function makePipeline() -> Pipeline {
     }
 }
 
-function pipelineChecksum(pipeline: Pipeline) -> Int {
+function pipelineChecksum(pipeline: borrow Pipeline) -> Int {
     var checksum = pipeline.shaderId + pipeline.descriptor.vertexLayout.stride
     checksum = checksum + pipeline.descriptor.vertexLayout.attributes[0].format * 3
     checksum = checksum + pipeline.descriptor.vertexLayout.attributes[0].offset * 5

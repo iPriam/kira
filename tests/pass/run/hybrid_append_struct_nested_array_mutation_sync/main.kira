@@ -13,7 +13,7 @@ struct SyncBucket {
 }
 
 @Runtime
-function scoreValues(values: [Int]) -> Int {
+function scoreValues(values: borrow [Int]) -> Int {
     var total = 0
     var index = 0
     while index < values.count {
@@ -24,7 +24,7 @@ function scoreValues(values: [Int]) -> Int {
 }
 
 @Runtime
-function scorePoints(points: [SyncPoint]) -> Int {
+function scorePoints(points: borrow [SyncPoint]) -> Int {
     var total = 0
     var index = 0
     while index < points.count {
@@ -36,7 +36,7 @@ function scorePoints(points: [SyncPoint]) -> Int {
 }
 
 @Runtime
-function scoreBuckets(buckets: [SyncBucket]) -> Int {
+function scoreBuckets(buckets: borrow [SyncBucket]) -> Int {
     var total = 0
     var index = 0
     while index < buckets.count {
@@ -48,7 +48,7 @@ function scoreBuckets(buckets: [SyncBucket]) -> Int {
 }
 
 @Native
-function nativeAppendNestedArrays(buckets: [SyncBucket], base: Int) {
+function nativeAppendNestedArrays(buckets: borrow mut [SyncBucket], base: Int) {
     buckets.append(SyncBucket {
         label: base + 1,
         values: [base + 11, base + 12, base + 13],

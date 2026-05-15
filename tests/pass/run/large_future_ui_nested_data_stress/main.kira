@@ -73,19 +73,19 @@ struct LayoutResult {
     var baseline: Int
 }
 
-function edgeSum(edge: EdgeInsets) -> Int {
+function edgeSum(edge: borrow EdgeInsets) -> Int {
     return edge.left + edge.top + edge.right + edge.bottom
 }
 
-function styleScore(style: WidgetStyle) -> Int {
+function styleScore(style: borrow WidgetStyle) -> Int {
     return edgeSum(style.padding) * 3 + style.border.width * 5 + style.border.color + style.shadow.blur * 7 + style.text.size * 11 + style.text.weight
 }
 
-function glyphScore(glyph: GlyphInfo) -> Int {
+function glyphScore(glyph: borrow GlyphInfo) -> Int {
     return glyph.codepoint * 3 + glyph.advance * 5 + glyph.x * 7 + glyph.y * 11
 }
 
-function measureNode(node: LayoutNode) -> LayoutResult {
+function measureNode(node: borrow LayoutNode) -> LayoutResult {
     var glyphWidth = 0
     var i = 0
     while i < 3 {
@@ -130,7 +130,7 @@ function makeNode(id: Int, style: WidgetStyle, base: Int) -> LayoutNode {
     }
 }
 
-function themeScore(theme: Theme) -> Int {
+function themeScore(theme: borrow Theme) -> Int {
     return theme.colors.background + theme.colors.foreground + theme.colors.accent + styleScore(theme.primary) + styleScore(theme.secondary)
 }
 

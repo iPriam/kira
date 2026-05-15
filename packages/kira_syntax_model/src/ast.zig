@@ -419,6 +419,7 @@ pub const Expr = union(enum) {
     native_state: NativeStateExpr,
     native_user_data: NativeUserDataExpr,
     native_recover: NativeRecoverExpr,
+    ownership: OwnershipExpr,
     unary: UnaryExpr,
     binary: BinaryExpr,
     conditional: ConditionalExpr,
@@ -483,6 +484,17 @@ pub const NativeRecoverExpr = struct {
     state_type: *TypeExpr,
     value: *Expr,
     span: Span,
+};
+
+pub const OwnershipExpr = struct {
+    op: OwnershipExprOp,
+    operand: *Expr,
+    span: Span,
+};
+
+pub const OwnershipExprOp = enum {
+    move,
+    copy,
 };
 
 pub const UnaryExpr = struct {
@@ -555,9 +567,24 @@ pub const UnaryOp = enum {
 pub const TypeExpr = union(enum) {
     named: QualifiedName,
     generic: GenericTypeExpr,
+    ownership: OwnershipTypeExpr,
     any: AnyTypeExpr,
     array: ArrayTypeExpr,
     function: FunctionTypeExpr,
+};
+
+pub const OwnershipMode = enum {
+    owned,
+    borrow_read,
+    borrow_mut,
+    move,
+    copy,
+};
+
+pub const OwnershipTypeExpr = struct {
+    mode: OwnershipMode,
+    target: *TypeExpr,
+    span: Span,
 };
 
 pub const AnyTypeExpr = struct {

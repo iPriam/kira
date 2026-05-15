@@ -9,7 +9,7 @@ struct Parent {
 }
 
 @Native
-function mutateAndSum(parent: Parent, values: [Int]) -> Int {
+function mutateAndSum(parent: borrow Parent, values: borrow [Int]) -> Int {
     var next = parent
     next.child.value = next.child.value + values[0]
     return next.child.value + values[1] + values[2]

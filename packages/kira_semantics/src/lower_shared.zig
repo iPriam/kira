@@ -44,8 +44,10 @@ pub const AnnotationHeader = struct {
 pub const FunctionHeader = struct {
     id: u32,
     params: []const model.ResolvedType = &.{},
+    param_ownership: []const model.OwnershipMode = &.{},
     execution: runtime_abi.FunctionExecution,
     return_type: model.ResolvedType,
+    return_ownership: model.OwnershipMode = .owned,
     is_extern: bool = false,
     foreign: ?model.ForeignFunction = null,
     span: source_pkg.Span,
@@ -70,7 +72,9 @@ pub const MethodMember = struct {
     generated_by: ?[]const u8 = null,
     overridable: bool = true,
     params: []const model.ResolvedType = &.{},
+    param_ownership: []const model.OwnershipMode = &.{},
     return_type: model.ResolvedType,
+    return_ownership: model.OwnershipMode = .owned,
     span: source_pkg.Span,
 };
 
@@ -146,6 +150,7 @@ pub fn typeFromSyntax(ctx: *const Context, ty: syntax.ast.TypeExpr) anyerror!mod
     return switch (ty) {
         .array => |info| .{ .kind = .array, .name = try typeTextFromSyntax(ctx, info.element_type.*) },
         .function => |info| .{ .kind = .callback, .name = try functionTypeTextFromSyntax(ctx, info) },
+        .ownership => |info| try typeFromSyntax(ctx, info.target.*),
         .any => |info| switch (info.target.*) {
             .named => |name| .{
                 .kind = .construct_any,
@@ -196,6 +201,13 @@ pub fn typeTextFromSyntax(ctx: *const Context, ty: syntax.ast.TypeExpr) anyerror
     return switch (ty) {
         .array => |info| std.fmt.allocPrint(ctx.allocator, "[{s}]", .{try typeTextFromSyntax(ctx, info.element_type.*)}),
         .function => |info| functionTypeTextFromSyntax(ctx, info),
+        .ownership => |info| switch (info.mode) {
+            .borrow_read => std.fmt.allocPrint(ctx.allocator, "borrow {s}", .{try typeTextFromSyntax(ctx, info.target.*)}),
+            .borrow_mut => std.fmt.allocPrint(ctx.allocator, "borrow mut {s}", .{try typeTextFromSyntax(ctx, info.target.*)}),
+            .move => std.fmt.allocPrint(ctx.allocator, "move {s}", .{try typeTextFromSyntax(ctx, info.target.*)}),
+            .copy => std.fmt.allocPrint(ctx.allocator, "copy {s}", .{try typeTextFromSyntax(ctx, info.target.*)}),
+            .owned => typeTextFromSyntax(ctx, info.target.*),
+        },
         .any => |info| std.fmt.allocPrint(ctx.allocator, "any {s}", .{try typeTextFromSyntax(ctx, info.target.*)}),
         .named => |name| ctx.allocator.dupe(u8, name.segments[name.segments.len - 1].text),
         .generic => |info| genericTypeTextFromSyntax(ctx, info),
@@ -287,15 +299,16 @@ pub fn typeLabel(ty: model.ResolvedType) []const u8 {
 
 pub fn typeFromSyntaxChecked(ctx: *Context, ty: syntax.ast.TypeExpr) anyerror!model.ResolvedType {
     const resolved = try typeFromSyntax(ctx, ty);
-    if (ty == .generic) {
-        const base_name = ty.generic.base.segments[ty.generic.base.segments.len - 1].text;
+    const semantic_ty = stripOwnershipType(ty);
+    if (semantic_ty == .generic) {
+        const base_name = semantic_ty.generic.base.segments[semantic_ty.generic.base.segments.len - 1].text;
         if (ctx.enum_headers == null or ctx.enum_headers.?.get(base_name) == null) {
             try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
                 .severity = .@"error",
                 .code = "KSEM031",
                 .title = "type mismatch",
                 .message = "Generic type syntax currently requires a declared enum base.",
-                .labels = &.{diagnostics.primaryLabel(ty.generic.span, "generic type base could not be resolved as an enum")},
+                .labels = &.{diagnostics.primaryLabel(semantic_ty.generic.span, "generic type base could not be resolved as an enum")},
                 .help = "Declare the enum first and use its generic type parameters in type positions only.",
             });
             return error.DiagnosticsEmitted;
@@ -307,6 +320,7 @@ pub fn typeFromSyntaxChecked(ctx: *Context, ty: syntax.ast.TypeExpr) anyerror!mo
 
 pub fn validateAnyConstructType(ctx: *Context, ty: syntax.ast.TypeExpr) !void {
     switch (ty) {
+        .ownership => |info| try validateAnyConstructType(ctx, info.target.*),
         .any => |info| {
             try validateAnyConstructTarget(ctx, info.target.*, info.span);
             try validateAnyConstructType(ctx, info.target.*);
@@ -318,6 +332,36 @@ pub fn validateAnyConstructType(ctx: *Context, ty: syntax.ast.TypeExpr) !void {
         },
         .named, .generic => {},
     }
+}
+
+pub fn ownershipModeFromSyntax(ty: ?*syntax.ast.TypeExpr) model.OwnershipMode {
+    const resolved = ty orelse return .owned;
+    return switch (resolved.*) {
+        .ownership => |info| ownershipModeFromSyntaxMode(info.mode),
+        else => .owned,
+    };
+}
+
+fn ownershipModeFromSyntaxMode(mode: syntax.ast.OwnershipMode) model.OwnershipMode {
+    return switch (mode) {
+        .owned => .owned,
+        .borrow_read => .borrow_read,
+        .borrow_mut => .borrow_mut,
+        .move => .move,
+        .copy => .copy,
+    };
+}
+
+pub fn stripOwnershipType(ty: syntax.ast.TypeExpr) syntax.ast.TypeExpr {
+    return switch (ty) {
+        .ownership => |info| stripOwnershipType(info.target.*),
+        else => ty,
+    };
+}
+
+pub fn paramOwnership(header: FunctionHeader, index: usize) model.OwnershipMode {
+    if (index < header.param_ownership.len) return header.param_ownership[index];
+    return .owned;
 }
 
 fn validateAnyConstructTarget(ctx: *Context, target: syntax.ast.TypeExpr, span: source_pkg.Span) !void {
@@ -952,6 +996,7 @@ fn exprSpan(expr: syntax.ast.Expr) source_pkg.Span {
         .native_state => |node| node.span,
         .native_user_data => |node| node.span,
         .native_recover => |node| node.span,
+        .ownership => |node| node.span,
         .unary => |node| node.span,
         .binary => |node| node.span,
         .conditional => |node| node.span,
@@ -1017,13 +1062,17 @@ fn captureBinding(
         .id = local_id,
         .ty = outer.ty,
         .storage = outer.storage,
+        .ownership = outer.ownership,
         .initialized = true,
+        .moved = outer.moved,
+        .move_span = outer.move_span,
         .decl_span = outer.decl_span,
     });
     try frame.locals.append(.{
         .id = local_id,
         .name = local_name,
         .ty = outer.ty,
+        .ownership = outer.ownership,
         .is_capture = true,
         .span = outer.decl_span,
     });

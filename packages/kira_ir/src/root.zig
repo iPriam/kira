@@ -2,6 +2,7 @@ pub const ir = @import("ir.zig");
 pub const Program = ir.Program;
 pub const Function = ir.Function;
 pub const ValueType = ir.ValueType;
+pub const OwnershipMode = ir.OwnershipMode;
 pub const ConstructConstraint = ir.ConstructConstraint;
 pub const Construct = ir.Construct;
 pub const ConstructImplementation = ir.ConstructImplementation;

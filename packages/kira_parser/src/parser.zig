@@ -363,6 +363,7 @@ pub fn exprSpan(expr: syntax.ast.Expr) source_pkg.Span {
         .native_state => |node| node.span,
         .native_user_data => |node| node.span,
         .native_recover => |node| node.span,
+        .ownership => |node| node.span,
         .unary => |node| node.span,
         .binary => |node| node.span,
         .conditional => |node| node.span,
@@ -376,6 +377,7 @@ pub fn typeSpan(ty: syntax.ast.TypeExpr) source_pkg.Span {
     return switch (ty) {
         .named => |node| node.span,
         .generic => |node| node.span,
+        .ownership => |node| node.span,
         .any => |node| node.span,
         .array => |node| node.span,
         .function => |node| node.span,

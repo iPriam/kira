@@ -21,24 +21,24 @@ function makeItems() -> [Item] {
     ]
 }
 
-function useItem(item: Item) -> Int {
+function useItem(item: borrow Item) -> Int {
     return item.x + item.nested.x
 }
 
-function useNested(nested: Nested) -> Int {
+function useNested(nested: borrow Nested) -> Int {
     return nested.x + nested.y
 }
 
-function getItem(items: [Item], i: Int) -> Item {
+function getItem(items: borrow [Item], i: Int) -> Item {
     return items[i]
 }
 
-function getNested(items: [Item], i: Int) -> Nested {
+function getNested(items: borrow [Item], i: Int) -> Nested {
     return items[i].nested
 }
 
-function checksum(items: [Item], index: Int) -> Int {
-    let container = Container { items: items }
+function checksum(items: borrow [Item], index: Int) -> Int {
+    let container = Container { items: makeItems() }
     let item = items[index]
     let nested = items[index].nested
     let returned = getItem(items, 2)

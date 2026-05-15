@@ -243,7 +243,9 @@ pub fn compileProgram(allocator: std.mem.Allocator, program: ir_pkg.Program, mod
             .id = function_decl.id,
             .name = function_decl.name,
             .param_count = @as(u32, @intCast(function_decl.param_types.len)),
+            .param_ownership = try lowerOwnershipModes(allocator, function_decl.param_ownership),
             .return_type = lowerTypeRef(function_decl.return_type),
+            .return_ownership = lowerOwnershipMode(function_decl.return_ownership),
             .register_count = function_decl.register_count,
             .local_count = function_decl.local_count,
             .local_types = try lowerLocalTypes(allocator, function_decl.local_types),
@@ -269,6 +271,16 @@ fn lowerLocalTypes(allocator: std.mem.Allocator, local_types: []const ir_pkg.Val
     const lowered = try allocator.alloc(instruction.TypeRef, local_types.len);
     for (local_types, 0..) |local_ty, index| lowered[index] = lowerTypeRef(local_ty);
     return lowered;
+}
+
+fn lowerOwnershipModes(allocator: std.mem.Allocator, values: []const ir_pkg.OwnershipMode) ![]const bytecode.OwnershipMode {
+    const lowered = try allocator.alloc(bytecode.OwnershipMode, values.len);
+    for (values, 0..) |value, index| lowered[index] = lowerOwnershipMode(value);
+    return lowered;
+}
+
+fn lowerOwnershipMode(value: ir_pkg.OwnershipMode) bytecode.OwnershipMode {
+    return @enumFromInt(@intFromEnum(value));
 }
 
 fn lowerTypeRef(value_type: ir_pkg.ValueType) instruction.TypeRef {
