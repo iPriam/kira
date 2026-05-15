@@ -200,6 +200,19 @@ KIRA_BRIDGE_EXPORT void kira_array_load(const KiraArray *array, int64_t index, K
     *out_value = array->items[index];
 }
 
+KIRA_BRIDGE_EXPORT void kira_array_release(KiraArray *array, void (*release_raw_ptr)(void *)) {
+    if (array == NULL) return;
+    if (release_raw_ptr != NULL) {
+        for (size_t index = 0; index < array->len; index += 1) {
+            if (array->items[index].tag == KIRA_BRIDGE_VALUE_RAW_PTR) {
+                release_raw_ptr((void *)array->items[index].payload.raw_ptr);
+            }
+        }
+    }
+    kira_bridge_free(array->items, array->len * sizeof(KiraBridgeValue));
+    kira_bridge_free(array, sizeof(KiraArray));
+}
+
 KIRA_BRIDGE_EXPORT KiraNativeState *kira_native_state_alloc(uint64_t type_id, int64_t payload_size) {
     if (payload_size < 0) return NULL;
     KiraNativeState *state = (KiraNativeState *)calloc(1, sizeof(KiraNativeState));

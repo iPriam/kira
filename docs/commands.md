@@ -18,6 +18,7 @@ Standalone CLI:
 - `kira shader ast examples/shaders/textured_quad.ksl`
 - `kira shader build examples/shaders/textured_quad.ksl`
 - `kira shader build`
+- `kira instruments run examples/arithmetic --backend runtime --track memory --track cpu --duration 500ms --sample-rate 10hz --fail-on-growth 1gb`
 - `kira sync`
 - `kira add FrostUI`
 - `kira add --git https://github.com/Sunlight-Horizon/GameKit.git --rev <commit> GameKit`
@@ -47,6 +48,7 @@ Build-system convenience:
 - `zig build run -- shader check examples/shaders/textured_quad.ksl`
 - `zig build run -- shader build examples/shaders/textured_quad.ksl`
 - `zig build run -- shader build`
+- `zig build run -- instruments run examples/arithmetic --backend runtime --track memory --track cpu --duration 500ms --sample-rate 10hz --json-out .kira/instruments/arithmetic.runtime.json`
 - `zig build run -- build --backend llvm examples/hello`
 - `zig build run -- build --backend hybrid examples/hybrid_roundtrip`
 - `zig build run -- new DemoApp generated/DemoApp`
@@ -76,6 +78,11 @@ CLI behavior:
 - `shader build <file.ksl>` emits GLSL 330 vertex/fragment source plus reflection JSON into `generated/shaders/` next to the source file by default, or `--out-dir <dir>`
 - `shader build` with no explicit file discovers all top-level PascalCase `*.ksl` entry shaders under `Shaders/` in the current project root and writes outputs to `generated/Shaders/`
 - `shader build` rejects compute shaders today with an explicit backend diagnostic because the current real graphics path in this repo is Sokol/OpenGL with GLSL 330 graphics shaders, not a compute-capable pipeline
+- `instruments run <target>` builds the target through the normal pipeline, launches the selected backend as a child process, samples process metrics over the requested duration, prints a stable human report, and optionally writes stable JSON with `--json-out`
+- `instruments run` accepts `--backend runtime|llvm|hybrid`, repeated `--track memory` and `--track cpu`, `--duration` values like `30s`, `1m`, or `500ms`, `--sample-rate` values like `10hz` or `2.5hz`, and `--fail-on-growth` byte thresholds like `10mb`, `512kb`, or `1048576`
+- `instruments run --track memory` samples the child process private working set on Windows, which is the Task Manager-like resident private memory metric; JSON keeps the stable `rss_*` field names and includes `"metric": "private_working_set"` to document the measured source. On other platforms memory instrumentation fails clearly until platform samplers are added
+- `instruments run --track cpu` reports measured CPU percent when enough samples are available, and reports CPU data as unavailable rather than inventing values when the run is too short or the platform data is not available
+- `instruments run --fail-on-growth <bytes>` exits non-zero when measured memory growth is greater than the threshold; equality is treated as passing
 - `sync` resolves registry, path, and git dependencies into `kira.lock`, verifies registry archive SHA-256 checksums, and populates the local cache under `~/.kira/cache/packages/`
 - `add`, `remove`, and `update` edit `kira.toml` and then refresh `kira.lock`
 - `package pack` writes a validated source-only `.tar` archive into `generated/`

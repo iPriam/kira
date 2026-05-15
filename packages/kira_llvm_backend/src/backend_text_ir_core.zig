@@ -120,15 +120,18 @@ pub fn buildTextLlvmIr(
     try writer.writeAll("declare void @\"kira_array_store\"(ptr, i64, ptr)\n");
     try writer.writeAll("declare void @\"kira_array_append\"(ptr, ptr)\n");
     try writer.writeAll("declare void @\"kira_array_load\"(ptr, i64, ptr)\n");
+    try writer.writeAll("declare void @\"kira_array_release\"(ptr, ptr)\n");
     try writer.writeAll("declare ptr @\"kira_native_state_alloc\"(i64, i64)\n");
     try writer.writeAll("declare ptr @\"kira_native_state_payload\"(ptr)\n");
     try writer.writeAll("declare ptr @\"kira_native_state_recover\"(ptr, i64)\n");
     try writer.writeAll("declare i64 @strlen(ptr)\n");
     try writer.writeAll("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)\n");
     try writer.writeAll("declare ptr @malloc(i64)\n");
+    try writer.writeAll("declare void @free(ptr)\n");
     if (request.mode == .hybrid) {
         try writer.writeAll("declare void @\"kira_hybrid_call_runtime\"(i32, ptr, i32, ptr)\n");
     }
+    try appendReleaseDefinitions(allocator, writer, request.program);
     for (function_decls.items) |decl| {
         try writer.writeAll(decl);
         try writer.writeByte('\n');
@@ -190,6 +193,20 @@ pub fn buildTextFunctionBody(
     string_state[0] = string_counter;
     var temp_counter: usize = 0;
     var block_terminated = false;
+    var owned_values = std.array_list.Managed(OwnedValue).init(allocator);
+    defer owned_values.deinit();
+    const register_owned_ptr = try allocator.alloc(bool, register_types.len);
+    defer allocator.free(register_owned_ptr);
+    @memset(register_owned_ptr, false);
+    const register_escaped = try allocator.alloc(bool, register_types.len);
+    defer allocator.free(register_escaped);
+    @memset(register_escaped, false);
+    const register_local_ptr = try allocator.alloc(?usize, register_types.len);
+    defer allocator.free(register_local_ptr);
+    @memset(register_local_ptr, null);
+    const local_owns_contents = try allocator.alloc(bool, variant.local_types.len);
+    defer allocator.free(local_owns_contents);
+    @memset(local_owns_contents, false);
     for (variant.local_types, 0..) |local_type, index| {
         const storage_type = try llvmLocalStorageTypeText(allocator, request.program, local_type);
         try writer.writeAll("  %local");
@@ -199,15 +216,16 @@ pub fn buildTextFunctionBody(
         try writer.writeAll("\n");
         if (local_type.kind == .ffi_struct) {
             const struct_type_name = typeRefName(local_type.name orelse return error.UnsupportedExecutableFeature);
-            try writer.print("  %local.size.ptr.{d} = getelementptr inbounds {s}, ptr null, i32 1\n", .{ index, struct_type_name });
-            try writer.print("  %local.size.{d} = ptrtoint ptr %local.size.ptr.{d} to i64\n", .{ index, index });
-            try writer.print("  %local.empty.{d} = icmp eq i64 %local.size.{d}, 0\n", .{ index, index });
-            try writer.print("  %local.alloc.size.{d} = select i1 %local.empty.{d}, i64 1, i64 %local.size.{d}\n", .{ index, index, index });
-            try writer.print("  %local.heap.{d} = call ptr @malloc(i64 %local.alloc.size.{d})\n", .{ index, index });
-            try writer.print("  store {s} zeroinitializer, ptr %local.heap.{d}\n", .{ struct_type_name, index });
-            try writer.print("  %local.heap.int.{d} = ptrtoint ptr %local.heap.{d} to i64\n", .{ index, index });
-            try writer.print("  store i64 %local.heap.int.{d}, ptr %local{d}\n", .{ index, index });
+            try writer.print("  %local.storage.{d} = alloca {s}\n", .{ index, struct_type_name });
+            try writer.print("  store {s} zeroinitializer, ptr %local.storage.{d}\n", .{ struct_type_name, index });
+            try writer.print("  %local.storage.int.{d} = ptrtoint ptr %local.storage.{d} to i64\n", .{ index, index });
+            try writer.print("  store i64 %local.storage.int.{d}, ptr %local{d}\n", .{ index, index });
         }
+    }
+    for (register_types, 0..) |register_type, index| {
+        if (register_type.kind != .ffi_struct) continue;
+        try writer.print("  %cleanup.heap.slot.{d} = alloca ptr\n", .{index});
+        try writer.print("  store ptr null, ptr %cleanup.heap.slot.{d}\n", .{index});
     }
     for (variant.param_types, 0..) |param_type, index| {
         try writer.writeAll("  store ");
@@ -266,6 +284,9 @@ pub fn buildTextFunctionBody(
                 try writer.writeAll(" = ptrtoint ptr %alloc.ptr.");
                 try writer.print("{d}", .{value.dst});
                 try writer.writeAll(" to i64\n");
+                try writer.print("  store ptr %alloc.ptr.{d}, ptr %cleanup.heap.slot.{d}\n", .{ value.dst, value.dst });
+                try owned_values.append(.{ .reg = value.dst, .ty = register_types[value.dst], .kind = .heap_ptr });
+                register_owned_ptr[value.dst] = true;
             },
             .alloc_enum => |value| try enum_ops.emitAllocEnum(writer, register_types, value),
             .alloc_native_state => |value| {
@@ -413,6 +434,8 @@ pub fn buildTextFunctionBody(
             .alloc_array => |value| {
                 try writer.print("  %alloc.array.ptr.{d} = call ptr @\"kira_array_alloc\"(i64 %r{d})\n", .{ value.dst, value.len });
                 try writer.print("  %r{d} = ptrtoint ptr %alloc.array.ptr.{d} to i64\n", .{ value.dst, value.dst });
+                try owned_values.append(.{ .reg = value.dst, .ty = register_types[value.dst], .kind = .array });
+                register_owned_ptr[value.dst] = true;
             },
             .const_function => |value| {
                 try writer.writeAll("  %r");
@@ -473,6 +496,8 @@ pub fn buildTextFunctionBody(
                     try writer.print("  store %kira.bridge.value %closure.pack.{d}.{d}, ptr %closure.slot.{d}.{d}\n", .{ value.dst, index, value.dst, index });
                 }
                 try writer.print("  %r{d} = ptrtoint ptr %closure.ptr.{d} to i64\n", .{ value.dst, value.dst });
+                try owned_values.append(.{ .reg = value.dst, .ty = register_types[value.dst], .kind = .raw_heap });
+                register_owned_ptr[value.dst] = true;
             },
             .add => |value| {
                 const arithmetic_type = register_types[value.lhs];
@@ -577,6 +602,7 @@ pub fn buildTextFunctionBody(
                 if (function_decl.local_types[value.local].kind == .ffi_struct) {
                     try writer.writeAll(" = load i64, ptr %local");
                     try writer.print("{d}\n", .{value.local});
+                    register_local_ptr[value.dst] = value.local;
                 } else {
                     try writer.writeAll(" = load ");
                     try writer.writeAll(llvmValueTypeText(function_decl.local_types[value.local]));
@@ -586,6 +612,7 @@ pub fn buildTextFunctionBody(
             },
             .local_ptr => |value| {
                 try writer.print("  %r{d} = ptrtoint ptr %local{d} to i64\n", .{ value.dst, value.local });
+                register_local_ptr[value.dst] = value.local;
             },
             .subobject_ptr => |value| {
                 const base_type_name = register_types[value.base].name orelse return error.UnsupportedExecutableFeature;
@@ -851,6 +878,7 @@ pub fn buildTextFunctionBody(
                 try writer.print("  call void @\"kira_array_store\"(ptr %array.set.ptr.{d}, i64 %r{d}, ptr %array.set.pack.ptr.{d})\n", .{
                     value.src, value.index, temp_index,
                 });
+                if (register_owned_ptr[value.src]) register_escaped[value.src] = true;
             },
             .array_append => |value| {
                 const temp_index = temp_counter;
@@ -900,6 +928,7 @@ pub fn buildTextFunctionBody(
                 try writer.print("  call void @\"kira_array_append\"(ptr %array.append.ptr.{d}, ptr %array.append.pack.ptr.{d})\n", .{
                     value.src, temp_index,
                 });
+                if (register_owned_ptr[value.src]) register_escaped[value.src] = true;
             },
             .enum_tag => |value| try enum_ops.emitEnumTag(writer, value),
             .enum_payload => |value| try enum_ops.emitEnumPayload(writer, value),
@@ -1000,6 +1029,7 @@ pub fn buildTextFunctionBody(
                     },
                     else => return error.UnsupportedExecutableFeature,
                 }
+                if (register_owned_ptr[value.src]) register_escaped[value.src] = true;
             },
             .copy_indirect => |value| {
                 const struct_type_name = typeRefName(value.type_name);
@@ -1007,6 +1037,9 @@ pub fn buildTextFunctionBody(
                 try writer.print("  %copy.src.{d} = inttoptr i64 %r{d} to ptr\n", .{ value.src_ptr, value.src_ptr });
                 try writer.print("  %copy.val.{d} = load {s}, ptr %copy.src.{d}\n", .{ value.dst_ptr, struct_type_name, value.src_ptr });
                 try writer.print("  store {s} %copy.val.{d}, ptr %copy.dst.{d}\n", .{ struct_type_name, value.dst_ptr, value.dst_ptr });
+                if (register_local_ptr[value.dst_ptr]) |local_index| {
+                    if (register_owned_ptr[value.src_ptr]) local_owns_contents[local_index] = true;
+                }
             },
             .branch => |value| {
                 try writer.writeAll("  br i1 %r");
@@ -1048,6 +1081,20 @@ pub fn buildTextFunctionBody(
             },
             .call => |value| {
                 try writeCallInstruction(writer, request, plan, symbol_names, request.program, register_types, value, &temp_counter);
+                if (value.dst) |dst| {
+                    const callee_decl = functionById(request.program.*, value.callee) orelse return error.UnknownFunction;
+                    const owns_return = !callee_decl.is_extern and try functionReturnOwnsAllocation(allocator, request.program, value.callee, 0);
+                    if (owns_return and register_types[dst].kind == .array) {
+                        try owned_values.append(.{ .reg = dst, .ty = register_types[dst], .kind = .array });
+                        register_owned_ptr[dst] = true;
+                    }
+                    if (owns_return and register_types[dst].kind == .ffi_struct) {
+                        try writer.print("  %cleanup.call.ptr.{d} = inttoptr i64 %r{d} to ptr\n", .{ dst, dst });
+                        try writer.print("  store ptr %cleanup.call.ptr.{d}, ptr %cleanup.heap.slot.{d}\n", .{ dst, dst });
+                        try owned_values.append(.{ .reg = dst, .ty = register_types[dst], .kind = .heap_ptr });
+                        register_owned_ptr[dst] = true;
+                    }
+                }
             },
             .call_virtual => |value| {
                 const type_decl = findTypeDecl(request.program, value.static_type_name) orelse return error.UnknownType;
@@ -1068,11 +1115,26 @@ pub fn buildTextFunctionBody(
                     .args = args,
                     .dst = value.dst,
                 }, &temp_counter);
+                if (value.dst) |dst| {
+                    const callee_decl = functionById(request.program.*, callee) orelse return error.UnknownFunction;
+                    const owns_return = !callee_decl.is_extern and try functionReturnOwnsAllocation(allocator, request.program, callee, 0);
+                    if (owns_return and register_types[dst].kind == .array) {
+                        try owned_values.append(.{ .reg = dst, .ty = register_types[dst], .kind = .array });
+                        register_owned_ptr[dst] = true;
+                    }
+                    if (owns_return and register_types[dst].kind == .ffi_struct) {
+                        try writer.print("  %cleanup.call.ptr.{d} = inttoptr i64 %r{d} to ptr\n", .{ dst, dst });
+                        try writer.print("  store ptr %cleanup.call.ptr.{d}, ptr %cleanup.heap.slot.{d}\n", .{ dst, dst });
+                        try owned_values.append(.{ .reg = dst, .ty = register_types[dst], .kind = .heap_ptr });
+                        register_owned_ptr[dst] = true;
+                    }
+                }
             },
             .call_value => |value| {
                 try writeIndirectCallInstruction(writer, request, symbol_names, request.program, register_types, value);
             },
             .ret => |value| {
+                try emitFunctionCleanup(allocator, writer, request.program, variant.local_types, local_owns_contents, owned_values.items, register_escaped, value.src);
                 if (value.src) |src| {
                     try writer.writeAll("  ret ");
                     try writer.writeAll(llvmValueTypeText(function_decl.return_type));
@@ -1086,7 +1148,201 @@ pub fn buildTextFunctionBody(
             },
         }
     }
-    if (!block_terminated) try writer.writeAll("  ret void\n");
+    if (!block_terminated) {
+        try emitFunctionCleanup(allocator, writer, request.program, variant.local_types, local_owns_contents, owned_values.items, register_escaped, null);
+        try writer.writeAll("  ret void\n");
+    }
     try writer.writeAll("}\n");
     return body.toOwnedSlice();
+}
+
+const OwnedValue = struct {
+    reg: u32,
+    ty: ir.ValueType,
+    kind: Kind,
+
+    const Kind = enum {
+        array,
+        heap_ptr,
+        raw_heap,
+    };
+};
+
+fn functionReturnOwnsAllocation(
+    allocator: std.mem.Allocator,
+    program: *const ir.Program,
+    function_id: u32,
+    depth: usize,
+) !bool {
+    if (depth > 64) return false;
+    const function_decl = functionById(program.*, function_id) orelse return error.UnknownFunction;
+    if (function_decl.is_extern) return false;
+
+    const owned = try allocator.alloc(bool, function_decl.register_count);
+    defer allocator.free(owned);
+    @memset(owned, false);
+
+    var saw_value_return = false;
+    for (function_decl.instructions) |instruction| {
+        switch (instruction) {
+            .alloc_struct => |value| owned[value.dst] = true,
+            .alloc_array => |value| owned[value.dst] = true,
+            .call => |value| if (value.dst) |dst| {
+                const callee_decl = functionById(program.*, value.callee) orelse return error.UnknownFunction;
+                owned[dst] = !callee_decl.is_extern and try functionReturnOwnsAllocation(allocator, program, value.callee, depth + 1);
+            },
+            .call_virtual => |value| if (value.dst) |dst| {
+                const type_decl = findTypeDecl(program, value.static_type_name) orelse return error.UnknownType;
+                var resolved_callee: ?u32 = null;
+                for (type_decl.methods) |method_decl| {
+                    if (std.mem.eql(u8, method_decl.name, value.method_name)) {
+                        resolved_callee = method_decl.function_id;
+                        break;
+                    }
+                }
+                const callee = resolved_callee orelse return error.UnknownFunction;
+                const callee_decl = functionById(program.*, callee) orelse return error.UnknownFunction;
+                owned[dst] = !callee_decl.is_extern and try functionReturnOwnsAllocation(allocator, program, callee, depth + 1);
+            },
+            .ret => |value| {
+                const src = value.src orelse return false;
+                saw_value_return = true;
+                if (src >= owned.len or !owned[src]) return false;
+            },
+            else => {},
+        }
+    }
+
+    return saw_value_return;
+}
+
+fn emitFunctionCleanup(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    program: *const ir.Program,
+    local_types: []const ir.ValueType,
+    local_owns_contents: []const bool,
+    owned_values: []const OwnedValue,
+    register_escaped: []const bool,
+    returned_reg: ?u32,
+) !void {
+    for (owned_values) |owned| {
+        if (returned_reg != null and returned_reg.? == owned.reg) continue;
+        if (register_escaped[owned.reg]) continue;
+        switch (owned.kind) {
+            .array => {
+                const release_fn = try arrayElementDestroySymbol(allocator, program, owned.ty);
+                defer if (release_fn) |name| allocator.free(name);
+                try writer.print("  %cleanup.array.ptr.{d} = inttoptr i64 %r{d} to ptr\n", .{ owned.reg, owned.reg });
+                try writer.writeAll("  call void @\"kira_array_release\"(ptr ");
+                try writer.print("%cleanup.array.ptr.{d}, ptr ", .{owned.reg});
+                if (release_fn) |name| {
+                    try writeLlvmSymbol(writer, name);
+                } else {
+                    try writer.writeAll("null");
+                }
+                try writer.writeAll(")\n");
+            },
+            .heap_ptr => {
+                try writer.print("  %cleanup.heap.ptr.{d} = load ptr, ptr %cleanup.heap.slot.{d}\n", .{ owned.reg, owned.reg });
+                try writer.print("  call void @free(ptr %cleanup.heap.ptr.{d})\n", .{owned.reg});
+            },
+            .raw_heap => {
+                try writer.print("  %cleanup.raw.ptr.{d} = inttoptr i64 %r{d} to ptr\n", .{ owned.reg, owned.reg });
+                try writer.print("  call void @free(ptr %cleanup.raw.ptr.{d})\n", .{owned.reg});
+            },
+        }
+    }
+
+    for (local_types, 0..) |local_type, index| {
+        if (local_type.kind != .ffi_struct) continue;
+        if (!local_owns_contents[index]) continue;
+        const release_name = try releaseContentsSymbolName(allocator, local_type.name orelse return error.UnsupportedExecutableFeature);
+        defer allocator.free(release_name);
+        try writer.writeAll("  call void ");
+        try writeLlvmSymbol(writer, release_name);
+        try writer.print("(ptr %local.storage.{d})\n", .{index});
+    }
+}
+
+fn appendReleaseDefinitions(allocator: std.mem.Allocator, writer: anytype, program: *const ir.Program) !void {
+    try writer.writeAll("define void @\"kira_destroy_raw_ptr\"(ptr %value) {\nentry:\n  call void @free(ptr %value)\n  ret void\n}\n");
+    for (program.types) |type_decl| {
+        if (type_decl.ffi) |ffi_info| {
+            if (ffi_info != .ffi_struct) continue;
+        }
+
+        const contents_name = try releaseContentsSymbolName(allocator, type_decl.name);
+        defer allocator.free(contents_name);
+        const destroy_name = try destroySymbolName(allocator, type_decl.name);
+        defer allocator.free(destroy_name);
+        const struct_type_name = typeRefName(type_decl.name);
+
+        try writer.writeAll("define void ");
+        try writeLlvmSymbol(writer, contents_name);
+        try writer.writeAll("(ptr %value) {\nentry:\n");
+        for (type_decl.fields, 0..) |field, index| {
+            switch (field.ty.kind) {
+                .ffi_struct => {
+                    const field_contents = try releaseContentsSymbolName(allocator, field.ty.name orelse return error.UnsupportedExecutableFeature);
+                    defer allocator.free(field_contents);
+                    try writer.print("  %release.field.{d} = getelementptr inbounds {s}, ptr %value, i32 0, i32 {d}\n", .{ index, struct_type_name, index });
+                    try writer.writeAll("  call void ");
+                    try writeLlvmSymbol(writer, field_contents);
+                    try writer.print("(ptr %release.field.{d})\n", .{index});
+                },
+                .array => {
+                    const release_fn = try arrayElementDestroySymbol(allocator, program, field.ty);
+                    defer if (release_fn) |name| allocator.free(name);
+                    try writer.print("  %release.array.field.{d} = getelementptr inbounds {s}, ptr %value, i32 0, i32 {d}\n", .{ index, struct_type_name, index });
+                    try writer.print("  %release.array.{d} = load ptr, ptr %release.array.field.{d}\n", .{ index, index });
+                    try writer.print("  call void @\"kira_array_release\"(ptr %release.array.{d}, ptr ", .{index});
+                    if (release_fn) |name| {
+                        try writeLlvmSymbol(writer, name);
+                    } else {
+                        try writer.writeAll("null");
+                    }
+                    try writer.writeAll(")\n");
+                },
+                else => {},
+            }
+        }
+        try writer.writeAll("  ret void\n}\n");
+
+        try writer.writeAll("define void ");
+        try writeLlvmSymbol(writer, destroy_name);
+        try writer.writeAll("(ptr %value) {\nentry:\n");
+        try writer.writeAll("  %isnull = icmp eq ptr %value, null\n");
+        try writer.writeAll("  br i1 %isnull, label %done, label %body\nbody:\n");
+        try writer.writeAll("  call void ");
+        try writeLlvmSymbol(writer, contents_name);
+        try writer.writeAll("(ptr %value)\n");
+        try writer.writeAll("  call void @free(ptr %value)\n");
+        try writer.writeAll("  br label %done\ndone:\n  ret void\n}\n");
+    }
+    if (program.types.len > 0) try writer.writeByte('\n');
+}
+
+fn arrayElementDestroySymbol(allocator: std.mem.Allocator, program: *const ir.Program, array_ty: ir.ValueType) !?[]const u8 {
+    const array_name = array_ty.name orelse return null;
+    const type_decl = findTypeDecl(program, array_name) orelse return null;
+    if (type_decl.ffi) |ffi_info| {
+        return switch (ffi_info) {
+            .ffi_struct => try destroySymbolName(allocator, type_decl.name),
+            .array => |array_info| blk: {
+                if (array_info.element.kind != .ffi_struct) break :blk null;
+                break :blk try destroySymbolName(allocator, array_info.element.name orelse return error.UnsupportedExecutableFeature);
+            },
+            else => null,
+        };
+    }
+    return try destroySymbolName(allocator, type_decl.name);
+}
+
+fn releaseContentsSymbolName(allocator: std.mem.Allocator, type_name: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "kira_release_contents_{s}", .{type_name});
+}
+
+fn destroySymbolName(allocator: std.mem.Allocator, type_name: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "kira_destroy_{s}", .{type_name});
 }

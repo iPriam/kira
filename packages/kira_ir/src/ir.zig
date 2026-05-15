@@ -245,6 +245,7 @@ pub const AllocNativeState = struct {
 pub const AllocArray = struct {
     dst: u32,
     len: u32,
+    ty: ValueType = .{ .kind = .array },
 };
 
 pub const Binary = struct {

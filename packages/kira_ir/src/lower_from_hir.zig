@@ -963,7 +963,11 @@ pub const Lowerer = struct {
                     .value = @as(i64, @intCast(node.elements.len)),
                 } });
                 const dst = self.freshRegister();
-                try instructions.append(.{ .alloc_array = .{ .dst = dst, .len = len_reg } });
+                try instructions.append(.{ .alloc_array = .{
+                    .dst = dst,
+                    .len = len_reg,
+                    .ty = try lowerResolvedType(self.program, node.ty),
+                } });
                 for (node.elements, 0..) |element, index| {
                     const index_reg = self.freshRegister();
                     try instructions.append(.{ .const_int = .{

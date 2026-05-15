@@ -105,7 +105,7 @@ pub fn inferRegisterTypes(allocator: std.mem.Allocator, program: ir.Program, fun
             .alloc_struct => |value| register_types[value.dst] = .{ .kind = .ffi_struct, .name = value.type_name },
             .alloc_enum => |value| register_types[value.dst] = .{ .kind = .enum_instance, .name = value.enum_type_name },
             .alloc_native_state => |value| register_types[value.dst] = .{ .kind = .raw_ptr, .name = value.type_name },
-            .alloc_array => |value| register_types[value.dst] = .{ .kind = .array },
+            .alloc_array => |value| register_types[value.dst] = value.ty,
             .const_function => |value| register_types[value.dst] = .{ .kind = .raw_ptr, .name = if (value.representation == .callable_value) "Callable" else "RawPtr" },
             .const_closure => |value| register_types[value.dst] = .{ .kind = .raw_ptr, .name = "Closure" },
             .add => |value| register_types[value.dst] = register_types[value.lhs],
