@@ -68,11 +68,12 @@ jobs:
         if: matrix.os != 'windows'
         shell: bash
         run: |
+          TOOLCHAIN_DIR="$HOME/.kira/toolchains/release/${{ env.VERSION }}"
           STAGE_DIR="${{ env.BINARY_NAME }}-${{ matrix.artifact_suffix }}"
           mkdir -p "$STAGE_DIR"
 
-          cp zig-out/bin/kirac "$STAGE_DIR/${{ env.PRIMARY_EXECUTABLE }}"
-          cp zig-out/bin/kira-bootstrapper "$STAGE_DIR/${{ env.BINARY_NAME }}"
+          cp "$TOOLCHAIN_DIR/bin/${{ env.PRIMARY_EXECUTABLE }}" "$STAGE_DIR/${{ env.PRIMARY_EXECUTABLE }}"
+          cp "zig-out/bin/${{ env.BINARY_NAME }}" "$STAGE_DIR/${{ env.BINARY_NAME }}"
           chmod +x "$STAGE_DIR/${{ env.PRIMARY_EXECUTABLE }}"
           chmod +x "$STAGE_DIR/${{ env.BINARY_NAME }}"
 
@@ -93,11 +94,12 @@ jobs:
         if: matrix.os == 'windows'
         shell: pwsh
         run: |
+          $toolchainDir = Join-Path $HOME ".kira\toolchains\release\${{ env.VERSION }}"
           $stageDir = "${{ env.BINARY_NAME }}-${{ matrix.artifact_suffix }}"
           New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 
-          Copy-Item "zig-out\bin\kirac.exe" -Destination "$stageDir\${{ env.PRIMARY_EXECUTABLE }}.exe"
-          Copy-Item "zig-out\bin\kira-bootstrapper.exe" -Destination "$stageDir\${{ env.BINARY_NAME }}.exe"
+          Copy-Item (Join-Path $toolchainDir "bin\${{ env.PRIMARY_EXECUTABLE }}.exe") -Destination "$stageDir\${{ env.PRIMARY_EXECUTABLE }}.exe"
+          Copy-Item "zig-out\bin\${{ env.BINARY_NAME }}.exe" -Destination "$stageDir\${{ env.BINARY_NAME }}.exe"
 
           Copy-Item README.md, LICENSE -Destination "$stageDir\"
 
@@ -167,6 +169,7 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
@@ -200,6 +203,7 @@ jobs:
       - name: Verify release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
           expected=(kira-linux-x64.tar.gz kira-macos-arm64.tar.gz kira-windows-x64.zip SHA256SUMS.txt)
