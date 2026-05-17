@@ -45,6 +45,8 @@ kira --help
 
 `zig build install` installs the PATH-facing launcher into `zig-out/bin/` by default and installs the active toolchain under `~/.kira/toolchains/<channel>/<version>/`. `zig build install-kirac` is also available for the same managed toolchain plus launcher flow.
 
+GitHub release archives now ship the `kira` launcher separately from the managed toolchain payload. On first run, the release launcher downloads the matching `kira-toolchain-<platform>` archive into `~/.kira/toolchains/release/<version>/` and activates it automatically. LLVM remains a separate `kira fetch-llvm` step for native and hybrid workflows.
+
 On Windows, run the launcher directly or add it to the current PowerShell session:
 
 ```powershell

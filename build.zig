@@ -5,6 +5,7 @@ const toolchain_layout = @import("packages/kira_llvm_toolchain_layout/src/root.z
 const kirac_version = "0.1.0";
 const kira_primary_executable = "kirac";
 const kira_bootstrapper_name = "kira-bootstrapper";
+const kira_repository = "kira-lang-com/kira";
 
 const Package = struct {
     name: []const u8,
@@ -118,8 +119,10 @@ pub fn build(b: *std.Build) void {
 
     const bootstrapper_options = b.addOptions();
     bootstrapper_options.addOption([]const u8, "version", kirac_version);
+    bootstrapper_options.addOption([]const u8, "channel", channel.dirName());
     bootstrapper_options.addOption([]const u8, "llvm_version", llvm_version);
     bootstrapper_options.addOption([]const u8, "llvm_host_key", llvm_host_key);
+    bootstrapper_options.addOption([]const u8, "release_repository", kira_repository);
     const bootstrapper_module = b.createModule(.{
         .root_source_file = b.path("packages/kira_bootstrapper/src/main.zig"),
         .target = b.graph.host,
@@ -127,6 +130,7 @@ pub fn build(b: *std.Build) void {
     });
     bootstrapper_module.addImport("kira_toolchain", modules.get("kira_toolchain").?);
     bootstrapper_module.addOptions("kira_bootstrapper_build_options", bootstrapper_options);
+    bootstrapper_module.link_libc = true;
     const bootstrapper = b.addExecutable(.{
         .name = kira_bootstrapper_name,
         .root_module = bootstrapper_module,
@@ -225,6 +229,12 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(unit_tests);
         test_step.dependOn(&run_tests.step);
     }
+
+    const bootstrapper_tests = b.addTest(.{
+        .root_module = bootstrapper_module,
+    });
+    const run_bootstrapper_tests = b.addRunArtifact(bootstrapper_tests);
+    test_step.dependOn(&run_bootstrapper_tests.step);
 
     const corpus_module = b.createModule(.{
         .root_source_file = b.path("tests/corpus_main.zig"),

@@ -63,61 +63,73 @@ jobs:
         run: zig build -Doptimize=ReleaseSafe
         shell: pwsh
 
-      - name: Package release (Unix)
-        id: package
+      - name: Package bootstrapper (Unix)
+        id: package-bootstrapper
+        if: matrix.os != 'windows'
+        shell: bash
+        run: |
+          STAGE_DIR="${{ env.BINARY_NAME }}-${{ matrix.artifact_suffix }}"
+          mkdir -p "$STAGE_DIR"
+
+          cp "zig-out/bin/${{ env.BINARY_NAME }}" "$STAGE_DIR/${{ env.BINARY_NAME }}"
+          chmod +x "$STAGE_DIR/${{ env.BINARY_NAME }}"
+
+          cp README.md LICENSE llvm-metadata.toml "$STAGE_DIR/"
+
+          ARCHIVE="${STAGE_DIR}.${{ matrix.archive_ext }}"
+          tar -czf "$ARCHIVE" "$STAGE_DIR"
+          echo "bootstrapper_archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Package toolchain (Unix)
+        id: package-toolchain
         if: matrix.os != 'windows'
         shell: bash
         run: |
           TOOLCHAIN_DIR="$HOME/.kira/toolchains/release/${{ env.VERSION }}"
-          STAGE_DIR="${{ env.BINARY_NAME }}-${{ matrix.artifact_suffix }}"
-          mkdir -p "$STAGE_DIR"
+          ARCHIVE="kira-toolchain-${{ matrix.artifact_suffix }}.${{ matrix.archive_ext }}"
+          tar -czf "$ARCHIVE" -C "$TOOLCHAIN_DIR" .
+          echo "toolchain_archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
 
-          cp "$TOOLCHAIN_DIR/bin/${{ env.PRIMARY_EXECUTABLE }}" "$STAGE_DIR/${{ env.PRIMARY_EXECUTABLE }}"
-          cp "zig-out/bin/${{ env.BINARY_NAME }}" "$STAGE_DIR/${{ env.BINARY_NAME }}"
-          chmod +x "$STAGE_DIR/${{ env.PRIMARY_EXECUTABLE }}"
-          chmod +x "$STAGE_DIR/${{ env.BINARY_NAME }}"
+      - name: Package bootstrapper (Windows)
+        id: package-bootstrapper-win
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $stageDir = "${{ env.BINARY_NAME }}-${{ matrix.artifact_suffix }}"
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 
-          cp README.md LICENSE "$STAGE_DIR/"
+          Copy-Item "zig-out\bin\${{ env.BINARY_NAME }}.exe" -Destination "$stageDir\${{ env.BINARY_NAME }}.exe"
 
-          mkdir -p "$STAGE_DIR/templates"
-          cp -r templates/* "$STAGE_DIR/templates/"
-          mkdir -p "$STAGE_DIR/foundation"
-          cp -r foundation/* "$STAGE_DIR/foundation/"
-          cp llvm-metadata.toml "$STAGE_DIR/"
+          Copy-Item README.md, LICENSE, llvm-metadata.toml -Destination "$stageDir\"
 
-          ARCHIVE="${STAGE_DIR}.${{ matrix.archive_ext }}"
-          tar -czf "$ARCHIVE" "$STAGE_DIR"
-          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+          $archive = "$stageDir.${{ matrix.archive_ext }}"
+          Compress-Archive -Path $stageDir -DestinationPath $archive
+          "bootstrapper_archive=$archive" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8NoBOM -Append
 
-      - name: Package release (Windows)
-        id: package-win
+      - name: Package toolchain (Windows)
+        id: package-toolchain-win
         if: matrix.os == 'windows'
         shell: pwsh
         run: |
           $toolchainDir = Join-Path $HOME ".kira\toolchains\release\${{ env.VERSION }}"
-          $stageDir = "${{ env.BINARY_NAME }}-${{ matrix.artifact_suffix }}"
-          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+          $archive = "kira-toolchain-${{ matrix.artifact_suffix }}.${{ matrix.archive_ext }}"
+          Push-Location $toolchainDir
+          Compress-Archive -Path "bin", "foundation", "templates", "llvm-metadata.toml" -DestinationPath (Join-Path $env:GITHUB_WORKSPACE $archive)
+          Pop-Location
+          "toolchain_archive=$archive" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8NoBOM -Append
 
-          Copy-Item (Join-Path $toolchainDir "bin\${{ env.PRIMARY_EXECUTABLE }}.exe") -Destination "$stageDir\${{ env.PRIMARY_EXECUTABLE }}.exe"
-          Copy-Item "zig-out\bin\${{ env.BINARY_NAME }}.exe" -Destination "$stageDir\${{ env.BINARY_NAME }}.exe"
-
-          Copy-Item README.md, LICENSE -Destination "$stageDir\"
-
-          New-Item -ItemType Directory -Force -Path "$stageDir\templates" | Out-Null
-          Copy-Item "templates\*" -Destination "$stageDir\templates\" -Recurse
-          New-Item -ItemType Directory -Force -Path "$stageDir\foundation" | Out-Null
-          Copy-Item "foundation\*" -Destination "$stageDir\foundation\" -Recurse
-          Copy-Item llvm-metadata.toml -Destination "$stageDir\"
-
-          $archive = "$stageDir.${{ matrix.archive_ext }}"
-          Compress-Archive -Path $stageDir -DestinationPath $archive
-          "archive=$archive" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8NoBOM -Append
-
-      - name: Upload artifact
+      - name: Upload bootstrapper artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.BINARY_NAME }}-${{ matrix.artifact_suffix }}
-          path: ${{ matrix.os == 'windows' && steps.package-win.outputs.archive || steps.package.outputs.archive }}
+          name: kira-bootstrapper-${{ matrix.artifact_suffix }}
+          path: ${{ matrix.os == 'windows' && steps.package-bootstrapper-win.outputs.bootstrapper_archive || steps.package-bootstrapper.outputs.bootstrapper_archive }}
+          if-no-files-found: error
+
+      - name: Upload toolchain artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kira-toolchain-${{ matrix.artifact_suffix }}
+          path: ${{ matrix.os == 'windows' && steps.package-toolchain-win.outputs.toolchain_archive || steps.package-toolchain.outputs.toolchain_archive }}
           if-no-files-found: error
 
   checksum:
@@ -172,33 +184,33 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            echo "Release $TAG_NAME already exists"
-            exit 1
-          fi
-
           cat > /tmp/notes.md << 'RELEASE_NOTES'
           Kira v0.1.0 release
 
           ## Installation
-          Extract the archive for your platform and add the bin directory to your PATH.
+          Extract the `kira-<platform>` archive for your platform, put `kira` on your PATH, and run it once to install the matching managed toolchain.
+          Use `kira fetch-llvm` afterwards if you want LLVM/native and hybrid backends on that machine.
 
           ## What's Included
-          - `kirac` - Kira compiler CLI
-          - `kira` - Bootstrapper launcher
-          - templates/ - Project templates
-          - foundation/ - Foundation library
-          - llvm-metadata.toml - LLVM toolchain version
+          - `kira-<platform>` - Bootstrapper launcher archive for each supported host
+          - `kira-toolchain-<platform>` - Managed Kira toolchain archive downloaded automatically by the launcher
+          - `SHA256SUMS.txt` - Checksums for all published assets
 
           ## Verification
           Verify the checksums using `sha256sum -c SHA256SUMS.txt`
           RELEASE_NOTES
 
-          gh release create "$TAG_NAME" \
-            --title "$TAG_NAME" \
-            --notes-file /tmp/notes.md \
-            artifacts/kira-* \
-            artifacts/SHA256SUMS.txt
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" \
+              --title "$TAG_NAME" \
+              --notes-file /tmp/notes.md
+            gh release upload "$TAG_NAME" artifacts/* --clobber
+          else
+            gh release create "$TAG_NAME" \
+              --title "$TAG_NAME" \
+              --notes-file /tmp/notes.md \
+              artifacts/*
+          fi
 
       - name: Verify release
         env:
@@ -206,7 +218,15 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          expected=(kira-linux-x64.tar.gz kira-macos-arm64.tar.gz kira-windows-x64.zip SHA256SUMS.txt)
+          expected=(
+            kira-linux-x64.tar.gz
+            kira-macos-arm64.tar.gz
+            kira-windows-x64.zip
+            kira-toolchain-linux-x64.tar.gz
+            kira-toolchain-macos-arm64.tar.gz
+            kira-toolchain-windows-x64.zip
+            SHA256SUMS.txt
+          )
           for asset in "${expected[@]}"; do
             if ! gh release view "$TAG_NAME" --json assets --jq '.assets[].name' | grep -qx "$asset"; then
               echo "Missing expected asset: $asset"

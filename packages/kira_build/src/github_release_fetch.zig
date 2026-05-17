@@ -1,7 +1,7 @@
 const std = @import("std");
 const kira_toolchain = @import("kira_toolchain");
 
-pub const default_repository = "kira-lang-com/kira-zig";
+pub const default_repository = "kira-lang-com/kira";
 
 pub const ResolvedAsset = struct {
     repository: []const u8,

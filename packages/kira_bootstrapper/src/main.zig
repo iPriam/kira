@@ -1,6 +1,6 @@
 const std = @import("std");
 const kira_toolchain = @import("kira_toolchain");
-const build_options = @import("kira_bootstrapper_build_options");
+const release_install = @import("release_install.zig");
 
 pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -11,29 +11,59 @@ pub fn main(init: std.process.Init) !void {
     const args = try allocator.alloc([]const u8, raw_args.len);
     for (raw_args, 0..) |arg, index| args[index] = arg;
     const current_path = try kira_toolchain.currentToolchainPath(allocator);
-    const current_contents = std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, current_path, allocator, .limited(4 * 1024)) catch {
-        try printMissingToolchain(current_path);
-        std.process.exit(1);
-    };
-
-    const current = kira_toolchain.parseCurrentToolchainToml(allocator, current_contents) catch {
-        try printBrokenToolchain(current_path);
-        std.process.exit(1);
+    var current = blk: {
+        break :blk loadCurrentToolchain(allocator, current_path) catch |err| switch (err) {
+            error.FileNotFound => {
+                if (!release_install.canAutoInstallManagedToolchain()) {
+                    try printMissingToolchain(current_path);
+                    std.process.exit(1);
+                }
+                try installReleaseToolchainOrExit(allocator, current_path);
+                break :blk try loadCurrentToolchain(allocator, current_path);
+            },
+            error.InvalidCurrentToolchain => {
+                if (!release_install.canAutoInstallManagedToolchain()) {
+                    try printBrokenToolchain(current_path);
+                    std.process.exit(1);
+                }
+                try installReleaseToolchainOrExit(allocator, current_path);
+                break :blk try loadCurrentToolchain(allocator, current_path);
+            },
+            else => return err,
+        };
     };
     defer current.deinit(allocator);
 
-    const executable_path = try kira_toolchain.managedPrimaryBinaryPath(
+    if (release_install.canAutoInstallManagedToolchain() and
+        (current.channel != .release or !std.mem.eql(u8, current.version, release_install.managedReleaseVersion())))
+    {
+        try installReleaseToolchainOrExit(allocator, current_path);
+        current.deinit(allocator);
+        current = try loadCurrentToolchain(allocator, current_path);
+    }
+
+    var executable_path = try kira_toolchain.managedPrimaryBinaryPath(
         allocator,
         current.channel,
         current.version,
         current.primary,
     );
-
-    if (!isFetchLlvmCommand(args)) {
-        validateManagedLlvmTools(allocator) catch {
-            try printBrokenLlvmToolchain();
+    if (!managedExecutableExists(executable_path)) {
+        if (release_install.canAutoInstallManagedToolchain()) {
+            try installReleaseToolchainOrExit(allocator, current_path);
+            current.deinit(allocator);
+            current = try loadCurrentToolchain(allocator, current_path);
+            allocator.free(executable_path);
+            executable_path = try kira_toolchain.managedPrimaryBinaryPath(
+                allocator,
+                current.channel,
+                current.version,
+                current.primary,
+            );
+        } else {
+            try printMissingExecutable(executable_path);
             std.process.exit(1);
-        };
+        }
     }
 
     var child_args = try allocator.alloc([]const u8, args.len);
@@ -61,24 +91,36 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-fn isFetchLlvmCommand(args: []const []const u8) bool {
-    return args.len > 1 and std.mem.eql(u8, args[1], "fetch-llvm");
+fn loadCurrentToolchain(allocator: std.mem.Allocator, current_path: []const u8) !kira_toolchain.CurrentToolchain {
+    const current_contents = std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, current_path, allocator, .limited(4 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return error.FileNotFound,
+        else => return err,
+    };
+    return kira_toolchain.parseCurrentToolchainToml(allocator, current_contents) catch error.InvalidCurrentToolchain;
 }
 
-fn validateManagedLlvmTools(allocator: std.mem.Allocator) !void {
-    if (build_options.llvm_version.len == 0 or std.mem.eql(u8, build_options.llvm_host_key, "unsupported-host")) {
-        return error.UnsupportedLlvmHost;
+fn installReleaseToolchainOrExit(allocator: std.mem.Allocator, current_path: []const u8) !void {
+    if (!release_install.canAutoInstallManagedToolchain()) {
+        try printMissingToolchain(current_path);
+        std.process.exit(1);
     }
-    const llvm_home = try kira_toolchain.managedLlvmHome(
-        allocator,
-        build_options.llvm_version,
-        build_options.llvm_host_key,
-    );
-    defer allocator.free(llvm_home);
-    const clang_path = try kira_toolchain.managedLlvmClangPath(allocator, llvm_home);
-    defer allocator.free(clang_path);
-    const llvm_ar_path = try kira_toolchain.managedLlvmArPath(allocator, llvm_home);
-    defer allocator.free(llvm_ar_path);
+
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr = std.Io.File.stderr().writer(std.Options.debug_io, &stderr_buffer);
+    defer stderr.interface.flush() catch {};
+
+    release_install.installManagedReleaseToolchain(allocator, &stderr.interface) catch |install_err| {
+        try stderr.interface.print("kira-bootstrapper could not install the managed release toolchain: {s}\n", .{@errorName(install_err)});
+        try stderr.interface.flush();
+        try printMissingToolchain(current_path);
+        std.process.exit(1);
+    };
+}
+
+fn managedExecutableExists(path: []const u8) bool {
+    var file = std.Io.Dir.openFileAbsolute(std.Options.debug_io, path, .{}) catch std.Io.Dir.cwd().openFile(std.Options.debug_io, path, .{}) catch return false;
+    file.close(std.Options.debug_io);
+    return true;
 }
 
 fn printMissingToolchain(current_path: []const u8) !void {

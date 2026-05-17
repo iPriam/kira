@@ -61,6 +61,7 @@ Install notes:
 - `zig build install-kirac` installs the same managed toolchain plus launcher flow without changing the rest of the repo install names
 - `zig build install -p .local` installs into `.local/bin/` instead of `zig-out/bin/`
 - `~/.kira/toolchains/current.toml` selects which real toolchain `kira` forwards to
+- GitHub release archives ship the `kira` launcher separately from the managed toolchain payload; on first run, the release launcher downloads the matching `kira-toolchain-<platform>` archive into `~/.kira/toolchains/release/<version>/` and activates it automatically
 - add the chosen launcher `bin/` directory to `PATH` to make direct `kira` invocation global for your shell session
 
 CLI behavior:
