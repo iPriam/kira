@@ -12,6 +12,11 @@ const ClosureObject = ownership.ClosureObject;
 
 const NativeStateBox = extern struct { type_id: u64, payload: usize, runtime_payload: usize };
 
+const ExportedNativeClosure = struct {
+    native_ptr: usize,
+    captures: []runtime_abi.Value,
+};
+
 const NativeLayoutStats = struct {
     arrays_current: usize = 0,
     arrays_peak: usize = 0,
@@ -35,6 +40,7 @@ pub const Vm = struct {
     heap: ownership.Heap,
     native_layout_stats: NativeLayoutStats = .{},
     native_state_materialized_types: std.StringHashMap(usize),
+    exported_native_closures: std.AutoHashMap(usize, ExportedNativeClosure),
     last_error_buffer: [256]u8 = [_]u8{0} ** 256,
     last_error_len: usize = 0,
 
@@ -43,10 +49,22 @@ pub const Vm = struct {
             .allocator = allocator,
             .heap = ownership.Heap.init(allocator),
             .native_state_materialized_types = std.StringHashMap(usize).init(allocator),
+            .exported_native_closures = std.AutoHashMap(usize, ExportedNativeClosure).init(allocator),
         };
     }
 
     pub fn deinit(self: *Vm) void {
+        var exported_iterator = self.exported_native_closures.iterator();
+        while (exported_iterator.next()) |entry| {
+            const exported = entry.value_ptr.*;
+            for (exported.captures) |capture| self.heap.releaseValue(capture);
+            self.allocator.free(exported.captures);
+            const byte_len = 16 + exported.captures.len * @sizeOf(runtime_abi.BridgeValue);
+            const word_count = @max(1, std.math.divCeil(usize, byte_len, @sizeOf(u64)) catch unreachable);
+            const words: [*]u64 = @ptrFromInt(exported.native_ptr);
+            self.allocator.free(words[0..word_count]);
+        }
+        self.exported_native_closures.deinit();
         self.heap.deinit();
         self.native_state_materialized_types.deinit();
     }
@@ -343,6 +361,7 @@ pub const Vm = struct {
             .array => {
                 if (value == .raw_ptr) self.destroyArrayNativeLayout(module, ty, value.raw_ptr);
             },
+            .enum_instance, .construct_any => self.heap.releaseValue(value),
             else => {},
         }
     }
@@ -561,6 +580,14 @@ pub const Vm = struct {
                     }
                     const array_ptr: *const ArrayObject = @ptrFromInt(array_value.raw_ptr);
                     self.setSlotOwned(&registers[value.dst], &register_owned[value.dst], .{ .integer = @intCast(array_ptr.len) });
+                },
+                .string_len => |value| {
+                    const string_value = registers[value.string];
+                    if (string_value != .string) {
+                        self.rememberError("string length requires a valid string value");
+                        return error.RuntimeFailure;
+                    }
+                    self.setSlotOwned(&registers[value.dst], &register_owned[value.dst], .{ .integer = @intCast(string_value.string.len) });
                 },
                 .array_get => |value| {
                     const array_value = registers[value.array];
@@ -871,14 +898,7 @@ pub const Vm = struct {
         const src_ptr: [*]align(1) runtime_abi.Value = @ptrFromInt(src_payload);
         const native_payload = try self.allocator.alloc(runtime_abi.BridgeValue, type_decl.fields.len);
         for (type_decl.fields, 0..) |field_decl, index| {
-            var native_value = src_ptr[index];
-            if (field_decl.ty.kind == .ffi_struct and native_value == .raw_ptr and native_value.raw_ptr != 0) {
-                native_value = .{ .raw_ptr = try self.copyStructToNativeLayout(
-                    module,
-                    field_decl.ty.name orelse return error.RuntimeFailure,
-                    native_value.raw_ptr,
-                ) };
-            }
+            const native_value = try self.preserveNativeStateValue(module, field_decl.ty, src_ptr[index]);
             native_payload[index] = runtime_abi.bridgeValueFromValue(native_value);
         }
 
@@ -904,6 +924,8 @@ pub const Vm = struct {
             if (!result.found_existing) result.value_ptr.* = 0;
             result.value_ptr.* += 1;
             box.runtime_payload = try self.materializeNativeStatePayload(module, type_name, box.payload);
+            self.destroyNativeStatePayload(module, type_name, box.payload);
+            box.payload = 0;
         }
         if (box.runtime_payload == 0) {
             self.rememberError("nativeRecover used a userdata token with no state payload");
@@ -920,17 +942,49 @@ pub const Vm = struct {
         const native_payload: [*]const runtime_abi.BridgeValue = @ptrFromInt(native_payload_ptr);
         const runtime_payload = try self.allocator.alloc(runtime_abi.BridgeValue, type_decl.fields.len);
         for (type_decl.fields, 0..) |field_decl, index| {
-            var value = runtime_abi.bridgeValueToValue(native_payload[index]);
-            if (field_decl.ty.kind == .ffi_struct and value == .raw_ptr and value.raw_ptr != 0) {
-                value = .{ .raw_ptr = try self.copyStructFromNativeLayout(
-                    module,
-                    field_decl.ty.name orelse return error.RuntimeFailure,
-                    value.raw_ptr,
-                ) };
-            }
+            const value = try self.materializeNativeStateValue(module, field_decl.ty, runtime_abi.bridgeValueToValue(native_payload[index]));
             runtime_payload[index] = runtime_abi.bridgeValueFromValue(value);
         }
         return @intFromPtr(runtime_payload.ptr);
+    }
+
+    fn preserveNativeStateValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) !runtime_abi.Value {
+        return switch (ty.kind) {
+            .ffi_struct, .array, .enum_instance, .construct_any => try self.copyValueToNativeLayout(module, ty, value),
+            else => value,
+        };
+    }
+
+    fn materializeNativeStateValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) !runtime_abi.Value {
+        return switch (ty.kind) {
+            .ffi_struct, .array, .enum_instance, .construct_any => try self.copyValueFromNativeLayout(module, ty, value),
+            else => value,
+        };
+    }
+
+    fn destroyNativeStatePayload(self: *Vm, module: *const bytecode.Module, type_name: []const u8, native_payload_ptr: usize) void {
+        if (native_payload_ptr == 0) return;
+        const type_decl = helper_impl.findType(module, type_name) orelse return;
+        const native_payload: [*]const runtime_abi.BridgeValue = @ptrFromInt(native_payload_ptr);
+        for (type_decl.fields, 0..) |field_decl, index| {
+            self.destroyPreservedNativeStateValue(module, field_decl.ty, runtime_abi.bridgeValueToValue(native_payload[index]));
+        }
+        self.allocator.free(native_payload[0..type_decl.fields.len]);
+    }
+
+    fn destroyPreservedNativeStateValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) void {
+        switch (ty.kind) {
+            .ffi_struct => {
+                if (value != .raw_ptr or value.raw_ptr == 0) return;
+                self.destroyStructNativeLayout(module, ty.name orelse return, value.raw_ptr);
+            },
+            .array => {
+                if (value != .raw_ptr or value.raw_ptr == 0) return;
+                self.destroyArrayNativeLayout(module, ty, value.raw_ptr);
+            },
+            .enum_instance, .construct_any => self.heap.releaseValue(value),
+            else => {},
+        }
     }
 
     fn zeroValueForType(self: *Vm, module: *const bytecode.Module, value_type: bytecode.TypeRef) anyerror!runtime_abi.Value {
@@ -981,6 +1035,18 @@ pub const Vm = struct {
                 if (value != .raw_ptr or value.raw_ptr == 0) break :blk .{ .raw_ptr = 0 };
                 break :blk .{ .raw_ptr = try self.copyArrayToNativeLayout(module, ty, value.raw_ptr) };
             },
+            .enum_instance, .construct_any => blk: {
+                self.heap.retainValue(value);
+                break :blk value;
+            },
+            .raw_ptr => blk: {
+                if (ty.name) |name| {
+                    if (isCallbackTypeName(name) and value == .raw_ptr and value.raw_ptr != 0 and self.heap.getClosure(value.raw_ptr) != null) {
+                        break :blk .{ .raw_ptr = try self.exportRuntimeClosureToNative(module, value.raw_ptr) };
+                    }
+                }
+                break :blk value;
+            },
             else => value,
         };
     }
@@ -1019,8 +1085,60 @@ pub const Vm = struct {
                 if (value != .raw_ptr or value.raw_ptr == 0) break :blk .{ .raw_ptr = 0 };
                 break :blk .{ .raw_ptr = try self.copyArrayFromNativeLayout(module, ty, value.raw_ptr) };
             },
+            .enum_instance, .construct_any => blk: {
+                self.heap.retainValue(value);
+                break :blk value;
+            },
             else => value,
         };
+    }
+
+    pub fn exportRuntimeClosureToNative(self: *Vm, module: *const bytecode.Module, closure_ptr: usize) !usize {
+        if (self.exported_native_closures.get(closure_ptr)) |existing| {
+            return runtime_abi.tagNativeClosurePointer(existing.native_ptr);
+        }
+
+        const closure = self.heap.getClosure(closure_ptr) orelse {
+            self.rememberError("callback value is not a valid runtime closure");
+            return error.RuntimeFailure;
+        };
+        const function_decl = module.findFunctionById(closure.function_id) orelse {
+            self.rememberError("runtime closure function could not be resolved");
+            return error.RuntimeFailure;
+        };
+        if (closure.captures.len > function_decl.param_count) {
+            self.rememberError("runtime closure capture metadata is inconsistent");
+            return error.RuntimeFailure;
+        }
+
+        const param_count: usize = function_decl.param_count;
+        const capture_types = function_decl.local_types[param_count - closure.captures.len .. param_count];
+        const byte_len = 16 + closure.captures.len * @sizeOf(runtime_abi.BridgeValue);
+        const word_count = @max(1, std.math.divCeil(usize, byte_len, @sizeOf(u64)) catch unreachable);
+        const words = try self.allocator.alloc(u64, word_count);
+        errdefer self.allocator.free(words);
+        @memset(words, 0);
+
+        const raw_ptr = @intFromPtr(words.ptr);
+        const header: [*]u64 = @ptrFromInt(raw_ptr);
+        header[0] = closure.function_id;
+        header[1] = closure.captures.len;
+
+        const retained_captures = try self.allocator.alloc(runtime_abi.Value, closure.captures.len);
+        errdefer self.allocator.free(retained_captures);
+        const slots: [*]runtime_abi.BridgeValue = @ptrFromInt(raw_ptr + 16);
+        for (closure.captures, 0..) |capture, index| {
+            const lowered = try self.copyValueToNativeLayout(module, capture_types[index], capture);
+            self.heap.retainValue(lowered);
+            retained_captures[index] = lowered;
+            slots[index] = runtime_abi.bridgeValueFromValue(lowered);
+        }
+
+        try self.exported_native_closures.put(closure_ptr, .{
+            .native_ptr = raw_ptr,
+            .captures = retained_captures,
+        });
+        return runtime_abi.tagNativeClosurePointer(raw_ptr);
     }
 
     fn allocateEnum(self: *Vm, enum_type_name: []const u8, registers: []const runtime_abi.Value, discriminant: u32, payload_src: ?u32) !usize {
@@ -1044,6 +1162,10 @@ pub const Vm = struct {
         return self.managedStructTypeName(ptr) != null;
     }
 
+    fn isCallbackTypeName(name: []const u8) bool {
+        return std.mem.indexOf(u8, name, "->") != null;
+    }
+
     fn resolveStructValuePointer(self: *Vm, expected_type_name: []const u8, ptr: usize) !usize {
         if (ptr == 0) {
             self.rememberError("struct value pointer is null");
@@ -1055,8 +1177,10 @@ pub const Vm = struct {
         const slot_ptr: *const runtime_abi.Value = @ptrFromInt(ptr);
         const value = slot_ptr.*;
         if (value != .raw_ptr) {
-            self.rememberError("struct pointer slot does not contain a struct value");
-            return error.RuntimeFailure;
+            // Some lowered paths hand us a direct pointer to inline struct field storage
+            // instead of a slot containing a managed struct pointer. Treat that as an
+            // already-resolved struct pointer and let downstream field access validate it.
+            return ptr;
         }
         if (value.raw_ptr == 0) return 0;
         if (!self.isManagedStructPointer(value.raw_ptr)) {
@@ -1298,6 +1422,10 @@ pub const Vm = struct {
                 .ffi_struct => if (field_decl.ty.name) |nested_name| {
                     self.destroyStructNativeLayoutFields(module, nested_name, address);
                 },
+                .enum_instance, .construct_any => {
+                    const raw_ptr = (@as(*const usize, @ptrFromInt(address))).*;
+                    self.heap.releaseValue(.{ .raw_ptr = raw_ptr });
+                },
                 else => {},
             }
         }
@@ -1333,7 +1461,7 @@ test "executes nested runtime calls" {
     var vm = Vm.init(arena.allocator());
     const module = bytecode.Module{
         .types = &.{},
-        .functions = &.{
+        .functions = @constCast(&[_]bytecode.Function{
             .{
                 .id = 0,
                 .name = "main",
@@ -1341,10 +1469,10 @@ test "executes nested runtime calls" {
                 .register_count = 1,
                 .local_count = 0,
                 .local_types = &.{},
-                .instructions = &.{
-                    .{ .call_runtime = .{ .function_id = 1 } },
+                .instructions = @constCast(&[_]bytecode.Instruction{
+                    .{ .call_runtime = .{ .function_id = 1, .args = &.{} } },
                     .{ .ret = .{ .src = null } },
-                },
+                }),
             },
             .{
                 .id = 1,
@@ -1353,13 +1481,13 @@ test "executes nested runtime calls" {
                 .register_count = 1,
                 .local_count = 0,
                 .local_types = &.{},
-                .instructions = &.{
+                .instructions = @constCast(&[_]bytecode.Instruction{
                     .{ .const_int = .{ .dst = 0, .value = 42 } },
                     .{ .print = .{ .src = 0, .ty = .{ .kind = .integer, .name = "I64" } } },
                     .{ .ret = .{ .src = null } },
-                },
+                }),
             },
-        },
+        }),
         .entry_function_id = 0,
     };
 
@@ -1671,7 +1799,7 @@ test "hybrid_native_state_field_set_releases_replaced_managed_values" {
     };
     const module = bytecode.Module{
         .types = @constCast(&types),
-        .functions = &.{
+        .functions = @constCast(&[_]bytecode.Function{
             .{
                 .id = 0,
                 .name = "replaceHandle",
@@ -1681,7 +1809,7 @@ test "hybrid_native_state_field_set_releases_replaced_managed_values" {
                 .local_types = @constCast(&local_types),
                 .instructions = @constCast(&instructions),
             },
-        },
+        }),
         .entry_function_id = null,
     };
 
@@ -1697,7 +1825,7 @@ test "hybrid_native_state_field_set_releases_replaced_managed_values" {
         if (box.runtime_payload != 0) {
             const runtime_payload: [*]runtime_abi.BridgeValue = @ptrFromInt(box.runtime_payload);
             vm.heap.releaseValue(runtime_abi.bridgeValueToValue(runtime_payload[0]));
-            vm.allocator.free(runtime_payload[0..1]);
+            vm.allocator.free(@as([]runtime_abi.BridgeValue, runtime_payload[0..1]));
         }
         vm.allocator.free(native_payload);
         vm.allocator.destroy(box);
@@ -1718,17 +1846,17 @@ test "prints struct values" {
 
     var vm = Vm.init(arena.allocator());
     const module = bytecode.Module{
-        .types = &.{
+        .types = @constCast(&[_]bytecode.TypeDecl{
             .{
                 .name = "Color",
-                .fields = &.{
+                .fields = @constCast(&[_]bytecode.Field{
                     .{ .name = "r", .ty = .{ .kind = .integer, .name = "I64" } },
                     .{ .name = "g", .ty = .{ .kind = .integer, .name = "I64" } },
                     .{ .name = "b", .ty = .{ .kind = .integer, .name = "I64" } },
-                },
+                }),
             },
-        },
-        .functions = &.{
+        }),
+        .functions = @constCast(&[_]bytecode.Function{
             .{
                 .id = 0,
                 .name = "main",
@@ -1736,7 +1864,7 @@ test "prints struct values" {
                 .register_count = 8,
                 .local_count = 0,
                 .local_types = &.{},
-                .instructions = &.{
+                .instructions = @constCast(&[_]bytecode.Instruction{
                     .{ .alloc_struct = .{ .dst = 0, .type_name = "Color" } },
                     .{ .field_ptr = .{ .dst = 1, .base = 0, .base_type_name = "Color", .field_index = 0, .field_ty = .{ .kind = .integer, .name = "I64" } } },
                     .{ .const_int = .{ .dst = 2, .value = 255 } },
@@ -1749,9 +1877,9 @@ test "prints struct values" {
                     .{ .store_indirect = .{ .ptr = 5, .src = 6, .ty = .{ .kind = .integer, .name = "I64" } } },
                     .{ .print = .{ .src = 0, .ty = .{ .kind = .ffi_struct, .name = "Color" } } },
                     .{ .ret = .{ .src = null } },
-                },
+                }),
             },
-        },
+        }),
         .entry_function_id = 0,
     };
 
@@ -1768,7 +1896,7 @@ test "resolves function constants through hooks" {
     var vm = Vm.init(arena.allocator());
     const module = bytecode.Module{
         .types = &.{},
-        .functions = &.{
+        .functions = @constCast(&[_]bytecode.Function{
             .{
                 .id = 0,
                 .name = "main",
@@ -1776,16 +1904,18 @@ test "resolves function constants through hooks" {
                 .register_count = 1,
                 .local_count = 0,
                 .local_types = &.{},
-                .instructions = &.{
+                .instructions = @constCast(&[_]bytecode.Instruction{
                     .{ .const_function = .{ .dst = 0, .function_id = 7 } },
                     .{ .ret = .{ .src = 0 } },
-                },
+                }),
             },
-        },
+        }),
         .entry_function_id = 0,
     };
 
-    const result = try vm.runFunctionById(&module, 0, &.{}, std.io.null_writer, .{
+    var discard_buffer: [1]u8 = undefined;
+    var discarding: std.Io.Writer.Discarding = .init(&discard_buffer);
+    const result = try vm.runFunctionById(&module, 0, &.{}, &discarding.writer, .{
         .resolve_function = struct {
             fn resolve(_: ?*anyopaque, function_id: u32) !usize {
                 return 0x1000 + function_id;
@@ -1802,24 +1932,24 @@ test "copies struct arguments by value for runtime calls" {
 
     var vm = Vm.init(arena.allocator());
     const module = bytecode.Module{
-        .types = &.{
+        .types = @constCast(&[_]bytecode.TypeDecl{
             .{
                 .name = "Pair",
-                .fields = &.{
+                .fields = @constCast(&[_]bytecode.Field{
                     .{ .name = "left", .ty = .{ .kind = .integer, .name = "I64" } },
                     .{ .name = "right", .ty = .{ .kind = .integer, .name = "I64" } },
-                },
+                }),
             },
-        },
-        .functions = &.{
+        }),
+        .functions = @constCast(&[_]bytecode.Function{
             .{
                 .id = 0,
                 .name = "main",
                 .param_count = 0,
                 .register_count = 6,
                 .local_count = 1,
-                .local_types = &.{.{ .kind = .ffi_struct, .name = "Pair" }},
-                .instructions = &.{
+                .local_types = @constCast(&[_]bytecode.TypeRef{.{ .kind = .ffi_struct, .name = "Pair" }}),
+                .instructions = @constCast(&[_]bytecode.Instruction{
                     .{ .alloc_struct = .{ .dst = 0, .type_name = "Pair" } },
                     .{ .field_ptr = .{ .dst = 1, .base = 0, .base_type_name = "Pair", .field_index = 0, .field_ty = .{ .kind = .integer, .name = "I64" } } },
                     .{ .const_int = .{ .dst = 2, .value = 1 } },
@@ -1829,7 +1959,7 @@ test "copies struct arguments by value for runtime calls" {
                     .{ .field_ptr = .{ .dst = 3, .base = 0, .base_type_name = "Pair", .field_index = 0, .field_ty = .{ .kind = .integer, .name = "I64" } } },
                     .{ .load_indirect = .{ .dst = 4, .ptr = 3, .ty = .{ .kind = .integer, .name = "I64" } } },
                     .{ .ret = .{ .src = 4 } },
-                },
+                }),
             },
             .{
                 .id = 1,
@@ -1837,20 +1967,22 @@ test "copies struct arguments by value for runtime calls" {
                 .param_count = 1,
                 .register_count = 3,
                 .local_count = 1,
-                .local_types = &.{.{ .kind = .ffi_struct, .name = "Pair" }},
-                .instructions = &.{
+                .local_types = @constCast(&[_]bytecode.TypeRef{.{ .kind = .ffi_struct, .name = "Pair" }}),
+                .instructions = @constCast(&[_]bytecode.Instruction{
                     .{ .load_local = .{ .dst = 0, .local = 0 } },
                     .{ .field_ptr = .{ .dst = 1, .base = 0, .base_type_name = "Pair", .field_index = 0, .field_ty = .{ .kind = .integer, .name = "I64" } } },
                     .{ .const_int = .{ .dst = 2, .value = 99 } },
                     .{ .store_indirect = .{ .ptr = 1, .src = 2, .ty = .{ .kind = .integer, .name = "I64" } } },
                     .{ .ret = .{ .src = null } },
-                },
+                }),
             },
-        },
+        }),
         .entry_function_id = 0,
     };
 
-    const result = try vm.runFunctionById(&module, 0, &.{}, std.io.null_writer, .{});
+    var discard_buffer_6: [1]u8 = undefined;
+    var discarding_6: std.Io.Writer.Discarding = .init(&discard_buffer_6);
+    const result = try vm.runFunctionById(&module, 0, &.{}, &discarding_6.writer, .{});
     try std.testing.expectEqual(@as(i64, 1), result.integer);
 }
 
@@ -1860,32 +1992,32 @@ test "copyStruct tolerates null nested ffi struct pointers" {
 
     var vm = Vm.init(arena.allocator());
     const module = bytecode.Module{
-        .types = &.{
+        .types = @constCast(&[_]bytecode.TypeDecl{
             .{
                 .name = "Child",
-                .fields = &.{.{ .name = "x", .ty = .{ .kind = .integer, .name = "I64" } }},
+                .fields = @constCast(&[_]bytecode.Field{.{ .name = "x", .ty = .{ .kind = .integer, .name = "I64" } }}),
             },
             .{
                 .name = "Parent",
-                .fields = &.{.{ .name = "child", .ty = .{ .kind = .ffi_struct, .name = "Child" } }},
+                .fields = @constCast(&[_]bytecode.Field{.{ .name = "child", .ty = .{ .kind = .ffi_struct, .name = "Child" } }}),
             },
-        },
-        .functions = &.{
+        }),
+        .functions = @constCast(&[_]bytecode.Function{
             .{
                 .id = 0,
                 .name = "main",
                 .param_count = 0,
                 .register_count = 7,
                 .local_count = 1,
-                .local_types = &.{.{ .kind = .ffi_struct, .name = "Parent" }},
-                .instructions = &.{
+                .local_types = @constCast(&[_]bytecode.TypeRef{.{ .kind = .ffi_struct, .name = "Parent" }}),
+                .instructions = @constCast(&[_]bytecode.Instruction{
                     .{ .alloc_struct = .{ .dst = 0, .type_name = "Parent" } },
                     .{ .field_ptr = .{ .dst = 1, .base = 0, .base_type_name = "Parent", .field_index = 0, .field_ty = .{ .kind = .ffi_struct, .name = "Child" } } },
-                    .{ .const_ptr = .{ .dst = 2, .value = 0 } },
+                    .{ .const_null_ptr = .{ .dst = 2 } },
                     .{ .store_indirect = .{ .ptr = 1, .src = 2, .ty = .{ .kind = .ffi_struct, .name = "Child" } } },
                     .{ .call_runtime = .{ .function_id = 1, .args = &.{0} } },
                     .{ .ret = .{ .src = null } },
-                },
+                }),
             },
             .{
                 .id = 1,
@@ -1893,8 +2025,8 @@ test "copyStruct tolerates null nested ffi struct pointers" {
                 .param_count = 1,
                 .register_count = 4,
                 .local_count = 1,
-                .local_types = &.{.{ .kind = .ffi_struct, .name = "Parent" }},
-                .instructions = &.{
+                .local_types = @constCast(&[_]bytecode.TypeRef{.{ .kind = .ffi_struct, .name = "Parent" }}),
+                .instructions = @constCast(&[_]bytecode.Instruction{
                     .{ .load_local = .{ .dst = 0, .local = 0 } },
                     .{ .field_ptr = .{ .dst = 1, .base = 0, .base_type_name = "Parent", .field_index = 0, .field_ty = .{ .kind = .ffi_struct, .name = "Child" } } },
                     .{ .load_indirect = .{ .dst = 2, .ptr = 1, .ty = .{ .kind = .ffi_struct, .name = "Child" } } },
@@ -1902,13 +2034,15 @@ test "copyStruct tolerates null nested ffi struct pointers" {
                     .{ .const_int = .{ .dst = 2, .value = 7 } },
                     .{ .store_indirect = .{ .ptr = 3, .src = 2, .ty = .{ .kind = .integer, .name = "I64" } } },
                     .{ .ret = .{ .src = null } },
-                },
+                }),
             },
-        },
+        }),
         .entry_function_id = 0,
     };
 
-    try vm.runMain(&module, std.io.null_writer);
+    var discard_buffer_2: [1]u8 = undefined;
+    var discarding_2: std.Io.Writer.Discarding = .init(&discard_buffer_2);
+    try vm.runMain(&module, &discarding_2.writer);
 }
 
 test "construct any values survive nested runtime calls without leaking" {
@@ -1922,16 +2056,16 @@ test "construct any values survive nested runtime calls without leaking" {
         .construct_constraint = .{ .construct_name = "Widget" },
     };
     const module = bytecode.Module{
-        .constructs = &.{.{ .name = "Widget" }},
-        .construct_implementations = &.{
+        .constructs = @constCast(&[_]bytecode.Construct{.{ .name = "Widget" }}),
+        .construct_implementations = @constCast(&[_]bytecode.ConstructImplementation{
             .{ .type_name = "Button", .construct_constraint = .{ .construct_name = "Widget" }, .fields = &.{}, .has_content = false, .lifecycle_hooks = &.{} },
             .{ .type_name = "Label", .construct_constraint = .{ .construct_name = "Widget" }, .fields = &.{}, .has_content = false, .lifecycle_hooks = &.{} },
-        },
-        .types = &.{
+        }),
+        .types = @constCast(&[_]bytecode.TypeDecl{
             .{ .name = "Button", .fields = &.{} },
             .{ .name = "Label", .fields = &.{} },
-        },
-        .functions = &.{
+        }),
+        .functions = @constCast(&[_]bytecode.Function{
             .{
                 .id = 0,
                 .name = "main",
@@ -1939,13 +2073,13 @@ test "construct any values survive nested runtime calls without leaking" {
                 .register_count = 2,
                 .local_count = 0,
                 .local_types = &.{},
-                .instructions = &.{
+                .instructions = @constCast(&[_]bytecode.Instruction{
                     .{ .alloc_struct = .{ .dst = 0, .type_name = "Button" } },
                     .{ .call_runtime = .{ .function_id = 1, .args = &.{0} } },
                     .{ .alloc_struct = .{ .dst = 0, .type_name = "Label" } },
                     .{ .call_runtime = .{ .function_id = 1, .args = &.{0} } },
                     .{ .ret = .{ .src = null } },
-                },
+                }),
             },
             .{
                 .id = 1,
@@ -1954,12 +2088,12 @@ test "construct any values survive nested runtime calls without leaking" {
                 .return_type = any_widget,
                 .register_count = 2,
                 .local_count = 1,
-                .local_types = &.{any_widget},
-                .instructions = &.{
+                .local_types = @constCast(&[_]bytecode.TypeRef{any_widget}),
+                .instructions = @constCast(&[_]bytecode.Instruction{
                     .{ .load_local = .{ .dst = 0, .local = 0 } },
                     .{ .call_runtime = .{ .function_id = 2, .args = &.{0}, .dst = 1 } },
                     .{ .ret = .{ .src = 1 } },
-                },
+                }),
             },
             .{
                 .id = 2,
@@ -1968,17 +2102,19 @@ test "construct any values survive nested runtime calls without leaking" {
                 .return_type = any_widget,
                 .register_count = 1,
                 .local_count = 1,
-                .local_types = &.{any_widget},
-                .instructions = &.{
+                .local_types = @constCast(&[_]bytecode.TypeRef{any_widget}),
+                .instructions = @constCast(&[_]bytecode.Instruction{
                     .{ .load_local = .{ .dst = 0, .local = 0 } },
                     .{ .ret = .{ .src = 0 } },
-                },
+                }),
             },
-        },
+        }),
         .entry_function_id = 0,
     };
 
-    try vm.runMain(&module, std.io.null_writer);
+    var discard_buffer_7: [1]u8 = undefined;
+    var discarding_7: std.Io.Writer.Discarding = .init(&discard_buffer_7);
+    try vm.runMain(&module, &discarding_7.writer);
     try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
 }
 
@@ -1988,18 +2124,18 @@ test "native state recovery mutates persistent payload" {
 
     var vm = Vm.init(arena.allocator());
     const module = bytecode.Module{
-        .types = &.{.{
+        .types = @constCast(&[_]bytecode.TypeDecl{.{
             .name = "CounterState",
-            .fields = &.{.{ .name = "count", .ty = .{ .kind = .integer, .name = "I64" } }},
-        }},
-        .functions = &.{.{
+            .fields = @constCast(&[_]bytecode.Field{.{ .name = "count", .ty = .{ .kind = .integer, .name = "I64" } }}),
+        }}),
+        .functions = @constCast(&[_]bytecode.Function{.{
             .id = 0,
             .name = "main",
             .param_count = 0,
             .register_count = 9,
             .local_count = 0,
             .local_types = &.{},
-            .instructions = &.{
+            .instructions = @constCast(&[_]bytecode.Instruction{
                 .{ .alloc_struct = .{ .dst = 0, .type_name = "CounterState" } },
                 .{ .alloc_native_state = .{ .dst = 1, .src = 0, .type_name = "CounterState", .type_id = 77 } },
                 .{ .recover_native_state = .{ .dst = 2, .state = 1, .type_name = "CounterState", .type_id = 77 } },
@@ -2010,13 +2146,79 @@ test "native state recovery mutates persistent payload" {
                 .{ .field_ptr = .{ .dst = 6, .base = 5, .base_type_name = "CounterState", .field_index = 0, .field_ty = .{ .kind = .integer, .name = "I64" } } },
                 .{ .load_indirect = .{ .dst = 7, .ptr = 6, .ty = .{ .kind = .integer, .name = "I64" } } },
                 .{ .ret = .{ .src = 7 } },
-            },
-        }},
+            }),
+        }}),
         .entry_function_id = 0,
     };
 
-    const result = try vm.runFunctionById(&module, 0, &.{}, std.io.null_writer, .{});
+    var discard_buffer_3: [1]u8 = undefined;
+    var discarding_3: std.Io.Writer.Discarding = .init(&discard_buffer_3);
+    const result = try vm.runFunctionById(&module, 0, &.{}, &discarding_3.writer, .{});
     try std.testing.expectEqual(@as(i64, 9), result.integer);
+}
+
+test "native state preserves nested enum values inside arrays of structs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var vm = Vm.init(arena.allocator());
+    const layer_array_ty = bytecode.TypeRef{ .kind = .array, .name = "Layer" };
+    const mode_enum_ty = bytecode.TypeRef{ .kind = .enum_instance, .name = "Mode" };
+    const module = bytecode.Module{
+        .types = @constCast(&[_]bytecode.TypeDecl{
+            .{
+                .name = "Layer",
+                .fields = @constCast(&[_]bytecode.Field{.{ .name = "payload", .ty = mode_enum_ty }}),
+            },
+            .{
+                .name = "State",
+                .fields = @constCast(&[_]bytecode.Field{.{ .name = "layers", .ty = layer_array_ty }}),
+            },
+        }),
+        .enums = @constCast(&[_]bytecode.EnumTypeDecl{.{
+            .name = "Mode",
+            .variants = @constCast(&[_]bytecode.EnumVariantDecl{
+                .{ .name = "None", .discriminant = 0 },
+                .{ .name = "Surface", .discriminant = 1 },
+            }),
+        }}),
+        .functions = @constCast(&[_]bytecode.Function{.{
+            .id = 0,
+            .name = "main",
+            .param_count = 0,
+            .return_type = .{ .kind = .integer, .name = "I64" },
+            .register_count = 13,
+            .local_count = 0,
+            .local_types = &.{},
+            .instructions = @constCast(&[_]bytecode.Instruction{
+                .{ .const_int = .{ .dst = 0, .value = 1 } },
+                .{ .alloc_struct = .{ .dst = 1, .type_name = "State" } },
+                .{ .field_ptr = .{ .dst = 2, .base = 1, .base_type_name = "State", .field_index = 0, .field_ty = layer_array_ty } },
+                .{ .alloc_array = .{ .dst = 3, .len = 0 } },
+                .{ .alloc_struct = .{ .dst = 4, .type_name = "Layer" } },
+                .{ .field_ptr = .{ .dst = 5, .base = 4, .base_type_name = "Layer", .field_index = 0, .field_ty = mode_enum_ty } },
+                .{ .alloc_enum = .{ .dst = 6, .enum_type_name = "Mode", .discriminant = 1 } },
+                .{ .store_indirect = .{ .ptr = 5, .src = 6, .ty = mode_enum_ty } },
+                .{ .array_append = .{ .array = 3, .src = 4 } },
+                .{ .store_indirect = .{ .ptr = 2, .src = 3, .ty = layer_array_ty } },
+                .{ .alloc_native_state = .{ .dst = 7, .src = 1, .type_name = "State", .type_id = 77 } },
+                .{ .recover_native_state = .{ .dst = 8, .state = 7, .type_name = "State", .type_id = 77 } },
+                .{ .field_ptr = .{ .dst = 9, .base = 8, .base_type_name = "State", .field_index = 0, .field_ty = layer_array_ty } },
+                .{ .load_indirect = .{ .dst = 10, .ptr = 9, .ty = layer_array_ty } },
+                .{ .array_get = .{ .dst = 11, .array = 10, .index = 0, .ty = .{ .kind = .ffi_struct, .name = "Layer" } } },
+                .{ .field_ptr = .{ .dst = 12, .base = 11, .base_type_name = "Layer", .field_index = 0, .field_ty = mode_enum_ty } },
+                .{ .load_indirect = .{ .dst = 6, .ptr = 12, .ty = mode_enum_ty } },
+                .{ .enum_tag = .{ .dst = 0, .src = 6 } },
+                .{ .ret = .{ .src = 0 } },
+            }),
+        }}),
+        .entry_function_id = 0,
+    };
+
+    var discard_buffer_4: [1]u8 = undefined;
+    var discarding_4: std.Io.Writer.Discarding = .init(&discard_buffer_4);
+    const result = try vm.runFunctionById(&module, 0, &.{}, &discarding_4.writer, .{});
+    try std.testing.expectEqual(@as(i64, 1), result.integer);
 }
 
 test "native state recovery validates the expected type id" {
@@ -2025,27 +2227,29 @@ test "native state recovery validates the expected type id" {
 
     var vm = Vm.init(arena.allocator());
     const module = bytecode.Module{
-        .types = &.{.{
+        .types = @constCast(&[_]bytecode.TypeDecl{.{
             .name = "CounterState",
-            .fields = &.{.{ .name = "count", .ty = .{ .kind = .integer, .name = "I64" } }},
-        }},
-        .functions = &.{.{
+            .fields = @constCast(&[_]bytecode.Field{.{ .name = "count", .ty = .{ .kind = .integer, .name = "I64" } }}),
+        }}),
+        .functions = @constCast(&[_]bytecode.Function{.{
             .id = 0,
             .name = "main",
             .param_count = 0,
             .register_count = 3,
             .local_count = 0,
             .local_types = &.{},
-            .instructions = &.{
+            .instructions = @constCast(&[_]bytecode.Instruction{
                 .{ .alloc_struct = .{ .dst = 0, .type_name = "CounterState" } },
                 .{ .alloc_native_state = .{ .dst = 1, .src = 0, .type_name = "CounterState", .type_id = 77 } },
                 .{ .recover_native_state = .{ .dst = 2, .state = 1, .type_name = "CounterState", .type_id = 88 } },
                 .{ .ret = .{ .src = null } },
-            },
-        }},
+            }),
+        }}),
         .entry_function_id = 0,
     };
 
-    try std.testing.expectError(error.RuntimeFailure, vm.runFunctionById(&module, 0, &.{}, std.io.null_writer, .{}));
+    var discard_buffer_5: [1]u8 = undefined;
+    var discarding_5: std.Io.Writer.Discarding = .init(&discard_buffer_5);
+    try std.testing.expectError(error.RuntimeFailure, vm.runFunctionById(&module, 0, &.{}, &discarding_5.writer, .{}));
     try std.testing.expect(std.mem.indexOf(u8, vm.lastError().?, "wrong state type") != null);
 }

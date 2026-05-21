@@ -38,6 +38,7 @@ const llvmCompareValueTypeText = parent.llvmCompareValueTypeText;
 const llvmIndirectLoadTypeText = parent.llvmIndirectLoadTypeText;
 const llvmFieldStoreValuePrefix = parent.llvmFieldStoreValuePrefix;
 const fieldIndex = parent.fieldIndex;
+const resolveExecution = parent.resolveExecution;
 const fieldType = parent.fieldType;
 const isPointerLikeValueType = parent.isPointerLikeValueType;
 const bridgeTagValue = parent.bridgeTagValue;
@@ -838,6 +839,9 @@ pub fn buildTextFunctionBody(
                 try writer.print("  %array.ptr.{d} = inttoptr i64 %r{d} to ptr\n", .{ value.dst, value.array });
                 try writer.print("  %r{d} = call i64 @\"kira_array_len\"(ptr %array.ptr.{d})\n", .{ value.dst, value.dst });
             },
+            .string_len => |value| {
+                try writer.print("  %r{d} = extractvalue %kira.string %r{d}, 1\n", .{ value.dst, value.string });
+            },
             .array_get => |value| {
                 const temp_index = temp_counter;
                 temp_counter += 1;
@@ -1188,6 +1192,7 @@ pub fn buildTextFunctionBody(
             .call => |value| {
                 try writeCallInstruction(writer, request, plan, symbol_names, request.program, register_types, value, &temp_counter);
                 const callee_decl = functionById(request.program.*, value.callee) orelse return error.UnknownFunction;
+                const resolved_callee_execution = resolveExecution(callee_decl.execution, request.mode);
                 markConsumedCallArgs(register_types, register_owned_ptr, register_owns_contents, register_escaped, register_local_ptr, variant.local_types, local_owns_contents, local_owned_values, value.args, callee_decl.param_types, callee_decl.param_ownership);
                 if (value.dst) |dst| {
                     const owns_return = !callee_decl.is_extern and try functionReturnOwnsAllocation(allocator, request.program, value.callee, 0);
@@ -1195,7 +1200,7 @@ pub fn buildTextFunctionBody(
                         try owned_values.append(.{ .reg = dst, .ty = register_types[dst], .kind = .array });
                         register_owned_ptr[dst] = true;
                     }
-                    if (owns_return and register_types[dst].kind == .ffi_struct) {
+                    if (owns_return and register_types[dst].kind == .ffi_struct and resolved_callee_execution != .runtime) {
                         try writer.print("  %cleanup.call.ptr.{d} = inttoptr i64 %r{d} to ptr\n", .{ dst, dst });
                         try writer.print("  store ptr %cleanup.call.ptr.{d}, ptr %cleanup.heap.slot.{d}\n", .{ dst, dst });
                         try owned_values.append(.{ .reg = dst, .ty = register_types[dst], .kind = .heap_ptr });
@@ -1224,6 +1229,7 @@ pub fn buildTextFunctionBody(
                     .dst = value.dst,
                 }, &temp_counter);
                 const callee_decl = functionById(request.program.*, callee) orelse return error.UnknownFunction;
+                const resolved_callee_execution = resolveExecution(callee_decl.execution, request.mode);
                 markConsumedCallArgs(register_types, register_owned_ptr, register_owns_contents, register_escaped, register_local_ptr, variant.local_types, local_owns_contents, local_owned_values, args, callee_decl.param_types, callee_decl.param_ownership);
                 if (value.dst) |dst| {
                     const owns_return = !callee_decl.is_extern and try functionReturnOwnsAllocation(allocator, request.program, callee, 0);
@@ -1231,7 +1237,7 @@ pub fn buildTextFunctionBody(
                         try owned_values.append(.{ .reg = dst, .ty = register_types[dst], .kind = .array });
                         register_owned_ptr[dst] = true;
                     }
-                    if (owns_return and register_types[dst].kind == .ffi_struct) {
+                    if (owns_return and register_types[dst].kind == .ffi_struct and resolved_callee_execution != .runtime) {
                         try writer.print("  %cleanup.call.ptr.{d} = inttoptr i64 %r{d} to ptr\n", .{ dst, dst });
                         try writer.print("  store ptr %cleanup.call.ptr.{d}, ptr %cleanup.heap.slot.{d}\n", .{ dst, dst });
                         try owned_values.append(.{ .reg = dst, .ty = register_types[dst], .kind = .heap_ptr });

@@ -1,0 +1,8 @@
+@Main
+function main() {
+    let title = "KIRA"
+    let subtitle = "UI FOUNDATION"
+    print(title.count)
+    print(subtitle.count)
+    return
+}

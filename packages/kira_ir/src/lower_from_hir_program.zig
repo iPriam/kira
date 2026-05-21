@@ -118,6 +118,7 @@ fn markReferencedTypesInExpr(
         .c_string_to_string => |node| try markReferencedTypesInExpr(allocator, program, referenced, node.value),
         .array_len => |node| try markReferencedTypesInExpr(allocator, program, referenced, node.object),
         .field => |node| try markReferencedTypesInExpr(allocator, program, referenced, node.object),
+        .string_len => |node| try markReferencedTypesInExpr(allocator, program, referenced, node.object),
         .binary => |node| {
             try markReferencedTypesInExpr(allocator, program, referenced, node.lhs);
             try markReferencedTypesInExpr(allocator, program, referenced, node.rhs);

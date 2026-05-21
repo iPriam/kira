@@ -126,6 +126,10 @@ pub fn writeCallInstruction(
                     try writer.writeAll("  %call.int.");
                     try writer.print("{d}", .{dst});
                     try writer.writeAll(" = call ");
+                } else if (callee_decl.is_extern and effective_return_type.kind == .float and std.mem.eql(u8, floatAbiTypeName(effective_return_type.name), "float")) {
+                    try writer.writeAll("  %call.float.");
+                    try writer.print("{d}", .{dst});
+                    try writer.writeAll(" = call ");
                 } else {
                     try writer.writeAll("  %r");
                     try writer.print("{d}", .{dst});
@@ -230,8 +234,8 @@ pub fn writeCallInstruction(
                 const abi_type = floatAbiTypeName(effective_return_type.name);
                 if (std.mem.eql(u8, abi_type, "float")) {
                     const dst = call_inst.dst.?;
-                    try writer.print("  %r{d}.ext = fpext float %r{d} to double\n", .{ dst, dst });
-                    try writer.print("  %r{d} = fadd double %r{d}.ext, 0.0\n", .{ dst, dst });
+                    try writer.print("  %call.float.ext.{d} = fpext float %call.float.{d} to double\n", .{ dst, dst });
+                    try writer.print("  %r{d} = fadd double %call.float.ext.{d}, 0.0\n", .{ dst, dst });
                 }
             }
         },
@@ -719,7 +723,9 @@ pub fn buildCallValueDispatcher(
     var closure_functions = std.array_list.Managed(ir.Function).init(allocator);
     defer closure_functions.deinit();
     for (request.program.functions) |function_decl| {
-        if (resolveExecution(function_decl.execution, request.mode) != .native or function_decl.is_extern) continue;
+        const execution = resolveExecution(function_decl.execution, request.mode);
+        if (function_decl.is_extern) continue;
+        if (execution != .native and !(request.mode == .hybrid and execution == .runtime)) continue;
         if (!closureCallValueSignature(dispatcher.param_types, dispatcher.return_type, function_decl.param_types, function_decl.return_type)) continue;
         try closure_functions.append(function_decl);
     }
@@ -736,38 +742,159 @@ pub fn buildCallValueDispatcher(
     try writer.writeAll("  ]\n");
 
     for (closure_functions.items, 0..) |function_decl, case_index| {
-        const callee_name = symbol_names.get(function_decl.id) orelse return error.MissingFunctionDeclaration;
         try writer.print("dispatch.closure.case.{d}:\n", .{case_index});
         for (function_decl.param_types[dispatcher.param_types.len..], 0..) |capture_type, capture_index| {
             try writer.print("  %closure.slot.{d}.{d} = getelementptr inbounds %kira.bridge.value, ptr %closure.slots, i64 {d}\n", .{ case_index, capture_index, capture_index });
             try writer.print("  %closure.value.{d}.{d} = load %kira.bridge.value, ptr %closure.slot.{d}.{d}\n", .{ case_index, capture_index, case_index, capture_index });
             try writeUnpackBridgeValue(writer, capture_type, case_index, capture_index);
         }
-
-        if (dispatcher.return_type.kind == .void) {
-            try writer.writeAll("  call void ");
-        } else {
-            try writer.print("  %closure.call.{d} = call {s} ", .{ case_index, llvmValueTypeText(dispatcher.return_type) });
-        }
-        try writeLlvmSymbol(writer, callee_name);
-        try writer.writeByte('(');
-        for (function_decl.param_types, 0..) |param_type, index| {
-            if (index != 0) try writer.writeAll(", ");
-            try writer.writeAll(llvmValueTypeText(param_type));
-            try writer.writeByte(' ');
-            if (index < dispatcher.param_types.len) {
-                try writer.print("%arg{d}", .{index});
-            } else {
-                try writer.print("%closure.arg.{d}.{d}", .{ case_index, index - dispatcher.param_types.len });
-            }
-        }
-        try writer.writeAll(")\n");
-        switch (dispatcher.return_type.kind) {
-            .void => try writer.writeAll("  ret void\n"),
-            .integer, .construct_any, .raw_ptr, .ffi_struct, .array, .enum_instance => try writer.print("  ret i64 %closure.call.{d}\n", .{case_index}),
-            .float => try writer.print("  ret {s} %closure.call.{d}\n", .{ llvmValueTypeText(dispatcher.return_type), case_index }),
-            .boolean => try writer.print("  ret i1 %closure.call.{d}\n", .{case_index}),
-            .string => try writer.print("  ret %kira.string %closure.call.{d}\n", .{case_index}),
+        switch (resolveExecution(function_decl.execution, request.mode)) {
+            .native => {
+                const callee_name = symbol_names.get(function_decl.id) orelse return error.MissingFunctionDeclaration;
+                if (dispatcher.return_type.kind == .void) {
+                    try writer.writeAll("  call void ");
+                } else {
+                    try writer.print("  %closure.call.{d} = call {s} ", .{ case_index, llvmValueTypeText(dispatcher.return_type) });
+                }
+                try writeLlvmSymbol(writer, callee_name);
+                try writer.writeByte('(');
+                for (function_decl.param_types, 0..) |param_type, index| {
+                    if (index != 0) try writer.writeAll(", ");
+                    try writer.writeAll(llvmValueTypeText(param_type));
+                    try writer.writeByte(' ');
+                    if (index < dispatcher.param_types.len) {
+                        try writer.print("%arg{d}", .{index});
+                    } else {
+                        try writer.print("%closure.arg.{d}.{d}", .{ case_index, index - dispatcher.param_types.len });
+                    }
+                }
+                try writer.writeAll(")\n");
+                switch (dispatcher.return_type.kind) {
+                    .void => try writer.writeAll("  ret void\n"),
+                    .integer, .construct_any, .raw_ptr, .ffi_struct, .array, .enum_instance => try writer.print("  ret i64 %closure.call.{d}\n", .{case_index}),
+                    .float => try writer.print("  ret {s} %closure.call.{d}\n", .{ llvmValueTypeText(dispatcher.return_type), case_index }),
+                    .boolean => try writer.print("  ret i1 %closure.call.{d}\n", .{case_index}),
+                    .string => try writer.print("  ret %kira.string %closure.call.{d}\n", .{case_index}),
+                }
+            },
+            .runtime => {
+                if (request.mode != .hybrid) return error.RuntimeCallInNativeBuild;
+                const runtime_param_count = function_decl.param_types.len;
+                try writer.print("  %closure.rt.args.{d} = alloca [{d} x %kira.bridge.value]\n", .{ case_index, runtime_param_count });
+                for (dispatcher.param_types, 0..) |param_type, index| {
+                    try writer.print("  %closure.rt.slot.{d}.{d} = getelementptr inbounds [{d} x %kira.bridge.value], ptr %closure.rt.args.{d}, i64 0, i64 {d}\n", .{
+                        case_index, index, runtime_param_count, case_index, index,
+                    });
+                    try writer.print("  %closure.rt.pack.{d}.{d}.0 = insertvalue %kira.bridge.value zeroinitializer, i8 {d}, 0\n", .{
+                        case_index, index, bridgeTagValue(param_type),
+                    });
+                    switch (param_type.kind) {
+                        .integer, .construct_any, .raw_ptr, .ffi_struct, .array, .enum_instance => {
+                            try writer.print("  %closure.rt.pack.{d}.{d}.1 = insertvalue %kira.bridge.value %closure.rt.pack.{d}.{d}.0, i64 %arg{d}, 2\n", .{
+                                case_index, index, case_index, index, index,
+                            });
+                            try writer.print("  store %kira.bridge.value %closure.rt.pack.{d}.{d}.1, ptr %closure.rt.slot.{d}.{d}\n", .{
+                                case_index, index, case_index, index,
+                            });
+                        },
+                        .boolean => {
+                            try writer.print("  %closure.rt.bool.{d}.{d} = zext i1 %arg{d} to i64\n", .{ case_index, index, index });
+                            try writer.print("  %closure.rt.pack.{d}.{d}.1 = insertvalue %kira.bridge.value %closure.rt.pack.{d}.{d}.0, i64 %closure.rt.bool.{d}.{d}, 2\n", .{
+                                case_index, index, case_index, index, case_index, index,
+                            });
+                            try writer.print("  store %kira.bridge.value %closure.rt.pack.{d}.{d}.1, ptr %closure.rt.slot.{d}.{d}\n", .{
+                                case_index, index, case_index, index,
+                            });
+                        },
+                        .string => {
+                            try writer.print("  %closure.rt.str.ptr.{d}.{d} = extractvalue %kira.string %arg{d}, 0\n", .{ case_index, index, index });
+                            try writer.print("  %closure.rt.str.ptrint.{d}.{d} = ptrtoint ptr %closure.rt.str.ptr.{d}.{d} to i64\n", .{
+                                case_index, index, case_index, index,
+                            });
+                            try writer.print("  %closure.rt.str.len.{d}.{d} = extractvalue %kira.string %arg{d}, 1\n", .{ case_index, index, index });
+                            try writer.print("  %closure.rt.pack.{d}.{d}.1 = insertvalue %kira.bridge.value %closure.rt.pack.{d}.{d}.0, i64 %closure.rt.str.ptrint.{d}.{d}, 2\n", .{
+                                case_index, index, case_index, index, case_index, index,
+                            });
+                            try writer.print("  %closure.rt.pack.{d}.{d}.2 = insertvalue %kira.bridge.value %closure.rt.pack.{d}.{d}.1, i64 %closure.rt.str.len.{d}.{d}, 3\n", .{
+                                case_index, index, case_index, index, case_index, index,
+                            });
+                            try writer.print("  store %kira.bridge.value %closure.rt.pack.{d}.{d}.2, ptr %closure.rt.slot.{d}.{d}\n", .{
+                                case_index, index, case_index, index,
+                            });
+                        },
+                        .float => {
+                            if (param_type.name != null and std.mem.eql(u8, param_type.name.?, "F32")) {
+                                try writer.print("  %closure.rt.float.ext.{d}.{d} = fpext float %arg{d} to double\n", .{ case_index, index, index });
+                                try writer.print("  %closure.rt.float.bits.{d}.{d} = bitcast double %closure.rt.float.ext.{d}.{d} to i64\n", .{
+                                    case_index, index, case_index, index,
+                                });
+                            } else {
+                                try writer.print("  %closure.rt.float.bits.{d}.{d} = bitcast double %arg{d} to i64\n", .{ case_index, index, index });
+                            }
+                            try writer.print("  %closure.rt.pack.{d}.{d}.1 = insertvalue %kira.bridge.value %closure.rt.pack.{d}.{d}.0, i64 %closure.rt.float.bits.{d}.{d}, 2\n", .{
+                                case_index, index, case_index, index, case_index, index,
+                            });
+                            try writer.print("  store %kira.bridge.value %closure.rt.pack.{d}.{d}.1, ptr %closure.rt.slot.{d}.{d}\n", .{
+                                case_index, index, case_index, index,
+                            });
+                        },
+                        .void => return error.UnsupportedExecutableFeature,
+                    }
+                }
+                for (function_decl.param_types[dispatcher.param_types.len..], 0..) |_, capture_index| {
+                    const runtime_index = dispatcher.param_types.len + capture_index;
+                    try writer.print("  %closure.rt.slot.{d}.{d} = getelementptr inbounds [{d} x %kira.bridge.value], ptr %closure.rt.args.{d}, i64 0, i64 {d}\n", .{
+                        case_index, runtime_index, runtime_param_count, case_index, runtime_index,
+                    });
+                    try writer.print("  store %kira.bridge.value %closure.value.{d}.{d}, ptr %closure.rt.slot.{d}.{d}\n", .{
+                        case_index, capture_index, case_index, runtime_index,
+                    });
+                }
+                try writer.print("  %closure.rt.result.{d} = alloca %kira.bridge.value\n", .{case_index});
+                try writer.print("  call void @\"kira_hybrid_call_runtime\"(i32 {d}, ptr %closure.rt.args.{d}, i32 {d}, ptr %closure.rt.result.{d})\n", .{
+                    function_decl.id, case_index, runtime_param_count, case_index,
+                });
+                switch (dispatcher.return_type.kind) {
+                    .void => {
+                        try writer.writeAll("  ret void\n");
+                    },
+                    .integer, .construct_any, .raw_ptr, .ffi_struct, .array, .enum_instance => {
+                        try writer.print("  %closure.rt.result.load.{d} = load %kira.bridge.value, ptr %closure.rt.result.{d}\n", .{ case_index, case_index });
+                        try writer.print("  %closure.rt.ret.{d} = extractvalue %kira.bridge.value %closure.rt.result.load.{d}, 2\n", .{ case_index, case_index });
+                        try writer.print("  ret i64 %closure.rt.ret.{d}\n", .{case_index});
+                    },
+                    .boolean => {
+                        try writer.print("  %closure.rt.result.load.{d} = load %kira.bridge.value, ptr %closure.rt.result.{d}\n", .{ case_index, case_index });
+                        try writer.print("  %closure.rt.ret.word.{d} = extractvalue %kira.bridge.value %closure.rt.result.load.{d}, 2\n", .{ case_index, case_index });
+                        try writer.print("  %closure.rt.ret.{d} = trunc i64 %closure.rt.ret.word.{d} to i1\n", .{ case_index, case_index });
+                        try writer.print("  ret i1 %closure.rt.ret.{d}\n", .{case_index});
+                    },
+                    .float => {
+                        try writer.print("  %closure.rt.result.load.{d} = load %kira.bridge.value, ptr %closure.rt.result.{d}\n", .{ case_index, case_index });
+                        try writer.print("  %closure.rt.ret.bits.{d} = extractvalue %kira.bridge.value %closure.rt.result.load.{d}, 2\n", .{ case_index, case_index });
+                        if (dispatcher.return_type.name != null and std.mem.eql(u8, dispatcher.return_type.name.?, "F32")) {
+                            try writer.print("  %closure.rt.ret.float64.{d} = bitcast i64 %closure.rt.ret.bits.{d} to double\n", .{ case_index, case_index });
+                            try writer.print("  %closure.rt.ret.{d} = fptrunc double %closure.rt.ret.float64.{d} to float\n", .{ case_index, case_index });
+                            try writer.print("  ret float %closure.rt.ret.{d}\n", .{case_index});
+                        } else {
+                            try writer.print("  %closure.rt.ret.{d} = bitcast i64 %closure.rt.ret.bits.{d} to double\n", .{ case_index, case_index });
+                            try writer.print("  ret double %closure.rt.ret.{d}\n", .{case_index});
+                        }
+                    },
+                    .string => {
+                        try writer.print("  %closure.rt.result.load.{d} = load %kira.bridge.value, ptr %closure.rt.result.{d}\n", .{ case_index, case_index });
+                        try writer.print("  %closure.rt.ret.ptrint.{d} = extractvalue %kira.bridge.value %closure.rt.result.load.{d}, 2\n", .{ case_index, case_index });
+                        try writer.print("  %closure.rt.ret.len.{d} = extractvalue %kira.bridge.value %closure.rt.result.load.{d}, 3\n", .{ case_index, case_index });
+                        try writer.print("  %closure.rt.ret.ptr.{d} = inttoptr i64 %closure.rt.ret.ptrint.{d} to ptr\n", .{ case_index, case_index });
+                        try writer.print("  %closure.rt.ret.init.{d} = insertvalue %kira.string zeroinitializer, ptr %closure.rt.ret.ptr.{d}, 0\n", .{ case_index, case_index });
+                        try writer.print("  %closure.rt.ret.{d} = insertvalue %kira.string %closure.rt.ret.init.{d}, i64 %closure.rt.ret.len.{d}, 1\n", .{
+                            case_index, case_index, case_index,
+                        });
+                        try writer.print("  ret %kira.string %closure.rt.ret.{d}\n", .{case_index});
+                    },
+                }
+            },
+            .inherited => unreachable,
         }
     }
 

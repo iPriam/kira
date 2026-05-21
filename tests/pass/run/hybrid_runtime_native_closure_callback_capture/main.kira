@@ -1,0 +1,23 @@
+@Runtime
+struct Counter {
+    var count: Int
+}
+
+@Native
+function invokeCallback(callback: (Counter) -> Counter, counter: Counter) -> Int {
+    let next = callback(move counter)
+    return next.count
+}
+
+@Main
+function main() {
+    let bonus: Int = 5
+    let counter = Counter { count: 3 }
+    let callback: (Counter) -> Counter = { value in
+        var next = value
+        next.count = next.count + bonus
+        return next
+    }
+    print(invokeCallback(move callback, move counter))
+    return
+}

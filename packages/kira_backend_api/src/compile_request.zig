@@ -19,5 +19,6 @@ pub const CompileRequest = struct {
     program: *const ir.Program,
     module_name: []const u8,
     emit: NativeEmitOptions,
+    target_selector: ?native.TargetSelector = null,
     resolved_native_libraries: []const native.ResolvedNativeLibrary = &.{},
 };

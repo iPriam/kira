@@ -9,6 +9,8 @@ pub const RuntimeInvoker = *const fn (?*anyopaque, u32, []const runtime_abi.Brid
 const InstallRuntimeInvokerFn = *const fn (*const fn (u32, ?[*]const runtime_abi.BridgeValue, u32, *runtime_abi.BridgeValue) callconv(.c) void) callconv(.c) void;
 const InstallArrayAllocatorFn = *const fn (*const fn (usize) callconv(.c) ?*anyopaque, *const fn (?*anyopaque, usize) callconv(.c) void) callconv(.c) void;
 const SetTraceEnabledFn = *const fn (u8) callconv(.c) void;
+const InstallFirstFrameHookFn = *const fn (*const fn () callconv(.c) void) callconv(.c) void;
+const InstallLogHookFn = *const fn (*const fn ([*:0]const u8) callconv(.c) void) callconv(.c) void;
 
 var active_runtime_context: ?*anyopaque = null;
 var active_runtime_invoker: ?RuntimeInvoker = null;
@@ -18,6 +20,7 @@ const NativeLibrary = if (builtin.os.tag == .windows) WindowsNativeLibrary else 
 pub const NativeBridge = struct {
     allocator: std.mem.Allocator,
     library: ?NativeLibrary = null,
+    self_bound: bool = false,
     trampolines: std.AutoHashMapUnmanaged(u32, trampoline.Trampoline) = .{},
 
     pub fn init(allocator: std.mem.Allocator) NativeBridge {
@@ -27,6 +30,7 @@ pub const NativeBridge = struct {
     pub fn deinit(self: *NativeBridge) void {
         self.trampolines.deinit(self.allocator);
         if (self.library) |*library| library.close();
+        self.self_bound = false;
         active_array_allocator = null;
     }
 
@@ -57,6 +61,58 @@ pub const NativeBridge = struct {
         self.library = library;
     }
 
+    pub fn bindCurrentProcess(self: *NativeBridge, descriptors: []const hybrid.BridgeDescriptor) !void {
+        for (descriptors) |descriptor| {
+            const symbol_name_z = try self.allocator.dupeZ(u8, descriptor.symbol_name);
+            const invoke = try resolveSelfTrampoline(symbol_name_z);
+            try self.trampolines.put(self.allocator, descriptor.function_id.value, .{
+                .function_id = descriptor.function_id.value,
+                .symbol_name = descriptor.symbol_name,
+                .invoke = invoke,
+            });
+        }
+
+        const install_invoker = resolveSelfSymbol(InstallRuntimeInvokerFn, "kira_hybrid_install_runtime_invoker") orelse return error.MissingRuntimeInvokerInstaller;
+        install_invoker(kira_hybrid_host_call_runtime);
+        active_array_allocator = self.allocator;
+        if (resolveSelfSymbol(InstallArrayAllocatorFn, "kira_hybrid_install_array_allocator")) |install_array_allocator| {
+            install_array_allocator(kira_hybrid_array_alloc, kira_hybrid_array_free);
+        }
+        if (resolveSelfSymbol(SetTraceEnabledFn, "kira_set_execution_trace_enabled")) |set_trace_enabled| {
+            set_trace_enabled(if (runtime_abi.executionTraceEnabled()) 1 else 0);
+        }
+
+        self.self_bound = true;
+    }
+
+    pub fn installFirstFrameHook(self: *NativeBridge, hook: *const fn () callconv(.c) void) !void {
+        if (self.library) |*library| {
+            if (library.lookup(InstallFirstFrameHookFn, "kira_live_install_first_frame_hook")) |install_hook| {
+                install_hook(hook);
+            }
+            return;
+        }
+        if (self.self_bound) {
+            if (resolveSelfSymbol(InstallFirstFrameHookFn, "kira_live_install_first_frame_hook")) |install_hook| {
+                install_hook(hook);
+            }
+        }
+    }
+
+    pub fn installLogHook(self: *NativeBridge, hook: *const fn ([*:0]const u8) callconv(.c) void) !void {
+        if (self.library) |*library| {
+            if (library.lookup(InstallLogHookFn, "kira_live_install_log_hook")) |install_hook| {
+                install_hook(hook);
+            }
+            return;
+        }
+        if (self.self_bound) {
+            if (resolveSelfSymbol(InstallLogHookFn, "kira_live_install_log_hook")) |install_hook| {
+                install_hook(hook);
+            }
+        }
+    }
+
     pub fn call(self: *NativeBridge, function_id: u32, args: []const runtime_abi.Value) !runtime_abi.Value {
         const tramp = self.trampolines.get(function_id) orelse return error.MissingNativeTrampoline;
         runtime_abi.emitExecutionTrace("BRIDGE", "CALL", "runtime->native fn={d} symbol={s} args={d}", .{
@@ -83,11 +139,17 @@ pub const NativeBridge = struct {
     }
 
     pub fn resolveImplementationPointer(self: *NativeBridge, function_id: u32) !usize {
-        var library = self.library orelse return error.MissingNativeTrampoline;
         var buffer: [64]u8 = undefined;
         const symbol_name = try std.fmt.bufPrintZ(&buffer, "kira_native_impl_{d}", .{function_id});
-        const symbol = library.lookup(*const anyopaque, symbol_name) orelse return error.MissingNativeSymbol;
-        return @intFromPtr(symbol);
+        const symbol = if (self.library) |*library|
+            library.lookup(*const anyopaque, symbol_name)
+        else if (self.self_bound)
+            resolveSelfSymbol(*const anyopaque, symbol_name)
+        else
+            null;
+        if (symbol == null) return error.MissingNativeSymbol;
+        const resolved = symbol.?;
+        return @intFromPtr(resolved);
     }
 };
 
@@ -98,6 +160,25 @@ fn openNativeLibrary(allocator: std.mem.Allocator, path: []const u8) !NativeLibr
     return std.DynLib.open(path);
 }
 
+fn resolveSelfTrampoline(symbol_name: [:0]const u8) !trampoline.NativeTrampolineFn {
+    return resolveSelfSymbol(trampoline.NativeTrampolineFn, symbol_name) orelse error.MissingNativeSymbol;
+}
+
+fn resolveSelfSymbol(comptime T: type, symbol_name: [:0]const u8) ?T {
+    if (builtin.os.tag == .windows) {
+        return WindowsNativeLibrary.lookupSelf(T, symbol_name);
+    }
+    return posixLookupSelf(T, symbol_name);
+}
+
+fn posixLookupSelf(comptime T: type, symbol_name: [:0]const u8) ?T {
+    const c = @cImport({
+        @cInclude("dlfcn.h");
+    });
+    const address = c.dlsym(c.RTLD_DEFAULT, symbol_name.ptr) orelse return null;
+    return @ptrCast(@alignCast(address));
+}
+
 const WindowsNativeLibrary = struct {
     handle: std.os.windows.HMODULE,
 
@@ -105,6 +186,7 @@ const WindowsNativeLibrary = struct {
     extern "kernel32" fn LoadLibraryExW([*:0]const u16, ?std.os.windows.HANDLE, u32) callconv(.winapi) ?std.os.windows.HMODULE;
     extern "kernel32" fn FreeLibrary(std.os.windows.HMODULE) callconv(.winapi) std.os.windows.BOOL;
     extern "kernel32" fn GetProcAddress(std.os.windows.HMODULE, [*:0]const u8) callconv(.winapi) ?*anyopaque;
+    extern "kernel32" fn GetModuleHandleW(?[*:0]const u16) callconv(.winapi) ?std.os.windows.HMODULE;
 
     fn open(allocator: std.mem.Allocator, path: []const u8) !WindowsNativeLibrary {
         const path_w = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, path);
@@ -119,6 +201,12 @@ const WindowsNativeLibrary = struct {
 
     pub fn lookup(self: *WindowsNativeLibrary, comptime T: type, name: [:0]const u8) ?T {
         const address = GetProcAddress(self.handle, name.ptr) orelse return null;
+        return @ptrCast(address);
+    }
+
+    pub fn lookupSelf(comptime T: type, name: [:0]const u8) ?T {
+        const handle = GetModuleHandleW(null) orelse return null;
+        const address = GetProcAddress(handle, name.ptr) orelse return null;
         return @ptrCast(address);
     }
 };

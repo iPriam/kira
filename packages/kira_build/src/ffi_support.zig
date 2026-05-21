@@ -34,7 +34,16 @@ pub fn prepareNativeLibraries(
     source_path: []const u8,
     imports: []const syntax.ast.ImportDecl,
 ) ![]const native.ResolvedNativeLibrary {
-    const selector = try hostTargetSelector(allocator);
+    return prepareNativeLibrariesForTarget(allocator, source_path, imports, null);
+}
+
+pub fn prepareNativeLibrariesForTarget(
+    allocator: std.mem.Allocator,
+    source_path: []const u8,
+    imports: []const syntax.ast.ImportDecl,
+    explicit_selector: ?native.TargetSelector,
+) ![]const native.ResolvedNativeLibrary {
+    const selector = try resolvedTargetSelector(allocator, explicit_selector);
     const manifest_paths = try loadProjectNativeManifestPaths(allocator, source_path);
     _ = imports;
 
@@ -58,9 +67,20 @@ pub fn prepareImportedNativeLibraries(
     imports: []const syntax.ast.ImportDecl,
     module_map: package_manager.ModuleMap,
 ) ![]const native.ResolvedNativeLibrary {
-    const selector = try hostTargetSelector(allocator);
+    return prepareImportedNativeLibrariesForTarget(allocator, existing, imports, module_map, null);
+}
+
+pub fn prepareImportedNativeLibrariesForTarget(
+    allocator: std.mem.Allocator,
+    existing: []const native.ResolvedNativeLibrary,
+    imports: []const syntax.ast.ImportDecl,
+    module_map: package_manager.ModuleMap,
+    explicit_selector: ?native.TargetSelector,
+) ![]const native.ResolvedNativeLibrary {
+    const selector = try resolvedTargetSelector(allocator, explicit_selector);
     var libraries = std.array_list.Managed(native.ResolvedNativeLibrary).init(allocator);
     var seen = std.StringHashMap(void).init(allocator);
+    var visited_packages = std.StringHashMap(void).init(allocator);
 
     for (existing) |library| {
         try libraries.append(library);
@@ -70,15 +90,40 @@ pub fn prepareImportedNativeLibraries(
     for (imports) |import_decl| {
         const owner = program_graph.packageRootOwnerForImport(module_map, import_decl.module_name) orelse continue;
         const package_root = std.fs.path.dirname(owner.source_root) orelse continue;
-        try appendNativeLibrariesFromPackageRoot(allocator, selector, package_root, &seen, &libraries);
-    }
-
-    for (module_map.owners) |owner| {
-        const package_root = std.fs.path.dirname(owner.source_root) orelse continue;
-        try appendNativeLibrariesFromPackageRoot(allocator, selector, package_root, &seen, &libraries);
+        try appendNativeLibrariesFromPackageRootRecursive(allocator, selector, package_root, module_map, &visited_packages, &seen, &libraries);
     }
 
     return libraries.toOwnedSlice();
+}
+
+fn appendNativeLibrariesFromPackageRootRecursive(
+    allocator: std.mem.Allocator,
+    selector: native.TargetSelector,
+    package_root: []const u8,
+    module_map: package_manager.ModuleMap,
+    visited_packages: *std.StringHashMap(void),
+    seen: *std.StringHashMap(void),
+    libraries: *std.array_list.Managed(native.ResolvedNativeLibrary),
+) !void {
+    const package_key = try artifactIdentity(allocator, package_root);
+    if (visited_packages.contains(package_key)) return;
+    try visited_packages.put(package_key, {});
+
+    try appendNativeLibrariesFromPackageRoot(allocator, selector, package_root, seen, libraries);
+
+    const project_manifest = try loadProjectManifestFromRoot(allocator, package_root);
+    for (project_manifest.dependencies) |dependency| {
+        const owner = findModuleOwner(module_map, dependency.name) orelse continue;
+        const dependency_root = std.fs.path.dirname(owner.source_root) orelse continue;
+        try appendNativeLibrariesFromPackageRootRecursive(allocator, selector, dependency_root, module_map, visited_packages, seen, libraries);
+    }
+}
+
+fn findModuleOwner(module_map: package_manager.ModuleMap, package_name: []const u8) ?package_manager.ModuleMap.ModuleOwner {
+    for (module_map.owners) |owner| {
+        if (std.mem.eql(u8, owner.package_name, package_name)) return owner;
+    }
+    return null;
 }
 
 fn appendNativeLibrariesFromPackageRoot(
@@ -115,15 +160,20 @@ fn loadProjectNativeManifestPaths(allocator: std.mem.Allocator, source_path: []c
 }
 
 fn loadNativeManifestPathsFromProjectRoot(allocator: std.mem.Allocator, project_root: []const u8) ![]const []const u8 {
-    const project_manifest_path = try findManifestInDirectory(allocator, project_root) orelse return &.{};
-    const manifest_text = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, project_manifest_path, allocator, .limited(1024 * 1024));
-    const project_manifest = try manifest.parseProjectManifest(allocator, manifest_text);
+    const project_manifest = try loadProjectManifestFromRoot(allocator, project_root);
 
     var manifests = std.array_list.Managed([]const u8).init(allocator);
     for (project_manifest.native_libraries) |value| {
+        const project_manifest_path = try findManifestInDirectory(allocator, project_root) orelse return &.{};
         try manifests.append(try absolutizeFromManifest(allocator, project_manifest_path, value));
     }
     return manifests.toOwnedSlice();
+}
+
+fn loadProjectManifestFromRoot(allocator: std.mem.Allocator, project_root: []const u8) !manifest.ProjectManifest {
+    const project_manifest_path = try findManifestInDirectory(allocator, project_root) orelse return error.ProjectManifestNotFound;
+    const manifest_text = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, project_manifest_path, allocator, .limited(1024 * 1024));
+    return manifest.parseProjectManifest(allocator, manifest_text);
 }
 
 fn ensureNativeArtifact(allocator: std.mem.Allocator, library: *native.ResolvedNativeLibrary) !void {
@@ -320,10 +370,16 @@ fn compileStaticLibraryViaClang(allocator: std.mem.Allocator, library: *native.R
         for (library.build.include_dirs) |include_dir| {
             try argv.append(try std.fmt.allocPrint(allocator, "-I{s}", .{include_dir}));
         }
+        for (library.link.include_dirs) |include_dir| {
+            try argv.append(try std.fmt.allocPrint(allocator, "-I{s}", .{include_dir}));
+        }
         for (library.headers.defines) |define| {
             try argv.append(try std.fmt.allocPrint(allocator, "-D{s}", .{define}));
         }
         for (library.build.defines) |define| {
+            try argv.append(try std.fmt.allocPrint(allocator, "-D{s}", .{define}));
+        }
+        for (library.link.defines) |define| {
             try argv.append(try std.fmt.allocPrint(allocator, "-D{s}", .{define}));
         }
         try runCommand(allocator, argv.items);
@@ -339,25 +395,21 @@ fn compileStaticLibraryViaClang(allocator: std.mem.Allocator, library: *native.R
 fn appendClangCompileCommand(
     argv: *std.array_list.Managed([]const u8),
     clang_path: []const u8,
-    target_triple: []const u8,
+    _: []const u8,
     library: native.ResolvedNativeLibrary,
     source_path: []const u8,
     object_path: []const u8,
 ) !void {
     try argv.appendSlice(&.{ clang_path, "-c", "-O3" });
-    if (builtin.os.tag == .macos) {
-        try llvm_backend.clangDriver.appendHostClangDriverArgs(argv.allocator, argv);
-    } else {
-        try argv.appendSlice(&.{ "-target", target_triple });
-    }
-    if (shouldCompileAsObjectiveC(builtin.os.tag, library, source_path)) {
+    try llvm_backend.clangDriver.appendClangDriverArgs(argv.allocator, argv, library.target);
+    if (shouldCompileAsObjectiveC(library.target, library, source_path)) {
         try argv.appendSlice(&.{ "-x", "objective-c" });
     }
     try argv.appendSlice(&.{ source_path, "-o", object_path });
 }
 
-fn shouldCompileAsObjectiveC(os_tag: std.Target.Os.Tag, library: native.ResolvedNativeLibrary, source_path: []const u8) bool {
-    if (os_tag != .macos) return false;
+fn shouldCompileAsObjectiveC(selector: native.TargetSelector, library: native.ResolvedNativeLibrary, source_path: []const u8) bool {
+    if (!std.mem.eql(u8, selector.operating_system, "macos") and !std.mem.eql(u8, selector.operating_system, "ios")) return false;
     if (library.link.frameworks.len == 0 and library.headers.frameworks.len == 0) return false;
 
     const extension = std.fs.path.extension(source_path);
@@ -446,6 +498,11 @@ fn hostTargetSelector(allocator: std.mem.Allocator) !native.TargetSelector {
         },
         else => return error.UnsupportedTarget,
     });
+}
+
+fn resolvedTargetSelector(allocator: std.mem.Allocator, explicit_selector: ?native.TargetSelector) !native.TargetSelector {
+    if (explicit_selector) |selector| return selector;
+    return hostTargetSelector(allocator);
 }
 
 fn absolutize(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {

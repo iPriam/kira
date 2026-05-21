@@ -961,8 +961,17 @@ pub fn resolvedTypeFromText(text: []const u8) !model.ResolvedType {
 
 fn functionTypeTextFromSyntax(ctx: *const Context, info: syntax.ast.FunctionTypeExpr) anyerror![]const u8 {
     var params = std.array_list.Managed(model.ResolvedType).init(ctx.allocator);
-    for (info.params) |param| try params.append(try typeFromSyntax(ctx, param.*));
-    return function_types.signatureText(ctx.allocator, params.items, try typeFromSyntax(ctx, info.result.*));
+    var param_ownership = std.array_list.Managed(model.OwnershipMode).init(ctx.allocator);
+    for (info.params) |param| {
+        try params.append(try typeFromSyntax(ctx, stripOwnershipType(param.*)));
+        try param_ownership.append(ownershipModeFromSyntax(param));
+    }
+    return function_types.signatureText(
+        ctx.allocator,
+        params.items,
+        param_ownership.items,
+        try typeFromSyntax(ctx, stripOwnershipType(info.result.*)),
+    );
 }
 
 fn genericTypeTextFromSyntax(ctx: *const Context, info: syntax.ast.GenericTypeExpr) ![]const u8 {

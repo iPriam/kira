@@ -1,0 +1,32 @@
+enum Mode {
+    None
+    Surface
+}
+
+struct Layer {
+    let payload: Mode
+}
+
+struct State {
+    let layers: [Layer]
+}
+
+@Main
+function main() {
+    let state = nativeState(State {
+        layers: [
+            Layer {
+                payload: Mode.Surface
+            }
+        ]
+    })
+    let token = nativeUserData(state)
+    let recovered = nativeRecover<State>(token)
+    let first = recovered.layers[0]
+
+    match first.payload {
+        Surface -> print(1);
+        None -> print(0);
+    }
+    return
+}

@@ -629,11 +629,12 @@ pub fn lowerCallbackBlockValue(
 
     for (params, 0..) |param, index| {
         const param_ty = signature.params[index];
+        const param_ownership = if (index < signature.param_ownership.len) signature.param_ownership[index] else .owned;
         try callback_scope.put(ctx.allocator, param.name, .{
             .id = next_local_id,
             .ty = param_ty,
-            .storage = .immutable,
-            .ownership = .owned,
+            .storage = if (param_ownership == .borrow_mut) .mutable else .immutable,
+            .ownership = param_ownership,
             .initialized = true,
             .decl_span = param.span,
         });
@@ -641,14 +642,14 @@ pub fn lowerCallbackBlockValue(
             .id = next_local_id,
             .name = try ctx.allocator.dupe(u8, param.name),
             .ty = param_ty,
-            .ownership = .owned,
+            .ownership = param_ownership,
             .span = param.span,
         });
         try locals.append(.{
             .id = next_local_id,
             .name = try ctx.allocator.dupe(u8, param.name),
             .ty = param_ty,
-            .ownership = .owned,
+            .ownership = param_ownership,
             .is_param = true,
             .span = param.span,
         });

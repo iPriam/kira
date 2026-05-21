@@ -169,6 +169,7 @@ fn resolveVariant(
             .native_state_field_get => |value| register_types[value.dst] = value.field_ty,
             .c_string_to_string => |value| register_types[value.dst] = .{ .kind = .string },
             .array_len => |value| register_types[value.dst] = .{ .kind = .integer, .name = "I64" },
+            .string_len => |value| register_types[value.dst] = .{ .kind = .integer, .name = "I64" },
             .array_get => |value| register_types[value.dst] = value.ty,
             .enum_tag => |value| register_types[value.dst] = .{ .kind = .integer, .name = "I64" },
             .enum_payload => |value| register_types[value.dst] = value.payload_ty,

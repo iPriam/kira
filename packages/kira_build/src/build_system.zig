@@ -108,6 +108,10 @@ pub const BuildSystem = struct {
         return pipeline.checkFileForBackend(self.allocator, path, target);
     }
 
+    pub fn checkForBuildTarget(self: BuildSystem, path: []const u8, target: build_def.BuildTarget) !pipeline.CheckPipelineResult {
+        return pipeline.checkFileForBackendWithSelector(self.allocator, path, target.execution, target.selector);
+    }
+
     pub fn checkPackageRoot(self: BuildSystem, source_root: []const u8) !pipeline.CheckPipelineResult {
         if (self.use_cache) {
             const module_files = @import("kira_program_graph").collectPackageModuleFiles(self.allocator, source_root) catch &.{};
@@ -153,7 +157,13 @@ pub const BuildSystem = struct {
     }
 
     pub fn compileForBackend(self: BuildSystem, request: build_def.BuildRequest) !pipeline.ExecutablePipelineResult {
-        return pipeline.compileFileForBackend(self.allocator, request.source_path, request.target.execution, request.native_libraries);
+        return pipeline.compileFileForBackendWithSelector(
+            self.allocator,
+            request.source_path,
+            request.target.execution,
+            request.target.selector,
+            request.native_libraries,
+        );
     }
 
     pub fn build(self: BuildSystem, request: build_def.BuildRequest) !BuildArtifactOutcome {
@@ -255,6 +265,7 @@ pub const BuildSystem = struct {
                 .object_path = object_path,
                 .executable_path = request.output_path,
             },
+            .target_selector = request.target.selector,
             .resolved_native_libraries = compiled.native_libraries,
         }) catch |err| {
             const backend_diagnostics = try pipeline.backendDiagnostics(self.allocator, compiled.source.path, err);
@@ -320,6 +331,7 @@ pub const BuildSystem = struct {
                 .object_path = object_path,
                 .shared_library_path = library_path,
             },
+            .target_selector = request.target.selector,
             .resolved_native_libraries = compiled.native_libraries,
         }) catch |err| {
             const backend_diagnostics = try pipeline.backendDiagnostics(self.allocator, compiled.source.path, err);

@@ -90,7 +90,7 @@ fn traceTypeName(ty: bytecode.TypeRef) []const u8 {
 }
 
 test "printValue fails cleanly on mismatched runtime value" {
-    var buffer = std.array_list.Managed(u8).init(std.testing.allocator);
+    var buffer: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer buffer.deinit();
     const module: bytecode.Module = .{
         .types = &.{},
@@ -99,7 +99,7 @@ test "printValue fails cleanly on mismatched runtime value" {
     };
 
     try std.testing.expectError(error.RuntimeFailure, printValue(
-        buffer.writer(),
+        &buffer.writer,
         &module,
         .{ .void = {} },
         .{ .kind = .integer },

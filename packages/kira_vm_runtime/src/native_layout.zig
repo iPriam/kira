@@ -36,6 +36,11 @@ pub fn valueTypeLayout(module: *const bytecode.Module, value_type: bytecode.Type
 
 pub fn structLayout(module: *const bytecode.Module, type_name: []const u8) anyerror!NativeTypeLayout {
     const type_decl = findType(module, type_name) orelse return error.RuntimeFailure;
+    if (type_decl.fields.len == 0) {
+        // Empty Kira types are emitted as `{ i8 }` in the native LLVM backend,
+        // so they still occupy one byte and affect following field offsets.
+        return .{ .size = 1, .alignment = 1 };
+    }
     var offset: usize = 0;
     var max_alignment: usize = 1;
     for (type_decl.fields) |field_decl| {
@@ -112,4 +117,33 @@ fn findType(module: *const bytecode.Module, name: []const u8) ?bytecode.TypeDecl
         if (std.mem.eql(u8, type_decl.name, name)) return type_decl;
     }
     return null;
+}
+
+test "empty native types still occupy one byte and shift later fields" {
+    const mode_ty = bytecode.TypeRef{ .kind = .enum_instance, .name = "Mode" };
+    const module = bytecode.Module{
+        .types = @constCast(&[_]bytecode.TypeDecl{
+            .{ .name = "EmptyClass", .kind = .class, .fields = &.{} },
+            .{ .name = "LayoutDescriptor", .fields = @constCast(&[_]bytecode.Field{
+                .{ .name = "width", .ty = mode_ty },
+                .{ .name = "height", .ty = mode_ty },
+            }) },
+            .{ .name = "Node", .fields = @constCast(&[_]bytecode.Field{
+                .{ .name = "id", .ty = .{ .kind = .integer, .name = "I64" } },
+                .{ .name = "view", .ty = .{ .kind = .ffi_struct, .name = "EmptyClass" } },
+                .{ .name = "layout", .ty = .{ .kind = .ffi_struct, .name = "LayoutDescriptor" } },
+            }) },
+        }),
+        .enums = @constCast(&[_]bytecode.EnumTypeDecl{.{
+            .name = "Mode",
+            .variants = @constCast(&[_]bytecode.EnumVariantDecl{.{ .name = "Fill", .discriminant = 0 }}),
+        }}),
+        .functions = &.{},
+        .entry_function_id = null,
+    };
+
+    const empty_layout = try structLayout(&module, "EmptyClass");
+    try std.testing.expectEqual(@as(usize, 1), empty_layout.size);
+    try std.testing.expectEqual(@as(usize, 1), try fieldOffset(&module, "Node", 1));
+    try std.testing.expectEqual(@as(usize, 16), try fieldOffset(&module, "Node", 2));
 }

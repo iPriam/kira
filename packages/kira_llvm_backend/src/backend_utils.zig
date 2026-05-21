@@ -20,6 +20,7 @@ pub const functionExecutionById = runtime_utils.functionExecutionById;
 pub const functionById = runtime_utils.functionById;
 pub const resolveExecution = platform_utils.resolveExecution;
 pub const hostTargetTriple = platform_utils.hostTargetTriple;
+pub const targetTriple = platform_utils.targetTriple;
 pub const ensureParentDir = platform_utils.ensureParentDir;
 pub const allocPrintZ = platform_utils.allocPrintZ;
 const PrintValueRef = struct {

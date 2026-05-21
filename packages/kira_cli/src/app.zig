@@ -13,6 +13,7 @@ const cmd_package = @import("commands/package.zig");
 const cmd_fetch_llvm = @import("commands/fetch_llvm.zig");
 const cmd_shader = @import("commands/shader.zig");
 const cmd_instruments = @import("commands/instruments.zig");
+const cmd_live = @import("commands/live.zig");
 const support = @import("support.zig");
 
 pub fn run(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
@@ -57,6 +58,7 @@ pub fn runWithWriters(allocator: std.mem.Allocator, args: []const []const u8, ou
     if (std.mem.eql(u8, command, "remove")) return executeCommand(allocator, command, args[2..], out, err, cmd_remove.execute);
     if (std.mem.eql(u8, command, "update")) return executeCommand(allocator, command, args[2..], out, err, cmd_update.execute);
     if (std.mem.eql(u8, command, "package")) return executeCommand(allocator, command, args[2..], out, err, cmd_package.execute);
+    if (std.mem.eql(u8, command, "live")) return executeCommand(allocator, command, args[2..], out, err, cmd_live.execute);
 
     try err.print("unknown command: {s}\n\n", .{command});
     try printUsage(err);
@@ -90,6 +92,18 @@ fn executeCommand(allocator: std.mem.Allocator, _: []const u8, args: []const []c
             try err.writeAll("  help: Re-run the generated executable directly to inspect the application/runtime failure.\n");
             return 1;
         }
+        if (run_err == error.MacOSSdkUnavailable) {
+            try err.writeAll("error[KLIVE002]: macOS SDK is unavailable\n");
+            try err.writeAll("  Kira could not locate the macOS SDK through the active Apple developer tools.\n");
+            try err.writeAll("  help: Install full Xcode.app and switch `xcode-select` to it, or set `SDKROOT` to a valid macOS SDK path.\n");
+            return 1;
+        }
+        if (run_err == error.IPhoneOSSdkUnavailable) {
+            try err.writeAll("error[KLIVE003]: iPhoneOS SDK is unavailable\n");
+            try err.writeAll("  Kira could not locate the iPhoneOS SDK through the active Apple developer tools.\n");
+            try err.writeAll("  help: Install full Xcode.app and switch `xcode-select` to it so `xcrun --sdk iphoneos --show-sdk-path` succeeds.\n");
+            return 1;
+        }
 
         try support.logInternalCompilerError(err, @errorName(run_err));
         try support.renderInternalCompilerError(err, @errorName(run_err));
@@ -117,6 +131,12 @@ fn printUsage(writer: anytype) !void {
         \\  update [<project-dir|kira.toml|project.toml>]
         \\  package pack [<project-dir|kira.toml|project.toml>]
         \\  package inspect <archive-path|project-dir>
+        \\  live desktop <target> [--run-for <time>] [--kill-after]
+        \\  live macos <target> [--run-for <time>] [--kill-after]
+        \\  live ios <target> --device auto [--run-for <time>] [--kill-after]
+        \\  live runners list <target>
+        \\  live runners build <target>
+        \\  live runners clean <target>
         \\  new [--lib] <Name> <destination>
         \\  fetch-llvm [--ci-metadata --json | --archive <path>]
         \\  help

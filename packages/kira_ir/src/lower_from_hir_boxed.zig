@@ -83,6 +83,7 @@ fn collectBoxedFromExpr(boxed: []bool, expr: *const model.Expr) void {
             collectBoxedFromExpr(boxed, node.index);
         },
         .array_len => |node| collectBoxedFromExpr(boxed, node.object),
+        .string_len => |node| collectBoxedFromExpr(boxed, node.object),
         .field => |node| collectBoxedFromExpr(boxed, node.object),
         .parent_view => |node| collectBoxedFromExpr(boxed, node.object),
         .native_state => |node| collectBoxedFromExpr(boxed, node.value),

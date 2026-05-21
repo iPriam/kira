@@ -56,6 +56,8 @@ typedef struct {
 static void (*kira_runtime_invoker_ex)(uint32_t, const KiraBridgeValue *, uint32_t, KiraBridgeValue *) = NULL;
 static void *(*kira_array_alloc_fn)(size_t) = NULL;
 static void (*kira_array_free_fn)(void *, size_t) = NULL;
+static void (*kira_live_first_frame_hook)(void) = NULL;
+static void (*kira_live_log_hook)(const char*) = NULL;
 static int kira_trace_execution_enabled = -1;
 #if defined(_WIN32)
 static int kira_stdout_binary_configured = 0;
@@ -95,6 +97,31 @@ KIRA_BRIDGE_EXPORT void kira_set_execution_trace_enabled(uint8_t enabled) {
 KIRA_BRIDGE_EXPORT void kira_hybrid_install_array_allocator(void *(*alloc_fn)(size_t), void (*free_fn)(void *, size_t)) {
     kira_array_alloc_fn = alloc_fn;
     kira_array_free_fn = free_fn;
+}
+
+KIRA_BRIDGE_EXPORT void kira_live_install_first_frame_hook(void (*hook)(void)) {
+    kira_live_first_frame_hook = hook;
+}
+
+KIRA_BRIDGE_EXPORT void kira_live_install_log_hook(void (*hook)(const char*)) {
+    kira_live_log_hook = hook;
+}
+
+KIRA_BRIDGE_EXPORT void kira_live_emit_log_line(const char* line) {
+    if (line == NULL) {
+        return;
+    }
+    if (kira_live_log_hook != NULL) {
+        kira_live_log_hook(line);
+    }
+    fprintf(stderr, "%s\n", line);
+    fflush(stderr);
+}
+
+KIRA_BRIDGE_EXPORT void kira_live_emit_first_frame(void) {
+    if (kira_live_first_frame_hook != NULL) {
+        kira_live_first_frame_hook();
+    }
 }
 
 static void *kira_bridge_alloc(size_t size) {

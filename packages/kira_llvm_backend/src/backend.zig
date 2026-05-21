@@ -67,6 +67,7 @@ pub const resolveExecution = backend_utils.resolveExecution;
 pub const requiresTextIrFallback = backend_utils.requiresTextIrFallback;
 pub const functionDeclNeedsTextIrFallback = backend_utils.functionDeclNeedsTextIrFallback;
 pub const hostTargetTriple = backend_utils.hostTargetTriple;
+pub const targetTriple = @import("backend_platform_utils.zig").targetTriple;
 pub const ensureParentDir = backend_utils.ensureParentDir;
 pub const allocPrintZ = backend_utils.allocPrintZ;
 pub const inheritedProcessEnviron = backend_utils.inheritedProcessEnviron;
@@ -74,7 +75,7 @@ pub const inheritedProcessEnviron = backend_utils.inheritedProcessEnviron;
 pub fn compile(allocator: std.mem.Allocator, request: backend_api.CompileRequest) !backend_api.CompileResult {
     if (request.mode != .llvm_native and request.mode != .hybrid) return error.UnsupportedBackendMode;
 
-    const triple = try hostTargetTriple(allocator);
+    const triple = try targetTriple(allocator, request.target_selector);
     defer allocator.free(triple);
     return compileViaTextIr(allocator, request, triple);
 }
@@ -82,7 +83,7 @@ pub fn compile(allocator: std.mem.Allocator, request: backend_api.CompileRequest
 pub fn validate(allocator: std.mem.Allocator, request: backend_api.CompileRequest) !void {
     if (request.mode != .llvm_native and request.mode != .hybrid) return error.UnsupportedBackendMode;
 
-    const triple = try hostTargetTriple(allocator);
+    const triple = try targetTriple(allocator, request.target_selector);
     defer allocator.free(triple);
 
     const ir_text = try buildTextLlvmIr(allocator, request, triple);
@@ -112,7 +113,7 @@ fn compileViaTextIr(
     defer if (owns_ir_path) allocator.free(ir_path);
 
     try writeTextFile(ir_path, ir_text);
-    try emitObjectFileFromIr(allocator, ir_path, request.emit.object_path, request.mode == .hybrid);
+    try emitObjectFileFromIr(allocator, ir_path, request.emit.object_path, request.mode == .hybrid, request.target_selector);
 
     var artifacts = std.array_list.Managed(backend_api.Artifact).init(allocator);
     try artifacts.append(.{
@@ -121,8 +122,8 @@ fn compileViaTextIr(
     });
 
     if (request.emit.executable_path) |executable_path| {
-        const bridge_object = try linker.buildRuntimeHelpersObject(allocator, request.emit.object_path, false);
-        try linker.linkExecutable(allocator, executable_path, &.{ request.emit.object_path, bridge_object }, request.resolved_native_libraries);
+        const bridge_object = try linker.buildRuntimeHelpersObject(allocator, request.emit.object_path, false, request.target_selector);
+        try linker.linkExecutable(allocator, executable_path, &.{ request.emit.object_path, bridge_object }, request.resolved_native_libraries, request.target_selector);
         try artifacts.append(.{
             .kind = .executable,
             .path = try allocator.dupe(u8, executable_path),
@@ -130,8 +131,8 @@ fn compileViaTextIr(
     }
 
     if (request.emit.shared_library_path) |library_path| {
-        const bridge_object = try linker.buildRuntimeHelpersObject(allocator, request.emit.object_path, true);
-        try linker.linkSharedLibrary(allocator, library_path, &.{ request.emit.object_path, bridge_object }, request.resolved_native_libraries);
+        const bridge_object = try linker.buildRuntimeHelpersObject(allocator, request.emit.object_path, true, request.target_selector);
+        try linker.linkSharedLibrary(allocator, library_path, &.{ request.emit.object_path, bridge_object }, request.resolved_native_libraries, request.target_selector);
         try artifacts.append(.{
             .kind = .native_library,
             .path = try allocator.dupe(u8, library_path),
@@ -516,7 +517,7 @@ fn emitObjectFile(
     object_path: []const u8,
 ) !void {
     if (builtin.os.tag == .macos) {
-        return emitObjectFileViaClang(allocator, api, module_ref, object_path);
+        return emitObjectFileViaClang(allocator, api, module_ref, object_path, null);
     }
 
     const object_path_z = try allocator.dupeZ(u8, object_path);
@@ -532,6 +533,7 @@ fn emitObjectFileFromIr(
     ir_path: []const u8,
     object_path: []const u8,
     pic: bool,
+    selector: ?@import("kira_native_lib_definition").TargetSelector,
 ) !void {
     const llvm_toolchain = try toolchain.Toolchain.discover(allocator);
     const clang_path = try llvm_toolchain.clangPath(allocator);
@@ -540,7 +542,7 @@ fn emitObjectFileFromIr(
     defer environ_map.deinit();
     var argv = std.array_list.Managed([]const u8).init(allocator);
     try argv.append(clang_path);
-    try @import("clang_driver.zig").appendHostClangDriverArgs(allocator, &argv);
+    try @import("clang_driver.zig").appendClangDriverArgs(allocator, &argv, selector);
     if (pic and builtin.os.tag != .windows) try argv.append("-fPIC");
     try argv.appendSlice(&.{ "-c", "-o", object_path, ir_path });
     const process_environ = inheritedProcessEnviron();

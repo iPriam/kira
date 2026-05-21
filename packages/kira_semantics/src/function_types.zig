@@ -3,14 +3,23 @@ const model = @import("kira_semantics_model");
 
 pub const Signature = struct {
     params: []const model.ResolvedType,
+    param_ownership: []const model.OwnershipMode,
     result: model.ResolvedType,
 };
 
-pub fn signatureText(allocator: std.mem.Allocator, params: []const model.ResolvedType, result: model.ResolvedType) ![]const u8 {
+pub fn signatureText(
+    allocator: std.mem.Allocator,
+    params: []const model.ResolvedType,
+    param_ownership: []const model.OwnershipMode,
+    result: model.ResolvedType,
+) ![]const u8 {
     var builder = std.array_list.Managed(u8).init(allocator);
     try builder.append('(');
     for (params, 0..) |param, index| {
         if (index != 0) try builder.appendSlice(", ");
+        if (index < param_ownership.len) {
+            try builder.appendSlice(ownershipPrefix(param_ownership[index]));
+        }
         try builder.appendSlice(typeText(param));
     }
     try builder.appendSlice(") -> ");
@@ -58,10 +67,13 @@ const Parser = struct {
         try self.expect('(');
 
         var params = std.array_list.Managed(model.ResolvedType).init(self.allocator);
+        var param_ownership = std.array_list.Managed(model.OwnershipMode).init(self.allocator);
         self.skipSpaces();
         if (!self.peekIs(')')) {
             while (true) {
-                try params.append(try self.parseType());
+                const parsed = try self.parseTypeWithOwnership();
+                try params.append(parsed.ty);
+                try param_ownership.append(parsed.ownership);
                 self.skipSpaces();
                 if (!self.match(',')) break;
                 self.skipSpaces();
@@ -71,13 +83,33 @@ const Parser = struct {
         self.skipSpaces();
         if (!self.match('-') or !self.match('>')) return error.InvalidFunctionTypeSignature;
         self.skipSpaces();
-        const result = try self.parseType();
+        const result = (try self.parseTypeWithOwnership()).ty;
         self.skipSpaces();
         if (require_eof and self.index != self.text.len) return error.InvalidFunctionTypeSignature;
         return .{
             .params = try params.toOwnedSlice(),
+            .param_ownership = try param_ownership.toOwnedSlice(),
             .result = result,
         };
+    }
+
+    fn parseTypeWithOwnership(self: *Parser) anyerror!struct { ty: model.ResolvedType, ownership: model.OwnershipMode } {
+        self.skipSpaces();
+        if (self.tryKeyword("borrow")) {
+            self.skipSpaces();
+            const ownership: model.OwnershipMode = if (self.tryKeyword("mut")) .borrow_mut else .borrow_read;
+            self.skipSpaces();
+            return .{ .ty = try self.parseType(), .ownership = ownership };
+        }
+        if (self.tryKeyword("move")) {
+            self.skipSpaces();
+            return .{ .ty = try self.parseType(), .ownership = .move };
+        }
+        if (self.tryKeyword("copy")) {
+            self.skipSpaces();
+            return .{ .ty = try self.parseType(), .ownership = .copy };
+        }
+        return .{ .ty = try self.parseType(), .ownership = .owned };
     }
 
     fn parseType(self: *Parser) anyerror!model.ResolvedType {
@@ -86,7 +118,7 @@ const Parser = struct {
             const signature = try self.parseFunctionType(false);
             return .{
                 .kind = .callback,
-                .name = try signatureText(self.allocator, signature.params, signature.result),
+                .name = try signatureText(self.allocator, signature.params, signature.param_ownership, signature.result),
             };
         }
 
@@ -121,6 +153,15 @@ const Parser = struct {
         return self.index < self.text.len and self.text[self.index] == ch;
     }
 
+    fn tryKeyword(self: *Parser, keyword: []const u8) bool {
+        if (self.index + keyword.len > self.text.len) return false;
+        if (!std.mem.eql(u8, self.text[self.index .. self.index + keyword.len], keyword)) return false;
+        const end = self.index + keyword.len;
+        if (end < self.text.len and !std.ascii.isWhitespace(self.text[end]) and self.text[end] != '(' and self.text[end] != '[') return false;
+        self.index = end;
+        return true;
+    }
+
     fn expect(self: *Parser, ch: u8) !void {
         if (!self.match(ch)) return error.InvalidFunctionTypeSignature;
     }
@@ -131,6 +172,16 @@ fn typeTextOwned(allocator: std.mem.Allocator, ty: model.ResolvedType) ![]const 
         .callback => allocator.dupe(u8, ty.name orelse "Callback"),
         .array => std.fmt.allocPrint(allocator, "[{s}]", .{ty.name orelse ""}),
         else => allocator.dupe(u8, typeText(ty)),
+    };
+}
+
+fn ownershipPrefix(mode: model.OwnershipMode) []const u8 {
+    return switch (mode) {
+        .owned => "",
+        .borrow_read => "borrow ",
+        .borrow_mut => "borrow mut ",
+        .move => "move ",
+        .copy => "copy ",
     };
 }
 

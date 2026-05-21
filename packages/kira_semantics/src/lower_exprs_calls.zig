@@ -481,7 +481,17 @@ pub fn lowerCallExpr(
             }
             var args = std.array_list.Managed(*model.Expr).init(ctx.allocator);
             for (node.args, 0..) |arg, index| {
-                try args.append(try lowerCallArgument(ctx, arg.value, signature.params[index], .owned, "callable value", imports, scope, function_headers.?, node.span));
+                try args.append(try lowerCallArgument(
+                    ctx,
+                    arg.value,
+                    signature.params[index],
+                    if (index < signature.param_ownership.len) signature.param_ownership[index] else .owned,
+                    "callable value",
+                    imports,
+                    scope,
+                    function_headers.?,
+                    node.span,
+                ));
             }
             lowered.* = .{ .call_value = .{
                 .callee = callee,

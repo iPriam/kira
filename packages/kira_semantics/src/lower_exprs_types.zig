@@ -20,14 +20,19 @@ pub fn functionTypeFromResolvedSignature(
     params: []const model.ResolvedType,
     return_type: model.ResolvedType,
 ) !model.ResolvedType {
+    const param_ownership = try allocator.alloc(model.OwnershipMode, params.len);
+    @memset(param_ownership, .owned);
     return .{
         .kind = .callback,
-        .name = try function_types.signatureText(allocator, params, return_type),
+        .name = try function_types.signatureText(allocator, params, param_ownership, return_type),
     };
 }
 
 pub fn functionTypeFromHeader(allocator: std.mem.Allocator, header: shared.FunctionHeader) !model.ResolvedType {
-    return functionTypeFromResolvedSignature(allocator, header.params, header.return_type);
+    return .{
+        .kind = .callback,
+        .name = try function_types.signatureText(allocator, header.params, header.param_ownership, header.return_type),
+    };
 }
 
 pub fn isCallableValueExpr(expr: *syntax.ast.Expr, scope: *model.Scope) bool {
@@ -662,6 +667,7 @@ pub fn callbackTypesCompatible(expected: model.ResolvedType, actual: model.Resol
     if (expected_sig == null or actual_sig == null) return false;
     if (expected_sig.?.params.len != actual_sig.?.params.len) return false;
     for (expected_sig.?.params, 0..) |param, index| {
+        if (index < expected_sig.?.param_ownership.len and index < actual_sig.?.param_ownership.len and expected_sig.?.param_ownership[index] != actual_sig.?.param_ownership[index]) return false;
         if (!shared.canAssignExactly(param, actual_sig.?.params[index])) return false;
     }
     return actual_sig.?.result.kind == .unknown or shared.canAssignExactly(expected_sig.?.result, actual_sig.?.result);

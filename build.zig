@@ -52,7 +52,8 @@ const packages = [_]Package{
     .{ .name = "kira_doc", .path = "packages/kira_doc/src/root.zig", .imports = &.{ "kira_core", "kira_parser", "kira_semantics" } },
     .{ .name = "kira_app_generation", .path = "packages/kira_app_generation/src/root.zig", .imports = &.{"kira_core"} },
     .{ .name = "kira_main", .path = "packages/kira_main/src/root.zig", .imports = &.{ "kira_core", "kira_runtime_abi", "kira_hybrid_definition", "kira_bytecode", "kira_vm_runtime", "kira_native_bridge", "kira_hybrid_runtime" } },
-    .{ .name = "kira_cli", .path = "packages/kira_cli/src/main.zig", .imports = &.{ "kira_core", "kira_source", "kira_diagnostics", "kira_syntax_model", "kira_lexer", "kira_parser", "kira_semantics", "kira_ir", "kira_bytecode", "kira_vm_runtime", "kira_build", "kira_build_definition", "kira_hybrid_runtime", "kira_runtime_abi", "kira_app_generation", "kira_log", "kira_toolchain", "kira_project", "kira_package_manager", "kira_manifest", "kira_ksl_syntax_model", "kira_instruments" } },
+    .{ .name = "kira_live", .path = "packages/kira_live/src/root.zig", .imports = &.{ "kira_build", "kira_build_definition", "kira_diagnostics", "kira_hybrid_definition", "kira_hybrid_runtime", "kira_ir", "kira_llvm_backend", "kira_manifest", "kira_native_lib_definition", "kira_package_manager", "kira_project" } },
+    .{ .name = "kira_cli", .path = "packages/kira_cli/src/main.zig", .imports = &.{ "kira_core", "kira_source", "kira_diagnostics", "kira_syntax_model", "kira_lexer", "kira_parser", "kira_semantics", "kira_ir", "kira_bytecode", "kira_vm_runtime", "kira_build", "kira_build_definition", "kira_hybrid_runtime", "kira_runtime_abi", "kira_app_generation", "kira_live", "kira_log", "kira_toolchain", "kira_project", "kira_package_manager", "kira_manifest", "kira_ksl_syntax_model", "kira_instruments" } },
 };
 
 fn applyImports(module: *std.Build.Module, modules: *std.StringArrayHashMapUnmanaged(*std.Build.Module), names: []const []const u8) void {
@@ -172,6 +173,44 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(kira_main);
     kira_main.installHeadersDirectory(b.path("packages/kira_main/include"), "", .{});
 
+    const live_support_module = b.createModule(.{
+        .root_source_file = b.path("packages/kira_live/src/runner_support.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    live_support_module.addImport("kira_hybrid_definition", modules.get("kira_hybrid_definition").?);
+    live_support_module.addImport("kira_hybrid_runtime", modules.get("kira_hybrid_runtime").?);
+    live_support_module.link_libc = true;
+
+    const live_support = b.addLibrary(.{
+        .linkage = .static,
+        .name = "kira_live_runner_support",
+        .root_module = live_support_module,
+    });
+    live_support.root_module.addCSourceFile(.{
+        .file = b.path("packages/kira_native_bridge/src/runtime_helpers.c"),
+        .flags = &.{},
+    });
+    const install_live_support = b.addInstallArtifact(live_support, .{});
+
+    const live_desktop_module = b.createModule(.{
+        .root_source_file = b.path("packages/kira_live/src/desktop_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    live_desktop_module.addImport("kira_hybrid_definition", modules.get("kira_hybrid_definition").?);
+    live_desktop_module.addImport("kira_hybrid_runtime", modules.get("kira_hybrid_runtime").?);
+    live_desktop_module.link_libc = true;
+    const live_desktop_runner = b.addExecutable(.{
+        .name = "kira-live-desktop-runner",
+        .root_module = live_desktop_module,
+    });
+    live_desktop_runner.root_module.addCSourceFile(.{
+        .file = b.path("packages/kira_native_bridge/src/runtime_helpers.c"),
+        .flags = &.{},
+    });
+    const install_live_desktop_runner = b.addInstallArtifact(live_desktop_runner, .{});
+
     const run_cmd = b.addRunArtifact(cli);
     if (b.args) |args| run_cmd.addArgs(args);
     const run_step = b.step("run", "Run the kirac CLI");
@@ -197,6 +236,11 @@ pub fn build(b: *std.Build) void {
     const fetch_llvm_step = b.step("fetch-llvm", "Download and install the pinned LLVM toolchain");
     fetch_llvm_step.dependOn(&fetch_llvm_run.step);
 
+    const live_support_step = b.step("live-runner-support", "Build the generic live runner support static library");
+    live_support_step.dependOn(&install_live_support.step);
+    const live_desktop_step = b.step("live-desktop-runner", "Build the generic desktop live runner executable");
+    live_desktop_step.dependOn(&install_live_desktop_runner.step);
+
     const test_step = b.step("test", "Run package tests");
     const test_roots = [_][]const u8{
         "kira_toolchain",
@@ -219,6 +263,7 @@ pub fn build(b: *std.Build) void {
         "kira_build",
         "kira_instruments",
         "kira_cli",
+        "kira_live",
         "kira_llvm_backend",
         "kira_native_bridge",
     };

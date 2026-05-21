@@ -97,6 +97,7 @@ fn findDirectFfiUseInExpr(
         },
         .c_string_to_string => |node| return findDirectFfiUseInExpr(node.value.*, function_headers),
         .array_len => |node| return findDirectFfiUseInExpr(node.object.*, function_headers),
+        .string_len => |node| return findDirectFfiUseInExpr(node.object.*, function_headers),
         .field => |node| return findDirectFfiUseInExpr(node.object.*, function_headers),
         .native_state => |node| return findDirectFfiUseInExpr(node.value.*, function_headers),
         .native_user_data => |node| return findDirectFfiUseInExpr(node.state.*, function_headers),

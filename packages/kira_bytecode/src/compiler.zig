@@ -164,6 +164,7 @@ pub fn compileProgram(allocator: std.mem.Allocator, program: ir_pkg.Program, mod
                 } }),
                 .c_string_to_string => |value| try instructions.append(.{ .c_string_to_string = .{ .dst = value.dst, .src = value.src } }),
                 .array_len => |value| try instructions.append(.{ .array_len = .{ .dst = value.dst, .array = value.array } }),
+                .string_len => |value| try instructions.append(.{ .string_len = .{ .dst = value.dst, .string = value.string } }),
                 .array_get => |value| try instructions.append(.{ .array_get = .{
                     .dst = value.dst,
                     .array = value.array,

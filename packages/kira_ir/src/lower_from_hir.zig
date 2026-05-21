@@ -506,6 +506,7 @@ fn countCallbacksInExpr(expr: *model.Expr) u32 {
         .parent_view => |node| countCallbacksInExpr(node.object),
         .c_string_to_string => |node| countCallbacksInExpr(node.value),
         .array_len => |node| countCallbacksInExpr(node.object),
+        .string_len => |node| countCallbacksInExpr(node.object),
         .field => |node| countCallbacksInExpr(node.object),
         .binary => |node| countCallbacksInExpr(node.lhs) + countCallbacksInExpr(node.rhs),
         .conditional => |node| countCallbacksInExpr(node.condition) + countCallbacksInExpr(node.then_expr) + countCallbacksInExpr(node.else_expr),
@@ -1220,6 +1221,15 @@ pub const Lowerer = struct {
                 try instructions.append(.{ .array_len = .{
                     .dst = dst,
                     .array = array_reg,
+                } });
+                break :blk dst;
+            },
+            .string_len => |node| blk: {
+                const string_reg = try self.lowerExpr(instructions, node.object);
+                const dst = self.freshRegister();
+                try instructions.append(.{ .string_len = .{
+                    .dst = dst,
+                    .string = string_reg,
                 } });
                 break :blk dst;
             },

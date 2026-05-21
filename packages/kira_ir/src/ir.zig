@@ -169,6 +169,7 @@ pub const Instruction = union(enum) {
     native_state_field_set: NativeStateFieldSet,
     c_string_to_string: CStringToString,
     array_len: ArrayLen,
+    string_len: StringLen,
     array_get: ArrayGet,
     array_set: ArraySet,
     array_append: ArrayAppend,
@@ -344,6 +345,11 @@ pub const CStringToString = struct {
 pub const ArrayLen = struct {
     dst: u32,
     array: u32,
+};
+
+pub const StringLen = struct {
+    dst: u32,
+    string: u32,
 };
 
 pub const ArrayGet = struct {

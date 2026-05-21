@@ -6,7 +6,12 @@ const backend_utils = @import("backend_utils.zig");
 const clang_driver = @import("clang_driver.zig");
 const toolchain = @import("toolchain.zig");
 
-pub fn buildRuntimeHelpersObject(allocator: std.mem.Allocator, object_path: []const u8, pic: bool) ![]const u8 {
+pub fn buildRuntimeHelpersObject(
+    allocator: std.mem.Allocator,
+    object_path: []const u8,
+    pic: bool,
+    selector: ?native.TargetSelector,
+) ![]const u8 {
     const helper_object = try helperObjectPath(allocator, object_path);
     const helper_source = try std.fs.path.join(allocator, &.{ build_options.repo_root, "packages", "kira_native_bridge", "src", "runtime_helpers.c" });
     const llvm_toolchain = try toolchain.Toolchain.discover(allocator);
@@ -14,7 +19,7 @@ pub fn buildRuntimeHelpersObject(allocator: std.mem.Allocator, object_path: []co
     try ensureParentDir(helper_object);
     var argv = std.array_list.Managed([]const u8).init(allocator);
     try argv.append(driver_path);
-    try clang_driver.appendHostClangDriverArgs(allocator, &argv);
+    try clang_driver.appendClangDriverArgs(allocator, &argv, selector);
     if (pic and builtin.os.tag != .windows) try argv.append("-fPIC");
     try argv.appendSlice(&.{ "-c", helper_source, "-o", helper_object });
     try runCommand(allocator, argv.items);
@@ -26,13 +31,14 @@ pub fn linkExecutable(
     executable_path: []const u8,
     object_paths: []const []const u8,
     native_libraries: []const native.ResolvedNativeLibrary,
+    selector: ?native.TargetSelector,
 ) !void {
     try ensureParentDir(executable_path);
     const llvm_toolchain = try toolchain.Toolchain.discover(allocator);
     const driver_path = try llvm_toolchain.compilerDriverPath(allocator);
     var argv = std.array_list.Managed([]const u8).init(allocator);
     try argv.append(driver_path);
-    try clang_driver.appendHostClangDriverArgs(allocator, &argv);
+    try clang_driver.appendClangDriverArgs(allocator, &argv, selector);
     try argv.appendSlice(&.{ "-o", executable_path });
     if (builtin.os.tag == .windows) {
         try argv.append("-Wl,/subsystem:console");
@@ -58,13 +64,14 @@ pub fn linkSharedLibrary(
     library_path: []const u8,
     object_paths: []const []const u8,
     native_libraries: []const native.ResolvedNativeLibrary,
+    selector: ?native.TargetSelector,
 ) !void {
     try ensureParentDir(library_path);
     const llvm_toolchain = try toolchain.Toolchain.discover(allocator);
     const driver_path = try llvm_toolchain.compilerDriverPath(allocator);
     var argv = std.array_list.Managed([]const u8).init(allocator);
     try argv.append(driver_path);
-    try clang_driver.appendHostClangDriverArgs(allocator, &argv);
+    try clang_driver.appendClangDriverArgs(allocator, &argv, selector);
     try argv.appendSlice(&.{ "-shared", "-o", library_path });
     for (object_paths) |path| try argv.append(path);
 

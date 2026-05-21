@@ -184,8 +184,16 @@ fn graphDiagnosticStage(diags: []const diagnostics.Diagnostic) FrontendStage {
 }
 
 pub fn compileFileToIr(allocator: std.mem.Allocator, path: []const u8) !FrontendPipelineResult {
+    return compileFileToIrForTarget(allocator, path, null);
+}
+
+pub fn compileFileToIrForTarget(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    target_selector: ?native.TargetSelector,
+) !FrontendPipelineResult {
     const total_start = nowNs();
-    const parsed = try parseFile(allocator, path);
+    const parsed = try parseFileForTarget(allocator, path, target_selector);
     if (parsed.program == null) {
         timingPrint("[kira:timing] compileFileToIr.total path={s} ns={d}\n", .{ path, elapsedNs(total_start) });
         return .{
@@ -223,7 +231,7 @@ pub fn compileFileToIr(allocator: std.mem.Allocator, path: []const u8) !Frontend
     timingPrint("[kira:timing] buildProgramGraph path={s} imports={d} declarations={d} functions={d} ns={d}\n", .{ parsed.source.path, merged_program.imports.len, merged_program.decls.len, merged_program.functions.len, elapsedNs(graph_start) });
 
     const native_import_start = nowNs();
-    const native_libraries = try ffi_support.prepareImportedNativeLibraries(allocator, parsed.native_libraries, merged_program.imports, module_map);
+    const native_libraries = try ffi_support.prepareImportedNativeLibrariesForTarget(allocator, parsed.native_libraries, merged_program.imports, module_map, target_selector);
     timingPrint("[kira:timing] prepareImportedNativeLibraries path={s} imports={d} native_libraries={d} ns={d}\n", .{ parsed.source.path, merged_program.imports.len, native_libraries.len, elapsedNs(native_import_start) });
 
     const validate_start = nowNs();
@@ -310,8 +318,18 @@ pub fn compileFileForBackend(
     target: build_def.ExecutionTarget,
     explicit_native_libraries: []const native.ResolvedNativeLibrary,
 ) !ExecutablePipelineResult {
+    return compileFileForBackendWithSelector(allocator, path, target, null, explicit_native_libraries);
+}
+
+pub fn compileFileForBackendWithSelector(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    target: build_def.ExecutionTarget,
+    target_selector: ?native.TargetSelector,
+    explicit_native_libraries: []const native.ResolvedNativeLibrary,
+) !ExecutablePipelineResult {
     const total_start = nowNs();
-    const frontend = try compileFileToIr(allocator, path);
+    const frontend = try compileFileToIrForTarget(allocator, path, target_selector);
     if (frontend.ir_program == null or diagnostics.hasErrors(frontend.diagnostics)) {
         timingPrint("[kira:timing] compileFileForBackend.total path={s} backend={s} ns={d}\n", .{ path, @tagName(target), elapsedNs(total_start) });
         return .{
@@ -363,6 +381,7 @@ pub fn compileFileForBackend(
                 .program = &ir_program,
                 .module_name = std.fs.path.stem(path),
                 .emit = dummyNativeEmitOptions(),
+                .target_selector = target_selector,
                 .resolved_native_libraries = merged_native_libraries,
             }) catch |err| {
                 const backend_diagnostics = try backendDiagnostics(allocator, frontend.source.path, err);
@@ -410,6 +429,7 @@ pub fn compileFileForBackend(
                 .program = &ir_program,
                 .module_name = std.fs.path.stem(path),
                 .emit = dummyNativeEmitOptions(),
+                .target_selector = target_selector,
                 .resolved_native_libraries = merged_native_libraries,
             }) catch |err| {
                 const backend_diagnostics = try backendDiagnostics(allocator, frontend.source.path, err);
@@ -443,8 +463,17 @@ pub fn checkFileForBackend(
     path: []const u8,
     target: build_def.ExecutionTarget,
 ) !CheckPipelineResult {
+    return checkFileForBackendWithSelector(allocator, path, target, null);
+}
+
+pub fn checkFileForBackendWithSelector(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    target: build_def.ExecutionTarget,
+    target_selector: ?native.TargetSelector,
+) !CheckPipelineResult {
     const total_start = nowNs();
-    const prepared = try compileFileForBackend(allocator, path, target, &.{});
+    const prepared = try compileFileForBackendWithSelector(allocator, path, target, target_selector, &.{});
     const reached_ir = prepared.ir_program != null or prepared.failure_stage == .ir or prepared.failure_stage == .backend_prepare;
     const reached_bytecode = prepared.bytecode_module != null;
     const reached_llvm = (target == .llvm_native or target == .hybrid) and prepared.failure_stage == null and prepared.ir_program != null;
@@ -647,14 +676,27 @@ pub fn lexFile(allocator: std.mem.Allocator, path: []const u8) !LexPipelineResul
 }
 
 pub fn parseFile(allocator: std.mem.Allocator, path: []const u8) !ParsePipelineResult {
-    return parseFileWithNativePreparation(allocator, path, true);
+    return parseFileForTarget(allocator, path, null);
+}
+
+pub fn parseFileForTarget(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    target_selector: ?native.TargetSelector,
+) !ParsePipelineResult {
+    return parseFileWithNativePreparation(allocator, path, true, target_selector);
 }
 
 fn parseFileWithoutNativePreparation(allocator: std.mem.Allocator, path: []const u8) !ParsePipelineResult {
-    return parseFileWithNativePreparation(allocator, path, false);
+    return parseFileWithNativePreparation(allocator, path, false, null);
 }
 
-fn parseFileWithNativePreparation(allocator: std.mem.Allocator, path: []const u8, prepare_native: bool) !ParsePipelineResult {
+fn parseFileWithNativePreparation(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    prepare_native: bool,
+    target_selector: ?native.TargetSelector,
+) !ParsePipelineResult {
     const lexed = try lexFile(allocator, path);
     if (lexed.tokens == null) {
         return .{
@@ -685,7 +727,7 @@ fn parseFileWithNativePreparation(allocator: std.mem.Allocator, path: []const u8
 
     const native_libraries = if (prepare_native) blk: {
         const native_start = nowNs();
-        const libraries = try ffi_support.prepareNativeLibraries(allocator, path, program.imports);
+        const libraries = try ffi_support.prepareNativeLibrariesForTarget(allocator, path, program.imports, target_selector);
         timingPrint("[kira:timing] prepareNativeLibraries path={s} native_libraries={d} ns={d}\n", .{ path, libraries.len, elapsedNs(native_start) });
         break :blk libraries;
     } else blk: {

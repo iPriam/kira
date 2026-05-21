@@ -76,13 +76,19 @@ pub const flattenMemberExprPath = types.flattenMemberExprPath;
 const emitUseAfterMove = types.emitUseAfterMove;
 pub const lowerEnumVariantExprExpected = lowerEnumVariantExprExpectedInternal;
 
-fn tryLowerArrayCountMemberExpr(object: *model.Expr, member_name: []const u8, span: source_pkg.Span) ?model.Expr {
+fn tryLowerCountMemberExpr(object: *model.Expr, member_name: []const u8, span: source_pkg.Span) ?model.Expr {
     if (!std.mem.eql(u8, member_name, "count")) return null;
-    if (model.hir.exprType(object.*).kind != .array) return null;
-    return .{ .array_len = .{
-        .object = object,
-        .span = span,
-    } };
+    return switch (model.hir.exprType(object.*).kind) {
+        .array => .{ .array_len = .{
+            .object = object,
+            .span = span,
+        } },
+        .string => .{ .string_len = .{
+            .object = object,
+            .span = span,
+        } },
+        else => null,
+    };
 }
 
 fn emitMemberAccessRequiresStructuredType(
@@ -740,8 +746,8 @@ pub fn lowerExpr(
             const flattened = try flattenMemberExpr(ctx.allocator, expr);
             if (std.mem.eql(u8, flattened.root, "<expr>")) {
                 const object = try lowerExpr(ctx, node.object, imports, scope, function_headers);
-                if (tryLowerArrayCountMemberExpr(object, node.member, node.span)) |array_len_expr| {
-                    lowered.* = array_len_expr;
+                if (tryLowerCountMemberExpr(object, node.member, node.span)) |count_expr| {
+                    lowered.* = count_expr;
                     return lowered;
                 }
                 const object_type = resolveFieldContainerType(ctx, model.hir.exprType(object.*)) orelse {
@@ -799,8 +805,8 @@ pub fn lowerExpr(
                     if (try lowerImplicitSelfFieldExpr(ctx, scope, flattened.root, exprSpan(node.object.*))) |object_value| {
                         const object = try ctx.allocator.create(model.Expr);
                         object.* = object_value;
-                        if (tryLowerArrayCountMemberExpr(object, node.member, node.span)) |array_len_expr| {
-                            lowered.* = array_len_expr;
+                        if (tryLowerCountMemberExpr(object, node.member, node.span)) |count_expr| {
+                            lowered.* = count_expr;
                             return lowered;
                         }
                         const object_type = resolveFieldContainerType(ctx, model.hir.exprType(object.*)) orelse {
@@ -834,8 +840,8 @@ pub fn lowerExpr(
             }
 
             const object = try lowerExpr(ctx, node.object, imports, scope, function_headers);
-            if (tryLowerArrayCountMemberExpr(object, node.member, node.span)) |array_len_expr| {
-                lowered.* = array_len_expr;
+            if (tryLowerCountMemberExpr(object, node.member, node.span)) |count_expr| {
+                lowered.* = count_expr;
                 return lowered;
             }
             const object_type = resolveFieldContainerType(ctx, model.hir.exprType(object.*)) orelse {

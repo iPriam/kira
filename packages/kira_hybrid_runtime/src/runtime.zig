@@ -29,6 +29,20 @@ pub const HybridRuntime = struct {
         };
     }
 
+    pub fn initFromCurrentProcess(allocator: std.mem.Allocator, manifest: hybrid.HybridModuleManifest) !HybridRuntime {
+        var bridge = native_bridge.NativeBridge.init(allocator);
+        const descriptors = try buildRuntimeDescriptors(allocator, manifest);
+        try binder.bindHybridSymbolsInSelf(&bridge, descriptors);
+
+        return .{
+            .allocator = allocator,
+            .manifest = manifest,
+            .module = try bytecode.Module.readFromFile(allocator, manifest.bytecode_path),
+            .vm = vm_runtime.Vm.init(allocator),
+            .bridge = bridge,
+        };
+    }
+
     pub fn deinit(self: *HybridRuntime) void {
         self.cleanupPendingCallbackReturns();
         self.pending_callback_return_values.deinit(self.allocator);
@@ -338,18 +352,25 @@ fn callNative(self: *HybridRuntime, function_id: u32, args: []const runtime_abi.
         }
     }
 
-    for (args, 0..) |arg, index| {
-        try self.vm.pinNativeBoundaryValue(arg);
-        lowered_args[index] = arg;
-        if (index >= function_decl.param_types.len) continue;
-        const param_type = function_decl.param_types[index];
-        if (arg != .raw_ptr or arg.raw_ptr == 0) continue;
-        switch (param_type.kind) {
-            .ffi_struct => {
-                native_arg_ptrs[index] = try self.vm.lowerStructToNativeLayout(
-                    &self.module,
-                    param_type.name orelse return error.RuntimeFailure,
-                    arg.raw_ptr,
+        for (args, 0..) |arg, index| {
+            try self.vm.pinNativeBoundaryValue(arg);
+            lowered_args[index] = arg;
+            if (index >= function_decl.param_types.len) continue;
+            const param_type = function_decl.param_types[index];
+            if (arg != .raw_ptr or arg.raw_ptr == 0) continue;
+            switch (param_type.kind) {
+                .raw_ptr => {
+                    if (param_type.name) |name| {
+                        if (isCallbackTypeName(name) and self.vm.heap.getClosure(arg.raw_ptr) != null) {
+                            lowered_args[index] = .{ .raw_ptr = try self.vm.exportRuntimeClosureToNative(&self.module, arg.raw_ptr) };
+                        }
+                    }
+                },
+                .ffi_struct => {
+                    native_arg_ptrs[index] = try self.vm.lowerStructToNativeLayout(
+                        &self.module,
+                        param_type.name orelse return error.RuntimeFailure,
+                        arg.raw_ptr,
                 );
                 lowered_args[index] = .{ .raw_ptr = native_arg_ptrs[index] };
             },

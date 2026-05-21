@@ -813,6 +813,30 @@ test "supports function types trailing callbacks and callable values" {
     try std.testing.expect(entry.body[2].expr_stmt.expr.* == .call_value);
 }
 
+test "callable values preserve borrow mut parameter ownership" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    var diags = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
+    const analyzed = try analyzeSource(
+        allocator,
+        "struct Counter { var value: Int }\n" ++
+            "function mutate(counter: borrow mut Counter) { counter.value = counter.value + 1; return; }\n" ++
+            "@Main function entry() {\n" ++
+            "    let callback: (borrow mut Counter) -> Void = mutate;\n" ++
+            "    var counter = Counter { value: 0 };\n" ++
+            "    callback(counter);\n" ++
+            "    return;\n" ++
+            "}",
+        &diags,
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), diags.items.len);
+    const entry = analyzed.functions[analyzed.functions.len - 1];
+    try std.testing.expect(entry.body[2].expr_stmt.expr.* == .call_value);
+}
+
 test "supports native callback state handles and recovered access" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1021,6 +1045,29 @@ test "array count lowers as a dedicated expression" {
     try std.testing.expect(count_stmt.value != null);
     try std.testing.expect(count_stmt.value.?.* == .array_len);
     try std.testing.expectEqual(model.Type.integer, count_stmt.value.?.array_len.ty.kind);
+}
+
+test "string count lowers as a dedicated expression" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    var diags = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
+    const analyzed = try analyzeSource(
+        allocator,
+        "@Main function entry() {\n" ++
+            "    let title = \"KIRA\"\n" ++
+            "    let count = title.count\n" ++
+            "    return;\n" ++
+            "}",
+        &diags,
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), diags.items.len);
+    const count_stmt = analyzed.functions[analyzed.entry_index].body[1].let_stmt;
+    try std.testing.expect(count_stmt.value != null);
+    try std.testing.expect(count_stmt.value.?.* == .string_len);
+    try std.testing.expectEqual(model.Type.integer, count_stmt.value.?.string_len.ty.kind);
 }
 
 fn parseSource(
