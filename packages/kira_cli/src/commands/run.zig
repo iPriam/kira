@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const bytecode = @import("kira_bytecode");
 const build = @import("kira_build");
 const build_def = @import("kira_build_definition");
+const diag_messages = @import("kira_diagnostic_messages");
 const diagnostics = @import("kira_diagnostics");
 const hybrid_runtime = @import("kira_hybrid_runtime");
 const package_manager = @import("kira_package_manager");
@@ -16,10 +17,22 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
     const previous_trace = runtime_abi.executionTraceEnabled();
     runtime_abi.setExecutionTraceEnabled(parsed.trace_execution);
     defer runtime_abi.setExecutionTraceEnabled(previous_trace);
-    const input = try support.resolveCommandInput(allocator, parsed.input_path);
+    const input = support.resolveCliInput(allocator, parsed.input_path) catch |err| switch (err) {
+        error.InvalidProjectPath => {
+            try support.renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.invalidProjectPath(allocator, parsed.input_path));
+            return error.CommandFailed;
+        },
+        error.ProjectManifestNotFound => {
+            try support.renderStandaloneDiagnostic(stderr, try diag_messages.PackageMessages.missingProjectManifest(allocator, parsed.input_path));
+            return error.CommandFailed;
+        },
+        else => return err,
+    };
+    try support.validateTargetSelection(allocator, stderr, .run, input);
     const backend = parsed.backend orelse input.default_backend orelse .vm;
+    const source_path = input.target.source_path.?;
 
-    if (input.project_root) |project_root| {
+    if (input.target.root_path) |project_root| {
         var package_diagnostics = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
         _ = package_manager.syncProject(allocator, project_root, support.versionString(), .{
             .offline = parsed.offline,
@@ -33,20 +46,20 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
         };
     }
 
-    try support.logFrontendStarted(stderr, "run", input.source_path);
+    try support.logFrontendStarted(stderr, "run", source_path);
     var system = build.BuildSystem.init(allocator);
-    const output_root = try support.outputRoot(allocator, input.project_root);
+    const output_root = try support.outputRoot(allocator, input.target.root_path);
     defer allocator.free(output_root);
     try support.ensurePath(output_root);
-    const stem = input.project_name orelse std.fs.path.stem(input.source_path);
+    const stem = input.target.project_name orelse std.fs.path.stem(source_path);
     const output_path = try runOutputPath(allocator, output_root, stem, backend);
     const result = try system.build(.{
-        .source_path = input.source_path,
+        .source_path = source_path,
         .output_path = output_path,
         .target = .{ .execution = backend },
     });
     if (result.failed()) {
-        try support.logBuildAborted(stderr, "run", result.failure_kind.?, input.source_path);
+        try support.logBuildAborted(stderr, "run", result.failure_kind.?, source_path);
         if (result.source) |source| {
             try support.renderDiagnostics(stderr, &source, result.diagnostics);
         }
@@ -62,10 +75,10 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
             defer vm.deinit();
             var original_cwd = try std.Io.Dir.cwd().openDir(std.Options.debug_io, ".", .{});
             defer {
-                if (input.project_root) |_| std.process.setCurrentDir(std.Options.debug_io, original_cwd) catch {};
+                if (input.target.root_path) |_| std.process.setCurrentDir(std.Options.debug_io, original_cwd) catch {};
                 original_cwd.close(std.Options.debug_io);
             }
-            if (input.project_root) |root| {
+            if (input.target.root_path) |root| {
                 var dir = try std.Io.Dir.openDirAbsolute(std.Options.debug_io, root, .{});
                 defer dir.close(std.Options.debug_io);
                 try std.process.setCurrentDir(std.Options.debug_io, dir);
@@ -76,7 +89,7 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
         },
         .llvm_native => {
             const executable = findExecutable(result.artifacts) orelse return error.MissingExecutableArtifact;
-            try runExecutable(allocator, executable.path, input.project_root, parsed.trace_execution, stdout, stderr);
+            try runExecutable(allocator, executable.path, input.target.root_path, parsed.trace_execution, stdout, stderr);
         },
         .hybrid => {
             const manifest_artifact = findHybridManifest(result.artifacts) orelse return error.MissingHybridManifestArtifact;
@@ -86,10 +99,10 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
             defer runtime.deinit();
             var original_cwd = try std.Io.Dir.cwd().openDir(std.Options.debug_io, ".", .{});
             defer {
-                if (input.project_root) |_| std.process.setCurrentDir(std.Options.debug_io, original_cwd) catch {};
+                if (input.target.root_path) |_| std.process.setCurrentDir(std.Options.debug_io, original_cwd) catch {};
                 original_cwd.close(std.Options.debug_io);
             }
-            if (input.project_root) |root| {
+            if (input.target.root_path) |root| {
                 var dir = try std.Io.Dir.openDirAbsolute(std.Options.debug_io, root, .{});
                 defer dir.close(std.Options.debug_io);
                 try std.process.setCurrentDir(std.Options.debug_io, dir);

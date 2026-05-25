@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build = @import("kira_build");
 const build_def = @import("kira_build_definition");
+const diag_messages = @import("kira_diagnostic_messages");
 const diagnostics = @import("kira_diagnostics");
 const package_manager = @import("kira_package_manager");
 const support = @import("../support.zig");
@@ -9,39 +10,45 @@ const support = @import("../support.zig");
 pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: anytype, stderr: anytype) !void {
     const parsed = try parseArgs(args);
     build.setTimingsEnabled(parsed.timings or timingsEnvEnabled());
-    const input = try support.resolveCheckInput(allocator, parsed.input_path);
-
-    const project_root = switch (input) {
-        .application => |app| app.project_root,
-        .library => |library| library.root_path,
+    const input = support.resolveCliInput(allocator, parsed.input_path) catch |err| switch (err) {
+        error.InvalidProjectPath => {
+            try support.renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.invalidProjectPath(allocator, parsed.input_path));
+            return error.CommandFailed;
+        },
+        error.ProjectManifestNotFound => {
+            try support.renderStandaloneDiagnostic(stderr, try diag_messages.PackageMessages.missingProjectManifest(allocator, parsed.input_path));
+            return error.CommandFailed;
+        },
+        else => return err,
     };
-    if (project_root) |root| {
+    try support.validateTargetSelection(allocator, stderr, .check, input);
+
+    if (input.target.root_path) |root| {
         try syncProject(allocator, root, parsed, stderr);
     }
 
-    const result = switch (input) {
-        .application => |app| blk: {
-            try support.logFrontendStarted(stderr, "check", app.source_path);
+    const result = switch (input.target.target_kind) {
+        .library => blk: {
+            const source_root = input.target.source_root.?;
+            try support.logFrontendStarted(stderr, "check", source_root);
+            var system = build.BuildSystem.init(allocator);
+            break :blk try system.checkPackageRoot(source_root);
+        },
+        .executable, .example, .source_file => blk: {
+            const source_path = input.target.source_path.?;
+            try support.logFrontendStarted(stderr, "check", source_path);
             var system = build.BuildSystem.init(allocator);
             if (parsed.backend) |backend| {
-                break :blk try system.checkForBackend(app.source_path, backend);
+                break :blk try system.checkForBackend(source_path, backend);
             }
-            break :blk try system.checkFrontend(app.source_path);
-        },
-        .library => |library| blk: {
-            try support.logFrontendStarted(stderr, "check", library.source_root);
-            var system = build.BuildSystem.init(allocator);
-            break :blk try system.checkPackageRoot(library.source_root);
+            break :blk try system.checkFrontend(source_path);
         },
     };
     if (!diagnostics.hasErrors(result.diagnostics)) {
         try stdout.writeAll("check passed\n");
         return;
     }
-    const display_path = switch (input) {
-        .application => |app| app.source_path,
-        .library => |library| library.source_root,
-    };
+    const display_path = input.displayPath();
     try support.logFrontendFailed(stderr, result.failure_stage, display_path, result.diagnostics.len);
     try support.renderDiagnostics(stderr, &result.source, result.diagnostics);
     return error.CommandFailed;

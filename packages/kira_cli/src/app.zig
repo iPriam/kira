@@ -1,4 +1,5 @@
 const std = @import("std");
+const diag_messages = @import("kira_diagnostic_messages");
 const cmd_run = @import("commands/run.zig");
 const cmd_build = @import("commands/build.zig");
 const cmd_check = @import("commands/check.zig");
@@ -15,6 +16,25 @@ const cmd_shader = @import("commands/shader.zig");
 const cmd_instruments = @import("commands/instruments.zig");
 const cmd_live = @import("commands/live.zig");
 const support = @import("support.zig");
+
+const CommandKind = enum {
+    run,
+    fetch_llvm,
+    tokens,
+    ast,
+    check,
+    build,
+    instruments,
+    instrument_artifact,
+    shader,
+    new,
+    sync,
+    add,
+    remove,
+    update,
+    package,
+    live,
+};
 
 pub fn run(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
     var stdout_buffer: [4096]u8 = undefined;
@@ -43,73 +63,101 @@ pub fn runWithWriters(allocator: std.mem.Allocator, args: []const []const u8, ou
         return 0;
     }
 
-    if (std.mem.eql(u8, command, "run")) return executeCommand(allocator, command, args[2..], out, err, cmd_run.execute);
-    if (std.mem.eql(u8, command, "fetch-llvm")) return executeCommand(allocator, command, args[2..], out, err, cmd_fetch_llvm.execute);
-    if (std.mem.eql(u8, command, "tokens")) return executeCommand(allocator, command, args[2..], out, err, cmd_tokens.execute);
-    if (std.mem.eql(u8, command, "ast")) return executeCommand(allocator, command, args[2..], out, err, cmd_ast.execute);
-    if (std.mem.eql(u8, command, "check")) return executeCommand(allocator, command, args[2..], out, err, cmd_check.execute);
-    if (std.mem.eql(u8, command, "build")) return executeCommand(allocator, command, args[2..], out, err, cmd_build.execute);
-    if (std.mem.eql(u8, command, "instruments")) return executeCommand(allocator, command, args[2..], out, err, cmd_instruments.execute);
-    if (std.mem.eql(u8, command, "__instrument-artifact")) return executeCommand(allocator, command, args[2..], out, err, cmd_instruments.executeArtifact);
-    if (std.mem.eql(u8, command, "shader")) return executeCommand(allocator, command, args[2..], out, err, cmd_shader.execute);
-    if (std.mem.eql(u8, command, "new")) return executeCommand(allocator, command, args[2..], out, err, cmd_new.execute);
-    if (std.mem.eql(u8, command, "sync")) return executeCommand(allocator, command, args[2..], out, err, cmd_sync.execute);
-    if (std.mem.eql(u8, command, "add")) return executeCommand(allocator, command, args[2..], out, err, cmd_add.execute);
-    if (std.mem.eql(u8, command, "remove")) return executeCommand(allocator, command, args[2..], out, err, cmd_remove.execute);
-    if (std.mem.eql(u8, command, "update")) return executeCommand(allocator, command, args[2..], out, err, cmd_update.execute);
-    if (std.mem.eql(u8, command, "package")) return executeCommand(allocator, command, args[2..], out, err, cmd_package.execute);
-    if (std.mem.eql(u8, command, "live")) return executeCommand(allocator, command, args[2..], out, err, cmd_live.execute);
+    const kind = parseCommand(command) orelse {
+        try support.renderStandaloneDiagnostic(err, diag_messages.CliMessages.unknownCommand(command));
+        try err.writeAll("\n");
+        try printUsage(err);
+        return 1;
+    };
 
-    try err.print("unknown command: {s}\n\n", .{command});
-    try printUsage(err);
-    return 1;
+    return dispatchCommand(allocator, kind, command, args[2..], out, err);
 }
 
-fn executeCommand(allocator: std.mem.Allocator, _: []const u8, args: []const []const u8, out: anytype, err: anytype, comptime execute: anytype) !u8 {
+fn executeCommand(allocator: std.mem.Allocator, command: []const u8, args: []const []const u8, out: anytype, err: anytype, comptime execute: anytype) !u8 {
     execute(allocator, args, out, err) catch |run_err| {
         if (run_err == error.CommandFailed or run_err == error.InvalidArguments) {
             if (run_err == error.InvalidArguments) try printUsage(err);
             return 1;
         }
         if (run_err == error.ProjectEntrypointNotFound) {
-            try err.writeAll("error[KPROJECT001]: project entrypoint not found\n");
-            try err.writeAll("  This project root does not contain `app/main.kira`, so it cannot be checked, built, or run as an application entrypoint yet.\n");
-            try err.writeAll("  help: Point the command at an application package or source file with an @Main entrypoint. Library-root checking is not supported yet.\n");
+            try support.renderStandaloneDiagnostic(err, try diag_messages.PackageMessages.missingSourceFile(allocator, support.defaultCommandInputPath()));
             return 1;
         }
         if (run_err == error.UnsupportedTarget) {
-            try err.writeAll("error[KBUILD002]: unsupported host target\n");
-            try err.print(
-                "  The current host target `{s}` is not supported by this project or one of its native libraries.\n",
-                .{support.currentHostTargetTriple()},
-            );
-            try err.writeAll("  help: Add a matching [target.<triple>] section to the relevant NativeLibs manifest, or build on a supported host.\n");
+            try support.renderStandaloneDiagnostic(err, try diag_messages.ToolchainMessages.unsupportedHostTarget(allocator, support.currentHostTargetTriple()));
             return 1;
         }
         if (run_err == error.NativeRunFailed) {
-            try err.writeAll("error[KRUN001]: native executable failed\n");
-            try err.writeAll("  Kira built the native executable, but it exited unsuccessfully while running.\n");
-            try err.writeAll("  help: Re-run the generated executable directly to inspect the application/runtime failure.\n");
+            try support.renderStandaloneDiagnostic(err, diag_messages.CliMessages.nativeExecutableFailed());
             return 1;
         }
         if (run_err == error.MacOSSdkUnavailable) {
-            try err.writeAll("error[KLIVE002]: macOS SDK is unavailable\n");
-            try err.writeAll("  Kira could not locate the macOS SDK through the active Apple developer tools.\n");
-            try err.writeAll("  help: Install full Xcode.app and switch `xcode-select` to it, or set `SDKROOT` to a valid macOS SDK path.\n");
+            try support.renderStandaloneDiagnostic(err, try diag_messages.ToolchainMessages.invalidToolchainActivation(allocator, @errorName(run_err)));
             return 1;
         }
         if (run_err == error.IPhoneOSSdkUnavailable) {
-            try err.writeAll("error[KLIVE003]: iPhoneOS SDK is unavailable\n");
-            try err.writeAll("  Kira could not locate the iPhoneOS SDK through the active Apple developer tools.\n");
-            try err.writeAll("  help: Install full Xcode.app and switch `xcode-select` to it so `xcrun --sdk iphoneos --show-sdk-path` succeeds.\n");
+            try support.renderStandaloneDiagnostic(err, try diag_messages.ToolchainMessages.invalidToolchainActivation(allocator, @errorName(run_err)));
             return 1;
         }
-
+        if (std.mem.eql(u8, command, "live") and
+            (run_err == error.EndOfStream or run_err == error.LiveHealthCheckFailed or run_err == error.LiveBundleBuildFailed))
+        {
+            try support.renderStandaloneDiagnostic(err, try diag_messages.CliMessages.liveSessionEndedUnexpectedly(allocator, @errorName(run_err)));
+            return 1;
+        }
         try support.logInternalCompilerError(err, @errorName(run_err));
         try support.renderInternalCompilerError(err, @errorName(run_err));
         return 1;
     };
     return 0;
+}
+
+fn parseCommand(command: []const u8) ?CommandKind {
+    if (std.mem.eql(u8, command, "run")) return .run;
+    if (std.mem.eql(u8, command, "fetch-llvm")) return .fetch_llvm;
+    if (std.mem.eql(u8, command, "tokens")) return .tokens;
+    if (std.mem.eql(u8, command, "ast")) return .ast;
+    if (std.mem.eql(u8, command, "check")) return .check;
+    if (std.mem.eql(u8, command, "build")) return .build;
+    if (std.mem.eql(u8, command, "instruments")) return .instruments;
+    if (std.mem.eql(u8, command, "__instrument-artifact")) return .instrument_artifact;
+    if (std.mem.eql(u8, command, "shader")) return .shader;
+    if (std.mem.eql(u8, command, "new")) return .new;
+    if (std.mem.eql(u8, command, "sync")) return .sync;
+    if (std.mem.eql(u8, command, "add")) return .add;
+    if (std.mem.eql(u8, command, "remove")) return .remove;
+    if (std.mem.eql(u8, command, "update")) return .update;
+    if (std.mem.eql(u8, command, "package")) return .package;
+    if (std.mem.eql(u8, command, "live")) return .live;
+    return null;
+}
+
+fn dispatchCommand(
+    allocator: std.mem.Allocator,
+    kind: CommandKind,
+    command: []const u8,
+    args: []const []const u8,
+    out: anytype,
+    err: anytype,
+) !u8 {
+    return switch (kind) {
+        .run => executeCommand(allocator, command, args, out, err, cmd_run.execute),
+        .fetch_llvm => executeCommand(allocator, command, args, out, err, cmd_fetch_llvm.execute),
+        .tokens => executeCommand(allocator, command, args, out, err, cmd_tokens.execute),
+        .ast => executeCommand(allocator, command, args, out, err, cmd_ast.execute),
+        .check => executeCommand(allocator, command, args, out, err, cmd_check.execute),
+        .build => executeCommand(allocator, command, args, out, err, cmd_build.execute),
+        .instruments => executeCommand(allocator, command, args, out, err, cmd_instruments.execute),
+        .instrument_artifact => executeCommand(allocator, command, args, out, err, cmd_instruments.executeArtifact),
+        .shader => executeCommand(allocator, command, args, out, err, cmd_shader.execute),
+        .new => executeCommand(allocator, command, args, out, err, cmd_new.execute),
+        .sync => executeCommand(allocator, command, args, out, err, cmd_sync.execute),
+        .add => executeCommand(allocator, command, args, out, err, cmd_add.execute),
+        .remove => executeCommand(allocator, command, args, out, err, cmd_remove.execute),
+        .update => executeCommand(allocator, command, args, out, err, cmd_update.execute),
+        .package => executeCommand(allocator, command, args, out, err, cmd_package.execute),
+        .live => executeCommand(allocator, command, args, out, err, cmd_live.execute),
+    };
 }
 
 fn printUsage(writer: anytype) !void {

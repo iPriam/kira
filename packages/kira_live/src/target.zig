@@ -1,12 +1,11 @@
 const std = @import("std");
-const manifest = @import("kira_manifest");
 const kira_project = @import("kira_project");
 
 pub const ResolvedLiveTarget = struct {
     target_root: []const u8,
     target_manifest_path: []const u8,
     target_package_name: []const u8,
-    target_kind: manifest.PackageKind,
+    target_kind: kira_project.TargetKind,
     validation_app_root: []const u8,
     validation_manifest_path: []const u8,
     validation_entrypoint_path: []const u8,
@@ -15,35 +14,25 @@ pub const ResolvedLiveTarget = struct {
 };
 
 pub fn resolveLiveTarget(allocator: std.mem.Allocator, input_path: []const u8) !ResolvedLiveTarget {
-    const resolved = try kira_project.loadPackageRootFromPath(allocator, input_path);
-    const output_root = try std.fs.path.join(allocator, &.{ resolved.root_path, ".kira-build", "live" });
+    const resolved = try kira_project.resolveTargetFromPath(allocator, input_path);
+    if (resolved.target_kind == .library) return error.LibraryTargetCannotBeStartedInLiveMode;
+    if (!resolved.canLive()) return error.TargetNotLiveCapable;
 
-    if (resolved.project.manifest.kind == .app) {
-        const entrypoint = resolved.entrypoint_path orelse return error.ProjectEntrypointNotFound;
-        return .{
-            .target_root = resolved.root_path,
-            .target_manifest_path = resolved.manifest_path,
-            .target_package_name = resolved.project.manifest.name,
-            .target_kind = resolved.project.manifest.kind,
-            .validation_app_root = resolved.root_path,
-            .validation_manifest_path = resolved.manifest_path,
-            .validation_entrypoint_path = entrypoint,
-            .output_root = output_root,
-            .runner_display_name = try defaultRunnerName(allocator, resolved.project.manifest.name),
-        };
-    }
-
-    const validation = try discoverValidationApp(allocator, resolved.root_path, resolved.project.manifest.name);
+    const target_root = resolved.root_path orelse return error.InvalidProjectPath;
+    const target_manifest_path = resolved.manifest_path orelse return error.ProjectManifestNotFound;
+    const target_package_name = resolved.project_name orelse return error.ProjectManifestNotFound;
+    const entrypoint = resolved.source_path orelse return error.ProjectEntrypointNotFound;
+    const output_root = try std.fs.path.join(allocator, &.{ target_root, ".kira-build", "live" });
     return .{
-        .target_root = resolved.root_path,
-        .target_manifest_path = resolved.manifest_path,
-        .target_package_name = resolved.project.manifest.name,
-        .target_kind = resolved.project.manifest.kind,
-        .validation_app_root = validation.root_path,
-        .validation_manifest_path = validation.manifest_path,
-        .validation_entrypoint_path = validation.entrypoint_path,
+        .target_root = target_root,
+        .target_manifest_path = target_manifest_path,
+        .target_package_name = target_package_name,
+        .target_kind = resolved.target_kind,
+        .validation_app_root = target_root,
+        .validation_manifest_path = target_manifest_path,
+        .validation_entrypoint_path = entrypoint,
         .output_root = output_root,
-        .runner_display_name = try defaultRunnerName(allocator, resolved.project.manifest.name),
+        .runner_display_name = try defaultRunnerName(allocator, target_package_name),
     };
 }
 
@@ -123,12 +112,9 @@ fn defaultRunnerName(allocator: std.mem.Allocator, package_name: []const u8) ![]
     return std.fmt.allocPrint(allocator, "{s}LiveRunner", .{trimmed});
 }
 
-test "target resolution discovers ui-foundation validation app" {
+test "target resolution rejects library roots for live mode" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const resolved = try resolveLiveTarget(arena.allocator(), "../ui-foundation");
-    try std.testing.expectEqual(manifest.PackageKind.library, resolved.target_kind);
-    try std.testing.expect(std.mem.endsWith(u8, resolved.validation_app_root, "Examples/basic-foundation-app"));
-    try std.testing.expect(std.mem.endsWith(u8, resolved.validation_entrypoint_path, "Examples/basic-foundation-app/app/main.kira"));
+    try std.testing.expectError(error.LibraryTargetCannotBeStartedInLiveMode, resolveLiveTarget(arena.allocator(), "../ui-foundation"));
 }

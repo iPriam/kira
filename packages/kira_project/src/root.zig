@@ -1,10 +1,14 @@
 pub const Project = @import("project.zig").Project;
 pub const ResolvedProject = @import("project.zig").ResolvedProject;
 pub const ResolvedPackageRoot = @import("project.zig").ResolvedPackageRoot;
+pub const ResolvedTarget = @import("project.zig").ResolvedTarget;
+pub const TargetKind = @import("project.zig").TargetKind;
+pub const CommandMode = @import("project.zig").CommandMode;
 pub const Workspace = @import("workspace.zig").Workspace;
 pub const loadProjectFromFile = @import("package_discovery.zig").loadProjectFromFile;
 pub const loadProjectFromPath = @import("package_discovery.zig").loadProjectFromPath;
 pub const loadPackageRootFromPath = @import("package_discovery.zig").loadPackageRootFromPath;
+pub const resolveTargetFromPath = @import("package_discovery.zig").resolveTargetFromPath;
 pub const manifest_file_name = @import("package_discovery.zig").manifest_file_name;
 pub const preferred_manifest_file_name = @import("package_discovery.zig").preferred_manifest_file_name;
 pub const legacy_manifest_file_name = @import("package_discovery.zig").legacy_manifest_file_name;

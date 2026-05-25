@@ -1,5 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const diag_messages = @import("kira_diagnostic_messages");
+const diagnostics = @import("kira_diagnostics");
 const live = @import("root.zig");
 const model = @import("model.zig");
 const native = @import("kira_native_lib_definition");
@@ -8,13 +10,13 @@ const protocol = @import("protocol.zig");
 pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: anytype, stderr: anytype) !void {
     const parsed = try parseArgs(args);
     if (parsed.mode == .runners_list) {
-        const target = try live.resolveLiveTarget(allocator, parsed.input_path);
+        const target = try resolveTargetOrDiagnose(allocator, parsed.input_path, stderr);
         try stdout.writeAll("desktop-dynamic-host\nxcode-macos\nxcode-ios\n");
         try stdout.print("target {s}\nvalidation {s}\n", .{ target.target_root, target.validation_app_root });
         return;
     }
     if (parsed.mode == .runners_clean) {
-        const target = try live.resolveLiveTarget(allocator, parsed.input_path);
+        const target = try resolveTargetOrDiagnose(allocator, parsed.input_path, stderr);
         const runners_root = try std.fs.path.join(allocator, &.{ target.output_root, "runners" });
         _ = std.Io.Dir.cwd().deleteTree(std.Options.debug_io, runners_root) catch {};
         const server_root = try std.fs.path.join(allocator, &.{ target.output_root, "server" });
@@ -23,10 +25,14 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
         return;
     }
 
-    const target = try live.resolveLiveTarget(allocator, parsed.input_path);
+    const target = try resolveTargetOrDiagnose(allocator, parsed.input_path, stderr);
     const developer_dir = if (parsed.kind == .xcode_macos or parsed.kind == .xcode_ios) try discoverXcodeDeveloperDir(allocator) else null;
     const selector = try runnerSelector(allocator, parsed.kind);
     const bundles = live.buildBundles(allocator, target, selector, parsed.kind != .desktop_dynamic_host) catch |err| switch (err) {
+        error.LiveBundleBuildFailed => {
+            try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.liveBundleBuildFailed(allocator, parsed.input_path));
+            return error.CommandFailed;
+        },
         error.IPhoneOSSdkUnavailable => {
             if (parsed.kind == .xcode_ios) {
                 const blocked = try generateBlockedAppleRunnerArtifacts(allocator, .ios, target);
@@ -56,7 +62,13 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
             return err;
         },
     };
-    const runner = try generateRunnerArtifacts(allocator, parsed.kind, target, bundles, parsed);
+    const runner = generateRunnerArtifacts(allocator, parsed.kind, target, bundles, parsed) catch |err| switch (err) {
+        error.ExternalCommandFailed => {
+            try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.liveBundleBuildFailed(allocator, parsed.input_path));
+            return error.CommandFailed;
+        },
+        else => return err,
+    };
     if (parsed.mode == .runners_build) {
         try stdout.print("built {s}\n", .{runner.runner_dir});
         return;
@@ -79,6 +91,57 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
             };
             return error.CommandFailed;
         },
+    }
+}
+
+fn resolveTargetOrDiagnose(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    stderr: anytype,
+) !live.ResolvedLiveTarget {
+    return live.resolveLiveTarget(allocator, input_path) catch |err| switch (err) {
+        error.InvalidProjectPath => {
+            try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.invalidProjectPath(allocator, input_path));
+            return error.CommandFailed;
+        },
+        error.ProjectManifestNotFound => {
+            try renderStandaloneDiagnostic(stderr, try diag_messages.PackageMessages.missingProjectManifest(allocator, input_path));
+            return error.CommandFailed;
+        },
+        error.LibraryTargetCannotBeStartedInLiveMode => {
+            try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.libraryTargetCannotBeStartedInLiveMode(allocator, input_path));
+            return error.CommandFailed;
+        },
+        error.TargetNotLiveCapable => {
+            try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.commandRequiresLiveCapableTarget(allocator, "source_file"));
+            return error.CommandFailed;
+        },
+        error.ProjectEntrypointNotFound => {
+            try renderStandaloneDiagnostic(stderr, try diag_messages.PackageMessages.missingSourceFile(allocator, input_path));
+            return error.CommandFailed;
+        },
+        else => return err,
+    };
+}
+
+fn renderStandaloneDiagnostic(stderr: anytype, item: diagnostics.Diagnostic) !void {
+    const items = [_]diagnostics.Diagnostic{item};
+    for (&items) |diag| {
+        const severity = switch (diag.severity) {
+            .@"error" => "error",
+            .warning => "warning",
+            .note => "note",
+        };
+        if (diag.code) |code| {
+            try stderr.print("{s}[{s}]: {s}\n", .{ severity, code, diag.title });
+        } else {
+            try stderr.print("{s}: {s}\n", .{ severity, diag.title });
+        }
+        try stderr.print("  {s}\n", .{diag.message});
+        if (diag.domain) |domain| try stderr.print("  domain: {s}\n", .{domain});
+        if (diag.phase) |phase| try stderr.print("  phase: {s}\n", .{phase});
+        for (diag.notes) |note| try stderr.print("  note: {s}\n", .{note});
+        if (diag.help) |help| try stderr.print("  help: {s}\n", .{help});
     }
 }
 
@@ -238,7 +301,7 @@ fn generateXcodeProject(
         \\        return kira_live_runner_entry([path UTF8String]);
         \\    }}
         \\}}
-        ,
+    ,
         .{},
     ));
 
@@ -771,7 +834,7 @@ fn infoPlist(allocator: std.mem.Allocator, platform: XcodePlatform, name: []cons
             \\  <key>NSHighResolutionCapable</key><true/>
             \\</dict>
             \\</plist>
-            ,
+        ,
             .{ name, name },
         ),
         .ios => std.fmt.allocPrint(
@@ -790,7 +853,7 @@ fn infoPlist(allocator: std.mem.Allocator, platform: XcodePlatform, name: []cons
             \\  <key>LSRequiresIPhoneOS</key><true/>
             \\</dict>
             \\</plist>
-            ,
+        ,
             .{ name, name },
         ),
     };

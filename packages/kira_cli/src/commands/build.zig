@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_pkg = @import("kira_build");
 const build_def = @import("kira_build_definition");
+const diag_messages = @import("kira_diagnostic_messages");
 const diagnostics = @import("kira_diagnostics");
 const package_manager = @import("kira_package_manager");
 const support = @import("../support.zig");
@@ -9,10 +10,21 @@ const support = @import("../support.zig");
 pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: anytype, stderr: anytype) !void {
     const parsed = try parseArgs(args);
     build_pkg.setTimingsEnabled(parsed.timings or timingsEnvEnabled());
-    const input = try support.resolveCommandInput(allocator, parsed.input_path);
+    const input = support.resolveCliInput(allocator, parsed.input_path) catch |err| switch (err) {
+        error.InvalidProjectPath => {
+            try support.renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.invalidProjectPath(allocator, parsed.input_path));
+            return error.CommandFailed;
+        },
+        error.ProjectManifestNotFound => {
+            try support.renderStandaloneDiagnostic(stderr, try diag_messages.PackageMessages.missingProjectManifest(allocator, parsed.input_path));
+            return error.CommandFailed;
+        },
+        else => return err,
+    };
+    try support.validateTargetSelection(allocator, stderr, .build, input);
     const backend = parsed.backend orelse input.default_backend orelse .vm;
 
-    if (input.project_root) |project_root| {
+    if (input.target.root_path) |project_root| {
         var package_diagnostics = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
         _ = package_manager.syncProject(allocator, project_root, support.versionString(), .{
             .offline = parsed.offline,
@@ -26,25 +38,40 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
         };
     }
 
-    try support.logFrontendStarted(stderr, "build", input.source_path);
-    const output_root = try support.outputRoot(allocator, input.project_root);
+    if (input.target.target_kind == .library) {
+        const source_root = input.target.source_root.?;
+        try support.logFrontendStarted(stderr, "build", source_root);
+        var system = build_pkg.BuildSystem.init(allocator);
+        const result = try system.checkPackageRoot(source_root);
+        if (diagnostics.hasErrors(result.diagnostics)) {
+            try support.logFrontendFailed(stderr, result.failure_stage, source_root, result.diagnostics.len);
+            try support.renderDiagnostics(stderr, &result.source, result.diagnostics);
+            return error.CommandFailed;
+        }
+        try stdout.print("built library {s}\n", .{source_root});
+        return;
+    }
+
+    const source_path = input.target.source_path.?;
+    try support.logFrontendStarted(stderr, "build", source_path);
+    const output_root = try support.outputRoot(allocator, input.target.root_path);
     defer allocator.free(output_root);
     try support.ensurePath(output_root);
     const output_path = try defaultOutputPath(
         allocator,
         output_root,
-        input.project_name orelse std.fs.path.stem(input.source_path),
+        input.target.project_name orelse std.fs.path.stem(source_path),
         backend,
     );
 
     var system = build_pkg.BuildSystem.init(allocator);
     const result = try system.build(.{
-        .source_path = input.source_path,
+        .source_path = source_path,
         .output_path = output_path,
         .target = .{ .execution = backend },
     });
     if (result.failed()) {
-        try support.logBuildAborted(stderr, "build", result.failure_kind.?, input.source_path);
+        try support.logBuildAborted(stderr, "build", result.failure_kind.?, source_path);
         if (result.source) |source| {
             try support.renderDiagnostics(stderr, &source, result.diagnostics);
         }

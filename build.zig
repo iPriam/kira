@@ -18,6 +18,7 @@ const packages = [_]Package{
     .{ .name = "kira_toolchain", .path = "packages/kira_toolchain/src/root.zig", .imports = &.{} },
     .{ .name = "kira_source", .path = "packages/kira_source/src/root.zig", .imports = &.{"kira_core"} },
     .{ .name = "kira_diagnostics", .path = "packages/kira_diagnostics/src/root.zig", .imports = &.{ "kira_core", "kira_source" } },
+    .{ .name = "kira_diagnostic_messages", .path = "packages/kira_diagnostic_messages/src/root.zig", .imports = &.{ "kira_diagnostics", "kira_source" } },
     .{ .name = "kira_log", .path = "packages/kira_log/src/root.zig", .imports = &.{"kira_core"} },
     .{ .name = "kira_runtime_abi", .path = "packages/kira_runtime_abi/src/root.zig", .imports = &.{"kira_core"} },
     .{ .name = "kira_syntax_model", .path = "packages/kira_syntax_model/src/root.zig", .imports = &.{ "kira_core", "kira_source" } },
@@ -46,14 +47,14 @@ const packages = [_]Package{
     .{ .name = "kira_package_manager", .path = "packages/kira_package_manager/src/root.zig", .imports = &.{ "kira_manifest", "kira_diagnostics", "kira_toolchain" } },
     .{ .name = "kira_program_graph", .path = "packages/kira_program_graph/src/root.zig", .imports = &.{ "kira_source", "kira_diagnostics", "kira_syntax_model", "kira_lexer", "kira_parser", "kira_package_manager" } },
     .{ .name = "kira_build_definition", .path = "packages/kira_build_definition/src/root.zig", .imports = &.{ "kira_core", "kira_native_lib_definition" } },
-    .{ .name = "kira_build", .path = "packages/kira_build/src/root.zig", .imports = &.{ "kira_core", "kira_source", "kira_diagnostics", "kira_syntax_model", "kira_lexer", "kira_parser", "kira_semantics", "kira_ir", "kira_bytecode", "kira_vm_runtime", "kira_manifest", "kira_project", "kira_package_manager", "kira_program_graph", "kira_build_definition", "kira_backend_api", "kira_native_lib_definition", "kira_hybrid_definition", "kira_runtime_abi", "kira_llvm_backend", "kira_llvm_toolchain_layout", "kira_toolchain", "kira_ksl_syntax_model", "kira_ksl_parser", "kira_ksl_semantics", "kira_shader_ir", "kira_shader_model", "kira_glsl_backend" } },
+    .{ .name = "kira_build", .path = "packages/kira_build/src/root.zig", .imports = &.{ "kira_core", "kira_source", "kira_diagnostics", "kira_diagnostic_messages", "kira_syntax_model", "kira_lexer", "kira_parser", "kira_semantics", "kira_ir", "kira_bytecode", "kira_vm_runtime", "kira_manifest", "kira_project", "kira_package_manager", "kira_program_graph", "kira_build_definition", "kira_backend_api", "kira_native_lib_definition", "kira_hybrid_definition", "kira_runtime_abi", "kira_llvm_backend", "kira_llvm_toolchain_layout", "kira_toolchain", "kira_ksl_syntax_model", "kira_ksl_parser", "kira_ksl_semantics", "kira_shader_ir", "kira_shader_model", "kira_glsl_backend" } },
     .{ .name = "kira_instruments", .path = "packages/kira_instruments/src/root.zig", .imports = &.{} },
     .{ .name = "kira_linter", .path = "packages/kira_linter/src/root.zig", .imports = &.{ "kira_core", "kira_diagnostics", "kira_parser", "kira_semantics" } },
     .{ .name = "kira_doc", .path = "packages/kira_doc/src/root.zig", .imports = &.{ "kira_core", "kira_parser", "kira_semantics" } },
     .{ .name = "kira_app_generation", .path = "packages/kira_app_generation/src/root.zig", .imports = &.{"kira_core"} },
     .{ .name = "kira_main", .path = "packages/kira_main/src/root.zig", .imports = &.{ "kira_core", "kira_runtime_abi", "kira_hybrid_definition", "kira_bytecode", "kira_vm_runtime", "kira_native_bridge", "kira_hybrid_runtime" } },
-    .{ .name = "kira_live", .path = "packages/kira_live/src/root.zig", .imports = &.{ "kira_build", "kira_build_definition", "kira_diagnostics", "kira_hybrid_definition", "kira_hybrid_runtime", "kira_ir", "kira_llvm_backend", "kira_manifest", "kira_native_lib_definition", "kira_package_manager", "kira_project" } },
-    .{ .name = "kira_cli", .path = "packages/kira_cli/src/main.zig", .imports = &.{ "kira_core", "kira_source", "kira_diagnostics", "kira_syntax_model", "kira_lexer", "kira_parser", "kira_semantics", "kira_ir", "kira_bytecode", "kira_vm_runtime", "kira_build", "kira_build_definition", "kira_hybrid_runtime", "kira_runtime_abi", "kira_app_generation", "kira_live", "kira_log", "kira_toolchain", "kira_project", "kira_package_manager", "kira_manifest", "kira_ksl_syntax_model", "kira_instruments" } },
+    .{ .name = "kira_live", .path = "packages/kira_live/src/root.zig", .imports = &.{ "kira_build", "kira_build_definition", "kira_diagnostics", "kira_diagnostic_messages", "kira_hybrid_definition", "kira_hybrid_runtime", "kira_ir", "kira_llvm_backend", "kira_manifest", "kira_native_lib_definition", "kira_package_manager", "kira_project" } },
+    .{ .name = "kira_cli", .path = "packages/kira_cli/src/main.zig", .imports = &.{ "kira_core", "kira_source", "kira_diagnostics", "kira_diagnostic_messages", "kira_syntax_model", "kira_lexer", "kira_parser", "kira_semantics", "kira_ir", "kira_bytecode", "kira_vm_runtime", "kira_build", "kira_build_definition", "kira_hybrid_runtime", "kira_runtime_abi", "kira_app_generation", "kira_live", "kira_log", "kira_toolchain", "kira_project", "kira_package_manager", "kira_manifest", "kira_ksl_syntax_model", "kira_instruments" } },
 };
 
 fn applyImports(module: *std.Build.Module, modules: *std.StringArrayHashMapUnmanaged(*std.Build.Module), names: []const []const u8) void {
@@ -241,11 +242,17 @@ pub fn build(b: *std.Build) void {
     const live_desktop_step = b.step("live-desktop-runner", "Build the generic desktop live runner executable");
     live_desktop_step.dependOn(&install_live_desktop_runner.step);
 
+    const cli_matrix_cmd = b.addSystemCommand(&.{ "python3", "tests/cli_matrix.py" });
+    cli_matrix_cmd.step.dependOn(b.getInstallStep());
+    const cli_matrix_step = b.step("cli-matrix", "Run the discovered sibling-project CLI matrix");
+    cli_matrix_step.dependOn(&cli_matrix_cmd.step);
+
     const test_step = b.step("test", "Run package tests");
     const test_roots = [_][]const u8{
         "kira_toolchain",
         "kira_lexer",
         "kira_diagnostics",
+        "kira_diagnostic_messages",
         "kira_parser",
         "kira_semantics",
         "kira_shader_model",

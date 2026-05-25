@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build = @import("kira_build");
 const build_def = @import("kira_build_definition");
+const diag_messages = @import("kira_diagnostic_messages");
 const diagnostics = @import("kira_diagnostics");
 const kira_log = @import("kira_log");
 const kira_project = @import("kira_project");
@@ -71,9 +72,16 @@ pub fn renderStandaloneDiagnostics(stderr: anytype, items: []const diagnostics.D
             try stderr.print("{s}: {s}\n", .{ severity, item.title });
         }
         try stderr.print("  {s}\n", .{item.message});
+        if (item.domain) |domain| try stderr.print("  domain: {s}\n", .{domain});
+        if (item.phase) |phase| try stderr.print("  phase: {s}\n", .{phase});
         for (item.notes) |note| try stderr.print("  note: {s}\n", .{note});
         if (item.help) |help| try stderr.print("  help: {s}\n", .{help});
     }
+}
+
+pub fn renderStandaloneDiagnostic(stderr: anytype, item: diagnostics.Diagnostic) !void {
+    const items = [_]diagnostics.Diagnostic{item};
+    try renderStandaloneDiagnostics(stderr, &items);
 }
 
 pub fn logFrontendStarted(stderr: anytype, command: []const u8, path: []const u8) !void {
@@ -132,11 +140,20 @@ pub fn logInternalCompilerError(stderr: anytype, err_name: []const u8) !void {
 }
 
 pub fn renderInternalCompilerError(stderr: anytype, err_name: []const u8) !void {
-    try stderr.writeAll("error[KICE001]: internal compiler error\n");
-    try stderr.writeAll("  Kira hit an unexpected internal failure and stopped before it could finish the command.\n");
-    try stderr.print("  note: internal error = {s}\n", .{err_name});
-    try stderr.writeAll("  help: Please report this bug with the command you ran and the source file that triggered it.\n");
+    try renderStandaloneDiagnostic(
+        stderr,
+        try diag_messages.CompilerBugMessages.genericInternalCompilerError(std.heap.page_allocator, err_name),
+    );
 }
+
+pub const ResolvedCliInput = struct {
+    target: kira_project.ResolvedTarget,
+    default_backend: ?build_def.ExecutionTarget = null,
+
+    pub fn displayPath(self: ResolvedCliInput) []const u8 {
+        return self.target.source_root orelse self.target.displayPath();
+    }
+};
 
 pub const ResolvedCommandInput = struct {
     source_path: []const u8,
@@ -145,78 +162,77 @@ pub const ResolvedCommandInput = struct {
     default_backend: ?build_def.ExecutionTarget = null,
 };
 
-pub const ResolvedCheckInput = union(enum) {
-    application: ResolvedCommandInput,
-    library: struct {
-        root_path: []const u8,
-        source_root: []const u8,
-        project_name: []const u8,
-        default_backend: ?build_def.ExecutionTarget = null,
-    },
-};
-
 pub fn defaultCommandInputPath() []const u8 {
     return ".";
 }
 
-pub fn resolveCommandInput(allocator: std.mem.Allocator, path: []const u8) !ResolvedCommandInput {
-    const base = std.fs.path.basename(path);
-    if (std.mem.eql(u8, base, kira_project.preferred_manifest_file_name) or
-        std.mem.eql(u8, base, kira_project.legacy_manifest_file_name) or
-        std.mem.eql(u8, base, "Kira.toml") or
-        directoryExists(path))
-    {
-        const resolved = try kira_project.loadProjectFromPath(allocator, path);
-        return .{
-            .source_path = resolved.entrypoint_path,
-            .project_root = resolved.root_path,
-            .project_name = resolved.project.manifest.name,
-            .default_backend = try parseExecutionTarget(resolved.project.manifest.execution_mode),
-        };
-    }
-
-    if (fileExists(path)) {
-        return .{
-            .source_path = try std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, path, allocator),
-            .project_name = std.fs.path.stem(path),
-        };
-    }
-
-    return error.InvalidArguments;
+pub fn resolveCliInput(allocator: std.mem.Allocator, path: []const u8) !ResolvedCliInput {
+    const target = try kira_project.resolveTargetFromPath(allocator, path);
+    const default_backend = if (target.project) |project|
+        try parseExecutionTarget(project.manifest.execution_mode)
+    else
+        null;
+    return .{
+        .target = target,
+        .default_backend = default_backend,
+    };
 }
 
-pub fn resolveCheckInput(allocator: std.mem.Allocator, path: []const u8) !ResolvedCheckInput {
-    const base = std.fs.path.basename(path);
-    if (std.mem.eql(u8, base, kira_project.preferred_manifest_file_name) or
-        std.mem.eql(u8, base, kira_project.legacy_manifest_file_name) or
-        std.mem.eql(u8, base, "Kira.toml") or
-        directoryExists(path))
-    {
-        const resolved = try kira_project.loadPackageRootFromPath(allocator, path);
-        if (resolved.entrypoint_path) |entrypoint_path| {
-            return .{ .application = .{
-                .source_path = entrypoint_path,
-                .project_root = resolved.root_path,
-                .project_name = resolved.project.manifest.name,
-                .default_backend = try parseExecutionTarget(resolved.project.manifest.execution_mode),
-            } };
-        }
-        return .{ .library = .{
-            .root_path = resolved.root_path,
-            .source_root = resolved.module_source_root,
-            .project_name = resolved.project.manifest.name,
-            .default_backend = try parseExecutionTarget(resolved.project.manifest.execution_mode),
-        } };
-    }
+pub fn resolveCommandInput(allocator: std.mem.Allocator, path: []const u8) !ResolvedCommandInput {
+    const input = try resolveCliInput(allocator, path);
+    const source_path = input.target.source_path orelse return error.ProjectEntrypointNotFound;
+    return .{
+        .source_path = source_path,
+        .project_root = input.target.root_path,
+        .project_name = input.target.project_name,
+        .default_backend = input.default_backend,
+    };
+}
 
-    if (fileExists(path)) {
-        return .{ .application = .{
-            .source_path = try std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, path, allocator),
-            .project_name = std.fs.path.stem(path),
-        } };
+pub fn validateTargetSelection(
+    allocator: std.mem.Allocator,
+    stderr: anytype,
+    command: kira_project.CommandMode,
+    input: ResolvedCliInput,
+) !void {
+    switch (command) {
+        .check, .build => {
+            if (input.target.target_kind != .library and input.target.source_path == null) {
+                if (input.target.root_path) |root| {
+                    try renderStandaloneDiagnostic(stderr, try diag_messages.PackageMessages.missingSourceFile(allocator, root));
+                    return error.CommandFailed;
+                }
+            }
+        },
+        .run => {
+            if (input.target.target_kind == .library) {
+                try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.libraryTargetCannotBeRun(allocator, input.target.displayPath()));
+                return error.CommandFailed;
+            }
+            if (!input.target.canRun()) {
+                if (input.target.root_path) |root| {
+                    try renderStandaloneDiagnostic(stderr, try diag_messages.PackageMessages.missingSourceFile(allocator, root));
+                } else {
+                    try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.commandRequiresRunnableTarget(allocator, "run", input.target.kindName()));
+                }
+                return error.CommandFailed;
+            }
+        },
+        .live => {
+            if (input.target.target_kind == .library) {
+                try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.libraryTargetCannotBeStartedInLiveMode(allocator, input.target.displayPath()));
+                return error.CommandFailed;
+            }
+            if (!input.target.canLive()) {
+                if (input.target.root_path) |root| {
+                    try renderStandaloneDiagnostic(stderr, try diag_messages.PackageMessages.missingSourceFile(allocator, root));
+                } else {
+                    try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.commandRequiresLiveCapableTarget(allocator, input.target.kindName()));
+                }
+                return error.CommandFailed;
+            }
+        },
     }
-
-    return error.InvalidArguments;
 }
 
 pub fn parseExecutionTarget(text: []const u8) !build_def.ExecutionTarget {

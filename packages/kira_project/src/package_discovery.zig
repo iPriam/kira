@@ -3,6 +3,8 @@ const manifest = @import("kira_manifest");
 const Project = @import("project.zig").Project;
 const ResolvedProject = @import("project.zig").ResolvedProject;
 const ResolvedPackageRoot = @import("project.zig").ResolvedPackageRoot;
+const ResolvedTarget = @import("project.zig").ResolvedTarget;
+const TargetKind = @import("project.zig").TargetKind;
 
 pub const preferred_manifest_file_name = "kira.toml";
 pub const legacy_manifest_file_name = "project.toml";
@@ -53,8 +55,44 @@ pub fn loadPackageRootFromPath(allocator: std.mem.Allocator, path: []const u8) !
     };
 }
 
+pub fn resolveTargetFromPath(allocator: std.mem.Allocator, path: []const u8) !ResolvedTarget {
+    const base = std.fs.path.basename(path);
+    if (std.mem.eql(u8, base, preferred_manifest_file_name) or
+        std.mem.eql(u8, base, legacy_manifest_file_name) or
+        std.mem.eql(u8, base, repo_manifest_file_name) or
+        directoryExists(path))
+    {
+        const resolved = try loadPackageRootFromPath(allocator, path);
+        const target_kind: TargetKind = switch (resolved.project.manifest.kind) {
+            .library => .library,
+            .app => if (isExampleRoot(resolved.root_path)) .example else .executable,
+        };
+        return .{
+            .root_path = resolved.root_path,
+            .manifest_path = resolved.manifest_path,
+            .source_path = resolved.entrypoint_path,
+            .source_root = resolved.module_source_root,
+            .project_name = resolved.project.manifest.name,
+            .project = resolved.project,
+            .package_kind = resolved.project.manifest.kind,
+            .target_kind = target_kind,
+        };
+    }
+
+    if (fileExists(path)) {
+        return .{
+            .source_path = try std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, path, allocator),
+            .project_name = std.fs.path.stem(path),
+            .target_kind = .source_file,
+        };
+    }
+
+    return error.InvalidProjectPath;
+}
+
 fn resolveRootPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     if (isManifestPath(path)) {
+        if (!fileExists(path)) return error.InvalidProjectPath;
         const directory = std.fs.path.dirname(path) orelse ".";
         return absolutize(allocator, directory);
     }
@@ -63,7 +101,7 @@ fn resolveRootPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
         return absolutize(allocator, path);
     }
 
-    return error.ProjectManifestNotFound;
+    return error.InvalidProjectPath;
 }
 
 fn discoverManifestPath(allocator: std.mem.Allocator, root_path: []const u8) !?[]u8 {
@@ -86,6 +124,13 @@ fn isManifestPath(path: []const u8) bool {
 fn absolutize(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(path)) return allocator.dupe(u8, path);
     return std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, path, allocator);
+}
+
+fn isExampleRoot(path: []const u8) bool {
+    return std.mem.indexOf(u8, path, "/examples/") != null or
+        std.mem.endsWith(u8, path, "/examples") or
+        std.mem.indexOf(u8, path, "/Examples/") != null or
+        std.mem.endsWith(u8, path, "/Examples");
 }
 
 fn moduleSourceRoot(allocator: std.mem.Allocator, root_path: []const u8) ![]u8 {

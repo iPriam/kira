@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const diag_messages = @import("kira_diagnostic_messages");
 const source_pkg = @import("kira_source");
 const diagnostics = @import("kira_diagnostics");
 const lexer = @import("kira_lexer");
@@ -71,6 +72,17 @@ pub const FrontendStage = enum {
     ir,
     backend_prepare,
 };
+
+fn compilerPhaseForStage(stage: FrontendStage) diag_messages.CompilerPhase {
+    return switch (stage) {
+        .lexer => .parser,
+        .parser => .parser,
+        .graph => .graph,
+        .semantics => .semantics,
+        .ir => .lowering,
+        .backend_prepare => .backend_prepare,
+    };
+}
 
 pub const LexPipelineResult = struct {
     source: source_pkg.SourceFile,
@@ -159,17 +171,10 @@ fn diagnosticsOwnedOrFallback(
     stage: FrontendStage,
 ) ![]const diagnostics.Diagnostic {
     if (diags.items.len == 0) {
-        try diags.append(.{
-            .severity = .@"error",
-            .code = "KICE002",
-            .title = "compiler stage failed without a diagnostic",
-            .message = try std.fmt.allocPrint(
-                allocator,
-                "Kira stopped during the {s} stage without reporting a normal diagnostic.",
-                .{@tagName(stage)},
-            ),
-            .help = "This is a compiler bug. Please report the command and source file that triggered it.",
-        });
+        try diags.append(try diag_messages.CompilerBugMessages.stageFailedWithoutDiagnostic(
+            allocator,
+            compilerPhaseForStage(stage),
+        ));
     }
     return diags.toOwnedSlice();
 }
@@ -271,13 +276,7 @@ pub fn compileFileToIrForTarget(
     const ir_start = nowNs();
     const ir_program = ir.lowerProgram(allocator, hir) catch |err| switch (err) {
         error.UnsupportedExecutableFeature, error.UnsupportedType => {
-            try diags.append(.{
-                .severity = .@"error",
-                .code = "KIR001",
-                .title = "feature is not executable in the current backend pipeline",
-                .message = "This program uses language constructs that are not yet lowered into the shared executable IR.",
-                .help = "Use `kirac check` to validate the frontend shape, or stay within the currently executable subset for `run` and `build`.",
-            });
+            try diags.append(diag_messages.BackendMessages.unsupportedExecutableFeature());
             timingPrint("[kira:timing] ir.lowerProgram path={s} ns={d}\n", .{ parsed.source.path, elapsedNs(ir_start) });
             timingPrint("[kira:timing] compileFileToIr.total path={s} ns={d}\n", .{ path, elapsedNs(total_start) });
             return .{
@@ -586,59 +585,13 @@ fn mergeNativeLibraries(
 
 pub fn backendDiagnostic(allocator: std.mem.Allocator, source_path: []const u8, err: anyerror) !diagnostics.Diagnostic {
     return switch (err) {
-        error.NativeFunctionInVmBuild => .{
-            .severity = .@"error",
-            .code = "KBUILD001",
-            .title = "native code requires a native-capable backend",
-            .message = "This program contains @Native functions, but the selected backend only supports runtime execution.",
-            .help = try std.fmt.allocPrint(
-                allocator,
-                "Use `kira build --backend hybrid {s}` for mixed @Runtime/@Native programs, or `kira build --backend llvm {s}` for fully native output.",
-                .{ source_path, source_path },
-            ),
-        },
-        error.LlvmToolchainUnavailable => .{
-            .severity = .@"error",
-            .code = "KBUILD002",
-            .title = "LLVM backend is unavailable",
-            .message = "Kira could not start the native toolchain because LLVM is not available in this build.",
-            .help = "Set KIRA_LLVM_HOME or run `kira-bootstrapper fetch-llvm` to install the pinned LLVM toolchain.",
-        },
-        error.RuntimeEntrypointInNativeBuild => .{
-            .severity = .@"error",
-            .code = "KBUILD003",
-            .title = "native build cannot start from a runtime entrypoint",
-            .message = "The selected native backend needs a native entrypoint, but @Main resolves to runtime execution.",
-            .help = "Use the VM or hybrid backend, or mark the entry function with @Native.",
-        },
-        error.RuntimeCallInNativeBuild => .{
-            .severity = .@"error",
-            .code = "KBUILD004",
-            .title = "native build depends on runtime-only code",
-            .message = "The selected native backend encountered a call that still requires the runtime.",
-            .help = "Use the hybrid backend for mixed execution, or move the called function to @Native.",
-        },
-        error.HybridBuildRequiresExplicitExecution => .{
-            .severity = .@"error",
-            .code = "KBUILD005",
-            .title = "hybrid build needs explicit execution annotations",
-            .message = "A hybrid build can only package functions that are explicitly marked with @Runtime or @Native.",
-            .help = "Annotate each reachable function with @Runtime or @Native.",
-        },
-        error.UnsupportedExecutableFeature, error.UnsupportedType => .{
-            .severity = .@"error",
-            .code = "KIR001",
-            .title = "feature is not executable in the current backend pipeline",
-            .message = "This program uses language constructs that are not yet supported by the selected backend preparation stage.",
-            .help = "Use a different backend if available, or stay within the currently executable subset for `check`, `build`, and `run`.",
-        },
-        else => .{
-            .severity = .@"error",
-            .code = "KBUILD999",
-            .title = "toolchain build failed",
-            .message = try std.fmt.allocPrint(allocator, "Kira hit a toolchain failure while preparing this program ({s}).", .{@errorName(err)}),
-            .help = "Check the toolchain setup and try the command again.",
-        },
+        error.NativeFunctionInVmBuild => try diag_messages.BackendMessages.nativeCodeRequiresNativeBackend(allocator, source_path),
+        error.LlvmToolchainUnavailable => diag_messages.ToolchainMessages.missingLlvmToolchain(),
+        error.RuntimeEntrypointInNativeBuild => diag_messages.BackendMessages.runtimeEntrypointInNativeBuild(),
+        error.RuntimeCallInNativeBuild => diag_messages.BackendMessages.runtimeCallInNativeBuild(),
+        error.HybridBuildRequiresExplicitExecution => diag_messages.BackendMessages.hybridBuildRequiresExplicitExecution(),
+        error.UnsupportedExecutableFeature, error.UnsupportedType => diag_messages.BackendMessages.unsupportedExecutableFeature(),
+        else => try diag_messages.ToolchainMessages.invalidToolchainActivation(allocator, @errorName(err)),
     };
 }
 
@@ -757,13 +710,7 @@ pub fn checkPackageRoot(allocator: std.mem.Allocator, source_root: []const u8) !
     if (module_files.len == 0) {
         const source = try source_pkg.SourceFile.initOwned(allocator, source_root, "");
         const diags = try allocator.alloc(diagnostics.Diagnostic, 1);
-        diags[0] = .{
-            .severity = .@"error",
-            .code = "KPROJECT002",
-            .title = "library has no source files",
-            .message = "Kira could not find any `.kira` source files in this package's canonical `app/` source root.",
-            .help = "Add library source files under the package `app/` directory.",
-        };
+        diags[0] = try diag_messages.PackageMessages.noBuildableTarget(allocator, source_root);
         timingPrint("[kira:timing] checkPackageRoot.total source_root={s} reached_ir=false reached_bytecode=false reached_llvm=false ns={d}\n", .{ source_root, elapsedNs(total_start) });
         return .{
             .source = source,
@@ -939,7 +886,7 @@ test "check reaches backend preparation for selected backend" {
 
     try std.testing.expect(result.failed());
     try std.testing.expectEqual(FrontendStage.backend_prepare, result.failure_stage.?);
-    try std.testing.expectEqualStrings("KBUILD001", result.diagnostics[0].code.?);
+    try std.testing.expectEqualStrings("KBE001", result.diagnostics[0].code.?);
 }
 
 test "built-in Foundation resolves before installed package conflicts" {
