@@ -11,6 +11,9 @@ const runtime_abi = @import("kira_runtime_abi");
 const vm_runtime = @import("kira_vm_runtime");
 const support = @import("../support.zig");
 
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
 pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: anytype, stderr: anytype) !void {
     const parsed = try parseArgs(args);
     build.setTimingsEnabled(parsed.timings or timingsEnvEnabled());
@@ -83,16 +86,23 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
                 defer dir.close(std.Options.debug_io);
                 try std.process.setCurrentDir(std.Options.debug_io, dir);
             }
+            const graphics_quit_after = graphicsQuitAfterFrames(parsed.quit_after_ns);
+            var env_restore = try ScopedEnv.setInt(allocator, "KIRA_GRAPHICS_QUIT_AFTER_FRAMES", graphics_quit_after);
+            defer env_restore.deinit();
             try vm.runMain(&module, stdout);
             if (runtimeMemoryReportEnabled()) vm.emitMemoryReport("vm");
             if (runtimeMemoryDetailEnabled()) vm.emitMemoryDetail();
         },
         .llvm_native => {
             const executable = findExecutable(result.artifacts) orelse return error.MissingExecutableArtifact;
-            try runExecutable(allocator, executable.path, input.target.root_path, parsed.trace_execution, stdout, stderr);
+            try runExecutable(allocator, executable.path, input.target.root_path, parsed.trace_execution, parsed.quit_after_ns, stdout, stderr);
         },
         .hybrid => {
             const manifest_artifact = findHybridManifest(result.artifacts) orelse return error.MissingHybridManifestArtifact;
+            if (parsed.quit_after_ns) |duration_ns| {
+                try runHybridArtifactBounded(allocator, manifest_artifact.path, input.target.root_path, duration_ns, stdout, stderr);
+                return;
+            }
             const runtime_allocator = std.heap.smp_allocator;
             const manifest = try hybrid_runtime.loadHybridModule(runtime_allocator, manifest_artifact.path);
             var runtime = try hybrid_runtime.HybridRuntime.init(runtime_allocator, manifest);
@@ -107,6 +117,9 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
                 defer dir.close(std.Options.debug_io);
                 try std.process.setCurrentDir(std.Options.debug_io, dir);
             }
+            const graphics_quit_after = graphicsQuitAfterFrames(parsed.quit_after_ns);
+            var env_restore = try ScopedEnv.setInt(allocator, "KIRA_GRAPHICS_QUIT_AFTER_FRAMES", graphics_quit_after);
+            defer env_restore.deinit();
             runtime.run() catch |err| {
                 if (err == error.RuntimeFailure) {
                     if (runtime.vm.lastError()) |message| {
@@ -122,12 +135,70 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
     }
 }
 
+pub fn executeHybridArtifact(allocator: std.mem.Allocator, args: []const []const u8, stdout: anytype, stderr: anytype) !void {
+    _ = allocator;
+    _ = stdout;
+    const parsed = try parseHybridArtifactArgs(args);
+    const runtime_allocator = std.heap.smp_allocator;
+    const manifest = try hybrid_runtime.loadHybridModule(runtime_allocator, parsed.manifest_path);
+    var runtime = try hybrid_runtime.HybridRuntime.init(runtime_allocator, manifest);
+    defer runtime.deinit();
+    var original_cwd = try std.Io.Dir.cwd().openDir(std.Options.debug_io, ".", .{});
+    defer {
+        if (parsed.cwd) |_| std.process.setCurrentDir(std.Options.debug_io, original_cwd) catch {};
+        original_cwd.close(std.Options.debug_io);
+    }
+    if (parsed.cwd) |cwd| {
+        var dir = try std.Io.Dir.openDirAbsolute(std.Options.debug_io, cwd, .{});
+        defer dir.close(std.Options.debug_io);
+        try std.process.setCurrentDir(std.Options.debug_io, dir);
+    }
+    runtime.run() catch |err| {
+        if (err == error.RuntimeFailure) {
+            if (runtime.vm.lastError()) |message| {
+                try stderr.print("hybrid runtime failure: {s}\n", .{message});
+                return error.CommandFailed;
+            }
+        }
+        return err;
+    };
+}
+
+const HybridArtifactArgs = struct {
+    manifest_path: []const u8,
+    cwd: ?[]const u8 = null,
+};
+
+fn parseHybridArtifactArgs(args: []const []const u8) !HybridArtifactArgs {
+    var manifest_path: ?[]const u8 = null;
+    var cwd: ?[]const u8 = null;
+    var index: usize = 0;
+    while (index < args.len) : (index += 1) {
+        const arg = args[index];
+        if (std.mem.eql(u8, arg, "--manifest")) {
+            index += 1;
+            if (index >= args.len) return error.InvalidArguments;
+            manifest_path = args[index];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--cwd")) {
+            index += 1;
+            if (index >= args.len) return error.InvalidArguments;
+            cwd = args[index];
+            continue;
+        }
+        return error.InvalidArguments;
+    }
+    return .{ .manifest_path = manifest_path orelse return error.InvalidArguments, .cwd = cwd };
+}
+
 const ParsedArgs = struct {
     backend: ?build_def.ExecutionTarget = null,
     offline: bool = false,
     locked: bool = false,
     trace_execution: bool = false,
     timings: bool = false,
+    quit_after_ns: ?u64 = null,
     input_path: []const u8,
 };
 
@@ -137,6 +208,7 @@ fn parseArgs(args: []const []const u8) !ParsedArgs {
     var locked = false;
     var trace_execution = false;
     var timings = false;
+    var quit_after_ns: ?u64 = null;
     var input_path: ?[]const u8 = null;
 
     var index: usize = 0;
@@ -164,6 +236,12 @@ fn parseArgs(args: []const []const u8) !ParsedArgs {
             timings = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--quit-after") or std.mem.eql(u8, arg, "-quit-after")) {
+            index += 1;
+            if (index >= args.len) return error.InvalidArguments;
+            quit_after_ns = parseDurationNs(args[index]) orelse return error.InvalidArguments;
+            continue;
+        }
         if (input_path != null) return error.InvalidArguments;
         input_path = arg;
     }
@@ -174,8 +252,29 @@ fn parseArgs(args: []const []const u8) !ParsedArgs {
         .locked = locked,
         .trace_execution = trace_execution,
         .timings = timings,
+        .quit_after_ns = quit_after_ns,
         .input_path = input_path orelse support.defaultCommandInputPath(),
     };
+}
+
+fn parseDurationNs(value: []const u8) ?u64 {
+    if (std.mem.endsWith(u8, value, "ms")) {
+        const number = value[0 .. value.len - 2];
+        if (number.len == 0) return null;
+        const parsed = std.fmt.parseInt(u64, number, 10) catch return null;
+        if (parsed == 0) return null;
+        return std.math.mul(u64, parsed, std.time.ns_per_ms) catch return null;
+    }
+    if (std.mem.endsWith(u8, value, "s")) {
+        const number = value[0 .. value.len - 1];
+        if (number.len == 0) return null;
+        const parsed = std.fmt.parseInt(u64, number, 10) catch return null;
+        if (parsed == 0) return null;
+        return std.math.mul(u64, parsed, std.time.ns_per_s) catch return null;
+    }
+    const parsed = std.fmt.parseInt(u64, value, 10) catch return null;
+    if (parsed == 0) return null;
+    return std.math.mul(u64, parsed, std.time.ns_per_s) catch return null;
 }
 
 fn timingsEnvEnabled() bool {
@@ -240,9 +339,13 @@ fn runExecutable(
     path: []const u8,
     project_root: ?[]const u8,
     trace_execution: bool,
+    quit_after_ns: ?u64,
     stdout: anytype,
     stderr: anytype,
 ) !void {
+    if (quit_after_ns) |duration_ns| {
+        return runExecutableBounded(allocator, path, project_root, trace_execution, duration_ns, stdout, stderr);
+    }
     const process_environ = inheritedProcessEnviron();
     var io_impl: std.Io.Threaded = .init(std.heap.smp_allocator, .{ .environ = process_environ });
     defer io_impl.deinit();
@@ -293,6 +396,119 @@ fn runExecutable(
     }
     return error.NativeRunFailed;
 }
+
+fn runExecutableBounded(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    project_root: ?[]const u8,
+    trace_execution: bool,
+    quit_after_ns: u64,
+    stdout: anytype,
+    stderr: anytype,
+) !void {
+    _ = stdout;
+    const process_environ = inheritedProcessEnviron();
+    var io_impl: std.Io.Threaded = .init(std.heap.smp_allocator, .{ .environ = process_environ });
+    defer io_impl.deinit();
+    var environ_map = try std.process.Environ.createMap(process_environ, allocator);
+    defer environ_map.deinit();
+    if (trace_execution) try environ_map.put("KIRA_TRACE_EXECUTION", "1");
+    if (graphicsQuitAfterFrames(quit_after_ns)) |frames| {
+        const value = try std.fmt.allocPrint(allocator, "{d}", .{frames});
+        try environ_map.put("KIRA_GRAPHICS_QUIT_AFTER_FRAMES", value);
+    }
+
+    const io = io_impl.io();
+    var child = try std.process.spawn(io, .{
+        .argv = &.{path},
+        .cwd = if (project_root) |root| .{ .path = root } else .inherit,
+        .environ_map = &environ_map,
+        .stdin = .ignore,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    });
+    const grace_ns = 5 * std.time.ns_per_s;
+    try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(quit_after_ns + grace_ns)), .awake);
+    child.kill(io);
+    try stderr.print("native executable quit-after elapsed: {s}\n", .{path});
+}
+
+fn runHybridArtifactBounded(
+    allocator: std.mem.Allocator,
+    manifest_path: []const u8,
+    project_root: ?[]const u8,
+    quit_after_ns: u64,
+    stdout: anytype,
+    stderr: anytype,
+) !void {
+    _ = stdout;
+    const self_exe = try resolveKiracExecutable(allocator);
+    defer allocator.free(self_exe);
+    var argv = std.array_list.Managed([]const u8).init(allocator);
+    try argv.appendSlice(&.{ self_exe, "__run-hybrid-artifact", "--manifest", manifest_path });
+    if (project_root) |root| try argv.appendSlice(&.{ "--cwd", root });
+
+    const process_environ = inheritedProcessEnviron();
+    var io_impl: std.Io.Threaded = .init(std.heap.smp_allocator, .{ .environ = process_environ });
+    defer io_impl.deinit();
+    var environ_map = try std.process.Environ.createMap(process_environ, allocator);
+    defer environ_map.deinit();
+    if (graphicsQuitAfterFrames(quit_after_ns)) |frames| {
+        const value = try std.fmt.allocPrint(allocator, "{d}", .{frames});
+        try environ_map.put("KIRA_GRAPHICS_QUIT_AFTER_FRAMES", value);
+    }
+    const io = io_impl.io();
+    var child = try std.process.spawn(io, .{
+        .argv = argv.items,
+        .cwd = if (project_root) |root| .{ .path = root } else .inherit,
+        .environ_map = &environ_map,
+        .stdin = .ignore,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    });
+    const grace_ns = 5 * std.time.ns_per_s;
+    try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(quit_after_ns + grace_ns)), .awake);
+    child.kill(io);
+    try stderr.print("hybrid runtime quit-after elapsed: {s}\n", .{manifest_path});
+}
+
+fn resolveKiracExecutable(allocator: std.mem.Allocator) ![]const u8 {
+    const toolchain_root = try support.resolveManagedToolchainRoot(allocator);
+    defer allocator.free(toolchain_root);
+    return std.fs.path.join(allocator, &.{ toolchain_root, "bin", support.primaryExecutableName() });
+}
+
+fn graphicsQuitAfterFrames(quit_after_ns: ?u64) ?u64 {
+    const duration_ns = quit_after_ns orelse return null;
+    const frame_ns = std.time.ns_per_s / 60;
+    return @max(1, (duration_ns + frame_ns - 1) / frame_ns);
+}
+
+const ScopedEnv = struct {
+    allocator: std.mem.Allocator,
+    name_z: ?[:0]u8 = null,
+    active: bool = false,
+
+    fn setInt(allocator: std.mem.Allocator, name: []const u8, value: ?u64) !ScopedEnv {
+        const int_value = value orelse return .{ .allocator = allocator };
+        if (!builtin.link_libc) return .{ .allocator = allocator };
+        const name_z = try allocator.dupeZ(u8, name);
+        const text_value = try std.fmt.allocPrint(allocator, "{d}", .{int_value});
+        defer allocator.free(text_value);
+        const value_z = try allocator.dupeZ(u8, text_value);
+        defer allocator.free(value_z);
+        if (setenv(name_z.ptr, value_z.ptr, 1) != 0) return error.EnvironmentUpdateFailed;
+        return .{ .allocator = allocator, .name_z = name_z, .active = true };
+    }
+
+    fn deinit(self: *ScopedEnv) void {
+        if (!self.active) return;
+        if (self.name_z) |name_z| {
+            _ = unsetenv(name_z.ptr);
+            self.allocator.free(name_z);
+        }
+    }
+};
 
 fn inheritedProcessEnviron() std.process.Environ {
     return switch (builtin.os.tag) {

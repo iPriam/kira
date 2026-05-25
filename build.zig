@@ -54,7 +54,7 @@ const packages = [_]Package{
     .{ .name = "kira_app_generation", .path = "packages/kira_app_generation/src/root.zig", .imports = &.{"kira_core"} },
     .{ .name = "kira_main", .path = "packages/kira_main/src/root.zig", .imports = &.{ "kira_core", "kira_runtime_abi", "kira_hybrid_definition", "kira_bytecode", "kira_vm_runtime", "kira_native_bridge", "kira_hybrid_runtime" } },
     .{ .name = "kira_live", .path = "packages/kira_live/src/root.zig", .imports = &.{ "kira_build", "kira_build_definition", "kira_diagnostics", "kira_diagnostic_messages", "kira_hybrid_definition", "kira_hybrid_runtime", "kira_ir", "kira_llvm_backend", "kira_manifest", "kira_native_lib_definition", "kira_package_manager", "kira_project" } },
-    .{ .name = "kira_cli", .path = "packages/kira_cli/src/main.zig", .imports = &.{ "kira_core", "kira_source", "kira_diagnostics", "kira_diagnostic_messages", "kira_syntax_model", "kira_lexer", "kira_parser", "kira_semantics", "kira_ir", "kira_bytecode", "kira_vm_runtime", "kira_build", "kira_build_definition", "kira_hybrid_runtime", "kira_runtime_abi", "kira_app_generation", "kira_live", "kira_log", "kira_toolchain", "kira_project", "kira_package_manager", "kira_manifest", "kira_ksl_syntax_model", "kira_instruments" } },
+    .{ .name = "kira_cli", .path = "packages/kira_cli/src/main.zig", .imports = &.{ "cli", "kira_core", "kira_source", "kira_diagnostics", "kira_diagnostic_messages", "kira_syntax_model", "kira_lexer", "kira_parser", "kira_semantics", "kira_ir", "kira_bytecode", "kira_vm_runtime", "kira_build", "kira_build_definition", "kira_hybrid_runtime", "kira_runtime_abi", "kira_app_generation", "kira_live", "kira_log", "kira_toolchain", "kira_project", "kira_package_manager", "kira_manifest", "kira_ksl_syntax_model", "kira_instruments" } },
 };
 
 fn applyImports(module: *std.Build.Module, modules: *std.StringArrayHashMapUnmanaged(*std.Build.Module), names: []const []const u8) void {
@@ -77,6 +77,8 @@ pub fn build(b: *std.Build) void {
     const llvm_probe = discoverLlvmHeaders(b.allocator, repo_root, llvm_version, llvm_host_key, b.graph.environ_map.get("KIRA_LLVM_HOME"));
     var modules: std.StringArrayHashMapUnmanaged(*std.Build.Module) = .empty;
     defer modules.deinit(b.allocator);
+    const cli_dep = b.dependency("cli", .{ .target = target, .optimize = optimize });
+    modules.put(b.allocator, "cli", cli_dep.module("cli")) catch @panic("failed to register zig-cli module");
 
     for (packages) |pkg| {
         const module = b.createModule(.{

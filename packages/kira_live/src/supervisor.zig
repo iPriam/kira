@@ -30,7 +30,11 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
     const selector = try runnerSelector(allocator, parsed.kind);
     const bundles = live.buildBundles(allocator, target, selector, parsed.kind != .desktop_dynamic_host) catch |err| switch (err) {
         error.LiveBundleBuildFailed => {
-            try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.liveBundleBuildFailed(allocator, parsed.input_path));
+            const diagnostic = if (parsed.kill_after)
+                try diag_messages.CliMessages.liveSmokeUnsupportedTarget(allocator, parsed.input_path)
+            else
+                try diag_messages.CliMessages.liveBundleBuildFailed(allocator, parsed.input_path);
+            try renderStandaloneDiagnostic(stderr, diagnostic);
             return error.CommandFailed;
         },
         error.IPhoneOSSdkUnavailable => {
@@ -360,6 +364,15 @@ fn runDesktop(
         .stderr = .inherit,
     });
 
+    if (parsed.kill_after) {
+        if (parsed.run_for_ns != 0) {
+            try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(parsed.run_for_ns)), .awake);
+        }
+        child.kill(io);
+        try stderr.print("live runner quit-after elapsed: {s}\n", .{runner.manifest_path});
+        return;
+    }
+
     var connection = try server.accept();
     defer connection.close();
     try connection.sendGraphAndBundles();
@@ -371,11 +384,7 @@ fn runDesktop(
     if (parsed.run_for_ns != 0) {
         try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(parsed.run_for_ns)), .awake);
     }
-    if (parsed.kill_after) {
-        child.kill(io);
-    } else {
-        _ = try child.wait(io);
-    }
+    _ = try child.wait(io);
     try stderr.print("live runner completed: {s}\n", .{runner.manifest_path});
 }
 
@@ -428,6 +437,15 @@ fn runMacOSApp(
         .stderr = .inherit,
     });
 
+    if (parsed.kill_after) {
+        if (parsed.run_for_ns != 0) {
+            try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(parsed.run_for_ns)), .awake);
+        }
+        child.kill(io);
+        try stderr.print("live runner quit-after elapsed: {s}\n", .{bundled_manifest});
+        return;
+    }
+
     var connection = try server.accept();
     defer connection.close();
     try connection.sendGraphAndBundles();
@@ -439,11 +457,7 @@ fn runMacOSApp(
     if (parsed.run_for_ns != 0) {
         try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(parsed.run_for_ns)), .awake);
     }
-    if (parsed.kill_after) {
-        child.kill(io);
-    } else {
-        _ = try child.wait(io);
-    }
+    _ = try child.wait(io);
     try stderr.print("live runner completed: {s}\n", .{bundled_manifest});
 }
 

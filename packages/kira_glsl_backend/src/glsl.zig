@@ -492,8 +492,10 @@ fn reservedGlslReplacement(name: []const u8) ?[]const u8 {
         .{ .name = "attribute", .replacement = "kira_attribute" },
         .{ .name = "const", .replacement = "kira_const" },
         .{ .name = "in", .replacement = "kira_in" },
+        .{ .name = "input", .replacement = "kira_input_param" },
         .{ .name = "inout", .replacement = "kira_inout" },
         .{ .name = "out", .replacement = "kira_out" },
+        .{ .name = "output", .replacement = "kira_output_param" },
         .{ .name = "uniform", .replacement = "kira_uniform" },
         .{ .name = "varying", .replacement = "kira_varying" },
         .{ .name = "buffer", .replacement = "kira_buffer" },
@@ -565,6 +567,8 @@ fn sampledUniformName(texture_name: []const u8, sampler_name: []const u8) []cons
 
 test "sanitizes GLSL reserved local names" {
     try std.testing.expectEqualStrings("kira_out", sanitizeName("out"));
+    try std.testing.expectEqualStrings("kira_input_param", sanitizeName("input"));
+    try std.testing.expectEqualStrings("kira_output_param", sanitizeName("output"));
     try std.testing.expectEqualStrings("kira_inout", sanitizeName("inout"));
     try std.testing.expectEqualStrings("result", sanitizeName("result"));
 }

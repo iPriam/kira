@@ -13,6 +13,7 @@ pub const DiagnosticCode = enum {
     KPK010_NoBuildableTarget,
     KCL001_UnknownCommand,
     KCL002_MissingCommandArgument,
+    KCL003_InvalidFlagValue,
     KCL005_InvalidBackendFlag,
     KCL006_InvalidProjectPath,
     KCL010_InvalidCommandTarget,
@@ -23,6 +24,8 @@ pub const DiagnosticCode = enum {
     KCL026_NativeExecutableFailed,
     KCL028_LiveBundleBuildFailed,
     KCL029_LiveSessionEndedUnexpectedly,
+    KCL030_InvalidDurationFlag,
+    KCL031_LiveSmokeUnsupportedTarget,
 };
 
 pub fn text(code: DiagnosticCode) []const u8 {
@@ -41,6 +44,7 @@ pub fn text(code: DiagnosticCode) []const u8 {
         .KPK010_NoBuildableTarget => "KPK010",
         .KCL001_UnknownCommand => "KCL001",
         .KCL002_MissingCommandArgument => "KCL002",
+        .KCL003_InvalidFlagValue => "KCL003",
         .KCL005_InvalidBackendFlag => "KCL005",
         .KCL006_InvalidProjectPath => "KCL006",
         .KCL010_InvalidCommandTarget => "KCL010",
@@ -51,5 +55,7 @@ pub fn text(code: DiagnosticCode) []const u8 {
         .KCL026_NativeExecutableFailed => "KCL026",
         .KCL028_LiveBundleBuildFailed => "KCL028",
         .KCL029_LiveSessionEndedUnexpectedly => "KCL029",
+        .KCL030_InvalidDurationFlag => "KCL030",
+        .KCL031_LiveSmokeUnsupportedTarget => "KCL031",
     };
 }

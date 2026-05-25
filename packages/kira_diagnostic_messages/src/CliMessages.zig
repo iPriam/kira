@@ -46,6 +46,36 @@ pub fn invalidBackendFlag(allocator: std.mem.Allocator, backend: []const u8) !di
     });
 }
 
+pub fn invalidFlagValue(allocator: std.mem.Allocator, flag: []const u8, value: []const u8, expected: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KCL003_InvalidFlagValue,
+        .domain = .cli,
+        .phase = .cli_argument_parsing,
+        .title = "invalid flag value",
+        .message = try std.fmt.allocPrint(
+            allocator,
+            "Option `{s}` does not accept value `{s}`.",
+            .{ flag, value },
+        ),
+        .help = try std.fmt.allocPrint(allocator, "Expected {s}.", .{expected}),
+    });
+}
+
+pub fn invalidDurationFlag(allocator: std.mem.Allocator, flag: []const u8, value: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KCL030_InvalidDurationFlag,
+        .domain = .cli,
+        .phase = .cli_argument_parsing,
+        .title = "invalid duration flag",
+        .message = try std.fmt.allocPrint(
+            allocator,
+            "Option `{s}` does not accept duration `{s}`.",
+            .{ flag, value },
+        ),
+        .help = "Use a positive duration like `5s`, `5000ms`, or plain integer seconds.",
+    });
+}
+
 pub fn invalidProjectPath(allocator: std.mem.Allocator, path: []const u8) !diagnostics.Diagnostic {
     return message.build(.{
         .code = .KCL006_InvalidProjectPath,
@@ -159,6 +189,21 @@ pub fn liveBundleBuildFailed(allocator: std.mem.Allocator, target: []const u8) !
             .{target},
         ),
         .help = "Run `kira check` or `kira build` on the same target first to inspect diagnostics, then retry `kira live`.",
+    });
+}
+
+pub fn liveSmokeUnsupportedTarget(allocator: std.mem.Allocator, target: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KCL031_LiveSmokeUnsupportedTarget,
+        .domain = .cli,
+        .phase = .target_selection,
+        .title = "live smoke target is not bundle-compatible",
+        .message = try std.fmt.allocPrint(
+            allocator,
+            "Kira cannot start a bounded live smoke session for `{s}` because the target or one of its packages is not currently compatible with live bundle generation.",
+            .{target},
+        ),
+        .help = "Use `kira check` and `kira build` for this target, or update the package so it can be lowered into a live bundle before retrying `kira live --quit-after`.",
     });
 }
 

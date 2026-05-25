@@ -16,25 +16,11 @@ const cmd_shader = @import("commands/shader.zig");
 const cmd_instruments = @import("commands/instruments.zig");
 const cmd_live = @import("commands/live.zig");
 const support = @import("support.zig");
-
-const CommandKind = enum {
-    run,
-    fetch_llvm,
-    tokens,
-    ast,
-    check,
-    build,
-    instruments,
-    instrument_artifact,
-    shader,
-    new,
-    sync,
-    add,
-    remove,
-    update,
-    package,
-    live,
-};
+const cli_parser = @import("parse/Parser.zig");
+const help_text = @import("command/HelpText.zig");
+const CommandKind = @import("command/CommandKind.zig").CommandKind;
+const ParsedCommand = @import("command/ParsedCommand.zig").ParsedCommand;
+const command_args = @import("dispatch/CommandArgs.zig");
 
 pub fn run(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
     var stdout_buffer: [4096]u8 = undefined;
@@ -48,35 +34,24 @@ pub fn run(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
 }
 
 pub fn runWithWriters(allocator: std.mem.Allocator, args: []const []const u8, out: anytype, err: anytype) !u8 {
-    if (args.len < 2) {
-        try printUsage(out);
-        return 0;
+    const parsed = try cli_parser.parse(allocator, args);
+    switch (parsed) {
+        .failure => |failure| {
+            try support.renderStandaloneDiagnostic(err, failure.diagnostic);
+            if (failure.command_for_help) |kind| {
+                try err.writeAll("\n");
+                try help_text.print(err, kind);
+            }
+            return 1;
+        },
+        .command => |command| return dispatchParsedCommand(allocator, command, out, err),
     }
-
-    const command = args[1];
-    if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h") or std.mem.eql(u8, command, "help")) {
-        try printUsage(out);
-        return 0;
-    }
-    if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "version")) {
-        try out.print("{s} {s}\n", .{ support.binaryName(), support.versionString() });
-        return 0;
-    }
-
-    const kind = parseCommand(command) orelse {
-        try support.renderStandaloneDiagnostic(err, diag_messages.CliMessages.unknownCommand(command));
-        try err.writeAll("\n");
-        try printUsage(err);
-        return 1;
-    };
-
-    return dispatchCommand(allocator, kind, command, args[2..], out, err);
 }
 
 fn executeCommand(allocator: std.mem.Allocator, command: []const u8, args: []const []const u8, out: anytype, err: anytype, comptime execute: anytype) !u8 {
     execute(allocator, args, out, err) catch |run_err| {
         if (run_err == error.CommandFailed or run_err == error.InvalidArguments) {
-            if (run_err == error.InvalidArguments) try printUsage(err);
+            if (run_err == error.InvalidArguments) try help_text.print(err, null);
             return 1;
         }
         if (run_err == error.ProjectEntrypointNotFound) {
@@ -112,24 +87,26 @@ fn executeCommand(allocator: std.mem.Allocator, command: []const u8, args: []con
     return 0;
 }
 
-fn parseCommand(command: []const u8) ?CommandKind {
-    if (std.mem.eql(u8, command, "run")) return .run;
-    if (std.mem.eql(u8, command, "fetch-llvm")) return .fetch_llvm;
-    if (std.mem.eql(u8, command, "tokens")) return .tokens;
-    if (std.mem.eql(u8, command, "ast")) return .ast;
-    if (std.mem.eql(u8, command, "check")) return .check;
-    if (std.mem.eql(u8, command, "build")) return .build;
-    if (std.mem.eql(u8, command, "instruments")) return .instruments;
-    if (std.mem.eql(u8, command, "__instrument-artifact")) return .instrument_artifact;
-    if (std.mem.eql(u8, command, "shader")) return .shader;
-    if (std.mem.eql(u8, command, "new")) return .new;
-    if (std.mem.eql(u8, command, "sync")) return .sync;
-    if (std.mem.eql(u8, command, "add")) return .add;
-    if (std.mem.eql(u8, command, "remove")) return .remove;
-    if (std.mem.eql(u8, command, "update")) return .update;
-    if (std.mem.eql(u8, command, "package")) return .package;
-    if (std.mem.eql(u8, command, "live")) return .live;
-    return null;
+fn dispatchParsedCommand(
+    allocator: std.mem.Allocator,
+    command: ParsedCommand,
+    out: anytype,
+    err: anytype,
+) !u8 {
+    switch (command) {
+        .help => |options| {
+            try help_text.print(out, options.command);
+            return 0;
+        },
+        .version => {
+            try out.print("{s} {s}\n", .{ support.binaryName(), support.versionString() });
+            return 0;
+        },
+        else => {},
+    }
+    const kind = command.kind();
+    const args = try command_args.toArgs(allocator, command);
+    return dispatchCommand(allocator, kind, kind.label(), args, out, err);
 }
 
 fn dispatchCommand(
@@ -149,6 +126,7 @@ fn dispatchCommand(
         .build => executeCommand(allocator, command, args, out, err, cmd_build.execute),
         .instruments => executeCommand(allocator, command, args, out, err, cmd_instruments.execute),
         .instrument_artifact => executeCommand(allocator, command, args, out, err, cmd_instruments.executeArtifact),
+        .run_hybrid_artifact => executeCommand(allocator, command, args, out, err, cmd_run.executeHybridArtifact),
         .shader => executeCommand(allocator, command, args, out, err, cmd_shader.execute),
         .new => executeCommand(allocator, command, args, out, err, cmd_new.execute),
         .sync => executeCommand(allocator, command, args, out, err, cmd_sync.execute),
@@ -157,49 +135,8 @@ fn dispatchCommand(
         .update => executeCommand(allocator, command, args, out, err, cmd_update.execute),
         .package => executeCommand(allocator, command, args, out, err, cmd_package.execute),
         .live => executeCommand(allocator, command, args, out, err, cmd_live.execute),
+        .help, .version => unreachable,
     };
-}
-
-fn printUsage(writer: anytype) !void {
-    try writer.print(
-        \\{s} <command> [args]
-        \\  run [--backend vm|llvm|hybrid] [--offline] [--locked] [<project-dir|kira.toml|project.toml>]
-        \\  build [--backend vm|llvm|hybrid] [--offline] [--locked] [<project-dir|kira.toml|project.toml>]
-        \\  instruments run <target> --backend runtime|llvm|hybrid --track memory|cpu --duration <time> --sample-rate <rate> [--fail-on-growth <bytes>] [--json-out <path>]
-        \\  shader check <file.ksl>
-        \\  shader ast <file.ksl>
-        \\  shader build [<file.ksl>|Shaders] [--out-dir <dir>]
-        \\  check [--backend vm|llvm|hybrid] [--offline] [--locked] [<project-dir|kira.toml|project.toml>]
-        \\  tokens [<project-dir|kira.toml|project.toml>]
-        \\  ast [<project-dir|kira.toml|project.toml>]
-        \\  sync [--offline] [--locked] [<project-dir|kira.toml|project.toml>]
-        \\  add <Package>
-        \\  add --git <url> --rev <commit> <Package>
-        \\  remove <Package>
-        \\  update [<project-dir|kira.toml|project.toml>]
-        \\  package pack [<project-dir|kira.toml|project.toml>]
-        \\  package inspect <archive-path|project-dir>
-        \\  live desktop <target> [--run-for <time>] [--kill-after]
-        \\  live macos <target> [--run-for <time>] [--kill-after]
-        \\  live ios <target> --device auto [--run-for <time>] [--kill-after]
-        \\  live runners list <target>
-        \\  live runners build <target>
-        \\  live runners clean <target>
-        \\  new [--lib] <Name> <destination>
-        \\  fetch-llvm [--ci-metadata --json | --archive <path>]
-        \\  help
-        \\  version
-        \\  project layout: <root>/kira.toml or <root>/project.toml with entrypoint at <root>/app/main.kira
-        \\  default project input: current directory
-        \\  entrypoint syntax: @Main [@Runtime|@Native] function entry() {{ ... }}
-        \\
-        \\install:
-        \\  zig build install-kirac
-        \\  installs the active Kira toolchain under ~/.kira/toolchains/<channel>/<version>/
-        \\  installs kira-bootstrapper into zig-out/bin/
-        \\  writes ~/.kira/toolchain/current.toml so kira-bootstrapper can launch the active toolchain
-        \\
-    , .{support.binaryName()});
 }
 
 test "invalid Kira input exits cleanly with rendered diagnostics" {

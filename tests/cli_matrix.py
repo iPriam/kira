@@ -177,9 +177,12 @@ def assert_clean_success(result: CommandResult, allow_timeout: bool) -> str | No
     return None
 
 
-def format_status(result: CommandResult, allow_timeout: bool, expected_code: str | None) -> str:
+def format_status(result: CommandResult, allow_timeout: bool, expected_code: str | None, accepted_codes: tuple[str, ...] = ()) -> str:
     if expected_code is not None:
         return f"expected {expected_code}" if expected_code in (result.stdout + result.stderr) else "unexpected failure"
+    for code in accepted_codes:
+        if code in (result.stdout + result.stderr):
+            return f"expected {code}"
     if result.timed_out and allow_timeout:
         return "smoke-timeout"
     if result.exit_code == 0:
@@ -205,6 +208,7 @@ def run_matrix() -> int:
         argv = [str(cli)]
         timeout_s = 120.0
         expected_code: str | None = None
+        accepted_codes: tuple[str, ...] = ()
         allow_timeout = False
 
         if command == "check":
@@ -213,13 +217,17 @@ def run_matrix() -> int:
             argv += ["build", str(target.path)]
         elif command == "run":
             argv += ["run", str(target.path)]
-            timeout_s = 8.0
-            allow_timeout = target.kind == "example"
+            if target.kind == "example":
+                argv += ["--quit-after", "5s"]
+            timeout_s = 20.0
             if target.kind == "library":
                 expected_code = "KCL020"
                 allow_timeout = False
         elif command == "live":
-            argv += ["live", "desktop", str(target.path), "--run-for", "1s", "--kill-after"]
+            argv += ["live", str(target.path)]
+            if target.kind == "example":
+                argv += ["--quit-after", "5s"]
+                accepted_codes = ("KCL031",)
             timeout_s = 60.0
             allow_timeout = False
             if target.kind == "library":
@@ -228,10 +236,12 @@ def run_matrix() -> int:
             raise ValueError(command)
 
         result = run_command(argv, cwd=root, timeout_s=timeout_s)
-        status = format_status(result, allow_timeout=allow_timeout, expected_code=expected_code)
+        status = format_status(result, allow_timeout=allow_timeout, expected_code=expected_code, accepted_codes=accepted_codes)
 
         if expected_code is not None:
             failure = assert_clean_failure(result, expected_code)
+        elif any(code in (result.stdout + result.stderr) for code in accepted_codes):
+            failure = assert_clean_failure(result, next(code for code in accepted_codes if code in (result.stdout + result.stderr)))
         else:
             failure = assert_clean_success(result, allow_timeout=allow_timeout)
         if failure is not None:

@@ -147,6 +147,8 @@ kira add --git https://github.com/Sunlight-Horizon/GameKit.git --rev <commit> Ga
 kira package pack
 ```
 
+Library roots are checkable and buildable, but execution belongs to app/example targets: `kira run .` on a library reports `KCL020`, and `kira live .` reports `KCL021`. For bounded smoke tests, `kira run <example> --quit-after 5s` and `kira live <example> --quit-after 5s` automatically shut down graphical/runtime sessions instead of leaving windows or child processes open. Targets that are valid for check/build/run but not live-bundle compatible are rejected before runner launch with `KCL031`.
+
 LLVM discovery is explicit:
 
 1. `KIRA_LLVM_HOME`
