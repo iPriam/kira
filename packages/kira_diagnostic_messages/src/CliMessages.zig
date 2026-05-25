@@ -197,13 +197,13 @@ pub fn liveSmokeUnsupportedTarget(allocator: std.mem.Allocator, target: []const 
         .code = .KCL031_LiveSmokeUnsupportedTarget,
         .domain = .cli,
         .phase = .target_selection,
-        .title = "live smoke target is not bundle-compatible",
+        .title = "live target is not bundle-compatible",
         .message = try std.fmt.allocPrint(
             allocator,
-            "Kira cannot start a bounded live smoke session for `{s}` because the target or one of its packages is not currently compatible with live bundle generation.",
+            "Kira cannot start a live session for `{s}` because the target or one of its packages is not currently compatible with live bundle generation.",
             .{target},
         ),
-        .help = "Use `kira check` and `kira build` for this target, or update the package so it can be lowered into a live bundle before retrying `kira live --quit-after`.",
+        .help = "Use `kira check` and `kira build` for this target, or update the package so it can be lowered into a live bundle before retrying `kira live`.",
     });
 }
 
@@ -219,5 +219,134 @@ pub fn liveSessionEndedUnexpectedly(allocator: std.mem.Allocator, err_name: []co
             .{err_name},
         ),
         .help = "Retry `kira live` without smoke flags to inspect the runner behavior, or use `kira build`/`kira run` to isolate the target failure first.",
+    });
+}
+
+pub fn invalidLivePlatform(allocator: std.mem.Allocator, value: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KCL041_InvalidLivePlatform,
+        .domain = .cli,
+        .phase = .cli_argument_parsing,
+        .title = "invalid live platform",
+        .message = try std.fmt.allocPrint(
+            allocator,
+            "`{s}` is not a supported live platform.",
+            .{value},
+        ),
+        .help = "Use `desktop`, `ios`, `ios-simulator`, or `ios-device`. Use `kira live <target>` when omitting the platform.",
+    });
+}
+
+pub fn liveRunnerBuildRootMissing(allocator: std.mem.Allocator, attempted_cwd: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KCL032_LiveRunnerBuildRootMissing,
+        .domain = .cli,
+        .phase = .backend_prepare,
+        .title = "live runner build root is unavailable",
+        .message = try std.fmt.allocPrint(
+            allocator,
+            "Kira could not locate a runner build root while preparing the desktop live runner. The user invocation cwd was `{s}`.",
+            .{attempted_cwd},
+        ),
+        .help = "Run `zig build` in the Kira toolchain repository so the live runner can be built or installed, then retry `kira live`.",
+    });
+}
+
+pub fn liveServerFailedToStart(allocator: std.mem.Allocator, host: []const u8, port: u16) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KCL033_LiveServerFailedToStart,
+        .domain = .cli,
+        .phase = .runtime_execution,
+        .title = "live server failed to start",
+        .message = try std.fmt.allocPrint(allocator, "Kira could not bind the live server at {s}:{d}.", .{ host, port }),
+        .help = "Check for another live server using the same port, then retry the command.",
+    });
+}
+
+pub fn liveClientFailedToConnect(allocator: std.mem.Allocator, target: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KCL034_LiveClientFailedToConnect,
+        .domain = .cli,
+        .phase = .runtime_execution,
+        .title = "live client failed to connect",
+        .message = try std.fmt.allocPrint(allocator, "The desktop live runner for `{s}` did not connect to the live server in time.", .{target}),
+        .help = "Re-run the command and inspect runner output; if this repeats, rebuild the Kira toolchain with `zig build`.",
+    });
+}
+
+pub fn liveEntrypointDidNotStart(allocator: std.mem.Allocator, target: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KCL037_LiveEntrypointDidNotStart,
+        .domain = .cli,
+        .phase = .runtime_execution,
+        .title = "live entrypoint did not start",
+        .message = try std.fmt.allocPrint(allocator, "The live client connected for `{s}`, but the app entrypoint did not start.", .{target}),
+        .help = "Run `kira build` for the same target and inspect runtime or native bridge diagnostics.",
+    });
+}
+
+pub fn liveFrameNotPresented(allocator: std.mem.Allocator, target: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KCL038_LiveFrameNotPresented,
+        .domain = .cli,
+        .phase = .runtime_execution,
+        .title = "live frame was not presented",
+        .message = try std.fmt.allocPrint(allocator, "The live client started `{s}`, but no rendered frame was acknowledged.", .{target}),
+        .help = "Use a renderable desktop target, or run a non-rendering target with an explicit headless/smoke mode once one is available.",
+    });
+}
+
+pub fn liveReloadTimedOut(allocator: std.mem.Allocator, target: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KCL039_LiveReloadTimedOut,
+        .domain = .cli,
+        .phase = .runtime_execution,
+        .title = "live reload timed out",
+        .message = try std.fmt.allocPrint(allocator, "A source change was detected for `{s}`, but the client did not complete hot restart.", .{target}),
+        .help = "Check the source edit for compiler diagnostics, then retry the live session.",
+    });
+}
+
+pub fn liveRunnerExitedEarly(allocator: std.mem.Allocator, target: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KCL044_LiveRunnerExitedEarly,
+        .domain = .cli,
+        .phase = .runtime_execution,
+        .title = "live runner exited early",
+        .message = try std.fmt.allocPrint(allocator, "The live runner for `{s}` exited before the live session became ready.", .{target}),
+        .help = "Inspect runner logs above for the runtime failure and rerun `kira build` for the same target.",
+    });
+}
+
+pub fn iosLiveUnsupported(allocator: std.mem.Allocator, platform: []const u8, detail: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KCL046_IosLiveUnsupported,
+        .domain = .cli,
+        .phase = .runtime_execution,
+        .title = "iOS live runner is not implemented yet",
+        .message = try std.fmt.allocPrint(allocator, "Kira recognized platform `{s}`, but this build cannot launch an iOS live client yet. {s}", .{ platform, detail }),
+        .help = "Use `kira live desktop <target>` today. iOS simulator support needs a simulator runner build, install, launch, and protocol connection path.",
+    });
+}
+
+pub fn missingXcodeTools(allocator: std.mem.Allocator, tool: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KTC020_MissingXcodeTools,
+        .domain = .toolchain,
+        .phase = .toolchain_activation,
+        .title = "missing Xcode command line tool",
+        .message = try std.fmt.allocPrint(allocator, "Kira could not find `{s}` while auditing iOS live support.", .{tool}),
+        .help = "Install Xcode and select it with `xcode-select`, then retry `kira live ios-simulator <target>`.",
+    });
+}
+
+pub fn missingIosSimulatorRuntime(allocator: std.mem.Allocator, detail: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KTC021_MissingIosSimulatorRuntime,
+        .domain = .toolchain,
+        .phase = .toolchain_activation,
+        .title = "missing iOS simulator runtime",
+        .message = try std.fmt.allocPrint(allocator, "Kira could not find an available iOS simulator runtime. {s}", .{detail}),
+        .help = "Install an iOS simulator runtime in Xcode Settings > Platforms, then retry.",
     });
 }

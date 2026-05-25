@@ -110,6 +110,11 @@ pub fn build(b: *std.Build) void {
     cli_options.addOption([]const u8, "primary_executable", kira_primary_executable);
     modules.get("kira_cli").?.addOptions("kira_cli_build_options", cli_options);
 
+    const live_options = b.addOptions();
+    live_options.addOption([]const u8, "repo_root", repo_root);
+    live_options.addOption([]const u8, "zig_exe", b.graph.zig_exe);
+    modules.get("kira_live").?.addOptions("kira_live_build_options", live_options);
+
     if (llvm_probe) |probe| {
         for (probe.include_dirs) |dir| {
             modules.get("kira_llvm_backend").?.addIncludePath(.{ .cwd_relative = dir });
@@ -207,10 +212,6 @@ pub fn build(b: *std.Build) void {
     const live_desktop_runner = b.addExecutable(.{
         .name = "kira-live-desktop-runner",
         .root_module = live_desktop_module,
-    });
-    live_desktop_runner.root_module.addCSourceFile(.{
-        .file = b.path("packages/kira_native_bridge/src/runtime_helpers.c"),
-        .flags = &.{},
     });
     const install_live_desktop_runner = b.addInstallArtifact(live_desktop_runner, .{});
 

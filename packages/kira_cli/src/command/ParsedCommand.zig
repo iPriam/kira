@@ -31,14 +31,14 @@ pub const RunOptions = struct {
 pub const LiveMode = enum { run, runners_list, runners_build, runners_clean };
 pub const LiveRunnerKind = enum {
     desktop,
-    macos,
-    ios,
+    ios_simulator,
+    ios_device,
 
     pub fn legacyLabel(self: LiveRunnerKind) []const u8 {
         return switch (self) {
             .desktop => "desktop",
-            .macos => "macos",
-            .ios => "ios",
+            .ios_simulator => "ios-simulator",
+            .ios_device => "ios-device",
         };
     }
 };
@@ -50,6 +50,7 @@ pub const LiveOptions = struct {
     run_for: ?Duration = null,
     quit_after: ?Duration = null,
     kill_after: bool = false,
+    headless: bool = false,
     device: []const u8 = "auto",
 };
 
@@ -122,6 +123,10 @@ pub const RunHybridArtifactOptions = struct {
     cwd: ?[]const u8 = null,
 };
 
+pub const LiveRunnerOptions = struct {
+    manifest_path: []const u8,
+};
+
 pub const ParsedCommand = union(CommandKind) {
     run: RunOptions,
     fetch_llvm: FetchLlvmOptions,
@@ -132,6 +137,7 @@ pub const ParsedCommand = union(CommandKind) {
     instruments: InstrumentsOptions,
     instrument_artifact: InstrumentArtifactOptions,
     run_hybrid_artifact: RunHybridArtifactOptions,
+    live_runner: LiveRunnerOptions,
     shader: ShaderOptions,
     new: NewOptions,
     sync: SyncOptions,

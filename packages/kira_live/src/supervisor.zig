@@ -3,12 +3,20 @@ const builtin = @import("builtin");
 const diag_messages = @import("kira_diagnostic_messages");
 const diagnostics = @import("kira_diagnostics");
 const live = @import("root.zig");
+const live_build_options = @import("kira_live_build_options");
 const model = @import("model.zig");
 const native = @import("kira_native_lib_definition");
 const protocol = @import("protocol.zig");
 
 pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: anytype, stderr: anytype) !void {
-    const parsed = try parseArgs(args);
+    const parsed = parseArgs(args) catch |err| switch (err) {
+        error.InvalidLivePlatform => {
+            const platform = if (args.len == 0) "" else args[0];
+            try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.invalidLivePlatform(allocator, platform));
+            return error.CommandFailed;
+        },
+        else => return err,
+    };
     if (parsed.mode == .runners_list) {
         const target = try resolveTargetOrDiagnose(allocator, parsed.input_path, stderr);
         try stdout.writeAll("desktop-dynamic-host\nxcode-macos\nxcode-ios\n");
@@ -26,49 +34,24 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
     }
 
     const target = try resolveTargetOrDiagnose(allocator, parsed.input_path, stderr);
-    const developer_dir = if (parsed.kind == .xcode_macos or parsed.kind == .xcode_ios) try discoverXcodeDeveloperDir(allocator) else null;
-    const selector = try runnerSelector(allocator, parsed.kind);
-    const bundles = live.buildBundles(allocator, target, selector, parsed.kind != .desktop_dynamic_host) catch |err| switch (err) {
+    if (parsed.platform == .ios_simulator or parsed.platform == .ios_device) {
+        return auditIosLiveOrDiagnose(allocator, parsed.platform, stdout, stderr);
+    }
+
+    const runner_kind = parsed.platform.runnerKind() orelse return error.CommandFailed;
+    const selector = try runnerSelector(allocator, runner_kind);
+    const bundles = live.buildBundles(allocator, target, selector, false) catch |err| switch (err) {
         error.LiveBundleBuildFailed => {
-            const diagnostic = if (parsed.kill_after)
-                try diag_messages.CliMessages.liveSmokeUnsupportedTarget(allocator, parsed.input_path)
-            else
-                try diag_messages.CliMessages.liveBundleBuildFailed(allocator, parsed.input_path);
-            try renderStandaloneDiagnostic(stderr, diagnostic);
+            try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.liveSmokeUnsupportedTarget(allocator, parsed.input_path));
             return error.CommandFailed;
         },
-        error.IPhoneOSSdkUnavailable => {
-            if (parsed.kind == .xcode_ios) {
-                const blocked = try generateBlockedAppleRunnerArtifacts(allocator, .ios, target);
-                if (developer_dir) |dir| {
-                    try runToolWithDeveloperDir(allocator, dir, &.{ "plutil", "-lint", try std.fs.path.join(allocator, &.{ blocked.runner_dir, try std.fmt.allocPrint(allocator, "{s}.xcodeproj", .{target.runner_display_name}), "project.pbxproj" }) });
-                    try runToolWithDeveloperDir(allocator, dir, &.{ "xcodebuild", "-list", "-project", try std.fs.path.join(allocator, &.{ blocked.runner_dir, try std.fmt.allocPrint(allocator, "{s}.xcodeproj", .{target.runner_display_name}) }) });
-                }
-                return failIPhoneOSSdk(stderr);
-            }
-            return err;
-        },
-        error.MacOSSdkUnavailable => {
-            if (parsed.kind == .xcode_macos) {
-                const blocked = try generateBlockedAppleRunnerArtifacts(allocator, .macos, target);
-                if (developer_dir) |dir| {
-                    try runToolWithDeveloperDir(allocator, dir, &.{ "plutil", "-lint", try std.fs.path.join(allocator, &.{ blocked.runner_dir, try std.fmt.allocPrint(allocator, "{s}.xcodeproj", .{target.runner_display_name}), "project.pbxproj" }) });
-                    try runToolWithDeveloperDir(allocator, dir, &.{ "xcodebuild", "-list", "-project", try std.fs.path.join(allocator, &.{ blocked.runner_dir, try std.fmt.allocPrint(allocator, "{s}.xcodeproj", .{target.runner_display_name}) }) });
-                }
-                return failMacOSSdk(stderr);
-            }
-            return err;
-        },
-        else => {
-            if (parsed.kind == .xcode_ios or parsed.kind == .xcode_macos) {
-                _ = try generateBlockedAppleRunnerArtifacts(allocator, if (parsed.kind == .xcode_ios) .ios else .macos, target);
-            }
-            return err;
-        },
+        else => return err,
     };
-    const runner = generateRunnerArtifacts(allocator, parsed.kind, target, bundles, parsed) catch |err| switch (err) {
+    try emitEvent(stdout, "live.bundle.compiled", "target={s} output_root={s}", .{ target.target_root, target.output_root });
+    const runner = generateRunnerArtifacts(allocator, runner_kind, target, bundles, parsed, stderr) catch |err| switch (err) {
         error.ExternalCommandFailed => {
-            try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.liveBundleBuildFailed(allocator, parsed.input_path));
+            const cwd = try std.process.currentPathAlloc(std.Options.debug_io, allocator);
+            try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.liveRunnerBuildRootMissing(allocator, cwd));
             return error.CommandFailed;
         },
         else => return err,
@@ -78,24 +61,7 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
         return;
     }
 
-    switch (parsed.kind) {
-        .desktop_dynamic_host => try runDesktop(allocator, parsed, bundles, runner, stdout, stderr),
-        .xcode_macos => {
-            const dir = developer_dir orelse return failMissingXcode(stderr, "macOS runner generation completed but building requires the full Xcode app, not Command Line Tools.");
-            try validateAppleRunnerProject(allocator, dir, .macos, runner, target.runner_display_name);
-            try runMacOSApp(allocator, parsed, bundles, runner, target.runner_display_name, stdout, stderr);
-        },
-        .xcode_ios => {
-            const dir = developer_dir orelse return failMissingXcode(stderr, "iOS runner generation completed but building/installing requires the full Xcode app, not Command Line Tools.");
-            validateAppleRunnerProject(allocator, dir, .ios, runner, target.runner_display_name) catch {
-                try stderr.writeAll("error[KLIVE004]: iOS runner build validation failed\n");
-                try stderr.writeAll("  Xcode can read the generated iOS project, but the build destination/platform setup is not usable on this machine.\n");
-                try stderr.writeAll("  help: Install the required iOS platform components in Xcode and ensure a valid generic iOS destination or connected device is available.\n");
-                return error.CommandFailed;
-            };
-            return error.CommandFailed;
-        },
-    }
+    try runDesktop(allocator, parsed, target, bundles, runner, stdout, stderr);
 }
 
 fn resolveTargetOrDiagnose(
@@ -158,10 +124,11 @@ const Mode = enum {
 
 const ParsedArgs = struct {
     mode: Mode = .run,
-    kind: live.RunnerKind = .desktop_dynamic_host,
+    platform: live.LivePlatform = .desktop,
     input_path: []const u8,
-    run_for_ns: u64 = 5 * std.time.ns_per_s,
+    run_for_ns: ?u64 = null,
     kill_after: bool = false,
+    headless: bool = false,
     device: []const u8 = "auto",
 };
 
@@ -170,20 +137,31 @@ fn parseArgs(args: []const []const u8) !ParsedArgs {
     if (std.mem.eql(u8, args[0], "runners")) {
         if (args.len < 3) return error.InvalidArguments;
         if (std.mem.eql(u8, args[1], "list")) return .{ .mode = .runners_list, .input_path = args[2] };
-        if (std.mem.eql(u8, args[1], "build")) return .{ .mode = .runners_build, .input_path = args[2], .kind = .desktop_dynamic_host };
+        if (std.mem.eql(u8, args[1], "build")) return .{ .mode = .runners_build, .input_path = args[2], .platform = .desktop };
         if (std.mem.eql(u8, args[1], "clean")) return .{ .mode = .runners_clean, .input_path = args[2] };
         return error.InvalidArguments;
     }
 
-    const kind = live.RunnerKind.parse(args[0]) orelse return error.InvalidArguments;
     var parsed = ParsedArgs{
         .mode = .run,
-        .kind = kind,
+        .platform = .desktop,
         .input_path = "",
     };
-    var index: usize = 1;
+    var index: usize = 0;
+    if (live.LivePlatform.parse(args[0])) |platform| {
+        parsed.platform = platform;
+        index = 1;
+    } else if (args.len >= 2 and !std.mem.startsWith(u8, args[1], "-")) {
+        return error.InvalidLivePlatform;
+    }
     while (index < args.len) : (index += 1) {
         const arg = args[index];
+        if (std.mem.eql(u8, arg, "--quit-after")) {
+            index += 1;
+            if (index >= args.len) return error.InvalidArguments;
+            parsed.run_for_ns = parseDurationNs(args[index]) orelse return error.InvalidArguments;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--run-for")) {
             index += 1;
             if (index >= args.len) return error.InvalidArguments;
@@ -192,6 +170,10 @@ fn parseArgs(args: []const []const u8) !ParsedArgs {
         }
         if (std.mem.eql(u8, arg, "--kill-after")) {
             parsed.kill_after = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--headless")) {
+            parsed.headless = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "--device")) {
@@ -212,6 +194,7 @@ const PreparedRunner = struct {
     runner_dir: []const u8,
     manifest_path: []const u8,
     executable_path: ?[]const u8 = null,
+    subcommand: ?[]const u8 = null,
 };
 
 fn generateRunnerArtifacts(
@@ -220,6 +203,7 @@ fn generateRunnerArtifacts(
     target: live.ResolvedLiveTarget,
     bundles: live.BundleBuildArtifacts,
     parsed: ParsedArgs,
+    stderr: anytype,
 ) !PreparedRunner {
     const runners_root = try std.fs.path.join(allocator, &.{ target.output_root, "runners" });
     try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, runners_root);
@@ -252,16 +236,13 @@ fn generateRunnerArtifacts(
 
     switch (kind) {
         .desktop_dynamic_host => {
-            try runTool(allocator, &.{ "zig", "build", "live-desktop-runner" });
-            const bin_dir = try std.fs.path.join(allocator, &.{ runner_dir, "bin" });
-            try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, bin_dir);
-            const source_exe = try std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, "zig-out/bin/kira-live-desktop-runner", allocator);
-            const dest_exe = try std.fs.path.join(allocator, &.{ bin_dir, "kira-live-desktop-runner" });
-            try copyFile(source_exe, dest_exe);
+            _ = stderr;
+            const runner_exe = try std.process.executablePathAlloc(std.Options.debug_io, allocator);
             return .{
                 .runner_dir = runner_dir,
                 .manifest_path = manifest_path,
-                .executable_path = dest_exe,
+                .executable_path = runner_exe,
+                .subcommand = "__live-runner",
             };
         },
         .xcode_macos => {
@@ -318,8 +299,9 @@ fn generateXcodeProject(
 
     const project_path = try std.fs.path.join(allocator, &.{ project_dir, "project.pbxproj" });
     const bundle_id = try runnerBundleId(allocator, target, if (platform == .ios) .xcode_ios else .xcode_macos);
-    try runTool(allocator, &.{ "zig", "build", "live-runner-support", "-Doptimize=ReleaseFast" });
-    const support_library_source = try std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, "zig-out/lib/libkira_live_runner_support.a", allocator);
+    const runner_build_root = try resolveLiveRunnerBuildRoot(allocator);
+    try runToolInCwd(allocator, runner_build_root, &.{ live_build_options.zig_exe, "build", "live-runner-support", "-Doptimize=ReleaseFast" });
+    const support_library_source = try std.fs.path.join(allocator, &.{ runner_build_root, "zig-out", "lib", "libkira_live_runner_support.a" });
     const support_library_path = try repackSupportArchiveForXcode(allocator, support_library_source, runner_dir);
     try writeFile(project_path, try pbxproj(
         allocator,
@@ -344,45 +326,110 @@ fn repackSupportArchiveForXcode(allocator: std.mem.Allocator, source_archive: []
 fn runDesktop(
     allocator: std.mem.Allocator,
     parsed: ParsedArgs,
+    target: live.ResolvedLiveTarget,
     bundles: live.BundleBuildArtifacts,
     runner: PreparedRunner,
     stdout: anytype,
     stderr: anytype,
 ) !void {
-    var server = try LiveServer.listen(allocator, "127.0.0.1", 42111, bundles.graph);
+    var server = LiveServer.listen(allocator, "127.0.0.1", 42111, bundles.graph) catch {
+        try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.liveServerFailedToStart(allocator, "127.0.0.1", 42111));
+        return error.CommandFailed;
+    };
     defer server.deinit();
     try rewriteRunnerManifestPort(allocator, runner.manifest_path, server.port);
+    try emitEvent(stdout, "live.server.started", "host=127.0.0.1 port={d}", .{server.port});
+    try emitEvent(stdout, "live.runner.resolved", "path={s} runtime_cwd={s}", .{
+        runner.executable_path.?,
+        target.target_root,
+    });
 
     var io_impl: std.Io.Threaded = .init(std.heap.smp_allocator, .{});
     defer io_impl.deinit();
+    const process_environ = inheritedProcessEnviron();
+    var environ_map = try std.process.Environ.createMap(process_environ, allocator);
+    defer environ_map.deinit();
+    if (parsed.run_for_ns) |duration_ns| {
+        const duration_text = try std.fmt.allocPrint(allocator, "{d}", .{duration_ns});
+        try environ_map.put("KIRA_LIVE_QUIT_AFTER_NS", duration_text);
+    }
     const io = io_impl.io();
+    var runner_argv = std.array_list.Managed([]const u8).init(allocator);
+    try runner_argv.append(runner.executable_path.?);
+    if (runner.subcommand) |subcommand| try runner_argv.append(subcommand);
+    try runner_argv.append(runner.manifest_path);
     var child = try std.process.spawn(io, .{
-        .argv = &.{ runner.executable_path.?, runner.manifest_path },
-        .cwd = .{ .path = std.fs.path.dirname(runner.manifest_path) orelse "." },
+        .argv = runner_argv.items,
+        .cwd = .{ .path = target.target_root },
+        .environ_map = &environ_map,
         .stdin = .ignore,
         .stdout = .inherit,
         .stderr = .inherit,
     });
+    try emitEvent(stdout, "live.runner.launched", "pid={d}", .{child.id orelse 0});
 
-    if (parsed.kill_after) {
-        if (parsed.run_for_ns != 0) {
-            try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(parsed.run_for_ns)), .awake);
+    var connection = (try acceptClientOrDiagnose(allocator, &server, &child, io, target, stdout, stderr)) orelse return;
+    defer connection.close();
+    try emitEvent(stdout, "live.client.connected", "target={s}", .{target.target_root});
+    try connection.sendGraphAndBundles();
+    try emitEvent(stdout, "live.bundle.graph.sent", "bundles={d}", .{bundles.graph.bundles.len});
+    const require_frame = !parsed.headless;
+    if (parsed.headless) {
+        try emitEvent(stdout, "live.runner.headless", "target={s}", .{target.target_root});
+    }
+    const health_ok = try connection.waitForHealthMarkers(stdout, 30 * std.time.ns_per_s, require_frame);
+    if (!health_ok) {
+        killAndWait(&child, io);
+        const diagnostic = if (require_frame)
+            try diag_messages.CliMessages.liveFrameNotPresented(allocator, target.target_root)
+        else
+            try diag_messages.CliMessages.liveEntrypointDidNotStart(allocator, target.target_root);
+        try renderStandaloneDiagnostic(stderr, diagnostic);
+        return error.CommandFailed;
+    }
+    try emitEvent(stdout, "live.session.ready", "target={s}", .{target.target_root});
+
+    if (parsed.run_for_ns) |duration_ns| {
+        const start = std.Io.Clock.Timestamp.now(std.Options.debug_io, .awake);
+        var source_snapshot = try SourceSnapshot.capture(allocator, target.validation_entrypoint_path);
+        while (elapsedSince(start) < duration_ns) {
+            try std.Options.debug_io.sleep(.fromNanoseconds(250 * std.time.ns_per_ms), .awake);
+            if (try source_snapshot.changed(target.validation_entrypoint_path)) {
+                try emitEvent(stdout, "live.source.changed", "path={s}", .{target.validation_entrypoint_path});
+                try emitEvent(stdout, "live.rebuild.started", "target={s}", .{target.target_root});
+                const rebuilt = live.buildBundles(allocator, target, try runnerSelector(allocator, .desktop_dynamic_host), false) catch {
+                    try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.liveBundleBuildFailed(allocator, target.target_root));
+                    killAndWait(&child, io);
+                    return error.CommandFailed;
+                };
+                try emitEvent(stdout, "live.rebuild.finished", "target={s}", .{target.target_root});
+                try emitEvent(stdout, "live.bundle.rebuilt", "mode=full-bundle", .{});
+                connection.graph = rebuilt.graph;
+                try connection.sendGraphAndBundles();
+                try emitEvent(stdout, "live.bundle.sent", "mode=full-bundle", .{});
+                if (!try connection.waitForReloadMarkers(stdout, 20 * std.time.ns_per_s)) {
+                    killAndWait(&child, io);
+                    try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.liveReloadTimedOut(allocator, target.target_root));
+                    return error.CommandFailed;
+                }
+                try source_snapshot.refresh(target.validation_entrypoint_path);
+            }
+            if (try pollChildExited(&child)) {
+                break;
+            }
         }
-        child.kill(io);
+        if (child.id != null) {
+            try protocol.writeFrame(&connection.writer.interface, .shutdown, "quit-after");
+            try connection.writer.interface.flush();
+            _ = try connection.waitForShutdownAck(stdout, 2 * std.time.ns_per_s);
+        }
+        if (child.id != null and !try waitChildExitBefore(&child, 2 * std.time.ns_per_s)) {
+            killAndWait(&child, io);
+            try emitEvent(stdout, "live.runner.force_killed", "reason=quit-after", .{});
+        }
+        try emitEvent(stdout, "live.session.ended", "reason=quit-after", .{});
         try stderr.print("live runner quit-after elapsed: {s}\n", .{runner.manifest_path});
         return;
-    }
-
-    var connection = try server.accept();
-    defer connection.close();
-    try connection.sendGraphAndBundles();
-    const health_ok = try connection.waitForHealthMarkers(stdout, 30 * std.time.ns_per_s);
-    if (!health_ok) {
-        child.kill(io);
-        return error.LiveHealthCheckFailed;
-    }
-    if (parsed.run_for_ns != 0) {
-        try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(parsed.run_for_ns)), .awake);
     }
     _ = try child.wait(io);
     try stderr.print("live runner completed: {s}\n", .{runner.manifest_path});
@@ -438,8 +485,8 @@ fn runMacOSApp(
     });
 
     if (parsed.kill_after) {
-        if (parsed.run_for_ns != 0) {
-            try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(parsed.run_for_ns)), .awake);
+        if (parsed.run_for_ns) |duration_ns| {
+            try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(duration_ns)), .awake);
         }
         child.kill(io);
         try stderr.print("live runner quit-after elapsed: {s}\n", .{bundled_manifest});
@@ -449,13 +496,13 @@ fn runMacOSApp(
     var connection = try server.accept();
     defer connection.close();
     try connection.sendGraphAndBundles();
-    const health_ok = try connection.waitForHealthMarkers(stdout, 30 * std.time.ns_per_s);
+    const health_ok = try connection.waitForHealthMarkers(stdout, 30 * std.time.ns_per_s, true);
     if (!health_ok) {
-        child.kill(io);
+        killAndWait(&child, io);
         return error.LiveHealthCheckFailed;
     }
-    if (parsed.run_for_ns != 0) {
-        try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(parsed.run_for_ns)), .awake);
+    if (parsed.run_for_ns) |duration_ns| {
+        try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(duration_ns)), .awake);
     }
     _ = try child.wait(io);
     try stderr.print("live runner completed: {s}\n", .{bundled_manifest});
@@ -495,11 +542,11 @@ fn validateAppleRunnerProject(
     const project_path = try std.fs.path.join(allocator, &.{ runner.runner_dir, project_name });
     const pbxproj_path = try std.fs.path.join(allocator, &.{ project_path, "project.pbxproj" });
     const derived_data_path = try std.fs.path.join(allocator, &.{ runner.runner_dir, "DerivedData" });
-    try runToolWithDeveloperDir(allocator, developer_dir, &.{ "plutil", "-lint", pbxproj_path });
-    try runToolWithDeveloperDir(allocator, developer_dir, &.{ "xcodebuild", "-list", "-project", project_path });
-    try runToolWithDeveloperDir(allocator, developer_dir, &.{ "xcodebuild", "-showBuildSettings", "-project", project_path });
+    try runToolWithDeveloperDir(allocator, developer_dir, null, &.{ "plutil", "-lint", pbxproj_path });
+    try runToolWithDeveloperDir(allocator, developer_dir, null, &.{ "xcodebuild", "-list", "-project", project_path });
+    try runToolWithDeveloperDir(allocator, developer_dir, null, &.{ "xcodebuild", "-showBuildSettings", "-project", project_path });
     switch (platform) {
-        .macos => try runToolWithDeveloperDir(allocator, developer_dir, &.{
+        .macos => try runToolWithDeveloperDir(allocator, developer_dir, null, &.{
             "xcodebuild",
             "-project",
             project_path,
@@ -514,7 +561,7 @@ fn validateAppleRunnerProject(
             "build",
             "CODE_SIGNING_ALLOWED=NO",
         }),
-        .ios => try runToolWithDeveloperDir(allocator, developer_dir, &.{
+        .ios => try runToolWithDeveloperDir(allocator, developer_dir, null, &.{
             "xcodebuild",
             "-project",
             project_path,
@@ -628,31 +675,102 @@ const LiveConnection = struct {
         try self.writer.interface.flush();
     }
 
-    fn waitForHealthMarkers(self: *LiveConnection, stdout: anytype, timeout_ns: u64) !bool {
+    fn waitForHealthMarkers(self: *LiveConnection, stdout: anytype, timeout_ns: u64, require_frame: bool) !bool {
         const markers = [_][]const u8{
-            "KIRA_LIVE_CONNECTED",
-            "KIRA_BUNDLE_GRAPH_RECEIVED",
-            "KIRA_BUNDLE_LOADED",
-            "KIRA_BUNDLE_LINKED",
-            "KIRA_ENTRYPOINT_STARTED",
-            "KIRA_APP_RENDERED_FIRST_FRAME",
+            "live.bundle.graph.received",
+            "live.client.bundle.received",
+            "live.bundle.loaded",
+            "live.bundle.linked",
+            "live.entrypoint.started",
+            "live.frame.presented",
         };
         var seen = [_]bool{false} ** markers.len;
         const start = std.Io.Clock.Timestamp.now(std.Options.debug_io, .awake);
         while (elapsedSince(start) < timeout_ns) {
-            if (!try waitReadable(self.stream.socket.handle, 250)) continue;
+            if (self.reader.interface.bufferedLen() == 0 and !try waitReadable(self.stream.socket.handle, 250)) continue;
             const frame = try protocol.readFrame(self.allocator, &self.reader.interface);
             if (frame.kind == .log_line) {
                 try stdout.print("{s}\n", .{frame.payload});
                 for (markers, 0..) |marker, index| {
                     if (std.mem.eql(u8, frame.payload, marker)) seen[index] = true;
                 }
-                if (allSeen(seen)) return true;
+                if (allSeen(seen, require_frame)) return true;
+                if (require_frame and std.mem.eql(u8, frame.payload, "live.entrypoint.finished")) return false;
+            }
+        }
+        return false;
+    }
+
+    fn waitForReloadMarkers(self: *LiveConnection, stdout: anytype, timeout_ns: u64) !bool {
+        const markers = [_][]const u8{
+            "live.client.bundle.received",
+            "live.client.hot_restart.started",
+            "live.hot_restart.finished",
+            "live.entrypoint.restarted",
+        };
+        var seen = [_]bool{false} ** markers.len;
+        const start = std.Io.Clock.Timestamp.now(std.Options.debug_io, .awake);
+        while (elapsedSince(start) < timeout_ns) {
+            if (self.reader.interface.bufferedLen() == 0 and !try waitReadable(self.stream.socket.handle, 250)) continue;
+            const frame = try protocol.readFrame(self.allocator, &self.reader.interface);
+            if (frame.kind == .log_line) {
+                try stdout.print("{s}\n", .{frame.payload});
+                for (markers, 0..) |marker, index| {
+                    if (std.mem.eql(u8, frame.payload, marker)) seen[index] = true;
+                }
+                if (seen[2] and seen[3]) return true;
+            }
+            if (frame.kind == .shutdown_ack) return false;
+        }
+        return false;
+    }
+
+    fn waitForShutdownAck(self: *LiveConnection, stdout: anytype, timeout_ns: u64) !bool {
+        const start = std.Io.Clock.Timestamp.now(std.Options.debug_io, .awake);
+        while (elapsedSince(start) < timeout_ns) {
+            if (self.reader.interface.bufferedLen() == 0 and !try waitReadable(self.stream.socket.handle, 100)) continue;
+            const frame = try protocol.readFrame(self.allocator, &self.reader.interface);
+            if (frame.kind == .log_line) {
+                try stdout.print("{s}\n", .{frame.payload});
+            }
+            if (frame.kind == .shutdown_ack) {
+                try emitEvent(stdout, "live.shutdown.ack", "client=desktop", .{});
+                return true;
             }
         }
         return false;
     }
 };
+
+fn acceptClientOrDiagnose(
+    allocator: std.mem.Allocator,
+    server: *LiveServer,
+    child: *std.process.Child,
+    io: std.Io,
+    target: live.ResolvedLiveTarget,
+    stdout: anytype,
+    stderr: anytype,
+) !?LiveConnection {
+    const start = std.Io.Clock.Timestamp.now(std.Options.debug_io, .awake);
+    while (elapsedSince(start) < 30 * std.time.ns_per_s) {
+        if (try pollChildExited(child)) {
+            try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.liveRunnerExitedEarly(allocator, target.target_root));
+            return null;
+        }
+        if (try waitReadable(server.server.socket.handle, 250)) {
+            try emitEvent(stdout, "live.client.connecting", "target={s}", .{target.target_root});
+            return try server.accept();
+        }
+    }
+    killAndWait(child, io);
+    try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.liveClientFailedToConnect(allocator, target.target_root));
+    return null;
+}
+
+fn killAndWait(child: *std.process.Child, io: std.Io) void {
+    if (child.id == null) return;
+    child.kill(io);
+}
 
 fn waitReadable(fd: anytype, timeout_ms: i32) !bool {
     var pollfd = [_]std.posix.pollfd{.{
@@ -663,6 +781,57 @@ fn waitReadable(fd: anytype, timeout_ms: i32) !bool {
     const ready = try std.posix.poll(&pollfd, timeout_ms);
     return ready > 0 and (pollfd[0].revents & std.posix.POLL.IN) != 0;
 }
+
+fn pollChildExited(child: *std.process.Child) !bool {
+    const pid = child.id orelse return true;
+    switch (builtin.os.tag) {
+        .windows, .wasi => return false,
+        else => {
+            var status: c_int = 0;
+            const result = std.c.waitpid(pid, &status, @intCast(std.c.W.NOHANG));
+            if (result == 0) return false;
+            if (result == pid) {
+                child.id = null;
+                return true;
+            }
+            return false;
+        },
+    }
+}
+
+fn waitChildExitBefore(child: *std.process.Child, timeout_ns: u64) !bool {
+    const start = std.Io.Clock.Timestamp.now(std.Options.debug_io, .awake);
+    while (elapsedSince(start) < timeout_ns) {
+        if (try pollChildExited(child)) return true;
+        try std.Options.debug_io.sleep(.fromNanoseconds(100 * std.time.ns_per_ms), .awake);
+    }
+    return try pollChildExited(child);
+}
+
+const SourceSnapshot = struct {
+    mtime_ns: i96,
+    size: u64,
+
+    fn capture(allocator: std.mem.Allocator, path: []const u8) !SourceSnapshot {
+        _ = allocator;
+        const stat = try std.Io.Dir.cwd().statFile(std.Options.debug_io, path, .{});
+        return .{
+            .mtime_ns = stat.mtime.nanoseconds,
+            .size = stat.size,
+        };
+    }
+
+    fn changed(self: *SourceSnapshot, path: []const u8) !bool {
+        const stat = try std.Io.Dir.cwd().statFile(std.Options.debug_io, path, .{});
+        return stat.mtime.nanoseconds != self.mtime_ns or stat.size != self.size;
+    }
+
+    fn refresh(self: *SourceSnapshot, path: []const u8) !void {
+        const stat = try std.Io.Dir.cwd().statFile(std.Options.debug_io, path, .{});
+        self.mtime_ns = stat.mtime.nanoseconds;
+        self.size = stat.size;
+    }
+};
 
 fn collectBundleFiles(allocator: std.mem.Allocator, root: []const u8, current: []const u8) ![]const protocol.ReplaceBundlePayload.FilePayload {
     var files = std.array_list.Managed(protocol.ReplaceBundlePayload.FilePayload).init(allocator);
@@ -685,9 +854,7 @@ fn appendBundleFiles(
             .directory => try appendBundleFiles(allocator, files, root, child),
             .file => {
                 const bytes = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, child, allocator, .limited(16 * 1024 * 1024));
-                const cwd = try std.process.currentPathAlloc(std.Options.debug_io, allocator);
-                defer allocator.free(cwd);
-                const relative = try std.fs.path.relative(allocator, cwd, null, root, child);
+                const relative = try std.fs.path.relative(allocator, root, null, root, child);
                 try files.append(.{ .relative_path = relative, .bytes = bytes });
             },
             else => {},
@@ -695,8 +862,11 @@ fn appendBundleFiles(
     }
 }
 
-fn allSeen(values: [6]bool) bool {
-    for (values) |value| if (!value) return false;
+fn allSeen(values: [6]bool, require_frame: bool) bool {
+    for (values, 0..) |value, index| {
+        if (!require_frame and index == values.len - 1) continue;
+        if (!value) return false;
+    }
     return true;
 }
 
@@ -711,7 +881,9 @@ fn parseDurationNs(value: []const u8) ?u64 {
         const parsed = std.fmt.parseInt(u64, number, 10) catch return null;
         return parsed * std.time.ns_per_s;
     }
-    return null;
+    const parsed = std.fmt.parseInt(u64, value, 10) catch return null;
+    if (parsed == 0) return null;
+    return parsed * std.time.ns_per_s;
 }
 
 fn runnerSelector(allocator: std.mem.Allocator, kind: live.RunnerKind) !?native.TargetSelector {
@@ -748,10 +920,14 @@ fn writeFile(path: []const u8, data: []const u8) !void {
 }
 
 fn runTool(allocator: std.mem.Allocator, argv: []const []const u8) !void {
-    return runToolWithDeveloperDir(allocator, null, argv);
+    return runToolWithDeveloperDir(allocator, null, null, argv);
 }
 
-fn runToolWithDeveloperDir(allocator: std.mem.Allocator, developer_dir: ?[]const u8, argv: []const []const u8) !void {
+fn runToolInCwd(allocator: std.mem.Allocator, cwd: []const u8, argv: []const []const u8) !void {
+    return runToolWithDeveloperDir(allocator, null, cwd, argv);
+}
+
+fn runToolWithDeveloperDir(allocator: std.mem.Allocator, developer_dir: ?[]const u8, cwd: ?[]const u8, argv: []const []const u8) !void {
     const process_environ: std.process.Environ = switch (builtin.os.tag) {
         .windows => .{ .block = .global },
         .wasi, .emscripten, .freestanding, .other => .empty,
@@ -771,6 +947,7 @@ fn runToolWithDeveloperDir(allocator: std.mem.Allocator, developer_dir: ?[]const
     const result = try std.process.run(allocator, io_impl.io(), .{
         .argv = argv,
         .expand_arg0 = .expand,
+        .cwd = if (cwd) |path| .{ .path = path } else .inherit,
         .environ_map = if (environ_map) |*map| map else null,
         .stdout_limit = .limited(256 * 1024),
         .stderr_limit = .limited(256 * 1024),
@@ -781,6 +958,132 @@ fn runToolWithDeveloperDir(allocator: std.mem.Allocator, developer_dir: ?[]const
     if (result.stdout.len != 0) std.debug.print("{s}", .{result.stdout});
     if (result.stderr.len != 0) std.debug.print("{s}", .{result.stderr});
     return error.ExternalCommandFailed;
+}
+
+fn runToolCapture(allocator: std.mem.Allocator, argv: []const []const u8) ![]u8 {
+    const process_environ = inheritedProcessEnviron();
+    var io_impl: std.Io.Threaded = .init(std.heap.smp_allocator, .{ .environ = process_environ });
+    defer io_impl.deinit();
+    const result = try std.process.run(allocator, io_impl.io(), .{
+        .argv = argv,
+        .expand_arg0 = .expand,
+        .stdout_limit = .limited(512 * 1024),
+        .stderr_limit = .limited(512 * 1024),
+    });
+    defer allocator.free(result.stderr);
+    if (result.term == .exited and result.term.exited == 0) return result.stdout;
+    allocator.free(result.stdout);
+    return error.ExternalCommandFailed;
+}
+
+fn resolveLiveRunnerBuildRoot(allocator: std.mem.Allocator) ![]const u8 {
+    if (isLiveRunnerBuildRoot(live_build_options.repo_root)) return allocator.dupe(u8, live_build_options.repo_root);
+    if (try findRepoRootFromSelfExe(allocator)) |root| return root;
+    if (try findRepoRootFromCwd(allocator)) |root| return root;
+    return error.ExternalCommandFailed;
+}
+
+fn findRepoRootFromCwd(allocator: std.mem.Allocator) !?[]u8 {
+    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".", allocator);
+    defer allocator.free(cwd);
+    return findRepoRootFromPath(allocator, cwd);
+}
+
+fn findRepoRootFromSelfExe(allocator: std.mem.Allocator) !?[]u8 {
+    const exe_path = try std.process.executablePathAlloc(std.Options.debug_io, allocator);
+    defer allocator.free(exe_path);
+    const exe_dir = std.fs.path.dirname(exe_path) orelse return null;
+    return findRepoRootFromPath(allocator, exe_dir);
+}
+
+fn findRepoRootFromPath(allocator: std.mem.Allocator, start_path: []const u8) !?[]u8 {
+    var current = try allocator.dupe(u8, start_path);
+    errdefer allocator.free(current);
+    while (true) {
+        if (isLiveRunnerBuildRoot(current)) return current;
+        const parent = std.fs.path.dirname(current) orelse break;
+        if (std.mem.eql(u8, parent, current)) break;
+        const parent_copy = try allocator.dupe(u8, parent);
+        allocator.free(current);
+        current = parent_copy;
+    }
+    allocator.free(current);
+    return null;
+}
+
+fn isLiveRunnerBuildRoot(path: []const u8) bool {
+    const build_path = std.fs.path.join(std.heap.page_allocator, &.{ path, "build.zig" }) catch return false;
+    defer std.heap.page_allocator.free(build_path);
+    if (!fileExists(build_path)) return false;
+    const runner_source = std.fs.path.join(std.heap.page_allocator, &.{ path, "packages", "kira_live", "src", "desktop_main.zig" }) catch return false;
+    defer std.heap.page_allocator.free(runner_source);
+    return fileExists(runner_source);
+}
+
+fn fileExists(path: []const u8) bool {
+    const file = std.Io.Dir.cwd().openFile(std.Options.debug_io, path, .{}) catch return false;
+    file.close(std.Options.debug_io);
+    return true;
+}
+
+fn inheritedProcessEnviron() std.process.Environ {
+    return switch (builtin.os.tag) {
+        .windows => .{ .block = .global },
+        .wasi, .emscripten, .freestanding, .other => .empty,
+        else => .{ .block = .{ .slice = std.c.environ[0..blk: {
+            var len: usize = 0;
+            while (std.c.environ[len] != null) : (len += 1) {}
+            break :blk len;
+        } :null] } },
+    };
+}
+
+fn emitEvent(writer: anytype, name: []const u8, comptime fmt: []const u8, args: anytype) !void {
+    try writer.print("event: {s}", .{name});
+    if (fmt.len != 0) {
+        try writer.writeAll(" ");
+        try writer.print(fmt, args);
+    }
+    try writer.writeAll("\n");
+}
+
+fn emitStderrEvent(writer: anytype, name: []const u8, comptime fmt: []const u8, args: anytype) !void {
+    try emitEvent(writer, name, fmt, args);
+}
+
+fn auditIosLiveOrDiagnose(
+    allocator: std.mem.Allocator,
+    platform: live.LivePlatform,
+    stdout: anytype,
+    stderr: anytype,
+) !void {
+    const xcodebuild_path = runToolCapture(allocator, &.{ "xcrun", "--find", "xcodebuild" }) catch {
+        try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.missingXcodeTools(allocator, "xcrun xcodebuild"));
+        return error.CommandFailed;
+    };
+    defer allocator.free(xcodebuild_path);
+    const simulator_sdk = runToolCapture(allocator, &.{ "xcrun", "--sdk", "iphonesimulator", "--show-sdk-path" }) catch {
+        try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.missingIosSimulatorRuntime(allocator, "`xcrun --sdk iphonesimulator --show-sdk-path` failed."));
+        return error.CommandFailed;
+    };
+    defer allocator.free(simulator_sdk);
+    const devices = runToolCapture(allocator, &.{ "xcrun", "simctl", "list", "devices", "available" }) catch {
+        try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.missingXcodeTools(allocator, "xcrun simctl"));
+        return error.CommandFailed;
+    };
+    defer allocator.free(devices);
+    if (std.mem.indexOf(u8, devices, "iPhone") == null and std.mem.indexOf(u8, devices, "iPad") == null) {
+        try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.missingIosSimulatorRuntime(allocator, "No available iPhone or iPad simulator devices were reported."));
+        return error.CommandFailed;
+    }
+    try emitEvent(stdout, "live.ios.tools.detected", "xcodebuild={s}", .{std.mem.trim(u8, xcodebuild_path, " \t\r\n")});
+    try emitEvent(stdout, "live.ios.simulator.detected", "sdk={s}", .{std.mem.trim(u8, simulator_sdk, " \t\r\n")});
+    try renderStandaloneDiagnostic(stderr, try diag_messages.CliMessages.iosLiveUnsupported(
+        allocator,
+        platform.cliName(),
+        "Xcode, the iPhoneSimulator SDK, and available simulator devices were detected.",
+    ));
+    return error.CommandFailed;
 }
 
 fn discoverXcodeDeveloperDir(allocator: std.mem.Allocator) !?[]const u8 {

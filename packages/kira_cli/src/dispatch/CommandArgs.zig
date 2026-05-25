@@ -68,6 +68,9 @@ pub fn toArgs(allocator: std.mem.Allocator, command: ParsedCommand) ![]const []c
             try list.appendSlice(&.{ "--manifest", options.manifest_path });
             if (options.cwd) |cwd| try list.appendSlice(&.{ "--cwd", cwd });
         },
+        .live_runner => |options| {
+            try list.append(options.manifest_path);
+        },
         .help, .version => {},
     }
     return list.toOwnedSlice();
@@ -103,15 +106,15 @@ fn appendLiveOptions(allocator: std.mem.Allocator, list: *std.array_list.Managed
         .run => {
             try list.appendSlice(&.{ options.runner.legacyLabel(), options.input_path });
             if (options.quit_after) |duration| {
-                try list.append("--run-for");
+                try list.append("--quit-after");
                 try duration.appendArgs(allocator, list);
-                try list.append("--kill-after");
             } else if (options.run_for) |duration| {
                 try list.append("--run-for");
                 try duration.appendArgs(allocator, list);
             }
             if (options.kill_after) try list.append("--kill-after");
-            if (!std.mem.eql(u8, options.device, "auto") or options.runner == .ios) try list.appendSlice(&.{ "--device", options.device });
+            if (options.headless) try list.append("--headless");
+            if (!std.mem.eql(u8, options.device, "auto") or options.runner == .ios_device) try list.appendSlice(&.{ "--device", options.device });
         },
     }
 }

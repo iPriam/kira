@@ -8,6 +8,7 @@ pub const CommandKind = enum {
     instruments,
     instrument_artifact,
     run_hybrid_artifact,
+    live_runner,
     shader,
     new,
     sync,
@@ -30,6 +31,7 @@ pub const CommandKind = enum {
             .instruments => "instruments",
             .instrument_artifact => "__instrument-artifact",
             .run_hybrid_artifact => "__run-hybrid-artifact",
+            .live_runner => "__live-runner",
             .shader => "shader",
             .new => "new",
             .sync => "sync",
@@ -53,6 +55,8 @@ pub fn parse(command: []const u8) ?CommandKind {
             if (std.mem.eql(u8, command, "__instrument-artifact")) return kind;
         } else if (kind == .run_hybrid_artifact) {
             if (std.mem.eql(u8, command, "__run-hybrid-artifact")) return kind;
+        } else if (kind == .live_runner) {
+            if (std.mem.eql(u8, command, "__live-runner")) return kind;
         } else if (std.mem.eql(u8, command, field.name)) {
             return kind;
         }

@@ -14,6 +14,9 @@ Standalone CLI:
 - `kira run --backend llvm examples/hello`
 - `kira run --backend hybrid examples/hybrid_roundtrip`
 - `kira live examples/hello --quit-after 5s`
+- `kira live desktop examples/hello --quit-after 5s`
+- `kira live desktop examples/hello --run-for 5s --kill-after`
+- `kira live ios-simulator examples/hello --quit-after 5s`
 - `kira tokens examples/hello`
 - `kira ast examples/hello`
 - `kira check examples/hello`
@@ -77,7 +80,13 @@ CLI behavior:
 - `run` defaults to the VM backend; `run --backend llvm` builds and runs a native executable
 - `run --backend hybrid` builds a hybrid manifest, bytecode sidecar, and native shared library, then runs the mixed program in the hybrid host
 - `run <target> --quit-after <duration>` starts the target and requests or enforces bounded shutdown after a positive duration such as `5s`, `5000ms`, or plain integer seconds. This is intended for non-disruptive smoke tests of graphical and long-running examples.
-- `live <target> --quit-after <duration>` starts a bounded live smoke session when the target can be live-bundled. If a target is checkable/buildable/runnable but cannot yet be lowered into a live bundle, the CLI rejects the smoke session with `KCL031` before launching a runner.
+- `live <target> --quit-after <duration>` defaults to the desktop platform and starts a real live server/client session. The server builds a VM/live-loadable bundle graph under the selected target's `.kira-build/live/`, launches a live runner client, sends the bundle graph and bundle payloads, waits for client load/link/entrypoint events, waits for at least one rendered frame unless `--headless` is explicitly supplied, and then requests clean shutdown when the duration expires.
+- `live desktop <target> --quit-after <duration>` is the explicit desktop spelling. The desktop runner window is visible for renderable apps/examples; `--quit-after` only bounds the session and does not bypass server/client handshake, bundle delivery, entrypoint start, or frame acknowledgement.
+- `live desktop <target> --run-for <duration> --kill-after` is a legacy compatibility spelling. `--run-for` maps to the same bounded duration as `--quit-after`; `--kill-after` is retained as an emergency cleanup hint after graceful shutdown has been attempted.
+- `live ios-simulator <target>` and `live ios <target>` are recognized platform spellings. The current implementation audits Xcode, the iPhoneSimulator SDK, and available simulator runtimes, then reports a precise unsupported-runner diagnostic until the simulator live client build/install/launch path is implemented. Physical device live support is recognized as `ios-device` but is not implemented.
+- Live root handling is explicit: invocation cwd, selected target root, Kira toolchain root, runner host path, generated live output root, and client runtime cwd are separate. The desktop runner host is resolved from the installed/development Kira toolchain; the selected example directory is never used as a Zig build root.
+- Live reload currently uses full-bundle hot restart. On source changes, the server rebuilds the bundle graph, sends the full bundle set, and the already-running client restarts the app entrypoint without rebuilding or relaunching the runner process. Incremental bundle patching is reserved for a future protocol extension and is not documented as supported yet.
+- `--headless` is only for non-window tests of the live protocol and reload loop. Normal desktop live sessions open a visible window when the platform can present one.
 - `run`, `build`, and `check` automatically sync dependencies before compiling; add `--offline` or `--locked` when you want cache-only or lockfile-only behavior
 - Library package roots are checkable and buildable, but not runnable or live-runnable. `kira run .` on a library emits `KCL020`; `kira live .` emits `KCL021`. Use an example or app target for execution.
 - Examples and app packages are the runnable surface for CLI smoke tests. The real sibling-project matrix runs examples with `--quit-after` so graphical windows and live runners do not remain open.

@@ -13,7 +13,7 @@ pub fn print(writer: anytype, command: ?CommandKind) !void {
         \\  check        Analyze a project, example, or source file.
         \\  build        Build a project, example, library, or source file.
         \\  run          Build and execute a runnable target.
-        \\  live         Start a bounded live runner session for an app/example target.
+        \\  live         Start a live server/client session for an app/example target.
         \\  shader       Check, inspect, or build KSL shaders.
         \\  instruments  Run a target under process instrumentation.
         \\  sync         Resolve and sync package dependencies.
@@ -55,10 +55,10 @@ fn printCommand(writer: anytype, kind: CommandKind) !void {
             \\
         ),
         .live => try writer.writeAll(
-            \\usage: kira live [desktop|macos|ios] <target> [--quit-after <duration>] [--run-for <duration>] [--kill-after] [--device auto]
+            \\usage: kira live [desktop|ios|ios-simulator|ios-device] <target> [--quit-after <duration>] [--run-for <duration>] [--kill-after] [--headless] [--device auto]
             \\       kira live <target> --quit-after <duration>
             \\       kira live runners list|build|clean <target>
-            \\Start live mode for an app/example. `--quit-after` is the non-disruptive smoke-test form.
+            \\Start a live server/client session for an app/example. `--quit-after` bounds the session without bypassing the live handshake; `--headless` is for non-window reload tests.
             \\
         ),
         .fetch_llvm => try writer.writeAll(
@@ -92,5 +92,6 @@ fn printCommand(writer: anytype, kind: CommandKind) !void {
         .help => try writer.writeAll("usage: kira help [command]\n"),
         .instrument_artifact => try writer.writeAll("usage: kira __instrument-artifact --backend runtime|llvm|hybrid --artifact <path> [--cwd <dir>]\n"),
         .run_hybrid_artifact => try writer.writeAll("usage: kira __run-hybrid-artifact --manifest <path> [--cwd <dir>]\n"),
+        .live_runner => try writer.writeAll("usage: kira __live-runner <runner-manifest>\n"),
     }
 }

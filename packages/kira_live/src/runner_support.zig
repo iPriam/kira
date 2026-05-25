@@ -4,7 +4,7 @@ const hybrid_runtime = @import("kira_hybrid_runtime");
 const model = @import("model.zig");
 const protocol = @import("protocol.zig");
 
-extern fn kira_live_install_first_frame_hook(callback: *const fn () callconv(.c) void) callconv(.c) void;
+const RequestQuitFn = *const fn () callconv(.c) void;
 
 var active_client: ?*RunnerClient = null;
 var first_frame_sent = false;
@@ -31,53 +31,118 @@ pub fn runFromManifestPath(allocator: std.mem.Allocator, manifest_path: []const 
     active_client = &client;
     defer active_client = null;
     first_frame_sent = false;
-    kira_live_install_first_frame_hook(kiraLiveFirstFrameHook);
 
     try client.sendText(.hello, "kira-live-runner");
     try client.sendText(.runtime_info, runner_manifest.name);
-    try client.sendText(.log_line, "KIRA_LIVE_CONNECTED");
+    try client.sendText(.log_line, try std.fmt.allocPrint(allocator, "live.runner.pid={d}", .{std.c.getpid()}));
+    try client.sendText(.log_line, "live.client.connected");
 
-    try receiveInitialBundles(allocator, &client, local_cache_root, runner_manifest.main_bundle_id);
-    const bundle_root = try std.fs.path.join(allocator, &.{ local_cache_root, "bundles", try std.fmt.allocPrint(allocator, "{s}.klbundle", .{runner_manifest.main_bundle_id}) });
+    var restart_count: u32 = 0;
+    while (true) : (restart_count += 1) {
+        switch (try receiveBundleSet(allocator, &client, local_cache_root, runner_manifest.main_bundle_id, restart_count != 0)) {
+            .bundle_ready => {},
+            .shutdown => return,
+        }
+        const bundle_root = try std.fs.path.join(allocator, &.{ local_cache_root, "bundles", try std.fmt.allocPrint(allocator, "{s}.klbundle", .{runner_manifest.main_bundle_id}) });
+        try runBundle(allocator, &client, bundle_root, runner_manifest.target_path, restart_count);
+    }
+}
+
+fn runBundle(
+    allocator: std.mem.Allocator,
+    client: *RunnerClient,
+    bundle_root: []const u8,
+    target_root: []const u8,
+    restart_count: u32,
+) !void {
+    first_frame_sent = false;
     const bundle_manifest_path = try std.fs.path.join(allocator, &.{ bundle_root, "KiraBundle.toml" });
     const bundle_manifest_text = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, bundle_manifest_path, allocator, .limited(1024 * 1024));
     const bundle_manifest = try model.BundleManifest.parse(allocator, bundle_manifest_text);
     const hybrid_path = try std.fs.path.join(allocator, &.{ bundle_root, bundle_manifest.hybrid_rel_path });
-    var hybrid_manifest = try hybrid.HybridModuleManifest.readFromFile(allocator, hybrid_path);
-    hybrid_manifest.bytecode_path = try std.fs.path.join(allocator, &.{ bundle_root, bundle_manifest.bytecode_rel_path });
+    const runtime_allocator = std.heap.smp_allocator;
+    var hybrid_manifest = try hybrid.HybridModuleManifest.readFromFile(runtime_allocator, hybrid_path);
+    hybrid_manifest.bytecode_path = try std.fs.path.join(runtime_allocator, &.{ bundle_root, bundle_manifest.bytecode_rel_path });
 
+    var original_cwd = try std.Io.Dir.cwd().openDir(std.Options.debug_io, ".", .{});
+    defer {
+        std.process.setCurrentDir(std.Options.debug_io, original_cwd) catch {};
+        original_cwd.close(std.Options.debug_io);
+    }
+    var bundle_dir = try std.Io.Dir.openDirAbsolute(std.Options.debug_io, bundle_root, .{});
+    defer bundle_dir.close(std.Options.debug_io);
+    try std.process.setCurrentDir(std.Options.debug_io, bundle_dir);
     var runtime = if (std.mem.eql(u8, hybrid_manifest.native_library_path, "__kira_live_self__"))
-        try hybrid_runtime.HybridRuntime.initFromCurrentProcess(allocator, hybrid_manifest)
+        try hybrid_runtime.HybridRuntime.initFromCurrentProcess(runtime_allocator, hybrid_manifest)
     else
-        try hybrid_runtime.HybridRuntime.init(allocator, hybrid_manifest);
+        try hybrid_runtime.HybridRuntime.init(runtime_allocator, hybrid_manifest);
     defer runtime.deinit();
     try runtime.bridge.installFirstFrameHook(kiraLiveFirstFrameHook);
     try runtime.bridge.installLogHook(kiraLiveLogHook);
-    try client.sendText(.log_line, "KIRA_BUNDLE_LINKED");
-    try client.sendText(.log_line, "KIRA_ENTRYPOINT_STARTED");
+    startNativeQuitTimer(&runtime) catch {};
+    try client.sendText(.log_line, "live.bundle.linked");
+    if (restart_count == 0) {
+        try client.sendText(.log_line, "live.entrypoint.started");
+    } else {
+        try client.sendText(.log_line, "live.entrypoint.restarted");
+    }
+    var target_dir = try std.Io.Dir.openDirAbsolute(std.Options.debug_io, target_root, .{});
+    defer target_dir.close(std.Options.debug_io);
+    try std.process.setCurrentDir(std.Options.debug_io, target_dir);
     try runtime.run();
+    if (restart_count == 0) {
+        try client.sendText(.log_line, "live.entrypoint.finished");
+    } else {
+        try client.sendText(.log_line, "live.hot_restart.finished");
+    }
 }
 
-fn receiveInitialBundles(
+fn startNativeQuitTimer(runtime: *hybrid_runtime.HybridRuntime) !void {
+    const duration_raw = std.c.getenv("KIRA_LIVE_QUIT_AFTER_NS") orelse return;
+    const duration_ns = std.fmt.parseInt(u64, std.mem.span(duration_raw), 10) catch return;
+    if (duration_ns == 0) return;
+    if (runtime.bridge.library) |*library| {
+        const request_quit = library.lookup(RequestQuitFn, "sapp_request_quit") orelse return;
+        var thread = try std.Thread.spawn(.{}, nativeQuitTimerMain, .{ duration_ns, request_quit });
+        thread.detach();
+    }
+}
+
+fn nativeQuitTimerMain(duration_ns: u64, request_quit: RequestQuitFn) void {
+    std.Options.debug_io.sleep(.fromNanoseconds(@intCast(duration_ns)), .awake) catch {};
+    request_quit();
+}
+
+const ReceiveResult = enum { bundle_ready, shutdown };
+
+fn receiveBundleSet(
     allocator: std.mem.Allocator,
     client: *RunnerClient,
     local_cache_root: []const u8,
     main_bundle_id: []const u8,
-) !void {
+    is_reload: bool,
+) !ReceiveResult {
     while (true) {
         const frame = try client.readFrame(allocator);
         switch (frame.kind) {
             .bundle_graph => {
-                try client.sendText(.log_line, "KIRA_BUNDLE_GRAPH_RECEIVED");
+                try client.sendText(.log_line, "live.bundle.graph.received");
             },
             .replace_bundle => {
                 const payload = try protocol.decodeReplaceBundlePayload(allocator, frame.payload);
+                try client.sendText(.log_line, "live.client.bundle.received");
                 const bundle_dir = try std.fs.path.join(allocator, &.{ local_cache_root, "bundles", try std.fmt.allocPrint(allocator, "{s}.klbundle", .{payload.bundle_id}) });
                 try storeBundlePayload(bundle_dir, payload);
                 if (std.mem.eql(u8, payload.bundle_id, main_bundle_id)) {
-                    try client.sendText(.log_line, "KIRA_BUNDLE_LOADED");
-                    return;
+                    try client.sendText(.log_line, "live.bundle.loaded");
+                    if (is_reload) try client.sendText(.log_line, "live.client.hot_restart.started");
+                    return .bundle_ready;
                 }
+            },
+            .shutdown => {
+                try client.sendText(.log_line, "live.shutdown.received");
+                try client.sendText(.shutdown_ack, "ok");
+                return .shutdown;
             },
             else => {},
         }
@@ -99,7 +164,7 @@ fn kiraLiveFirstFrameHook() callconv(.c) void {
     if (first_frame_sent) return;
     first_frame_sent = true;
     if (active_client) |client| {
-        client.sendText(.log_line, "KIRA_APP_RENDERED_FIRST_FRAME") catch {};
+        client.sendText(.log_line, "live.frame.presented") catch {};
     }
 }
 

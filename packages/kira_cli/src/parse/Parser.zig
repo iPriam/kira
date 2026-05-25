@@ -37,6 +37,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8) !ParseResul
     const command = parseCommandByKind(allocator, kind, args[2..]) catch |err| return switch (err) {
         error.InvalidBackend => .{ .failure = .{ .diagnostic = try diag_messages.CliMessages.invalidBackendFlag(allocator, last_value_for_error orelse "") } },
         error.InvalidDuration => .{ .failure = .{ .diagnostic = try diag_messages.CliMessages.invalidDurationFlag(allocator, last_flag_for_error orelse "--duration", last_value_for_error orelse "") } },
+        error.InvalidLivePlatform => .{ .failure = .{ .diagnostic = try diag_messages.CliMessages.invalidLivePlatform(allocator, last_value_for_error orelse "") } },
         error.MissingValue => .{ .failure = .{ .diagnostic = try diag_messages.CliMessages.missingFlagValue(last_flag_for_error orelse "option", last_expected_for_error orelse "a value") } },
         error.InvalidArguments => .{ .failure = .{ .diagnostic = try diag_messages.CliMessages.invalidFlagValue(allocator, last_flag_for_error orelse "arguments", last_value_for_error orelse "", last_expected_for_error orelse "valid command syntax"), .command_for_help = kind } },
         else => return err,
@@ -63,6 +64,7 @@ fn parseCommandByKind(allocator: std.mem.Allocator, kind: Kind, args: []const []
         .instruments => .{ .instruments = try parseInstruments(allocator, args) },
         .instrument_artifact => .{ .instrument_artifact = try parseInstrumentArtifact(allocator, args) },
         .run_hybrid_artifact => .{ .run_hybrid_artifact = try parseRunHybridArtifact(allocator, args) },
+        .live_runner => .{ .live_runner = try parseLiveRunnerCommand(args) },
         .help, .version => unreachable,
     };
 }
@@ -88,6 +90,11 @@ fn failDuration(flag: []const u8, value: []const u8) error{InvalidDuration} {
     last_flag_for_error = flag;
     last_value_for_error = value;
     return error.InvalidDuration;
+}
+
+fn failLivePlatform(value: []const u8) error{InvalidLivePlatform} {
+    last_value_for_error = value;
+    return error.InvalidLivePlatform;
 }
 
 fn isHelpFlag(arg: []const u8) bool {
@@ -203,6 +210,8 @@ fn parseLive(allocator: std.mem.Allocator, args: []const []const u8) !Parsed.Liv
     if (parseLiveRunner(args[0])) |explicit_runner| {
         runner = explicit_runner;
         index = 1;
+    } else if (args.len >= 2 and !std.mem.startsWith(u8, args[1], "-")) {
+        return failLivePlatform(args[0]);
     }
     var input_path: ?[]const u8 = null;
     var parsed = Parsed.LiveOptions{ .runner = runner, .input_path = "" };
@@ -224,6 +233,10 @@ fn parseLive(allocator: std.mem.Allocator, args: []const []const u8) !Parsed.Liv
             parsed.kill_after = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--headless")) {
+            parsed.headless = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--device")) {
             index += 1;
             if (index >= args.len) return failMissing("--device", "a device selector");
@@ -240,8 +253,8 @@ fn parseLive(allocator: std.mem.Allocator, args: []const []const u8) !Parsed.Liv
 
 fn parseLiveRunner(value: []const u8) ?Parsed.LiveRunnerKind {
     if (std.mem.eql(u8, value, "desktop")) return .desktop;
-    if (std.mem.eql(u8, value, "macos")) return .macos;
-    if (std.mem.eql(u8, value, "ios")) return .ios;
+    if (std.mem.eql(u8, value, "ios") or std.mem.eql(u8, value, "ios-simulator") or std.mem.eql(u8, value, "simulator")) return .ios_simulator;
+    if (std.mem.eql(u8, value, "ios-device") or std.mem.eql(u8, value, "device")) return .ios_device;
     return null;
 }
 
@@ -520,6 +533,11 @@ fn parseRunHybridArtifact(allocator: std.mem.Allocator, args: []const []const u8
     };
 }
 
+fn parseLiveRunnerCommand(args: []const []const u8) !Parsed.LiveRunnerOptions {
+    if (args.len != 1) return failMissing("__live-runner", "a runner manifest path");
+    return .{ .manifest_path = args[0] };
+}
+
 test "parse run quit after" {
     const result = try parse(std.testing.allocator, &.{ "kira", "run", "examples/hello", "--quit-after", "5s" });
     try std.testing.expectEqual(@as(u64, 5 * std.time.ns_per_s), result.command.run.quit_after.?.nanoseconds);
@@ -529,4 +547,27 @@ test "parse live shorthand quit after" {
     const result = try parse(std.testing.allocator, &.{ "kira", "live", "examples/hello", "-quit-after", "5000ms" });
     try std.testing.expectEqual(@as(u64, 5000 * std.time.ns_per_ms), result.command.live.quit_after.?.nanoseconds);
     try std.testing.expectEqualStrings("examples/hello", result.command.live.input_path);
+}
+
+test "parse live desktop explicit target and legacy duration flags" {
+    const result = try parse(std.testing.allocator, &.{ "kira", "live", "desktop", ".", "--run-for", "5s", "--kill-after" });
+    try std.testing.expectEqual(.desktop, result.command.live.runner);
+    try std.testing.expectEqualStrings(".", result.command.live.input_path);
+    try std.testing.expectEqual(@as(u64, 5 * std.time.ns_per_s), result.command.live.run_for.?.nanoseconds);
+    try std.testing.expect(result.command.live.kill_after);
+}
+
+test "parse live headless and ios simulator platform" {
+    const result = try parse(std.testing.allocator, &.{ "kira", "live", "ios-simulator", "examples/hello", "--headless", "--quit-after", "1s" });
+    try std.testing.expectEqual(.ios_simulator, result.command.live.runner);
+    try std.testing.expect(result.command.live.headless);
+    try std.testing.expectEqual(@as(u64, std.time.ns_per_s), result.command.live.quit_after.?.nanoseconds);
+}
+
+test "parse live rejects unknown platform before treating it as target" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const result = try parse(arena.allocator(), &.{ "kira", "live", "not-a-platform", "." });
+    try std.testing.expectEqual(.failure, std.meta.activeTag(result));
+    try std.testing.expectEqualStrings("KCL041", result.failure.diagnostic.code.?);
 }

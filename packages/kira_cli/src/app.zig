@@ -127,6 +127,7 @@ fn dispatchCommand(
         .instruments => executeCommand(allocator, command, args, out, err, cmd_instruments.execute),
         .instrument_artifact => executeCommand(allocator, command, args, out, err, cmd_instruments.executeArtifact),
         .run_hybrid_artifact => executeCommand(allocator, command, args, out, err, cmd_run.executeHybridArtifact),
+        .live_runner => executeCommand(allocator, command, args, out, err, cmd_live.executeRunner),
         .shader => executeCommand(allocator, command, args, out, err, cmd_shader.execute),
         .new => executeCommand(allocator, command, args, out, err, cmd_new.execute),
         .sync => executeCommand(allocator, command, args, out, err, cmd_sync.execute),
