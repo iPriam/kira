@@ -414,6 +414,7 @@ fn runExecutable(
         .stopped => |signal| try stderr.print("  stopped by signal: {d}\n", .{signal}),
         .unknown => |code| try stderr.print("  status: {d}\n", .{code}),
     }
+    try writeNativeFailureGuidance(result.term, stderr);
     if (result.stderr.len > 0) {
         try stderr.writeAll("  stderr:\n");
         try stderr.writeAll(result.stderr);
@@ -434,6 +435,24 @@ fn runExecutable(
         try stderr.writeAll("  note: Windows may report native fail-fast statuses through the low exit byte; running the executable directly can reveal the full NTSTATUS.\n");
     }
     return error.NativeRunFailed;
+}
+
+fn writeNativeFailureGuidance(term: std.process.Child.Term, stderr: anytype) !void {
+    const signal = switch (term) {
+        .signal => |value| value,
+        .stopped => |value| value,
+        else => null,
+    };
+    if (signal) |value| {
+        const signal_number = @intFromEnum(value);
+        if (signal_number == 11) {
+            try stderr.writeAll("  diagnostic: native process terminated with signal 11 (segmentation fault).\n");
+            try stderr.writeAll("  note: this usually means native code dereferenced invalid Kira-owned storage, such as an aggregate, array, string, native state, or FFI callback pointer.\n");
+        } else {
+            try stderr.print("  diagnostic: native process terminated by signal {d} before returning a Kira diagnostic.\n", .{signal_number});
+        }
+        try stderr.writeAll("  next: compare `kira run --backend vm`, `kira run --backend hybrid`, and `kira run --backend llvm`; if only native or hybrid fails, inspect aggregate defaults, array/string fields, and native bridge ownership.\n");
+    }
 }
 
 fn runExecutableBounded(

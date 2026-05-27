@@ -898,9 +898,34 @@ pub fn buildTextFunctionBody(
                     temp_index, bridgeTagValue(register_types[value.src]),
                 });
                 switch (register_types[value.src].kind) {
-                    .integer, .construct_any, .raw_ptr, .ffi_struct, .array, .enum_instance => {
+                    .integer, .construct_any, .raw_ptr, .array, .enum_instance => {
                         try writer.print("  %array.set.pack.{d} = insertvalue %kira.bridge.value %array.set.pack.{d}.0, i64 %r{d}, 2\n", .{
                             temp_index, temp_index, value.src,
+                        });
+                    },
+                    .ffi_struct => {
+                        const struct_type_name = typeRefName(register_types[value.src].name orelse return error.UnsupportedExecutableFeature);
+                        try writer.print("  %array.set.struct.src.{d} = inttoptr i64 %r{d} to ptr\n", .{ temp_index, value.src });
+                        try writer.print("  %array.set.struct.value.{d} = load {s}, ptr %array.set.struct.src.{d}\n", .{
+                            temp_index, struct_type_name, temp_index,
+                        });
+                        try writer.print("  %array.set.struct.size.ptr.{d} = getelementptr {s}, ptr null, i32 1\n", .{
+                            temp_index, struct_type_name,
+                        });
+                        try writer.print("  %array.set.struct.size.{d} = ptrtoint ptr %array.set.struct.size.ptr.{d} to i64\n", .{
+                            temp_index, temp_index,
+                        });
+                        try writer.print("  %array.set.struct.copy.{d} = call ptr @malloc(i64 %array.set.struct.size.{d})\n", .{
+                            temp_index, temp_index,
+                        });
+                        try writer.print("  store {s} %array.set.struct.value.{d}, ptr %array.set.struct.copy.{d}\n", .{
+                            struct_type_name, temp_index, temp_index,
+                        });
+                        try writer.print("  %array.set.struct.ptrint.{d} = ptrtoint ptr %array.set.struct.copy.{d} to i64\n", .{
+                            temp_index, temp_index,
+                        });
+                        try writer.print("  %array.set.pack.{d} = insertvalue %kira.bridge.value %array.set.pack.{d}.0, i64 %array.set.struct.ptrint.{d}, 2\n", .{
+                            temp_index, temp_index, temp_index,
                         });
                     },
                     .float => {
@@ -938,7 +963,7 @@ pub fn buildTextFunctionBody(
                 try writer.print("  call void @\"kira_array_store\"(ptr %array.set.ptr.{d}, i64 %r{d}, ptr %array.set.pack.ptr.{d})\n", .{
                     value.src, value.index, temp_index,
                 });
-                if (register_owned_ptr[value.src]) register_escaped[value.src] = true;
+                if (register_owned_ptr[value.src] and register_types[value.src].kind != .ffi_struct) register_escaped[value.src] = true;
                 if (register_local_ptr[value.src]) |source_local| {
                     switch (variant.local_types[source_local].kind) {
                         .ffi_struct => local_owns_contents[source_local] = false,
@@ -955,9 +980,34 @@ pub fn buildTextFunctionBody(
                     temp_index, bridgeTagValue(register_types[value.src]),
                 });
                 switch (register_types[value.src].kind) {
-                    .integer, .construct_any, .raw_ptr, .ffi_struct, .array, .enum_instance => {
+                    .integer, .construct_any, .raw_ptr, .array, .enum_instance => {
                         try writer.print("  %array.append.pack.{d} = insertvalue %kira.bridge.value %array.append.pack.{d}.0, i64 %r{d}, 2\n", .{
                             temp_index, temp_index, value.src,
+                        });
+                    },
+                    .ffi_struct => {
+                        const struct_type_name = typeRefName(register_types[value.src].name orelse return error.UnsupportedExecutableFeature);
+                        try writer.print("  %array.append.struct.src.{d} = inttoptr i64 %r{d} to ptr\n", .{ temp_index, value.src });
+                        try writer.print("  %array.append.struct.value.{d} = load {s}, ptr %array.append.struct.src.{d}\n", .{
+                            temp_index, struct_type_name, temp_index,
+                        });
+                        try writer.print("  %array.append.struct.size.ptr.{d} = getelementptr {s}, ptr null, i32 1\n", .{
+                            temp_index, struct_type_name,
+                        });
+                        try writer.print("  %array.append.struct.size.{d} = ptrtoint ptr %array.append.struct.size.ptr.{d} to i64\n", .{
+                            temp_index, temp_index,
+                        });
+                        try writer.print("  %array.append.struct.copy.{d} = call ptr @malloc(i64 %array.append.struct.size.{d})\n", .{
+                            temp_index, temp_index,
+                        });
+                        try writer.print("  store {s} %array.append.struct.value.{d}, ptr %array.append.struct.copy.{d}\n", .{
+                            struct_type_name, temp_index, temp_index,
+                        });
+                        try writer.print("  %array.append.struct.ptrint.{d} = ptrtoint ptr %array.append.struct.copy.{d} to i64\n", .{
+                            temp_index, temp_index,
+                        });
+                        try writer.print("  %array.append.pack.{d} = insertvalue %kira.bridge.value %array.append.pack.{d}.0, i64 %array.append.struct.ptrint.{d}, 2\n", .{
+                            temp_index, temp_index, temp_index,
                         });
                     },
                     .float => {
@@ -995,7 +1045,7 @@ pub fn buildTextFunctionBody(
                 try writer.print("  call void @\"kira_array_append\"(ptr %array.append.ptr.{d}, ptr %array.append.pack.ptr.{d})\n", .{
                     value.src, temp_index,
                 });
-                if (register_owned_ptr[value.src]) register_escaped[value.src] = true;
+                if (register_owned_ptr[value.src] and register_types[value.src].kind != .ffi_struct) register_escaped[value.src] = true;
                 if (register_local_ptr[value.src]) |source_local| {
                     switch (variant.local_types[source_local].kind) {
                         .ffi_struct => local_owns_contents[source_local] = false,
@@ -1250,12 +1300,44 @@ pub fn buildTextFunctionBody(
                 try writeIndirectCallInstruction(writer, request, symbol_names, request.program, register_types, value);
             },
             .ret => |value| {
+                var returned_struct_temp: ?usize = null;
+                if (value.src) |src| {
+                    if (register_types[src].kind == .ffi_struct and register_local_ptr[src] != null) {
+                        const temp_index = temp_counter;
+                        temp_counter += 1;
+                        const struct_type_name = typeRefName(register_types[src].name orelse return error.UnsupportedExecutableFeature);
+                        try writer.print("  %return.struct.src.{d} = inttoptr i64 %r{d} to ptr\n", .{ temp_index, src });
+                        try writer.print("  %return.struct.value.{d} = load {s}, ptr %return.struct.src.{d}\n", .{
+                            temp_index, struct_type_name, temp_index,
+                        });
+                        try writer.print("  %return.struct.size.ptr.{d} = getelementptr {s}, ptr null, i32 1\n", .{
+                            temp_index, struct_type_name,
+                        });
+                        try writer.print("  %return.struct.size.{d} = ptrtoint ptr %return.struct.size.ptr.{d} to i64\n", .{
+                            temp_index, temp_index,
+                        });
+                        try writer.print("  %return.struct.copy.{d} = call ptr @malloc(i64 %return.struct.size.{d})\n", .{
+                            temp_index, temp_index,
+                        });
+                        try writer.print("  store {s} %return.struct.value.{d}, ptr %return.struct.copy.{d}\n", .{
+                            struct_type_name, temp_index, temp_index,
+                        });
+                        try writer.print("  %return.struct.ptrint.{d} = ptrtoint ptr %return.struct.copy.{d} to i64\n", .{
+                            temp_index, temp_index,
+                        });
+                        returned_struct_temp = temp_index;
+                    }
+                }
                 try emitFunctionCleanup(allocator, writer, request.program, variant.local_types, local_owns_contents, local_owned_values, owned_values.items, register_escaped, register_local_ptr, value.src, &temp_counter);
                 if (value.src) |src| {
                     try writer.writeAll("  ret ");
                     try writer.writeAll(llvmValueTypeText(function_decl.return_type));
-                    try writer.writeAll(" %r");
-                    try writer.print("{d}", .{src});
+                    if (returned_struct_temp) |temp_index| {
+                        try writer.print(" %return.struct.ptrint.{d}", .{temp_index});
+                    } else {
+                        try writer.writeAll(" %r");
+                        try writer.print("{d}", .{src});
+                    }
                     try writer.writeAll("\n");
                 } else {
                     try writer.writeAll("  ret void\n");
@@ -1418,6 +1500,9 @@ fn functionReturnOwnsAllocationInner(
     const local_owned_values = try allocator.alloc(bool, function_decl.local_types.len);
     defer allocator.free(local_owned_values);
     @memset(local_owned_values, false);
+    const register_local_ptr = try allocator.alloc(?usize, function_decl.register_count);
+    defer allocator.free(register_local_ptr);
+    @memset(register_local_ptr, null);
 
     for (function_decl.param_types, 0..) |param_type, index| {
         if (!ownershipConsumes(paramOwnershipAt(function_decl.param_ownership, index))) continue;
@@ -1443,9 +1528,13 @@ fn functionReturnOwnsAllocationInner(
             .load_local => |value| {
                 if (value.dst >= owned.len or value.local >= function_decl.local_types.len) continue;
                 switch (function_decl.local_types[value.local].kind) {
+                    .ffi_struct => register_local_ptr[value.dst] = value.local,
                     .array, .raw_ptr, .string => owned[value.dst] = local_owned_values[value.local],
                     else => {},
                 }
+            },
+            .local_ptr => |value| {
+                if (value.dst < register_local_ptr.len) register_local_ptr[value.dst] = value.local;
             },
             .call => |value| if (value.dst) |dst| {
                 const callee_decl = functionById(program.*, value.callee) orelse return error.UnknownFunction;
@@ -1467,7 +1556,8 @@ fn functionReturnOwnsAllocationInner(
             .ret => |value| {
                 const src = value.src orelse return false;
                 saw_value_return = true;
-                if (src >= owned.len or !owned[src]) {
+                const returns_local_struct = src < register_local_ptr.len and register_local_ptr[src] != null and function_decl.return_type.kind == .ffi_struct;
+                if (src >= owned.len or (!owned[src] and !returns_local_struct)) {
                     try cache.put(function_id, .no);
                     return false;
                 }

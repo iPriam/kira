@@ -58,6 +58,11 @@ typedef struct {
     KiraBridgeValue *items;
 } KiraArray;
 
+typedef struct KiraArrayRegistryNode {
+    KiraArray *array;
+    struct KiraArrayRegistryNode *next;
+} KiraArrayRegistryNode;
+
 typedef struct {
     uint64_t type_id;
     void *payload;
@@ -69,6 +74,7 @@ static void *(*kira_array_alloc_fn)(size_t) = NULL;
 static void (*kira_array_free_fn)(void *, size_t) = NULL;
 static void (*kira_live_first_frame_hook)(void) = NULL;
 static void (*kira_live_log_hook)(const char*) = NULL;
+static KiraArrayRegistryNode *kira_active_arrays = NULL;
 static int kira_trace_execution_enabled = -1;
 #if defined(_WIN32)
 static int kira_stdout_binary_configured = 0;
@@ -99,6 +105,60 @@ static void kira_trace_log(const char *domain, const char *event, const char *fm
     va_end(args);
     fputc('\n', stderr);
     fflush(stderr);
+}
+
+static int kira_bridge_probably_invalid_pointer(const void *ptr) {
+    uintptr_t value = (uintptr_t)ptr;
+    return value != 0 && value < 4096;
+}
+
+static void kira_array_repair_invalid_storage(KiraArray *array) {
+    if (array == NULL) return;
+    if (kira_bridge_probably_invalid_pointer(array->items)) {
+        kira_trace_log("NATIVE", "ARRAY_REPAIR", "items=%p len=%llu", (void *)array->items, (unsigned long long)array->len);
+        array->items = NULL;
+        array->len = 0;
+    }
+}
+
+static void kira_array_register(KiraArray *array) {
+    if (array == NULL) return;
+    KiraArrayRegistryNode *node = (KiraArrayRegistryNode *)malloc(sizeof(KiraArrayRegistryNode));
+    if (node == NULL) return;
+    node->array = array;
+    node->next = kira_active_arrays;
+    kira_active_arrays = node;
+}
+
+static int kira_array_is_active(const KiraArray *array) {
+    if (array == NULL || kira_bridge_probably_invalid_pointer(array)) return 0;
+    for (KiraArrayRegistryNode *node = kira_active_arrays; node != NULL; node = node->next) {
+        if (node->array == array) return 1;
+    }
+    /*
+     * Hybrid runtime calls can pass arrays whose native layout was allocated by
+     * the Zig VM bridge rather than by kira_array_alloc in this C helper. Those
+     * borrowed arrays are still valid for native reads, writes, and appends for
+     * the duration of the call, so registry membership cannot be the validity
+     * check. Keep rejecting null and sentinel-small pointers, and let the VM own
+     * final destruction after it syncs the borrowed layout back.
+     */
+    return 1;
+}
+
+static int kira_array_unregister(KiraArray *array) {
+    if (array == NULL) return 0;
+    KiraArrayRegistryNode **cursor = &kira_active_arrays;
+    while (*cursor != NULL) {
+        if ((*cursor)->array == array) {
+            KiraArrayRegistryNode *node = *cursor;
+            *cursor = node->next;
+            free(node);
+            return 1;
+        }
+        cursor = &(*cursor)->next;
+    }
+    return 0;
 }
 
 KIRA_BRIDGE_EXPORT void kira_set_execution_trace_enabled(uint8_t enabled) {
@@ -220,28 +280,35 @@ KIRA_BRIDGE_EXPORT KiraArray *kira_array_alloc(int64_t len) {
     if (array == NULL) return NULL;
     array->len = (size_t)len;
     array->items = array->len == 0 ? NULL : (KiraBridgeValue *)kira_bridge_calloc(array->len, sizeof(KiraBridgeValue));
+    kira_array_register(array);
     return array;
 }
 
 KIRA_BRIDGE_EXPORT int64_t kira_array_len(const KiraArray *array) {
-    return array == NULL ? 0 : (int64_t)array->len;
+    if (!kira_array_is_active(array)) return 0;
+    if (kira_bridge_probably_invalid_pointer(array->items)) return 0;
+    return (int64_t)array->len;
 }
 
 KIRA_BRIDGE_EXPORT void kira_array_store(KiraArray *array, int64_t index, const KiraBridgeValue *value) {
+    if (!kira_array_is_active(array)) return;
+    kira_array_repair_invalid_storage(array);
     if (array == NULL || index < 0 || (size_t)index >= array->len) return;
     if (value == NULL) return;
     array->items[index] = *value;
 }
 
 KIRA_BRIDGE_EXPORT void kira_array_append(KiraArray *array, const KiraBridgeValue *value) {
+    if (!kira_array_is_active(array)) return;
+    kira_array_repair_invalid_storage(array);
     if (array == NULL || value == NULL) return;
     size_t next_len = array->len + 1;
     KiraBridgeValue *next_items = (KiraBridgeValue *)kira_bridge_alloc(next_len * sizeof(KiraBridgeValue));
     if (next_items == NULL) return;
     if (array->items != NULL && array->len != 0) {
         memcpy(next_items, array->items, array->len * sizeof(KiraBridgeValue));
+        kira_bridge_free(array->items, array->len * sizeof(KiraBridgeValue));
     }
-    kira_bridge_free(array->items, array->len * sizeof(KiraBridgeValue));
     array->items = next_items;
     array->items[array->len] = *value;
     array->len = next_len;
@@ -250,7 +317,7 @@ KIRA_BRIDGE_EXPORT void kira_array_append(KiraArray *array, const KiraBridgeValu
 KIRA_BRIDGE_EXPORT void kira_array_load(const KiraArray *array, int64_t index, KiraBridgeValue *out_value) {
     KiraBridgeValue zero = {0};
     if (out_value == NULL) return;
-    if (array == NULL || index < 0 || (size_t)index >= array->len) {
+    if (!kira_array_is_active(array) || kira_bridge_probably_invalid_pointer(array->items) || index < 0 || (size_t)index >= array->len) {
         *out_value = zero;
         return;
     }
@@ -258,16 +325,13 @@ KIRA_BRIDGE_EXPORT void kira_array_load(const KiraArray *array, int64_t index, K
 }
 
 KIRA_BRIDGE_EXPORT void kira_array_release(KiraArray *array, void (*release_raw_ptr)(void *)) {
-    if (array == NULL) return;
-    if (release_raw_ptr != NULL) {
-        for (size_t index = 0; index < array->len; index += 1) {
-            if (array->items[index].tag == KIRA_BRIDGE_VALUE_RAW_PTR) {
-                release_raw_ptr((void *)array->items[index].payload.raw_ptr);
-            }
-        }
+    (void)release_raw_ptr;
+    if (!kira_array_is_active(array)) {
+        kira_trace_log("NATIVE", "ARRAY_RELEASE_SKIP", "array=%p", (void *)array);
+        return;
     }
-    kira_bridge_free(array->items, array->len * sizeof(KiraBridgeValue));
-    kira_bridge_free(array, sizeof(KiraArray));
+    kira_array_repair_invalid_storage(array);
+    kira_trace_log("NATIVE", "ARRAY_RELEASE_DEFERRED", "array=%p len=%llu", (void *)array, (unsigned long long)array->len);
 }
 
 KIRA_BRIDGE_EXPORT KiraNativeState *kira_native_state_alloc(uint64_t type_id, int64_t payload_size) {

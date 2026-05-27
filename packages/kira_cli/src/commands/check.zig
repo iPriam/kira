@@ -27,6 +27,10 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
     if (input.target.root_path) |root| {
         try syncProject(allocator, root, parsed, stderr);
     }
+    if (parsed.print_backend_policy) {
+        const policy = if (input.target.project) |project| project.manifest.execution_policy else manifest.ExecutionPolicy{};
+        try printBackendPolicy(stdout, policy);
+    }
 
     const result = switch (input.target.target_kind) {
         .library => blk: {
@@ -55,6 +59,32 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
     return error.CommandFailed;
 }
 
+fn printBackendPolicy(stdout: anytype, policy: manifest.ExecutionPolicy) !void {
+    try stdout.print(
+        "backend.policy default backend={s} source={s} hybrid_selection={s}\n",
+        .{ policy.default_backend.label(), policy.default_source.label(), policy.hybrid_selection.label() },
+    );
+    for (policy.libraries) |library| {
+        if (library.backend == .hybrid or library.hybrid_selection != null) {
+            const selection = library.hybrid_selection orelse policy.hybrid_selection;
+            try stdout.print(
+                "backend.policy package={s} backend={s} source={s} hybrid_selection={s}",
+                .{ library.package, library.backend.label(), library.source.label(), selection.label() },
+            );
+            if (library.native_required or library.ffi_allowed) {
+                try stdout.print(" native_required={} ffi_allowed={}", .{ library.native_required, library.ffi_allowed });
+            }
+        } else {
+            try stdout.print(
+                "backend.policy package={s} backend={s} source={s} native_required={} ffi_allowed={}",
+                .{ library.package, library.backend.label(), library.source.label(), library.native_required, library.ffi_allowed },
+            );
+        }
+        try stdout.writeAll("\n");
+    }
+    try stdout.print("backend.policy web backend={s} graphics_bridge={s}\n", .{ policy.web.backend.label(), policy.web.graphics_bridge.label() });
+}
+
 fn syncProject(
     allocator: std.mem.Allocator,
     project_root: []const u8,
@@ -80,6 +110,7 @@ const ParsedArgs = struct {
     offline: bool = false,
     locked: bool = false,
     timings: bool = false,
+    print_backend_policy: bool = false,
     input_path: []const u8,
 };
 
@@ -87,6 +118,7 @@ fn parseArgs(args: []const []const u8) !ParsedArgs {
     var offline = false;
     var locked = false;
     var timings = false;
+    var print_backend_policy = false;
     var input_path: ?[]const u8 = null;
 
     var backend: ?build_def.ExecutionTarget = null;
@@ -118,6 +150,10 @@ fn parseArgs(args: []const []const u8) !ParsedArgs {
             timings = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--print-backend-policy")) {
+            print_backend_policy = true;
+            continue;
+        }
         if (input_path != null) return error.InvalidArguments;
         input_path = arg;
     }
@@ -128,6 +164,7 @@ fn parseArgs(args: []const []const u8) !ParsedArgs {
         .offline = offline,
         .locked = locked,
         .timings = timings,
+        .print_backend_policy = print_backend_policy,
         .input_path = input_path orelse support.defaultCommandInputPath(),
     };
 }

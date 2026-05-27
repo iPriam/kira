@@ -20,10 +20,7 @@ pub fn runFromManifestPath(allocator: std.mem.Allocator, manifest_path: []const 
     const manifest_text = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, manifest_path, allocator, .limited(1024 * 1024));
     const runner_manifest = try model.RunnerManifest.parse(allocator, manifest_text);
     const manifest_dir = std.fs.path.dirname(manifest_path) orelse ".";
-    const local_cache_root = if (std.fs.path.isAbsolute(runner_manifest.local_cache_path))
-        try allocator.dupe(u8, runner_manifest.local_cache_path)
-    else
-        try std.fs.path.join(allocator, &.{ manifest_dir, runner_manifest.local_cache_path });
+    const local_cache_root = try resolveLocalCacheRoot(allocator, manifest_dir, runner_manifest.local_cache_path);
     try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, local_cache_root);
 
     var client = try RunnerClient.connect(allocator, runner_manifest.server_host, runner_manifest.server_port);
@@ -46,6 +43,55 @@ pub fn runFromManifestPath(allocator: std.mem.Allocator, manifest_path: []const 
         const bundle_root = try std.fs.path.join(allocator, &.{ local_cache_root, "bundles", try std.fmt.allocPrint(allocator, "{s}.klbundle", .{runner_manifest.main_bundle_id}) });
         try runBundle(allocator, &client, bundle_root, runner_manifest.target_path, restart_count);
     }
+}
+
+fn resolveLocalCacheRoot(allocator: std.mem.Allocator, manifest_dir: []const u8, local_cache_path: []const u8) ![]const u8 {
+    if (std.fs.path.isAbsolute(local_cache_path)) return allocator.dupe(u8, local_cache_path);
+    if (std.mem.startsWith(u8, local_cache_path, "app-support/")) {
+        const base = try appContainerPath(allocator, .application_support);
+        return std.fs.path.join(allocator, &.{ base, local_cache_path["app-support/".len..] });
+    }
+    if (std.mem.startsWith(u8, local_cache_path, "app-cache/")) {
+        const base = try appContainerPath(allocator, .caches);
+        return std.fs.path.join(allocator, &.{ base, local_cache_path["app-cache/".len..] });
+    }
+    if (std.mem.startsWith(u8, local_cache_path, "tmp/")) {
+        const base = try appContainerPath(allocator, .temporary);
+        return std.fs.path.join(allocator, &.{ base, local_cache_path["tmp/".len..] });
+    }
+    return std.fs.path.join(allocator, &.{ manifest_dir, local_cache_path });
+}
+
+const AppContainerPathKind = enum {
+    application_support,
+    caches,
+    temporary,
+};
+
+fn appContainerPath(allocator: std.mem.Allocator, kind: AppContainerPathKind) ![]const u8 {
+    if (std.c.getenv("KIRA_LIVE_APP_CONTAINER_ROOT")) |raw| {
+        const root = std.mem.span(raw);
+        if (root.len != 0) return appContainerPathFromRoot(allocator, root, kind);
+    }
+    if (std.c.getenv("HOME")) |raw| {
+        const home = std.mem.span(raw);
+        if (home.len != 0) return appContainerPathFromRoot(allocator, home, kind);
+    }
+    if (kind == .temporary) {
+        if (std.c.getenv("TMPDIR")) |raw| {
+            const tmp = std.mem.span(raw);
+            if (tmp.len != 0) return allocator.dupe(u8, tmp);
+        }
+    }
+    return appContainerPathFromRoot(allocator, ".", kind);
+}
+
+fn appContainerPathFromRoot(allocator: std.mem.Allocator, root: []const u8, kind: AppContainerPathKind) ![]const u8 {
+    return switch (kind) {
+        .application_support => std.fs.path.join(allocator, &.{ root, "Library", "Application Support" }),
+        .caches => std.fs.path.join(allocator, &.{ root, "Library", "Caches" }),
+        .temporary => std.fs.path.join(allocator, &.{ root, "tmp" }),
+    };
 }
 
 fn runBundle(
@@ -225,3 +271,18 @@ const RunnerClient = struct {
         return protocol.readFrame(allocator, &self.reader.interface);
     }
 };
+
+test "live runner cache paths can target app-container writable roots" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const app_support = try appContainerPathFromRoot(arena.allocator(), "/tmp/KiraContainer", .application_support);
+    try std.testing.expectEqualStrings("/tmp/KiraContainer/Library/Application Support", app_support);
+    const caches = try appContainerPathFromRoot(arena.allocator(), "/tmp/KiraContainer", .caches);
+    try std.testing.expectEqualStrings("/tmp/KiraContainer/Library/Caches", caches);
+    const temporary = try appContainerPathFromRoot(arena.allocator(), "/tmp/KiraContainer", .temporary);
+    try std.testing.expectEqualStrings("/tmp/KiraContainer/tmp", temporary);
+
+    const relative = try resolveLocalCacheRoot(arena.allocator(), "/App.app/Contents/Resources", "cache");
+    try std.testing.expectEqualStrings("/App.app/Contents/Resources/cache", relative);
+}

@@ -19,6 +19,25 @@ pub fn nativeCodeRequiresNativeBackend(allocator: std.mem.Allocator, source_path
     });
 }
 
+pub fn nativeFfiPackageRequiresNativeBackend(allocator: std.mem.Allocator, source_path: []const u8, package_name: []const u8) !diagnostics.Diagnostic {
+    return message.build(.{
+        .code = .KBE001_UnsupportedBackendFeature,
+        .domain = .backend,
+        .phase = .backend_prepare,
+        .title = "native FFI package requires a native-capable backend",
+        .message = try std.fmt.allocPrint(
+            allocator,
+            "package `{s}` requires native FFI but was selected for VM execution",
+            .{package_name},
+        ),
+        .help = try std.fmt.allocPrint(
+            allocator,
+            "Use `kira check --backend llvm {s}` or `kira check --backend hybrid {s}` so native FFI packages are compiled through a native-capable backend.",
+            .{ source_path, source_path },
+        ),
+    });
+}
+
 pub fn runtimeEntrypointInNativeBuild() diagnostics.Diagnostic {
     return message.build(.{
         .code = .KBE002_RuntimeOnlyValueInNativeBackend,

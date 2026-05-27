@@ -1,17 +1,20 @@
 const ffi = globalThis.KiraBrowserFFI;
 const root = ffi.documentBody();
 const title = ffi.createElement("h1");
-ffi.setText(title, "Hello from Kira Wasm");
+ffi.setText(title, "Kira WebGPU surface");
 ffi.appendChild(root, title);
-const details = ffi.createElement("p");
-ffi.setText(details, "Location: " + ffi.href() + " | UA: " + ffi.userAgent());
-ffi.appendChild(root, details);
-const button = ffi.createElement("button");
-ffi.setText(button, "Click me");
-ffi.appendChild(root, button);
+const canvas = ffi.createCanvas();
+ffi.setAttribute(canvas, "width", "640");
+ffi.setAttribute(canvas, "height", "360");
+ffi.setStyle(canvas, "border", "1px solid #222");
+ffi.appendChild(root, canvas);
 const status = ffi.createElement("p");
-ffi.setText(status, "Waiting for DOM update");
+ffi.setText(status, "Detecting WebGPU");
 ffi.appendChild(root, status);
-ffi.onClick(button, () => ffi.setText(status, "Kira DOM updated"));
-ffi.setTimeout(() => ffi.setText(status, "Kira DOM updated"), 250);
-ffi.consoleLog("Kira browser API call succeeded");
+ffi.detectWebGPU().then((info) => {
+  ffi.setText(status, info.available && info.adapter ? "WebGPU adapter detected" : "WebGPU unavailable in this browser");
+  ffi.consoleLog("Kira WebGPU capability detection completed");
+}).catch((error) => {
+  ffi.setText(status, "WebGPU detection failed");
+  throw error;
+});

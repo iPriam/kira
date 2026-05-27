@@ -350,7 +350,7 @@ pub fn compileFileForBackendWithSelector(
         .vm => {
             const bytecode_start = nowNs();
             const module = bytecode.compileProgram(allocator, ir_program, .vm) catch |err| {
-                const backend_diagnostics = try backendDiagnostics(allocator, frontend.source.path, err);
+                const backend_diagnostics = try backendDiagnosticsForVm(allocator, frontend.source.path, err, merged_native_libraries);
                 timingPrint("[kira:timing] bytecode.compileProgram path={s} backend=vm ns={d}\n", .{ path, elapsedNs(bytecode_start) });
                 timingPrint("[kira:timing] compileFileForBackend.total path={s} backend={s} ns={d}\n", .{ path, @tagName(target), elapsedNs(total_start) });
                 return .{
@@ -599,6 +599,29 @@ pub fn backendDiagnostics(allocator: std.mem.Allocator, source_path: []const u8,
     const items = try allocator.alloc(diagnostics.Diagnostic, 1);
     items[0] = try backendDiagnostic(allocator, source_path, err);
     return items;
+}
+
+fn backendDiagnosticsForVm(
+    allocator: std.mem.Allocator,
+    source_path: []const u8,
+    err: anyerror,
+    native_libraries: []const native.ResolvedNativeLibrary,
+) ![]diagnostics.Diagnostic {
+    if (err == error.NativeFunctionInVmBuild and native_libraries.len != 0) {
+        const items = try allocator.alloc(diagnostics.Diagnostic, 1);
+        items[0] = try diag_messages.BackendMessages.nativeFfiPackageRequiresNativeBackend(
+            allocator,
+            source_path,
+            packageNameForNativeLibrary(native_libraries[0]),
+        );
+        return items;
+    }
+    return backendDiagnostics(allocator, source_path, err);
+}
+
+fn packageNameForNativeLibrary(library: native.ResolvedNativeLibrary) []const u8 {
+    if (std.mem.indexOf(u8, library.name, "sokol") != null) return "kira-graphics";
+    return library.name;
 }
 
 pub fn lexFile(allocator: std.mem.Allocator, path: []const u8) !LexPipelineResult {

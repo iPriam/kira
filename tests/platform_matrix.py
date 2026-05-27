@@ -56,6 +56,19 @@ def run_iphone_live(root: Path, cli: Path, target: cli_matrix.Target) -> str:
     )
 
 
+def run_android_live(root: Path, cli: Path, target: cli_matrix.Target) -> str:
+    result = cli_matrix.run_command(
+        [str(cli), "live", "android", str(target.path), "--quit-after", "1s"],
+        cwd=root,
+        timeout_s=60.0,
+    )
+    return status_from_result(
+        result,
+        ("event: live.android.tools.detected", "event: live.android.emulator.detected", "event: live.session.ready"),
+        ("KTC050", "KCL054", "KCL031"),
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip-macos", action="store_true")
@@ -74,15 +87,16 @@ def main() -> int:
     for example in examples:
         print(f"- {example.project}: {example.scope}")
 
-    print("\nProject | Example | desktop-fast live | macOS Xcode live | iPhone live")
-    print("--- | --- | --- | --- | ---")
+    print("\nProject | Example | desktop-fast live | macOS Xcode live | iPhone live | Android live")
+    print("--- | --- | --- | --- | --- | ---")
     failures: list[str] = []
     for example in examples:
         desktop = run_desktop_live(root, cli, example)
         macos = "skipped by flag" if args.skip_macos else run_macos_live(root, cli, example)
         iphone = "skipped by flag" if args.skip_iphone else run_iphone_live(root, cli, example)
-        print(f"{example.project} | {example.scope} | {desktop} | {macos} | {iphone}")
-        for label, status in (("desktop", desktop), ("macos", macos), ("iphone", iphone)):
+        android = run_android_live(root, cli, example)
+        print(f"{example.project} | {example.scope} | {desktop} | {macos} | {iphone} | {android}")
+        for label, status in (("desktop", desktop), ("macos", macos), ("iphone", iphone), ("android", android)):
             if status.startswith("fail"):
                 failures.append(f"{example.project}/{example.scope} {label}: {status}")
 

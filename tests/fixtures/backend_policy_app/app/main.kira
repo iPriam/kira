@@ -1,0 +1,5 @@
+@Main
+function main() {
+    print(1)
+    return
+}

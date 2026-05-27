@@ -51,6 +51,7 @@ pub fn toArgs(allocator: std.mem.Allocator, command: ParsedCommand) ![]const []c
             });
             if (options.input_path) |path| try list.append(path);
             if (options.out_dir) |out_dir| try list.appendSlice(&.{ "--out-dir", out_dir });
+            if (options.target) |target| try list.appendSlice(&.{ "--target", target });
         },
         .instruments => |options| {
             try list.appendSlice(&.{ "run", options.input_path, "--backend", instrumentBackendLabel(options.backend) });
@@ -84,6 +85,7 @@ fn appendProjectOptions(allocator: std.mem.Allocator, list: *std.array_list.Mana
     if (options.offline) try list.append("--offline");
     if (options.locked) try list.append("--locked");
     if (options.timings) try list.append("--timings");
+    if (options.print_backend_policy) try list.append("--print-backend-policy");
     try list.append(options.input_path);
 }
 

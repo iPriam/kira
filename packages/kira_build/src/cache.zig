@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_def = @import("kira_build_definition");
+const build_options = @import("kira_build_build_options");
 const hybrid = @import("kira_hybrid_definition");
 const kira_toolchain = @import("kira_toolchain");
 
@@ -68,12 +69,12 @@ pub const Entry = struct {
     pub fn hasArtifacts(self: Entry) bool {
         if (!fileExistsJoin(self.root_path, complete_marker_name)) return false;
         return switch (self.target) {
-            .vm => fileExistsJoin(self.root_path, "main.kbc"),
-            .llvm_native => fileExistsJoin(self.root_path, objectName()) and fileExistsJoin(self.root_path, executableNamePage("main")),
-            .hybrid => fileExistsJoin(self.root_path, "main.kbc") and
-                fileExistsJoin(self.root_path, objectName()) and
-                fileExistsJoin(self.root_path, sharedLibraryName()) and
-                fileExistsJoin(self.root_path, "main.khm"),
+            .vm => fileExistsNonEmptyJoin(self.root_path, "main.kbc"),
+            .llvm_native => fileExistsNonEmptyJoin(self.root_path, objectName()) and fileExistsNonEmptyJoin(self.root_path, executableNamePage("main")),
+            .hybrid => fileExistsNonEmptyJoin(self.root_path, "main.kbc") and
+                fileExistsNonEmptyJoin(self.root_path, objectName()) and
+                fileExistsNonEmptyJoin(self.root_path, sharedLibraryName()) and
+                fileExistsNonEmptyJoin(self.root_path, "main.khm"),
         };
     }
 
@@ -224,8 +225,13 @@ const StageDir = struct {
 
 fn fingerprintBuild(allocator: std.mem.Allocator, source_path: []const u8, target_name: []const u8) ![]const u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("kira-build-cache-v1\n");
+    hasher.update("kira-build-cache-v2\n");
     hasher.update(target_name);
+    hasher.update("\n");
+    const canonical_source = try absolutize(allocator, source_path);
+    defer allocator.free(canonical_source);
+    hasher.update("source=");
+    hasher.update(canonical_source);
     hasher.update("\n");
     hasher.update(@tagName(builtin.cpu.arch));
     hasher.update("-");
@@ -240,6 +246,7 @@ fn fingerprintBuild(allocator: std.mem.Allocator, source_path: []const u8, targe
         hasher.update(value);
         hasher.update("\n");
     } else |_| {}
+    try hashRepoSupportInputs(allocator, &hasher);
 
     const files = try inputFiles(allocator, source_path);
     defer allocator.free(files);
@@ -255,6 +262,25 @@ fn fingerprintBuild(allocator: std.mem.Allocator, source_path: []const u8, targe
     var digest: [32]u8 = undefined;
     hasher.final(&digest);
     return hexDigest(allocator, &digest);
+}
+
+fn hashRepoSupportInputs(allocator: std.mem.Allocator, hasher: anytype) !void {
+    const helper_source = try std.fs.path.join(allocator, &.{ build_options.repo_root, "packages", "kira_native_bridge", "src", "runtime_helpers.c" });
+    defer allocator.free(helper_source);
+    try hashFileIfPresent(allocator, hasher, "native_bridge_runtime_helpers", helper_source);
+}
+
+fn hashFileIfPresent(allocator: std.mem.Allocator, hasher: anytype, label: []const u8, path: []const u8) !void {
+    const canonical = absolutize(allocator, path) catch return;
+    defer allocator.free(canonical);
+    const contents = std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, canonical, allocator, .limited(64 * 1024 * 1024)) catch return;
+    defer allocator.free(contents);
+    hasher.update(label);
+    hasher.update("=");
+    hasher.update(canonical);
+    hasher.update("\n");
+    hasher.update(contents);
+    hasher.update("\n");
 }
 
 fn hashCompilerIdentity(allocator: std.mem.Allocator, hasher: anytype) !void {
@@ -481,10 +507,26 @@ fn fileExistsJoin(root: []const u8, name: []const u8) bool {
     return fileExists(path);
 }
 
+fn fileExistsNonEmptyJoin(root: []const u8, name: []const u8) bool {
+    const path = std.fs.path.join(std.heap.page_allocator, &.{ root, name }) catch return false;
+    defer std.heap.page_allocator.free(path);
+    return fileExistsNonEmpty(path);
+}
+
 fn fileExists(path: []const u8) bool {
     var file = std.Io.Dir.openFileAbsolute(std.Options.debug_io, path, .{}) catch std.Io.Dir.cwd().openFile(std.Options.debug_io, path, .{}) catch return false;
     file.close(std.Options.debug_io);
     return true;
+}
+
+fn fileExistsNonEmpty(path: []const u8) bool {
+    var file = if (std.fs.path.isAbsolute(path))
+        std.Io.Dir.openFileAbsolute(std.Options.debug_io, path, .{}) catch return false
+    else
+        std.Io.Dir.cwd().openFile(std.Options.debug_io, path, .{}) catch return false;
+    defer file.close(std.Options.debug_io);
+    const stat = file.stat(std.Options.debug_io) catch return false;
+    return stat.size != 0;
 }
 
 fn absolutize(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {

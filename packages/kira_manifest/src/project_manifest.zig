@@ -16,6 +16,7 @@ pub const ProjectManifest = struct {
     dependencies: []const dependency.DependencySpec = &.{},
     packages: []const []const u8 = &.{},
     execution_mode: []const u8 = "vm",
+    execution_policy: platform_config.ExecutionPolicy = .{},
     build_target: []const u8 = "host",
     registry_url: ?[]const u8 = null,
     registry_token_env: ?[]const u8 = null,

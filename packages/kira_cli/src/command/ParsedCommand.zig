@@ -17,6 +17,7 @@ pub const ProjectOptions = struct {
     offline: bool = false,
     locked: bool = false,
     timings: bool = false,
+    print_backend_policy: bool = false,
     input_path: []const u8 = ".",
 };
 
@@ -126,6 +127,7 @@ pub const ShaderOptions = struct {
     mode: ShaderMode,
     input_path: ?[]const u8 = null,
     out_dir: ?[]const u8 = null,
+    target: ?[]const u8 = null,
 };
 
 pub const InstrumentBackend = enum { runtime, llvm, hybrid };

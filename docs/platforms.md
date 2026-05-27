@@ -38,6 +38,8 @@ lto = true
 
 Default runners are also synthesized: desktop uses `kira`, Apple platforms use `xcode`, Windows uses `visual-studio`, Android uses `android-studio`, Web uses `kira-wasm` with `default_surface = "dom"`, and Linux uses `cmake`.
 
+Web surface requirements are also typed. `dom` is DOM rendering, while `webgpu` is a graphics-canvas surface that requires a canvas and browser WebGPU capability detection. This is platform modeling for Kira Graphics and is separate from Kira Web DOM rendering.
+
 TOML remains mostly optional. A minimal app can be:
 
 ```toml
@@ -49,3 +51,7 @@ kind = "app"
 `profiles.profiler` is the supported profiling profile name. `profiles.profile` is reserved so configs do not silently drift between noun and mode names.
 
 Target inference is command-aware. `kira live ios` means runner `ios` and the current project target. `kira live ./ios` means the default desktop runner and target path `./ios`.
+
+iOS live reporting keeps generic iPhoneOS build, simulator fallback, physical-device detection, provisioning, install, launch, and live protocol states separate. When a physical iPhone is unavailable, Kira audits the simulator fallback instead of claiming physical-device success.
+
+Android live reporting keeps SDK/Gradle availability, physical-device detection, emulator detection, install, launch, and live protocol states separate. Emulator-only success is not physical Android success.

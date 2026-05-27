@@ -1,1 +1,1 @@
-{"runner":"web","runtime":"kira-wasm","surface":"dom","app":"web_dom"}
+{"runner":"web","runtime":"kira-wasm","surface":"webgpu","rendering_model":"graphics-canvas","graphics_capability":"webgpu","requires_canvas":true,"requires_browser_detection":true,"app":"web_dom"}

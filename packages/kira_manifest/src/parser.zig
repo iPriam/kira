@@ -21,6 +21,11 @@ pub fn parseProjectManifest(allocator: std.mem.Allocator, text: []const u8) !Pro
     var registry_token_env: ?[]const u8 = null;
     var packages = std.array_list.Managed([]const u8).init(allocator);
     var dependencies = std.array_list.Managed(dependency.DependencySpec).init(allocator);
+    var execution_default_backend: platform_config.ExecutionBackend = .vm;
+    var execution_default_source: platform_config.BackendSelectionSource = .platform_default;
+    var execution_hybrid_selection: platform_config.HybridSelectionMode = .annotation_driven;
+    var execution_libraries = std.array_list.Managed(platform_config.LibraryExecutionPolicy).init(allocator);
+    var execution_web = platform_config.WebExecutionPolicy{};
     var section: []const u8 = "";
     var pending_array: ?enum {
         packages,
@@ -70,6 +75,50 @@ pub fn parseProjectManifest(allocator: std.mem.Allocator, text: []const u8) !Pro
             continue;
         }
 
+        if (std.mem.eql(u8, section, "execution")) {
+            if (std.mem.eql(u8, kv.key, "default_backend")) {
+                const parsed_backend = platform_config.ExecutionBackend.parse(try parseBorrowedString(kv.value)) orelse return error.InvalidManifest;
+                execution_default_backend = parsed_backend;
+                execution_default_source = .app_manifest;
+                execution_mode = try allocator.dupe(u8, parsed_backend.label());
+            }
+            continue;
+        }
+
+        if (std.mem.eql(u8, section, "execution.hybrid")) {
+            if (std.mem.eql(u8, kv.key, "selection")) {
+                execution_hybrid_selection = platform_config.HybridSelectionMode.parse(try parseBorrowedString(kv.value)) orelse return error.InvalidManifest;
+            }
+            continue;
+        }
+
+        if (std.mem.eql(u8, section, "execution.web")) {
+            if (std.mem.eql(u8, kv.key, "backend")) {
+                execution_web.backend = platform_config.ExecutionBackend.parse(try parseBorrowedString(kv.value)) orelse return error.InvalidManifest;
+            }
+            if (std.mem.eql(u8, kv.key, "graphics_bridge")) {
+                execution_web.graphics_bridge = platform_config.WebGraphicsBridge.parse(try parseBorrowedString(kv.value)) orelse return error.InvalidManifest;
+            }
+            continue;
+        }
+
+        if (parseExecutionLibrarySection(section)) |library_name| {
+            const policy = try ensureExecutionLibraryPolicy(allocator, &execution_libraries, library_name);
+            if (std.mem.eql(u8, kv.key, "backend")) {
+                policy.backend = platform_config.ExecutionBackend.parse(try parseBorrowedString(kv.value)) orelse return error.InvalidManifest;
+            }
+            if (std.mem.eql(u8, kv.key, "native_required")) {
+                policy.native_required = try parseBool(kv.value);
+            }
+            if (std.mem.eql(u8, kv.key, "ffi_allowed")) {
+                policy.ffi_allowed = try parseBool(kv.value);
+            }
+            if (std.mem.eql(u8, kv.key, "hybrid_selection")) {
+                policy.hybrid_selection = platform_config.HybridSelectionMode.parse(try parseBorrowedString(kv.value)) orelse return error.InvalidManifest;
+            }
+            continue;
+        }
+
         if (std.mem.eql(u8, section, "registry")) {
             if (std.mem.eql(u8, kv.key, "url")) registry_url = try parseOwnedString(allocator, kv.value);
             if (std.mem.eql(u8, kv.key, "token_env")) registry_token_env = try parseOwnedString(allocator, kv.value);
@@ -92,10 +141,41 @@ pub fn parseProjectManifest(allocator: std.mem.Allocator, text: []const u8) !Pro
         .dependencies = try dependencies.toOwnedSlice(),
         .packages = try packages.toOwnedSlice(),
         .execution_mode = execution_mode,
+        .execution_policy = .{
+            .default_backend = execution_default_backend,
+            .default_source = execution_default_source,
+            .hybrid_selection = execution_hybrid_selection,
+            .libraries = try execution_libraries.toOwnedSlice(),
+            .web = execution_web,
+        },
         .build_target = build_target,
         .registry_url = registry_url,
         .registry_token_env = registry_token_env,
     };
+}
+
+fn parseExecutionLibrarySection(section: []const u8) ?[]const u8 {
+    const prefix = "execution.libraries.";
+    if (!std.mem.startsWith(u8, section, prefix)) return null;
+    const raw = section[prefix.len..];
+    if (raw.len < 2 or raw[0] != '"' or raw[raw.len - 1] != '"') return null;
+    return raw[1 .. raw.len - 1];
+}
+
+fn ensureExecutionLibraryPolicy(
+    allocator: std.mem.Allocator,
+    list: *std.array_list.Managed(platform_config.LibraryExecutionPolicy),
+    package: []const u8,
+) !*platform_config.LibraryExecutionPolicy {
+    for (list.items) |*item| {
+        if (std.mem.eql(u8, item.package, package)) return item;
+    }
+    try list.append(.{
+        .package = try allocator.dupe(u8, package),
+        .backend = .hybrid,
+        .source = .app_manifest,
+    });
+    return &list.items[list.items.len - 1];
 }
 
 pub fn parsePackageManifest(allocator: std.mem.Allocator, text: []const u8) !PackageManifest {
@@ -563,6 +643,12 @@ fn parsePackageKind(value: []const u8) !PackageKind {
     const text = try parseBorrowedString(value);
     if (std.mem.eql(u8, text, "app")) return .app;
     if (std.mem.eql(u8, text, "library")) return .library;
+    return error.InvalidManifest;
+}
+
+fn parseBool(value: []const u8) !bool {
+    if (std.mem.eql(u8, value, "true")) return true;
+    if (std.mem.eql(u8, value, "false")) return false;
     return error.InvalidManifest;
 }
 

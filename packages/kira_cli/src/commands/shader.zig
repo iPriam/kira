@@ -1,6 +1,7 @@
 const std = @import("std");
 const build = @import("kira_build");
 const diagnostics = @import("kira_diagnostics");
+const shader_model = @import("kira_shader_model");
 const syntax = @import("kira_ksl_syntax_model");
 const support = @import("../support.zig");
 
@@ -40,7 +41,7 @@ fn executeAst(allocator: std.mem.Allocator, args: []const []const u8, stdout: an
 }
 
 fn executeBuild(allocator: std.mem.Allocator, args: []const []const u8, stdout: anytype, stderr: anytype) !void {
-    if (args.len > 3) return error.InvalidArguments;
+    if (args.len > 5) return error.InvalidArguments;
     const parsed = try parseBuildArgs(args);
     const resolved = try resolveBuildInputs(allocator, parsed, stderr);
     try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, resolved.output_dir);
@@ -48,7 +49,7 @@ fn executeBuild(allocator: std.mem.Allocator, args: []const []const u8, stdout: 
 
     for (resolved.paths) |path| {
         try support.logFrontendStarted(stderr, "shader-build", path);
-        const result = try build.buildShaderFile(allocator, path);
+        const result = try build.buildShaderFileForTarget(allocator, path, resolved.target);
         if (result.program == null or diagnostics.hasErrors(result.diagnostics)) {
             try support.logFrontendFailed(stderr, null, path, result.diagnostics.len);
             try support.renderDiagnostics(stderr, &result.source, result.diagnostics);
@@ -62,6 +63,30 @@ fn executeBuild(allocator: std.mem.Allocator, args: []const []const u8, stdout: 
             if (artifact.fragment_glsl) |fragment_glsl| {
                 try writeTextFile(allocator, resolved.output_dir, try std.fmt.allocPrint(allocator, "{s}.frag.glsl", .{artifact.shader_name}), fragment_glsl);
             }
+            if (artifact.vertex_wgsl) |vertex_wgsl| {
+                try writeTextFile(allocator, resolved.output_dir, try std.fmt.allocPrint(allocator, "{s}.vert.wgsl", .{artifact.shader_name}), vertex_wgsl);
+            }
+            if (artifact.fragment_wgsl) |fragment_wgsl| {
+                try writeTextFile(allocator, resolved.output_dir, try std.fmt.allocPrint(allocator, "{s}.frag.wgsl", .{artifact.shader_name}), fragment_wgsl);
+            }
+            if (artifact.vertex_hlsl) |vertex_hlsl| {
+                try writeTextFile(allocator, resolved.output_dir, try std.fmt.allocPrint(allocator, "{s}.vert.hlsl", .{artifact.shader_name}), vertex_hlsl);
+            }
+            if (artifact.fragment_hlsl) |fragment_hlsl| {
+                try writeTextFile(allocator, resolved.output_dir, try std.fmt.allocPrint(allocator, "{s}.frag.hlsl", .{artifact.shader_name}), fragment_hlsl);
+            }
+            if (artifact.vertex_msl) |vertex_msl| {
+                try writeTextFile(allocator, resolved.output_dir, try std.fmt.allocPrint(allocator, "{s}.vert.metal", .{artifact.shader_name}), vertex_msl);
+            }
+            if (artifact.fragment_msl) |fragment_msl| {
+                try writeTextFile(allocator, resolved.output_dir, try std.fmt.allocPrint(allocator, "{s}.frag.metal", .{artifact.shader_name}), fragment_msl);
+            }
+            if (artifact.vertex_spirv) |vertex_spirv| {
+                try writeTextFile(allocator, resolved.output_dir, try std.fmt.allocPrint(allocator, "{s}.vert.spvasm", .{artifact.shader_name}), vertex_spirv);
+            }
+            if (artifact.fragment_spirv) |fragment_spirv| {
+                try writeTextFile(allocator, resolved.output_dir, try std.fmt.allocPrint(allocator, "{s}.frag.spvasm", .{artifact.shader_name}), fragment_spirv);
+            }
             try writeTextFile(allocator, resolved.output_dir, try std.fmt.allocPrint(allocator, "{s}.reflection.json", .{artifact.shader_name}), artifact.reflection_json);
             artifact_sets_written += 1;
         }
@@ -73,15 +98,18 @@ fn executeBuild(allocator: std.mem.Allocator, args: []const []const u8, stdout: 
 const BuildArgs = struct {
     path: ?[]const u8 = null,
     output_dir: ?[]const u8 = null,
+    target: shader_model.BackendTarget = .glsl_330,
 };
 
 const ResolvedBuildInputs = struct {
     paths: []const []const u8,
     output_dir: []const u8,
+    target: shader_model.BackendTarget,
 };
 
 fn parseBuildArgs(args: []const []const u8) !BuildArgs {
     var output_dir: ?[]const u8 = null;
+    var target: shader_model.BackendTarget = .glsl_330;
     var path: ?[]const u8 = null;
     var index: usize = 0;
     while (index < args.len) : (index += 1) {
@@ -92,10 +120,16 @@ fn parseBuildArgs(args: []const []const u8) !BuildArgs {
             output_dir = args[index];
             continue;
         }
+        if (std.mem.eql(u8, arg, "--target")) {
+            index += 1;
+            if (index >= args.len) return error.InvalidArguments;
+            target = shader_model.BackendTarget.parse(args[index]) orelse return error.InvalidArguments;
+            continue;
+        }
         if (path != null) return error.InvalidArguments;
         path = arg;
     }
-    return .{ .path = path, .output_dir = output_dir };
+    return .{ .path = path, .output_dir = output_dir, .target = target };
 }
 
 fn defaultOutputDir(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
@@ -108,12 +142,12 @@ fn resolveBuildInputs(allocator: std.mem.Allocator, parsed: BuildArgs, stderr: a
         if (directoryExists(path)) {
             const discovered = try discoverShaderFilesInDir(allocator, path, false, stderr);
             const output_dir = parsed.output_dir orelse try defaultOutputDirForDirectory(allocator, path);
-            return .{ .paths = discovered, .output_dir = output_dir };
+            return .{ .paths = discovered, .output_dir = output_dir, .target = parsed.target };
         }
         const output_dir = parsed.output_dir orelse try defaultOutputDir(allocator, path);
         const single = try allocator.alloc([]const u8, 1);
         single[0] = path;
-        return .{ .paths = single, .output_dir = output_dir };
+        return .{ .paths = single, .output_dir = output_dir, .target = parsed.target };
     }
 
     if (!directoryExists("Shaders")) {
@@ -124,6 +158,7 @@ fn resolveBuildInputs(allocator: std.mem.Allocator, parsed: BuildArgs, stderr: a
     return .{
         .paths = try discoverShaderFilesInDir(allocator, "Shaders", true, stderr),
         .output_dir = parsed.output_dir orelse try allocator.dupe(u8, "generated/Shaders"),
+        .target = parsed.target,
     };
 }
 
@@ -237,6 +272,54 @@ test "shader build command writes artifacts" {
     try std.testing.expect(fileExists(out_dir, "TexturedQuad.vert.glsl"));
     try std.testing.expect(fileExists(out_dir, "TexturedQuad.frag.glsl"));
     try std.testing.expect(fileExists(out_dir, "TexturedQuad.reflection.json"));
+}
+
+test "shader build command writes WGSL artifacts when requested" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const out_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+
+    var stdout_buffer: [256]u8 = undefined;
+    var stderr_buffer: [1024]u8 = undefined;
+    var stdout = std.Io.Writer.fixed(&stdout_buffer);
+    var stderr = std.Io.Writer.fixed(&stderr_buffer);
+
+    try execute(allocator, &.{ "build", "tests/shaders/pass/graphics/basic_triangle/main.ksl", "--target", "wgsl", "--out-dir", out_dir }, &stdout, &stderr);
+
+    try std.testing.expect(fileExists(out_dir, "BasicTriangle.vert.wgsl"));
+    try std.testing.expect(fileExists(out_dir, "BasicTriangle.frag.wgsl"));
+    try std.testing.expect(fileExists(out_dir, "BasicTriangle.reflection.json"));
+}
+
+test "shader build command writes cross-target artifacts when requested" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    inline for (.{
+        .{ .target = "hlsl", .vertex = "BasicTriangle.vert.hlsl", .fragment = "BasicTriangle.frag.hlsl" },
+        .{ .target = "msl", .vertex = "BasicTriangle.vert.metal", .fragment = "BasicTriangle.frag.metal" },
+        .{ .target = "spirv", .vertex = "BasicTriangle.vert.spvasm", .fragment = "BasicTriangle.frag.spvasm" },
+    }) |case| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const out_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+
+        var stdout_buffer: [256]u8 = undefined;
+        var stderr_buffer: [1024]u8 = undefined;
+        var stdout = std.Io.Writer.fixed(&stdout_buffer);
+        var stderr = std.Io.Writer.fixed(&stderr_buffer);
+
+        try execute(allocator, &.{ "build", "tests/shaders/pass/graphics/basic_triangle/main.ksl", "--target", case.target, "--out-dir", out_dir }, &stdout, &stderr);
+
+        try std.testing.expect(fileExists(out_dir, case.vertex));
+        try std.testing.expect(fileExists(out_dir, case.fragment));
+        try std.testing.expect(fileExists(out_dir, "BasicTriangle.reflection.json"));
+    }
 }
 
 test "shader build discovers PascalCase entry shaders in Shaders directory" {

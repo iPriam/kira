@@ -5,9 +5,16 @@ const package_manager = @import("kira_package_manager");
 const syntax = @import("kira_ksl_syntax_model");
 const parser = @import("kira_ksl_parser");
 const semantics = @import("kira_ksl_semantics");
+const shader_model = @import("kira_shader_model");
 const shader_ir = @import("kira_shader_ir");
 const glsl_backend = @import("kira_glsl_backend");
+const wgsl_backend = @import("kira_wgsl_backend");
+const hlsl_backend = @import("kira_hlsl_backend");
+const msl_backend = @import("kira_msl_backend");
+const spirv_backend = @import("kira_spirv_backend");
 const json = @import("json.zig");
+
+pub const ShaderTarget = shader_model.BackendTarget;
 
 pub const ShaderFrontendStage = enum {
     lexer,
@@ -40,8 +47,17 @@ pub const ShaderCheckResult = struct {
 
 pub const LoweredShaderArtifact = struct {
     shader_name: []const u8,
+    target: ShaderTarget = .glsl_330,
     vertex_glsl: ?[]const u8 = null,
     fragment_glsl: ?[]const u8 = null,
+    vertex_wgsl: ?[]const u8 = null,
+    fragment_wgsl: ?[]const u8 = null,
+    vertex_hlsl: ?[]const u8 = null,
+    fragment_hlsl: ?[]const u8 = null,
+    vertex_msl: ?[]const u8 = null,
+    fragment_msl: ?[]const u8 = null,
+    vertex_spirv: ?[]const u8 = null,
+    fragment_spirv: ?[]const u8 = null,
     reflection_json: []const u8,
 };
 
@@ -150,6 +166,10 @@ pub fn checkFile(allocator: std.mem.Allocator, path: []const u8) !ShaderCheckRes
 }
 
 pub fn buildFile(allocator: std.mem.Allocator, path: []const u8) !ShaderBuildResult {
+    return buildFileForTarget(allocator, path, .glsl_330);
+}
+
+pub fn buildFileForTarget(allocator: std.mem.Allocator, path: []const u8, target: ShaderTarget) !ShaderBuildResult {
     const checked = try checkFile(allocator, path);
     if (checked.program == null) {
         return .{
@@ -164,23 +184,109 @@ pub fn buildFile(allocator: std.mem.Allocator, path: []const u8) !ShaderBuildRes
     for (checked.diagnostics) |diag| try diags.append(diag);
     var artifacts = std.array_list.Managed(LoweredShaderArtifact).init(allocator);
     for (checked.program.?.shaders) |shader_decl| {
-        const lowered = glsl_backend.lowerShader(allocator, checked.program.?, shader_decl, &diags) catch |err| switch (err) {
-            error.DiagnosticsEmitted => {
-                return .{
-                    .source = checked.source,
-                    .diagnostics = try diags.toOwnedSlice(),
-                    .program = checked.program,
-                    .failure_stage = .lowering,
+        const reflection = try reflectionForTarget(allocator, shader_decl.reflection, target);
+        switch (target) {
+            .glsl_330 => {
+                const lowered = glsl_backend.lowerShader(allocator, checked.program.?, shader_decl, &diags) catch |err| switch (err) {
+                    error.DiagnosticsEmitted => {
+                        return .{
+                            .source = checked.source,
+                            .diagnostics = try diags.toOwnedSlice(),
+                            .program = checked.program,
+                            .failure_stage = .lowering,
+                        };
+                    },
+                    else => return err,
                 };
+                try artifacts.append(.{
+                    .shader_name = shader_decl.name,
+                    .target = target,
+                    .vertex_glsl = lowered.vertex_source,
+                    .fragment_glsl = lowered.fragment_source,
+                    .reflection_json = try json.renderReflectionJson(allocator, reflection),
+                });
             },
-            else => return err,
-        };
-        try artifacts.append(.{
-            .shader_name = shader_decl.name,
-            .vertex_glsl = lowered.vertex_source,
-            .fragment_glsl = lowered.fragment_source,
-            .reflection_json = try json.renderReflectionJson(allocator, shader_decl.reflection),
-        });
+            .wgsl => {
+                const lowered = wgsl_backend.lowerShader(allocator, checked.program.?, shader_decl, &diags) catch |err| switch (err) {
+                    error.DiagnosticsEmitted => {
+                        return .{
+                            .source = checked.source,
+                            .diagnostics = try diags.toOwnedSlice(),
+                            .program = checked.program,
+                            .failure_stage = .lowering,
+                        };
+                    },
+                    else => return err,
+                };
+                try artifacts.append(.{
+                    .shader_name = shader_decl.name,
+                    .target = target,
+                    .vertex_wgsl = lowered.vertex_source,
+                    .fragment_wgsl = lowered.fragment_source,
+                    .reflection_json = try json.renderReflectionJson(allocator, reflection),
+                });
+            },
+            .hlsl => {
+                const lowered = hlsl_backend.lowerShader(allocator, checked.program.?, shader_decl, &diags) catch |err| switch (err) {
+                    error.DiagnosticsEmitted => {
+                        return .{
+                            .source = checked.source,
+                            .diagnostics = try diags.toOwnedSlice(),
+                            .program = checked.program,
+                            .failure_stage = .lowering,
+                        };
+                    },
+                    else => return err,
+                };
+                try artifacts.append(.{
+                    .shader_name = shader_decl.name,
+                    .target = target,
+                    .vertex_hlsl = lowered.vertex_source,
+                    .fragment_hlsl = lowered.fragment_source,
+                    .reflection_json = try json.renderReflectionJson(allocator, reflection),
+                });
+            },
+            .msl => {
+                const lowered = msl_backend.lowerShader(allocator, checked.program.?, shader_decl, &diags) catch |err| switch (err) {
+                    error.DiagnosticsEmitted => {
+                        return .{
+                            .source = checked.source,
+                            .diagnostics = try diags.toOwnedSlice(),
+                            .program = checked.program,
+                            .failure_stage = .lowering,
+                        };
+                    },
+                    else => return err,
+                };
+                try artifacts.append(.{
+                    .shader_name = shader_decl.name,
+                    .target = target,
+                    .vertex_msl = lowered.vertex_source,
+                    .fragment_msl = lowered.fragment_source,
+                    .reflection_json = try json.renderReflectionJson(allocator, reflection),
+                });
+            },
+            .spirv => {
+                const lowered = spirv_backend.lowerShader(allocator, checked.program.?, shader_decl, &diags) catch |err| switch (err) {
+                    error.DiagnosticsEmitted => {
+                        return .{
+                            .source = checked.source,
+                            .diagnostics = try diags.toOwnedSlice(),
+                            .program = checked.program,
+                            .failure_stage = .lowering,
+                        };
+                    },
+                    else => return err,
+                };
+                try artifacts.append(.{
+                    .shader_name = shader_decl.name,
+                    .target = target,
+                    .vertex_spirv = lowered.vertex_source,
+                    .fragment_spirv = lowered.fragment_source,
+                    .reflection_json = try json.renderReflectionJson(allocator, reflection),
+                });
+            },
+        }
     }
 
     return .{
@@ -188,6 +294,37 @@ pub fn buildFile(allocator: std.mem.Allocator, path: []const u8) !ShaderBuildRes
         .diagnostics = try diags.toOwnedSlice(),
         .program = checked.program,
         .artifacts = try artifacts.toOwnedSlice(),
+    };
+}
+
+fn reflectionForTarget(
+    allocator: std.mem.Allocator,
+    reflection: shader_model.Reflection,
+    target: ShaderTarget,
+) !shader_model.Reflection {
+    if (target == .glsl_330) return reflection;
+    const resources = try allocator.alloc(shader_model.ReflectedResource, reflection.resources.len);
+    for (reflection.resources, 0..) |resource_decl, resource_index| {
+        const bindings = try allocator.alloc(shader_model.BackendBinding, resource_decl.backend_bindings.len);
+        for (resource_decl.backend_bindings, 0..) |binding, binding_index| {
+            bindings[binding_index] = .{
+                .target = target,
+                .group_index = binding.group_index,
+                .binding_index = binding.binding_index,
+                .glsl_name = binding.glsl_name,
+            };
+        }
+        resources[resource_index] = resource_decl;
+        resources[resource_index].backend_bindings = bindings;
+    }
+    return .{
+        .shader_name = reflection.shader_name,
+        .shader_kind = reflection.shader_kind,
+        .backend = target,
+        .options = reflection.options,
+        .stages = reflection.stages,
+        .types = reflection.types,
+        .resources = resources,
     };
 }
 
@@ -320,6 +457,50 @@ test "shader pipeline matches basic triangle golden outputs" {
     try expectFileText(allocator, "tests/shaders/pass/graphics/basic_triangle/expected.vert.glsl", result.artifacts[0].vertex_glsl.?);
     try expectFileText(allocator, "tests/shaders/pass/graphics/basic_triangle/expected.frag.glsl", result.artifacts[0].fragment_glsl.?);
     try expectFileText(allocator, "tests/shaders/pass/graphics/basic_triangle/expected.reflection.json", result.artifacts[0].reflection_json);
+}
+
+test "shader pipeline emits WGSL graphics artifacts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const result = try buildFileForTarget(arena.allocator(), "tests/shaders/pass/graphics/basic_triangle/main.ksl", .wgsl);
+    try std.testing.expect(result.artifacts.len == 1);
+    try std.testing.expect(result.artifacts[0].vertex_wgsl != null);
+    try std.testing.expect(result.artifacts[0].fragment_wgsl != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.artifacts[0].vertex_wgsl.?, "@vertex") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.artifacts[0].vertex_wgsl.?, "@builtin(position)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.artifacts[0].fragment_wgsl.?, "@fragment") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.artifacts[0].reflection_json, "\"backend\": \"wgsl\"") != null);
+}
+
+test "shader pipeline emits HLSL MSL and SPIR-V graphics artifacts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    const hlsl = try buildFileForTarget(allocator, "tests/shaders/pass/graphics/basic_triangle/main.ksl", .hlsl);
+    try std.testing.expect(hlsl.artifacts.len == 1);
+    try std.testing.expect(hlsl.artifacts[0].vertex_hlsl != null);
+    try std.testing.expect(hlsl.artifacts[0].fragment_hlsl != null);
+    try std.testing.expect(std.mem.indexOf(u8, hlsl.artifacts[0].vertex_hlsl.?, "SV_Position") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hlsl.artifacts[0].fragment_hlsl.?, "SV_Target") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hlsl.artifacts[0].reflection_json, "\"backend\": \"hlsl\"") != null);
+
+    const msl = try buildFileForTarget(allocator, "tests/shaders/pass/graphics/basic_triangle/main.ksl", .msl);
+    try std.testing.expect(msl.artifacts.len == 1);
+    try std.testing.expect(msl.artifacts[0].vertex_msl != null);
+    try std.testing.expect(msl.artifacts[0].fragment_msl != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl.artifacts[0].vertex_msl.?, "vertex VertexOut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl.artifacts[0].fragment_msl.?, "[[color(0)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl.artifacts[0].reflection_json, "\"backend\": \"msl\"") != null);
+
+    const spirv = try buildFileForTarget(allocator, "tests/shaders/pass/graphics/basic_triangle/main.ksl", .spirv);
+    try std.testing.expect(spirv.artifacts.len == 1);
+    try std.testing.expect(spirv.artifacts[0].vertex_spirv != null);
+    try std.testing.expect(spirv.artifacts[0].fragment_spirv != null);
+    try std.testing.expect(std.mem.indexOf(u8, spirv.artifacts[0].vertex_spirv.?, "OpEntryPoint Vertex") != null);
+    try std.testing.expect(std.mem.indexOf(u8, spirv.artifacts[0].fragment_spirv.?, "OpExecutionMode %main OriginUpperLeft") != null);
+    try std.testing.expect(std.mem.indexOf(u8, spirv.artifacts[0].reflection_json, "\"backend\": \"spirv\"") != null);
 }
 
 test "shader pipeline supports imports" {

@@ -88,6 +88,113 @@ pub const Backend = enum {
     }
 };
 
+pub const ExecutionBackend = enum {
+    vm,
+    llvm,
+    hybrid,
+    wasm_runtime,
+    wasm_aot,
+
+    pub fn parse(value: []const u8) ?ExecutionBackend {
+        if (std.mem.eql(u8, value, "vm")) return .vm;
+        if (std.mem.eql(u8, value, "llvm") or std.mem.eql(u8, value, "llvm_native")) return .llvm;
+        if (std.mem.eql(u8, value, "hybrid")) return .hybrid;
+        if (std.mem.eql(u8, value, "wasm_runtime") or std.mem.eql(u8, value, "wasm-runtime")) return .wasm_runtime;
+        if (std.mem.eql(u8, value, "wasm_aot") or std.mem.eql(u8, value, "wasm-aot")) return .wasm_aot;
+        return null;
+    }
+
+    pub fn label(self: ExecutionBackend) []const u8 {
+        return switch (self) {
+            .vm => "vm",
+            .llvm => "llvm",
+            .hybrid => "hybrid",
+            .wasm_runtime => "wasm_runtime",
+            .wasm_aot => "wasm_aot",
+        };
+    }
+};
+
+pub const HybridSelectionMode = enum {
+    annotation_driven,
+    native_except_runtime,
+    vm_except_native,
+    explicit_only,
+
+    pub fn parse(value: []const u8) ?HybridSelectionMode {
+        if (std.mem.eql(u8, value, "annotation_driven") or std.mem.eql(u8, value, "annotation-driven")) return .annotation_driven;
+        if (std.mem.eql(u8, value, "native_except_runtime") or std.mem.eql(u8, value, "native-except-runtime")) return .native_except_runtime;
+        if (std.mem.eql(u8, value, "vm_except_native") or std.mem.eql(u8, value, "vm-except-native")) return .vm_except_native;
+        if (std.mem.eql(u8, value, "explicit_only") or std.mem.eql(u8, value, "explicit-only")) return .explicit_only;
+        return null;
+    }
+
+    pub fn label(self: HybridSelectionMode) []const u8 {
+        return switch (self) {
+            .annotation_driven => "annotation_driven",
+            .native_except_runtime => "native_except_runtime",
+            .vm_except_native => "vm_except_native",
+            .explicit_only => "explicit_only",
+        };
+    }
+};
+
+pub const BackendSelectionSource = enum {
+    platform_default,
+    profile,
+    app_manifest,
+    cli,
+
+    pub fn label(self: BackendSelectionSource) []const u8 {
+        return switch (self) {
+            .platform_default => "platform-default",
+            .profile => "profile",
+            .app_manifest => "app-manifest",
+            .cli => "cli",
+        };
+    }
+};
+
+pub const WebGraphicsBridge = enum {
+    none,
+    webgpu,
+
+    pub fn parse(value: []const u8) ?WebGraphicsBridge {
+        if (std.mem.eql(u8, value, "none")) return .none;
+        if (std.mem.eql(u8, value, "webgpu")) return .webgpu;
+        return null;
+    }
+
+    pub fn label(self: WebGraphicsBridge) []const u8 {
+        return switch (self) {
+            .none => "none",
+            .webgpu => "webgpu",
+        };
+    }
+};
+
+pub const LibraryExecutionPolicy = struct {
+    package: []const u8,
+    backend: ExecutionBackend = .hybrid,
+    source: BackendSelectionSource = .app_manifest,
+    native_required: bool = false,
+    ffi_allowed: bool = false,
+    hybrid_selection: ?HybridSelectionMode = null,
+};
+
+pub const WebExecutionPolicy = struct {
+    backend: ExecutionBackend = .wasm_runtime,
+    graphics_bridge: WebGraphicsBridge = .none,
+};
+
+pub const ExecutionPolicy = struct {
+    default_backend: ExecutionBackend = .vm,
+    default_source: BackendSelectionSource = .platform_default,
+    hybrid_selection: HybridSelectionMode = .annotation_driven,
+    libraries: []const LibraryExecutionPolicy = &.{},
+    web: WebExecutionPolicy = .{},
+};
+
 pub const WebSurface = enum {
     dom,
     webgpu,
@@ -104,6 +211,61 @@ pub const WebSurface = enum {
         return @tagName(self);
     }
 };
+
+pub const WebRenderingModel = enum {
+    dom,
+    graphics_canvas,
+    hybrid,
+
+    pub fn label(self: WebRenderingModel) []const u8 {
+        return switch (self) {
+            .dom => "dom",
+            .graphics_canvas => "graphics-canvas",
+            .hybrid => "hybrid",
+        };
+    }
+};
+
+pub const WebGraphicsCapability = enum {
+    webgpu,
+
+    pub fn label(self: WebGraphicsCapability) []const u8 {
+        return switch (self) {
+            .webgpu => "webgpu",
+        };
+    }
+};
+
+pub const WebSurfaceRequirements = struct {
+    surface: WebSurface,
+    rendering_model: WebRenderingModel,
+    graphics_capability: ?WebGraphicsCapability = null,
+    requires_canvas: bool = false,
+    requires_browser_detection: bool = false,
+};
+
+pub fn webSurfaceRequirements(surface: WebSurface) WebSurfaceRequirements {
+    return switch (surface) {
+        .dom => .{
+            .surface = .dom,
+            .rendering_model = .dom,
+        },
+        .webgpu => .{
+            .surface = .webgpu,
+            .rendering_model = .graphics_canvas,
+            .graphics_capability = .webgpu,
+            .requires_canvas = true,
+            .requires_browser_detection = true,
+        },
+        .hybrid => .{
+            .surface = .hybrid,
+            .rendering_model = .hybrid,
+            .graphics_capability = .webgpu,
+            .requires_canvas = true,
+            .requires_browser_detection = true,
+        },
+    };
+}
 
 pub const ExportFamily = enum {
     apple,
@@ -240,4 +402,24 @@ test "default platform config synthesizes profiles and runners" {
 test "profile is reserved; profiler is the supported profile" {
     try validateProfileSection("profiles.profiler");
     try std.testing.expectError(error.ReservedProfileName, validateProfileSection("profiles.profile"));
+}
+
+test "web surface requirements distinguish DOM and WebGPU canvas rendering" {
+    const dom_requirements = webSurfaceRequirements(.dom);
+    try std.testing.expectEqual(WebRenderingModel.dom, dom_requirements.rendering_model);
+    try std.testing.expect(!dom_requirements.requires_canvas);
+    try std.testing.expect(dom_requirements.graphics_capability == null);
+
+    const webgpu_requirements = webSurfaceRequirements(.webgpu);
+    try std.testing.expectEqual(WebRenderingModel.graphics_canvas, webgpu_requirements.rendering_model);
+    try std.testing.expectEqual(WebGraphicsCapability.webgpu, webgpu_requirements.graphics_capability.?);
+    try std.testing.expect(webgpu_requirements.requires_canvas);
+    try std.testing.expect(webgpu_requirements.requires_browser_detection);
+}
+
+test "execution backend policy uses typed internal values" {
+    try std.testing.expectEqual(ExecutionBackend.wasm_runtime, ExecutionBackend.parse("wasm_runtime").?);
+    try std.testing.expectEqual(ExecutionBackend.wasm_aot, ExecutionBackend.parse("wasm-aot").?);
+    try std.testing.expectEqual(HybridSelectionMode.native_except_runtime, HybridSelectionMode.parse("native_except_runtime").?);
+    try std.testing.expectEqualStrings("app-manifest", BackendSelectionSource.app_manifest.label());
 }

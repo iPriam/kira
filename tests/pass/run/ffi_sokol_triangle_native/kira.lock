@@ -1,0 +1,7 @@
+version = 1
+
+[root]
+name = "ffi_sokol_triangle_native"
+version = "0.1.0"
+kind = "app"
+kira = "0.1.0"

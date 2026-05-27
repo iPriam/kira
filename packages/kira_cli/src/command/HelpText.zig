@@ -41,7 +41,7 @@ pub fn print(writer: anytype, command: ?CommandKind) !void {
 fn printCommand(writer: anytype, kind: CommandKind) !void {
     switch (kind) {
         .check => try writer.writeAll(
-            \\usage: kira check [--backend vm|llvm|hybrid] [--offline] [--locked] [--timings] [<project-dir|manifest|source>]
+            \\usage: kira check [--backend vm|llvm|hybrid] [--offline] [--locked] [--timings] [--print-backend-policy] [<project-dir|manifest|source>]
             \\Analyze a target. Libraries are valid check targets.
             \\
         ),
@@ -75,7 +75,7 @@ fn printCommand(writer: anytype, kind: CommandKind) !void {
         .shader => try writer.writeAll(
             \\usage: kira shader check <file.ksl>
             \\       kira shader ast <file.ksl>
-            \\       kira shader build [<file.ksl>|Shaders] [--out-dir <dir>]
+            \\       kira shader build [<file.ksl>|Shaders] [--target glsl_330|wgsl|hlsl|msl|spirv] [--out-dir <dir>]
             \\
         ),
         .instruments => try writer.writeAll(

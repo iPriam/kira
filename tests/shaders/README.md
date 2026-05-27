@@ -19,8 +19,13 @@ Each case contains:
 The current KSL test coverage exercises:
 
 - valid graphics shader parsing and lowering
+- GLSL 330 graphics artifact emission
+- WGSL graphics artifact emission
+- HLSL graphics artifact emission
+- MSL graphics artifact emission
+- SPIR-V assembly artifact emission
 - import loading for helper modules
 - parser failures
 - semantic failures
 - reflection emission
-- explicit compute-backend rejection for the GLSL 330 backend
+- explicit compute-backend rejection for validated graphics backends

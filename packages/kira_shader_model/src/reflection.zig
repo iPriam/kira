@@ -1,8 +1,26 @@
+const std = @import("std");
 const module = @import("module.zig");
 const shader_types = @import("types.zig");
 
 pub const BackendTarget = enum {
     glsl_330,
+    wgsl,
+    hlsl,
+    msl,
+    spirv,
+
+    pub fn parse(value: []const u8) ?BackendTarget {
+        if (std.mem.eql(u8, value, "glsl") or std.mem.eql(u8, value, "glsl_330") or std.mem.eql(u8, value, "glsl330")) return .glsl_330;
+        if (std.mem.eql(u8, value, "wgsl")) return .wgsl;
+        if (std.mem.eql(u8, value, "hlsl")) return .hlsl;
+        if (std.mem.eql(u8, value, "msl") or std.mem.eql(u8, value, "metal") or std.mem.eql(u8, value, "mlsl")) return .msl;
+        if (std.mem.eql(u8, value, "spirv") or std.mem.eql(u8, value, "spir-v") or std.mem.eql(u8, value, "spv")) return .spirv;
+        return null;
+    }
+
+    pub fn label(self: BackendTarget) []const u8 {
+        return @tagName(self);
+    }
 };
 
 pub const BackendBinding = struct {

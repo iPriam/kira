@@ -13,9 +13,9 @@ Web surfaces are typed:
 - `webgpu`
 - `hybrid`
 
-The current implemented proof is `dom`. `webgpu` and `hybrid` are modeled and rejected with precise diagnostics until they have real host support.
+The current executable proofs are `dom` and `webgpu`. Web exports and web live runs write a generated Kira Wasm runtime module, load it through `WebAssembly.instantiate`, and expose the runtime status to browser glue. `webgpu` additionally creates a canvas, requests a WebGPU adapter/device, builds a WGSL triangle pipeline, submits one render pass, and records browser-side smoke state. `hybrid` is still rejected with a precise diagnostic until it has a browser VM/native boundary runner.
 
-Foundation.Web browser APIs are FFI-backed. The generated binding surface includes DOM node handles, console logging, navigator/location access, attributes/styles/classes, click/event hooks, and timers. Generated JS glue lives in web exports as `kira-browser-ffi.generated.js`.
+Foundation.Web browser APIs are FFI-backed. The generated binding surface includes DOM node handles, console logging, navigator/location access, attributes/styles/classes, stable callback registration/invocation/removal, DOM event hooks, timers, callback cleanup, and WebGPU capability detection. Generated JS glue lives in web exports as `kira-browser-ffi.generated.js`.
 
 `examples/web_dom` demonstrates:
 
@@ -33,6 +33,7 @@ kira check examples/web_dom
 kira run web examples/web_dom --quit-after 1s
 kira live web examples/web_dom --surface dom --quit-after 10s
 kira export web examples/web_dom --surface dom
+kira export web examples/web_dom --surface webgpu
 ```
 
-Emscripten is detected through `emcc --version`. If it is missing and cannot be set up non-interactively, Kira reports `KTC030`/`KTC031` instead of claiming a compiled Wasm build.
+The generated `kira-app.wasm` artifact is a real Wasm module with exported runtime probes. Kira no longer emits an 8-byte header-only placeholder and the web runner does not require `emcc` for this generated-runtime path.

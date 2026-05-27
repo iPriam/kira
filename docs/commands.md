@@ -31,6 +31,7 @@ Standalone CLI:
 - `kira shader check examples/shaders/textured_quad.ksl`
 - `kira shader ast examples/shaders/textured_quad.ksl`
 - `kira shader build examples/shaders/textured_quad.ksl`
+- `kira shader build examples/shaders/textured_quad.ksl --target wgsl`
 - `kira shader build`
 - `kira instruments run examples/arithmetic --backend runtime --track memory --track cpu --duration 500ms --sample-rate 10hz --fail-on-growth 1gb`
 - `kira sync`
@@ -63,6 +64,7 @@ Build-system convenience:
 - `zig build run -- build examples/hello`
 - `zig build run -- shader check examples/shaders/textured_quad.ksl`
 - `zig build run -- shader build examples/shaders/textured_quad.ksl`
+- `zig build run -- shader build examples/shaders/textured_quad.ksl --target wgsl`
 - `zig build run -- shader build`
 - `zig build run -- instruments run examples/arithmetic --backend runtime --track memory --track cpu --duration 500ms --sample-rate 10hz --json-out .kira/instruments/arithmetic.runtime.json`
 - `zig build run -- build --backend llvm examples/hello`
@@ -92,7 +94,7 @@ CLI behavior:
 - `live desktop <target> --run-for <duration> --kill-after` is a legacy compatibility spelling. `--run-for` maps to the same bounded duration as `--quit-after`; `--kill-after` is retained as an emergency cleanup hint after graceful shutdown has been attempted.
 - `live`, with no target, infers the current project/app target and defaults to the desktop runner. If the first positional after `live` is a known runner id, it is parsed as a runner; path-like values such as `./ios`, `../ios`, and `/tmp/ios` remain target paths.
 - Runner ids are `desktop`, `macos`, `ios`, `tvos`, `visionos`, `windows`, `android`, `web`, and `linux`. Every runner id is accepted; incomplete host/device clients emit Kira-owned diagnostics instead of disappearing.
-- `live web <target> --surface dom` runs the Kira Wasm DOM scaffold and writes browser artifacts under `.kira-build/live/runners/web-kira-wasm/`. `webgpu` and `hybrid` are modeled web surfaces and rejected with precise diagnostics until implemented.
+- `live web <target> --surface dom` runs the Kira Wasm DOM browser surface and writes browser artifacts under `.kira-build/live/runners/web-kira-wasm/`. `webgpu` writes a generated Wasm runtime module plus a WebGPU-capable canvas surface with browser capability detection, pipeline creation, and frame-render smoke state for the Kira Graphics WebGPU path. `hybrid` is modeled and rejected with a precise diagnostic until implemented.
 - `live ios <target> --host 0.0.0.0 --port 42111` audits Xcode, iOS SDKs, and physical-device discovery. A physical iPhone must use a device-reachable endpoint such as the host LAN IP, not `localhost`; install/launch/signing gaps are reported as blocked device-runner diagnostics.
 - Live root handling is explicit: invocation cwd, selected target root, Kira toolchain root, runner host path, generated live output root, and client runtime cwd are separate. The desktop runner host is resolved from the installed/development Kira toolchain; the selected example directory is never used as a Zig build root.
 - Live reload currently uses full-bundle hot restart. On source changes, the server rebuilds the bundle graph, sends the full bundle set, and the already-running client restarts the app entrypoint without rebuilding or relaunching the runner process. Incremental bundle patching is reserved for a future protocol extension and is not documented as supported yet.
@@ -109,8 +111,9 @@ CLI behavior:
 - `shader check` runs the dedicated `.ksl` lexer, parser, import loader, semantic pass, and typed shader IR validation
 - `shader ast` dumps the parsed KSL module shape without routing through the executable `.kira` frontend
 - `shader build <file.ksl>` emits GLSL 330 vertex/fragment source plus reflection JSON into `generated/shaders/` next to the source file by default, or `--out-dir <dir>`
+- `shader build <file.ksl> --target wgsl|hlsl|msl|metal|spirv|spv` emits target-specific graphics shader artifacts plus reflection JSON. `glsl`, `glsl330`, and `glsl_330` select GLSL 330; `mlsl` and `metal` select MSL; `spir-v` and `spv` select textual SPIR-V assembly output.
 - `shader build` with no explicit file discovers all top-level PascalCase `*.ksl` entry shaders under `Shaders/` in the current project root and writes outputs to `generated/Shaders/`
-- `shader build` rejects compute shaders today with an explicit backend diagnostic because the current real graphics path in this repo is Sokol/OpenGL with GLSL 330 graphics shaders, not a compute-capable pipeline
+- `shader build` rejects compute shaders today with an explicit backend diagnostic because the current validated KSL lowerers are graphics shader paths, not compute-capable pipelines
 - `instruments run <target>` builds the target through the normal pipeline, launches the selected backend as a child process, samples process metrics over the requested duration, prints a stable human report, and optionally writes stable JSON with `--json-out`
 - `instruments run` accepts `--backend runtime|llvm|hybrid`, repeated `--track memory` and `--track cpu`, `--duration` values like `30s`, `1m`, or `500ms`, `--sample-rate` values like `10hz` or `2.5hz`, and `--fail-on-growth` byte thresholds like `10mb`, `512kb`, or `1048576`
 - `instruments run --track memory` samples the child process private working set on Windows, which is the Task Manager-like resident private memory metric; JSON keeps the stable `rss_*` field names and includes `"metric": "private_working_set"` to document the measured source. On other platforms memory instrumentation fails clearly until platform samplers are added

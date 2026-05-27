@@ -14,11 +14,15 @@ The current repo now includes:
 - `kira_shader_ir`
 - `kira_shader_model`
 - `kira_glsl_backend`
+- `kira_wgsl_backend`
+- `kira_hlsl_backend`
+- `kira_msl_backend`
+- `kira_spirv_backend`
 - `kira_build` and `kira_cli` integration via `kira shader check|ast|build`
 
-The first concrete emitted backend is GLSL 330 for graphics shaders, aligned with the repo's existing Sokol/OpenGL examples that currently use inline `#version 330` shaders.
+The concrete emitted graphics backends are GLSL 330, WGSL, HLSL, MSL, and textual SPIR-V assembly. GLSL 330 remains the current Kira Graphics/Sokol desktop path; WGSL is emitted and validated for WebGPU-class shader module and render-pipeline creation; MSL is syntax-checked through Apple's Metal compiler when available.
 
-Compute shaders are part of the language surface, parser, semantic model, and reflection path, but `kira shader build` intentionally rejects them for now on the GLSL 330 backend with a clear diagnostic instead of pretending they work on the current graphics stack.
+Compute shaders are part of the language surface, parser, semantic model, and reflection path, but `kira shader build` intentionally rejects them for now on the validated graphics backends with a clear diagnostic instead of pretending they work on the current graphics stack.
 
 ## Design Laws
 
@@ -909,7 +913,7 @@ Recommended package layout:
 - Layer 2: `kira_shader_model`
 - Layer 2: `kira_ksl_semantics`
 - Layer 3: `kira_shader_ir`
-- Layer 4: backend lowerers such as the current `kira_glsl_backend` plus future `kira_spirv_backend`, `kira_wgsl_backend`, and `kira_msl_backend`
+- Layer 4: backend lowerers such as `kira_glsl_backend`, `kira_wgsl_backend`, `kira_hlsl_backend`, `kira_msl_backend`, and `kira_spirv_backend`
 - Layer 6: `kira_build` integration and CLI dispatch
 
 This change adds `kira_shader_model` as the first concrete step.
@@ -972,8 +976,9 @@ This IR is not the same as the current executable IR and should not be forced th
 Backends should lower from typed shader IR:
 
 - GLSL 330 text path for the current repo graphics flow
-- SPIR-V path for Vulkan
 - WGSL text path for WebGPU
+- HLSL path for D3D-style targets
+- SPIR-V path for Vulkan
 - MSL text path for Metal
 
 Backend lowerers must own:
@@ -1026,12 +1031,12 @@ The current repo now has:
 5. `kira_shader_ir`
 6. `kira shader check <file.ksl>`, `kira shader ast <file.ksl>`, and `kira shader build [<file.ksl>]`
 7. reflection emission as JSON sidecar output
-8. a first concrete backend: `kira_glsl_backend`, targeting GLSL 330 graphics shaders
+8. concrete graphics backends: `kira_glsl_backend`, `kira_wgsl_backend`, `kira_hlsl_backend`, `kira_msl_backend`, and `kira_spirv_backend`
 
 Still deferred:
 
 1. compute-capable backend lowering
-2. SPIR-V, WGSL, and MSL backends
+2. binary SPIR-V assembly/validation when a local `spirv-as`/`spirv-val` toolchain is available
 3. project-level shader asset integration beyond the direct CLI workflow
 4. reflection-driven runtime graphics pipeline consumption
 
@@ -1091,6 +1096,11 @@ Each corpus case should contain:
 Current:
 
 - GLSL 330 golden output checks
+- WGSL backend package checks
+- WGSL CLI artifact checks
+- real Chrome WebGPU shader-module, render-pipeline, and render-pass validation for generated WGSL
+- HLSL, MSL, and SPIR-V CLI artifact checks
+- MSL compiler checks with `xcrun metal`
 - reflection JSON checks
 - explicit compute-backend rejection checks
 - CLI shader command checks
@@ -1098,7 +1108,7 @@ Current:
 Later:
 
 - WGSL golden output tests
-- SPIR-V reflection and validation tests
+- binary SPIR-V validation tests
 - MSL golden output tests
 
 ## Tradeoffs

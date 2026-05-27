@@ -82,6 +82,7 @@ Executable arrays currently use a shared handle-based runtime representation. Th
 ## Dedicated Sibling Surfaces
 
 - `.ksl` is now a real dedicated shader language surface rather than an extension of the executable `.kira` frontend.
-- The implemented pipeline lives in [docs/ksl.md](ksl.md) and the dedicated packages `kira_ksl_syntax_model`, `kira_ksl_parser`, `kira_ksl_semantics`, `kira_shader_ir`, `kira_shader_model`, and `kira_glsl_backend`.
-- KSL v1 currently parses, validates, reflects, and lowers graphics shaders to GLSL 330.
-- Compute shaders are part of the source language and semantic model, but the current GLSL 330 backend rejects them intentionally with a clear diagnostic because the repo's real graphics stack today is Sokol/OpenGL graphics-only shader source.
+- The implemented pipeline lives in [docs/ksl.md](ksl.md) and the dedicated packages `kira_ksl_syntax_model`, `kira_ksl_parser`, `kira_ksl_semantics`, `kira_shader_ir`, `kira_shader_model`, `kira_glsl_backend`, and `kira_wgsl_backend`.
+- KSL v1 currently parses, validates, reflects, and lowers graphics shaders to GLSL 330 and WGSL.
+- HLSL, MSL, and SPIR-V are recognized KSL target identities, but the compiler rejects them with a clear diagnostic until validated lowerers exist.
+- Compute shaders are part of the source language and semantic model, but the current validated graphics backends reject them intentionally with a clear diagnostic because there is not yet a compute-capable KSL backend path.

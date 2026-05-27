@@ -1,0 +1,180 @@
+struct StateSlot {
+    var nodeId: Int = 0
+    var value: Int = 0
+    var active: Bool = false
+}
+
+struct RetainedNode {
+    var id: Int = 0
+    var parentId: Int = 0
+    var key: Int = 0
+    var label: String = ""
+    var childIds: [Int] = []
+    var stateSlots: [StateSlot] = []
+    var mounted: Bool = true
+}
+
+struct RetainedTree {
+    var nextId: Int = 1
+    var rootId: Int = 0
+    var nodes: [RetainedNode] = []
+    var removedIds: [Int] = []
+}
+
+class ClassBucket {
+    let title: String = ""
+    let values: [Int] = []
+}
+
+function scoreIds(values: borrow [Int]) -> Int {
+    var total = 0
+    var index = 0
+    while index < values.count {
+        total = total + values[index] * (index + 1)
+        index = index + 1
+    }
+    return total
+}
+
+function scoreSlots(slots: borrow [StateSlot]) -> Int {
+    var total = 0
+    var index = 0
+    while index < slots.count {
+        let slot = slots[index]
+        if slot.active {
+            total = total + slot.nodeId * 17 + slot.value * 19
+        }
+        index = index + 1
+    }
+    return total
+}
+
+function findNodeIndex(nodes: borrow [RetainedNode], id: Int) -> Int {
+    var index = 0
+    while index < nodes.count {
+        if nodes[index].id == id {
+            return index
+        }
+        index = index + 1
+    }
+    return -1
+}
+
+function appendRetainedNode(tree: RetainedTree, parentId: Int, key: Int, label: String) -> RetainedTree {
+    var next = tree
+    let nodeId = next.nextId
+    next.nextId = next.nextId + 1
+
+    var node = RetainedNode {
+        id: nodeId
+        parentId: parentId
+        key: key
+        label: label
+        childIds: []
+        stateSlots: []
+        mounted: true
+    }
+    node.stateSlots.append(StateSlot {
+        nodeId: nodeId
+        value: label.count + key
+        active: true
+    })
+
+    next.nodes.append(move node)
+    if parentId == 0 {
+        next.rootId = nodeId
+    } else {
+        let parentIndex = findNodeIndex(next.nodes, parentId)
+        if parentIndex >= 0 {
+            next.nodes[parentIndex].childIds.append(nodeId)
+        }
+    }
+    return next
+}
+
+function removeRetainedNode(tree: RetainedTree, nodeId: Int) -> RetainedTree {
+    var next = tree
+    var kept: [RetainedNode] = []
+    var index = 0
+    while index < next.nodes.count {
+        let node = next.nodes[index]
+        if node.id == nodeId {
+            next.removedIds.append(nodeId)
+        } else {
+            var updated = node
+            var children: [Int] = []
+            var childIndex = 0
+            while childIndex < updated.childIds.count {
+                if updated.childIds[childIndex] != nodeId {
+                    children.append(updated.childIds[childIndex])
+                }
+                childIndex = childIndex + 1
+            }
+            updated.childIds = children
+            kept.append(move updated)
+        }
+        index = index + 1
+    }
+    next.nodes = kept
+    return next
+}
+
+function retainedTreeScore(tree: borrow RetainedTree) -> Int {
+    var total = tree.nextId * 3 + tree.rootId * 5 + tree.removedIds.count * 7
+    var index = 0
+    while index < tree.nodes.count {
+        let node = tree.nodes[index]
+        total = total + node.id * 11 + node.parentId * 13 + node.key * 17 + node.label.count * 19
+        total = total + scoreIds(node.childIds) * 23 + scoreSlots(node.stateSlots) * 29
+        index = index + 1
+    }
+    return total
+}
+
+function buildRetainedTree() -> RetainedTree {
+    var tree = RetainedTree {}
+    tree = appendRetainedNode(move tree, 0, 100, "root")
+    let rootId = tree.rootId
+    tree = appendRetainedNode(move tree, rootId, 200, "first")
+    tree = appendRetainedNode(move tree, rootId, 300, "second")
+
+    var copied = tree.nodes[1]
+    copied.childIds.append(999)
+    copied.stateSlots.append(StateSlot {
+        nodeId: copied.id
+        value: copied.label.count + 400
+        active: true
+    })
+    tree.nodes[1] = copied
+
+    return removeRetainedNode(move tree, 3)
+}
+
+@Main
+function main() {
+    let blank = RetainedNode {}
+    let bucket = ClassBucket()
+    var tree = buildRetainedTree()
+    let copiedNode = tree.nodes[1]
+    var mutatedCopy = copiedNode
+    mutatedCopy.childIds.append(77)
+    mutatedCopy.stateSlots.append(StateSlot {
+        nodeId: 77
+        value: 88
+        active: true
+    })
+
+    print(blank.label.count)
+    print(blank.childIds.count)
+    print(blank.stateSlots.count)
+    print(bucket.title.count)
+    print(bucket.values.count)
+    print(tree.nextId)
+    print(tree.rootId)
+    print(tree.nodes.count)
+    print(tree.removedIds.count)
+    print(copiedNode.childIds.count)
+    print(mutatedCopy.childIds.count)
+    print(mutatedCopy.stateSlots.count)
+    return
+}

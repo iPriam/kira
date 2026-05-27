@@ -150,6 +150,10 @@ fn parseProjectCommand(allocator: std.mem.Allocator, args: []const []const u8) !
             parsed.timings = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--print-backend-policy")) {
+            parsed.print_backend_policy = true;
+            continue;
+        }
         if (std.mem.startsWith(u8, arg, "-")) return failInvalid(arg, "", "a supported flag");
         if (input_path != null) return failInvalid("target", arg, "a single target path");
         input_path = arg;
@@ -508,6 +512,12 @@ fn parseShader(allocator: std.mem.Allocator, args: []const []const u8) !Parsed.S
             index += 1;
             if (index >= args.len) return failMissing("--out-dir", "an output directory");
             parsed.out_dir = args[index];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--target")) {
+            index += 1;
+            if (index >= args.len) return failMissing("--target", "glsl_330, wgsl, hlsl, msl, or spirv");
+            parsed.target = args[index];
             continue;
         }
         if (std.mem.startsWith(u8, arg, "-")) return failInvalid(arg, "", "a supported shader flag");
