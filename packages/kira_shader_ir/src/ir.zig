@@ -227,6 +227,11 @@ pub const Intrinsic = enum {
     normalize,
     dot,
     sample,
+    length,
+    pow,
+    sin,
+    atan2,
+    smoothstep,
 };
 
 pub const MemberExpr = struct {

@@ -31,7 +31,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
 fn serveOne(allocator: std.mem.Allocator, root: []const u8, io: std.Io, stream: std.Io.net.Stream) !void {
     var request_buffer: [4096]u8 = undefined;
-    const read_len = try std.posix.read(stream.socket.handle, &request_buffer);
+    var reader = std.Io.net.Stream.Reader.init(stream, io, &request_buffer);
+    const read_len = try reader.interface.readSliceShort(&request_buffer);
     if (read_len == 0) return;
     const request = request_buffer[0..read_len];
     const first_line_end = std.mem.indexOfScalar(u8, request, '\n') orelse request.len;

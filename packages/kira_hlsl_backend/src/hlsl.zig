@@ -299,6 +299,11 @@ fn emitExpr(writer: anytype, expr: *const shader_ir.Expr) anyerror!void {
                     try emitCallArgs(writer, call_expr.args);
                     try writer.writeByte(')');
                 },
+                .length, .pow, .sin, .atan2, .smoothstep => {
+                    try writer.print("{s}(", .{@tagName(intrinsic)});
+                    try emitCallArgs(writer, call_expr.args);
+                    try writer.writeByte(')');
+                },
                 .sample => {
                     const texture_name = switch (call_expr.args[0].node) {
                         .name => |name_ref| name_ref.name,
@@ -327,8 +332,13 @@ fn emitConstValue(writer: anytype, value: shader_ir.ConstValue) !void {
         .bool => |bool_value| try writer.writeAll(if (bool_value) "true" else "false"),
         .int => |int_value| try writer.print("{d}", .{int_value}),
         .uint => |uint_value| try writer.print("{d}u", .{uint_value}),
-        .float => |float_value| try writer.print("{d}", .{float_value}),
+        .float => |float_value| try emitFloatValue(writer, float_value),
     }
+}
+
+fn emitFloatValue(writer: anytype, value: f64) !void {
+    try writer.print("{d}", .{value});
+    if (@floor(value) == value) try writer.writeAll(".0");
 }
 
 fn emitIndent(writer: anytype, level: usize) !void {

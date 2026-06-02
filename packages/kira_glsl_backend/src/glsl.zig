@@ -116,9 +116,10 @@ const Lowerer = struct {
             for (textures.items) |texture_decl| {
                 for (samplers.items) |sampler_decl| {
                     if (texture_decl.ty != .texture or sampler_decl.ty != .sampler) continue;
-                    try writer.print("uniform {s} {s};\n", .{
+                    try writer.print("uniform {s} kira_{s}_{s};\n", .{
                         glslSamplerType(texture_decl.ty.texture),
-                        sanitizeName(sampledUniformName(texture_decl.name, sampler_decl.name)),
+                        sanitizeName(texture_decl.name),
+                        sanitizeName(sampler_decl.name),
                     });
                 }
             }
@@ -311,7 +312,7 @@ fn emitExpr(writer: anytype, expr: *const shader_ir.Expr) anyerror!void {
             .bool => |bool_value| try writer.writeAll(if (bool_value) "true" else "false"),
             .int => |int_value| try writer.print("{d}", .{int_value}),
             .uint => |uint_value| try writer.print("{d}u", .{uint_value}),
-            .float => |float_value| try writer.print("{d}", .{float_value}),
+            .float => |float_value| try emitFloatValue(writer, float_value),
         },
         .name => |name_ref| try writer.writeAll(sanitizeName(name_ref.name)),
         .unary => |unary_expr| {
@@ -383,6 +384,16 @@ fn emitExpr(writer: anytype, expr: *const shader_ir.Expr) anyerror!void {
                     try emitCallArgs(writer, call_expr.args);
                     try writer.writeByte(')');
                 },
+                .length, .pow, .sin, .smoothstep => {
+                    try writer.print("{s}(", .{@tagName(intrinsic)});
+                    try emitCallArgs(writer, call_expr.args);
+                    try writer.writeByte(')');
+                },
+                .atan2 => {
+                    try writer.writeAll("atan(");
+                    try emitCallArgs(writer, call_expr.args);
+                    try writer.writeByte(')');
+                },
                 .sample => {
                     const texture_name = switch (call_expr.args[0].node) {
                         .name => |name_ref| name_ref.name,
@@ -392,7 +403,7 @@ fn emitExpr(writer: anytype, expr: *const shader_ir.Expr) anyerror!void {
                         .name => |name_ref| name_ref.name,
                         else => "unsupported_sampler",
                     };
-                    try writer.print("texture({s}, ", .{sanitizeName(sampledUniformName(texture_name, sampler_name))});
+                    try writer.print("texture(kira_{s}_{s}, ", .{ sanitizeName(texture_name), sanitizeName(sampler_name) });
                     try emitExpr(writer, call_expr.args[2]);
                     try writer.writeByte(')');
                 },
@@ -413,8 +424,13 @@ fn emitConstValue(writer: anytype, value: shader_ir.ConstValue) !void {
         .bool => |bool_value| try writer.writeAll(if (bool_value) "true" else "false"),
         .int => |int_value| try writer.print("{d}", .{int_value}),
         .uint => |uint_value| try writer.print("{d}u", .{uint_value}),
-        .float => |float_value| try writer.print("{d}", .{float_value}),
+        .float => |float_value| try emitFloatValue(writer, float_value),
     }
+}
+
+fn emitFloatValue(writer: anytype, value: f64) !void {
+    try writer.print("{d}", .{value});
+    if (@floor(value) == value) try writer.writeAll(".0");
 }
 
 fn emitIndent(writer: anytype, level: usize) !void {
@@ -558,11 +574,6 @@ fn prefixedName(allocator: std.mem.Allocator, prefix: []const u8, name: []const 
 fn resourceBlockName(group_name: []const u8, resource_name: []const u8) []const u8 {
     _ = group_name;
     return resource_name;
-}
-
-fn sampledUniformName(texture_name: []const u8, sampler_name: []const u8) []const u8 {
-    _ = sampler_name;
-    return texture_name;
 }
 
 test "sanitizes GLSL reserved local names" {

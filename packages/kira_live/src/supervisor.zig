@@ -187,7 +187,7 @@ fn runDesktop(
         .stdout = .inherit,
         .stderr = .inherit,
     });
-    try emitEvent(stdout, "live.runner.launched", "pid={d}", .{child.id orelse 0});
+    try emitEvent(stdout, "live.runner.launched", "pid={any}", .{child.id});
 
     var connection = (try acceptClientOrDiagnose(allocator, &server, &child, io, target, stdout, stderr)) orelse return;
     defer connection.close();

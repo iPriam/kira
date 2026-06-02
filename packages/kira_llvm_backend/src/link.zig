@@ -42,6 +42,7 @@ pub fn linkExecutable(
     if (builtin.os.tag == .windows) {
         try argv.append("-Wl,/subsystem:console");
     }
+    try appendNativeLibraryPaths(allocator, &argv);
     for (object_paths) |path| try argv.append(path);
 
     for (native_libraries) |library| {
@@ -71,6 +72,7 @@ pub fn linkSharedLibrary(
     try argv.append(driver_path);
     try clang_driver.appendClangDriverArgs(allocator, &argv, selector);
     try argv.appendSlice(&.{ "-shared", "-o", library_path });
+    try appendNativeLibraryPaths(allocator, &argv);
     for (object_paths) |path| try argv.append(path);
 
     for (native_libraries) |library| {
@@ -90,6 +92,16 @@ pub fn linkSharedLibrary(
 fn appendDefaultSystemLibraries(argv: *std.array_list.Managed([]const u8), selector: ?native.TargetSelector) !void {
     if (emscripten.isSelector(selector)) return;
     if (builtin.os.tag == .linux) try argv.append("-lm");
+}
+
+fn appendNativeLibraryPaths(allocator: std.mem.Allocator, argv: *std.array_list.Managed([]const u8)) !void {
+    var environ_map = try std.process.Environ.createMap(backend_utils.inheritedProcessEnviron(), allocator);
+    defer environ_map.deinit();
+    const value = environ_map.get("KIRA_NATIVE_LIBRARY_PATH") orelse return;
+    var paths = std.mem.splitScalar(u8, value, std.fs.path.delimiter);
+    while (paths.next()) |path| {
+        if (path.len != 0) try argv.append(try std.fmt.allocPrint(allocator, "-L{s}", .{path}));
+    }
 }
 
 fn compilerDriverPathForSelector(allocator: std.mem.Allocator, selector: ?native.TargetSelector) ![]const u8 {

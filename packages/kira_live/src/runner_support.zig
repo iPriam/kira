@@ -44,7 +44,7 @@ fn runLiveFromManifest(
 
     try client.sendText(.hello, "kira-live-runner");
     try client.sendText(.runtime_info, runner_manifest.name);
-    try client.sendText(.log_line, try std.fmt.allocPrint(allocator, "live.runner.pid={d}", .{std.c.getpid()}));
+    try client.sendText(.log_line, try std.fmt.allocPrint(allocator, "live.runner.pid={d}", .{processId()}));
     try client.sendText(.log_line, "live.client.connected");
 
     var restart_count: u32 = 0;
@@ -70,7 +70,7 @@ fn runStandaloneFromManifest(
         try std.fs.path.join(allocator, &.{ manifest_dir, embedded_rel });
     const bundle_root = try std.fs.path.join(allocator, &.{ embedded_bundles_root, try std.fmt.allocPrint(allocator, "{s}.klbundle", .{runner_manifest.main_bundle_id}) });
     standalone_first_frame_emitted = false;
-    standaloneLog("live.runner.pid={d}", .{std.c.getpid()});
+    standaloneLog("live.runner.pid={d}", .{processId()});
     standaloneLog("live.runtime.mode=standalone", .{});
     standaloneLog("live.bundle.loaded", .{});
     try runBundleStandalone(allocator, bundle_root, manifest_dir);
@@ -320,6 +320,15 @@ fn standaloneLog(comptime fmt: []const u8, args: anytype) void {
 }
 
 const builtin = @import("builtin");
+
+extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) u32;
+
+fn processId() u32 {
+    return switch (builtin.os.tag) {
+        .windows => GetCurrentProcessId(),
+        else => @intCast(std.c.getpid()),
+    };
+}
 
 const SYSLOG_LEVEL_NOTICE: c_int = 5;
 extern "c" fn syslog(priority: c_int, format: [*:0]const u8, ...) callconv(.c) void;

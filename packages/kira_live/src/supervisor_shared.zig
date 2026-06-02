@@ -219,6 +219,16 @@ pub fn killAndWait(child: *std.process.Child, io: std.Io) void {
 }
 
 pub fn waitReadable(fd: anytype, timeout_ms: i32) !bool {
+    if (builtin.os.tag == .windows) {
+        var pollfd = [_]WindowsPollFd{.{
+            .fd = fd,
+            .events = windows_poll_in,
+            .revents = 0,
+        }};
+        const ready = WSAPoll(&pollfd, pollfd.len, timeout_ms);
+        if (ready < 0) return error.PollFailed;
+        return ready > 0 and (pollfd[0].revents & windows_poll_in) != 0;
+    }
     var pollfd = [_]std.posix.pollfd{.{
         .fd = fd,
         .events = std.posix.POLL.IN,
@@ -227,6 +237,16 @@ pub fn waitReadable(fd: anytype, timeout_ms: i32) !bool {
     const ready = try std.posix.poll(&pollfd, timeout_ms);
     return ready > 0 and (pollfd[0].revents & std.posix.POLL.IN) != 0;
 }
+
+const windows_poll_in: c_short = 0x0300;
+
+const WindowsPollFd = extern struct {
+    fd: *anyopaque,
+    events: c_short,
+    revents: c_short,
+};
+
+extern "ws2_32" fn WSAPoll(fd_array: [*]WindowsPollFd, fds: u32, timeout: c_int) callconv(.winapi) c_int;
 
 pub fn pollChildExited(child: *std.process.Child) !bool {
     const pid = child.id orelse return true;

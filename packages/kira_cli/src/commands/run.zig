@@ -15,6 +15,7 @@ const support = @import("../support.zig");
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+extern "kernel32" fn SetEnvironmentVariableA(name: [*:0]const u8, value: ?[*:0]const u8) callconv(.winapi) c_int;
 
 pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: anytype, stderr: anytype) !void {
     const parsed = try parseArgs(args);
@@ -579,14 +580,22 @@ const ScopedEnv = struct {
         defer allocator.free(text_value);
         const value_z = try allocator.dupeZ(u8, text_value);
         defer allocator.free(value_z);
-        if (setenv(name_z.ptr, value_z.ptr, 1) != 0) return error.EnvironmentUpdateFailed;
+        if (builtin.os.tag == .windows) {
+            if (SetEnvironmentVariableA(name_z.ptr, value_z.ptr) == 0) return error.EnvironmentUpdateFailed;
+        } else if (setenv(name_z.ptr, value_z.ptr, 1) != 0) {
+            return error.EnvironmentUpdateFailed;
+        }
         return .{ .allocator = allocator, .name_z = name_z, .active = true };
     }
 
     fn deinit(self: *ScopedEnv) void {
         if (!self.active) return;
         if (self.name_z) |name_z| {
-            _ = unsetenv(name_z.ptr);
+            if (builtin.os.tag == .windows) {
+                _ = SetEnvironmentVariableA(name_z.ptr, null);
+            } else {
+                _ = unsetenv(name_z.ptr);
+            }
             self.allocator.free(name_z);
         }
     }

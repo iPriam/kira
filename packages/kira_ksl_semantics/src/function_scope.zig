@@ -359,13 +359,20 @@ pub const FunctionScope = struct {
 
     fn lowerIntrinsicCall(self: *FunctionScope, call_expr: syntax.ast.CallExpr, intrinsic: shader_ir.Intrinsic) anyerror!*shader_ir.Expr {
         const return_ty: shader_model.Type = switch (intrinsic) {
-            .normalize => blk: {
+            .normalize, .sin => blk: {
                 if (call_expr.args.len != 1) {
                     try self.analyzer.emitDiagnostic("KSL020", "invalid intrinsic call", call_expr.span, "Pass the expected arguments to the intrinsic.");
                     return error.DiagnosticsEmitted;
                 }
                 const first = try self.lowerExpr(call_expr.args[0], null);
                 break :blk first.ty;
+            },
+            .length => blk: {
+                if (call_expr.args.len != 1) {
+                    try self.analyzer.emitDiagnostic("KSL020", "invalid intrinsic call", call_expr.span, "Pass the expected arguments to the intrinsic.");
+                    return error.DiagnosticsEmitted;
+                }
+                break :blk .{ .scalar = .float };
             },
             .sample => .{ .vector = .{ .scalar = .float, .width = 4 } },
             .mul => blk: {
@@ -380,7 +387,14 @@ pub const FunctionScope = struct {
                 if (typeEql(left.ty, right.ty)) break :blk left.ty;
                 break :blk right.ty;
             },
-            .dot => .{ .scalar = .float },
+            .dot, .pow, .atan2, .smoothstep => blk: {
+                const expected_args: usize = if (intrinsic == .smoothstep) 3 else 2;
+                if (call_expr.args.len != expected_args) {
+                    try self.analyzer.emitDiagnostic("KSL020", "invalid intrinsic call", call_expr.span, "Pass the expected arguments to the intrinsic.");
+                    return error.DiagnosticsEmitted;
+                }
+                break :blk .{ .scalar = .float };
+            },
         };
         return try self.lowerCallArgs(call_expr, .{ .intrinsic = intrinsic }, return_ty);
     }
