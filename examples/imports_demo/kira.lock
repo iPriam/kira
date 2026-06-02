@@ -1,0 +1,7 @@
+version = 1
+
+[root]
+name = "imports_demo"
+version = "0.1.0"
+kind = "app"
+kira = "0.1.0"

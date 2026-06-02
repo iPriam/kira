@@ -10,8 +10,7 @@ test "wasm32 emscripten build runs real Kira entrypoint through node" {
     const allocator = arena.allocator();
 
     const process_allocator = std.heap.smp_allocator;
-    try llvm_backend.emscripten.validateAvailable(process_allocator);
-    try validateNodeAvailable(process_allocator);
+    try ensureRuntimeToolingAvailable(process_allocator);
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -59,6 +58,17 @@ test "wasm32 emscripten build runs real Kira entrypoint through node" {
 
     try std.testing.expectEqual(@as(std.process.Child.Term, .{ .exited = 0 }), result.term);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "wasm-entrypoint-ok") != null);
+}
+
+fn ensureRuntimeToolingAvailable(allocator: std.mem.Allocator) !void {
+    llvm_backend.emscripten.validateAvailable(allocator) catch |err| switch (err) {
+        error.EmscriptenUnavailable => return error.SkipZigTest,
+        else => return err,
+    };
+    validateNodeAvailable(allocator) catch |err| switch (err) {
+        error.NodeUnavailable => return error.SkipZigTest,
+        else => return err,
+    };
 }
 
 test "wasm32 emscripten reports host native library target exclusion" {
@@ -120,12 +130,15 @@ fn validateNodeAvailable(allocator: std.mem.Allocator) !void {
     const process_environ = inheritedProcessEnviron();
     var io_impl: std.Io.Threaded = .init(std.heap.smp_allocator, .{ .environ = process_environ });
     defer io_impl.deinit();
-    const result = try std.process.run(allocator, io_impl.io(), .{
+    const result = std.process.run(allocator, io_impl.io(), .{
         .argv = &.{ "node", "--version" },
         .expand_arg0 = .expand,
         .stdout_limit = .limited(1024),
         .stderr_limit = .limited(1024),
-    });
+    }) catch |err| switch (err) {
+        error.FileNotFound => return error.NodeUnavailable,
+        else => return err,
+    };
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 

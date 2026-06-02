@@ -41,8 +41,3 @@ Widget Card(title: String) {
         return;
     }
 }
-
-@Main
-function entry() {
-    return;
-}

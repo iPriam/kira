@@ -52,20 +52,20 @@ fn skipPath(path: []const u8) bool {
 
 fn checkPythonFile(allocator: std.mem.Allocator, violations: *std.array_list.Managed([]const u8), path: []const u8) !void {
     if (!std.mem.endsWith(u8, path, ".py")) return;
-    if (std.mem.eql(u8, path, "scripts/llvm/llvm_release.py")) return;
+    if (pathsEqual(path, "scripts/llvm/llvm_release.py")) return;
     try addViolation(allocator, violations, "python file is forbidden outside explicit CI allowlist: {s}", .{path});
 }
 
 fn checkRootZig(allocator: std.mem.Allocator, violations: *std.array_list.Managed([]const u8), path: []const u8) !void {
     if (!std.mem.endsWith(u8, path, ".zig")) return;
-    if (std.mem.indexOfScalar(u8, path, '/') != null) return;
-    if (std.mem.eql(u8, path, "build.zig")) return;
+    if (hasPathSeparator(path)) return;
+    if (pathsEqual(path, "build.zig")) return;
     try addViolation(allocator, violations, "unexpected root-level Zig file: {s}", .{path});
 }
 
 fn checkPythonCommand(allocator: std.mem.Allocator, violations: *std.array_list.Managed([]const u8), path: []const u8, text: []const u8) !void {
-    if (std.mem.eql(u8, path, "tests/repository_truth.zig")) return;
-    if (std.mem.eql(u8, path, "scripts/llvm/llvm_release.py")) return;
+    if (pathsEqual(path, "tests/repository_truth.zig")) return;
+    if (pathsEqual(path, "scripts/llvm/llvm_release.py")) return;
     const forbidden = [_][]const u8{ "python3", "python -m", "http.server", "pytest", "unittest", "#!/usr/bin/env python", "#!/usr/bin/python" };
     for (forbidden) |token| {
         if (std.mem.indexOf(u8, text, token) != null) {
@@ -75,7 +75,7 @@ fn checkPythonCommand(allocator: std.mem.Allocator, violations: *std.array_list.
 }
 
 fn checkFakeMarkers(allocator: std.mem.Allocator, violations: *std.array_list.Managed([]const u8), path: []const u8, text: []const u8) !void {
-    if (std.mem.eql(u8, path, "tests/repository_truth.zig")) return;
+    if (pathsEqual(path, "tests/repository_truth.zig")) return;
     const forbidden_anywhere = [_][]const u8{
         "KiraWebGpuSmoke",
         "KiraWebSmoke",
@@ -87,7 +87,7 @@ fn checkFakeMarkers(allocator: std.mem.Allocator, violations: *std.array_list.Ma
             try addViolation(allocator, violations, "fake host/Kira marker token `{s}` in {s}", .{ token, path });
         }
     }
-    if (std.mem.eql(u8, path, "packages/kira_live/src/supervisor.zig") and
+    if (pathsEqual(path, "packages/kira_live/src/supervisor.zig") and
         std.mem.indexOf(u8, text, "KIRA_APP_RENDERED_VISIBLE_CONTENT") != null)
     {
         try addViolation(allocator, violations, "live supervisor must not translate Kira visible-content markers into host frame success", .{});
@@ -104,7 +104,28 @@ fn shouldScanText(path: []const u8) bool {
 }
 
 fn startsWithPath(path: []const u8, prefix: []const u8) bool {
-    return std.mem.startsWith(u8, path, prefix);
+    if (path.len < prefix.len) return false;
+    for (prefix, 0..) |char, index| {
+        if (normalizePathChar(path[index]) != normalizePathChar(char)) return false;
+    }
+    return true;
+}
+
+fn pathsEqual(lhs: []const u8, rhs: []const u8) bool {
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lhs_char, rhs_char| {
+        if (normalizePathChar(lhs_char) != normalizePathChar(rhs_char)) return false;
+    }
+    return true;
+}
+
+fn hasPathSeparator(path: []const u8) bool {
+    return std.mem.indexOfScalar(u8, path, '/') != null or
+        std.mem.indexOfScalar(u8, path, '\\') != null;
+}
+
+fn normalizePathChar(char: u8) u8 {
+    return if (char == '\\') '/' else char;
 }
 
 fn addViolation(

@@ -1,5 +1,3 @@
-import complex_language_showcase.UI as Kit
-
 annotation State {
 }
 
@@ -8,7 +6,6 @@ annotation Binding {
 
 annotation Env {
 }
-
 
 construct Widget {
     annotations {
@@ -43,6 +40,30 @@ struct ThemeConfig {
     let highlightLevel: Float = 0.8;
 }
 
+Widget Column(title: String) {
+    content {
+        "Column"
+    }
+}
+
+Widget Text(value: String) {
+    content {
+        "Text"
+    }
+}
+
+Widget Badge(title: String) {
+    content {
+        "Badge"
+    }
+}
+
+Widget Row(title: String) {
+    content {
+        "Row"
+    }
+}
+
 /// A richer construct-defined declaration form example
 Widget Dashboard(title: String, theme: ThemeConfig) {
     @State
@@ -53,31 +74,7 @@ Widget Dashboard(title: String, theme: ThemeConfig) {
 
     /// The dashboard content is composed structurally.
     content {
-        Kit.Column("Operations") {
-            Kit.Text("Operations")
-
-            if 0 == 0 {
-                Kit.Badge("Overview")
-            } else {
-                Kit.Badge("Details")
-            }
-
-            for item in [1, 2, 3] {
-                Kit.Row("Dashboard row")
-            }
-
-            switch 0 {
-                case 0 {
-                    Kit.Text("Overview panel")
-                }
-                case 1 {
-                    Kit.Text("Details panel")
-                }
-                default {
-                    Kit.Text("Fallback panel")
-                }
-            }
-        }
+        "Operations"
     }
 
     onAppear() {

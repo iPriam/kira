@@ -47,7 +47,26 @@ Widget Card(title: String) {
     }
 }
 
-@Main
-function entry() {
-    return;
+Widget Column(title: String) {
+    content {
+        "Column"
+    }
+}
+
+Widget Text(value: String) {
+    content {
+        value
+    }
+}
+
+Widget Badge(title: String) {
+    content {
+        title
+    }
+}
+
+Widget Row(title: String) {
+    content {
+        title
+    }
 }

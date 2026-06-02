@@ -19,8 +19,6 @@ function main() {
     print(bottomEdge);
     printLine("hello");
     
-    let color = Color { r: 255, g: 0, b: 0 };
-    print(color);
     return;
 }
 
@@ -28,7 +26,7 @@ function main() {
 /// Axis-aligned rectangle in points.
 /// Use this for widget bounds, clip regions, and draw command geometry.
 /// The rectangle stores an origin and extent in the same coordinate space.
-struct Rect {
+struct HelloRect {
     /// Left edge in points.
     var x: Float = 0.0
     /// Top edge in points.
@@ -41,21 +39,21 @@ struct Rect {
     /// Return whether the rectangle contains the supplied point.
     /// Bounds checks are inclusive on the trailing edges for stable hit testing.
     /// Use this when routing pointer or touch events.
-    function contains(point: Point) -> Bool {
+    function contains(point: HelloPoint) -> Bool {
         return point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height
     }
 
     /// Return whether this rectangle overlaps another rectangle.
     /// The check is axis-aligned and ignores z-order or clipping state.
     /// Use this for fast culling and layout overlap tests.
-    function intersects(other: Rect) -> Bool {
+    function intersects(other: HelloRect) -> Bool {
         return x < other.x + other.width && x + width > other.x && y < other.y + other.height && y + height > other.y
     }
 
     /// Return the overlapping region between this rectangle and another rectangle.
     /// When the two rectangles do not overlap, the result is an empty rectangle literal.
     /// Use this when computing nested clip regions.
-    function intersection(other: Rect) -> Rect {
+    function intersection(other: HelloRect) -> HelloRect {
         let ix = x > other.x ? x : other.x
         let iy = y > other.y ? y : other.y
         let rx = x + width < other.x + other.width ? x + width : other.x + other.width
@@ -63,24 +61,24 @@ struct Rect {
         let iw = rx - ix
         let ih = by - iy
         if iw <= 0.0 || ih <= 0.0 {
-            return Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }
+            return HelloRect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }
         }
-        return Rect { x: ix, y: iy, width: iw, height: ih }
+        return HelloRect { x: ix, y: iy, width: iw, height: ih }
     }
 
     /// Inset the rectangle by the supplied edge values.
     /// Positive insets shrink the interior and move the origin inward.
     /// Use this for applying padding before placing children.
-    function inset(by: EdgeInsets) -> Rect {
+    function inset(by: HelloEdgeInsets) -> HelloRect {
         let insetWidth = (width - by.leading) - by.trailing
         let insetHeight = (height - by.top) - by.bottom
-        return Rect { x: x + by.leading, y: y + by.top, width: insetWidth, height: insetHeight }
+        return HelloRect { x: x + by.leading, y: y + by.top, width: insetWidth, height: insetHeight }
     }
 }
 
 /// Insets around a rectangle in points.
 /// Use this to shrink layout bounds before placing child content.
-struct EdgeInsets {
+struct HelloEdgeInsets {
     var top: Float = 0.0
     var trailing: Float = 0.0
     var bottom: Float = 0.0
@@ -90,7 +88,7 @@ struct EdgeInsets {
 /// Two-dimensional point in Foundation layout and drawing space.
 /// Use this for widget origins, hit-testing, and pointer coordinates.
 /// All values are expressed in points in the current UI coordinate system.
-struct Point {
+struct HelloPoint {
     /// Horizontal position in points.
     var x: Float = 0.0
     /// Vertical position in points.
@@ -99,7 +97,7 @@ struct Point {
     /// Compute the Manhattan distance to another point.
     /// Use this for simple hit-testing thresholds and gesture heuristics when a scalar distance is sufficient.
     /// The returned value is expressed in points.
-    function distanceTo(other: Point) -> Float {
+    function distanceTo(other: HelloPoint) -> Float {
         let dx = x - other.x
         let dy = y - other.y
         let adx = dx < 0.0 ? 0.0 - dx : dx
@@ -111,9 +109,9 @@ struct Point {
 /// Small composition example that uses the geometry types together.
 /// This is a frontend-friendly model shape for simple layout metadata.
 /// It keeps `hello.kira` runnable while still showing how the new types connect.
-struct LayoutSample {
+struct HelloLayoutSample {
     /// Anchor point for the sample content.
-    let anchor: Point
+    let anchor: HelloPoint
     /// Bounding rectangle for the sample content.
-    let frame: Rect
+    let frame: HelloRect
 }

@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const native = @import("kira_native_lib_definition");
 const backend_utils = @import("backend_utils.zig");
@@ -20,11 +21,11 @@ pub fn emccPath(allocator: std.mem.Allocator) ![]const u8 {
     if (try envVarOwned(allocator, "EMCC")) |path| return path;
     if (try envVarOwned(allocator, "EMSDK")) |root| {
         defer allocator.free(root);
-        const candidate = try std.fs.path.join(allocator, &.{ root, "upstream", "emscripten", "emcc" });
+        const candidate = try std.fs.path.join(allocator, &.{ root, "upstream", "emscripten", emccExecutableName() });
         if (fileExists(candidate)) return candidate;
         allocator.free(candidate);
     }
-    return allocator.dupe(u8, "emcc");
+    return allocator.dupe(u8, emccExecutableName());
 }
 
 pub fn validateAvailable(allocator: std.mem.Allocator) !void {
@@ -33,16 +34,23 @@ pub fn validateAvailable(allocator: std.mem.Allocator) !void {
     const process_environ = backend_utils.inheritedProcessEnviron();
     var io_impl: std.Io.Threaded = .init(std.heap.smp_allocator, .{ .environ = process_environ });
     defer io_impl.deinit();
-    const result = try std.process.run(allocator, io_impl.io(), .{
+    const result = std.process.run(allocator, io_impl.io(), .{
         .argv = &.{ emcc, "--version" },
         .expand_arg0 = .expand,
         .stdout_limit = .limited(64 * 1024),
         .stderr_limit = .limited(64 * 1024),
-    });
+    }) catch |err| switch (err) {
+        error.FileNotFound => return error.EmscriptenUnavailable,
+        else => return err,
+    };
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
     if (result.term == .exited and result.term.exited == 0) return;
     return error.EmscriptenUnavailable;
+}
+
+fn emccExecutableName() []const u8 {
+    return if (builtin.os.tag == .windows) "emcc.bat" else "emcc";
 }
 
 fn envVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]const u8 {

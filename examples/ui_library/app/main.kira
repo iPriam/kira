@@ -1,35 +1,5 @@
 import UI
 
-/// A small app-side example that imports the stub UI library
-Widget DashboardShell() {
-    content {
-        Card("Operations")
-
-        if true {
-            Card("Overview")
-        } else {
-            Card("Fallback")
-        }
-
-        for item in [1, 2] {
-            Card("Row")
-        }
-
-        switch 0 {
-            case 0 {
-                Card("Primary")
-            }
-            default {
-                Card("Secondary")
-            }
-        }
-    }
-
-    onAppear() {
-        return;
-    }
-}
-
 @Main
 function entry() {
     print("ui library app example");

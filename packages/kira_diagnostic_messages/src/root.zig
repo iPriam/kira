@@ -55,7 +55,19 @@ test "KIC001 is only used in approved fallback locations" {
 
 fn isApproved(path: []const u8, approved: []const []const u8) bool {
     for (approved) |candidate| {
-        if (std.mem.eql(u8, path, candidate)) return true;
+        if (pathsEqual(path, candidate)) return true;
     }
     return false;
+}
+
+fn pathsEqual(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |lhs, rhs| {
+        if (normalizePathChar(lhs) != normalizePathChar(rhs)) return false;
+    }
+    return true;
+}
+
+fn normalizePathChar(char: u8) u8 {
+    return if (char == '\\') '/' else char;
 }
