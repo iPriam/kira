@@ -330,8 +330,13 @@ pub fn build(b: *std.Build) void {
         .name = "kira-hybrid-runner",
         .root_module = hybrid_runner_module,
     });
+    // `zig build test -Dstable-tests` runs the corpus serially and retries transient
+    // native (llvm) build/link failures, trading speed for determinism on loaded or
+    // contended machines. Equivalent to setting KIRA_CORPUS_STABLE=1.
+    const stable_tests = b.option(bool, "stable-tests", "Run the corpus serially and retry transient llvm build/link failures") orelse false;
     const run_corpus = b.addRunArtifact(corpus_runner);
     run_corpus.addArtifactArg(hybrid_runner);
+    if (stable_tests) run_corpus.setEnvironmentVariable("KIRA_CORPUS_STABLE", "1");
     run_corpus.stdio = .inherit;
     test_step.dependOn(&run_corpus.step);
 

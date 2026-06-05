@@ -633,6 +633,56 @@ test "allows imported construct and callable names in the global namespace" {
     try std.testing.expectEqualStrings("Widget", analyzed.forms[0].construct.construct_name);
 }
 
+test "root declarations shadow dependency declarations without duplicate leakage" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    var diags = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
+    var program = try parseSource(
+        allocator,
+        "struct Color { let r: Int = 0; }\n" ++
+            "struct Color { let value: Int = 7; }\n" ++
+            "@Main function entry() { let color = Color(); print(color.value); return; }",
+        &diags,
+    );
+    const origins = try allocator.alloc(syntax.ast.DeclOrigin, program.decls.len);
+    for (origins) |*origin| origin.* = .{};
+    origins[0] = .{ .package_name = "KiraGraphics", .source_path = "KiraGraphics/Color.kira" };
+    program.decl_origins = origins;
+
+    const analyzed = try analyzer.analyze(allocator, program, &diags);
+
+    try std.testing.expectEqual(@as(usize, 0), diags.items.len);
+    const color = findTypeDeclByName(analyzed, "Color") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), color.fields.len);
+    try std.testing.expectEqualStrings("value", color.fields[0].name);
+}
+
+test "duplicate declarations still fail within one dependency namespace" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    var diags = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
+    var program = try parseSource(
+        allocator,
+        "struct Color { let r: Int = 0; }\n" ++
+            "struct Color { let g: Int = 0; }\n" ++
+            "@Main function entry() { return; }",
+        &diags,
+    );
+    const origins = try allocator.alloc(syntax.ast.DeclOrigin, program.decls.len);
+    for (origins) |*origin| origin.* = .{ .package_name = "KiraGraphics", .source_path = "KiraGraphics/Color.kira" };
+    origins[2] = .{};
+    program.decl_origins = origins;
+
+    const result = analyzer.analyze(allocator, program, &diags);
+
+    try std.testing.expectError(error.DiagnosticsEmitted, result);
+    try expectFirstDiagnosticTitle(diags.items, "duplicate top-level name");
+}
+
 test "lowers any construct parameters as structured construct constraints" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

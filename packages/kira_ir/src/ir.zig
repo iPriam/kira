@@ -451,6 +451,9 @@ pub const CallValue = struct {
     callee: u32,
     args: []const u32,
     param_types: []const ValueType,
+    // Per-parameter ownership so the backend drop pass can escape arguments consumed by an
+    // owned/move parameter (mirrors Function.param_ownership). Empty => treat all as owned.
+    param_ownership: []const OwnershipMode = &.{},
     return_type: ValueType,
     dst: ?u32 = null,
 };

@@ -5,6 +5,14 @@ pub const Program = struct {
     imports: []ImportDecl,
     decls: []Decl,
     functions: []FunctionDecl,
+    import_origins: []DeclOrigin = &.{},
+    decl_origins: []DeclOrigin = &.{},
+    function_origins: []DeclOrigin = &.{},
+};
+
+pub const DeclOrigin = struct {
+    package_name: ?[]const u8 = null,
+    source_path: []const u8 = "",
 };
 
 pub const Decl = union(enum) {

@@ -23,6 +23,7 @@ pub const FieldStorage = hir.FieldStorage;
 pub const LifecycleHook = hir.LifecycleHook;
 pub const BuilderBlock = hir.BuilderBlock;
 pub const BuilderItem = hir.BuilderItem;
+pub const exprType = hir.exprType;
 pub const BuilderSwitchCase = hir.BuilderSwitchCase;
 pub const SwitchCase = hir.SwitchCase;
 pub const TypeDecl = hir.TypeDecl;

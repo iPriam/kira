@@ -534,6 +534,17 @@ pub fn parsePrimary(self: *Parser) anyerror!*syntax.ast.Expr {
         }
         return try self.makeIdentifierExpr(token);
     }
+    if (self.match(.dollar)) {
+        const start = self.previous().span.start;
+        const token = try self.expect(.identifier, "expected binding name after '$'", "write the state or binding name to project here");
+        const name = try self.makeSingleSegmentName(token);
+        const expr = try self.allocator.create(syntax.ast.Expr);
+        expr.* = .{ .identifier = .{
+            .name = name,
+            .span = source_pkg.Span.init(start, token.span.end),
+        } };
+        return expr;
+    }
     if (self.match(.l_paren)) {
         const expr = try self.parseExpression();
         _ = try self.expect(.r_paren, "expected ')' after grouped expression", "close the grouped expression here");

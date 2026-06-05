@@ -22,6 +22,7 @@ pub const Program = struct {
 pub const Import = struct {
     module_name: []const u8,
     alias: ?[]const u8,
+    package_name: ?[]const u8 = null,
     span: source_pkg.Span,
 };
 
@@ -109,6 +110,11 @@ pub const Construct = struct {
     name: []const u8,
     allowed_annotations: []AnnotationRule,
     required_content: bool,
+    // Element type of a typed `content: Content<T>;` section, e.g. "Widget".
+    // Null when the construct declares content via the legacy `requires { content; }`
+    // form (which carries no element type). When set, construct-backed declarations
+    // are validated so their content block only holds element-typed values.
+    content_element_type: ?[]const u8 = null,
     allowed_lifecycle_hooks: [][]const u8,
     span: source_pkg.Span,
 };
@@ -584,6 +590,10 @@ pub const CallValueExpr = struct {
     callee: *Expr,
     args: []*Expr,
     param_types: []const ResolvedType,
+    // Per-parameter ownership of the callable's signature, so the backend can drop-escape
+    // arguments consumed by an owned/move parameter (mirrors a direct Call). Empty means
+    // "treat all as owned" for backward compatibility.
+    param_ownership: []const OwnershipMode = &.{},
     ty: ResolvedType,
     span: source_pkg.Span,
 };

@@ -18,7 +18,15 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     const jobs = try buildJobs(allocator, cases);
     const profile_enabled = try envFlag(allocator, init.environ, "KIRA_CORPUS_PROFILE");
-    const worker_count = resolveWorkerCount(allocator, init.environ, jobs.len);
+    // Stability mode: native (llvm) cases build and link real binaries, which contend
+    // on the toolchain when many run at once and can fail transiently under load. Stable
+    // mode runs every job serially and retries a failing llvm job a few times so a
+    // transient build/link hiccup does not fail the suite. Real (deterministic) failures
+    // still fail after the retries are exhausted. Enable with KIRA_CORPUS_STABLE=1 or
+    // `zig build test -Dstable-tests`.
+    const stable = try envFlag(allocator, init.environ, "KIRA_CORPUS_STABLE");
+    const worker_count = if (stable) @as(usize, @intCast(@min(jobs.len, 1))) else resolveWorkerCount(allocator, init.environ, jobs.len);
+    const retries = resolveRetries(allocator, init.environ, stable);
     const options: execute.Options = .{
         .hybrid_runner_path = args[1],
         .profile = profile_enabled,
@@ -32,6 +40,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         .jobs = jobs,
         .results = results,
         .options = options,
+        .retries = retries,
     };
 
     if (worker_count <= 1 or jobs.len <= 1) {
@@ -89,6 +98,7 @@ const Shared = struct {
     jobs: []const Job,
     results: []JobResult,
     options: execute.Options,
+    retries: usize = 0,
     next_index: std.atomic.Value(usize) = .init(0),
 
     fn runUntilDone(self: *Shared) void {
@@ -100,38 +110,54 @@ const Shared = struct {
     }
 
     fn runJob(self: *Shared, index: usize) void {
-        const arena_ptr = std.heap.smp_allocator.create(std.heap.ArenaAllocator) catch {
-            self.results[index] = .{
-                .report = .{
-                    .output = "FAIL <internal>: OutOfMemory\n",
+        const job = self.jobs[index];
+        // Only native (llvm) jobs are retried: they build/link real binaries and so are
+        // the only jobs subject to transient toolchain contention. vm/hybrid run in-process.
+        const max_attempts: usize = if (job.backend == .llvm) self.retries + 1 else 1;
+        var attempt: usize = 0;
+        while (true) {
+            attempt += 1;
+            const arena_ptr = std.heap.smp_allocator.create(std.heap.ArenaAllocator) catch {
+                self.results[index] = .{
+                    .report = .{
+                        .output = "FAIL <internal>: OutOfMemory\n",
+                        .passed = 0,
+                        .failed = 1,
+                    },
+                };
+                return;
+            };
+            arena_ptr.* = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+            const allocator = arena_ptr.allocator();
+
+            const report = execute.runBackendJob(allocator, job.case, job.backend, self.options) catch |err| blk: {
+                const label = std.fmt.allocPrint(
+                    allocator,
+                    "{s} [{s}]",
+                    .{ job.case.name, backendName(job.backend) },
+                ) catch "internal";
+                const output = std.fmt.allocPrint(allocator, "FAIL {s}: {s}\n", .{ label, @errorName(err) }) catch "FAIL <internal>: execution failed\n";
+                break :blk execute.JobReport{
+                    .output = output,
                     .passed = 0,
                     .failed = 1,
-                },
+                };
+            };
+
+            // Retry a failing llvm job (transient build/link flake) until it passes or the
+            // attempts are exhausted; a deterministic failure still fails after the retries.
+            if (report.failed != 0 and attempt < max_attempts) {
+                arena_ptr.deinit();
+                std.heap.smp_allocator.destroy(arena_ptr);
+                continue;
+            }
+
+            self.results[index] = .{
+                .arena = arena_ptr,
+                .report = report,
             };
             return;
-        };
-        arena_ptr.* = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
-        const allocator = arena_ptr.allocator();
-        const job = self.jobs[index];
-
-        const report = execute.runBackendJob(allocator, job.case, job.backend, self.options) catch |err| blk: {
-            const label = std.fmt.allocPrint(
-                allocator,
-                "{s} [{s}]",
-                .{ job.case.name, backendName(job.backend) },
-            ) catch "internal";
-            const output = std.fmt.allocPrint(allocator, "FAIL {s}: {s}\n", .{ label, @errorName(err) }) catch "FAIL <internal>: execution failed\n";
-            break :blk execute.JobReport{
-                .output = output,
-                .passed = 0,
-                .failed = 1,
-            };
-        };
-
-        self.results[index] = .{
-            .arena = arena_ptr,
-            .report = report,
-        };
+        }
     }
 };
 
@@ -172,6 +198,19 @@ fn resolveWorkerCount(allocator: std.mem.Allocator, environ: std.process.Environ
 fn clampWorkerCount(count: usize, job_count: usize) usize {
     const resolved = if (count == 0) 1 else count;
     return @max(@min(resolved, job_count), 1);
+}
+
+// Number of EXTRA attempts for a failing llvm job. Defaults to 2 in stable mode, 0
+// otherwise; KIRA_CORPUS_RETRIES overrides either way (capped to keep reruns bounded).
+fn resolveRetries(allocator: std.mem.Allocator, environ: std.process.Environ, stable: bool) usize {
+    var retries: usize = if (stable) 2 else 0;
+    if (environ.getAlloc(allocator, "KIRA_CORPUS_RETRIES")) |value| {
+        defer allocator.free(value);
+        if (std.fmt.parseInt(usize, std.mem.trim(u8, value, " \t\r\n"), 10)) |parsed| {
+            retries = parsed;
+        } else |_| {}
+    } else |_| {}
+    return @min(retries, 5);
 }
 
 fn envFlag(allocator: std.mem.Allocator, environ: std.process.Environ, name: []const u8) !bool {

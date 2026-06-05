@@ -1,0 +1,46 @@
+// Regression: an array literal of heap structs returned from one branch of an
+// `if`, with an empty array returned from the other branch. Drop elaboration in
+// the LLVM text-IR backend used to emit a function-exit cleanup for the
+// conditionally-allocated array (and its element heap slots) on the *other*
+// return path, producing LLVM "instruction does not dominate all uses" and a
+// broken module. The owned temporaries of a returning block must not be cleaned
+// up by a sibling block's return.
+
+struct Color {
+    let r: Float = 0.0
+    let g: Float = 0.0
+    let b: Float = 0.0
+    let a: Float = 1.0
+}
+
+struct Glow {
+    let color: Color = Color {}
+    let radius: Float = 0.0
+    let intensity: Float = 0.0
+}
+
+function glowEffects(enabled: Bool) -> [Glow] {
+    if enabled {
+        return [
+            Glow {
+                color: Color { r: 0.30 g: 0.55 b: 1.0 a: 1.0 }
+                radius: 22.0
+                intensity: 0.28
+            }
+        ]
+    }
+    return []
+}
+
+function glowCount(enabled: Bool) -> Int {
+    let effects = glowEffects(enabled)
+    return effects.count
+}
+
+@Main
+function main() {
+    print(glowCount(true))
+    print(glowCount(false))
+    print(glowCount(true))
+    return
+}

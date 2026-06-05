@@ -1,0 +1,32 @@
+# ~/.codex/kira-campaign.config.toml
+
+# Model comparison for this campaign:
+# - GPT-5.4 XHigh fast @ 900k context:
+#   Best choice for this repo-wide autonomous campaign because it needs to hold
+#   compiler changes, UI Foundation, Kira Graphics, Kira UI, Kira-doc, examples,
+#   tests, leaks investigation, screenshots, routing, text input, modifiers,
+#   constructs, and all syntax constraints at once.
+#
+# - GPT-5.5 XHigh fast @ 256k context:
+#   Better for narrower follow-up reviews or focused subsystem fixes, but more
+#   likely to drop constraints during a huge multi-repo implementation campaign.
+
+model = "gpt-5.4"
+model_reasoning_effort = "xhigh"
+model_context_window = 900000
+model_auto_compact_token_limit = 900000
+model_reasoning_summary = "detailed"
+model_supports_reasoning_summaries = true
+
+model_instructions_file = "/Users/priamc/.codex/kira-campaign/system.md"
+
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
+
+[features]
+fast_mode = true
+
+log_dir = "/Users/priamc/.codex/kira-campaign/logs"

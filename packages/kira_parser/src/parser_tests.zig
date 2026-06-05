@@ -320,8 +320,8 @@ test "parses the restored hello example with canonical class/struct syntax" {
     const program = try parseSource(allocator, source_text, &diags);
 
     try std.testing.expectEqual(@as(usize, 0), diags.items.len);
-    try std.testing.expectEqual(@as(usize, 5), program.decls.len);
-    try std.testing.expectEqual(@as(usize, 1), program.functions.len);
+    try std.testing.expectEqual(@as(usize, 3), program.decls.len);
+    try std.testing.expectEqual(@as(usize, 3), program.functions.len);
 }
 
 test "reports malformed annotations as diagnostics" {

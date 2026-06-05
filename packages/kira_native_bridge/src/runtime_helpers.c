@@ -368,6 +368,33 @@ KIRA_BRIDGE_EXPORT void kira_array_release_replaced(KiraArray *old_array, KiraAr
     kira_array_release(old_array, release_raw_ptr);
 }
 
+/*
+ * Free an owned closure value. A closure i64 is either a callable-value (a bare
+ * function id, high bit clear, within u32 — no heap) or a tagged heap closure block
+ * { i64 fn_id; i64 count; KiraBridgeValue[] } with the high bit set. Used to drop an
+ * owned closure parameter at the callee's scope exit. Tag-safe and null/sentinel-safe
+ * so it also accepts plain heap raw pointers (high bit already clear). Captured heap
+ * values are left untouched (ambiguous without per-capture type info — conservative:
+ * leak rather than risk freeing a shared/static capture or a double free).
+ */
+KIRA_BRIDGE_EXPORT void kira_destroy_closure(uintptr_t value) {
+    if (value == 0) return;
+    if (value <= 0xFFFFFFFFULL) return; /* callable-value function id: nothing to free */
+    /*
+     * Only an actual closure block carries the high tag bit (set in lowerConstClosure).
+     * An owned raw_ptr parameter that is NOT a closure — e.g. an FFI/native-state userdata
+     * pointer passed as `RawPtr` — has the high bit clear and must NOT be freed: it is
+     * owned by the caller (the native-state box), and freeing it corrupts that box (seen as
+     * "userdata type mismatch" on a later nativeRecover). The high bit cleanly separates a
+     * real closure value from a borrowed raw pointer, so this is safe for both.
+     */
+    if ((value & 0x8000000000000000ULL) == 0) return;
+    void *ptr = (void *)(value & 0x7FFFFFFFFFFFFFFFULL); /* clear the closure tag bit */
+    uintptr_t bits = (uintptr_t)ptr;
+    if (bits < 0x1000 || (bits & 0x7) != 0) return; /* not a heap-allocated block */
+    free(ptr);
+}
+
 KIRA_BRIDGE_EXPORT void kira_array_append(KiraArray *array, const KiraBridgeValue *value) {
     if (!kira_array_is_active(array)) return;
     kira_array_repair_invalid_storage(array);

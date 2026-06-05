@@ -1,0 +1,18 @@
+// A construct that declares a typed `content: Content<Widget>;` section accepts
+// only widget-producing expressions in its declarations' content blocks. A raw
+// String literal is not a widget and must be rejected with a precise diagnostic.
+
+construct Widget {
+    content: Content<Widget>;
+}
+
+Widget InvalidCard {
+    content {
+        "Card"
+    }
+}
+
+@Main
+function main() {
+    return
+}

@@ -40,6 +40,7 @@ pub const TokenKind = enum {
     kw_true,
     kw_false,
     at_sign,
+    dollar,
     l_paren,
     r_paren,
     l_brace,

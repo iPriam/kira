@@ -23,6 +23,7 @@ pub const Context = struct {
     enum_headers: ?*const std.StringHashMapUnmanaged(model.EnumDecl) = null,
     concrete_enums: ?*std.StringHashMapUnmanaged(model.EnumDecl) = null,
     callback_capture_frame: ?*CallbackCaptureFrame = null,
+    current_package: ?[]const u8 = null,
 };
 
 pub const CallbackCaptureFrame = struct {
@@ -52,6 +53,20 @@ pub const FunctionHeader = struct {
     foreign: ?model.ForeignFunction = null,
     span: source_pkg.Span,
 };
+
+pub fn scopedSymbolName(allocator: std.mem.Allocator, package_name: []const u8, name: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ package_name, name });
+}
+
+pub fn findFunctionHeader(ctx: *const Context, headers: *const std.StringHashMapUnmanaged(FunctionHeader), name: []const u8) ?FunctionHeader {
+    if (ctx.current_package) |package_name| {
+        if (std.mem.indexOfScalar(u8, name, '.') == null) {
+            const scoped = std.fmt.allocPrint(ctx.allocator, "{s}.{s}", .{ package_name, name }) catch return null;
+            if (headers.get(scoped)) |header| return header;
+        }
+    }
+    return headers.get(name);
+}
 
 pub const ConstructHeader = struct {
     index: usize,
@@ -1062,6 +1077,13 @@ fn captureBinding(
 ) !model.LocalBinding {
     _ = use_span;
     if (frame.active_scope.get(name)) |binding| return binding;
+    // A mutable local is captured by reference (a pointer to the enclosing frame's local
+    // slot) so that mutations inside the closure propagate to the enclosing scope; an
+    // immutable local is captured by value. NOTE: a by-reference capture dangles if the
+    // closure escapes its defining frame (returned/stored) — see
+    // [[escaping-closure-capture-uaf]]. Making escaping closures safe requires escape
+    // analysis (capture-by-move only when the closure escapes) or heap-boxed upvalues, so
+    // that non-escaping by-ref mutation (callback_mutable_value_capture) keeps working.
     const by_ref = outer.storage != .immutable;
 
     const local_id = frame.next_local_id.*;
@@ -1149,14 +1171,41 @@ pub fn containsString(values: [][]const u8, name: []const u8) bool {
     return false;
 }
 
-pub fn isImportedRoot(name: []const u8, imports: []const model.Import) bool {
+pub fn isImportedRoot(ctx: *const Context, name: []const u8, imports: []const model.Import) bool {
     for (imports) |import_decl| {
+        if (!importVisibleToContext(ctx, import_decl)) continue;
         if (import_decl.alias) |alias| {
             if (std.mem.eql(u8, alias, name)) return true;
         }
         if (std.mem.eql(u8, import_decl.module_name, name)) return true;
     }
     return false;
+}
+
+pub fn importedQualifiedName(ctx: *const Context, imports: []const model.Import, name: []const u8) ?[]const u8 {
+    const root_end = std.mem.indexOfScalar(u8, name, '.') orelse return null;
+    const root = name[0..root_end];
+    const member = name[root_end + 1 ..];
+    for (imports) |import_decl| {
+        if (!importVisibleToContext(ctx, import_decl)) continue;
+        if (import_decl.alias) |alias| {
+            if (std.mem.eql(u8, alias, root)) {
+                return std.fmt.allocPrint(ctx.allocator, "{s}.{s}", .{ import_decl.module_name, member }) catch null;
+            }
+        }
+        if (std.mem.eql(u8, import_decl.module_name, root)) {
+            return std.fmt.allocPrint(ctx.allocator, "{s}.{s}", .{ import_decl.module_name, member }) catch null;
+        }
+    }
+    return null;
+}
+
+fn importVisibleToContext(ctx: *const Context, import_decl: model.Import) bool {
+    if (import_decl.package_name) |package_name| {
+        if (ctx.current_package == null) return false;
+        return std.mem.eql(u8, package_name, ctx.current_package.?);
+    }
+    return ctx.current_package == null;
 }
 
 pub fn resolveAnnotationHeader(ctx: *Context, name: syntax.ast.QualifiedName) !AnnotationHeader {

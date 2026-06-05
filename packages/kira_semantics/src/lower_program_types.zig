@@ -15,12 +15,14 @@ const ResolverState = parent.ResolverState;
 const lowerFieldDefaultExprExpected = parent.lowerFieldDefaultExprExpected;
 const lowerField = parent.lowerField;
 const lowerFunction = parent.lowerFunction;
-pub fn lowerImports(ctx: *shared.Context, imports: []const syntax.ast.ImportDecl) ![]model.Import {
-    const lowered = try ctx.allocator.alloc(model.Import, imports.len);
-    for (imports, 0..) |import_decl, index| {
+pub fn lowerImports(ctx: *shared.Context, program: syntax.ast.Program) ![]model.Import {
+    const lowered = try ctx.allocator.alloc(model.Import, program.imports.len);
+    for (program.imports, 0..) |import_decl, index| {
+        const origin = if (index < program.import_origins.len) program.import_origins[index] else syntax.ast.DeclOrigin{};
         lowered[index] = .{
             .module_name = try shared.qualifiedNameText(ctx.allocator, import_decl.module_name),
             .alias = if (import_decl.alias) |alias| try ctx.allocator.dupe(u8, alias) else null,
+            .package_name = if (origin.package_name) |package_name| try ctx.allocator.dupe(u8, package_name) else null,
             .span = import_decl.span,
         };
     }
@@ -85,6 +87,7 @@ pub fn appendGeneratedFunctionUnique(
 
 pub fn registerImportAliases(ctx: *shared.Context, imports: []const model.Import, map: *std.StringHashMapUnmanaged(source_pkg.Span)) !void {
     for (imports) |import_decl| {
+        if (import_decl.package_name != null) continue;
         const visible = import_decl.alias orelse import_decl.module_name;
         try shared.registerTopLevelName(ctx.allocator, ctx.diagnostics, map, visible, import_decl.span);
     }
@@ -95,8 +98,23 @@ pub fn lowerConstructDecl(ctx: *shared.Context, construct_decl: syntax.ast.Const
     var allowed_annotations = std.array_list.Managed(model.AnnotationRule).init(ctx.allocator);
     var allowed_lifecycle_hooks = std.array_list.Managed([]const u8).init(ctx.allocator);
     var required_content = false;
+    var content_element_type: ?[]const u8 = null;
 
     for (construct_decl.sections) |section| {
+        // A typed content section `content: Content<T>;` parses as a custom section
+        // named "content" whose single entry is a named_rule carrying the type expr.
+        // It both requires a content block and pins the element type used to validate
+        // construct-backed declarations.
+        if (std.mem.eql(u8, section.name, "content")) {
+            for (section.entries) |entry| {
+                if (entry == .named_rule) {
+                    required_content = true;
+                    if (entry.named_rule.type_expr) |type_expr| {
+                        content_element_type = contentElementTypeName(type_expr.*);
+                    }
+                }
+            }
+        }
         switch (section.kind) {
             .annotations => {
                 for (section.entries) |entry| {
@@ -132,8 +150,31 @@ pub fn lowerConstructDecl(ctx: *shared.Context, construct_decl: syntax.ast.Const
         .name = try ctx.allocator.dupe(u8, construct_decl.name),
         .allowed_annotations = try allowed_annotations.toOwnedSlice(),
         .required_content = required_content,
+        .content_element_type = if (content_element_type) |name| try ctx.allocator.dupe(u8, name) else null,
         .allowed_lifecycle_hooks = try allowed_lifecycle_hooks.toOwnedSlice(),
         .span = construct_decl.span,
+    };
+}
+
+// Extract the element type leaf from a typed content section. `content: Content<Widget>`
+// yields "Widget"; a bare `content: Widget` yields "Widget". Returns null for shapes that
+// do not name a single element type (so no element validation is imposed).
+fn contentElementTypeName(type_expr: syntax.ast.TypeExpr) ?[]const u8 {
+    return switch (type_expr) {
+        .generic => |generic| if (generic.args.len == 1)
+            leafTypeName(generic.args[0].*)
+        else
+            null,
+        .named => |named| named.segments[named.segments.len - 1].text,
+        else => null,
+    };
+}
+
+fn leafTypeName(type_expr: syntax.ast.TypeExpr) ?[]const u8 {
+    return switch (type_expr) {
+        .named => |named| named.segments[named.segments.len - 1].text,
+        .generic => |generic| generic.base.segments[generic.base.segments.len - 1].text,
+        else => null,
     };
 }
 

@@ -1,0 +1,24 @@
+// A construct that declares a typed `content: Content<Widget>;` section accepts
+// widget-producing (element-typed) expressions in a declaration's content block.
+// Here the content holds a `Widget` value, so the content block is valid. This
+// pairs with the negative case in tests/fail/semantics/content_string_not_widget,
+// where a raw String literal is rejected.
+
+struct Widget {
+    let label: String = ""
+}
+
+construct Surface {
+    content: Content<Widget>;
+}
+
+Surface Dashboard {
+    content {
+        Widget { label: "panel" }
+    }
+}
+
+@Main
+function main() {
+    return
+}

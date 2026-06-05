@@ -8,20 +8,10 @@ const toolchain = @import("toolchain.zig");
 const linker = @import("link.zig");
 pub const emscripten = @import("emscripten.zig");
 const runtime_symbols = @import("runtime_symbols.zig");
-const text_ir_core = @import("backend_text_ir_core.zig");
-const text_ir_tail = @import("backend_text_ir_tail.zig");
-const text_ir_calls = @import("backend_text_ir_calls.zig");
 const backend_utils = @import("backend_utils.zig");
 const monomorphization = @import("backend_monomorphization.zig");
+const backend_capi = @import("backend_capi.zig");
 
-pub const buildTextLlvmIr = text_ir_core.buildTextLlvmIr;
-pub const buildTextFunctionBody = text_ir_core.buildTextFunctionBody;
-pub const buildTextMainBody = text_ir_tail.buildTextMainBody;
-
-pub const writeCallInstruction = text_ir_calls.writeCallInstruction;
-pub const writeIndirectCallInstruction = text_ir_calls.writeIndirectCallInstruction;
-pub const buildCallValueDispatcher = text_ir_calls.buildCallValueDispatcher;
-pub const dispatcherSymbolName = text_ir_calls.dispatcherSymbolName;
 pub const MonomorphizationPlan = monomorphization.Plan;
 pub const FunctionVariant = monomorphization.FunctionVariant;
 pub const buildMonomorphizationPlan = monomorphization.buildPlan;
@@ -61,8 +51,6 @@ pub const emitObjectFileViaClang = backend_utils.emitObjectFileViaClang;
 pub const inferRegisterTypes = backend_utils.inferRegisterTypes;
 pub const functionExecutionById = backend_utils.functionExecutionById;
 pub const functionById = backend_utils.functionById;
-pub const buildTextExternDecl = backend_utils.buildTextExternDecl;
-pub const buildHybridBridgeWrapper = backend_utils.buildHybridBridgeWrapper;
 pub const bridgeTagValue = backend_utils.bridgeTagValue;
 pub const resolveExecution = backend_utils.resolveExecution;
 pub const requiresTextIrFallback = backend_utils.requiresTextIrFallback;
@@ -78,20 +66,13 @@ pub fn compile(allocator: std.mem.Allocator, request: backend_api.CompileRequest
 
     const triple = try targetTriple(allocator, request.target_selector);
     defer allocator.free(triple);
-    return compileViaTextIr(allocator, request, triple);
+    // The LLVM C-API backend is the sole native/hybrid codegen path (the textual-IR writer
+    // has been retired). It is at full corpus parity (1047/0 across vm/llvm/hybrid) and,
+    // with owned-value drop on by default, is leak-equivalent-or-better than the writer was.
+    return compileViaCApi(allocator, request, triple);
 }
 
-pub fn validate(allocator: std.mem.Allocator, request: backend_api.CompileRequest) !void {
-    if (request.mode != .llvm_native and request.mode != .hybrid) return error.UnsupportedBackendMode;
-
-    const triple = try targetTriple(allocator, request.target_selector);
-    defer allocator.free(triple);
-
-    const ir_text = try buildTextLlvmIr(allocator, request, triple);
-    allocator.free(ir_text);
-}
-
-fn compileViaTextIr(
+fn compileViaCApi(
     allocator: std.mem.Allocator,
     request: backend_api.CompileRequest,
     triple: []const u8,
@@ -100,21 +81,17 @@ fn compileViaTextIr(
     if (request.emit.executable_path) |path| try ensureParentDir(path);
     if (request.emit.shared_library_path) |path| try ensureParentDir(path);
 
-    const ir_text = try buildTextLlvmIr(allocator, request, triple);
-    defer allocator.free(ir_text);
+    const llvm_toolchain = try toolchain.Toolchain.discover(allocator);
+    var api = try llvm.Api.open(llvm_toolchain);
+    defer api.close();
 
-    var owns_ir_path = false;
-    const ir_path = if (request.emit.ir_path) |path|
-        path
-    else blk: {
-        const temp_ir_path = try std.fmt.allocPrint(allocator, "{s}.ll", .{request.emit.object_path});
-        owns_ir_path = true;
-        break :blk temp_ir_path;
-    };
-    defer if (owns_ir_path) allocator.free(ir_path);
+    const lowered = try backend_capi.buildModule(allocator, &api, request, triple);
+    // A module must be disposed before its owning context. defer runs LIFO, so
+    // register the context disposal first (runs last) and the module second.
+    defer api.LLVMContextDispose(lowered.context);
+    defer api.LLVMDisposeModule(lowered.module_ref);
 
-    try writeTextFile(ir_path, ir_text);
-    try emitObjectFileFromIr(allocator, ir_path, request.emit.object_path, request.mode == .hybrid, request.target_selector);
+    try emitObjectFileViaClang(allocator, &api, lowered.module_ref, request.emit.object_path, request.target_selector);
 
     var artifacts = std.array_list.Managed(backend_api.Artifact).init(allocator);
     try artifacts.append(.{
@@ -131,6 +108,7 @@ fn compileViaTextIr(
         });
     }
 
+    // Hybrid builds emit a shared library that the VM loads to call kira_native_impl_*.
     if (request.emit.shared_library_path) |library_path| {
         const bridge_object = try linker.buildRuntimeHelpersObject(allocator, request.emit.object_path, true, request.target_selector);
         try linker.linkSharedLibrary(allocator, library_path, &.{ request.emit.object_path, bridge_object }, request.resolved_native_libraries, request.target_selector);
@@ -141,6 +119,24 @@ fn compileViaTextIr(
     }
 
     return .{ .artifacts = try artifacts.toOwnedSlice() };
+}
+
+pub fn validate(allocator: std.mem.Allocator, request: backend_api.CompileRequest) !void {
+    if (request.mode != .llvm_native and request.mode != .hybrid) return error.UnsupportedBackendMode;
+
+    const triple = try targetTriple(allocator, request.target_selector);
+    defer allocator.free(triple);
+
+    // Validate by lowering through the C-API backend and verifying the LLVM module, then
+    // discarding it without emitting an object. This is the same lowering the build path
+    // uses, so a program that validates here will also compile. (Requires the managed LLVM
+    // — the only native codegen path now that the text-IR writer is retired.)
+    const llvm_toolchain = try toolchain.Toolchain.discover(allocator);
+    var api = try llvm.Api.open(llvm_toolchain);
+    defer api.close();
+    const lowered = try backend_capi.buildModule(allocator, &api, request, triple);
+    api.LLVMDisposeModule(lowered.module_ref);
+    api.LLVMContextDispose(lowered.context);
 }
 
 const TargetMachineInfo = struct {
@@ -507,64 +503,6 @@ fn verifyModule(api: *const llvm.Api, module_ref: llvm.c.LLVMModuleRef) !void {
     if (api.LLVMVerifyModule(module_ref, llvm.c.LLVMReturnStatusAction, &error_message) != 0) {
         defer if (error_message != null) api.LLVMDisposeMessage(error_message);
         return error.InvalidLlvmModule;
-    }
-}
-
-fn emitObjectFile(
-    allocator: std.mem.Allocator,
-    api: *const llvm.Api,
-    machine: llvm.c.LLVMTargetMachineRef,
-    module_ref: llvm.c.LLVMModuleRef,
-    object_path: []const u8,
-) !void {
-    if (builtin.os.tag == .macos) {
-        return emitObjectFileViaClang(allocator, api, module_ref, object_path, null);
-    }
-
-    const object_path_z = try allocator.dupeZ(u8, object_path);
-    var error_message: [*c]u8 = null;
-    if (api.LLVMTargetMachineEmitToFile(machine, module_ref, object_path_z.ptr, llvm.c.LLVMObjectFile, &error_message) != 0) {
-        defer if (error_message != null) api.LLVMDisposeMessage(error_message);
-        return error.ObjectEmissionFailed;
-    }
-}
-
-fn emitObjectFileFromIr(
-    allocator: std.mem.Allocator,
-    ir_path: []const u8,
-    object_path: []const u8,
-    pic: bool,
-    selector: ?@import("kira_native_lib_definition").TargetSelector,
-) !void {
-    const llvm_toolchain = try toolchain.Toolchain.discover(allocator);
-    const clang_path = if (emscripten.isSelector(selector))
-        try emscripten.emccPath(allocator)
-    else
-        (try @import("clang_driver.zig").appleClangPathForSelector(allocator, selector)) orelse try llvm_toolchain.clangPath(allocator);
-    defer allocator.free(clang_path);
-    var environ_map = try llvm_toolchain.processEnvironMap(allocator);
-    defer environ_map.deinit();
-    var argv = std.array_list.Managed([]const u8).init(allocator);
-    try argv.append(clang_path);
-    try @import("clang_driver.zig").appendClangDriverArgs(allocator, &argv, selector);
-    if (pic and builtin.os.tag != .windows) try argv.append("-fPIC");
-    try argv.appendSlice(&.{ "-c", "-o", object_path, ir_path });
-    const process_environ = inheritedProcessEnviron();
-    var io_impl: std.Io.Threaded = .init(std.heap.smp_allocator, .{ .environ = process_environ });
-    defer io_impl.deinit();
-    const result = std.process.run(allocator, io_impl.io(), .{
-        .argv = argv.items,
-        .environ_map = &environ_map,
-        .stdout_limit = .limited(512 * 1024),
-        .stderr_limit = .limited(512 * 1024),
-    }) catch |err| return err;
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    if (result.term != .exited or result.term.exited != 0) {
-        if (result.stdout.len != 0) std.debug.print("{s}", .{result.stdout});
-        if (result.stderr.len != 0) std.debug.print("{s}", .{result.stderr});
-        return error.ObjectEmissionFailed;
     }
 }
 

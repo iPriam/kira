@@ -702,14 +702,14 @@ pub fn lowerExpr(
                     .storage = binding.storage,
                     .span = node.span,
                 } };
-            } else if (shared.isImportedRoot(name, imports)) {
+            } else if (shared.isImportedRoot(ctx, name, imports)) {
                 lowered.* = .{ .namespace_ref = .{
                     .root = try ctx.allocator.dupe(u8, name),
                     .path = try ctx.allocator.dupe(u8, name),
                     .span = node.span,
                 } };
             } else if (function_headers) |headers| {
-                if (headers.get(name)) |header| {
+                    if (shared.findFunctionHeader(ctx, headers, name)) |header| {
                     lowered.* = .{ .function_ref = .{
                         .representation = .callable_value,
                         .function_id = header.id,
@@ -768,7 +768,7 @@ pub fn lowerExpr(
             }
             const root_is_type = (ctx.type_headers != null and (ctx.type_headers.?.get(flattened.root) != null)) or
                 ctx.imported_globals.findType(flattened.root) != null;
-            if ((shared.isImportedRoot(flattened.root, imports) or root_is_type) and scope.get(flattened.root) == null) {
+            if ((shared.isImportedRoot(ctx, flattened.root, imports) or root_is_type) and scope.get(flattened.root) == null) {
                 if (function_headers) |headers| {
                     if (headers.get(flattened.path)) |header| {
                         lowered.* = .{ .function_ref = .{

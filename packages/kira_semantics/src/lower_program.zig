@@ -62,6 +62,65 @@ pub const ResolverState = enum {
     resolved,
 };
 
+fn declOrigin(program: syntax.ast.Program, index: usize) syntax.ast.DeclOrigin {
+    if (index < program.decl_origins.len) return program.decl_origins[index];
+    return .{};
+}
+
+fn scopedTopLevelName(allocator: std.mem.Allocator, origin: syntax.ast.DeclOrigin, name: []const u8) ![]const u8 {
+    if (origin.package_name) |package_name| {
+        return shared.scopedSymbolName(allocator, package_name, name);
+    }
+    return name;
+}
+
+fn registerScopedTopLevelName(
+    allocator: std.mem.Allocator,
+    out_diagnostics: *std.array_list.Managed(diagnostics.Diagnostic),
+    map: *std.StringHashMapUnmanaged(source_pkg.Span),
+    origin: syntax.ast.DeclOrigin,
+    name: []const u8,
+    span: source_pkg.Span,
+) !void {
+    const key = try scopedTopLevelName(allocator, origin, name);
+    try shared.registerTopLevelName(allocator, out_diagnostics, map, key, span);
+}
+
+fn collectRootTopLevelNames(
+    allocator: std.mem.Allocator,
+    program: syntax.ast.Program,
+    names: *std.StringHashMapUnmanaged(void),
+) !void {
+    for (program.decls, 0..) |decl, decl_index| {
+        if (declOrigin(program, decl_index).package_name != null) continue;
+        switch (decl) {
+            .annotation_decl => |item| try names.put(allocator, item.name, {}),
+            .capability_decl => |item| try names.put(allocator, item.name, {}),
+            .enum_decl => |item| try names.put(allocator, item.name, {}),
+            .type_decl => |item| try names.put(allocator, item.name, {}),
+            .construct_decl => |item| try names.put(allocator, item.name, {}),
+            .construct_form_decl => |item| try names.put(allocator, item.name, {}),
+            .function_decl => |item| try names.put(allocator, item.name, {}),
+        }
+    }
+}
+
+fn putFunctionHeader(
+    allocator: std.mem.Allocator,
+    headers: *std.StringHashMapUnmanaged(shared.FunctionHeader),
+    root_top_level_names: *const std.StringHashMapUnmanaged(void),
+    origin: syntax.ast.DeclOrigin,
+    name: []const u8,
+    header: shared.FunctionHeader,
+) !void {
+    const scoped_name = try scopedTopLevelName(allocator, origin, name);
+    try headers.put(allocator, scoped_name, header);
+    if (origin.package_name == null) return;
+    if (root_top_level_names.contains(name)) return;
+    if (headers.get(name) != null) return;
+    try headers.put(allocator, name, header);
+}
+
 pub fn lowerProgram(
     allocator: std.mem.Allocator,
     program: syntax.ast.Program,
@@ -84,7 +143,7 @@ pub fn lowerProgramWithOptions(
         .imported_globals = imported_globals,
     };
 
-    const imports = try lowerImports(&ctx, program.imports);
+    const imports = try lowerImports(&ctx, program);
 
     var top_level_names = std.StringHashMapUnmanaged(source_pkg.Span){};
     defer top_level_names.deinit(allocator);
@@ -122,8 +181,12 @@ pub fn lowerProgramWithOptions(
     defer local_types.deinit(allocator);
     var resolver_states = std.StringHashMapUnmanaged(ResolverState){};
     defer resolver_states.deinit(allocator);
+    var root_top_level_names = std.StringHashMapUnmanaged(void){};
+    defer root_top_level_names.deinit(allocator);
+    try collectRootTopLevelNames(allocator, program, &root_top_level_names);
 
-    for (program.decls) |decl| {
+    for (program.decls, 0..) |decl, decl_index| {
+        const origin = declOrigin(program, decl_index);
         switch (decl) {
             .annotation_decl => |annotation_decl| {
                 if (annotation_headers.get(annotation_decl.name)) |previous| {
@@ -140,7 +203,7 @@ pub fn lowerProgramWithOptions(
                     });
                     return error.DiagnosticsEmitted;
                 }
-                try shared.registerTopLevelName(allocator, out_diagnostics, &top_level_names, annotation_decl.name, annotation_decl.span);
+                try registerScopedTopLevelName(allocator, out_diagnostics, &top_level_names, origin, annotation_decl.name, annotation_decl.span);
                 const lowered = try shared.lowerAnnotationDecl(&ctx, annotation_decl, "");
                 try annotation_headers.put(allocator, lowered.name, .{
                     .index = annotations.items.len,
@@ -163,7 +226,7 @@ pub fn lowerProgramWithOptions(
                     });
                     return error.DiagnosticsEmitted;
                 }
-                try shared.registerTopLevelName(allocator, out_diagnostics, &top_level_names, capability_decl.name, capability_decl.span);
+                try registerScopedTopLevelName(allocator, out_diagnostics, &top_level_names, origin, capability_decl.name, capability_decl.span);
                 const lowered = try shared.lowerCapabilityDecl(&ctx, capability_decl, "");
                 try capability_headers.put(allocator, lowered.name, capabilities.items.len);
                 try capabilities.append(lowered);
@@ -179,11 +242,12 @@ pub fn lowerProgramWithOptions(
         }
     }
 
-    for (program.decls) |decl| {
+    for (program.decls, 0..) |decl, decl_index| {
+        const origin = declOrigin(program, decl_index);
         switch (decl) {
             .annotation_decl, .capability_decl => {},
             .construct_decl => |construct_decl| {
-                try shared.registerTopLevelName(allocator, out_diagnostics, &top_level_names, construct_decl.name, construct_decl.span);
+                try registerScopedTopLevelName(allocator, out_diagnostics, &top_level_names, origin, construct_decl.name, construct_decl.span);
                 const lowered = try lowerConstructDecl(&ctx, construct_decl);
                 try construct_headers.put(allocator, lowered.name, .{
                     .index = constructs.items.len,
@@ -192,22 +256,22 @@ pub fn lowerProgramWithOptions(
                 try constructs.append(lowered);
             },
             .enum_decl => |enum_decl| {
-                try shared.registerTopLevelName(allocator, out_diagnostics, &top_level_names, enum_decl.name, enum_decl.span);
+                try registerScopedTopLevelName(allocator, out_diagnostics, &top_level_names, origin, enum_decl.name, enum_decl.span);
                 const lowered = try enum_impl.lowerEnumDecl(&ctx, enum_decl);
                 try enum_headers.put(allocator, lowered.name, lowered);
                 if (lowered.type_params.len == 0) try concrete_enums.put(allocator, lowered.name, lowered);
             },
             .type_decl => |type_decl| {
                 if (!hasFfiAnnotation(type_decl.annotations)) {
-                    try shared.registerTopLevelName(allocator, out_diagnostics, &top_level_names, type_decl.name, type_decl.span);
+                    try registerScopedTopLevelName(allocator, out_diagnostics, &top_level_names, origin, type_decl.name, type_decl.span);
                 }
                 try local_types.put(allocator, type_decl.name, type_decl);
             },
             .construct_form_decl => |form_decl| {
-                try shared.registerTopLevelName(allocator, out_diagnostics, &top_level_names, form_decl.name, form_decl.span);
+                try registerScopedTopLevelName(allocator, out_diagnostics, &top_level_names, origin, form_decl.name, form_decl.span);
             },
             .function_decl => |function_decl| {
-                try shared.registerTopLevelName(allocator, out_diagnostics, &top_level_names, function_decl.name, function_decl.span);
+                try registerScopedTopLevelName(allocator, out_diagnostics, &top_level_names, origin, function_decl.name, function_decl.span);
                 const annotation_info = try shared.resolveFunctionAnnotations(&ctx, function_decl.annotations);
                 const foreign = try shared.resolveForeignFunction(&ctx, function_decl.annotations, function_decl.span);
                 var param_types = std.array_list.Managed(model.ResolvedType).init(allocator);
@@ -221,7 +285,7 @@ pub fn lowerProgramWithOptions(
                     }
                 }
                 const return_ownership = shared.ownershipModeFromSyntax(function_decl.return_type);
-                try function_headers.put(allocator, function_decl.name, .{
+                try putFunctionHeader(allocator, &function_headers, &root_top_level_names, origin, function_decl.name, .{
                     .id = @as(u32, @intCast(function_headers.count())),
                     .params = try param_types.toOwnedSlice(),
                     .param_ownership = try param_ownership.toOwnedSlice(),
@@ -294,7 +358,9 @@ pub fn lowerProgramWithOptions(
         });
     }
 
-    for (program.decls) |decl| {
+    for (program.decls, 0..) |decl, decl_index| {
+        const previous_package = ctx.current_package;
+        ctx.current_package = declOrigin(program, decl_index).package_name;
         switch (decl) {
             .construct_form_decl => |form_decl| try forms.append(try lowerConstructForm(&ctx, form_decl, imports, constructs.items, &construct_headers)),
             .function_decl => |function_decl| {
@@ -325,6 +391,7 @@ pub fn lowerProgramWithOptions(
             },
             else => {},
         }
+        ctx.current_package = previous_package;
     }
 
     if (main_index == null and options.require_main) {
@@ -368,7 +435,7 @@ fn lowerConstructForm(
     var construct_model: ?model.Construct = null;
     if (construct_headers.get(construct_name)) |header| {
         construct_model = constructs[header.index];
-    } else if (!imported_construct_visible and !shared.isImportedRoot(construct_root, imports)) {
+    } else if (!imported_construct_visible and !shared.isImportedRoot(ctx, construct_root, imports)) {
         try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
             .severity = .@"error",
             .code = "KSEM020",
@@ -391,7 +458,13 @@ fn lowerConstructForm(
             .field_decl => |field_decl| try fields.append(try lowerField(ctx, field_decl, construct_model)),
             .content_section => |content_section| {
                 try shared.validateAnnotationPlacement(ctx, content_section.annotations, .content_section, construct_model);
-                content = try exprs.lowerBuilderBlock(ctx, content_section.builder, imports, null);
+                const lowered_content = try exprs.lowerBuilderBlock(ctx, content_section.builder, imports, null);
+                if (construct_model) |construct_info| {
+                    if (construct_info.content_element_type) |element_type| {
+                        try validateContentBlock(ctx, lowered_content, element_type);
+                    }
+                }
+                content = lowered_content;
             },
             .lifecycle_hook => |hook| {
                 if (construct_model) |construct_info| {
@@ -442,6 +515,55 @@ fn lowerConstructForm(
         .lifecycle_hooks = try lifecycle_hooks.toOwnedSlice(),
         .span = form_decl.span,
     };
+}
+
+// A construct that declares `content: Content<T>;` accepts only element-typed
+// (widget-producing) values in a declaration's content block. Raw primitive
+// literals are never widgets, so reject them with a precise diagnostic instead of
+// silently lowering a String where a Widget was expected.
+fn validateContentBlock(ctx: *shared.Context, block: model.BuilderBlock, element_type: []const u8) anyerror!void {
+    for (block.items) |item| {
+        switch (item) {
+            .expr => |expr_item| try validateContentValue(ctx, expr_item.expr, expr_item.span, element_type),
+            .if_item => |if_item| {
+                try validateContentBlock(ctx, if_item.then_block, element_type);
+                if (if_item.else_block) |else_block| try validateContentBlock(ctx, else_block, element_type);
+            },
+            .for_item => |for_item| try validateContentBlock(ctx, for_item.body, element_type),
+            .switch_item => |switch_item| {
+                for (switch_item.cases) |case_node| try validateContentBlock(ctx, case_node.body, element_type);
+                if (switch_item.default_block) |default_block| try validateContentBlock(ctx, default_block, element_type);
+            },
+        }
+    }
+}
+
+fn validateContentValue(ctx: *shared.Context, expr: *model.Expr, span: source_pkg.Span, element_type: []const u8) anyerror!void {
+    const found = model.exprType(expr.*);
+    const found_label: ?[]const u8 = switch (found.kind) {
+        .string, .c_string => "String",
+        .integer => "Int",
+        .float => "Float",
+        .boolean => "Bool",
+        else => null,
+    };
+    if (found_label) |label| {
+        const text_hint = if (found.kind == .string or found.kind == .c_string)
+            "; use Text(...) if visible text was intended"
+        else
+            "";
+        try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
+            .severity = .@"error",
+            .code = "KSEM098",
+            .title = "content value is not a widget",
+            .message = try std.fmt.allocPrint(ctx.allocator, "Kira expected {s} content, found {s}{s}.", .{ element_type, label, text_hint }),
+            .labels = &.{
+                diagnostics.primaryLabel(span, "this value is not a widget"),
+            },
+            .help = "Content blocks accept widget-producing expressions, not raw values.",
+        });
+        return error.DiagnosticsEmitted;
+    }
 }
 
 pub fn lowerFunction(
@@ -569,7 +691,7 @@ pub fn lowerFunction(
         (if (explicit_return_type.kind == .unknown) model.ResolvedType{ .kind = .void } else explicit_return_type)
     else
         try exprs.resolveFunctionReturnType(ctx, explicit_return_type, body);
-    const header = function_headers.get(function_decl.name).?;
+    const header = shared.findFunctionHeader(ctx, function_headers, function_decl.name).?;
     try ffi_boundary.validateDirectFfiBoundary(ctx, function_decl.name, header, body, function_headers);
 
     return .{

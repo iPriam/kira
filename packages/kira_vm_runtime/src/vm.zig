@@ -1294,6 +1294,14 @@ pub const Vm = struct {
                 const nested_dst: [*]align(1) runtime_abi.Value = @ptrFromInt(dst_ptr[index].raw_ptr);
                 const nested_src: [*]align(1) runtime_abi.Value = @ptrFromInt(src_ptr[index].raw_ptr);
                 try self.copyStruct(module, nested_type, nested_dst, nested_src);
+            } else if (field_decl.ty.kind == .array and self.heap.isManagedValue(src_ptr[index])) {
+                // Affine value semantics: copying a struct deep-clones its array
+                // fields so the copy and the original share no backing storage.
+                const element_ty = try self.arrayElementType(module, field_decl.ty);
+                const cloned = try self.cloneArrayValueDeep(module, element_ty, src_ptr[index]);
+                const old = dst_ptr[index];
+                dst_ptr[index] = cloned;
+                self.heap.releaseValue(old);
             } else {
                 self.heap.retainValue(src_ptr[index]);
                 const old = dst_ptr[index];
@@ -1301,6 +1309,50 @@ pub const Vm = struct {
                 self.heap.releaseValue(old);
             }
         }
+    }
+
+    /// Deep-clone a managed array value so the result shares no backing storage
+    /// with the source. Struct and nested-array elements are cloned recursively;
+    /// primitive/string elements are retained. Implements affine copy semantics
+    /// for array-typed struct fields (see copyStruct).
+    fn cloneArrayValueDeep(
+        self: *Vm,
+        module: *const bytecode.Module,
+        element_ty: bytecode.TypeRef,
+        src_value: runtime_abi.Value,
+    ) anyerror!runtime_abi.Value {
+        if (src_value != .raw_ptr or src_value.raw_ptr == 0) return src_value;
+        const src_array: *const ArrayObject = @ptrFromInt(src_value.raw_ptr);
+        const len = src_array.len;
+        const dst_ptr = try self.allocateArray(len);
+        const dst_array: *ArrayObject = @ptrFromInt(dst_ptr);
+        var index: usize = 0;
+        while (index < len) : (index += 1) {
+            const element = runtime_abi.bridgeValueToValue(src_array.items[index]);
+            const cloned = switch (element_ty.kind) {
+                .ffi_struct => blk: {
+                    if (element != .raw_ptr or element.raw_ptr == 0) break :blk element;
+                    const nested_name = element_ty.name orelse break :blk element;
+                    const fresh = try self.allocateStruct(module, nested_name);
+                    const nested_type = helper_impl.findType(module, nested_name) orelse {
+                        self.heap.releaseValue(.{ .raw_ptr = fresh });
+                        self.rememberError("array element struct type could not be resolved");
+                        return error.RuntimeFailure;
+                    };
+                    const fresh_fields: [*]align(1) runtime_abi.Value = @ptrFromInt(fresh);
+                    const src_fields: [*]align(1) runtime_abi.Value = @ptrFromInt(element.raw_ptr);
+                    try self.copyStruct(module, nested_type, fresh_fields, src_fields);
+                    break :blk runtime_abi.Value{ .raw_ptr = fresh };
+                },
+                .array => try self.cloneArrayValueDeep(module, try self.arrayElementType(module, element_ty), element),
+                else => retain: {
+                    self.heap.retainValue(element);
+                    break :retain element;
+                },
+            };
+            dst_array.items[index] = runtime_abi.bridgeValueFromValue(cloned);
+        }
+        return .{ .raw_ptr = dst_ptr };
     }
 
     fn materializeNativeResult(

@@ -1,0 +1,20 @@
+function invoke(handler: () -> Void) {
+    handler()
+    return
+}
+
+@Main
+function main() {
+    var values: [Int] = []
+    values.append(10)
+    values.append(20)
+    values.append(30)
+    invoke { in
+        var total = 0
+        for item in values {
+            total = total + item
+        }
+        print(total)
+    }
+    return
+}

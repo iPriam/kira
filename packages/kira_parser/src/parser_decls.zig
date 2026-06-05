@@ -14,16 +14,7 @@ const expectedTokenHelp = parent.expectedTokenHelp;
 const cloneQualifiedName = parent.cloneQualifiedName;
 pub fn parseTopLevelDecl(self: *Parser, annotations: []const syntax.ast.Annotation) !?syntax.ast.Decl {
     if (self.at(.kw_annotation)) {
-        if (annotations.len != 0) {
-            try self.emitUnexpectedToken(
-                "annotation declarations cannot be annotated",
-                self.peek(),
-                "annotation declaration starts here",
-                "Remove the preceding annotation usage.",
-            );
-            return error.DiagnosticsEmitted;
-        }
-        return .{ .annotation_decl = try self.parseAnnotationDecl() };
+        return .{ .annotation_decl = try self.parseAnnotationDeclWithAnnotations(annotations) };
     }
     if (self.at(.kw_capability)) {
         if (annotations.len != 0) {
@@ -161,6 +152,22 @@ pub fn parseAnnotationDecl(self: *Parser) !syntax.ast.AnnotationDecl {
         .parameters = try parameters.toOwnedSlice(),
         .generated_members = try generated_members.toOwnedSlice(),
         .span = source_pkg.Span.init(annotation_token.span.start, close.span.end),
+    };
+}
+
+pub fn parseAnnotationDeclWithAnnotations(self: *Parser, annotations: []const syntax.ast.Annotation) !syntax.ast.AnnotationDecl {
+    const decl = try self.parseAnnotationDecl();
+    if (annotations.len == 0) return decl;
+    var uses = std.array_list.Managed(syntax.ast.QualifiedName).init(self.allocator);
+    try uses.appendSlice(decl.uses);
+    for (annotations) |annotation| try uses.append(annotation.name);
+    return .{
+        .name = decl.name,
+        .targets = decl.targets,
+        .uses = try uses.toOwnedSlice(),
+        .parameters = decl.parameters,
+        .generated_members = decl.generated_members,
+        .span = source_pkg.Span.init(annotations[0].span.start, decl.span.end),
     };
 }
 
@@ -452,6 +459,22 @@ pub fn parseParamList(self: *Parser) ![]syntax.ast.ParamDecl {
         const name_token = try self.expect(.identifier, "expected parameter name", "write the parameter name here");
         var type_expr: ?*syntax.ast.TypeExpr = null;
         var end = name_token.span.end;
+        if (std.mem.eql(u8, name_token.lexeme, "_")) {
+            const unlabeled_name = try self.expect(.identifier, "expected parameter name after '_'", "write the internal parameter name here");
+            end = unlabeled_name.span.end;
+            if (self.match(.colon)) {
+                type_expr = try self.parseTypeExpr();
+                end = typeSpan(type_expr.?.*).end;
+            }
+            try params.append(.{
+                .annotations = annotations,
+                .name = unlabeled_name.lexeme,
+                .type_expr = type_expr,
+                .span = source_pkg.Span.init(name_token.span.start, end),
+            });
+            if (!self.match(.comma)) break;
+            continue;
+        }
         if (self.match(.colon)) {
             type_expr = try self.parseTypeExpr();
             end = typeSpan(type_expr.?.*).end;
@@ -534,10 +557,50 @@ pub fn parseConstructDeclWithAnnotations(self: *Parser, annotations: []const syn
 
 pub fn parseConstructSection(self: *Parser) !syntax.ast.ConstructSection {
     const name_token = try self.expect(.identifier, "expected construct section name", "name the section here");
+    if (self.match(.colon)) {
+        const type_expr = try self.parseTypeExpr();
+        const end = try self.consumeStatementTerminator(typeSpan(type_expr.*).end, "expected ';' after construct section type", "terminate the typed construct section with ';'");
+        const qualified = try self.makeSingleSegmentName(name_token);
+        const entries = try self.allocator.alloc(syntax.ast.ConstructSectionEntry, 1);
+        entries[0] = .{ .named_rule = .{
+            .name = qualified,
+            .args = &.{},
+            .type_expr = type_expr,
+            .value = null,
+            .block = null,
+            .span = source_pkg.Span.init(name_token.span.start, end),
+        } };
+        return .{
+            .name = name_token.lexeme,
+            .kind = sectionKind(name_token.lexeme),
+            .entries = entries,
+            .span = source_pkg.Span.init(name_token.span.start, end),
+        };
+    }
     _ = try self.expect(.l_brace, "expected '{' after construct section name", "open the construct section here");
     var entries = std.array_list.Managed(syntax.ast.ConstructSectionEntry).init(self.allocator);
 
     while (!self.at(.r_brace) and !self.at(.eof)) {
+        if (sectionKind(name_token.lexeme) == .modifiers and self.at(.identifier) and self.peekNext().kind == .l_brace) {
+            const subgroup = self.advance();
+            _ = try self.expect(.l_brace, "expected '{' after wrapper group", "open the wrapper group here");
+            while (!self.at(.r_brace) and !self.at(.eof)) {
+                if (self.at(.at_sign)) {
+                    try entries.append(.{ .annotation_spec = try self.parseAnnotationSpec() });
+                    continue;
+                }
+                try self.emitUnexpectedToken(
+                    "expected wrapper annotation",
+                    self.peek(),
+                    "wrapper groups contain annotation specs",
+                    "Use entries such as `@State;` inside `member { ... }` or `parameter { ... }`.",
+                );
+                return error.DiagnosticsEmitted;
+            }
+            _ = try self.expect(.r_brace, "expected '}' to close wrapper group", "wrapper group should end here");
+            _ = subgroup;
+            continue;
+        }
         if (self.at(.at_sign) and sectionKind(name_token.lexeme) == .annotations) {
             try entries.append(.{ .annotation_spec = try self.parseAnnotationSpec() });
             continue;
@@ -605,7 +668,8 @@ pub fn parseAnnotationSpec(self: *Parser) !syntax.ast.AnnotationSpec {
 pub fn parseConstructFormDeclWithAnnotations(self: *Parser, annotations: []const syntax.ast.Annotation) !syntax.ast.ConstructFormDecl {
     const construct_name = try self.parseQualifiedName("expected construct name");
     const name_token = try self.expect(.identifier, "expected declaration name after construct name", "name the construct-defined declaration here");
-    const params = try self.parseParamList();
+    // Parameters are optional: `Widget App { ... }` declares a no-parameter form.
+    const params = if (self.at(.l_paren)) try self.parseParamList() else try self.allocator.alloc(syntax.ast.ParamDecl, 0);
     const body = try self.parseConstructBody();
     const start = if (annotations.len > 0) annotations[0].span.start else construct_name.span.start;
     return .{

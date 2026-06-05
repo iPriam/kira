@@ -274,6 +274,18 @@ fn fingerprintBuild(allocator: std.mem.Allocator, source_path: []const u8, targe
         hasher.update(value);
         hasher.update("\n");
     } else |_| {}
+    // Native codegen path marker. The LLVM C-API backend (with drop on) is the sole native
+    // codegen path now that the text-IR writer is retired; bumping this string invalidates
+    // caches produced by the old text-writer default.
+    hasher.update("native-backend=capi-drop-v1\n");
+    // Owned-value drop elaboration (KIRA_CAPI_DROP) changes the emitted code, so a
+    // toggle must not reuse a binary built with the other setting.
+    if (kira_toolchain.envVarOwned(allocator, "KIRA_CAPI_DROP")) |value| {
+        defer allocator.free(value);
+        hasher.update("KIRA_CAPI_DROP=");
+        hasher.update(value);
+        hasher.update("\n");
+    } else |_| {}
     try hashRepoSupportInputs(allocator, &hasher);
 
     const files = try inputFiles(allocator, source_path);

@@ -258,7 +258,7 @@ pub fn lowerCallExpr(
             return;
         }
         const flattened_member = try flattenMemberExpr(ctx.allocator, node.callee);
-        if (shared.isImportedRoot(flattened_member.root, imports) and scope.get(flattened_member.root) == null) {
+        if (shared.isImportedRoot(ctx, flattened_member.root, imports) and scope.get(flattened_member.root) == null) {
             // Imported namespace calls such as `Support.value()` are not instance methods.
         } else {
             const object = try lowerExpr(ctx, member.object, imports, scope, function_headers);
@@ -361,7 +361,10 @@ pub fn lowerCallExpr(
     }
 
     if (function_headers) |headers| {
-        const header = headers.get(callee_name) orelse headers.get(callee_leaf) orelse blk: {
+        const imported_qualified = shared.importedQualifiedName(ctx, imports, callee_name);
+        const header = (if (imported_qualified) |qualified| shared.findFunctionHeader(ctx, headers, qualified) else null) orelse
+            shared.findFunctionHeader(ctx, headers, callee_name) orelse
+            shared.findFunctionHeader(ctx, headers, callee_leaf) orelse blk: {
             if (ctx.imported_globals.findFunction(callee_leaf)) |function_decl| {
                 break :blk shared.FunctionHeader{
                     .id = 0,
@@ -497,6 +500,7 @@ pub fn lowerCallExpr(
                 .callee = callee,
                 .args = try args.toOwnedSlice(),
                 .param_types = signature.params,
+                .param_ownership = signature.param_ownership,
                 .ty = signature.result,
                 .span = node.span,
             } };
@@ -518,7 +522,7 @@ pub fn lowerCallExpr(
     _ = try shared.resolveLocalOrCapture(ctx, scope.*, callee_leaf, node.span);
 
     if (std.mem.indexOfScalar(u8, callee_name, '.')) |root_end| {
-        if (!shared.isImportedRoot(callee_name[0..root_end], imports)) {
+        if (!shared.isImportedRoot(ctx, callee_name[0..root_end], imports)) {
             try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
                 .severity = .@"error",
                 .code = "KSEM027",

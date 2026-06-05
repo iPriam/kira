@@ -6,6 +6,7 @@ const llvm = @import("llvm_c.zig");
 const clang_driver = @import("clang_driver.zig");
 const toolchain = @import("toolchain.zig");
 const native = @import("kira_native_lib_definition");
+const emscripten = @import("emscripten.zig");
 
 pub fn freeStringList(allocator: std.mem.Allocator, list: *std.array_list.Managed([]const u8)) void {
     for (list.items) |item| allocator.free(item);
@@ -54,7 +55,13 @@ pub fn emitObjectFileViaClang(
     });
 
     const llvm_toolchain = try toolchain.Toolchain.discover(allocator);
-    const clang_path = try llvm_toolchain.clangPath(allocator);
+    // Pick the compiler that owns the target the same way the text-IR path does
+    // (emitObjectFileFromIr): emcc for wasm32-emscripten (the managed host clang has no
+    // WebAssembly target), Apple clang for Apple cross targets, else the managed clang.
+    const clang_path = if (emscripten.isSelector(selector))
+        try emscripten.emccPath(allocator)
+    else
+        (try clang_driver.appleClangPathForSelector(allocator, selector)) orelse try llvm_toolchain.clangPath(allocator);
     defer allocator.free(clang_path);
     var environ_map = try llvm_toolchain.processEnvironMap(allocator);
     defer environ_map.deinit();

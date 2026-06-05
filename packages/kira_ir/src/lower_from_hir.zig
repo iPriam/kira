@@ -646,6 +646,12 @@ fn lowerParamOwnership(allocator: std.mem.Allocator, params: []const model.Param
     return lowered;
 }
 
+fn lowerOwnershipModeSlice(allocator: std.mem.Allocator, modes: []const model.OwnershipMode) ![]const ir.OwnershipMode {
+    const lowered = try allocator.alloc(ir.OwnershipMode, modes.len);
+    for (modes, 0..) |mode, index| lowered[index] = lowerOwnershipMode(mode);
+    return lowered;
+}
+
 fn lowerCallbackParamTypes(allocator: std.mem.Allocator, program: model.Program, callback: model.hir.CallbackExpr) ![]ir.ValueType {
     const lowered = try allocator.alloc(ir.ValueType, callback.params.len + callback.captures.len);
     for (callback.params, 0..) |param, index| {
@@ -717,6 +723,7 @@ fn lowerExprStatement(lowerer: *Lowerer, instructions: *std.array_list.Managed(i
                 .callee = callee,
                 .args = try args.toOwnedSlice(),
                 .param_types = try lowerResolvedTypeSlice(lowerer.allocator, lowerer.program, call.param_types),
+                .param_ownership = try lowerOwnershipModeSlice(lowerer.allocator, call.param_ownership),
                 .return_type = try lowerResolvedType(lowerer.program, call.ty),
                 .dst = null,
             } });
@@ -952,6 +959,7 @@ pub const Lowerer = struct {
                     .callee = callee,
                     .args = try args.toOwnedSlice(),
                     .param_types = try lowerResolvedTypeSlice(self.allocator, self.program, node.param_types),
+                    .param_ownership = try lowerOwnershipModeSlice(self.allocator, node.param_ownership),
                     .return_type = try lowerResolvedType(self.program, node.ty),
                     .dst = dst,
                 } });
@@ -1521,6 +1529,7 @@ fn cloneInstruction(allocator: std.mem.Allocator, instruction: ir.Instruction) !
             .callee = value.callee,
             .args = try cloneU32Slice(allocator, value.args),
             .param_types = try cloneValueTypeSlice(allocator, value.param_types),
+            .param_ownership = try cloneOwnershipModeSlice(allocator, value.param_ownership),
             .return_type = value.return_type,
             .dst = value.dst,
         } },

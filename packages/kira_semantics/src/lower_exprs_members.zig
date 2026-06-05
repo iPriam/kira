@@ -90,7 +90,7 @@ pub fn lowerParentQualifiedFieldExpr(
 ) !?model.Expr {
     _ = function_headers;
     const qualifier = parentQualifierName(node.object) orelse return null;
-    if (scope.get(qualifier) != null or shared.isImportedRoot(qualifier, imports)) return null;
+    if (scope.get(qualifier) != null or shared.isImportedRoot(ctx, qualifier, imports)) return null;
 
     const self_binding = scope.get("self") orelse return null;
     const self_type = resolveFieldContainerType(ctx, self_binding.ty) orelse return null;
@@ -120,7 +120,7 @@ pub fn lowerParentQualifiedMethodCall(
 ) !?model.Expr {
     const member = if (node.callee.* == .member) node.callee.member else return null;
     const qualifier = parentQualifierName(member.object) orelse return null;
-    if (scope.get(qualifier) != null or shared.isImportedRoot(qualifier, imports)) return null;
+    if (scope.get(qualifier) != null or shared.isImportedRoot(ctx, qualifier, imports)) return null;
 
     const self_binding = scope.get("self") orelse return null;
     const self_type = resolveFieldContainerType(ctx, self_binding.ty) orelse return null;

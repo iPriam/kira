@@ -75,16 +75,22 @@ pub fn buildProgramGraph(
     var stats = GraphTimingStats.init(allocator);
     var visited = std.StringHashMap(void).init(allocator);
     var import_list = std.array_list.Managed(syntax.ast.ImportDecl).init(allocator);
+    var import_origins = std.array_list.Managed(syntax.ast.DeclOrigin).init(allocator);
     var decls = std.array_list.Managed(syntax.ast.Decl).init(allocator);
+    var decl_origins = std.array_list.Managed(syntax.ast.DeclOrigin).init(allocator);
     var functions = std.array_list.Managed(syntax.ast.FunctionDecl).init(allocator);
+    var function_origins = std.array_list.Managed(syntax.ast.DeclOrigin).init(allocator);
 
-    try appendProgramGraph(allocator, &stats, &visited, &import_list, &decls, &functions, source_path, root_program, module_map, diags, true);
+    try appendProgramGraph(allocator, &stats, &visited, &import_list, &import_origins, &decls, &decl_origins, &functions, &function_origins, source_path, root_program, module_map, diags, true, null);
     printGraphStats("buildProgramGraph", &stats, import_list.items.len, decls.items.len, functions.items.len);
 
     return .{
         .imports = try import_list.toOwnedSlice(),
         .decls = try decls.toOwnedSlice(),
         .functions = try functions.toOwnedSlice(),
+        .import_origins = try import_origins.toOwnedSlice(),
+        .decl_origins = try decl_origins.toOwnedSlice(),
+        .function_origins = try function_origins.toOwnedSlice(),
     };
 }
 
@@ -97,12 +103,15 @@ pub fn buildProgramGraphFromFiles(
     var stats = GraphTimingStats.init(allocator);
     var visited = std.StringHashMap(void).init(allocator);
     var import_list = std.array_list.Managed(syntax.ast.ImportDecl).init(allocator);
+    var import_origins = std.array_list.Managed(syntax.ast.DeclOrigin).init(allocator);
     var decls = std.array_list.Managed(syntax.ast.Decl).init(allocator);
+    var decl_origins = std.array_list.Managed(syntax.ast.DeclOrigin).init(allocator);
     var functions = std.array_list.Managed(syntax.ast.FunctionDecl).init(allocator);
+    var function_origins = std.array_list.Managed(syntax.ast.DeclOrigin).init(allocator);
 
     for (source_paths) |source_path| {
         const program = try parseModuleProgramTimed(allocator, &stats, source_path, diags, null);
-        try appendProgramGraph(allocator, &stats, &visited, &import_list, &decls, &functions, source_path, program, module_map, diags, true);
+        try appendProgramGraph(allocator, &stats, &visited, &import_list, &import_origins, &decls, &decl_origins, &functions, &function_origins, source_path, program, module_map, diags, true, null);
     }
     printGraphStats("buildProgramGraphFromFiles", &stats, import_list.items.len, decls.items.len, functions.items.len);
 
@@ -110,6 +119,9 @@ pub fn buildProgramGraphFromFiles(
         .imports = try import_list.toOwnedSlice(),
         .decls = try decls.toOwnedSlice(),
         .functions = try functions.toOwnedSlice(),
+        .import_origins = try import_origins.toOwnedSlice(),
+        .decl_origins = try decl_origins.toOwnedSlice(),
+        .function_origins = try function_origins.toOwnedSlice(),
     };
 }
 
@@ -118,13 +130,17 @@ fn appendProgramGraph(
     stats: *GraphTimingStats,
     visited: *std.StringHashMap(void),
     import_list: *std.array_list.Managed(syntax.ast.ImportDecl),
+    import_origins: *std.array_list.Managed(syntax.ast.DeclOrigin),
     decls: *std.array_list.Managed(syntax.ast.Decl),
+    decl_origins: *std.array_list.Managed(syntax.ast.DeclOrigin),
     functions: *std.array_list.Managed(syntax.ast.FunctionDecl),
+    function_origins: *std.array_list.Managed(syntax.ast.DeclOrigin),
     source_path: []const u8,
     program: syntax.ast.Program,
     module_map: package_manager.ModuleMap,
     diags: *std.array_list.Managed(diagnostics.Diagnostic),
     expose_imports: bool,
+    origin_package: ?[]const u8,
 ) !void {
     try validateSourcePathAllowed(allocator, source_path, module_map, diags);
 
@@ -134,11 +150,31 @@ fn appendProgramGraph(
     if (visited.contains(visited_key)) return;
     try visited.put(try allocator.dupe(u8, visited_key), {});
 
-    if (expose_imports) {
-        for (program.imports) |import_decl| try import_list.append(import_decl);
+    const origin: syntax.ast.DeclOrigin = .{
+        .package_name = if (origin_package) |package_name| try allocator.dupe(u8, package_name) else null,
+        .source_path = try allocator.dupe(u8, visited_key),
+    };
+
+    // Always record imports together with the package they originate from.
+    // Root imports (package_name == null) are importer-visible; dependency
+    // imports stay scoped to their owning package so that a dependency's own
+    // qualified references (e.g. `KiraUIFoundation.Text` inside KiraUI) resolve
+    // without leaking those names into the importer's public namespace.
+    // `expose_imports` is preserved for callers but importer-visibility is now
+    // governed by package scoping in the semantics layer.
+    _ = expose_imports;
+    for (program.imports) |import_decl| {
+        try import_list.append(import_decl);
+        try import_origins.append(origin);
     }
-    for (program.decls) |decl| try decls.append(decl);
-    for (program.functions) |function_decl| try functions.append(function_decl);
+    for (program.decls) |decl| {
+        try decls.append(decl);
+        try decl_origins.append(origin);
+    }
+    for (program.functions) |function_decl| {
+        try functions.append(function_decl);
+        try function_origins.append(origin);
+    }
 
     for (program.imports) |import_decl| {
         if (imports.packageRootOwnerForImport(module_map, import_decl.module_name)) |owner| {
@@ -159,7 +195,7 @@ fn appendProgramGraph(
             for (module_files) |module_path| {
                 try stats.addPackageParse(owner.package_name);
                 const imported_program = try parseModuleProgramTimed(allocator, stats, module_path, diags, owner.package_name);
-                try appendProgramGraph(allocator, stats, visited, import_list, decls, functions, module_path, imported_program, module_map, diags, false);
+                try appendProgramGraph(allocator, stats, visited, import_list, import_origins, decls, decl_origins, functions, function_origins, module_path, imported_program, module_map, diags, false, owner.package_name);
             }
             continue;
         }
@@ -172,7 +208,7 @@ fn appendProgramGraph(
             return error.DiagnosticsEmitted;
         };
         const imported_program = try parseModuleProgramTimed(allocator, stats, module_path, diags, null);
-        try appendProgramGraph(allocator, stats, visited, import_list, decls, functions, module_path, imported_program, module_map, diags, false);
+        try appendProgramGraph(allocator, stats, visited, import_list, import_origins, decls, decl_origins, functions, function_origins, module_path, imported_program, module_map, diags, false, origin_package);
     }
 }
 
@@ -430,9 +466,16 @@ test "dependency imports do not become importer-visible imports" {
     const program = try buildProgramGraph(allocator, source_path, root_program, .{ .owners = owners[0..] }, &diags);
 
     try std.testing.expectEqual(@as(usize, 0), diags.items.len);
-    try std.testing.expectEqual(@as(usize, 1), program.imports.len);
+    try std.testing.expectEqual(@as(usize, 2), program.imports.len);
     try std.testing.expectEqualStrings("Dep", program.imports[0].module_name.segments[0].text);
+    try std.testing.expectEqualStrings("Foundation", program.imports[1].module_name.segments[0].text);
+    try std.testing.expect(program.import_origins[0].package_name == null);
+    try std.testing.expectEqualStrings("Dep", program.import_origins[1].package_name.?);
     try std.testing.expectEqual(@as(usize, 3), program.functions.len);
+    try std.testing.expectEqual(@as(usize, 3), program.function_origins.len);
+    try std.testing.expect(program.function_origins[0].package_name == null);
+    try std.testing.expectEqualStrings("Dep", program.function_origins[1].package_name.?);
+    try std.testing.expectEqualStrings("Foundation", program.function_origins[2].package_name.?);
 }
 
 test "graph rejects an entry source outside declared app roots" {

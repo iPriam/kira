@@ -504,7 +504,7 @@ pub fn findTypeDecl(program: *const ir.Program, name: []const u8) ?ir.TypeDecl {
     return null;
 }
 
-fn findEnumDecl(program: *const ir.Program, name: []const u8) ?ir.EnumTypeDecl {
+pub fn findEnumDecl(program: *const ir.Program, name: []const u8) ?ir.EnumTypeDecl {
     for (program.enums) |enum_decl| {
         if (std.mem.eql(u8, enum_decl.name, name)) return enum_decl;
     }
@@ -694,47 +694,17 @@ pub fn countStringConstants(function_decl: ir.Function) usize {
     return count;
 }
 
-pub fn buildTextExternDecl(
-    allocator: std.mem.Allocator,
-    request: backend_api.CompileRequest,
-    symbol_names: *const std.AutoHashMapUnmanaged(u32, []const u8),
-    function_decl: ir.Function,
-) ![]const u8 {
-    var output: std.Io.Writer.Allocating = .init(allocator);
-    errdefer output.deinit();
-    var writer = &output.writer;
-    const uses_sret = externReturnUsesSRet(request.program, function_decl.return_type);
-    try writer.writeAll("declare ");
-    if (uses_sret) {
-        try writer.writeAll("void");
-    } else {
-        const abi_type = try externReturnAbiTypeText(allocator, request.program, function_decl.return_type);
-        defer allocator.free(abi_type);
-        try writer.writeAll(abi_type);
-    }
-    try writer.writeByte(' ');
-    try writeLlvmSymbol(writer, symbol_names.get(function_decl.id) orelse return error.MissingFunctionDeclaration);
-    try writer.writeByte('(');
-    if (uses_sret) {
-        try writer.print("ptr sret({s}) align {d}", .{
-            typeRefName(function_decl.return_type.name orelse return error.UnsupportedExecutableFeature),
-            (try valueTypeLayout(request.program, function_decl.return_type)).alignment,
-        });
-    }
-    for (function_decl.param_types, 0..) |param_type, index| {
-        if (index != 0 or uses_sret) try writer.writeAll(", ");
-        const abi_type = try externParamAbiTypeText(allocator, request.program, param_type);
-        defer allocator.free(abi_type);
-        try writer.writeAll(abi_type);
-    }
-    try writer.writeAll(")\n");
-    return output.toOwnedSlice();
-}
-
 const TypeLayout = struct {
     size: usize,
     alignment: usize,
 };
+
+// Byte size of a value type under the native ABI. Used by the C-API backend's FFI
+// marshalling to decide small-struct-as-integer passing, mirroring the text backend's
+// externParamAbiTypeText/externReturnAbiTypeText sizing.
+pub fn valueAbiSize(program: *const ir.Program, value_type: ir.ValueType) !usize {
+    return (try valueTypeLayout(program, value_type)).size;
+}
 
 fn valueTypeLayout(program: *const ir.Program, value_type: ir.ValueType) anyerror!TypeLayout {
     return switch (value_type.kind) {
@@ -796,187 +766,6 @@ fn ffiTypeLayout(program: *const ir.Program, type_name: []const u8) anyerror!Typ
 fn alignForward(value: usize, alignment: usize) usize {
     if (alignment <= 1) return value;
     return std.mem.alignForward(usize, value, alignment);
-}
-
-pub fn buildHybridBridgeWrapper(
-    allocator: std.mem.Allocator,
-    symbol_names: *const std.AutoHashMapUnmanaged(u32, []const u8),
-    function_decl: ir.Function,
-) ![]const u8 {
-    var output: std.Io.Writer.Allocating = .init(allocator);
-    errdefer output.deinit();
-    var writer = &output.writer;
-
-    const export_name = try std.fmt.allocPrint(allocator, "kira_native_fn_{d}", .{function_decl.id});
-    defer allocator.free(export_name);
-    const impl_name = symbol_names.get(function_decl.id) orelse return error.MissingFunctionDeclaration;
-
-    try writer.writeAll("define ");
-    if (builtin.os.tag == .windows) {
-        try writer.writeAll("dllexport ");
-    }
-    try writer.writeAll("void ");
-    try writeLlvmSymbol(writer, export_name);
-    try writer.writeAll("(ptr %args, i32 %arg_count, ptr %out_result) {\nentry:\n");
-
-    for (function_decl.param_types, 0..) |param_type, index| {
-        try writer.writeAll("  %bridge.slot.");
-        try writer.print("{d}", .{index});
-        try writer.print(" = getelementptr inbounds %kira.bridge.value, ptr %args, i64 {d}\n", .{index});
-        try writer.writeAll("  %bridge.load.");
-        try writer.print("{d}", .{index});
-        try writer.writeAll(" = load %kira.bridge.value, ptr %bridge.slot.");
-        try writer.print("{d}\n", .{index});
-        switch (param_type.kind) {
-            .integer, .construct_any, .raw_ptr, .ffi_struct, .array, .enum_instance => {
-                try writer.writeAll("  %bridge.word0.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(" = extractvalue %kira.bridge.value %bridge.load.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(", 2\n");
-            },
-            .float => {
-                try writer.writeAll("  %bridge.word0.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(" = extractvalue %kira.bridge.value %bridge.load.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(", 2\n");
-                try writer.writeAll("  %bridge.float64.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(" = bitcast i64 %bridge.word0.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(" to double\n");
-                if (param_type.name != null and std.mem.eql(u8, param_type.name.?, "F32")) {
-                    try writer.writeAll("  %bridge.float.");
-                    try writer.print("{d}", .{index});
-                    try writer.writeAll(" = fptrunc double %bridge.float64.");
-                    try writer.print("{d}", .{index});
-                    try writer.writeAll(" to float\n");
-                } else {
-                    try writer.writeAll("  %bridge.float.");
-                    try writer.print("{d}", .{index});
-                    try writer.writeAll(" = fadd double %bridge.float64.");
-                    try writer.print("{d}", .{index});
-                    try writer.writeAll(", 0.0\n");
-                }
-            },
-            .boolean => {
-                try writer.writeAll("  %bridge.word0.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(" = extractvalue %kira.bridge.value %bridge.load.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(", 2\n");
-                try writer.writeAll("  %bridge.bool.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(" = trunc i64 %bridge.word0.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(" to i1\n");
-            },
-            .string => {
-                try writer.writeAll("  %bridge.ptrint.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(" = extractvalue %kira.bridge.value %bridge.load.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(", 2\n");
-                try writer.writeAll("  %bridge.len.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(" = extractvalue %kira.bridge.value %bridge.load.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(", 3\n");
-                try writer.writeAll("  %bridge.ptr.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(" = inttoptr i64 %bridge.ptrint.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(" to ptr\n");
-                try writer.writeAll("  %bridge.str.init.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(" = insertvalue %kira.string zeroinitializer, ptr %bridge.ptr.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(", 0\n");
-                try writer.writeAll("  %bridge.str.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(" = insertvalue %kira.string %bridge.str.init.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(", i64 %bridge.len.");
-                try writer.print("{d}", .{index});
-                try writer.writeAll(", 1\n");
-            },
-            .void => {},
-        }
-    }
-
-    if (function_decl.return_type.kind == .void) {
-        try writer.writeAll("  call void ");
-    } else {
-        try writer.writeAll("  %bridge.call = call ");
-        try writer.writeAll(llvmValueTypeText(function_decl.return_type));
-        try writer.writeByte(' ');
-    }
-    try writeLlvmSymbol(writer, impl_name);
-    try writer.writeByte('(');
-    for (function_decl.param_types, 0..) |param_type, index| {
-        if (index != 0) try writer.writeAll(", ");
-        try writer.writeAll(llvmValueTypeText(param_type));
-        try writer.writeByte(' ');
-        switch (param_type.kind) {
-            .integer, .construct_any, .raw_ptr, .ffi_struct, .array, .enum_instance => {
-                try writer.writeAll("%bridge.word0.");
-                try writer.print("{d}", .{index});
-            },
-            .float => {
-                try writer.writeAll("%bridge.float.");
-                try writer.print("{d}", .{index});
-            },
-            .boolean => {
-                try writer.writeAll("%bridge.bool.");
-                try writer.print("{d}", .{index});
-            },
-            .string => {
-                try writer.writeAll("%bridge.str.");
-                try writer.print("{d}", .{index});
-            },
-            .void => try writer.writeAll("undef"),
-        }
-    }
-    try writer.writeAll(")\n");
-
-    try writer.writeAll("  %bridge.out.0 = insertvalue %kira.bridge.value zeroinitializer, i8 ");
-    try writer.print("{d}", .{bridgeTagValue(function_decl.return_type)});
-    try writer.writeAll(", 0\n");
-    switch (function_decl.return_type.kind) {
-        .void => {
-            try writer.writeAll("  store %kira.bridge.value %bridge.out.0, ptr %out_result\n");
-        },
-        .integer, .construct_any, .raw_ptr, .ffi_struct, .array, .enum_instance => {
-            try writer.writeAll("  %bridge.out.1 = insertvalue %kira.bridge.value %bridge.out.0, i64 %bridge.call, 2\n");
-            try writer.writeAll("  store %kira.bridge.value %bridge.out.1, ptr %out_result\n");
-        },
-        .boolean => {
-            try writer.writeAll("  %bridge.ret.bool = zext i1 %bridge.call to i64\n");
-            try writer.writeAll("  %bridge.out.1 = insertvalue %kira.bridge.value %bridge.out.0, i64 %bridge.ret.bool, 2\n");
-            try writer.writeAll("  store %kira.bridge.value %bridge.out.1, ptr %out_result\n");
-        },
-        .float => {
-            if (function_decl.return_type.name != null and std.mem.eql(u8, function_decl.return_type.name.?, "F32")) {
-                try writer.writeAll("  %bridge.ret.float64 = fpext float %bridge.call to double\n");
-                try writer.writeAll("  %bridge.ret.float = bitcast double %bridge.ret.float64 to i64\n");
-            } else {
-                try writer.writeAll("  %bridge.ret.float = bitcast double %bridge.call to i64\n");
-            }
-            try writer.writeAll("  %bridge.out.1 = insertvalue %kira.bridge.value %bridge.out.0, i64 %bridge.ret.float, 2\n");
-            try writer.writeAll("  store %kira.bridge.value %bridge.out.1, ptr %out_result\n");
-        },
-        .string => {
-            try writer.writeAll("  %bridge.ret.ptr = extractvalue %kira.string %bridge.call, 0\n");
-            try writer.writeAll("  %bridge.ret.ptrint = ptrtoint ptr %bridge.ret.ptr to i64\n");
-            try writer.writeAll("  %bridge.ret.len = extractvalue %kira.string %bridge.call, 1\n");
-            try writer.writeAll("  %bridge.out.1 = insertvalue %kira.bridge.value %bridge.out.0, i64 %bridge.ret.ptrint, 2\n");
-            try writer.writeAll("  %bridge.out.2 = insertvalue %kira.bridge.value %bridge.out.1, i64 %bridge.ret.len, 3\n");
-            try writer.writeAll("  store %kira.bridge.value %bridge.out.2, ptr %out_result\n");
-        },
-    }
-    try writer.writeAll("  ret void\n}\n");
-    return output.toOwnedSlice();
 }
 
 pub fn bridgeTagValue(value_type: ir.ValueType) u8 {

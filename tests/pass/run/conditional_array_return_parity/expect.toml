@@ -8,4 +8,4 @@ result = "pass"
 
 [phases.run]
 result = "pass"
-stdout = "0\n0\n0\n0\n0\n4\n1\n2\n1\n1\n2\n3\n"
+stdout = "1\n0\n1\n"

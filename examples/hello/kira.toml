@@ -1,0 +1,10 @@
+[package]
+name = "hello"
+version = "0.1.0"
+kind = "app"
+kira = "0.1.0"
+module_root = "main"
+
+[defaults]
+execution_mode = "vm"
+build_target = "host"

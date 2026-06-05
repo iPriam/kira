@@ -34,6 +34,10 @@ pub fn tokenize(allocator: std.mem.Allocator, source: *const source_pkg.SourceFi
                 try tokens.append(makeToken(.at_sign, source.text[index .. index + 1], index, index + 1));
                 index += 1;
             },
+            '$' => {
+                try tokens.append(makeToken(.dollar, source.text[index .. index + 1], index, index + 1));
+                index += 1;
+            },
             '(' => {
                 try tokens.append(makeToken(.l_paren, source.text[index .. index + 1], index, index + 1));
                 index += 1;

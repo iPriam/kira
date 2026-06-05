@@ -28,6 +28,7 @@ pub const Parser = struct {
 
     pub const parseTopLevelDecl = decl_impl.parseTopLevelDecl;
     pub const parseAnnotationDecl = decl_impl.parseAnnotationDecl;
+    pub const parseAnnotationDeclWithAnnotations = decl_impl.parseAnnotationDeclWithAnnotations;
     pub const parseCapabilityDecl = decl_impl.parseCapabilityDecl;
     pub const parseEnumDecl = decl_impl.parseEnumDecl;
     pub const parseAnnotationTarget = decl_impl.parseAnnotationTarget;
@@ -245,7 +246,10 @@ pub const Parser = struct {
         while (cursor + 1 < self.tokens.len and self.tokens[cursor].kind == .dot and self.tokens[cursor + 1].kind == .identifier) {
             cursor += 2;
         }
-        return cursor + 1 < self.tokens.len and self.tokens[cursor].kind == .identifier and self.tokens[cursor + 1].kind == .l_paren;
+        // A construct-defined declaration form is `ConstructName DeclName ( ... ) { ... }`
+        // or, when it takes no parameters, `ConstructName DeclName { ... }`.
+        return cursor + 1 < self.tokens.len and self.tokens[cursor].kind == .identifier and
+            (self.tokens[cursor + 1].kind == .l_paren or self.tokens[cursor + 1].kind == .l_brace);
     }
 
     pub fn isLifecycleHookStart(self: *Parser) bool {
@@ -391,6 +395,7 @@ pub fn paramsEnd(params: []const syntax.ast.ParamDecl, fallback: usize) usize {
 
 pub fn sectionKind(name: []const u8) syntax.ast.ConstructSectionKind {
     if (std.mem.eql(u8, name, "annotations")) return .annotations;
+    if (std.mem.eql(u8, name, "wrappers")) return .modifiers;
     if (std.mem.eql(u8, name, "modifiers")) return .modifiers;
     if (std.mem.eql(u8, name, "requires")) return .requires;
     if (std.mem.eql(u8, name, "lifecycle")) return .lifecycle;
@@ -440,6 +445,7 @@ pub fn tokenDescription(kind: syntax.TokenKind) []const u8 {
         .kw_true => "'true'",
         .kw_false => "'false'",
         .at_sign => "'@'",
+        .dollar => "'$'",
         .l_paren => "'('",
         .r_paren => "')'",
         .l_brace => "'{'",
