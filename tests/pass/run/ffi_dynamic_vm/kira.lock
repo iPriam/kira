@@ -1,0 +1,7 @@
+version = 1
+
+[root]
+name = "ffi_dynamic_vm"
+version = "0.1.0"
+kind = "app"
+kira = "0.1.0"

@@ -15,6 +15,29 @@ pub fn buildRuntimeHelpersObject(
 ) ![]const u8 {
     const helper_object = try helperObjectPath(allocator, object_path);
     const helper_source = try std.fs.path.join(allocator, &.{ build_options.repo_root, "packages", "kira_native_bridge", "src", "runtime_helpers.c" });
+    try compileHelperSource(allocator, helper_source, helper_object, pic, selector);
+    return helper_object;
+}
+
+pub fn buildDynamicFfiHelpersObject(
+    allocator: std.mem.Allocator,
+    object_path: []const u8,
+    pic: bool,
+    selector: ?native.TargetSelector,
+) ![]const u8 {
+    const helper_object = try siblingObjectPath(allocator, object_path, ".dynamic_ffi");
+    const helper_source = try std.fs.path.join(allocator, &.{ build_options.repo_root, "packages", "kira_native_bridge", "src", "dynamic_ffi_helpers.c" });
+    try compileHelperSource(allocator, helper_source, helper_object, pic, selector);
+    return helper_object;
+}
+
+fn compileHelperSource(
+    allocator: std.mem.Allocator,
+    helper_source: []const u8,
+    helper_object: []const u8,
+    pic: bool,
+    selector: ?native.TargetSelector,
+) !void {
     const driver_path = try compilerDriverPathForSelector(allocator, selector);
     try ensureParentDir(helper_object);
     var argv = std.array_list.Managed([]const u8).init(allocator);
@@ -23,7 +46,6 @@ pub fn buildRuntimeHelpersObject(
     if (pic and builtin.os.tag != .windows) try argv.append("-fPIC");
     try argv.appendSlice(&.{ "-c", helper_source, "-o", helper_object });
     try runCommand(allocator, argv.items);
-    return helper_object;
 }
 
 pub fn linkExecutable(
@@ -46,7 +68,7 @@ pub fn linkExecutable(
     for (object_paths) |path| try argv.append(path);
 
     for (native_libraries) |library| {
-        try argv.append(library.artifact_path);
+        if (library.artifact_path.len != 0) try argv.append(library.artifact_path);
         for (library.link.system_libs) |system_lib| {
             try argv.append(try std.fmt.allocPrint(allocator, "-l{s}", .{system_lib}));
         }
@@ -76,7 +98,7 @@ pub fn linkSharedLibrary(
     for (object_paths) |path| try argv.append(path);
 
     for (native_libraries) |library| {
-        try argv.append(library.artifact_path);
+        if (library.artifact_path.len != 0) try argv.append(library.artifact_path);
         for (library.link.system_libs) |system_lib| {
             try argv.append(try std.fmt.allocPrint(allocator, "-l{s}", .{system_lib}));
         }
@@ -112,10 +134,14 @@ fn compilerDriverPathForSelector(allocator: std.mem.Allocator, selector: ?native
 }
 
 fn helperObjectPath(allocator: std.mem.Allocator, object_path: []const u8) ![]const u8 {
+    return siblingObjectPath(allocator, object_path, ".bridge");
+}
+
+fn siblingObjectPath(allocator: std.mem.Allocator, object_path: []const u8, suffix: []const u8) ![]const u8 {
     const ext = std.fs.path.extension(object_path);
-    if (ext.len == 0) return std.fmt.allocPrint(allocator, "{s}.bridge.o", .{object_path});
+    if (ext.len == 0) return std.fmt.allocPrint(allocator, "{s}{s}.o", .{ object_path, suffix });
     const stem = object_path[0 .. object_path.len - ext.len];
-    return std.fmt.allocPrint(allocator, "{s}.bridge{s}", .{ stem, ext });
+    return std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ stem, suffix, ext });
 }
 
 fn runCommand(allocator: std.mem.Allocator, argv: []const []const u8) !void {

@@ -206,6 +206,26 @@ pub fn tokenize(allocator: std.mem.Allocator, source: *const source_pkg.SourceFi
             },
             '0'...'9' => {
                 const start = index;
+                if (source.text[index] == '0' and (peekByte(source.text, index + 1) == 'x' or peekByte(source.text, index + 1) == 'X')) {
+                    index += 2;
+                    const digits_start = index;
+                    while (index < source.text.len and isHexDigit(source.text[index])) : (index += 1) {}
+                    if (index == digits_start) {
+                        try diagnostics.appendOwned(allocator, out_diagnostics, .{
+                            .severity = .@"error",
+                            .code = "KLEX003",
+                            .title = "hex integer literal requires digits",
+                            .message = "Kira expected at least one hexadecimal digit after the `0x` prefix.",
+                            .labels = &.{
+                                diagnostics.primaryLabel(source_pkg.Span.init(start, index), "hex literal has no digits"),
+                            },
+                            .help = "Use a literal such as `0x1f`.",
+                        });
+                        return error.DiagnosticsEmitted;
+                    }
+                    try tokens.append(makeToken(.integer, source.text[start..index], start, index));
+                    continue;
+                }
                 while (index < source.text.len and std.ascii.isDigit(source.text[index])) : (index += 1) {}
                 if (index + 1 <= source.text.len and peekByte(source.text, index) == '.' and std.ascii.isDigit(peekByte(source.text, index + 1))) {
                     index += 1;
@@ -249,6 +269,10 @@ fn peekByte(text: []const u8, index: usize) u8 {
 
 fn isIdentifierContinue(byte: u8) bool {
     return std.ascii.isAlphanumeric(byte) or byte == '_';
+}
+
+fn isHexDigit(byte: u8) bool {
+    return std.ascii.isDigit(byte) or (byte >= 'a' and byte <= 'f') or (byte >= 'A' and byte <= 'F');
 }
 
 fn keywordKind(lexeme: []const u8) syntax.TokenKind {
@@ -366,6 +390,36 @@ test "tokenizes modern expression and member syntax" {
     try std.testing.expectEqual(syntax.TokenKind.amp_amp, tokens[33].kind);
     try std.testing.expectEqual(syntax.TokenKind.question, tokens[39].kind);
     try std.testing.expectEqual(syntax.TokenKind.colon, tokens[41].kind);
+}
+
+test "tokenizes hex integer literals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    const source = try source_pkg.SourceFile.initOwned(allocator, "hex.kira", "let a: Int = 0x1f; let b: Int = 0XCAFE;");
+    var diags = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
+    const tokens = try tokenize(allocator, &source, &diags);
+
+    try std.testing.expectEqual(@as(usize, 0), diags.items.len);
+    try std.testing.expectEqual(syntax.TokenKind.integer, tokens[5].kind);
+    try std.testing.expectEqualStrings("0x1f", tokens[5].lexeme);
+    try std.testing.expectEqual(syntax.TokenKind.integer, tokens[12].kind);
+    try std.testing.expectEqualStrings("0XCAFE", tokens[12].lexeme);
+}
+
+test "reports empty hex integer literals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    const source = try source_pkg.SourceFile.initOwned(allocator, "hex-empty.kira", "let a: Int = 0x;");
+    var diags = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
+    const result = tokenize(allocator, &source, &diags);
+
+    try std.testing.expectError(error.DiagnosticsEmitted, result);
+    try std.testing.expectEqual(@as(usize, 1), diags.items.len);
+    try std.testing.expectEqualStrings("hex integer literal requires digits", diags.items[0].title);
 }
 
 test "tokenizes inheritance keywords" {

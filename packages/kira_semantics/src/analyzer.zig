@@ -20,6 +20,16 @@ pub fn analyzeWithImports(
     return lowering.lowerProgram(allocator, program, imported_globals, out_diagnostics);
 }
 
+pub fn analyzeWithImportsOptions(
+    allocator: std.mem.Allocator,
+    program: syntax.ast.Program,
+    imported_globals: ImportedGlobals,
+    options: AnalysisOptions,
+    out_diagnostics: *std.array_list.Managed(diagnostics.Diagnostic),
+) !model.Program {
+    return lowering.lowerProgramWithOptions(allocator, program, imported_globals, options, out_diagnostics);
+}
+
 pub fn analyzeLibrary(
     allocator: std.mem.Allocator,
     program: syntax.ast.Program,

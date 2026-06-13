@@ -23,8 +23,13 @@ const ReleaseResponse = struct {
 
     const Asset = struct {
         name: []const u8,
+        url: []const u8,
         browser_download_url: []const u8,
     };
+};
+
+const HttpStatusResult = struct {
+    status: std.http.Status,
 };
 
 pub fn resolveReleaseAsset(
@@ -34,6 +39,15 @@ pub fn resolveReleaseAsset(
     asset_name: []const u8,
 ) !ResolvedAsset {
     const repository = try resolveRepositorySlug(allocator, repo_root);
+    return resolveReleaseAssetInRepository(allocator, repository, release_tag, asset_name);
+}
+
+pub fn resolveReleaseAssetInRepository(
+    allocator: std.mem.Allocator,
+    repository: []const u8,
+    release_tag: []const u8,
+    asset_name: []const u8,
+) !ResolvedAsset {
     errdefer allocator.free(repository);
 
     const api_url = try std.fmt.allocPrint(
@@ -90,7 +104,10 @@ pub fn downloadAssetToFile(
     var file_buffer: [16 * 1024]u8 = undefined;
     var file_writer = file.writer(std.Options.debug_io, &file_buffer);
 
-    const response = try fetchWriter(allocator, download_url, false, &file_writer.interface);
+    const response = fetchWriterViaManualRedirect(allocator, download_url, &file_writer.interface) catch |manual_err| blk: {
+        std.debug.print("GitHub asset manual redirect download failed: {s}\n", .{@errorName(manual_err)});
+        break :blk try fetchWriter(allocator, download_url, false, &file_writer.interface);
+    };
     try file_writer.interface.flush();
 
     switch (response.status) {
@@ -98,16 +115,93 @@ pub fn downloadAssetToFile(
         .not_found => return error.GitHubReleaseAssetNotFound,
         else => {
             std.debug.print(
-                "GitHub asset download failed: status={d} ({s}) url={s}\n",
+                "GitHub asset download failed through Zig HTTP: status={d} ({s}) url={s}\n",
                 .{
                     @intFromEnum(response.status),
                     @tagName(response.status),
                     download_url,
                 },
             );
+            printFailedDownloadBody(allocator, destination_path);
             return error.GitHubAssetDownloadFailed;
         },
     }
+}
+
+fn printFailedDownloadBody(allocator: std.mem.Allocator, destination_path: []const u8) void {
+    const body = std.Io.Dir.cwd().readFileAlloc(
+        std.Options.debug_io,
+        destination_path,
+        allocator,
+        .limited(2048),
+    ) catch return;
+    defer allocator.free(body);
+    const trimmed = std.mem.trim(u8, body, " \t\r\n");
+    if (trimmed.len == 0) return;
+    std.debug.print("GitHub asset error body: {s}\n", .{trimmed});
+}
+
+fn fetchWriterViaManualRedirect(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    writer: *std.Io.Writer,
+) !HttpStatusResult {
+    const redirect_url = try fetchSingleRedirectLocation(allocator, url);
+    defer allocator.free(redirect_url);
+    return fetchWriterMinimal(allocator, redirect_url, writer);
+}
+
+fn fetchSingleRedirectLocation(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+) ![]u8 {
+    var client: std.http.Client = .{
+        .allocator = allocator,
+        .io = std.Options.debug_io,
+    };
+    defer client.deinit();
+
+    const uri = try std.Uri.parse(url);
+    var headers = [_]std.http.Header{
+        .{ .name = "User-Agent", .value = "kirac-fetch-toolchain" },
+    };
+    var req = try std.http.Client.request(&client, .GET, uri, .{
+        .redirect_behavior = .unhandled,
+        .extra_headers = &headers,
+    });
+    defer req.deinit();
+
+    try req.sendBodiless();
+    var response = try req.receiveHead(&.{});
+    if (response.head.status.class() != .redirect) return error.GitHubAssetDownloadFailed;
+    const location = response.head.location orelse return error.GitHubAssetDownloadFailed;
+
+    const reader = response.reader(&.{});
+    _ = reader.discardRemaining() catch |err| switch (err) {
+        error.ReadFailed => return response.bodyErr().?,
+    };
+    return allocator.dupe(u8, location);
+}
+
+fn fetchWriterMinimal(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    writer: *std.Io.Writer,
+) !HttpStatusResult {
+    var client: std.http.Client = .{
+        .allocator = allocator,
+        .io = std.Options.debug_io,
+    };
+    defer client.deinit();
+
+    var redirect_buffer: [64 * 1024]u8 = undefined;
+    const result = try client.fetch(.{
+        .location = .{ .url = url },
+        .response_writer = writer,
+        .extra_headers = &.{},
+        .redirect_buffer = &redirect_buffer,
+    });
+    return .{ .status = result.status };
 }
 
 const FetchResponse = struct {
@@ -139,7 +233,7 @@ fn fetchWriter(
     url: []const u8,
     is_api_request: bool,
     writer: *std.Io.Writer,
-) !struct { status: std.http.Status } {
+) !HttpStatusResult {
     var client: std.http.Client = .{
         .allocator = allocator,
         .io = std.Options.debug_io,
@@ -151,14 +245,16 @@ fn fetchWriter(
 
     var extra_headers = std.array_list.Managed(std.http.Header).init(allocator);
     defer extra_headers.deinit();
+    var privileged_headers = std.array_list.Managed(std.http.Header).init(allocator);
+    defer privileged_headers.deinit();
 
-    try extra_headers.append(.{ .name = "User-Agent", .value = "kirac-fetch-llvm" });
+    try extra_headers.append(.{ .name = "User-Agent", .value = "kirac-fetch-toolchain" });
 
     if (is_api_request) {
         try extra_headers.append(.{ .name = "Accept", .value = "application/vnd.github+json" });
         try extra_headers.append(.{ .name = "X-GitHub-Api-Version", .value = "2022-11-28" });
     } else {
-        try extra_headers.append(.{ .name = "Accept", .value = "application/octet-stream" });
+        try privileged_headers.append(.{ .name = "Accept", .value = "application/octet-stream" });
     }
 
     var auth_header_value: ?[]const u8 = null;
@@ -167,7 +263,7 @@ fn fetchWriter(
     if (is_api_request) {
         if (token) |value| {
             auth_header_value = try std.fmt.allocPrint(allocator, "Bearer {s}", .{value});
-            try extra_headers.append(.{ .name = "Authorization", .value = auth_header_value.? });
+            try privileged_headers.append(.{ .name = "Authorization", .value = auth_header_value.? });
         }
     }
 
@@ -179,6 +275,7 @@ fn fetchWriter(
         .location = .{ .url = url },
         .response_writer = writer,
         .extra_headers = extra_headers.items,
+        .privileged_headers = privileged_headers.items,
         .redirect_buffer = &redirect_buffer,
     });
 

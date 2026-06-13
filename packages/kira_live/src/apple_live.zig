@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const diag_messages = @import("kira_diagnostic_messages");
 const live = @import("root.zig");
 const protocol = @import("protocol.zig");
@@ -175,7 +176,7 @@ fn runSimulatorNativeConsole(
     defer io_impl.deinit();
     var environ_map = try std.process.Environ.createMap(process_environ, allocator);
     defer environ_map.deinit();
-    const stamp = std.c.getpid();
+    const stamp = processId();
     const tmp_root = "/tmp";
     const stdout_path = try std.fs.path.join(allocator, &.{ tmp_root, try std.fmt.allocPrint(allocator, "kira-ios-native-{d}.stdout.log", .{stamp}) });
     const stderr_path = try std.fs.path.join(allocator, &.{ tmp_root, try std.fmt.allocPrint(allocator, "kira-ios-native-{d}.stderr.log", .{stamp}) });
@@ -216,6 +217,15 @@ fn runSimulatorNativeConsole(
         defer allocator.free(err);
         if (err.len != 0) try stderr.writeAll(err);
     } else |_| {}
+}
+
+extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) u32;
+
+fn processId() u32 {
+    return switch (builtin.os.tag) {
+        .windows => GetCurrentProcessId(),
+        else => @intCast(std.c.getpid()),
+    };
 }
 
 fn runIosSimulator(
@@ -325,7 +335,6 @@ fn acceptSimulatorClient(
 
 fn platformSelector(allocator: std.mem.Allocator, platform: Platform) !@import("kira_native_lib_definition").TargetSelector {
     const native = @import("kira_native_lib_definition");
-    const builtin = @import("builtin");
     return switch (platform) {
         .macos => native.TargetSelector.parse(allocator, switch (builtin.cpu.arch) {
             .aarch64 => "aarch64-macos-none",

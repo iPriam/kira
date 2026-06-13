@@ -9,7 +9,7 @@ include_dirs = ["FS"]
 
 [autobinding]
 module = "fs"
-output = "../app/fs.kira"
+output = "../bindings/fs/fs.kira"
 headers = ["FS/fs.h"]
 
 [bindings]

@@ -315,7 +315,16 @@ fn runVmPhase(allocator: std.mem.Allocator, system: *build.BuildSystem, case: di
     var run_dir = try std.Io.Dir.cwd().openDir(std.Options.debug_io, run_cwd, .{});
     defer run_dir.close(std.Options.debug_io);
     try std.process.setCurrentDir(std.Options.debug_io, run_dir);
-    try vm.runMain(&module, &output.writer);
+
+    var ffi_dispatcher = vm_runtime.FfiDispatcher.init(allocator, &module);
+    defer ffi_dispatcher.deinit();
+    for (result.native_libraries) |library| {
+        try ffi_dispatcher.registerLibrary(library.name, library.artifact_path);
+    }
+    try vm.runMainWithHooks(&module, &output.writer, .{
+        .context = &ffi_dispatcher,
+        .call_native = vm_runtime.FfiDispatcher.hook,
+    });
     return .{
         .result = .pass,
         .stdout = try output.toOwnedSlice(),

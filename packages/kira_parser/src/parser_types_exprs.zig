@@ -473,7 +473,7 @@ pub fn parsePrimary(self: *Parser) anyerror!*syntax.ast.Expr {
     }
     if (self.match(.integer)) {
         const token = self.previous();
-        const value = std.fmt.parseInt(i64, token.lexeme, 10) catch {
+        const value = parseIntegerLiteral(token.lexeme) catch {
             try diagnostics.appendOwned(self.allocator, self.diagnostics, .{
                 .severity = .@"error",
                 .code = "KPAR003",
@@ -583,4 +583,11 @@ pub fn parsePrimary(self: *Parser) anyerror!*syntax.ast.Expr {
         .help = "Insert a literal, name, call, collection literal, or parenthesized expression.",
     });
     return error.DiagnosticsEmitted;
+}
+
+fn parseIntegerLiteral(lexeme: []const u8) !i64 {
+    if (lexeme.len > 2 and lexeme[0] == '0' and (lexeme[1] == 'x' or lexeme[1] == 'X')) {
+        return std.fmt.parseInt(i64, lexeme[2..], 16);
+    }
+    return std.fmt.parseInt(i64, lexeme, 10);
 }

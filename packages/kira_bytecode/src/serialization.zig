@@ -5,6 +5,7 @@
 const std = @import("std");
 const instruction = @import("instruction.zig");
 const bytecode = @import("bytecode.zig");
+const runtime_abi = @import("kira_runtime_abi");
 
 const Module = bytecode.Module;
 const Construct = bytecode.Construct;
@@ -20,7 +21,7 @@ const Function = bytecode.Function;
 const OwnershipMode = bytecode.OwnershipMode;
 
 pub fn serialize(writer: anytype, module: Module) !void {
-    try writer.writeAll("KBC4");
+    try writer.writeAll("KBC5");
     try writer.writeInt(u32, @as(u32, @intCast(module.constructs.len)), .little);
     try writer.writeInt(u32, @as(u32, @intCast(module.construct_implementations.len)), .little);
     try writer.writeInt(u32, @as(u32, @intCast(module.types.len)), .little);
@@ -79,6 +80,19 @@ pub fn serialize(writer: anytype, module: Module) !void {
         try writeOwnershipModes(writer, function_decl.param_ownership);
         try writeTypeRef(writer, function_decl.return_type);
         try writer.writeByte(@intFromEnum(function_decl.return_ownership));
+        // KBC5 FFI metadata: declared parameter types plus the optional foreign
+        // binding, so the VM can dispatch direct FFI through LibFFI.
+        try writer.writeInt(u32, @as(u32, @intCast(function_decl.param_types.len)), .little);
+        for (function_decl.param_types) |param_ty| try writeTypeRef(writer, param_ty);
+        try writer.writeByte(if (function_decl.is_extern) 1 else 0);
+        if (function_decl.foreign) |foreign| {
+            try writer.writeByte(1);
+            try writeString(writer, foreign.library_name);
+            try writeString(writer, foreign.symbol_name);
+            try writer.writeByte(@intFromEnum(foreign.calling_convention));
+        } else {
+            try writer.writeByte(0);
+        }
         try writer.writeInt(u32, function_decl.register_count, .little);
         try writer.writeInt(u32, function_decl.local_count, .little);
         try writer.writeInt(u32, @as(u32, @intCast(function_decl.local_types.len)), .little);
@@ -318,10 +332,12 @@ pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !Module {
 
     var magic: [4]u8 = undefined;
     try reader.readSliceAll(&magic);
-    const has_function_ownership = std.mem.eql(u8, &magic, "KBC1") or std.mem.eql(u8, &magic, "KBC3") or std.mem.eql(u8, &magic, "KBC4");
-    const has_closure_ownership = std.mem.eql(u8, &magic, "KBC3") or std.mem.eql(u8, &magic, "KBC4");
-    const has_load_ownership = std.mem.eql(u8, &magic, "KBC3") or std.mem.eql(u8, &magic, "KBC4");
-    const has_indirect_call_ownership = std.mem.eql(u8, &magic, "KBC4");
+    const is_kbc5 = std.mem.eql(u8, &magic, "KBC5");
+    const has_function_ownership = std.mem.eql(u8, &magic, "KBC1") or std.mem.eql(u8, &magic, "KBC3") or std.mem.eql(u8, &magic, "KBC4") or is_kbc5;
+    const has_closure_ownership = std.mem.eql(u8, &magic, "KBC3") or std.mem.eql(u8, &magic, "KBC4") or is_kbc5;
+    const has_load_ownership = std.mem.eql(u8, &magic, "KBC3") or std.mem.eql(u8, &magic, "KBC4") or is_kbc5;
+    const has_indirect_call_ownership = std.mem.eql(u8, &magic, "KBC4") or is_kbc5;
+    const has_ffi_metadata = is_kbc5;
     if (!has_function_ownership and
         !std.mem.eql(u8, &magic, "KBC0") and
         !std.mem.eql(u8, &magic, "KBC2"))
@@ -427,6 +443,26 @@ pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !Module {
             try defaultOwnershipModes(allocator, param_count, .owned);
         const return_type = try readTypeRef(allocator, reader);
         const return_ownership: OwnershipMode = if (has_function_ownership) try readOwnershipMode(reader) else .owned;
+        var param_types: []const instruction.TypeRef = &.{};
+        var is_extern = false;
+        var foreign: ?bytecode.ForeignFunction = null;
+        if (has_ffi_metadata) {
+            const param_type_count = try reader.takeInt(u32, .little);
+            var param_type_list = std.array_list.Managed(instruction.TypeRef).init(allocator);
+            for (0..param_type_count) |_| try param_type_list.append(try readTypeRef(allocator, reader));
+            param_types = try param_type_list.toOwnedSlice();
+            is_extern = (try reader.takeByte()) != 0;
+            if ((try reader.takeByte()) != 0) {
+                const library_name = try readString(allocator, reader);
+                const symbol_name = try readString(allocator, reader);
+                const calling_convention: runtime_abi.CallingConvention = @enumFromInt(try reader.takeByte());
+                foreign = .{
+                    .library_name = library_name,
+                    .symbol_name = symbol_name,
+                    .calling_convention = calling_convention,
+                };
+            }
+        }
         const register_count = try reader.takeInt(u32, .little);
         const local_count = try reader.takeInt(u32, .little);
         const local_type_count = try reader.takeInt(u32, .little);
@@ -677,8 +713,11 @@ pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !Module {
             .name = name,
             .param_count = param_count,
             .param_ownership = param_ownership,
+            .param_types = param_types,
             .return_type = return_type,
             .return_ownership = return_ownership,
+            .is_extern = is_extern,
+            .foreign = foreign,
             .register_count = register_count,
             .local_count = local_count,
             .local_types = try local_types.toOwnedSlice(),
@@ -920,6 +959,54 @@ test "round-trips function constants" {
     const round_tripped = try deserialize(allocator, bytes.written());
     try std.testing.expect(round_tripped.functions[0].instructions[0] == .const_function);
     try std.testing.expectEqual(@as(u32, 42), round_tripped.functions[0].instructions[0].const_function.function_id);
+}
+
+test "round-trips foreign FFI metadata for VM direct dispatch" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    const module: Module = .{
+        .types = &.{},
+        .functions = &.{
+            .{
+                .id = 7,
+                .name = "kira_ffi_add",
+                .param_count = 2,
+                .param_types = &.{
+                    .{ .kind = .integer, .name = "I32" },
+                    .{ .kind = .integer, .name = "I32" },
+                },
+                .return_type = .{ .kind = .integer, .name = "I32" },
+                .is_extern = true,
+                .foreign = .{
+                    .library_name = "ffimath",
+                    .symbol_name = "kira_ffi_add",
+                    .calling_convention = .c,
+                },
+                .register_count = 0,
+                .local_count = 0,
+                .local_types = &.{},
+                .instructions = &.{},
+            },
+        },
+        .entry_function_id = null,
+    };
+
+    var bytes: std.Io.Writer.Allocating = .init(allocator);
+    defer bytes.deinit();
+    try serialize(&bytes.writer, module);
+
+    const round_tripped = try deserialize(allocator, bytes.written());
+    const func = round_tripped.functions[0];
+    try std.testing.expect(func.is_extern);
+    try std.testing.expect(func.foreign != null);
+    try std.testing.expectEqualStrings("ffimath", func.foreign.?.library_name);
+    try std.testing.expectEqualStrings("kira_ffi_add", func.foreign.?.symbol_name);
+    try std.testing.expectEqual(runtime_abi.CallingConvention.c, func.foreign.?.calling_convention);
+    try std.testing.expectEqual(@as(usize, 2), func.param_types.len);
+    try std.testing.expectEqualStrings("I32", func.param_types[0].name.?);
+    try std.testing.expectEqualStrings("I32", func.return_type.name.?);
 }
 
 test "round-trips construct metadata and constrained types" {

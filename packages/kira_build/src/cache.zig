@@ -424,7 +424,11 @@ fn hasProjectManifest(path: []const u8) bool {
 fn sourceBelongsToProject(allocator: std.mem.Allocator, root: []const u8, source_path: []const u8) bool {
     const app_root = std.fs.path.join(allocator, &.{ root, "app" }) catch return false;
     defer allocator.free(app_root);
-    return pathStartsWith(source_path, app_root);
+    if (pathStartsWith(source_path, app_root)) return true;
+
+    const bindings_root = std.fs.path.join(allocator, &.{ root, "bindings" }) catch return false;
+    defer allocator.free(bindings_root);
+    return pathStartsWith(source_path, bindings_root);
 }
 
 fn pathStartsWith(path: []const u8, prefix: []const u8) bool {

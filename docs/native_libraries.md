@@ -10,8 +10,15 @@ Kira's first real FFI system is intentionally strict:
 - direct LLVM/native extern calls with no public wrapper layer
 - hybrid runtime/native argument and result marshalling
 - explicit native callback support
+- VM-side dynamic linking and direct FFI through LibFFI (no LLVM required)
 
-This pass does not implement dynamic linking, libffi, a stable Kira ABI, non-C ABIs, variadics, or captured closures across the boundary.
+The native-compiling backends (LLVM and hybrid) still require an `@Native`
+boundary for direct FFI. The VM additionally executes direct FFI itself by
+loading the named library at runtime and marshalling the call through LibFFI;
+see [VM Dynamic FFI through LibFFI](#vm-dynamic-ffi-through-libffi). This pass
+does not implement a stable Kira ABI, non-C ABIs, variadics, by-value
+aggregate arguments through the VM LibFFI path, or captured closures across the
+boundary.
 
 ## Package Split
 
@@ -190,7 +197,8 @@ Hybrid mode now uses a real bridge value ABI for boundary calls:
 
 That bridge is the normal execution boundary, not a usability quarantine:
 
-- direct FFI usage still requires `@Native`
+- direct FFI usage on the native-compiling backends (LLVM, hybrid) still requires `@Native` (diagnostic `KSEM093`)
+- the VM lifts that requirement and executes direct FFI through LibFFI (see below)
 - indirect use remains allowed
 - `@Runtime` code can call `@Native` Kira helpers, construct and mutate native-annotated values, and pass them through hybrid honestly
 - `@Native` code can call back into `@Runtime` helpers the same way
@@ -203,6 +211,59 @@ The current bridge value set covers the ordinary executable surface used by mixe
 - string
 - boolean
 - raw pointer
+
+## VM Dynamic FFI through LibFFI
+
+The VM can call dynamically linked native functions directly, without LLVM
+native compilation. This makes `kira run` (the pure VM) a real FFI host: an
+`@FFI.Extern` function can be called from ordinary runtime code, and the VM
+loads the library and marshals the call through LibFFI at runtime.
+
+How it works:
+
+- The bytecode compiler emits each `@FFI.Extern` declaration as a metadata-only
+  stub that carries the library name, symbol, calling convention, declared
+  parameter types, and return type (KBC5 container format).
+- For the VM target, semantics lifts the `KSEM093` `@Native` requirement
+  (`AnalysisOptions.allow_runtime_direct_ffi`); the native-compiling backends
+  keep it.
+- At a `call_native` instruction the interpreter routes through the LibFFI
+  dispatcher (`packages/kira_vm_runtime/src/vm_ffi.zig`), which opens (and
+  caches) the named library, resolves the symbol, builds a LibFFI signature from
+  the declared FFI primitive types, marshals the arguments, invokes the
+  function, and lifts the result.
+- The dispatcher loads the LibFFI runtime from the managed toolchain
+  (`~/.kira/toolchains/libffi/...`, installed with `zig build fetch-libffi`).
+
+Library resolution mirrors the rest of the native-library system. A library
+built or shipped as a shared object is declared with `link_mode = "dynamic"`;
+the build can compile dynamic libraries from sources just like static archives:
+
+```toml
+[library]
+name = "ffimath"
+link_mode = "dynamic"
+abi = "c"
+
+[build]
+sources = ["ffimath.c"]
+
+[target.x86_64-windows-msvc]
+dynamic_lib = "../generated/native/x86_64-windows-msvc/ffimath.dll"
+```
+
+Supported VM LibFFI types are the scalar primitives (`I8`…`I64`, `U8`…`U64`,
+`Bool`, `F32`, `F64`), `RawPtr`, and `CString` (marshalled as a borrowed
+NUL-terminated copy for the duration of the call). By-value aggregates,
+callbacks, and non-C calling conventions are rejected rather than mis-marshalled.
+
+The runnable proof case is:
+
+- [tests/pass/run/ffi_dynamic_vm/app/main.kira](../tests/pass/run/ffi_dynamic_vm/app/main.kira)
+
+```bash
+kira run --backend vm tests/pass/run/ffi_dynamic_vm
+```
 
 ## Proof Target
 

@@ -1,0 +1,20 @@
+struct ResultCodes {
+    let success: I64 = 0
+    let outOfHostMemory: I64 = -1
+    let initializationFailed: I64 = -3
+}
+
+@Main
+function main() {
+    let codes = ResultCodes {}
+    print(codes.success)
+    print(codes.outOfHostMemory)
+    print(codes.initializationFailed)
+
+    let direct: I64 = -42
+    print(direct)
+
+    let scale: F64 = -1.5
+    print(scale)
+    return
+}

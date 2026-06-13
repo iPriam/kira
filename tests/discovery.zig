@@ -319,8 +319,11 @@ fn defaultBackends(allocator: std.mem.Allocator) ![]const Backend {
 }
 
 fn validateBackendPolicy(backends: []const Backend) !void {
-    // The corpus has no VM-only truth: every explicit matrix must include
-    // hybrid, while LLVM is opted in by native/backend integration cases.
+    // Most matrices must include hybrid, with LLVM opted in by native/backend
+    // integration cases. The single exception is a pure VM matrix: direct FFI
+    // executed through LibFFI is genuine VM-only truth — hybrid and native
+    // reject it with KSEM093 because they require an @Native boundary — so
+    // `["vm"]` alone is a legitimate, non-redundant expectation.
     var saw_hybrid = false;
     var saw_vm = false;
     var saw_llvm = false;
@@ -340,6 +343,7 @@ fn validateBackendPolicy(backends: []const Backend) !void {
             },
         }
     }
+    if (saw_vm and !saw_hybrid and !saw_llvm) return;
     if (!saw_hybrid) return error.InvalidExpectation;
 }
 

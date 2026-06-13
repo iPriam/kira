@@ -4,6 +4,7 @@
 // distinct call signature gets one dispatcher that switches on the id and, for
 // closures, appends the unpacked captures as trailing arguments.
 const std = @import("std");
+const builtin = @import("builtin");
 const ir = @import("kira_ir");
 const backend_api = @import("kira_backend_api");
 const llvm = @import("llvm_c.zig");
@@ -355,6 +356,9 @@ pub fn buildHybridTrampoline(
     const name = try allocPrintZ(allocator, "kira_native_fn_{d}", .{function_decl.id});
     defer allocator.free(name);
     const fn_value = api.LLVMAddFunction(module_ref, name.ptr, fn_ty);
+    if (builtin.os.tag == .windows) {
+        api.LLVMSetDLLStorageClass(fn_value, llvm.c.LLVMDLLExportStorageClass);
+    }
     const entry = api.LLVMAppendBasicBlockInContext(types.context, fn_value, "entry");
     api.LLVMPositionBuilderAtEnd(builder, entry);
 

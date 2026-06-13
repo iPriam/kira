@@ -8,17 +8,20 @@ pub const Platform = enum {
 
 pub const ArchiveFormat = enum {
     zip,
+    tar_gz,
     tar_xz,
 
     pub fn extension(self: ArchiveFormat) []const u8 {
         return switch (self) {
             .zip => ".zip",
+            .tar_gz => ".tar.gz",
             .tar_xz => ".tar.xz",
         };
     }
 
     pub fn fromString(value: []const u8) ?ArchiveFormat {
         if (std.mem.eql(u8, value, "zip")) return .zip;
+        if (std.mem.eql(u8, value, "tar.gz")) return .tar_gz;
         if (std.mem.eql(u8, value, "tar.xz")) return .tar_xz;
         return null;
     }

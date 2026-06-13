@@ -1,0 +1,7 @@
+version = 1
+
+[root]
+name = "Foundation"
+version = "0.1.0"
+kind = "library"
+kira = "0.1.0"

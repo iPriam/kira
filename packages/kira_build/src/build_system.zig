@@ -6,7 +6,9 @@ const bytecode = @import("kira_bytecode");
 const hybrid = @import("kira_hybrid_definition");
 const runtime_abi = @import("kira_runtime_abi");
 const llvm_backend = @import("kira_llvm_backend");
+const native = @import("kira_native_lib_definition");
 const pipeline = @import("pipeline.zig");
+const ffi_support = @import("ffi_support.zig");
 const builtin = @import("builtin");
 const cache = @import("cache.zig");
 
@@ -20,6 +22,9 @@ pub const BuildArtifactOutcome = struct {
     source: ?source_pkg.SourceFile = null,
     diagnostics: []const diagnostics.Diagnostic = &.{},
     artifacts: []const build_def.Artifact = &.{},
+    /// Native libraries resolved for the build target. The VM runner uses these
+    /// to map FFI library names to loadable paths for LibFFI dispatch.
+    native_libraries: []const native.ResolvedNativeLibrary = &.{},
     failure_kind: ?BuildFailureKind = null,
     failure_stage: ?pipeline.FrontendStage = null,
     cache_status: pipeline.CacheStatus = .not_checked,
@@ -183,8 +188,13 @@ pub const BuildSystem = struct {
                             restore_ns,
                             elapsedNs(total_start),
                         });
+                        // A cache hit skips the frontend, so re-resolve the
+                        // project's native libraries (artifacts already exist)
+                        // to keep the VM's LibFFI dispatcher able to load them.
+                        const restored_native_libraries = self.resolveCachedNativeLibraries(request);
                         return .{
                             .artifacts = artifacts,
+                            .native_libraries = restored_native_libraries,
                             .cache_status = .hit,
                             .cache_restore_ns = restore_ns,
                         };
@@ -211,6 +221,14 @@ pub const BuildSystem = struct {
         const result = try self.buildUncached(request);
         pipeline.timingPrint("[kira:timing] build.total path={s} backend={s} cached=false ns={d}\n", .{ request.source_path, @tagName(request.target.execution), elapsedNs(total_start) });
         return result;
+    }
+
+    /// Re-resolves the project's declared native libraries for a cache-restored
+    /// VM build. Only the VM backend dispatches FFI through these paths, so other
+    /// backends skip the work. Best-effort: failures yield no libraries.
+    fn resolveCachedNativeLibraries(self: BuildSystem, request: build_def.BuildRequest) []const native.ResolvedNativeLibrary {
+        if (request.target.execution != .vm) return &.{};
+        return ffi_support.prepareNativeLibrariesForTarget(self.allocator, request.source_path, &.{}, request.target.selector) catch &.{};
     }
 
     fn buildUncached(self: BuildSystem, request: build_def.BuildRequest) !BuildArtifactOutcome {
@@ -240,7 +258,7 @@ pub const BuildSystem = struct {
             .kind = .bytecode,
             .path = request.output_path,
         };
-        return .{ .artifacts = artifacts };
+        return .{ .artifacts = artifacts, .native_libraries = compiled.native_libraries };
     }
 
     pub fn buildNativeArtifact(self: BuildSystem, request: build_def.BuildRequest) !BuildArtifactOutcome {

@@ -4,7 +4,7 @@ version = "0.1.0"
 kind = "library"
 kira = "0.1.0"
 module_root = "Foundation"
-native_libraries = ["NativeLibs/FS.toml"]
+native_libraries = ["NativeLibs/FS.toml", "NativeLibs/DynamicFfi.toml"]
 
 [defaults]
 execution_mode = "vm"

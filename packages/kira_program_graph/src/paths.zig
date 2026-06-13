@@ -10,6 +10,15 @@ pub fn canonicalizeExistingPath(allocator: std.mem.Allocator, path: []const u8) 
     return realPathFileAlloc(allocator, std.Io.Dir.cwd(), path);
 }
 
+/// Generated FFI bindings live in `<package>/bindings`, a sibling of the `app/`
+/// source root, so hand-written and generated sources never share a directory.
+pub fn bindingsRootForSourceRoot(allocator: std.mem.Allocator, source_root: []const u8) ![]u8 {
+    const package_root = std.fs.path.dirname(source_root) orelse return allocator.dupe(u8, source_root);
+    const joined = try std.fs.path.join(allocator, &.{ package_root, "bindings" });
+    defer allocator.free(joined);
+    return canonicalizeSourceRoot(allocator, joined);
+}
+
 pub fn canonicalizeSourceRoot(allocator: std.mem.Allocator, root_path: []const u8) ![]u8 {
     if (dirExists(root_path)) return canonicalizeDirectory(allocator, root_path);
     return absolutizeLexical(allocator, root_path);

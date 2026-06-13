@@ -1,0 +1,11 @@
+// Hand-written binding for the dynamically linked `ffimath` test library.
+// The VM dispatches each call through LibFFI; no @Native boundary is required.
+
+@FFI.Extern { library: ffimath; symbol: kira_ffi_add; abi: c; }
+function kira_ffi_add(a: I32, b: I32): I32;
+
+@FFI.Extern { library: ffimath; symbol: kira_ffi_scale; abi: c; }
+function kira_ffi_scale(x: F64): F64;
+
+@FFI.Extern { library: ffimath; symbol: kira_ffi_strlen; abi: c; }
+function kira_ffi_strlen(text: CString): I64;

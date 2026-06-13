@@ -16,7 +16,10 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const cases = try discovery.discoverCases(allocator);
     if (cases.len == 0) return error.NoCorpusCases;
 
-    const jobs = try buildJobs(allocator, cases);
+    // Optional single-case filter: KIRA_CORPUS_FILTER=substring runs only cases
+    // whose path contains the substring. Handy for iterating on one corpus case.
+    const case_filter = init.environ.getAlloc(allocator, "KIRA_CORPUS_FILTER") catch null;
+    const jobs = try buildJobs(allocator, cases, case_filter);
     const profile_enabled = try envFlag(allocator, init.environ, "KIRA_CORPUS_PROFILE");
     // Stability mode: native (llvm) cases build and link real binaries, which contend
     // on the toolchain when many run at once and can fail transiently under load. Stable
@@ -165,9 +168,12 @@ fn workerMain(shared: *Shared) void {
     shared.runUntilDone();
 }
 
-fn buildJobs(allocator: std.mem.Allocator, cases: []const discovery.Case) ![]Job {
+fn buildJobs(allocator: std.mem.Allocator, cases: []const discovery.Case, case_filter: ?[]const u8) ![]Job {
     var jobs = std.array_list.Managed(Job).init(allocator);
     for (cases) |case| {
+        if (case_filter) |filter| {
+            if (filter.len != 0 and std.mem.indexOf(u8, case.name, filter) == null) continue;
+        }
         for (case.expectation.backends) |backend| {
             try jobs.append(.{
                 .case = case,

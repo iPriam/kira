@@ -84,6 +84,7 @@ fn cloneAutobinding(allocator: std.mem.Allocator, autobinding: native.Autobindin
         .headers = try cloneStrings(allocator, autobinding.headers),
         .bindings = .{
             .mode = autobinding.bindings.mode,
+            .profile = autobinding.bindings.profile,
             .functions = try cloneStrings(allocator, autobinding.bindings.functions),
             .structs = try cloneStrings(allocator, autobinding.bindings.structs),
             .callbacks = try cloneStrings(allocator, autobinding.bindings.callbacks),

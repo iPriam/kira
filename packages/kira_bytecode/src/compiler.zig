@@ -78,6 +78,15 @@ pub fn compileProgram(allocator: std.mem.Allocator, program: ir_pkg.Program, mod
 
     for (program.functions, 0..) |function_decl, index| {
         const resolved_execution = resolveExecution(function_decl.execution, mode);
+        // Foreign FFI declarations carry no Kira body. In VM mode the
+        // interpreter dispatches them through LibFFI (see kira_vm_runtime), so
+        // emit a metadata-only stub instead of rejecting the program. The
+        // hybrid/native paths resolve them through the native bridge and do not
+        // need a bytecode entry.
+        if (function_decl.is_extern and resolved_execution == .native) {
+            if (mode == .vm) try functions.append(try externStub(allocator, function_decl));
+            continue;
+        }
         if (mode == .vm and resolved_execution == .native) return error.NativeFunctionInVmBuild;
         if (resolved_execution == .native and mode == .hybrid_runtime) continue;
 
@@ -250,6 +259,7 @@ pub fn compileProgram(allocator: std.mem.Allocator, program: ir_pkg.Program, mod
             .name = function_decl.name,
             .param_count = @as(u32, @intCast(function_decl.param_types.len)),
             .param_ownership = try lowerOwnershipModes(allocator, function_decl.param_ownership),
+            .param_types = try lowerLocalTypes(allocator, function_decl.param_types),
             .return_type = lowerTypeRef(function_decl.return_type),
             .return_ownership = lowerOwnershipMode(function_decl.return_ownership),
             .register_count = function_decl.register_count,
@@ -270,6 +280,31 @@ pub fn compileProgram(allocator: std.mem.Allocator, program: ir_pkg.Program, mod
         .enums = try enums.toOwnedSlice(),
         .functions = try functions.toOwnedSlice(),
         .entry_function_id = entry_function_id,
+    };
+}
+
+/// Builds a metadata-only bytecode function for a foreign (`@FFI.Extern`)
+/// declaration. The function carries no instructions; the VM looks up its
+/// `foreign`/`param_types`/`return_type` to drive a LibFFI dispatch.
+fn externStub(allocator: std.mem.Allocator, function_decl: ir_pkg.Function) !bytecode.Function {
+    return .{
+        .id = function_decl.id,
+        .name = function_decl.name,
+        .param_count = @as(u32, @intCast(function_decl.param_types.len)),
+        .param_ownership = try lowerOwnershipModes(allocator, function_decl.param_ownership),
+        .param_types = try lowerLocalTypes(allocator, function_decl.param_types),
+        .return_type = lowerTypeRef(function_decl.return_type),
+        .return_ownership = lowerOwnershipMode(function_decl.return_ownership),
+        .is_extern = true,
+        .foreign = if (function_decl.foreign) |foreign| .{
+            .library_name = foreign.library_name,
+            .symbol_name = foreign.symbol_name,
+            .calling_convention = foreign.calling_convention,
+        } else null,
+        .register_count = 0,
+        .local_count = 0,
+        .local_types = &.{},
+        .instructions = &.{},
     };
 }
 

@@ -1,0 +1,30 @@
+schema_version = 1
+
+[libffi]
+version = "3.5.2"
+source_tag = "v3.5.2"
+source_commit = "250e4b8d55918f3f0380608e7f2f6cfe02a8c3ee"
+release_tag = "v3.5.2"
+repository = "kira-lang-com/libffi"
+
+[build]
+build_type = "Release"
+targets_to_build = "host"
+
+[target.x86_64-windows-msvc]
+runner = "windows-2025"
+platform = "windows"
+archive = "zip"
+asset = "libffi-3.5.2-windows-x64-shared.zip"
+
+[target.x86_64-linux-gnu]
+runner = "ubuntu-24.04"
+platform = "linux"
+archive = "tar.gz"
+asset = "libffi-3.5.2-linux-x86_64-shared.tar.gz"
+
+[target.aarch64-macos]
+runner = "macos-15"
+platform = "macos"
+archive = "tar.gz"
+asset = "libffi-3.5.2-macos-arm64-shared.tar.gz"

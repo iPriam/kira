@@ -21,6 +21,7 @@ pub const test_roots = [_][]const u8{
     "kira_package_manager",
     "kira_program_graph",
     "kira_native_lib_definition",
+    "kira_dynamic_ffi",
     "kira_build",
     "kira_instruments",
     "kira_cli",

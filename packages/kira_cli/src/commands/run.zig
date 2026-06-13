@@ -95,7 +95,21 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
             const graphics_quit_after = graphicsQuitAfterFrames(parsed.quit_after_ns);
             var env_restore = try ScopedEnv.setInt(allocator, "KIRA_GRAPHICS_QUIT_AFTER_FRAMES", graphics_quit_after);
             defer env_restore.deinit();
-            vm.runMain(&module, stdout) catch |err| {
+            var ffi_dispatcher = vm_runtime.FfiDispatcher.init(runtime_allocator, &module);
+            defer ffi_dispatcher.deinit();
+            for (result.native_libraries) |library| {
+                try ffi_dispatcher.registerLibrary(library.name, library.artifact_path);
+            }
+            vm.runMainWithHooks(&module, stdout, .{
+                .context = &ffi_dispatcher,
+                .call_native = vm_runtime.FfiDispatcher.hook,
+            }) catch |err| {
+                // A failed FFI dispatch records a precise message even when the
+                // error is not RuntimeFailure (e.g. an unsupported FFI type).
+                if (ffi_dispatcher.lastError()) |ffi_message| {
+                    try stderr.print("vm ffi failure: {s}\n", .{ffi_message});
+                    return error.CommandFailed;
+                }
                 if (err == error.RuntimeFailure) {
                     if (vm.lastError()) |message| {
                         try stderr.print("vm runtime failure: {s}\n", .{message});

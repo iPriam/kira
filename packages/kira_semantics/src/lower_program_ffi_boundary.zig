@@ -12,6 +12,10 @@ pub fn validateDirectFfiBoundary(
     function_headers: *const std.StringHashMapUnmanaged(shared.FunctionHeader),
 ) !void {
     if (declaration_header.execution == .native) return;
+    // The VM executes direct FFI through LibFFI (see kira_vm_runtime/src/vm_ffi.zig),
+    // so the @Native requirement is lifted for that target. Other backends still
+    // require an @Native boundary to marshal the call.
+    if (ctx.allow_runtime_direct_ffi) return;
 
     for (body) |statement| {
         if (findDirectFfiUseInStatement(statement, function_headers)) |use| {

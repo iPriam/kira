@@ -436,6 +436,7 @@ pub fn parseNativeLibManifest(allocator: std.mem.Allocator, text: []const u8) !N
             if (assignString(line, "mode")) |value| {
                 autobinding_bindings.mode = if (std.mem.eql(u8, value, "all_public")) .all_public else .listed;
             }
+            if (assignString(line, "profile")) |value| autobinding_bindings.profile = parseAutobindingProfile(value);
             if (std.mem.startsWith(u8, line, "functions")) autobinding_bindings.functions = try parseStringArray(allocator, (try splitKeyValue(line)).value);
             if (std.mem.startsWith(u8, line, "structs")) autobinding_bindings.structs = try parseStringArray(allocator, (try splitKeyValue(line)).value);
             if (std.mem.startsWith(u8, line, "callbacks")) autobinding_bindings.callbacks = try parseStringArray(allocator, (try splitKeyValue(line)).value);
@@ -838,6 +839,12 @@ fn parseAbi(value: []const u8) native.LibraryAbi {
     return .c;
 }
 
+fn parseAutobindingProfile(value: []const u8) native.AutobindingProfile {
+    if (std.mem.eql(u8, value, "vulkan")) return .vulkan;
+    if (std.mem.eql(u8, value, "directx12")) return .directx12;
+    return .generic;
+}
+
 test "parses project manifest dependencies" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -983,6 +990,7 @@ test "parses native library manifest" {
         \\headers = ["vendor/sokol/sokol_gfx.h"]
         \\
         \\[bindings]
+        \\profile = "vulkan"
         \\functions = ["sg_setup"]
         \\structs = ["sg_desc"]
         \\
@@ -999,6 +1007,7 @@ test "parses native library manifest" {
     try std.testing.expectEqualStrings("vendor/sokol/sokol_gfx.h", manifest.library.headers.entrypoint.?);
     try std.testing.expectEqualStrings("sokol_gfx", manifest.library.autobinding.?.module_name);
     try std.testing.expectEqualStrings("vendor/sokol/sokol_gfx_impl.c", manifest.library.build.sources[0]);
+    try std.testing.expectEqual(native.AutobindingProfile.vulkan, manifest.library.autobinding.?.bindings.profile);
     try std.testing.expectEqualStrings("sg_setup", manifest.library.autobinding.?.bindings.functions[0]);
     try std.testing.expectEqual(@as(usize, 1), manifest.library.targets.len);
     try std.testing.expectEqualStrings("generated/native/sokol_gfx/x86_64-linux-gnu/libsokol_gfx.a", manifest.library.targets[0].static_lib.?);

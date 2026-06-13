@@ -129,6 +129,24 @@ test "parses native callback state builtins" {
     try std.testing.expect(entry_statements[1].let_stmt.value.?.* == .native_user_data);
 }
 
+test "parses hex integer literals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    var diags = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
+    const program = try parseSource(
+        allocator,
+        "@Main function entry() { let low: Int = 0x1f; let high: Int = 0XCAFE; return; }",
+        &diags,
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), diags.items.len);
+    const statements = program.functions[0].body.?.statements;
+    try std.testing.expectEqual(@as(i64, 31), statements[0].let_stmt.value.?.integer.value);
+    try std.testing.expectEqual(@as(i64, 51966), statements[1].let_stmt.value.?.integer.value);
+}
+
 test "parses enum declarations generic type references and match statements" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

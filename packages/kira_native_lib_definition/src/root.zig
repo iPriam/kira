@@ -10,6 +10,7 @@ pub const LibraryAbi = @import("native_library.zig").LibraryAbi;
 pub const HeaderSpec = @import("native_library.zig").HeaderSpec;
 pub const AutobindingSpec = @import("native_library.zig").AutobindingSpec;
 pub const AutobindingMode = @import("native_library.zig").AutobindingMode;
+pub const AutobindingProfile = @import("native_library.zig").AutobindingProfile;
 pub const AutobindingBindings = @import("native_library.zig").AutobindingBindings;
 pub const BuildRecipe = @import("native_library.zig").BuildRecipe;
 pub const TargetSpec = @import("native_library.zig").TargetSpec;

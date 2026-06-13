@@ -1,0 +1,11 @@
+backends = ["vm"]
+
+[phases.check]
+result = "pass"
+
+[phases.build]
+result = "pass"
+
+[phases.run]
+result = "pass"
+stdout = "42\n25\n15\n"

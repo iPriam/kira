@@ -1,6 +1,7 @@
 const std = @import("std");
 const instruction = @import("instruction.zig");
 const ownership_mode = @import("ownership_mode.zig");
+const runtime_abi = @import("kira_runtime_abi");
 
 pub const Module = struct {
     constructs: []Construct = &.{},
@@ -32,13 +33,28 @@ pub const Module = struct {
     }
 };
 
+/// Foreign (FFI) binding for an `@FFI.Extern` function. Present only on
+/// `is_extern` functions; lets the VM dispatch the call through LibFFI without
+/// LLVM-compiled trampolines (see kira_vm_runtime/src/vm_ffi.zig).
+pub const ForeignFunction = struct {
+    library_name: []const u8,
+    symbol_name: []const u8,
+    calling_convention: runtime_abi.CallingConvention = .c,
+};
+
 pub const Function = struct {
     id: u32,
     name: []const u8,
     param_count: u32 = 0,
     param_ownership: []const OwnershipMode = &.{},
+    /// Declared parameter types. Carries the precise FFI primitive name (e.g.
+    /// "I32", "U64", "F32", "CString", "RawPtr") in `TypeRef.name`, which the
+    /// VM FFI dispatcher maps to LibFFI argument types.
+    param_types: []const instruction.TypeRef = &.{},
     return_type: instruction.TypeRef = .{ .kind = .void },
     return_ownership: OwnershipMode = .owned,
+    is_extern: bool = false,
+    foreign: ?ForeignFunction = null,
     register_count: u32,
     local_count: u32,
     local_types: []instruction.TypeRef = &.{},

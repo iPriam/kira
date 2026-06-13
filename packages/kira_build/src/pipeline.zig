@@ -189,13 +189,22 @@ fn graphDiagnosticStage(diags: []const diagnostics.Diagnostic) FrontendStage {
 }
 
 pub fn compileFileToIr(allocator: std.mem.Allocator, path: []const u8) !FrontendPipelineResult {
-    return compileFileToIrForTarget(allocator, path, null);
+    return compileFileToIrForTargetWithFfi(allocator, path, null, false);
 }
 
 pub fn compileFileToIrForTarget(
     allocator: std.mem.Allocator,
     path: []const u8,
     target_selector: ?native.TargetSelector,
+) !FrontendPipelineResult {
+    return compileFileToIrForTargetWithFfi(allocator, path, target_selector, false);
+}
+
+pub fn compileFileToIrForTargetWithFfi(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    target_selector: ?native.TargetSelector,
+    allow_runtime_direct_ffi: bool,
 ) !FrontendPipelineResult {
     const total_start = nowNs();
     const parsed = try parseFileForTarget(allocator, path, target_selector);
@@ -217,6 +226,28 @@ pub fn compileFileToIrForTarget(
     const module_map = try package_manager.loadModuleMapForSource(allocator, parsed.source.path);
     timingPrint("[kira:timing] loadModuleMapForSource path={s} owners={d} ns={d}\n", .{ parsed.source.path, module_map.owners.len, elapsedNs(module_map_start) });
 
+    // Declared dependency packages must have their native artifacts and generated
+    // `bindings/` sources ready before the program graph collects package files,
+    // otherwise freshly generated bindings only become visible one run later.
+    const native_import_start = nowNs();
+    const native_libraries = ffi_support.prepareDeclaredNativeLibrariesForTarget(allocator, parsed.native_libraries, module_map, target_selector) catch |err| switch (err) {
+        error.UnsupportedTarget => {
+            const display_target = try displayTargetSelector(allocator, target_selector);
+            try diags.append(try diag_messages.ToolchainMessages.unsupportedNativeLibraryTarget(allocator, display_target));
+            timingPrint("[kira:timing] prepareDeclaredNativeLibraries path={s} native_libraries=0 ns={d}\n", .{ parsed.source.path, elapsedNs(native_import_start) });
+            timingPrint("[kira:timing] compileFileToIr.total path={s} ns={d}\n", .{ path, elapsedNs(total_start) });
+            return .{
+                .source = parsed.source,
+                .diagnostics = try diags.toOwnedSlice(),
+                .ir_program = null,
+                .native_libraries = &.{},
+                .failure_stage = .backend_prepare,
+            };
+        },
+        else => return err,
+    };
+    timingPrint("[kira:timing] prepareDeclaredNativeLibraries path={s} native_libraries={d} ns={d}\n", .{ parsed.source.path, native_libraries.len, elapsedNs(native_import_start) });
+
     const graph_start = nowNs();
     const merged_program = program_graph.buildProgramGraph(allocator, parsed.source.path, parsed.program.?, module_map, &diags) catch |err| switch (err) {
         error.DiagnosticsEmitted => {
@@ -234,25 +265,6 @@ pub fn compileFileToIrForTarget(
         else => return err,
     };
     timingPrint("[kira:timing] buildProgramGraph path={s} imports={d} declarations={d} functions={d} ns={d}\n", .{ parsed.source.path, merged_program.imports.len, merged_program.decls.len, merged_program.functions.len, elapsedNs(graph_start) });
-
-    const native_import_start = nowNs();
-    const native_libraries = ffi_support.prepareImportedNativeLibrariesForTarget(allocator, parsed.native_libraries, merged_program.imports, module_map, target_selector) catch |err| switch (err) {
-        error.UnsupportedTarget => {
-            const display_target = try displayTargetSelector(allocator, target_selector);
-            try diags.append(try diag_messages.ToolchainMessages.unsupportedNativeLibraryTarget(allocator, display_target));
-            timingPrint("[kira:timing] prepareImportedNativeLibraries path={s} imports={d} native_libraries=0 ns={d}\n", .{ parsed.source.path, merged_program.imports.len, elapsedNs(native_import_start) });
-            timingPrint("[kira:timing] compileFileToIr.total path={s} ns={d}\n", .{ path, elapsedNs(total_start) });
-            return .{
-                .source = parsed.source,
-                .diagnostics = try diags.toOwnedSlice(),
-                .ir_program = null,
-                .native_libraries = &.{},
-                .failure_stage = .backend_prepare,
-            };
-        },
-        else => return err,
-    };
-    timingPrint("[kira:timing] prepareImportedNativeLibraries path={s} imports={d} native_libraries={d} ns={d}\n", .{ parsed.source.path, merged_program.imports.len, native_libraries.len, elapsedNs(native_import_start) });
 
     const validate_start = nowNs();
     validateImports(allocator, &parsed.source, merged_program, &diags) catch |err| switch (err) {
@@ -272,7 +284,7 @@ pub fn compileFileToIrForTarget(
     timingPrint("[kira:timing] validateImports path={s} imports={d} ns={d}\n", .{ parsed.source.path, merged_program.imports.len, elapsedNs(validate_start) });
 
     const semantics_start = nowNs();
-    const hir = semantics.analyzeWithImports(allocator, merged_program, .{}, &diags) catch |err| switch (err) {
+    const hir = semantics.analyzeWithImportsOptions(allocator, merged_program, .{}, .{ .allow_runtime_direct_ffi = allow_runtime_direct_ffi }, &diags) catch |err| switch (err) {
         error.DiagnosticsEmitted => {
             timingPrint("[kira:timing] semantics.analyzeWithImports path={s} ns={d}\n", .{ parsed.source.path, elapsedNs(semantics_start) });
             timingPrint("[kira:timing] compileFileToIr.total path={s} ns={d}\n", .{ path, elapsedNs(total_start) });
@@ -347,7 +359,7 @@ pub fn compileFileForBackendWithSelector(
         try llvm_backend.emscripten.selector(allocator)
     else
         target_selector;
-    const frontend = try compileFileToIrForTarget(allocator, path, effective_selector);
+    const frontend = try compileFileToIrForTargetWithFfi(allocator, path, effective_selector, target == .vm);
     if (frontend.ir_program == null or diagnostics.hasErrors(frontend.diagnostics)) {
         timingPrint("[kira:timing] compileFileForBackend.total path={s} backend={s} ns={d}\n", .{ path, @tagName(target), elapsedNs(total_start) });
         return .{
@@ -763,6 +775,16 @@ pub fn checkFile(allocator: std.mem.Allocator, path: []const u8) !CheckPipelineR
 
 pub fn checkPackageRoot(allocator: std.mem.Allocator, source_root: []const u8) !CheckPipelineResult {
     const total_start = nowNs();
+
+    // Generate this package's native artifacts and `bindings/` sources before
+    // collecting module files so a library check sees its own fresh bindings.
+    const native_prepare_start = nowNs();
+    const own_libraries = ffi_support.prepareNativeLibrariesForTarget(allocator, source_root, &.{}, null) catch |err| switch (err) {
+        error.UnsupportedTarget => &.{},
+        else => return err,
+    };
+    timingPrint("[kira:timing] prepareNativeLibraries source_root={s} native_libraries={d} ns={d}\n", .{ source_root, own_libraries.len, elapsedNs(native_prepare_start) });
+
     const collect_start = nowNs();
     const module_files = try program_graph.collectPackageModuleFiles(allocator, source_root);
     const collect_ns = elapsedNs(collect_start);
@@ -788,6 +810,16 @@ pub fn checkPackageRoot(allocator: std.mem.Allocator, source_root: []const u8) !
     const module_map = try package_manager.loadModuleMapForSource(allocator, module_files[0]);
     const imported_package_files = try countImportedPackageFiles(allocator, module_map);
     timingPrint("[kira:timing] loadModuleMapForSource package_root={s} owners={d} imported_package_files={d} ns={d}\n", .{ module_files[0], module_map.owners.len, imported_package_files, elapsedNs(module_map_start) });
+
+    // Dependency packages contribute generated `bindings/` sources to the graph,
+    // so their native preparation must complete before the graph is built.
+    const declared_prepare_start = nowNs();
+    const declared_libraries = ffi_support.prepareDeclaredNativeLibrariesForTarget(allocator, own_libraries, module_map, null) catch |err| switch (err) {
+        error.UnsupportedTarget => own_libraries,
+        else => return err,
+    };
+    timingPrint("[kira:timing] prepareDeclaredNativeLibraries package_root={s} native_libraries={d} ns={d}\n", .{ module_files[0], declared_libraries.len, elapsedNs(declared_prepare_start) });
+
     const graph_start = nowNs();
     const merged_program = program_graph.buildProgramGraphFromFiles(allocator, module_files, module_map, &diags) catch |err| switch (err) {
         error.DiagnosticsEmitted => {

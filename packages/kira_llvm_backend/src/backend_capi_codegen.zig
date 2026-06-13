@@ -368,7 +368,7 @@ pub const FunctionCodegen = struct {
         const api = self.api;
         const operand_kind = if (v.lhs < self.register_types.len) self.register_types[v.lhs].kind else ir.ValueType.Kind.integer;
         if (operand_kind == .float) {
-            const pred: c_uint = switch (v.op) {
+            const pred: c_int = switch (v.op) {
                 .equal => llvm.c.LLVMRealOEQ,
                 .not_equal => llvm.c.LLVMRealONE,
                 .less => llvm.c.LLVMRealOLT,
@@ -380,7 +380,7 @@ pub const FunctionCodegen = struct {
         }
         // Integer / boolean / pointer comparison. Equality is valid for all;
         // ordering uses signed predicates (Kira Int is signed).
-        const pred: c_uint = switch (v.op) {
+        const pred: c_int = switch (v.op) {
             .equal => llvm.c.LLVMIntEQ,
             .not_equal => llvm.c.LLVMIntNE,
             .less => llvm.c.LLVMIntSLT,

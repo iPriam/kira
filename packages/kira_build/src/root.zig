@@ -3,10 +3,15 @@ pub const BuildArtifactOutcome = @import("build_system.zig").BuildArtifactOutcom
 pub const BuildFailureKind = @import("build_system.zig").BuildFailureKind;
 pub const LlvmMetadata = @import("llvm_metadata.zig").Metadata;
 pub const LlvmFetchPlan = @import("fetch_llvm.zig").FetchPlan;
+pub const LibffiMetadata = @import("libffi_metadata.zig").Metadata;
+pub const LibffiFetchPlan = @import("fetch_libffi.zig").FetchPlan;
 pub const executableExtension = @import("build_system.zig").executableExtension;
 pub const fetchLlvm = @import("fetch_llvm.zig").run;
 pub const fetchLlvmInstallArchive = @import("fetch_llvm.zig").installArchive;
 pub const fetchLlvmPrintCiMetadataJson = @import("fetch_llvm.zig").printCiMetadataJson;
+pub const fetchLibffi = @import("fetch_libffi.zig").run;
+pub const fetchLibffiInstallArchive = @import("fetch_libffi.zig").installArchive;
+pub const fetchLibffiPrintCiMetadataJson = @import("fetch_libffi.zig").printCiMetadataJson;
 pub const sharedLibraryExtension = @import("build_system.zig").sharedLibraryExtension;
 pub const CheckPipelineResult = @import("pipeline.zig").CheckPipelineResult;
 pub const CacheStatus = @import("pipeline.zig").CacheStatus;
@@ -47,6 +52,7 @@ pub const buildShaderFile = @import("shader/pipeline.zig").buildFile;
 pub const buildShaderFileForTarget = @import("shader/pipeline.zig").buildFileForTarget;
 
 test {
+    _ = @import("ffi_autobind_tests.zig");
     _ = @import("pipeline_tests.zig");
     _ = @import("wasm_emscripten_tests.zig");
 }

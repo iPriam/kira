@@ -284,11 +284,18 @@ pub const Vm = struct {
     }
 
     pub fn runMain(self: *Vm, module: *const bytecode.Module, writer: anytype) anyerror!void {
+        return self.runMainWithHooks(module, writer, .{});
+    }
+
+    /// Runs the module entrypoint with caller-provided hooks. `kira run` uses
+    /// this to install the LibFFI dispatcher (vm_ffi.zig) so direct FFI calls
+    /// execute in the pure VM without LLVM-compiled trampolines.
+    pub fn runMainWithHooks(self: *Vm, module: *const bytecode.Module, writer: anytype, hooks: Hooks) anyerror!void {
         const entry_function_id = module.entry_function_id orelse {
             self.rememberError("bytecode module has no runtime entrypoint");
             return error.RuntimeFailure;
         };
-        const result = try self.runFunctionById(module, entry_function_id, &.{}, writer, .{});
+        const result = try self.runFunctionById(module, entry_function_id, &.{}, writer, hooks);
         self.heap.dropValue(result);
     }
 

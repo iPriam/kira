@@ -1,0 +1,31 @@
+[library]
+name = "kira_runtime"
+link_mode = "dynamic"
+abi = "c"
+
+[headers]
+entrypoint = "DynamicFfi/kira_dynamic_ffi.h"
+include_dirs = ["DynamicFfi"]
+
+[autobinding]
+module = "dynamicffi"
+output = "../bindings/dynamicffi/dynamicffi.kira"
+headers = ["DynamicFfi/kira_dynamic_ffi.h"]
+
+[bindings]
+mode = "all_public"
+
+[target.x86_64-windows-msvc]
+dynamic_lib = ""
+
+[target.x86_64-linux-gnu]
+dynamic_lib = ""
+
+[target.aarch64-macos-none]
+dynamic_lib = ""
+
+[target.aarch64-ios-none]
+dynamic_lib = ""
+
+[target.aarch64-ios-simulator]
+dynamic_lib = ""

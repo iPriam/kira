@@ -1,4 +1,6 @@
-backends = ["hybrid", "vm"]
+# The VM now executes direct FFI through LibFFI (see tests/pass/run/ffi_dynamic_vm),
+# so the @Native requirement only applies to the native-compiling backends.
+backends = ["hybrid", "llvm"]
 
 [phases.check]
 result = "fail"

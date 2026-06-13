@@ -1,40 +1,56 @@
-const builtin = @import("builtin");
 const std = @import("std");
 const native = @import("kira_native_lib_definition");
-const llvm_backend = @import("kira_llvm_backend");
+const fs_helpers = @import("ffi_autobind_fs.zig");
+const autobind_cache = @import("ffi_autobind_cache.zig");
+const clang_dump = @import("ffi_autobind_clang.zig");
+const json_helpers = @import("ffi_autobind_json.zig");
+const macros = @import("ffi_autobind_macros.zig");
+const names = @import("ffi_autobind_names.zig");
+const profiles = @import("ffi_autobind_profiles.zig");
+const type_text = @import("ffi_autobind_type_text.zig");
+const dynamic_runtime = @import("ffi_autobind_dynamic_runtime.zig");
 
-const CParam = struct {
+const objectString = json_helpers.objectString;
+const objectBool = json_helpers.objectBool;
+const objectQualType = json_helpers.objectQualType;
+const cloneStrings = json_helpers.cloneStrings;
+const sanitizeIdentifier = names.sanitizeIdentifier;
+const cleanCType = type_text.cleanCType;
+const isUnsupportedAnonymousAggregate = type_text.isUnsupportedAnonymousAggregate;
+const trimPointerTarget = type_text.trimPointerTarget;
+
+pub const CParam = struct {
     name: []const u8,
     qual_type: []const u8,
 };
 
-const CFunction = struct {
+pub const CFunction = struct {
     name: []const u8,
     return_type: []const u8,
     params: []const CParam,
 };
 
-const CField = struct {
+pub const CField = struct {
     name: []const u8,
     qual_type: []const u8,
 };
 
-const CEnumItem = struct {
+pub const CEnumItem = struct {
     name: []const u8,
     value: i64,
 };
 
-const CEnum = struct {
+pub const CEnum = struct {
     name: []const u8,
     items: []const CEnumItem,
 };
 
-const CRecord = struct {
+pub const CRecord = struct {
     name: []const u8,
     fields: []const CField,
 };
 
-const CTypedef = struct {
+pub const CTypedef = struct {
     name: []const u8,
     qual_type: []const u8,
     kind: Kind,
@@ -50,41 +66,44 @@ const CTypedef = struct {
     };
 };
 
-const CMacro = struct {
-    name: []const u8,
-    value: []const u8,
-};
-
 const ArrayTypeInfo = struct {
     name: []const u8,
     element_type: []const u8,
     count: usize,
 };
 
-const AstIndex = struct {
+pub const AstIndex = struct {
     functions: std.StringHashMapUnmanaged(CFunction) = .{},
     enums: std.StringHashMapUnmanaged(CEnum) = .{},
     records: std.StringHashMapUnmanaged(CRecord) = .{},
     typedefs: std.StringHashMapUnmanaged(CTypedef) = .{},
-    macros: std.StringHashMapUnmanaged(CMacro) = .{},
+    macros: std.StringHashMapUnmanaged(macros.CMacro) = .{},
 };
 
 pub fn ensureGeneratedBindings(allocator: std.mem.Allocator, library: native.ResolvedNativeLibrary) !void {
     const autobinding = library.autobinding orelse return;
-    const cache_key = try autobindingCacheKey(allocator, library, autobinding);
+    const cache_key = try autobind_cache.cacheKey(allocator, library, autobinding);
     defer allocator.free(cache_key);
-    if (try generatedBindingsAreCurrent(allocator, autobinding.output_path, cache_key)) return;
+    if (try autobind_cache.bindingsAreCurrent(allocator, autobinding.output_path, cache_key)) return;
 
-    const ast_json = try runClangAstDump(allocator, library, autobinding.headers);
-    defer allocator.free(ast_json);
-
-    var index = try buildAstIndex(allocator, ast_json, autobinding.headers);
-    try collectMacroConstants(allocator, autobinding.headers, &index);
+    var index = AstIndex{};
+    if (profiles.astDumpFilters(autobinding.bindings.profile)) |filters| {
+        for (filters) |filter| {
+            const ast_json = try clang_dump.dumpAst(allocator, library, autobinding.headers, filter);
+            defer allocator.free(ast_json);
+            try buildAstIndexInto(allocator, ast_json, autobinding.headers, &index);
+        }
+    } else {
+        const ast_json = try clang_dump.dumpAst(allocator, library, autobinding.headers, null);
+        defer allocator.free(ast_json);
+        try buildAstIndexInto(allocator, ast_json, autobinding.headers, &index);
+    }
+    try macros.collectConstants(allocator, autobinding.headers, &index.macros);
     const rendered = try renderBindings(allocator, library, autobinding.bindings, index);
     defer allocator.free(rendered);
 
     const maybe_dir = std.fs.path.dirname(autobinding.output_path) orelse ".";
-    try makePath(maybe_dir);
+    try fs_helpers.makePath(maybe_dir);
     if (std.fs.path.isAbsolute(autobinding.output_path)) {
         const file = try std.Io.Dir.createFileAbsolute(std.Options.debug_io, autobinding.output_path, .{ .truncate = true });
         defer file.close(std.Options.debug_io);
@@ -95,215 +114,78 @@ pub fn ensureGeneratedBindings(allocator: std.mem.Allocator, library: native.Res
             .data = rendered,
         });
     }
-    try writeAutobindingCacheKey(autobinding.output_path, cache_key);
-}
-
-fn generatedBindingsAreCurrent(allocator: std.mem.Allocator, output_path: []const u8, cache_key: []const u8) !bool {
-    if (!fileExists(output_path)) return false;
-    const key_path = try autobindingKeyPath(allocator, output_path);
-    defer allocator.free(key_path);
-    const existing = readFileAlloc(key_path, allocator, 4096) catch return false;
-    defer allocator.free(existing);
-    return std.mem.eql(u8, existing, cache_key);
-}
-
-fn writeAutobindingCacheKey(output_path: []const u8, cache_key: []const u8) !void {
-    const key_path = try autobindingKeyPath(std.heap.page_allocator, output_path);
-    defer std.heap.page_allocator.free(key_path);
-    try writeFile(key_path, cache_key);
-}
-
-fn autobindingKeyPath(allocator: std.mem.Allocator, output_path: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(allocator, "{s}.key", .{output_path});
-}
-
-fn autobindingCacheKey(
-    allocator: std.mem.Allocator,
-    library: native.ResolvedNativeLibrary,
-    autobinding: native.AutobindingSpec,
-) ![]const u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("kira-autobinding-v1\n");
-    try hashCompilerIdentity(allocator, &hasher);
-    try hashString(&hasher, "library", library.name);
-    try hashPath(allocator, &hasher, "artifact", library.artifact_path);
-    try hashString(&hasher, "module", autobinding.module_name);
-    try hashPath(allocator, &hasher, "output", autobinding.output_path);
-    try hashString(&hasher, "mode", @tagName(autobinding.bindings.mode));
-    for (library.headers.include_dirs) |path| try hashPath(allocator, &hasher, "include_dir", path);
-    for (library.headers.defines) |define| try hashString(&hasher, "header_define", define);
-    for (library.build.defines) |define| try hashString(&hasher, "build_define", define);
-    for (autobinding.bindings.functions) |name| try hashString(&hasher, "function", name);
-    for (autobinding.bindings.structs) |name| try hashString(&hasher, "struct", name);
-    for (autobinding.bindings.callbacks) |name| try hashString(&hasher, "callback", name);
-
-    if (library.manifest_path) |path| try hashFileIfPresent(allocator, &hasher, "manifest", path);
-    if (library.headers.entrypoint) |path| try hashFileIfPresent(allocator, &hasher, "entrypoint", path);
-    for (autobinding.headers) |path| try hashFileIfPresent(allocator, &hasher, "header", path);
-    for (library.headers.include_dirs) |dir| try hashHeaderDirectory(allocator, &hasher, dir);
-
-    var digest: [32]u8 = undefined;
-    hasher.final(&digest);
-    return hexDigest(allocator, &digest);
-}
-
-fn hashCompilerIdentity(allocator: std.mem.Allocator, hasher: anytype) !void {
-    const exe_path = std.process.executablePathAlloc(std.Options.debug_io, allocator) catch return;
-    defer allocator.free(exe_path);
-    try hashString(hasher, "compiler_path", exe_path);
-    const stat = statFile(exe_path) catch return;
-    var buffer: [128]u8 = undefined;
-    const text = try std.fmt.bufPrint(&buffer, "size={d};mtime={d}", .{ stat.size, stat.mtime });
-    try hashString(hasher, "compiler_stat", text);
-}
-
-fn hashHeaderDirectory(allocator: std.mem.Allocator, hasher: anytype, dir_path: []const u8) !void {
-    var files = std.array_list.Managed([]const u8).init(allocator);
-    try collectHeaderFiles(allocator, dir_path, &files);
-    std.mem.sort([]const u8, files.items, {}, struct {
-        fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
-            return std.mem.lessThan(u8, lhs, rhs);
-        }
-    }.lessThan);
-    for (files.items) |path| try hashFileIfPresent(allocator, hasher, "include_header", path);
-}
-
-fn collectHeaderFiles(allocator: std.mem.Allocator, dir_path: []const u8, files: *std.array_list.Managed([]const u8)) !void {
-    var dir = if (std.fs.path.isAbsolute(dir_path))
-        std.Io.Dir.openDirAbsolute(std.Options.debug_io, dir_path, .{ .iterate = true }) catch return
-    else
-        std.Io.Dir.cwd().openDir(std.Options.debug_io, dir_path, .{ .iterate = true }) catch return;
-    defer dir.close(std.Options.debug_io);
-
-    var iterator = dir.iterate();
-    while (try iterator.next(std.Options.debug_io)) |entry| {
-        if (entry.kind == .directory) {
-            const child = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
-            try collectHeaderFiles(allocator, child, files);
-            continue;
-        }
-        if (entry.kind != .file or !isHeaderFile(entry.name)) continue;
-        try files.append(try std.fs.path.join(allocator, &.{ dir_path, entry.name }));
-    }
-}
-
-fn isHeaderFile(path: []const u8) bool {
-    const ext = std.fs.path.extension(path);
-    return std.mem.eql(u8, ext, ".h") or
-        std.mem.eql(u8, ext, ".hh") or
-        std.mem.eql(u8, ext, ".hpp") or
-        std.mem.eql(u8, ext, ".hxx");
-}
-
-fn hashFileIfPresent(allocator: std.mem.Allocator, hasher: anytype, label: []const u8, path: []const u8) !void {
-    const bytes = readFileAlloc(path, allocator, 64 * 1024 * 1024) catch return;
-    defer allocator.free(bytes);
-    try hashPath(allocator, hasher, label, path);
-    hasher.update(bytes);
-    hasher.update("\n");
-}
-
-fn hashPath(allocator: std.mem.Allocator, hasher: anytype, label: []const u8, path: []const u8) !void {
-    const canonical = try canonicalPathOrOriginal(allocator, path);
-    defer allocator.free(canonical);
-    try hashString(hasher, label, canonical);
-}
-
-fn canonicalPathOrOriginal(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
-    return std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, path, allocator) catch allocator.dupe(u8, path);
-}
-
-fn hashString(hasher: anytype, label: []const u8, value: []const u8) !void {
-    hasher.update(label);
-    hasher.update("=");
-    hasher.update(value);
-    hasher.update("\n");
-}
-
-fn hexDigest(allocator: std.mem.Allocator, digest: []const u8) ![]const u8 {
-    const alphabet = "0123456789abcdef";
-    const out = try allocator.alloc(u8, digest.len * 2 + 1);
-    for (digest, 0..) |byte, index| {
-        out[index * 2] = alphabet[byte >> 4];
-        out[index * 2 + 1] = alphabet[byte & 0x0f];
-    }
-    out[digest.len * 2] = '\n';
-    return out;
-}
-
-fn runClangAstDump(allocator: std.mem.Allocator, library: native.ResolvedNativeLibrary, headers: []const []const u8) ![]const u8 {
-    const llvm_toolchain = try llvm_backend.LlvmToolchain.discover(allocator);
-    const clang_path = try llvm_toolchain.clangPath(allocator);
-    defer allocator.free(clang_path);
-    var environ_map = try llvm_toolchain.processEnvironMap(allocator);
-    defer environ_map.deinit();
-
-    var argv = std.array_list.Managed([]const u8).init(allocator);
-    try argv.appendSlice(&.{ clang_path, "-Xclang", "-ast-dump=json", "-fsyntax-only" });
-    try llvm_backend.clangDriver.appendHostClangDriverArgs(allocator, &argv);
-
-    if (library.headers.entrypoint) |entrypoint| {
-        try argv.append(entrypoint);
-    } else if (headers.len > 0) {
-        try argv.append(headers[0]);
-    } else {
-        return error.MissingAutobindingHeader;
-    }
-    for (library.headers.include_dirs) |include_dir| {
-        try argv.append(try std.fmt.allocPrint(allocator, "-I{s}", .{include_dir}));
-    }
-    for (library.headers.defines) |define| {
-        try argv.append(try std.fmt.allocPrint(allocator, "-D{s}", .{define}));
-    }
-
-    const process_environ = inheritedProcessEnviron();
-    var io_impl: std.Io.Threaded = .init(std.heap.smp_allocator, .{ .environ = process_environ });
-    defer io_impl.deinit();
-    const result = try std.process.run(allocator, io_impl.io(), .{
-        .argv = argv.items,
-        .expand_arg0 = .expand,
-        .environ_map = &environ_map,
-        .stdout_limit = .limited(16 * 1024 * 1024),
-        .stderr_limit = .limited(16 * 1024 * 1024),
-    });
-    defer allocator.free(result.stderr);
-
-    if (result.term != .exited or result.term.exited != 0) {
-        allocator.free(result.stdout);
-        return error.ClangAutobindingFailed;
-    }
-
-    return result.stdout;
-}
-
-fn inheritedProcessEnviron() std.process.Environ {
-    return switch (builtin.os.tag) {
-        .windows => .{ .block = .global },
-        .wasi, .emscripten, .freestanding, .other => .empty,
-        else => .{ .block = .{ .slice = currentPosixEnvironBlock() } },
-    };
-}
-
-fn currentPosixEnvironBlock() [:null]const ?[*:0]const u8 {
-    if (!builtin.link_libc) return &.{};
-
-    const environ = std.c.environ;
-    var len: usize = 0;
-    while (environ[len] != null) : (len += 1) {}
-    return environ[0..len :null];
+    try autobind_cache.writeKey(autobinding.output_path, cache_key);
 }
 
 fn buildAstIndex(allocator: std.mem.Allocator, ast_json: []const u8, headers: []const []const u8) !AstIndex {
-    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, ast_json, .{
+    var index = AstIndex{};
+    try buildAstIndexInto(allocator, ast_json, headers, &index);
+    return index;
+}
+
+fn buildAstIndexInto(allocator: std.mem.Allocator, ast_json: []const u8, headers: []const []const u8, index: *AstIndex) !void {
+    if (std.mem.trim(u8, ast_json, " \t\r\n").len == 0) return;
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, ast_json, .{
         .ignore_unknown_fields = true,
-    });
+    }) catch |err| switch (err) {
+        error.SyntaxError => return buildFilteredAstIndexInto(allocator, ast_json, headers, index),
+        else => return err,
+    };
     defer parsed.deinit();
 
     const normalized_headers = try normalizePaths(allocator, headers);
 
-    var index = AstIndex{};
-    try walkNode(allocator, parsed.value, normalized_headers, &index);
-    return index;
+    try walkNode(allocator, parsed.value, normalized_headers, index);
+}
+
+fn buildFilteredAstIndexInto(allocator: std.mem.Allocator, ast_json: []const u8, headers: []const []const u8, index: *AstIndex) !void {
+    const normalized_headers = try normalizePaths(allocator, headers);
+    var start: ?usize = null;
+    var depth: usize = 0;
+    var in_string = false;
+    var escaped = false;
+    var saw_document = false;
+
+    for (ast_json, 0..) |ch, offset| {
+        if (start == null) {
+            if (std.ascii.isWhitespace(ch)) continue;
+            if (ch != '{') return error.SyntaxError;
+            start = offset;
+            depth = 1;
+            continue;
+        }
+
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if (ch == '"') {
+            in_string = true;
+        } else if (ch == '{') {
+            depth += 1;
+        } else if (ch == '}') {
+            depth -= 1;
+            if (depth == 0) {
+                const slice = ast_json[start.? .. offset + 1];
+                var parsed = try std.json.parseFromSlice(std.json.Value, allocator, slice, .{
+                    .ignore_unknown_fields = true,
+                });
+                defer parsed.deinit();
+                try walkNode(allocator, parsed.value, normalized_headers, index);
+                start = null;
+                saw_document = true;
+            }
+        }
+    }
+
+    if (start != null or !saw_document) return error.SyntaxError;
 }
 
 fn walkNode(
@@ -379,11 +261,11 @@ fn extractFunctionDecl(allocator: std.mem.Allocator, object: std.json.ObjectMap)
     var params = std.array_list.Managed(CParam).init(allocator);
     if (object.get("inner")) |inner| {
         if (inner == .array) {
-            for (inner.array.items) |child| {
+            for (inner.array.items, 0..) |child, index| {
                 if (child != .object) continue;
                 if (!std.mem.eql(u8, objectString(child.object, "kind") orelse "", "ParmVarDecl")) continue;
                 try params.append(.{
-                    .name = try allocator.dupe(u8, objectString(child.object, "name") orelse "arg"),
+                    .name = try namedOrIndexed(allocator, objectString(child.object, "name"), "arg", index),
                     .qual_type = try allocator.dupe(u8, objectQualType(child.object) orelse return error.InvalidAutobindingDecl),
                 });
             }
@@ -401,11 +283,11 @@ fn extractRecordDecl(allocator: std.mem.Allocator, object: std.json.ObjectMap) !
     var fields = std.array_list.Managed(CField).init(allocator);
     if (object.get("inner")) |inner| {
         if (inner == .array) {
-            for (inner.array.items) |child| {
+            for (inner.array.items, 0..) |child, index| {
                 if (child != .object) continue;
                 if (!std.mem.eql(u8, objectString(child.object, "kind") orelse "", "FieldDecl")) continue;
                 try fields.append(.{
-                    .name = try allocator.dupe(u8, objectString(child.object, "name") orelse return error.InvalidAutobindingDecl),
+                    .name = try namedOrIndexed(allocator, objectString(child.object, "name"), "field", index),
                     .qual_type = try allocator.dupe(u8, objectQualType(child.object) orelse return error.InvalidAutobindingDecl),
                 });
             }
@@ -416,6 +298,13 @@ fn extractRecordDecl(allocator: std.mem.Allocator, object: std.json.ObjectMap) !
         .name = try allocator.dupe(u8, objectString(object, "name") orelse return error.InvalidAutobindingDecl),
         .fields = try fields.toOwnedSlice(),
     };
+}
+
+fn namedOrIndexed(allocator: std.mem.Allocator, maybe_name: ?[]const u8, prefix: []const u8, index: usize) ![]const u8 {
+    if (maybe_name) |name| {
+        if (name.len > 0) return allocator.dupe(u8, name);
+    }
+    return std.fmt.allocPrint(allocator, "{s}{d}", .{ prefix, index });
 }
 
 fn extractEnumDecl(allocator: std.mem.Allocator, object: std.json.ObjectMap) !CEnum {
@@ -504,7 +393,7 @@ fn findFunctionProtoInValue(value: std.json.Value) ?FunctionProto {
     return null;
 }
 
-fn renderBindings(
+pub fn renderBindings(
     allocator: std.mem.Allocator,
     library: native.ResolvedNativeLibrary,
     spec: native.AutobindingBindings,
@@ -519,6 +408,8 @@ fn renderBindings(
     var required_inline_callbacks = std.StringHashMapUnmanaged(CTypedef){};
 
     var function_names = std.array_list.Managed([]const u8).init(allocator);
+    const profile_selection = profiles.selection(spec.profile);
+    try appendProfileSelection(allocator, profile_selection, &function_names, &required_structs, &required_callbacks, &index);
     if (spec.mode == .all_public) {
         var function_iter = index.functions.iterator();
         while (function_iter.next()) |entry| try function_names.append(entry.key_ptr.*);
@@ -604,6 +495,9 @@ fn renderBindings(
     var writer = &output.writer;
 
     try writer.print("// generated by kira FFI autobinding for {s}\n\n", .{library.name});
+    if (profiles.dynamicLoaderName(spec.profile)) |loader_name| {
+        try dynamic_runtime.writeBindings(writer, loader_name);
+    }
 
     for (sorted_aliases) |name| {
         const typedef_decl = index.typedefs.get(name) orelse return error.MissingAutobindType;
@@ -613,7 +507,10 @@ fn renderBindings(
         try writeAliasType(allocator, writer, typedef_decl);
     }
 
-    _ = sorted_enums;
+    for (sorted_enums) |name| {
+        const enum_decl = index.enums.get(name) orelse return error.MissingAutobindType;
+        try writeEnumConstantsType(writer, enum_decl);
+    }
 
     for (sorted_callbacks) |name| {
         const typedef_decl = index.typedefs.get(name) orelse return error.MissingAutobindCallback;
@@ -654,6 +551,27 @@ fn renderBindings(
     return output.toOwnedSlice();
 }
 
+fn appendProfileSelection(
+    allocator: std.mem.Allocator,
+    selection: profiles.ProfileSelection,
+    function_names: *std.array_list.Managed([]const u8),
+    required_structs: *std.StringHashMapUnmanaged(void),
+    required_callbacks: *std.StringHashMapUnmanaged(void),
+    index: *const AstIndex,
+) !void {
+    for (selection.functions) |name| {
+        if (index.functions.contains(name)) try function_names.append(name);
+    }
+    for (selection.structs) |name| {
+        if (resolveRecord(name, index) != null or index.typedefs.contains(name)) {
+            try required_structs.put(allocator, name, {});
+        }
+    }
+    for (selection.callbacks) |name| {
+        if (index.typedefs.contains(name)) try required_callbacks.put(allocator, name, {});
+    }
+}
+
 fn writeAliasType(allocator: std.mem.Allocator, writer: anytype, typedef_decl: CTypedef) !void {
     switch (typedef_decl.kind) {
         .callback => return writeCallbackType(allocator, writer, typedef_decl),
@@ -679,10 +597,13 @@ fn writeSyntheticArrayType(allocator: std.mem.Allocator, writer: anytype, array_
     try writer.print("struct {s} {{}}\n\n", .{array_info.name});
 }
 
-fn writeEnumType(allocator: std.mem.Allocator, writer: anytype, enum_decl: CEnum) !void {
-    _ = allocator;
-    try writer.writeAll("@FFI.Alias { target: U32; }\n");
-    try writer.print("struct {s} {{}}\n\n", .{enum_decl.name});
+fn writeEnumConstantsType(writer: anytype, enum_decl: CEnum) !void {
+    if (enum_decl.items.len == 0) return;
+    try writer.print("struct {s}Constants {{\n", .{sanitizeIdentifier(enum_decl.name)});
+    for (enum_decl.items) |item| {
+        try writer.print("    let {s}: I64 = {d}\n", .{ sanitizeIdentifier(item.name), item.value });
+    }
+    try writer.writeAll("}\n\n");
 }
 
 fn writeCallbackType(allocator: std.mem.Allocator, writer: anytype, typedef_decl: CTypedef) !void {
@@ -715,10 +636,14 @@ fn writeStructType(
 }
 
 fn writeMacroConstantsType(writer: anytype, library_name: []const u8, macro_names: []const []const u8, index: *const AstIndex) !void {
-    _ = writer;
-    _ = library_name;
-    _ = macro_names;
-    _ = index;
+    if (macro_names.len == 0) return;
+    try writer.print("struct {s}Constants {{\n", .{sanitizeIdentifier(library_name)});
+    for (macro_names) |name| {
+        const macro = index.macros.get(name) orelse continue;
+        const ty = if (std.mem.startsWith(u8, macro.value, "-")) "I64" else "U64";
+        try writer.print("    let {s}: {s} = {s}\n", .{ sanitizeIdentifier(macro.name), ty, macro.value });
+    }
+    try writer.writeAll("}\n\n");
 }
 
 fn writeFunctionDecl(allocator: std.mem.Allocator, writer: anytype, library_name: []const u8, function_decl: CFunction, index: *const AstIndex) !void {
@@ -829,14 +754,15 @@ const ParsedType = union(enum) {
 };
 
 fn kiraTypeName(allocator: std.mem.Allocator, qual_type: []const u8, maybe_index: ?*const AstIndex) ![]const u8 {
-    const text = std.mem.trim(u8, qual_type, " ");
+    const text = cleanCType(qual_type);
+    if (isUnsupportedAnonymousAggregate(text)) return allocator.dupe(u8, "RawPtr");
     if (primitiveKiraTypeName(text)) |name| return allocator.dupe(u8, name);
     if (std.mem.startsWith(u8, text, "enum ")) return allocator.dupe(u8, "U32");
     if (maybe_index) |index| {
         if (index.enums.contains(text)) return allocator.dupe(u8, "U32");
         if (index.typedefs.get(text)) |typedef_decl| {
             if (typedef_decl.kind == .alias) {
-                const target = std.mem.trim(u8, typedef_decl.qual_type, " ");
+                const target = cleanCType(typedef_decl.qual_type);
                 if (primitiveKiraTypeName(target)) |name| return allocator.dupe(u8, name);
                 if (std.mem.startsWith(u8, target, "enum ")) return allocator.dupe(u8, "U32");
                 if (index.enums.contains(target)) return allocator.dupe(u8, "U32");
@@ -856,7 +782,8 @@ fn kiraTypeName(allocator: std.mem.Allocator, qual_type: []const u8, maybe_index
 }
 
 fn parseCType(allocator: std.mem.Allocator, qual_type: []const u8, index: *const AstIndex) !ParsedType {
-    const text = std.mem.trim(u8, qual_type, " ");
+    const text = cleanCType(qual_type);
+    if (isUnsupportedAnonymousAggregate(text)) return .plain;
     if (isPrimitiveType(text)) return .plain;
     if (try parseArrayType(allocator, text)) |array_info| return .{ .array_name = array_info };
     if (std.mem.endsWith(u8, text, "*")) {
@@ -870,7 +797,7 @@ fn parseCType(allocator: std.mem.Allocator, qual_type: []const u8, index: *const
     if (std.mem.startsWith(u8, text, "struct ")) {
         return .{ .struct_name = try allocator.dupe(u8, text["struct ".len..]) };
     }
-    if (index.enums.contains(text)) return .plain;
+    if (index.enums.contains(text)) return .{ .enum_name = try allocator.dupe(u8, text) };
     if (index.typedefs.get(text)) |typedef_decl| {
         return switch (typedef_decl.kind) {
             .callback => .{ .callback_name = try allocator.dupe(u8, text) },
@@ -905,7 +832,7 @@ fn typedefResolvesToSelfRecordOrEnum(name: []const u8, typedef_decl: CTypedef, i
         const target = trimStructPrefix(typedef_decl.qual_type);
         if (std.mem.eql(u8, target, name)) return true;
     }
-    const trimmed = std.mem.trim(u8, typedef_decl.qual_type, " ");
+    const trimmed = cleanCType(typedef_decl.qual_type);
     if (std.mem.startsWith(u8, trimmed, "enum ")) {
         const target = trimmed["enum ".len..];
         if (std.mem.eql(u8, target, name) and index.enums.contains(name)) return true;
@@ -915,24 +842,14 @@ fn typedefResolvesToSelfRecordOrEnum(name: []const u8, typedef_decl: CTypedef, i
 
 fn typedefResolvesToPrimitiveAlias(typedef_decl: CTypedef) bool {
     if (typedef_decl.kind != .alias) return false;
-    return primitiveKiraTypeName(std.mem.trim(u8, typedef_decl.qual_type, " ")) != null;
+    return primitiveKiraTypeName(cleanCType(typedef_decl.qual_type)) != null;
 }
 
 fn typedefResolvesToEnumAlias(typedef_decl: CTypedef, index: *const AstIndex) bool {
     if (typedef_decl.kind != .alias) return false;
-    const target = std.mem.trim(u8, typedef_decl.qual_type, " ");
+    const target = cleanCType(typedef_decl.qual_type);
     if (std.mem.startsWith(u8, target, "enum ")) return true;
     return index.enums.contains(target);
-}
-
-fn trimPointerTarget(text: []const u8) []const u8 {
-    var trimmed = std.mem.trim(u8, text, " ");
-    while (std.mem.endsWith(u8, trimmed, "*")) {
-        trimmed = std.mem.trimEnd(u8, trimmed[0 .. trimmed.len - 1], " ");
-    }
-    if (std.mem.startsWith(u8, trimmed, "const ")) trimmed = trimmed["const ".len..];
-    if (std.mem.startsWith(u8, trimmed, "struct ")) trimmed = trimmed["struct ".len..];
-    return trimmed;
 }
 
 fn isPrimitiveType(text: []const u8) bool {
@@ -984,6 +901,8 @@ fn primitiveKiraTypeName(text: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, text, "unsigned short") or std.mem.eql(u8, text, "unsigned short int") or std.mem.eql(u8, text, "uint16_t")) return "U16";
     if (std.mem.eql(u8, text, "int") or std.mem.eql(u8, text, "int32_t")) return "I32";
     if (std.mem.eql(u8, text, "unsigned int") or std.mem.eql(u8, text, "uint32_t")) return "U32";
+    if (std.mem.eql(u8, text, "long")) return "I32";
+    if (std.mem.eql(u8, text, "unsigned long")) return "U32";
     if (std.mem.eql(u8, text, "long long") or std.mem.eql(u8, text, "int64_t") or std.mem.eql(u8, text, "intptr_t") or std.mem.eql(u8, text, "ptrdiff_t")) return "I64";
     if (std.mem.eql(u8, text, "unsigned long long") or std.mem.eql(u8, text, "uint64_t") or std.mem.eql(u8, text, "uintptr_t") or std.mem.eql(u8, text, "size_t")) return "U64";
     if (std.mem.eql(u8, text, "float")) return "F32";
@@ -1003,7 +922,7 @@ fn parseInlineCallbackFromQualType(
     callback_name: []const u8,
     qual_type: []const u8,
 ) !?CTypedef {
-    const text = std.mem.trim(u8, qual_type, " ");
+    const text = cleanCType(qual_type);
     const marker = std.mem.indexOf(u8, text, "(*)") orelse return null;
     const result_text = std.mem.trimEnd(u8, text[0..marker], " ");
     const params_start = std.mem.indexOfScalarPos(u8, text, marker + 3, '(') orelse return null;
@@ -1053,31 +972,6 @@ fn syntheticArrayTypeName(allocator: std.mem.Allocator, element_text: []const u8
     return std.fmt.allocPrint(allocator, "{s}_array_{d}", .{ base_name, count });
 }
 
-fn sanitizeIdentifier(name: []const u8) []const u8 {
-    if (std.mem.eql(u8, name, "type")) return "type_value";
-    if (std.mem.eql(u8, name, "class")) return "class_value";
-    if (std.mem.eql(u8, name, "struct")) return "struct_value";
-    if (std.mem.eql(u8, name, "annotation")) return "annotation_value";
-    if (std.mem.eql(u8, name, "capability")) return "capability_value";
-    if (std.mem.eql(u8, name, "function")) return "function_value";
-    if (std.mem.eql(u8, name, "generated")) return "generated_value";
-    if (std.mem.eql(u8, name, "overridable")) return "overridable_value";
-    if (std.mem.eql(u8, name, "targets")) return "targets_value";
-    if (std.mem.eql(u8, name, "uses")) return "uses_value";
-    if (std.mem.eql(u8, name, "extends")) return "extends_value";
-    if (std.mem.eql(u8, name, "override")) return "override_value";
-    if (std.mem.eql(u8, name, "return")) return "return_value";
-    if (std.mem.eql(u8, name, "switch")) return "switch_value";
-    if (std.mem.eql(u8, name, "for")) return "for_value";
-    if (std.mem.eql(u8, name, "if")) return "if_value";
-    if (std.mem.eql(u8, name, "else")) return "else_value";
-    if (std.mem.eql(u8, name, "let")) return "let_value";
-    if (std.mem.eql(u8, name, "var")) return "var_value";
-    if (std.mem.eql(u8, name, "import")) return "import_value";
-    if (std.mem.eql(u8, name, "construct")) return "construct_value";
-    return name;
-}
-
 fn sortStrings(values: [][]const u8) void {
     std.mem.sort([]const u8, values, {}, struct {
         fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
@@ -1092,152 +986,4 @@ fn sortedMapKeys(allocator: std.mem.Allocator, map: anytype) ![]const []const u8
     while (iter.next()) |entry| try keys.append(entry.key_ptr.*);
     sortStrings(keys.items);
     return keys.toOwnedSlice();
-}
-
-fn collectMacroConstants(allocator: std.mem.Allocator, headers: []const []const u8, index: *AstIndex) !void {
-    for (headers) |header_path| {
-        const text = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, header_path, allocator, .limited(4 * 1024 * 1024));
-        var lines = std.mem.splitScalar(u8, text, '\n');
-        while (lines.next()) |raw_line| {
-            const line = std.mem.trim(u8, raw_line, " \t\r");
-            if (!std.mem.startsWith(u8, line, "#define ")) continue;
-            const rest = std.mem.trimStart(u8, line["#define ".len..], " \t");
-            var parts = std.mem.tokenizeAny(u8, rest, " \t");
-            const name = parts.next() orelse continue;
-            if (name.len == 0 or name[0] == '_' or std.mem.indexOfScalar(u8, name, '(') != null) continue;
-            const value_text = std.mem.trim(u8, rest[name.len..], " \t");
-            if (normalizeIntegerMacroValue(allocator, value_text)) |value| {
-                try index.macros.put(allocator, try allocator.dupe(u8, name), .{
-                    .name = try allocator.dupe(u8, name),
-                    .value = value,
-                });
-            }
-        }
-    }
-}
-
-fn normalizeIntegerMacroValue(allocator: std.mem.Allocator, text: []const u8) ?[]const u8 {
-    if (text.len == 0) return null;
-    const trimmed = std.mem.trim(u8, text, " \t()");
-    if (trimmed.len == 0) return null;
-    var end = trimmed.len;
-    while (end > 0) {
-        const ch = trimmed[end - 1];
-        if (ch == 'u' or ch == 'U' or ch == 'l' or ch == 'L') {
-            end -= 1;
-            continue;
-        }
-        break;
-    }
-    const candidate = trimmed[0..end];
-    const signed_value = std.fmt.parseInt(i64, candidate, 0) catch {
-        const unsigned_value = std.fmt.parseInt(u64, candidate, 0) catch return null;
-        return std.fmt.allocPrint(allocator, "{d}", .{unsigned_value}) catch null;
-    };
-    return std.fmt.allocPrint(allocator, "{d}", .{signed_value}) catch null;
-}
-
-fn objectString(object: std.json.ObjectMap, key: []const u8) ?[]const u8 {
-    const value = object.get(key) orelse return null;
-    if (value != .string) return null;
-    return value.string;
-}
-
-fn objectBool(object: std.json.ObjectMap, key: []const u8) bool {
-    const value = object.get(key) orelse return false;
-    return value == .bool and value.bool;
-}
-
-fn objectQualType(object: std.json.ObjectMap) ?[]const u8 {
-    const type_value = object.get("type") orelse return null;
-    if (type_value != .object) return null;
-    return objectString(type_value.object, "qualType");
-}
-
-fn cloneStrings(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
-    var list = std.array_list.Managed([]const u8).init(allocator);
-    for (values) |value| {
-        try list.append(try allocator.dupe(u8, value));
-    }
-    return list.toOwnedSlice();
-}
-
-fn trimComment(line: []const u8) []const u8 {
-    const trimmed = std.mem.trim(u8, line, " \t\r");
-    if (trimmed.len == 0 or trimmed[0] == '#') return "";
-    return trimmed;
-}
-
-fn assignString(line: []const u8, key: []const u8) ?[]const u8 {
-    if (!std.mem.startsWith(u8, line, key)) return null;
-    const equal_index = std.mem.indexOfScalar(u8, line, '=') orelse return null;
-    return unquote(std.mem.trim(u8, line[equal_index + 1 ..], " \t"));
-}
-
-fn unquote(value: []const u8) []const u8 {
-    if (value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"') {
-        return value[1 .. value.len - 1];
-    }
-    return value;
-}
-
-fn parseStringArray(allocator: std.mem.Allocator, line: []const u8) ![]const []const u8 {
-    const start = std.mem.indexOfScalar(u8, line, '[') orelse return error.InvalidManifest;
-    const end = std.mem.lastIndexOfScalar(u8, line, ']') orelse return error.InvalidManifest;
-    var items = std.array_list.Managed([]const u8).init(allocator);
-    var parts = std.mem.splitScalar(u8, line[start + 1 .. end], ',');
-    while (parts.next()) |part| {
-        const trimmed = std.mem.trim(u8, part, " \t");
-        if (trimmed.len == 0) continue;
-        try items.append(try allocator.dupe(u8, unquote(trimmed)));
-    }
-    return items.toOwnedSlice();
-}
-
-fn makePath(path: []const u8) !void {
-    try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, path);
-}
-
-fn fileExists(path: []const u8) bool {
-    var file = if (std.fs.path.isAbsolute(path))
-        std.Io.Dir.openFileAbsolute(std.Options.debug_io, path, .{}) catch return false
-    else
-        std.Io.Dir.cwd().openFile(std.Options.debug_io, path, .{}) catch return false;
-    file.close(std.Options.debug_io);
-    return true;
-}
-
-fn readFileAlloc(path: []const u8, allocator: std.mem.Allocator, limit: usize) ![]u8 {
-    if (std.fs.path.isAbsolute(path)) {
-        const parent_path = std.fs.path.dirname(path) orelse return error.FileNotFound;
-        const base_name = std.fs.path.basename(path);
-        var parent_dir = try std.Io.Dir.openDirAbsolute(std.Options.debug_io, parent_path, .{});
-        defer parent_dir.close(std.Options.debug_io);
-        return parent_dir.readFileAlloc(std.Options.debug_io, base_name, allocator, .limited(limit));
-    }
-    return std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, path, allocator, .limited(limit));
-}
-
-fn writeFile(path: []const u8, data: []const u8) !void {
-    const maybe_dir = std.fs.path.dirname(path) orelse ".";
-    try makePath(maybe_dir);
-    if (std.fs.path.isAbsolute(path)) {
-        const file = try std.Io.Dir.createFileAbsolute(std.Options.debug_io, path, .{ .truncate = true });
-        defer file.close(std.Options.debug_io);
-        try file.writeStreamingAll(std.Options.debug_io, data);
-        return;
-    }
-    try std.Io.Dir.cwd().writeFile(std.Options.debug_io, .{
-        .sub_path = path,
-        .data = data,
-    });
-}
-
-fn statFile(path: []const u8) !std.Io.File.Stat {
-    var file = if (std.fs.path.isAbsolute(path))
-        try std.Io.Dir.openFileAbsolute(std.Options.debug_io, path, .{})
-    else
-        try std.Io.Dir.cwd().openFile(std.Options.debug_io, path, .{});
-    defer file.close(std.Options.debug_io);
-    return file.stat(std.Options.debug_io);
 }

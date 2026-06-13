@@ -1,0 +1,12 @@
+import ffimath as ffimath
+
+@Main
+function main() {
+    let sum: I32 = ffimath.kira_ffi_add(40, 2)
+    print(sum)
+    let scaled: F64 = ffimath.kira_ffi_scale(10.0)
+    print(scaled)
+    let length: I64 = ffimath.kira_ffi_strlen("hello, kira ffi")
+    print(length)
+    return
+}

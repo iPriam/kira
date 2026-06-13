@@ -89,6 +89,10 @@ pub fn ownerForSourcePath(
         const canonical_root = try paths.canonicalizeSourceRoot(allocator, owner.source_root);
         defer allocator.free(canonical_root);
         if (paths.pathWithinRoot(canonical_source, canonical_root)) return owner;
+
+        const bindings_root = try paths.bindingsRootForSourceRoot(allocator, canonical_root);
+        defer allocator.free(bindings_root);
+        if (paths.pathWithinRoot(canonical_source, bindings_root)) return owner;
     }
     return null;
 }

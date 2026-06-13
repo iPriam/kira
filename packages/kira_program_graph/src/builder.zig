@@ -307,8 +307,12 @@ pub fn collectPackageModuleFiles(allocator: std.mem.Allocator, source_root: []co
     defer allocator.free(canonical_root);
 
     var files = std.array_list.Managed([]u8).init(allocator);
-    if (!paths.dirExists(canonical_root)) return files.toOwnedSlice();
-    try appendPackageModuleFiles(allocator, &files, canonical_root);
+    if (paths.dirExists(canonical_root)) try appendPackageModuleFiles(allocator, &files, canonical_root);
+
+    const bindings_root = try paths.bindingsRootForSourceRoot(allocator, canonical_root);
+    defer allocator.free(bindings_root);
+    if (paths.dirExists(bindings_root)) try appendPackageModuleFiles(allocator, &files, bindings_root);
+
     sortPaths(files.items);
     return files.toOwnedSlice();
 }
@@ -350,11 +354,11 @@ fn validateSourcePathAllowed(
         .title = "source file outside canonical source root",
         .message = try std.fmt.allocPrint(
             allocator,
-            "Kira source file `{s}` is outside the allowed `app/` source roots for this package graph.",
+            "Kira source file `{s}` is outside the allowed `app/` and `bindings/` source roots for this package graph.",
             .{source_path},
         ),
         .notes = try allowedRootNotes(allocator, module_map),
-        .help = "Move the Kira source file under the package `app/` directory or import a declared dependency through its `app/` source root.",
+        .help = "Move the Kira source file under the package `app/` directory (or `bindings/` for generated FFI bindings), or import a declared dependency through its `app/` source root.",
     });
     return error.DiagnosticsEmitted;
 }

@@ -70,6 +70,34 @@ pub fn prepareImportedNativeLibraries(
     return prepareImportedNativeLibrariesForTarget(allocator, existing, imports, module_map, null);
 }
 
+/// Prepare native libraries (artifacts + generated bindings) for every package the
+/// module map declares, not just packages named by parsed imports. This must run
+/// before the program graph is built so freshly generated `bindings/` sources are
+/// part of the same compilation instead of appearing one run later.
+pub fn prepareDeclaredNativeLibrariesForTarget(
+    allocator: std.mem.Allocator,
+    existing: []const native.ResolvedNativeLibrary,
+    module_map: package_manager.ModuleMap,
+    explicit_selector: ?native.TargetSelector,
+) ![]const native.ResolvedNativeLibrary {
+    const selector = try resolvedTargetSelector(allocator, explicit_selector);
+    var libraries = std.array_list.Managed(native.ResolvedNativeLibrary).init(allocator);
+    var seen = std.StringHashMap(void).init(allocator);
+    var visited_packages = std.StringHashMap(void).init(allocator);
+
+    for (existing) |library| {
+        try libraries.append(library);
+        try seen.put(try artifactIdentity(allocator, library), {});
+    }
+
+    for (module_map.owners) |owner| {
+        const package_root = std.fs.path.dirname(owner.source_root) orelse continue;
+        try appendNativeLibrariesFromPackageRootRecursive(allocator, selector, package_root, module_map, &visited_packages, &seen, &libraries);
+    }
+
+    return libraries.toOwnedSlice();
+}
+
 pub fn prepareImportedNativeLibrariesForTarget(
     allocator: std.mem.Allocator,
     existing: []const native.ResolvedNativeLibrary,
@@ -84,7 +112,7 @@ pub fn prepareImportedNativeLibrariesForTarget(
 
     for (existing) |library| {
         try libraries.append(library);
-        try seen.put(try artifactIdentity(allocator, library.artifact_path), {});
+        try seen.put(try artifactIdentity(allocator, library), {});
     }
 
     for (imports) |import_decl| {
@@ -105,7 +133,7 @@ fn appendNativeLibrariesFromPackageRootRecursive(
     seen: *std.StringHashMap(void),
     libraries: *std.array_list.Managed(native.ResolvedNativeLibrary),
 ) !void {
-    const package_key = try artifactIdentity(allocator, package_root);
+    const package_key = try packageIdentity(allocator, package_root);
     if (visited_packages.contains(package_key)) return;
     try visited_packages.put(package_key, {});
 
@@ -136,7 +164,7 @@ fn appendNativeLibrariesFromPackageRoot(
     const manifest_paths = try loadNativeManifestPathsFromProjectRoot(allocator, package_root);
     for (manifest_paths) |manifest_path| {
         var library = try resolver.resolveNativeManifestFile(allocator, manifest_path, selector);
-        const identity = try artifactIdentity(allocator, library.artifact_path);
+        const identity = try artifactIdentity(allocator, library);
         if (seen.contains(identity)) continue;
         const artifact_start = nowTimestamp();
         try ensureNativeArtifact(allocator, &library);
@@ -149,8 +177,15 @@ fn appendNativeLibrariesFromPackageRoot(
     }
 }
 
-fn artifactIdentity(allocator: std.mem.Allocator, artifact_path: []const u8) ![]const u8 {
-    return std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, artifact_path, allocator) catch allocator.dupe(u8, artifact_path);
+fn artifactIdentity(allocator: std.mem.Allocator, library: native.ResolvedNativeLibrary) ![]const u8 {
+    if (library.artifact_path.len == 0) {
+        return std.fmt.allocPrint(allocator, "runtime-dynamic:{s}:{s}", .{ library.manifest_path orelse "", library.name });
+    }
+    return std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, library.artifact_path, allocator) catch allocator.dupe(u8, library.artifact_path);
+}
+
+fn packageIdentity(allocator: std.mem.Allocator, package_root: []const u8) ![]const u8 {
+    return std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, package_root, allocator) catch allocator.dupe(u8, package_root);
 }
 
 fn loadProjectNativeManifestPaths(allocator: std.mem.Allocator, source_path: []const u8) ![]const []const u8 {
@@ -189,8 +224,10 @@ fn ensureNativeArtifact(allocator: std.mem.Allocator, library: *native.ResolvedN
     if (try nativeArtifactIsFresh(allocator, library.artifact_path, fingerprint_path, fingerprint)) {
         return;
     }
-    if (library.link_mode != .static) return error.UnsupportedNativeLibraryBuildMode;
-    try compileStaticLibraryViaClang(allocator, library);
+    switch (library.link_mode) {
+        .static => try compileStaticLibraryViaClang(allocator, library),
+        .dynamic => try compileSharedLibraryViaClang(allocator, library),
+    }
     try writeFile(fingerprint_path, fingerprint);
 }
 
@@ -352,18 +389,81 @@ fn compileStaticLibraryViaClang(allocator: std.mem.Allocator, library: *native.R
         }
     }
 
-    var bytes: [8]u8 = undefined;
-    std.Options.debug_io.random(&bytes);
-    const build_suffix = std.mem.readInt(u64, &bytes, .little);
+    const build_suffix = randomBuildSuffix();
     const staged_artifact_path = try stagedArtifactPath(allocator, library.artifact_path, build_suffix);
     defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, staged_artifact_path) catch {};
 
+    try compileSourcesToObjects(allocator, clang_path, target_triple, library.*, build_suffix, &object_paths);
+
+    var argv = std.array_list.Managed([]const u8).init(allocator);
+    try argv.appendSlice(&.{ llvm_ar_path, "rcs", staged_artifact_path });
+    try argv.appendSlice(object_paths.items);
+    try runCommand(allocator, argv.items);
+    try publishStagedArtifact(staged_artifact_path, library.artifact_path);
+}
+
+/// Compiles the library sources and links them into a shared library
+/// (`.dll`/`.so`/`.dylib`) the VM can `dlopen` for direct LibFFI dispatch.
+/// Exported symbols rely on `__declspec(dllexport)` (Windows) or default
+/// visibility (POSIX) in the sources.
+fn compileSharedLibraryViaClang(allocator: std.mem.Allocator, library: *native.ResolvedNativeLibrary) !void {
+    const llvm_toolchain = try llvm_backend.LlvmToolchain.discover(allocator);
+    const clang_path = (try llvm_backend.clangDriver.appleClangPathForSelector(allocator, library.target)) orelse try llvm_toolchain.clangPath(allocator);
+    defer allocator.free(clang_path);
+    const target_triple = try targetTriple(allocator, library.target);
+    defer allocator.free(target_triple);
+
+    var object_paths = std.array_list.Managed([]const u8).init(allocator);
+    defer {
+        for (object_paths.items) |path| {
+            std.Io.Dir.cwd().deleteFile(std.Options.debug_io, path) catch {};
+        }
+    }
+
+    const build_suffix = randomBuildSuffix();
+    const staged_artifact_path = try stagedArtifactPath(allocator, library.artifact_path, build_suffix);
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, staged_artifact_path) catch {};
+
+    try compileSourcesToObjects(allocator, clang_path, target_triple, library.*, build_suffix, &object_paths);
+
+    var argv = std.array_list.Managed([]const u8).init(allocator);
+    try argv.append(clang_path);
+    try llvm_backend.clangDriver.appendClangDriverArgs(allocator, &argv, library.target);
+    try argv.append("-shared");
+    try argv.appendSlice(&.{ "-o", staged_artifact_path });
+    try argv.appendSlice(object_paths.items);
+    if (isAppleOperatingSystem(library.target.operating_system)) {
+        for (library.headers.frameworks) |framework| try argv.appendSlice(&.{ "-framework", framework });
+        for (library.link.frameworks) |framework| try argv.appendSlice(&.{ "-framework", framework });
+    }
+    for (library.headers.system_libs) |system_lib| try argv.append(try std.fmt.allocPrint(allocator, "-l{s}", .{system_lib}));
+    for (library.link.system_libs) |system_lib| try argv.append(try std.fmt.allocPrint(allocator, "-l{s}", .{system_lib}));
+    try runCommand(allocator, argv.items);
+    try publishStagedArtifact(staged_artifact_path, library.artifact_path);
+}
+
+fn randomBuildSuffix() u64 {
+    var bytes: [8]u8 = undefined;
+    std.Options.debug_io.random(&bytes);
+    return std.mem.readInt(u64, &bytes, .little);
+}
+
+/// Compiles each declared source into an object file, appending the produced
+/// object paths (caller owns cleanup). Shared by the static and dynamic builds.
+fn compileSourcesToObjects(
+    allocator: std.mem.Allocator,
+    clang_path: []const u8,
+    target_triple: []const u8,
+    library: native.ResolvedNativeLibrary,
+    build_suffix: u64,
+    object_paths: *std.array_list.Managed([]const u8),
+) !void {
     for (library.build.sources, 0..) |source_path, index| {
         const object_path = try sourceObjectPath(allocator, library.artifact_path, index, build_suffix);
         try object_paths.append(object_path);
 
         var argv = std.array_list.Managed([]const u8).init(allocator);
-        try appendClangCompileCommand(&argv, clang_path, target_triple, library.*, source_path, object_path);
+        try appendClangCompileCommand(&argv, clang_path, target_triple, library, source_path, object_path);
         for (library.headers.include_dirs) |include_dir| {
             try argv.append(try std.fmt.allocPrint(allocator, "-I{s}", .{include_dir}));
         }
@@ -384,12 +484,6 @@ fn compileStaticLibraryViaClang(allocator: std.mem.Allocator, library: *native.R
         }
         try runCommand(allocator, argv.items);
     }
-
-    var argv = std.array_list.Managed([]const u8).init(allocator);
-    try argv.appendSlice(&.{ llvm_ar_path, "rcs", staged_artifact_path });
-    try argv.appendSlice(object_paths.items);
-    try runCommand(allocator, argv.items);
-    try publishStagedArtifact(staged_artifact_path, library.artifact_path);
 }
 
 fn appendClangCompileCommand(

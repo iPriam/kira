@@ -1,0 +1,20 @@
+[library]
+name = "ffimath"
+link_mode = "dynamic"
+abi = "c"
+
+[headers]
+entrypoint = "ffimath.h"
+include_dirs = ["."]
+
+[build]
+sources = ["ffimath.c"]
+
+[target.x86_64-windows-msvc]
+dynamic_lib = "../generated/native/x86_64-windows-msvc/ffimath.dll"
+
+[target.x86_64-linux-gnu]
+dynamic_lib = "../generated/native/x86_64-linux-gnu/libffimath.so"
+
+[target.aarch64-macos-none]
+dynamic_lib = "../generated/native/aarch64-macos/libffimath.dylib"

@@ -146,6 +146,31 @@ pub fn managedLlvmHome(
     return std.fs.path.join(allocator, &.{ root, host_key });
 }
 
+pub fn managedLibffiRoot(allocator: std.mem.Allocator) ![]u8 {
+    const root = try toolchainsRoot(allocator);
+    defer allocator.free(root);
+    return std.fs.path.join(allocator, &.{ root, "libffi" });
+}
+
+pub fn managedLibffiVersionRoot(
+    allocator: std.mem.Allocator,
+    libffi_version: []const u8,
+) ![]u8 {
+    const root = try managedLibffiRoot(allocator);
+    defer allocator.free(root);
+    return std.fs.path.join(allocator, &.{ root, libffi_version });
+}
+
+pub fn managedLibffiHome(
+    allocator: std.mem.Allocator,
+    libffi_version: []const u8,
+    host_key: []const u8,
+) ![]u8 {
+    const root = try managedLibffiVersionRoot(allocator, libffi_version);
+    defer allocator.free(root);
+    return std.fs.path.join(allocator, &.{ root, host_key });
+}
+
 pub fn executableName(allocator: std.mem.Allocator, base: []const u8) ![]u8 {
     if (@import("builtin").os.tag == .windows) {
         return std.fmt.allocPrint(allocator, "{s}.exe", .{base});
@@ -277,6 +302,15 @@ test "builds managed toolchain layout" {
     );
     defer std.testing.allocator.free(expected_llvm_suffix);
     try std.testing.expect(std.mem.endsWith(u8, llvm_home, expected_llvm_suffix));
+
+    const libffi_home = try managedLibffiHome(std.testing.allocator, "3.5.2", "x86_64-linux-gnu");
+    defer std.testing.allocator.free(libffi_home);
+    const expected_libffi_suffix = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ ".kira", "toolchains", "libffi", "3.5.2", "x86_64-linux-gnu" },
+    );
+    defer std.testing.allocator.free(expected_libffi_suffix);
+    try std.testing.expect(std.mem.endsWith(u8, libffi_home, expected_libffi_suffix));
 }
 
 fn pinnedLlvmVersionForTests(allocator: std.mem.Allocator) ![]u8 {

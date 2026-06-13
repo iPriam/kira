@@ -24,8 +24,15 @@ pub const AutobindingMode = enum {
     all_public,
 };
 
+pub const AutobindingProfile = enum {
+    generic,
+    vulkan,
+    directx12,
+};
+
 pub const AutobindingBindings = struct {
     mode: AutobindingMode = .listed,
+    profile: AutobindingProfile = .generic,
     functions: []const []const u8 = &.{},
     structs: []const []const u8 = &.{},
     callbacks: []const []const u8 = &.{},
