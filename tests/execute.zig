@@ -19,7 +19,48 @@ pub const JobReport = struct {
     failed: usize,
 };
 
-var process_state_mutex: std.atomic.Mutex = .unlocked;
+// Minimal spin reader-writer lock. This stdlib exposes only `std.atomic.Mutex`
+// (a spinlock) and an `Io`-bound `std.Io.RwLock`, neither of which fits a plain
+// shared/exclusive guard, so the corpus runner carries its own. State: 0 = free,
+// n>0 = n shared holders, -1 = one exclusive holder. Waiters yield rather than
+// busy-spin so a thread blocked on a multi-second native build does not pin a core.
+const RwLock = struct {
+    state: std.atomic.Value(i32) = .init(0),
+
+    fn lockShared(self: *RwLock) void {
+        while (true) {
+            const current = self.state.load(.monotonic);
+            if (current >= 0 and self.state.cmpxchgWeak(current, current + 1, .acquire, .monotonic) == null) return;
+            std.Thread.yield() catch std.atomic.spinLoopHint();
+        }
+    }
+
+    fn unlockShared(self: *RwLock) void {
+        _ = self.state.fetchSub(1, .release);
+    }
+
+    fn lock(self: *RwLock) void {
+        while (self.state.cmpxchgWeak(0, -1, .acquire, .monotonic) != null) {
+            std.Thread.yield() catch std.atomic.spinLoopHint();
+        }
+    }
+
+    fn unlock(self: *RwLock) void {
+        self.state.store(0, .release);
+    }
+};
+
+// Corpus jobs run on a worker pool. Every backend compiles through an in-process
+// `BuildSystem` that reads source and the build cache via cwd-relative paths, so all
+// jobs share one logical "process cwd" resource. Compilation never *changes* cwd, so
+// any number of build/check jobs may run concurrently — they take the shared (read)
+// side. The VM run phase is the lone exception: it `setCurrentDir`s to the project
+// root so FFI/native-lib resolution matches the native backends, which mutates the
+// process-global cwd and must therefore run exclusively (write side) against every
+// other thread's cwd-relative IO. The RwLock lets the expensive native (llvm/hybrid)
+// builds parallelize while keeping the brief VM cwd window serialized; before this the
+// whole job held one exclusive mutex, which serialized the entire 4-worker pool.
+var process_state_lock: RwLock = .{};
 
 pub fn runBackendJob(
     allocator: std.mem.Allocator,
@@ -27,9 +68,6 @@ pub fn runBackendJob(
     backend: discovery.Backend,
     options: Options,
 ) !JobReport {
-    while (!process_state_mutex.tryLock()) std.atomic.spinLoopHint();
-    defer process_state_mutex.unlock();
-
     var reporter = BufferedReporter.init(allocator);
     var system = build.BuildSystem.init(allocator);
     var profiles: [3]PhaseProfile = .{ .{}, .{}, .{} };
@@ -169,6 +207,11 @@ fn runCheckPhase(
     case: discovery.Case,
     backend: discovery.Backend,
 ) !PhaseActual {
+    // Shared (read) side: reads source/cache via cwd-relative paths but never
+    // mutates cwd, so any number of these run concurrently. See process_state_lock.
+    process_state_lock.lockShared();
+    defer process_state_lock.unlockShared();
+
     const start = nowTimestamp();
     const result = try system.checkForBackend(case.source_path, executionTarget(backend));
     return .{
@@ -191,6 +234,11 @@ fn runBuildPhase(
     case: discovery.Case,
     backend: discovery.Backend,
 ) !PhaseActual {
+    // Shared side held across the whole phase: makeTmpDir/cleanup and the build all
+    // touch cwd-relative paths without mutating cwd. See process_state_lock.
+    process_state_lock.lockShared();
+    defer process_state_lock.unlockShared();
+
     var tmp = try makeTmpDir(allocator);
     defer tmp.cleanup();
 
@@ -287,6 +335,15 @@ fn comparePhase(
 }
 
 fn runVmPhase(allocator: std.mem.Allocator, system: *build.BuildSystem, case: discovery.Case) !PhaseActual {
+    // The VM run is the lone phase that mutates process-global cwd (setCurrentDir to
+    // the project root, for FFI/native-lib parity with the native backends), so it
+    // holds the exclusive side of the lock for its whole body. That serializes VM runs
+    // against every other thread's cwd-relative IO while leaving cwd at the repo root
+    // for all of this phase's own setup (makeTmpDir, build, runtimeCwdForCase) until
+    // the explicit setCurrentDir below. See process_state_lock.
+    process_state_lock.lock();
+    defer process_state_lock.unlock();
+
     var tmp = try makeTmpDir(allocator);
     defer tmp.cleanup();
 
@@ -339,6 +396,12 @@ fn runVmPhase(allocator: std.mem.Allocator, system: *build.BuildSystem, case: di
 }
 
 fn runLlvmPhase(allocator: std.mem.Allocator, system: *build.BuildSystem, case: discovery.Case) !PhaseActual {
+    // Shared side held across the whole phase: the in-process build (IR-gen plus child
+    // clang/lld) and the child-process exe run all use cwd-relative or explicit-cwd
+    // paths without mutating cwd, so they parallelize freely. See process_state_lock.
+    process_state_lock.lockShared();
+    defer process_state_lock.unlockShared();
+
     var tmp = try makeTmpDir(allocator);
     defer tmp.cleanup();
 
@@ -391,6 +454,11 @@ fn runHybridPhase(
     case: discovery.Case,
     options: Options,
 ) !PhaseActual {
+    // Shared side held across the whole phase: build plus the child-process runner
+    // (explicit cwd) never mutate process cwd. See process_state_lock.
+    process_state_lock.lockShared();
+    defer process_state_lock.unlockShared();
+
     var tmp = try makeTmpDir(allocator);
     defer tmp.cleanup();
 
