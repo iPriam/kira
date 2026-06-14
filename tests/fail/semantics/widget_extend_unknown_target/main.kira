@@ -1,0 +1,11 @@
+// `extend` must target a known construct family.
+extend NoSuchConstruct {
+    function foo() -> Int {
+        return 0
+    }
+}
+
+@Main
+function main() {
+    return
+}

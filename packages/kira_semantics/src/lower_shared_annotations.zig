@@ -328,7 +328,9 @@ pub fn validateAnnotationPlacement(
             });
             return error.DiagnosticsEmitted;
         }
-        if (placement == .field_decl or placement == .content_section) {
+        if ((placement == .field_decl or placement == .content_section) and !header.compiler_builtin) {
+            // Compiler-builtin annotations (`@Content`, `@Required`, FFI markers) are part of the
+            // language surface, not a construct's user-declared `annotations { ... }` allow-list.
             if (construct_model) |construct_info| {
                 if (!containsAnnotationRule(construct_info.allowed_annotations, name)) {
                     try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{

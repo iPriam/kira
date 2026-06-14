@@ -104,6 +104,9 @@ pub fn registerGenericEnumInstantiations(ctx: *shared.Context, program: syntax.a
                 for (annotation_decl.parameters) |param| try registerTypeExpr(ctx, param.type_expr.*);
             },
             .capability_decl => {},
+            // Extension declarations contribute fluent modifiers, validated separately; they
+            // introduce no enums/types to pre-register here.
+            .extend_decl => {},
         }
     }
 }
@@ -134,6 +137,9 @@ fn registerTypeDecl(ctx: *shared.Context, type_decl: syntax.ast.TypeDecl) anyerr
             },
             .function_decl => |function_decl| try registerFunctionDecl(ctx, function_decl),
             .content_section => |content| try registerBuilderBlock(ctx, content.builder),
+            .properties_section => |properties| {
+                for (properties.entries) |entry| try registerExpr(ctx, entry.value);
+            },
             .lifecycle_hook => |hook| try registerBlock(ctx, hook.body),
             .named_rule => |rule| {
                 if (rule.type_expr) |type_expr| try registerTypeExpr(ctx, type_expr.*);
@@ -161,6 +167,11 @@ fn registerConstructDecl(ctx: *shared.Context, construct_decl: syntax.ast.Constr
                     for (signature.params) |param| if (param.type_expr) |type_expr| try registerTypeExpr(ctx, type_expr.*);
                     if (signature.return_type) |type_expr| try registerTypeExpr(ctx, type_expr.*);
                 },
+                .property_schema => |property| {
+                    if (property.type_expr) |type_expr| try registerTypeExpr(ctx, type_expr.*);
+                    if (property.default_value) |value| try registerExpr(ctx, value);
+                },
+                .content_channel, .content_directive, .content_projection => {},
                 .named_rule => |rule| {
                     if (rule.type_expr) |type_expr| try registerTypeExpr(ctx, type_expr.*);
                     if (rule.value) |value| try registerExpr(ctx, value);
@@ -181,6 +192,9 @@ fn registerConstructFormDecl(ctx: *shared.Context, form_decl: syntax.ast.Constru
             },
             .function_decl => |function_decl| try registerFunctionDecl(ctx, function_decl),
             .content_section => |content| try registerBuilderBlock(ctx, content.builder),
+            .properties_section => |properties| {
+                for (properties.entries) |entry| try registerExpr(ctx, entry.value);
+            },
             .lifecycle_hook => |hook| try registerBlock(ctx, hook.body),
             .named_rule => |rule| {
                 if (rule.type_expr) |type_expr| try registerTypeExpr(ctx, type_expr.*);
@@ -238,6 +252,10 @@ fn registerBlock(ctx: *shared.Context, block: syntax.ast.Block) anyerror!void {
                     try registerBlock(ctx, case_node.body);
                 }
                 if (node.default_block) |default_block| try registerBlock(ctx, default_block);
+            },
+            .attempt_stmt => |node| {
+                try registerBlock(ctx, .{ .statements = node.body, .span = node.span });
+                for (node.handlers) |handler| try registerBlock(ctx, handler.body);
             },
             .break_stmt, .continue_stmt => {},
         }
@@ -401,5 +419,6 @@ fn enumDefaultSpan(expr: syntax.ast.Expr) source_pkg.Span {
         .member => |node| node.span,
         .index => |node| node.span,
         .call => |node| node.span,
+        .try_expr => |node| node.span,
     };
 }

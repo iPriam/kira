@@ -44,6 +44,12 @@ pub const Parser = struct {
     pub const parseTypeDeclWithAnnotations = decl_impl.parseTypeDeclWithAnnotations;
     pub const parseConstructDeclWithAnnotations = decl_impl.parseConstructDeclWithAnnotations;
     pub const parseConstructSection = decl_impl.parseConstructSection;
+    pub const parseConstructContentSection = decl_impl.parseConstructContentSection;
+    pub const parseContentChannel = decl_impl.parseContentChannel;
+    pub const parseContentProjection = decl_impl.parseContentProjection;
+    pub const parseCountRange = decl_impl.parseCountRange;
+    pub const parsePropertySchemaField = decl_impl.parsePropertySchemaField;
+    pub const parseDeclPropertiesSection = decl_impl.parseDeclPropertiesSection;
     pub const parseAnnotationSpec = decl_impl.parseAnnotationSpec;
     pub const parseConstructFormDeclWithAnnotations = decl_impl.parseConstructFormDeclWithAnnotations;
     pub const parseConstructBody = decl_impl.parseConstructBody;
@@ -60,6 +66,7 @@ pub const Parser = struct {
     pub const finishWhileStatement = statement_impl.finishWhileStatement;
     pub const finishMatchStatement = statement_impl.finishMatchStatement;
     pub const finishSwitchStatement = statement_impl.finishSwitchStatement;
+    pub const finishAttemptStatement = statement_impl.finishAttemptStatement;
 
     pub const parseBuilderBlock = block_impl.parseBuilderBlock;
     pub const looksLikeCallbackBlock = block_impl.looksLikeCallbackBlock;
@@ -374,6 +381,7 @@ pub fn exprSpan(expr: syntax.ast.Expr) source_pkg.Span {
         .member => |node| node.span,
         .index => |node| node.span,
         .call => |node| node.span,
+        .try_expr => |node| node.span,
     };
 }
 
@@ -401,6 +409,7 @@ pub fn sectionKind(name: []const u8) syntax.ast.ConstructSectionKind {
     if (std.mem.eql(u8, name, "lifecycle")) return .lifecycle;
     if (std.mem.eql(u8, name, "builder")) return .builder;
     if (std.mem.eql(u8, name, "representation")) return .representation;
+    if (std.mem.eql(u8, name, "properties")) return .properties;
     return .custom;
 }
 
@@ -420,6 +429,10 @@ pub fn tokenDescription(kind: syntax.TokenKind) []const u8 {
         .kw_struct => "'struct'",
         .kw_type => "'type'",
         .kw_extends => "'extends'",
+        .kw_extend => "'extend'",
+        .kw_attempt => "'attempt'",
+        .kw_try => "'try'",
+        .kw_self_type => "'Self'",
         .kw_function => "'function'",
         .kw_generated => "'generated'",
         .kw_override => "'override'",
@@ -469,6 +482,7 @@ pub fn tokenDescription(kind: syntax.TokenKind) []const u8 {
         .slash => "'/'",
         .percent => "'%'",
         .dot => "'.'",
+        .dot_dot => "'..'",
         .less => "'<'",
         .less_equal => "'<='",
         .greater => "'>'",
@@ -553,7 +567,7 @@ test "parses imports functions and construct declarations" {
         allocator,
         "import UI as Kit\n" ++
             "/// demo\n" ++
-            "construct Widget { annotations { @State; } requires { content; } lifecycle { onAppear() {} } }\n" ++
+            "construct Widget { annotations { @State; } requires { function render() } lifecycle { onAppear() {} } }\n" ++
             "Widget Button(title: String) { @State let count: Int = 0; content { Text(title) } }\n" ++
             "@Main function entry(): Int { let x: Float = 12; print(x); return 0; }",
         &diags,

@@ -1,0 +1,13 @@
+backends = ["hybrid", "vm"]
+
+[phases.check]
+result = "fail"
+diagnostic_code = "KSEM141"
+diagnostic_title = "recursive declaration expansion"
+stage = "semantics"
+
+[phases.build]
+result = "blocked"
+
+[phases.run]
+result = "blocked"

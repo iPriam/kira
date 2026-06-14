@@ -1,0 +1,39 @@
+// `extend C { ... }` adds fluent modifier functions to a construct family. Modifiers return the
+// family type and are used as call chains (`Text(...).padding(amount: 8)`), distinct from the
+// core Widget->Node bridge.
+
+construct Widget {
+    @Required let body: Widget
+    let node: Node { body.node }
+}
+
+Widget Text {
+    let text: String = ""
+    let node: Node { TextNode(text: text) }
+}
+
+Widget Padding {
+    let amount: Float = 16
+    @Content let child: Widget
+    let node: Node { PaddingNode(amount: amount) }
+}
+
+extend Widget {
+    function padding(amount: Float) -> Widget {
+        Padding(amount: amount) {
+            self
+        }
+    }
+}
+
+Widget Button {
+    let title: String = ""
+    let body: Widget {
+        Text(text: title).padding(amount: 8)
+    }
+}
+
+@Main
+function main() {
+    return
+}

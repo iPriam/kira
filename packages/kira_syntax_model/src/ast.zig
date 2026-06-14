@@ -23,6 +23,17 @@ pub const Decl = union(enum) {
     type_decl: TypeDecl,
     construct_decl: ConstructDecl,
     construct_form_decl: ConstructFormDecl,
+    extend_decl: ExtendDecl,
+};
+
+// `extend Widget { function padding(...) -> Widget { ... } }` adds fluent modifier functions to a
+// construct family. The target is a construct name; members are functions. This is the external,
+// fluent-modifier surface (e.g. `.padding(...)`), distinct from the core Widget->Node bridge.
+pub const ExtendDecl = struct {
+    annotations: []const Annotation,
+    construct_name: QualifiedName,
+    members: []BodyMember,
+    span: Span,
 };
 
 pub const ImportDecl = struct {
@@ -166,7 +177,13 @@ pub const TypeKind = enum {
 pub const ConstructDecl = struct {
     annotations: []const Annotation,
     name: []const u8,
+    parents: []QualifiedName,
     sections: []ConstructSection,
+    // Direct, SwiftUI-style members declared at the construct body's top level, e.g.
+    // `@Required let body: Widget`, `@Required function measure(...) -> Size`, or a default
+    // computed member `let node: Node { body.node }`. These coexist with the older
+    // section-based surface; an empty slice means the construct uses only sections.
+    members: []BodyMember = &.{},
     span: Span,
 };
 
@@ -184,6 +201,7 @@ pub const ConstructSectionKind = enum {
     lifecycle,
     builder,
     representation,
+    properties,
     custom,
 };
 
@@ -192,7 +210,58 @@ pub const ConstructSectionEntry = union(enum) {
     field_decl: FieldDecl,
     lifecycle_hook: LifecycleHook,
     function_signature: FunctionSignature,
+    property_schema: PropertySchemaField,
+    content_channel: ContentChannelSchema,
+    content_directive: ContentDirective,
+    content_projection: ContentProjection,
     named_rule: NamedRule,
+};
+
+// A content-composition directive on a construct's `content` section: `content sealed`,
+// `content refine { ... }`, `content passthrough`, or `content project { ... }`.
+pub const ContentDirective = struct {
+    mode: ContentDirectiveMode,
+    span: Span,
+};
+
+pub const ContentDirectiveMode = enum { sealed, refine, passthrough, project };
+
+// A `content project { local as Parent.channel }` mapping: the declaration section named
+// `local` fills `Parent`'s `channel`.
+pub const ContentProjection = struct {
+    local: []const u8,
+    target_construct: QualifiedName,
+    target_channel: []const u8,
+    span: Span,
+};
+
+// A named content channel declared in a construct's `content { ... }` block, e.g.
+// `head { accepts WebElement; count 0..1 }`. `accepts` constrains the element type a
+// construct-backed declaration may place in the channel; `count` constrains how many.
+pub const ContentChannelSchema = struct {
+    name: []const u8,
+    accepts: ?QualifiedName,
+    count: ?CountRange,
+    span: Span,
+};
+
+// An inclusive lower bound and optional upper bound, written `min..max` or `min..`.
+// `0..` is {0, null}, `0..1` is {0, 1}, `1..` is {1, null}.
+pub const CountRange = struct {
+    min: u32,
+    max: ?u32,
+    span: Span,
+};
+
+// A typed slot in a construct's `properties { ... }` schema, e.g. `required path: String`
+// or `uuid: UUID`. `required` declarations must be provided by every construct-backed
+// declaration; non-required declarations are optional/defaultable.
+pub const PropertySchemaField = struct {
+    required: bool,
+    name: []const u8,
+    type_expr: ?*TypeExpr,
+    default_value: ?*Expr,
+    span: Span,
 };
 
 pub const AnnotationSpec = struct {
@@ -235,8 +304,23 @@ pub const BodyMember = union(enum) {
     field_decl: FieldDecl,
     function_decl: FunctionDecl,
     content_section: ContentSection,
+    properties_section: DeclPropertiesSection,
     lifecycle_hook: LifecycleHook,
     named_rule: NamedRule,
+};
+
+// A construct-backed declaration supplies its construct's declared properties through a
+// section: `Route Home { properties { path: "/" } }`. Each entry binds a schema property
+// name to a value expression. There is no constructor-style `Route Home(path: "/")` form.
+pub const DeclPropertiesSection = struct {
+    entries: []DeclPropertyEntry,
+    span: Span,
+};
+
+pub const DeclPropertyEntry = struct {
+    name: []const u8,
+    value: *Expr,
+    span: Span,
 };
 
 pub const FieldDecl = struct {
@@ -246,6 +330,9 @@ pub const FieldDecl = struct {
     name: []const u8,
     type_expr: ?*TypeExpr,
     value: ?*Expr,
+    // A block-bodied computed member, e.g. `let node: Node { body.node }`. When present the
+    // field is a computed default/override rather than stored state, and `value` is null.
+    body: ?Block = null,
     span: Span,
 };
 
@@ -284,6 +371,23 @@ pub const Statement = union(enum) {
     continue_stmt: ContinueStatement,
     match_stmt: MatchStatement,
     switch_stmt: SwitchStatement,
+    attempt_stmt: AttemptStatement,
+};
+
+// Linear error handling over `Result<Value, Failure>`. Each `try` expression inside `body`
+// unwraps a `Result`: on `Ok` execution continues, on `Error` control transfers to the matching
+// `handle` case. `handle` is a contextual keyword recognized only after an `attempt { ... }` block.
+pub const AttemptStatement = struct {
+    body: []Statement,
+    handlers: []HandleCase,
+    span: Span,
+};
+
+pub const HandleCase = struct {
+    variant_name: []const u8,
+    binding_name: ?[]const u8,
+    body: Block,
+    span: Span,
 };
 
 pub const LetStatement = struct {
@@ -434,6 +538,13 @@ pub const Expr = union(enum) {
     member: MemberExpr,
     index: IndexExpr,
     call: CallExpr,
+    try_expr: TryExpr,
+};
+
+// `try expr` unwraps a `Result<Value, Failure>`. Only valid inside an `attempt { ... }` block.
+pub const TryExpr = struct {
+    operand: *Expr,
+    span: Span,
 };
 
 pub const IntegerLiteral = struct {

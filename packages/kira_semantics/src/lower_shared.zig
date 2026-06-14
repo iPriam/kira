@@ -136,6 +136,10 @@ pub fn registerBuiltinAnnotationHeaders(
     try putBuiltinAnnotation(allocator, headers, "Native", false);
     try putBuiltinAnnotation(allocator, headers, "Runtime", false);
     try putBuiltinAnnotation(allocator, headers, "Printable", false);
+    // SwiftUI-style construct surface: `@Required` marks required construct members; `@Content`
+    // marks caller-provided child fields on concrete declarations.
+    try putBuiltinAnnotation(allocator, headers, "Required", false);
+    try putBuiltinAnnotation(allocator, headers, "Content", false);
     try putBuiltinAnnotation(allocator, headers, "FFI.Extern", true);
     try putBuiltinAnnotation(allocator, headers, "FFI.Struct", true);
     try putBuiltinAnnotation(allocator, headers, "FFI.Pointer", true);

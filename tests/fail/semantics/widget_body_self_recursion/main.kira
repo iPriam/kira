@@ -1,0 +1,18 @@
+// A widget that defines `body` as itself, without overriding the default `node = body.node`,
+// would resolve forever (`Loop.node -> body.node -> Loop.node -> ...`). It is rejected.
+
+construct Widget {
+    @Required let body: Widget
+    let node: Node { body.node }
+}
+
+Widget Loop {
+    let body: Widget {
+        Loop()
+    }
+}
+
+@Main
+function main() {
+    return
+}

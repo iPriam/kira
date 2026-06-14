@@ -235,6 +235,179 @@ test "parses qualified extends lists and override members" {
     try std.testing.expectEqual(syntax.ast.FieldStorage.mutable, program.decls[0].type_decl.members[1].field_decl.storage);
 }
 
+test "parses construct extends parent lists" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    var diags = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
+    const program = try parseSource(
+        allocator,
+        "construct WebElement { }\n" ++
+            "construct Drawable { }\n" ++
+            "construct Surface extends WebElement, Drawable { }\n" ++
+            "@Main function entry() { return; }",
+        &diags,
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), diags.items.len);
+    try std.testing.expectEqual(@as(usize, 0), program.decls[0].construct_decl.parents.len);
+    try std.testing.expectEqual(@as(usize, 2), program.decls[2].construct_decl.parents.len);
+    try std.testing.expectEqualStrings("WebElement", program.decls[2].construct_decl.parents[0].segments[0].text);
+    try std.testing.expectEqualStrings("Drawable", program.decls[2].construct_decl.parents[1].segments[0].text);
+}
+
+test "parses construct direct members with @Required and a computed node field" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    var diags = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
+    const program = try parseSource(
+        allocator,
+        "construct Widget {\n" ++
+            "    @Required let body: Widget\n" ++
+            "    let node: Node {\n" ++
+            "        body.node\n" ++
+            "    }\n" ++
+            "}\n" ++
+            "@Main function entry() { return; }",
+        &diags,
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), diags.items.len);
+    const construct_decl = program.decls[0].construct_decl;
+    try std.testing.expectEqual(@as(usize, 2), construct_decl.members.len);
+
+    const required_body = construct_decl.members[0].field_decl;
+    try std.testing.expectEqualStrings("body", required_body.name);
+    try std.testing.expectEqual(@as(usize, 1), required_body.annotations.len);
+    try std.testing.expectEqualStrings("Required", required_body.annotations[0].name.segments[0].text);
+    try std.testing.expect(required_body.body == null);
+
+    const computed_node = construct_decl.members[1].field_decl;
+    try std.testing.expectEqualStrings("node", computed_node.name);
+    try std.testing.expect(computed_node.value == null);
+    try std.testing.expect(computed_node.body != null);
+}
+
+test "parses bodyless @Required construct member functions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    var diags = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
+    const program = try parseSource(
+        allocator,
+        "construct Node {\n" ++
+            "    @Required function measure() -> Int\n" ++
+            "    @Required function place() -> Int\n" ++
+            "}\n" ++
+            "@Main function entry() { return; }",
+        &diags,
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), diags.items.len);
+    const construct_decl = program.decls[0].construct_decl;
+    try std.testing.expectEqual(@as(usize, 2), construct_decl.members.len);
+    const measure = construct_decl.members[0].function_decl;
+    try std.testing.expectEqualStrings("measure", measure.name);
+    try std.testing.expect(measure.body == null);
+    try std.testing.expectEqualStrings("Required", measure.annotations[0].name.segments[0].text);
+}
+
+test "parses extend declaration with modifier functions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    var diags = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
+    const program = try parseSource(
+        allocator,
+        "construct Widget { @Required let body: Widget }\n" ++
+            "extend Widget {\n" ++
+            "    function padding(amount: Float) -> Widget {\n" ++
+            "        return self\n" ++
+            "    }\n" ++
+            "}\n" ++
+            "@Main function entry() { return; }",
+        &diags,
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), diags.items.len);
+    const extend_decl = program.decls[1].extend_decl;
+    try std.testing.expectEqualStrings("Widget", extend_decl.construct_name.segments[0].text);
+    try std.testing.expectEqual(@as(usize, 1), extend_decl.members.len);
+    try std.testing.expectEqualStrings("padding", extend_decl.members[0].function_decl.name);
+}
+
+test "parses construct property schema and declaration properties section" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    var diags = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
+    const program = try parseSource(
+        allocator,
+        "construct Route {\n" ++
+            "    properties {\n" ++
+            "        required path: String\n" ++
+            "        title: String\n" ++
+            "    }\n" ++
+            "}\n" ++
+            "Route Home {\n" ++
+            "    properties {\n" ++
+            "        path: \"/\"\n" ++
+            "    }\n" ++
+            "}\n" ++
+            "@Main function entry() { return; }",
+        &diags,
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), diags.items.len);
+    const section = program.decls[0].construct_decl.sections[0];
+    try std.testing.expectEqual(syntax.ast.ConstructSectionKind.properties, section.kind);
+    try std.testing.expectEqual(@as(usize, 2), section.entries.len);
+    try std.testing.expect(section.entries[0].property_schema.required);
+    try std.testing.expectEqualStrings("path", section.entries[0].property_schema.name);
+    try std.testing.expect(!section.entries[1].property_schema.required);
+
+    const form_member = program.decls[1].construct_form_decl.body.members[0];
+    try std.testing.expectEqual(@as(usize, 1), form_member.properties_section.entries.len);
+    try std.testing.expectEqualStrings("path", form_member.properties_section.entries[0].name);
+}
+
+test "parses construct content channels with accepts and count ranges" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    var diags = std.array_list.Managed(diagnostics.Diagnostic).init(allocator);
+    const program = try parseSource(
+        allocator,
+        "construct WebElement {\n" ++
+            "    content {\n" ++
+            "        head { accepts Title count 0..1 }\n" ++
+            "        body { accepts Title count 1.. }\n" ++
+            "    }\n" ++
+            "}\n" ++
+            "@Main function entry() { return; }",
+        &diags,
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), diags.items.len);
+    const section = program.decls[0].construct_decl.sections[0];
+    try std.testing.expectEqual(@as(usize, 2), section.entries.len);
+    const head = section.entries[0].content_channel;
+    try std.testing.expectEqualStrings("head", head.name);
+    try std.testing.expectEqualStrings("Title", head.accepts.?.segments[0].text);
+    try std.testing.expectEqual(@as(u32, 0), head.count.?.min);
+    try std.testing.expectEqual(@as(u32, 1), head.count.?.max.?);
+    const body = section.entries[1].content_channel;
+    try std.testing.expectEqual(@as(u32, 1), body.count.?.min);
+    try std.testing.expect(body.count.?.max == null);
+}
+
 test "parses class struct capability and generated annotation declarations" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

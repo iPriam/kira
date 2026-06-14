@@ -49,11 +49,17 @@ fn dumpDecl(writer: anytype, decl: ast.Decl, depth: usize) anyerror!void {
                 try indent(writer, depth + 1);
                 try writer.print("Section {s}\n", .{section.name});
             }
+            for (construct_decl.members) |member| try dumpBodyMember(writer, member, depth + 1);
         },
         .construct_form_decl => |form_decl| {
             try indent(writer, depth);
             try writer.print("ConstructDecl {s} {s}\n", .{ qualifiedNameText(form_decl.construct_name), form_decl.name });
             for (form_decl.body.members) |member| try dumpBodyMember(writer, member, depth + 1);
+        },
+        .extend_decl => |extend_decl| {
+            try indent(writer, depth);
+            try writer.print("Extend {s}\n", .{qualifiedNameText(extend_decl.construct_name)});
+            for (extend_decl.members) |member| try dumpBodyMember(writer, member, depth + 1);
         },
     }
 }
@@ -78,6 +84,14 @@ fn dumpBodyMember(writer: anytype, member: ast.BodyMember, depth: usize) anyerro
             try indent(writer, depth);
             try writer.writeAll("Content\n");
             try dumpBuilderBlock(writer, content.builder, depth + 1);
+        },
+        .properties_section => |properties| {
+            try indent(writer, depth);
+            try writer.writeAll("Properties\n");
+            for (properties.entries) |entry| {
+                try indent(writer, depth + 1);
+                try writer.print("{s}\n", .{entry.name});
+            }
         },
         .lifecycle_hook => |hook| {
             try indent(writer, depth);
@@ -166,6 +180,16 @@ fn dumpStatement(writer: anytype, statement: ast.Statement, depth: usize) anyerr
             try indent(writer, depth);
             try writer.writeAll("Switch\n");
             try dumpExpr(writer, switch_stmt.subject.*, depth + 1);
+        },
+        .attempt_stmt => |attempt_stmt| {
+            try indent(writer, depth);
+            try writer.writeAll("Attempt\n");
+            for (attempt_stmt.body) |body_stmt| try dumpStatement(writer, body_stmt, depth + 1);
+            for (attempt_stmt.handlers) |handler| {
+                try indent(writer, depth + 1);
+                try writer.print("Handle {s}\n", .{handler.variant_name});
+                try dumpBlock(writer, handler.body, depth + 2);
+            }
         },
     }
 }
@@ -309,6 +333,11 @@ fn dumpExpr(writer: anytype, expr: ast.Expr, depth: usize) anyerror!void {
                 try writer.writeAll("Callback\n");
                 try dumpBlock(writer, callback.body, depth + 2);
             }
+        },
+        .try_expr => |value| {
+            try indent(writer, depth);
+            try writer.writeAll("Try\n");
+            try dumpExpr(writer, value.operand.*, depth + 1);
         },
     }
 }

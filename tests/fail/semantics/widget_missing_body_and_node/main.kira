@@ -1,0 +1,16 @@
+// A widget must provide `body` (and inherit the default `node`) or provide `node` directly.
+// `Broken` provides neither, so the required `body` member cannot be satisfied.
+
+construct Widget {
+    @Required let body: Widget
+    let node: Node { body.node }
+}
+
+Widget Broken {
+    let title: String = ""
+}
+
+@Main
+function main() {
+    return
+}

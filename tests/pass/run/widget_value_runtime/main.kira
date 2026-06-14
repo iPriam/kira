@@ -1,0 +1,19 @@
+// A concrete declaration is a runtime struct of its stored scalar fields: it can be constructed
+// with call syntax and its fields read, executing identically on vm, llvm, and hybrid.
+
+construct Widget {
+    @Required let body: Widget
+    let node: Node { body.node }
+}
+
+Widget Text {
+    let text: String = ""
+    let node: Node { TextNode(text: text) }
+}
+
+@Main
+function main() {
+    let label = Text(text: "hello widget runtime")
+    print(label.text)
+    return
+}

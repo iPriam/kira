@@ -1,0 +1,28 @@
+construct Widget {
+    @Required let body: Widget
+    let node: Node { body.node }
+}
+Widget Text {
+    let text: String = ""
+    let node: Node { TextNode(text: text) }
+}
+Widget Padding {
+    @Content let child: Widget
+    let node: Node { PaddingNode() }
+}
+Widget VStack {
+    @Content let children: [Widget]
+    let node: Node { VStackNode() }
+}
+Widget Dialog {
+    @Content let header: Widget
+    @Content let content: Widget
+    let node: Node { DialogNode() }
+}
+Widget Screen {
+    let body: Widget {
+        VStack { "hello" }
+    }
+}
+@Main
+function main() { return }

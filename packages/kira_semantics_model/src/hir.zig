@@ -108,12 +108,28 @@ pub const AnnotationValue = union(enum) {
 
 pub const Construct = struct {
     name: []const u8,
+    parents: []ConstructParent = &.{},
+    properties: []PropertySchema = &.{},
+    content_channels: []ContentChannel = &.{},
+    content_refine: []ContentChannel = &.{},
+    content_projections: []ContentProjection = &.{},
+    content_sealed: bool = false,
+    content_passthrough: bool = false,
+    required_functions: []RequiredFunction = &.{},
+    // Fields a construct requires its concrete declarations to provide, declared as direct
+    // `@Required let name: T` members (the SwiftUI-style surface).
+    required_fields: []RequiredField = &.{},
+    // Non-required direct members the construct supplies a default body for (e.g. the default
+    // `let node: Node { body.node }`). A concrete declaration may override them, and overriding
+    // every default member that consumes a required field discharges that requirement
+    // (the terminal-`node` rule).
+    default_members: []ConstructDefaultMember = &.{},
     allowed_annotations: []AnnotationRule,
-    required_content: bool,
     // Element type of a typed `content: Content<T>;` section, e.g. "Widget".
-    // Null when the construct declares content via the legacy `requires { content; }`
-    // form (which carries no element type). When set, construct-backed declarations
-    // are validated so their content block only holds element-typed values.
+    // Null when the construct does not pin a content element type. When set,
+    // construct-backed declarations are validated so their content block only
+    // holds element-typed values. Content-requiredness is expressed through
+    // content channels (`content { name { count 1.. } }`), not here.
     content_element_type: ?[]const u8 = null,
     allowed_lifecycle_hooks: [][]const u8,
     span: source_pkg.Span,
@@ -121,6 +137,70 @@ pub const Construct = struct {
 
 pub const AnnotationRule = struct {
     name: []const u8,
+    span: source_pkg.Span,
+};
+
+pub const ConstructParent = struct {
+    name: []const u8,
+    span: source_pkg.Span,
+};
+
+// A typed slot declared in a construct's `properties { ... }` schema. `type_text` is the
+// canonical type text (e.g. "String", "Int", "UUID") used to validate the values supplied
+// by construct-backed declarations.
+pub const PropertySchema = struct {
+    required: bool,
+    name: []const u8,
+    type_text: []const u8,
+    span: source_pkg.Span,
+};
+
+// A function a construct requires its first concrete declaration to implement. `param_types`
+// and `return_type` are canonical type texts (with `Self` left as the literal "Self", resolved
+// against the implementing declaration during satisfaction checking).
+pub const RequiredFunction = struct {
+    name: []const u8,
+    param_types: []const []const u8,
+    return_type: []const u8,
+    span: source_pkg.Span,
+};
+
+// A field a construct requires its concrete declarations to provide, declared as a direct
+// `@Required let name: T` member. `type_text` is the canonical type text (with `Self` left
+// literal). A required field whose `type_text` equals the construct's own name is recursive
+// (e.g. `body: Widget` in `construct Widget`); such fields participate in the terminal rule.
+pub const RequiredField = struct {
+    name: []const u8,
+    type_text: []const u8,
+    span: source_pkg.Span,
+};
+
+// A non-required direct member with a default body. `references` lists the names of the
+// construct's required fields read by the default body, so the satisfaction checker knows
+// which requirements an override of this member discharges.
+pub const ConstructDefaultMember = struct {
+    name: []const u8,
+    is_field: bool,
+    references: []const []const u8,
+    span: source_pkg.Span,
+};
+
+// A named content channel on a construct. `accepts` is the canonical element type text a
+// channel accepts (null = unconstrained); `min`/`max` bound how many elements a declaration
+// may place in the channel (max null = unbounded).
+pub const ContentChannel = struct {
+    name: []const u8,
+    accepts: ?[]const u8,
+    min: u32,
+    max: ?u32,
+    span: source_pkg.Span,
+};
+
+// A `content project { local as Parent.channel }` mapping resolved on a construct.
+pub const ContentProjection = struct {
+    local: []const u8,
+    target_construct: []const u8,
+    target_channel: []const u8,
     span: source_pkg.Span,
 };
 

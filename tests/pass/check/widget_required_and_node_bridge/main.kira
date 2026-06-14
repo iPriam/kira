@@ -1,0 +1,53 @@
+// The SwiftUI-style construct surface: `@Required` marks required construct members directly,
+// and `let node: Node { ... }` is the typed Widget->Node bridge.
+//
+// * `construct Node` requires two functions (test: @Required function requirement).
+// * `construct Widget` requires the `body` field and supplies a default `node = body.node`
+//   (test: @Required field requirement + default computed member).
+// * A composite widget provides `body` and inherits the default `node`.
+// * A primitive widget provides `node` directly and omits `body` (terminal rule), without
+//   triggering infinite `body` resolution.
+
+construct Node {
+    @Required function measure() -> Int
+    @Required function place() -> Int
+}
+
+construct Widget {
+    @Required let body: Widget
+    let node: Node { body.node }
+}
+
+// Concrete Node declaration: must implement every @Required function.
+Node TextNode {
+    function measure() -> Int {
+        return 0
+    }
+    function place() -> Int {
+        return 0
+    }
+}
+
+// Primitive/terminal widget: provides `node`, omits `body`. The explicit `node` discharges the
+// required `body`, and resolution stops here (no infinite body recursion).
+Widget Text {
+    let text: String = ""
+
+    let node: Node {
+        TextNode()
+    }
+}
+
+// Composite widget: provides `body`, inherits the default `node = body.node`.
+Widget Button {
+    let title: String = ""
+
+    let body: Widget {
+        Text(text: title)
+    }
+}
+
+@Main
+function main() {
+    return
+}

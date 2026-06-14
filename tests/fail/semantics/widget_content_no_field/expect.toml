@@ -1,0 +1,13 @@
+backends = ["hybrid", "vm"]
+
+[phases.check]
+result = "fail"
+diagnostic_code = "KSEM142"
+diagnostic_title = "unexpected content block"
+stage = "semantics"
+
+[phases.build]
+result = "blocked"
+
+[phases.run]
+result = "blocked"

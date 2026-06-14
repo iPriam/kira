@@ -9,6 +9,12 @@ const ImportedGlobals = @import("imported_globals.zig").ImportedGlobals;
 const type_impl = @import("lower_program_types.zig");
 const enum_impl = @import("lower_program_enums.zig");
 const ffi_boundary = @import("lower_program_ffi_boundary.zig");
+const requirements = @import("lower_construct_requirements.zig");
+const field_requirements = @import("lower_construct_field_requirements.zig");
+const widget_content = @import("lower_widget_content.zig");
+const content_composition = @import("lower_construct_content.zig");
+const construct_functions = @import("lower_construct_functions.zig");
+const construct_members = @import("lower_construct_members.zig");
 
 pub const lowerImports = type_impl.lowerImports;
 pub const composeAnnotationGeneratedFunctions = type_impl.composeAnnotationGeneratedFunctions;
@@ -109,6 +115,8 @@ fn collectRootTopLevelNames(
             .construct_decl => |item| try names.put(allocator, item.name, {}),
             .construct_form_decl => |item| try names.put(allocator, item.name, {}),
             .function_decl => |item| try names.put(allocator, item.name, {}),
+            // Extension declarations add no new top-level name; they extend an existing construct.
+            .extend_decl => {},
         }
     }
 }
@@ -254,7 +262,7 @@ pub fn lowerProgramWithOptions(
     for (program.decls, 0..) |decl, decl_index| {
         const origin = declOrigin(program, decl_index);
         switch (decl) {
-            .annotation_decl, .capability_decl => {},
+            .annotation_decl, .capability_decl, .extend_decl => {},
             .construct_decl => |construct_decl| {
                 try registerScopedTopLevelName(allocator, out_diagnostics, &top_level_names, origin, construct_decl.name, construct_decl.span);
                 const lowered = try lowerConstructDecl(&ctx, construct_decl);
@@ -278,6 +286,11 @@ pub fn lowerProgramWithOptions(
             },
             .construct_form_decl => |form_decl| {
                 try registerScopedTopLevelName(allocator, out_diagnostics, &top_level_names, origin, form_decl.name, form_decl.span);
+                // Gap #1 (runtime): a concrete declaration is also a struct type of its stored
+                // scalar fields, so `Text(text: "hi")` lowers through the ordinary struct
+                // construction path into an `alloc_struct`. Composition members (`@Content`
+                // children, computed `let node { ... }`) are excluded — they are not stored state.
+                try local_types.put(allocator, form_decl.name, try synthesizeFormStruct(allocator, form_decl));
             },
             .function_decl => |function_decl| {
                 try registerScopedTopLevelName(allocator, out_diagnostics, &top_level_names, origin, function_decl.name, function_decl.span);
@@ -336,6 +349,7 @@ pub fn lowerProgramWithOptions(
     for (program.decls) |decl| {
         switch (decl) {
             .type_decl => |type_decl| try registerTypeMethodHeaders(&ctx, type_decl, &function_headers),
+            .construct_form_decl => |form_decl| try construct_functions.registerConstructFormFunctionHeaders(&ctx, form_decl, &function_headers),
             .function_decl => {},
             else => {},
         }
@@ -367,11 +381,34 @@ pub fn lowerProgramWithOptions(
         });
     }
 
+    // All constructs are registered above; validate `extends` (unknown parent + cycles)
+    // before lowering construct-form declarations that depend on the family graph.
+    try type_impl.validateConstructInheritance(&ctx, constructs.items, &construct_headers);
+    try content_composition.validateConstructContentComposition(&ctx, constructs.items, &construct_headers);
+
+    // Map each construct-backed declaration to its declared parent (a construct or another
+    // declaration), so a declaration's construct family can be resolved through a chain such as
+    // `Drawable Sprite { ... }` then `Sprite Player { ... }`.
+    var form_parent = std.StringHashMapUnmanaged([]const u8){};
+    defer form_parent.deinit(allocator);
+    for (program.decls) |decl| {
+        if (decl != .construct_form_decl) continue;
+        const form_decl = decl.construct_form_decl;
+        const parent_leaf = form_decl.construct_name.segments[form_decl.construct_name.segments.len - 1].text;
+        try form_parent.put(allocator, form_decl.name, parent_leaf);
+    }
+    // Reject declaration-parent cycles before lowering, so they surface as cycles (KSEM119)
+    // rather than as unresolvable parents during form lowering.
+    try requirements.validateFormParentCycles(&ctx, program, &form_parent);
+
     for (program.decls, 0..) |decl, decl_index| {
         const previous_package = ctx.current_package;
         ctx.current_package = declOrigin(program, decl_index).package_name;
         switch (decl) {
-            .construct_form_decl => |form_decl| try forms.append(try lowerConstructForm(&ctx, form_decl, imports, constructs.items, &construct_headers)),
+            .construct_form_decl => |form_decl| {
+                try forms.append(try lowerConstructForm(&ctx, form_decl, imports, constructs.items, &construct_headers, &form_parent));
+                try functions.appendSlice(try construct_functions.lowerConstructFormFunctions(&ctx, form_decl, imports, &function_headers));
+            },
             .function_decl => |function_decl| {
                 const lowered = try lowerFunction(&ctx, function_decl, imports, &function_headers);
                 if (lowered.is_main) {
@@ -403,6 +440,35 @@ pub fn lowerProgramWithOptions(
         ctx.current_package = previous_package;
     }
 
+    // Validate required-function satisfaction across the mixed construct/declaration graph.
+    try requirements.validateConstructFormRequirements(&ctx, program, constructs.items, &construct_headers, &form_parent);
+    // Validate `@Required` field satisfaction with the terminal-`node` rule.
+    try field_requirements.validateConstructFormFieldRequirements(&ctx, program, constructs.items, &construct_headers, &form_parent);
+    // Validate caller-provided `@Content` at construction sites in composition bodies.
+    try widget_content.validateWidgetContent(&ctx, program);
+    // `extend C { ... }` must target a known construct family.
+    for (program.decls) |decl| {
+        if (decl != .extend_decl) continue;
+        const extend_decl = decl.extend_decl;
+        const name = try shared.qualifiedNameText(allocator, extend_decl.construct_name);
+        const leaf = extend_decl.construct_name.segments[extend_decl.construct_name.segments.len - 1].text;
+        const root = extend_decl.construct_name.segments[0].text;
+        const known = construct_headers.get(leaf) != null or
+            ctx.imported_globals.hasConstruct(name) or
+            shared.isImportedRoot(&ctx, root, imports);
+        if (!known) {
+            try diagnostics.appendOwned(allocator, out_diagnostics, .{
+                .severity = .@"error",
+                .code = "KSEM146",
+                .title = "unknown extend target",
+                .message = try std.fmt.allocPrint(allocator, "Kira could not find a construct named '{s}' to extend.", .{name}),
+                .labels = &.{diagnostics.primaryLabel(extend_decl.construct_name.span, "unknown construct")},
+                .help = "Declare the construct before extending it, or import the module that provides it.",
+            });
+            return error.DiagnosticsEmitted;
+        }
+    }
+
     if (main_index == null and options.require_main) {
         try diagnostics.appendOwned(allocator, out_diagnostics, .{
             .severity = .@"error",
@@ -429,21 +495,46 @@ pub fn lowerProgramWithOptions(
     };
 }
 
+// Build the struct type backing a concrete declaration: its stored scalar fields only. Computed
+// composition members (`let node: Node { ... }`) and caller-provided `@Content` children are not
+// stored state, so they are excluded from the runtime layout.
+fn synthesizeFormStruct(allocator: std.mem.Allocator, form_decl: syntax.ast.ConstructFormDecl) !syntax.ast.TypeDecl {
+    var members = std.array_list.Managed(syntax.ast.BodyMember).init(allocator);
+    for (form_decl.body.members) |member| {
+        if (member != .field_decl) continue;
+        const field = member.field_decl;
+        if (field.body != null) continue;
+        if (construct_members.hasContentAnnotation(field.annotations)) continue;
+        try members.append(.{ .field_decl = field });
+    }
+    return .{
+        .kind = .struct_decl,
+        .annotations = &.{},
+        .name = form_decl.name,
+        .parents = &.{},
+        .members = try members.toOwnedSlice(),
+        .span = form_decl.span,
+    };
+}
+
 fn lowerConstructForm(
     ctx: *shared.Context,
     form_decl: syntax.ast.ConstructFormDecl,
     imports: []const model.Import,
     constructs: []const model.Construct,
     construct_headers: *const std.StringHashMapUnmanaged(shared.ConstructHeader),
+    form_parent: *const std.StringHashMapUnmanaged([]const u8),
 ) !model.ConstructForm {
     try shared.validateAnnotationPlacement(ctx, form_decl.annotations, .construct_form_decl, null);
     const construct_name = try shared.qualifiedNameText(ctx.allocator, form_decl.construct_name);
     const construct_root = form_decl.construct_name.segments[0].text;
     const imported_construct_visible = form_decl.construct_name.segments.len == 1 and ctx.imported_globals.hasConstruct(construct_name);
 
+    // The parent may be a construct or another construct-backed declaration; resolve the
+    // construct family that ultimately governs this declaration's content/properties/lifecycle.
     var construct_model: ?model.Construct = null;
-    if (construct_headers.get(construct_name)) |header| {
-        construct_model = constructs[header.index];
+    if (requirements.resolveFamilyConstructModel(constructs, construct_headers, form_parent, construct_name)) |family| {
+        construct_model = family;
     } else if (!imported_construct_visible and !shared.isImportedRoot(ctx, construct_root, imports)) {
         try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
             .severity = .@"error",
@@ -464,7 +555,15 @@ fn lowerConstructForm(
 
     for (form_decl.body.members) |member| {
         switch (member) {
-            .field_decl => |field_decl| try fields.append(try lowerField(ctx, field_decl, construct_model)),
+            // A computed/composition member (`let node: Node { ... }`) is the typed Widget->Node
+            // bridge, and an `@Content` field is caller-provided children — both are part of the
+            // composition contract, not stored runtime state, so neither becomes a runtime field.
+            // Their roles are validated separately (terminal-`node` rule, content routing).
+            .field_decl => |field_decl| {
+                if (field_decl.body != null) continue;
+                if (construct_members.hasContentAnnotation(field_decl.annotations)) continue;
+                try fields.append(try lowerField(ctx, field_decl, construct_model));
+            },
             .content_section => |content_section| {
                 try shared.validateAnnotationPlacement(ctx, content_section.annotations, .content_section, construct_model);
                 const lowered_content = try exprs.lowerBuilderBlock(ctx, content_section.builder, imports, null);
@@ -501,19 +600,8 @@ fn lowerConstructForm(
     }
 
     if (construct_model) |construct_info| {
-        if (construct_info.required_content and content == null) {
-            try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
-                .severity = .@"error",
-                .code = "KSEM022",
-                .title = "missing required content block",
-                .message = try std.fmt.allocPrint(ctx.allocator, "The construct '{s}' requires a `content {{ ... }}` block.", .{construct_info.name}),
-                .labels = &.{
-                    diagnostics.primaryLabel(form_decl.span, "required content block is missing"),
-                },
-                .help = "Add a `content { ... }` section to this declaration.",
-            });
-            return error.DiagnosticsEmitted;
-        }
+        try type_impl.validateFormProperties(ctx, form_decl, construct_info, constructs, construct_headers);
+        try type_impl.validateFormContentChannels(ctx, form_decl, construct_info, constructs, construct_headers);
     }
 
     return .{

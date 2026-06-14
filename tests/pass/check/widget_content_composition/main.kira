@@ -1,0 +1,63 @@
+// `@Content` fields are caller-provided children. A trailing `{ ... }` block on a construction
+// fills them: a single `Widget` field takes one child, a `[Widget]` field takes many in order,
+// and multiple `@Content` fields are filled by name. Field names are the channel names.
+
+construct Widget {
+    @Required let body: Widget
+    let node: Node { body.node }
+}
+
+Widget Text {
+    let text: String = ""
+    let node: Node { TextNode(text: text) }
+}
+
+Widget VStack {
+    @Content let children: [Widget]
+    let node: Node { VStackNode() }
+}
+
+Widget HStack {
+    @Content let children: [Widget]
+    let node: Node { HStackNode() }
+}
+
+Widget Padding {
+    @Content let child: Widget
+    let node: Node { PaddingNode() }
+}
+
+Widget Dialog {
+    @Content let header: Widget
+    @Content let content: Widget
+    let node: Node { DialogNode() }
+}
+
+// Nested composition: list content, single content, and named fills, all in source order.
+Widget Screen {
+    let body: Widget {
+        VStack {
+            Text(text: "title")
+            HStack {
+                Text(text: "left")
+                Text(text: "right")
+            }
+            Padding {
+                Text(text: "inner")
+            }
+            Dialog {
+                header {
+                    Text(text: "Title")
+                }
+                content {
+                    Text(text: "Message")
+                }
+            }
+        }
+    }
+}
+
+@Main
+function main() {
+    return
+}
