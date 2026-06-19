@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build = @import("kira_build");
+const build_def = @import("kira_build_definition");
 const diag_messages = @import("kira_diagnostic_messages");
 const diagnostics = @import("kira_diagnostics");
 const package_manager = @import("kira_package_manager");
@@ -40,14 +41,15 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
         };
     }
 
+    const target_selector = try backendTargetSelector(allocator, parsed.backend);
     const libraries = switch (input.target.target_kind) {
         .library => blk: {
             const source_root = input.target.source_root orelse return error.ProjectEntrypointNotFound;
-            break :blk try build.ensureDeclaredNativeBindingsForSourceRoot(allocator, source_root, null);
+            break :blk try build.ensureDeclaredNativeBindingsForSourceRoot(allocator, source_root, target_selector);
         },
         .executable, .example, .source_file => blk: {
             const source_path = input.target.source_path orelse return error.ProjectEntrypointNotFound;
-            break :blk try build.ensureDeclaredNativeBindingsForSource(allocator, source_path, null);
+            break :blk try build.ensureDeclaredNativeBindingsForSource(allocator, source_path, target_selector);
         },
     };
 
@@ -63,7 +65,7 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
 
 const ParsedArgs = struct {
     mode: Mode = .autobind,
-    backend: ?@import("kira_build_definition").ExecutionTarget = null,
+    backend: ?build_def.ExecutionTarget = null,
     offline: bool = false,
     locked: bool = false,
     timings: bool = false,
@@ -74,7 +76,7 @@ const ParsedArgs = struct {
 
 fn parseArgs(args: []const []const u8) !ParsedArgs {
     if (args.len == 0 or !std.mem.eql(u8, args[0], "autobind")) return error.InvalidArguments;
-    var backend: ?@import("kira_build_definition").ExecutionTarget = null;
+    var backend: ?build_def.ExecutionTarget = null;
     var offline = false;
     var locked = false;
     var timings = false;
@@ -121,10 +123,39 @@ fn timingsEnvEnabled() bool {
     return value.len != 0 and !std.mem.eql(u8, value, "0") and !std.mem.eql(u8, value, "false");
 }
 
-fn parseBackend(arg: []const u8) ?@import("kira_build_definition").ExecutionTarget {
+fn parseBackend(arg: []const u8) ?build_def.ExecutionTarget {
     if (std.mem.eql(u8, arg, "vm")) return .vm;
     if (std.mem.eql(u8, arg, "llvm")) return .llvm_native;
     if (std.mem.eql(u8, arg, "wasm") or std.mem.eql(u8, arg, "wasm32-emscripten")) return .wasm32_emscripten;
     if (std.mem.eql(u8, arg, "hybrid")) return .hybrid;
     return null;
+}
+
+fn backendTargetSelector(allocator: std.mem.Allocator, backend: ?build_def.ExecutionTarget) !?build.NativeTargetSelector {
+    const selected = backend orelse return null;
+    const selector = try build.NativeTargetSelector.parse(allocator, switch (selected) {
+        .vm, .llvm_native, .hybrid => switch (builtin.os.tag) {
+            .linux => switch (builtin.cpu.arch) {
+                .x86_64 => "x86_64-linux-gnu",
+                else => return error.UnsupportedTarget,
+            },
+            .macos => switch (builtin.cpu.arch) {
+                .aarch64 => "aarch64-macos-none",
+                else => return error.UnsupportedTarget,
+            },
+            .windows => switch (builtin.cpu.arch) {
+                .x86_64 => if (builtin.abi == .gnu) "x86_64-windows-gnu" else "x86_64-windows-msvc",
+                else => return error.UnsupportedTarget,
+            },
+            else => return error.UnsupportedTarget,
+        },
+        .wasm32_emscripten => "wasm32-emscripten-none",
+    });
+    return selector;
+}
+
+test "parseArgs recognizes backend override for autobind" {
+    const parsed = try parseArgs(&.{ "autobind", "--backend", "hybrid", "examples/hello" });
+    try std.testing.expectEqual(build_def.ExecutionTarget.hybrid, parsed.backend.?);
+    try std.testing.expectEqualStrings("examples/hello", parsed.input_path);
 }

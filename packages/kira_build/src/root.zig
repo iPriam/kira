@@ -40,6 +40,7 @@ pub const checkPackageRoot = @import("pipeline.zig").checkPackageRoot;
 pub const checkFileForBackendWithSelector = @import("pipeline.zig").checkFileForBackendWithSelector;
 pub const backendDiagnostics = @import("pipeline.zig").backendDiagnostics;
 pub const resolveNativeManifestFile = @import("native_lib_resolver.zig").resolveNativeManifestFile;
+pub const NativeTargetSelector = @import("kira_native_lib_definition").TargetSelector;
 pub const NativePreparationMode = @import("ffi_support.zig").NativePreparationMode;
 pub const NativeWarning = @import("ffi_support.zig").NativeWarning;
 pub const NativeWarningKind = @import("ffi_support.zig").NativeWarningKind;
