@@ -169,6 +169,7 @@ pub fn lowerConstructImplementations(allocator: std.mem.Allocator, program: mode
         lowered[index] = .{
             .type_name = try allocator.dupe(u8, form_decl.name),
             .construct_constraint = .{ .construct_name = try allocator.dupe(u8, form_decl.construct.construct_name) },
+            .families = try cloneStringSlice(allocator, form_decl.families),
             .fields = try lowerFieldTypes(allocator, program, form_decl.fields),
             .has_content = form_decl.content != null,
             .lifecycle_hooks = try lowerLifecycleHooks(allocator, form_decl.lifecycle_hooks),
@@ -182,6 +183,12 @@ fn lowerLifecycleHooks(allocator: std.mem.Allocator, hooks: []const model.Lifecy
     for (hooks, 0..) |hook_decl, index| {
         lowered[index] = .{ .name = try allocator.dupe(u8, hook_decl.name) };
     }
+    return lowered;
+}
+
+fn cloneStringSlice(allocator: std.mem.Allocator, values: []const []const u8) ![]const []const u8 {
+    const lowered = try allocator.alloc([]const u8, values.len);
+    for (values, 0..) |value, index| lowered[index] = try allocator.dupe(u8, value);
     return lowered;
 }
 pub fn lowerTypeDecls(
@@ -301,6 +308,7 @@ pub fn markReachableExpr(
             for (node.args) |arg| try markReachableExpr(allocator, program, reachable, arg);
         },
         .virtual_call => |node| {
+            try markReachableVirtualMethods(allocator, program, reachable, node.static_type_name, node.method_name);
             try markReachableExpr(allocator, program, reachable, node.receiver);
             for (node.args) |arg| try markReachableExpr(allocator, program, reachable, arg);
         },
@@ -333,6 +341,38 @@ pub fn markReachableExpr(
         },
         else => {},
     }
+}
+
+fn markReachableVirtualMethods(
+    allocator: std.mem.Allocator,
+    program: model.Program,
+    reachable: *std.AutoHashMapUnmanaged(u32, void),
+    static_type_name: []const u8,
+    method_name: []const u8,
+) anyerror!void {
+    for (program.types) |type_decl| {
+        const participates = if (std.mem.eql(u8, type_decl.name, static_type_name))
+            true
+        else
+            formSatisfiesFamily(program, type_decl.name, static_type_name);
+        if (!participates) continue;
+        for (type_decl.methods) |method_decl| {
+            if (!std.mem.eql(u8, method_decl.name, method_name)) continue;
+            if (functionIdByName(program, method_decl.full_name)) |function_id| {
+                try markReachableFunction(allocator, program, reachable, function_id);
+            }
+        }
+    }
+}
+
+fn formSatisfiesFamily(program: model.Program, type_name: []const u8, family: []const u8) bool {
+    for (program.forms) |form_decl| {
+        if (!std.mem.eql(u8, form_decl.name, type_name)) continue;
+        for (form_decl.families) |candidate| {
+            if (std.mem.eql(u8, candidate, family)) return true;
+        }
+    }
+    return false;
 }
 
 pub fn markReferencedType(
@@ -457,8 +497,54 @@ pub fn lowerAssignmentStatement(
             }
         },
         .field => |target| {
-            const base_reg = try lowerer.lowerExpr(instructions, target.object);
             const target_ty = try lowerResolvedType(program, target.ty);
+            // `arr[i].field = value`: a struct array element is materialized by
+            // value (the VM has no element-pointer op), so writing through a
+            // `field_ptr` into that element mutates a transient copy and the
+            // store is lost. Read the element, mutate the field, then write the
+            // element back into the array via `array_set` so the mutation
+            // survives. Backend-agnostic: LLVM produces the same result.
+            if (target.object.* == .index) {
+                const idx_expr = target.object.index;
+                const elem_ty = try lowerResolvedType(program, model.hir.exprType(target.object.*));
+                const arr_reg = try lowerer.lowerExpr(instructions, idx_expr.object);
+                const index_reg = try lowerer.lowerExpr(instructions, idx_expr.index);
+                const elem_reg = lowerer.freshRegister();
+                try instructions.append(.{ .array_get = .{
+                    .dst = elem_reg,
+                    .array = arr_reg,
+                    .index = index_reg,
+                    .ty = elem_ty,
+                } });
+                const elem_ptr = lowerer.freshRegister();
+                try instructions.append(.{ .field_ptr = .{
+                    .dst = elem_ptr,
+                    .base = elem_reg,
+                    .base_type_name = target.container_type_name,
+                    .field_index = target.field_index,
+                    .field_ty = target_ty,
+                } });
+                if (target_ty.kind == .ffi_struct) {
+                    try instructions.append(.{ .copy_indirect = .{
+                        .dst_ptr = elem_ptr,
+                        .src_ptr = value_reg,
+                        .type_name = target_ty.name orelse return error.UnsupportedExecutableFeature,
+                    } });
+                } else {
+                    try instructions.append(.{ .store_indirect = .{
+                        .ptr = elem_ptr,
+                        .src = value_reg,
+                        .ty = target_ty,
+                    } });
+                }
+                try instructions.append(.{ .array_set = .{
+                    .array = arr_reg,
+                    .index = index_reg,
+                    .src = elem_reg,
+                } });
+                return;
+            }
+            const base_reg = try lowerer.lowerExpr(instructions, target.object);
             if (model.hir.exprType(target.object.*).kind == .native_state_view) {
                 try instructions.append(.{ .native_state_field_set = .{
                     .state = base_reg,
