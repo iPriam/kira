@@ -8,4 +8,4 @@ result = "pass"
 
 [phases.run]
 result = "pass"
-stdout = "111\n222\n333\n"
+stdout = "111\n222\n333\n555\n"

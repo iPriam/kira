@@ -150,10 +150,24 @@ pub fn lowerStatement(
             const declaration = try types.lowerLocalDeclaration(ctx, node, imports, scope, function_headers);
             const local_id = next_local_id.*;
             next_local_id.* += 1;
+            // Rust reborrow: `var r = t` where `t` is a `borrow mut` (`&mut`) rebinds
+            // `r` as a mutable alias of the same storage rather than copying it — the
+            // engine's `var result = tree` pattern. Restricted to `borrow mut`: a shared
+            // `borrow` (`&`) keeps value-copy semantics (you cannot mutate through `&`),
+            // which existing code relies on to get an independent, mutable, owned copy.
+            const is_reborrow = if (declaration.value) |value| switch (value.*) {
+                .local => |local_read| if (scope.get(local_read.name)) |source|
+                    source.ownership == .borrow_mut
+                else
+                    false,
+                else => false,
+            } else false;
+            const local_ownership: model.OwnershipMode = if (is_reborrow) .borrow_mut else .owned;
             try scope.put(ctx.allocator, node.name, .{
                 .id = local_id,
                 .ty = declaration.ty,
                 .storage = @enumFromInt(@intFromEnum(node.storage)),
+                .ownership = local_ownership,
                 .initialized = declaration.initialized,
                 .decl_span = node.span,
             });
@@ -161,7 +175,7 @@ pub fn lowerStatement(
                 .id = local_id,
                 .name = try ctx.allocator.dupe(u8, node.name),
                 .ty = declaration.ty,
-                .ownership = .owned,
+                .ownership = local_ownership,
                 .span = node.span,
             });
             break :blk .{ .let_stmt = .{
@@ -169,6 +183,7 @@ pub fn lowerStatement(
                 .ty = declaration.ty,
                 .explicit_type = node.type_expr != null,
                 .value = declaration.value,
+                .is_reborrow = is_reborrow,
                 .span = node.span,
             } };
         },

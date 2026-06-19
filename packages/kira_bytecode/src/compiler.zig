@@ -139,7 +139,7 @@ pub fn compileProgram(allocator: std.mem.Allocator, program: ir_pkg.Program, mod
                     .src = value.src,
                     .op = @enumFromInt(@intFromEnum(value.op)),
                 } }),
-                .store_local => |value| try instructions.append(.{ .store_local = .{ .local = value.local, .src = value.src } }),
+                .store_local => |value| try instructions.append(.{ .store_local = .{ .local = value.local, .src = value.src, .borrow = value.borrow } }),
                 .load_local => |value| try instructions.append(.{ .load_local = .{ .dst = value.dst, .local = value.local, .ownership = lowerOwnershipMode(value.ownership) } }),
                 .local_ptr => |value| try instructions.append(.{ .local_ptr = .{ .dst = value.dst, .local = value.local } }),
                 .subobject_ptr => |value| try instructions.append(.{ .subobject_ptr = .{

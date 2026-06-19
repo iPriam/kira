@@ -831,6 +831,17 @@ pub const Lowerer = struct {
         switch (statement) {
             .let_stmt => |node| {
                 const local_id = self.mapLocal(node.local_id);
+                if (node.is_reborrow) {
+                    // Reborrow (`var r = t` over a borrow): bind the local as a
+                    // non-owning alias of the source pointer. No box, no clone — both
+                    // bindings reference the same storage, mutations are shared, and
+                    // the alias is not freed at scope exit (the borrow's owner frees).
+                    if (node.value) |value| {
+                        const reg = try self.lowerExpr(instructions, value);
+                        try instructions.append(.{ .store_local = .{ .local = local_id, .src = reg, .borrow = true } });
+                    }
+                    return false;
+                }
                 if (self.isBoxedLocal(node.local_id)) {
                     try self.initializeBoxedLocal(instructions, local_id, try lowerResolvedType(self.program, node.ty), null);
                 }

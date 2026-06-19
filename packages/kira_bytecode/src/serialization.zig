@@ -191,6 +191,7 @@ pub fn serialize(writer: anytype, module: Module) !void {
                 .store_local => |value| {
                     try writer.writeInt(u32, value.local, .little);
                     try writer.writeInt(u32, value.src, .little);
+                    try writer.writeByte(@intFromBool(value.borrow));
                 },
                 .load_local => |value| {
                     try writer.writeInt(u32, value.dst, .little);
@@ -577,6 +578,7 @@ pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !Module {
                 .store_local => try instructions.append(.{ .store_local = .{
                     .local = try reader.takeInt(u32, .little),
                     .src = try reader.takeInt(u32, .little),
+                    .borrow = (try reader.takeByte()) != 0,
                 } }),
                 .load_local => try instructions.append(.{ .load_local = .{
                     .dst = try reader.takeInt(u32, .little),

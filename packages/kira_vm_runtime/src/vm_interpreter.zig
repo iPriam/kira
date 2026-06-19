@@ -272,7 +272,13 @@ pub fn runPrepared(
             continue :dispatch code[pc];
         },
         .store_local => |value| {
-            if (register_owned[value.src]) {
+            if (value.borrow) {
+                // Reborrow (`var r = t` over a borrow): alias the source pointer as
+                // a non-owning slot. Never clone — both bindings reference the same
+                // storage and frame-exit cleanup must not free it (the borrow's owner
+                // does). Mirrors the borrow-mut parameter binding path.
+                setSlotBorrowed(vm, &locals[value.local], &local_owned[value.local], registers[value.src]);
+            } else if (register_owned[value.src]) {
                 transferSlot(
                     vm,
                     &locals[value.local],

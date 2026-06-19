@@ -82,7 +82,7 @@ pub const Instruction = union(OpCode) {
     modulo: struct { dst: u32, lhs: u32, rhs: u32 },
     compare: struct { dst: u32, lhs: u32, rhs: u32, op: CompareOp },
     unary: struct { dst: u32, src: u32, op: UnaryOp },
-    store_local: struct { local: u32, src: u32 },
+    store_local: struct { local: u32, src: u32, borrow: bool = false },
     load_local: struct { dst: u32, local: u32, ownership: ownership_mode.OwnershipMode = .borrow_read },
     local_ptr: struct { dst: u32, local: u32 },
     subobject_ptr: struct { dst: u32, base: u32, offset: u32 },

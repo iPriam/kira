@@ -1,9 +1,10 @@
 // Regression: mutations through a `borrow mut` struct parameter must write back
-// to the caller across all backends. Covers scalar fields and array-element
-// fields (both scalar- and struct-valued). The VM previously lost writes to an
-// array element of a borrow-mut struct (`t.nodes[0].field = ...`) while LLVM did
-// not — a backend parity violation that collapsed all UI layout to the origin,
-// since the KiraLayout engine writes `tree.nodes[i].measuredSize`.
+// to the caller across all backends. Covers scalar fields, array-element fields
+// (scalar- and struct-valued), and the reborrow `var r = t` pattern the KiraLayout
+// engine relies on. Two bugs collapsed all UI layout to the origin: the VM lost
+// array-element writes (`t.nodes[0].field = ...`) while LLVM did not (a parity
+// violation), and `var r = t` deep-copied instead of reborrowing (Rust semantics:
+// binding a borrow aliases the same storage).
 
 struct Pair { var w: Int = 0; var h: Int = 0 }
 struct Node { var v: Int = 0; var sz: Pair = Pair {} }
@@ -24,6 +25,13 @@ function mutElemStruct(t: borrow mut Tree) {
     return
 }
 
+// `var r = t` reborrows: r aliases t's storage, so mutations via r reach the caller.
+function mutViaReborrow(t: borrow mut Tree) {
+    var r = t
+    r.nodes[0].sz = Pair { w: 555, h: 666 }
+    return
+}
+
 @Main
 function main() {
     var p = Pair { w: 0, h: 0 }
@@ -37,5 +45,9 @@ function main() {
     var b = Tree { nodes: [Node { v: 0, sz: Pair {} }] }
     mutElemStruct(b)
     print(b.nodes[0].sz.w)
+
+    var c = Tree { nodes: [Node { v: 0, sz: Pair {} }] }
+    mutViaReborrow(c)
+    print(c.nodes[0].sz.w)
     return
 }

@@ -310,6 +310,12 @@ pub const UnaryOp = enum {
 pub const StoreLocal = struct {
     local: u32,
     src: u32,
+    // Reborrow: bind the local as a non-owning alias of the source pointer
+    // instead of cloning/owning it. Set when lowering `var r = t` where `t` is a
+    // borrow (Rust reborrow semantics). The VM stores the slot borrowed (not freed
+    // at frame exit); the LLVM backend's plain pointer store already aliases and its
+    // drop pass leaves untracked (non-copy_indirect) locals alone.
+    borrow: bool = false,
 };
 
 pub const LoadLocal = struct {

@@ -295,6 +295,10 @@ pub const LetStatement = struct {
     ty: ResolvedType,
     explicit_type: bool,
     value: ?*Expr,
+    // Rust reborrow: the initializer is a read of a borrow binding, so the new
+    // local aliases the same storage rather than copying it. Backends bind it as
+    // a non-owning alias instead of cloning the value.
+    is_reborrow: bool = false,
     span: source_pkg.Span,
 };
 
