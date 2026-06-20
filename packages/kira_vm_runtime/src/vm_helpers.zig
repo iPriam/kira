@@ -2,6 +2,7 @@ const std = @import("std");
 const bytecode = @import("kira_bytecode");
 const runtime_abi = @import("kira_runtime_abi");
 const native_layout = @import("native_layout.zig");
+const construct_any = @import("vm_construct_any.zig");
 
 pub fn resolveFunctionPointer(hooks: anytype, resolve_function: anytype, function_id: u32) !usize {
     return resolve_function(hooks.context, function_id);
@@ -126,7 +127,7 @@ pub fn readNativeFieldValue(
         },
         .construct_any => blk: {
             const raw_ptr = (@as(*const usize, @ptrFromInt(address))).*;
-            break :blk runtime_abi.Value{ .raw_ptr = raw_ptr };
+            break :blk try construct_any.materializeFromNativeIfNeeded(vm, module, field_decl.ty, raw_ptr);
         },
         .raw_ptr => try vm.materializeCallbackValueFromNative(
             module,

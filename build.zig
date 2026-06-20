@@ -324,6 +324,11 @@ pub fn build(b: *std.Build) void {
     platform_matrix_step.dependOn(&platform_matrix_cmd.step);
 
     const test_step = b.step("test", "Run package unit tests and repository policy checks");
+    // `zig build` is the documented workflow for refreshing the development
+    // snapshot that the `kira` bootstrapper launches from ~/.kira/toolchains.
+    // Keep the managed kirac install in lock-step with source changes before
+    // running the default validation step.
+    test_step.dependOn(&install_toolchain_step.step);
     test_step.dependOn(&real_runtime_verify_cmd.step);
     test_step.dependOn(&platform_matrix_cmd.step);
     // Unit tests for the interpreter-hot packages run against safety-mode
@@ -387,6 +392,7 @@ pub fn build(b: *std.Build) void {
 
     const run_backend_corpus = addCorpusRun(b, corpus_runner_exec, hybrid_runner_exec, "all", "run", false);
     const backend_test_step = b.step("test-backends", "Run corpus execution across all backends (vm+llvm+hybrid)");
+    backend_test_step.dependOn(&install_toolchain_step.step);
     backend_test_step.dependOn(&cli.step);
     backend_test_step.dependOn(&bootstrapper.step);
     backend_test_step.dependOn(&run_bootstrapper_tests.step);
@@ -405,6 +411,7 @@ pub fn build(b: *std.Build) void {
 
     const run_full_corpus = addCorpusRun(b, corpus_runner_exec, hybrid_runner_exec, "all", "check build run", false);
     const full_test_step = b.step("test-full", "Run complete validation: check, build, and run corpus across all backends");
+    full_test_step.dependOn(&install_toolchain_step.step);
     full_test_step.dependOn(&cli.step);
     full_test_step.dependOn(&bootstrapper.step);
     full_test_step.dependOn(&run_bootstrapper_tests.step);

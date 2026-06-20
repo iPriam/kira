@@ -309,3 +309,135 @@ test "compile frontend deduplicates mixed-separator paths while walking current 
     try std.testing.expectEqual(@as(usize, 0), result.diagnostics.len);
     try std.testing.expect(result.ir_program != null);
 }
+
+test "lowerProgram accepts imported type constant accessors used by widget code" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "Workspace/UI/app");
+    try tmp.dir.createDirPath(std.testing.io, "Workspace/App/app");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "Workspace/UI/kira.toml",
+        .data =
+        \\[package]
+        \\name = "UI"
+        \\version = "0.1.0"
+        \\kind = "library"
+        \\kira = "0.1.0"
+        \\module_root = "UI"
+        ,
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "Workspace/UI/app/UI.kira",
+        .data =
+        \\struct FoundationUiContext { let id: Int = 0 }
+        \\struct FoundationView { let id: Int = 0 }
+        \\
+        \\struct Color {
+        \\    let r: Float = 0.0
+        \\    let Purple: Color {
+        \\        return Color { r: 1.0 }
+        \\    }
+        \\    let Cyan: Color {
+        \\        return Color { r: 2.0 }
+        \\    }
+        \\}
+        \\
+        \\construct Widget {
+        \\    @Required let body: Widget
+        \\    function lower(context: borrow FoundationUiContext) -> FoundationView {
+        \\        return body.lower(context)
+        \\    }
+        \\}
+        \\
+        \\Widget Text(text: String) {
+        \\    function lower(context: borrow FoundationUiContext) -> FoundationView {
+        \\        let ignored = text.count + context.id
+        \\        return FoundationView { id: 1 }
+        \\    }
+        \\}
+        \\
+        \\function lowerAll(context: borrow FoundationUiContext, children: [any Widget]) -> FoundationView {
+        \\    var index = 0
+        \\    var last = FoundationView {}
+        \\    while index < children.count {
+        \\        last = children[index].lower(context)
+        \\        index = index + 1
+        \\    }
+        \\    return last
+        \\}
+        \\
+        \\Widget VStack() {
+        \\    @Content let children: [Widget]
+        \\    function lower(context: borrow FoundationUiContext) -> FoundationView {
+        \\        return lowerAll(context, children)
+        \\    }
+        \\}
+        ,
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "Workspace/App/kira.toml",
+        .data =
+        \\[package]
+        \\name = "App"
+        \\version = "0.1.0"
+        \\kind = "app"
+        \\kira = "0.1.0"
+        \\
+        \\[defaults]
+        \\execution_mode = "vm"
+        \\build_target = "host"
+        \\
+        \\[dependencies]
+        \\UI = { path = "../UI" }
+        ,
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "Workspace/App/app/main.kira",
+        .data =
+        \\import UI
+        \\
+        \\Widget AccentCard(title: String, accent: Color) {
+        \\    body {
+        \\        Text(text: title)
+        \\    }
+        \\}
+        \\
+        \\Widget Palette() {
+        \\    body {
+        \\        VStack() {
+        \\            AccentCard(title: "purple", accent: Color.Purple)
+        \\            AccentCard(title: "cyan", accent: Color.Cyan)
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\@Main
+        \\function main() {
+        \\    let root = Palette()
+        \\    let context = FoundationUiContext {}
+        \\    let view = root.lower(context)
+        \\    let ignored = view.id
+        \\    return
+        \\}
+        ,
+    });
+
+    const app_root = try tmp.dir.realPathFileAlloc(std.testing.io, "Workspace/App", arena.allocator());
+    var package_diags = std.array_list.Managed(diagnostics.Diagnostic).init(arena.allocator());
+    _ = try package_manager.syncProject(arena.allocator(), app_root, "0.1.0", .{}, &package_diags);
+
+    const source_path = try tmp.dir.realPathFileAlloc(std.testing.io, "Workspace/App/app/main.kira", arena.allocator());
+    const result = try pipeline.compileFileToBytecode(arena.allocator(), source_path);
+    try std.testing.expectEqual(@as(usize, 0), result.diagnostics.len);
+    try std.testing.expect(result.ir_program != null);
+    try std.testing.expect(result.bytecode_module != null);
+
+    const hybrid = try pipeline.compileFileForBackend(arena.allocator(), source_path, .hybrid, &.{});
+    try std.testing.expectEqual(@as(usize, 0), hybrid.diagnostics.len);
+    try std.testing.expect(hybrid.ir_program != null);
+    try std.testing.expect(hybrid.bytecode_module != null);
+}

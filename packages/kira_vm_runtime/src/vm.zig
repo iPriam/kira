@@ -5,6 +5,7 @@ const builtins = @import("builtins.zig");
 const ownership = @import("ownership.zig");
 const native_layout = @import("native_layout.zig");
 const helper_impl = @import("vm_helpers.zig");
+const clone_impl = @import("vm_value_clone.zig");
 const value_impl = @import("vm_values.zig");
 const vm_prepare = @import("vm_prepare.zig");
 const interpreter = @import("vm_interpreter.zig");
@@ -409,6 +410,10 @@ pub const Vm = struct {
         return native_bridge.materializeNativeResult(self, module, return_ty, result);
     }
 
+    pub fn materializeNativeStateValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) anyerror!runtime_abi.Value {
+        return native_bridge.materializeNativeStateValue(self, module, ty, value);
+    }
+
     pub fn copyStructFromNativeLayout(self: *Vm, module: *const bytecode.Module, type_name: []const u8, native_ptr: usize) anyerror!usize {
         return native_bridge.copyStructFromNativeLayout(self, module, type_name, native_ptr);
     }
@@ -541,6 +546,13 @@ pub const Vm = struct {
             std.mem.eql(u8, text, "U8") or std.mem.eql(u8, text, "U16") or std.mem.eql(u8, text, "U32"))
         {
             return .{ .kind = .integer, .name = text };
+        }
+        if (text.len > 4 and std.mem.startsWith(u8, text, "any ")) {
+            return .{
+                .kind = .construct_any,
+                .name = text,
+                .construct_constraint = .{ .construct_name = text[4..] },
+            };
         }
         if (std.mem.eql(u8, text, "RawPtr") or std.mem.endsWith(u8, text, "_ptr")) return .{ .kind = .raw_ptr, .name = text };
         if (text.len >= 2 and text[0] == '[' and text[text.len - 1] == ']') return .{ .kind = .array, .name = text[1 .. text.len - 1] };
@@ -683,139 +695,15 @@ pub const Vm = struct {
         value_type: bytecode.TypeRef,
         value: runtime_abi.Value,
     ) anyerror!runtime_abi.Value {
-        if (!self.heap.isManagedValue(value)) return value;
-        return switch (value_type.kind) {
-            .array => try self.cloneArrayValueDeep(module, try self.arrayElementType(module, value_type), value),
-            .enum_instance => try self.cloneEnumValue(module, value_type.name orelse {
-                self.rememberError("enum store type is missing a name");
-                return error.RuntimeFailure;
-            }, value),
-            .ffi_struct => blk: {
-                if (value != .raw_ptr or value.raw_ptr == 0) break :blk value;
-                const type_name = value_type.name orelse {
-                    self.rememberError("struct store type is missing a name");
-                    return error.RuntimeFailure;
-                };
-                const copied = if (self.isManagedStructPointer(value.raw_ptr))
-                    try self.cloneStructValue(module, type_name, value.raw_ptr)
-                else
-                    try self.copyStructFromNativeLayout(module, type_name, value.raw_ptr);
-                break :blk runtime_abi.Value{ .raw_ptr = copied };
-            },
-            .string => if (value.string.len == 0) value else blk: {
-                const owned = try self.allocator.dupe(u8, value.string);
-                errdefer self.allocator.free(owned);
-                try self.heap.registerString(owned);
-                break :blk runtime_abi.Value{ .string = owned };
-            },
-            .raw_ptr => blk: {
-                const name = value_type.name orelse break :blk value;
-                if (!isCallbackTypeName(name) or value != .raw_ptr or value.raw_ptr == 0) break :blk value;
-                break :blk runtime_abi.Value{ .raw_ptr = try self.cloneClosureValue(module, value.raw_ptr) };
-            },
-            else => value,
-        };
+        return clone_impl.cloneBorrowedValueForStore(self, module, value_type, value);
     }
 
     fn cloneClosureValue(self: *Vm, module: *const bytecode.Module, closure_ptr: usize) anyerror!usize {
-        const source = self.heap.getClosure(closure_ptr) orelse {
-            self.rememberError("callback store source is not a valid closure");
-            return error.RuntimeFailure;
-        };
-        const captures = try self.allocator.alloc(runtime_abi.Value, source.captures.len);
-        for (captures) |*capture| capture.* = .{ .void = {} };
-        var initialized: usize = 0;
-        errdefer {
-            self.heap.dropSlots(captures[0..initialized]);
-            self.allocator.free(captures);
-        }
-
-        const function_decl = module.findFunctionById(source.function_id);
-        const capture_types = if (function_decl) |decl| blk: {
-            if (source.captures.len > decl.param_count) {
-                self.rememberError("closure capture metadata is inconsistent");
-                return error.RuntimeFailure;
-            }
-            const start = decl.param_count - source.captures.len;
-            break :blk decl.local_types[start..decl.param_count];
-        } else null;
-
-        for (source.captures, 0..) |capture, index| {
-            const cloned = if (capture_types) |types|
-                try self.cloneBorrowedValueForStore(module, types[index], capture)
-            else
-                capture;
-            self.heap.assignTransferred(&captures[index], cloned);
-            initialized += 1;
-        }
-
-        const clone = try self.allocator.create(ClosureObject);
-        errdefer self.allocator.destroy(clone);
-        clone.* = .{
-            .function_id = source.function_id,
-            .is_native = source.is_native,
-            .captures = captures,
-        };
-        return self.heap.registerClosure(clone);
+        return clone_impl.cloneClosureValue(self, module, closure_ptr);
     }
 
     pub fn cloneBorrowedManagedValueDynamic(self: *Vm, module: *const bytecode.Module, value: runtime_abi.Value) anyerror!runtime_abi.Value {
-        return switch (value) {
-            .string => |bytes| if (bytes.len == 0 or !self.heap.isManagedValue(value)) value else blk: {
-                const owned = try self.allocator.dupe(u8, bytes);
-                errdefer self.allocator.free(owned);
-                try self.heap.registerString(owned);
-                break :blk runtime_abi.Value{ .string = owned };
-            },
-            // One record probe instead of the previous isManagedValue ->
-            // getClosure -> getArray -> getStructTypeName chain (four hash
-            // probes of the same key); behavior is identical.
-            .raw_ptr => |ptr| blk: {
-                const record = self.heap.getRecord(ptr) orelse break :blk value;
-                switch (record.kind) {
-                    .closure => break :blk runtime_abi.Value{ .raw_ptr = try self.cloneClosureValue(module, ptr) },
-                    .array => |array| break :blk runtime_abi.Value{ .raw_ptr = try self.cloneArrayValueDynamic(module, array) },
-                    .struct_fields => |struct_fields| {
-                        const type_name = struct_fields.type_name;
-                        if (self.findTypeCached(module, type_name) != null) {
-                            break :blk runtime_abi.Value{ .raw_ptr = try self.cloneStructValue(module, type_name, ptr) };
-                        }
-                        if (self.enumTypeExists(module, type_name)) {
-                            break :blk try self.cloneEnumValue(module, type_name, value);
-                        }
-                        break :blk value;
-                    },
-                    .string_bytes => break :blk value,
-                }
-            },
-            else => value,
-        };
-    }
-
-    fn cloneArrayValueDynamic(self: *Vm, module: *const bytecode.Module, source: *const ArrayObject) anyerror!usize {
-        const object = try self.heap.allocArrayObject();
-        errdefer self.heap.freeArrayObject(object);
-        const items = try self.heap.allocBridgeSlice(@max(source.len, 1));
-        for (items) |*item| item.* = runtime_abi.bridgeValueFromValue(.{ .void = {} });
-        var initialized: usize = 0;
-        errdefer {
-            for (items[0..initialized]) |item| self.heap.dropValue(runtime_abi.bridgeValueToValue(item));
-            self.heap.freeBridgeSlice(items);
-        }
-        for (source.items[0..source.len], 0..) |item, index| {
-            const cloned = try self.cloneBorrowedManagedValueDynamic(module, runtime_abi.bridgeValueToValue(item));
-            items[index] = runtime_abi.bridgeValueFromValue(cloned);
-            initialized += 1;
-        }
-        object.* = .{
-            .len = source.len,
-            .items = items.ptr,
-        };
-        return self.heap.registerArray(object);
-    }
-
-    fn enumTypeExists(self: *Vm, module: *const bytecode.Module, type_name: []const u8) bool {
-        return self.findEnumCached(module, type_name) != null;
+        return clone_impl.cloneBorrowedManagedValueDynamic(self, module, value);
     }
 
     pub fn cloneBorrowedLocalValue(
@@ -824,16 +712,7 @@ pub const Vm = struct {
         value_type: bytecode.TypeRef,
         value: runtime_abi.Value,
     ) !runtime_abi.Value {
-        if (value_type.kind != .ffi_struct or value != .raw_ptr or value.raw_ptr == 0) return value;
-        const type_name = value_type.name orelse {
-            self.rememberError("local struct type is missing a name");
-            return error.RuntimeFailure;
-        };
-        const copied = if (self.isManagedStructPointer(value.raw_ptr))
-            try self.cloneStructValue(module, type_name, value.raw_ptr)
-        else
-            try self.copyStructFromNativeLayout(module, type_name, value.raw_ptr);
-        return .{ .raw_ptr = copied };
+        return clone_impl.cloneBorrowedLocalValue(self, module, value_type, value);
     }
 
     pub fn resolveVirtualMethod(
@@ -888,38 +767,9 @@ pub const Vm = struct {
                 const nested_dst: [*]align(1) runtime_abi.Value = @ptrFromInt(dst_ptr[index].raw_ptr);
                 const nested_src: [*]align(1) runtime_abi.Value = @ptrFromInt(src_ptr[index].raw_ptr);
                 try self.copyStruct(module, nested_type, nested_dst, nested_src);
-            } else if (field_decl.ty.kind == .array and self.heap.isManagedValue(src_ptr[index])) {
-                // Affine value semantics: copying a struct deep-clones its array
-                // fields so the copy and the original share no backing storage.
-                const element_ty = try self.arrayElementType(module, field_decl.ty);
-                const cloned = try self.cloneArrayValueDeep(module, element_ty, src_ptr[index]);
-                const old = dst_ptr[index];
-                dst_ptr[index] = cloned;
-                self.heap.dropValue(old);
-            } else if (field_decl.ty.kind == .enum_instance and src_ptr[index] == .raw_ptr and src_ptr[index].raw_ptr != 0) {
-                const type_name = field_decl.ty.name orelse {
-                    self.rememberError("enum field type is missing a name");
-                    return error.RuntimeFailure;
-                };
-                const old = dst_ptr[index];
-                dst_ptr[index] = self.cloneEnumValue(module, type_name, src_ptr[index]) catch |err| {
-                    if (err == error.RuntimeFailure) {
-                        if (self.lastError()) |message| {
-                            var previous: [256]u8 = undefined;
-                            const previous_len = @min(message.len, previous.len);
-                            @memcpy(previous[0..previous_len], message[0..previous_len]);
-                            self.rememberFmt(
-                                "{s}; owner={s}.{s}",
-                                .{ previous[0..previous_len], type_decl.name, field_decl.name },
-                            );
-                        }
-                    }
-                    return err;
-                };
-                self.heap.dropValue(old);
             } else {
                 const old = dst_ptr[index];
-                dst_ptr[index] = src_ptr[index];
+                dst_ptr[index] = try self.cloneBorrowedValueForStore(module, field_decl.ty, src_ptr[index]);
                 self.heap.dropValue(old);
             }
         }
@@ -967,6 +817,7 @@ pub const Vm = struct {
                     const enum_name = element_ty.name orelse break :blk element;
                     break :blk try self.cloneEnumValue(module, enum_name, element);
                 },
+                .construct_any => try self.cloneBorrowedValueForStore(module, element_ty, element),
                 else => element,
             };
             dst_array.items[index] = runtime_abi.bridgeValueFromValue(cloned);

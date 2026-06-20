@@ -17,6 +17,7 @@ const runtime_abi = @import("kira_runtime_abi");
 const builtins = @import("builtins.zig");
 const ownership = @import("ownership.zig");
 const helper_impl = @import("vm_helpers.zig");
+const slot_impl = @import("vm_slot_utils.zig");
 const value_impl = @import("vm_values.zig");
 const vm_prepare = @import("vm_prepare.zig");
 const vm_mod = @import("vm.zig");
@@ -26,6 +27,64 @@ const Hooks = vm_mod.Hooks;
 const ArrayObject = ownership.ArrayObject;
 const PreparedModule = vm_prepare.PreparedModule;
 const PreparedFunction = vm_prepare.PreparedFunction;
+const fillTransferredArgs = slot_impl.fillTransferredArgs;
+const ownershipModeAt = slot_impl.ownershipModeAt;
+const releaseTrackedSlots = slot_impl.releaseTrackedSlots;
+const setSlotBorrowed = slot_impl.setSlotBorrowed;
+const setSlotManaged = slot_impl.setSlotManaged;
+const setSlotOwned = slot_impl.setSlotOwned;
+const setSlotPrimitive = slot_impl.setSlotPrimitive;
+const setSlotUnmanaged = slot_impl.setSlotUnmanaged;
+const transferSlot = slot_impl.transferSlot;
+
+const PreparedArrayElement = struct {
+    value: runtime_abi.Value,
+    owned: bool,
+};
+
+fn prepareArrayElement(
+    vm: *Vm,
+    module: *const bytecode.Module,
+    element_ty: bytecode.TypeRef,
+    item_value: runtime_abi.Value,
+) !PreparedArrayElement {
+    if (element_ty.kind == .ffi_struct and item_value == .raw_ptr and item_value.raw_ptr != 0) {
+        const type_name = element_ty.name orelse {
+            vm.rememberError("array element struct type is missing a name");
+            return error.RuntimeFailure;
+        };
+        const copied = if (vm.isManagedStructPointer(item_value.raw_ptr))
+            try vm.cloneStructValue(module, type_name, item_value.raw_ptr)
+        else
+            try vm.copyStructFromNativeLayout(module, type_name, item_value.raw_ptr);
+        return .{
+            .value = .{ .raw_ptr = copied },
+            .owned = true,
+        };
+    }
+
+    if (item_value != .raw_ptr or item_value.raw_ptr == 0) {
+        return .{ .value = item_value, .owned = false };
+    }
+
+    const needs_materialize = switch (element_ty.kind) {
+        .array => vm.heap.getArray(item_value.raw_ptr) == null,
+        .enum_instance => !vm.heap.isManagedValue(item_value),
+        .construct_any => !vm.isManagedStructPointer(item_value.raw_ptr),
+        .raw_ptr => blk: {
+            const name = element_ty.name orelse break :blk false;
+            break :blk Vm.isCallbackTypeName(name) and vm.heap.getClosure(item_value.raw_ptr) == null and runtime_abi.isTaggedNativeClosurePointer(item_value.raw_ptr);
+        },
+        else => false,
+    };
+    if (!needs_materialize) return .{ .value = item_value, .owned = false };
+
+    const materialized = try vm.materializeNativeStateValue(module, element_ty, item_value);
+    return .{
+        .value = materialized,
+        .owned = vm.heap.isManagedValue(materialized) and !vm.heap.isManagedValue(item_value),
+    };
+}
 
 pub fn runPrepared(
     vm: *Vm,
@@ -309,12 +368,8 @@ pub fn runPrepared(
                     decl.local_types[value.local]
                 else
                     bytecode.TypeRef{ .kind = .raw_ptr };
-                if (local_type.kind == .ffi_struct) {
-                    const stored = try vm.cloneBorrowedLocalValue(module, local_type, registers[value.src]);
-                    setSlotOwned(vm, &locals[value.local], &local_owned[value.local], stored);
-                } else {
-                    setSlotBorrowed(vm, &locals[value.local], &local_owned[value.local], registers[value.src]);
-                }
+                const stored = try vm.cloneBorrowedLocalValue(module, local_type, registers[value.src]);
+                setSlotOwned(vm, &locals[value.local], &local_owned[value.local], stored);
             }
             pc += 1;
             continue :dispatch code[pc];
@@ -472,19 +527,11 @@ pub fn runPrepared(
                 vm.rememberError("array index is out of bounds");
                 return error.RuntimeFailure;
             }
-            const item_value = runtime_abi.bridgeValueToValue(array_ptr.items[index]);
-            if (value.ty.kind == .ffi_struct and item_value == .raw_ptr and item_value.raw_ptr != 0) {
-                const type_name = value.ty.name orelse {
-                    vm.rememberError("array element struct type is missing a name");
-                    return error.RuntimeFailure;
-                };
-                const copied = if (vm.isManagedStructPointer(item_value.raw_ptr))
-                    try vm.cloneStructValue(module, type_name, item_value.raw_ptr)
-                else
-                    try vm.copyStructFromNativeLayout(module, type_name, item_value.raw_ptr);
-                setSlotOwned(vm, &registers[value.dst], &register_owned[value.dst], .{ .raw_ptr = copied });
+            const element = try prepareArrayElement(vm, module, value.ty, runtime_abi.bridgeValueToValue(array_ptr.items[index]));
+            if (element.owned) {
+                setSlotOwned(vm, &registers[value.dst], &register_owned[value.dst], element.value);
             } else {
-                setSlotBorrowed(vm, &registers[value.dst], &register_owned[value.dst], item_value);
+                setSlotBorrowed(vm, &registers[value.dst], &register_owned[value.dst], element.value);
             }
             pc += 1;
             continue :dispatch code[pc];
@@ -728,9 +775,13 @@ pub fn runPrepared(
             }
             const actual_type_name = vm.heap.getStructTypeName(receiver_value.raw_ptr) orelse value.static_type_name;
             const resolved_method = vm.resolveVirtualMethod(module, actual_type_name, value.method_name) orelse {
-                vm.rememberError("virtual method could not be resolved on the concrete receiver type");
+                vm.rememberFmt(
+                    "virtual method could not be resolved: function={s} receiver=0x{x} actual_type={s} static_type={s} method={s}",
+                    .{ decl.name, receiver_value.raw_ptr, actual_type_name, value.static_type_name, value.method_name },
+                );
                 return error.RuntimeFailure;
             };
+            const method_index_opt = prepared.indexOfId(resolved_method.function_id);
             const adjusted_receiver = if (resolved_method.receiver_offset == 0)
                 receiver_value.raw_ptr
             else
@@ -743,7 +794,36 @@ pub fn runPrepared(
             call_args[0] = .{ .raw_ptr = adjusted_receiver };
             for (value.args, 0..) |register_index, index| call_args[index + 1] = registers[register_index];
 
-            const result = if (prepared.indexOfId(resolved_method.function_id)) |method_index|
+            // Transfer ownership of moved receiver/argument registers into the call, mirroring
+            // `fillTransferredArgs` for direct `.call`. Without this, a receiver or argument that
+            // the resolved method consumes (e.g. `self` captured into an `extend Widget` modifier's
+            // `{ self }` content) stays marked owned in its register and is double-freed by the
+            // frame epilogue, corrupting the value the call moved it into. Receiver ownership is
+            // only transferable when the receiver pointer is not interior-adjusted; native methods
+            // (no managed decl) keep copy semantics. param_ownership[0] is `self`.
+            if (method_index_opt) |method_index| {
+                const param_ownership = prepared.functions[method_index].decl.param_ownership;
+                if (resolved_method.receiver_offset == 0) {
+                    switch (ownershipModeAt(param_ownership, 0)) {
+                        .owned, .move => if (register_owned[value.receiver]) {
+                            register_owned[value.receiver] = false;
+                            registers[value.receiver] = .{ .void = {} };
+                        },
+                        .borrow_read, .borrow_mut, .copy => {},
+                    }
+                }
+                for (value.args, 0..) |register_index, index| {
+                    switch (ownershipModeAt(param_ownership, index + 1)) {
+                        .owned, .move => if (register_owned[register_index]) {
+                            register_owned[register_index] = false;
+                            registers[register_index] = .{ .void = {} };
+                        },
+                        .borrow_read, .borrow_mut, .copy => {},
+                    }
+                }
+            }
+
+            const result = if (method_index_opt) |method_index|
                 try runPrepared(vm, prepared, &prepared.functions[method_index], call_args, writer, hooks)
             else native_result: {
                 const callback = hooks.call_native orelse {
@@ -812,11 +892,13 @@ pub fn runPrepared(
             continue :dispatch code[pc];
         },
         .ret => |value| {
-            const result = if (value.src) |src| registers[src] else runtime_abi.Value{ .void = {} };
+            var result = if (value.src) |src| registers[src] else runtime_abi.Value{ .void = {} };
             if (value.src) |src| {
                 if (register_owned[src]) {
                     register_owned[src] = false;
                     registers[src] = .{ .void = {} };
+                } else {
+                    result = try vm.cloneBorrowedLocalValue(module, decl.return_type, registers[src]);
                 }
             }
             return result;
@@ -945,96 +1027,4 @@ fn arithValues(vm: *Vm, lhs: runtime_abi.Value, rhs: runtime_abi.Value, kind: by
         .subtract => try value_impl.subtractValues(vm, lhs, rhs),
         .multiply => try value_impl.multiplyValues(vm, lhs, rhs),
     };
-}
-
-fn setSlotOwned(vm: *Vm, slot: *runtime_abi.Value, owned: *bool, value: runtime_abi.Value) void {
-    const old = slot.*;
-    const old_owned = owned.*;
-    slot.* = value;
-    owned.* = vm.heap.isManagedValue(value);
-    if (old_owned) vm.heap.dropValue(old);
-}
-
-// Fast paths for results whose ownership is statically known, avoiding the
-// isManagedValue heap-membership hash lookup that setSlotOwned performs.
-// `setSlotPrimitive`: const/arithmetic/compare results are never heap-managed.
-// `setSlotManaged`: a freshly allocated+registered heap value is always owned.
-inline fn setSlotPrimitive(vm: *Vm, slot: *runtime_abi.Value, owned: *bool, value: runtime_abi.Value) void {
-    const old = slot.*;
-    const old_owned = owned.*;
-    slot.* = value;
-    owned.* = false;
-    if (old_owned) vm.heap.dropValue(old);
-}
-
-inline fn setSlotManaged(vm: *Vm, slot: *runtime_abi.Value, owned: *bool, value: runtime_abi.Value) void {
-    const old = slot.*;
-    const old_owned = owned.*;
-    slot.* = value;
-    owned.* = true;
-    if (old_owned) vm.heap.dropValue(old);
-}
-
-fn setSlotBorrowed(vm: *Vm, slot: *runtime_abi.Value, owned: *bool, value: runtime_abi.Value) void {
-    const old = slot.*;
-    const old_owned = owned.*;
-    slot.* = value;
-    owned.* = false;
-    if (old_owned) vm.heap.dropValue(old);
-}
-
-fn setSlotUnmanaged(vm: *Vm, slot: *runtime_abi.Value, owned: *bool, value: runtime_abi.Value) void {
-    const old = slot.*;
-    const old_owned = owned.*;
-    slot.* = value;
-    owned.* = false;
-    if (old_owned) vm.heap.dropValue(old);
-}
-
-fn transferSlot(
-    vm: *Vm,
-    dst: *runtime_abi.Value,
-    dst_owned: *bool,
-    src: *runtime_abi.Value,
-    src_owned: *bool,
-) void {
-    const old = dst.*;
-    const old_owned = dst_owned.*;
-    dst.* = src.*;
-    dst_owned.* = src_owned.*;
-    if (src_owned.*) {
-        src.* = .{ .void = {} };
-        src_owned.* = false;
-    }
-    if (old_owned) vm.heap.dropValue(old);
-}
-
-fn fillTransferredArgs(
-    values: []runtime_abi.Value,
-    registers: []runtime_abi.Value,
-    register_owned: []bool,
-    argument_registers: []const u32,
-    param_ownership: []const bytecode.OwnershipMode,
-) void {
-    for (argument_registers, 0..) |register_index, index| {
-        values[index] = registers[register_index];
-        switch (ownershipModeAt(param_ownership, index)) {
-            .owned, .move => {
-                if (register_owned[register_index]) {
-                    register_owned[register_index] = false;
-                    registers[register_index] = .{ .void = {} };
-                }
-            },
-            .borrow_read, .borrow_mut, .copy => {},
-        }
-    }
-}
-
-fn ownershipModeAt(values: []const bytecode.OwnershipMode, index: usize) bytecode.OwnershipMode {
-    if (index < values.len) return values[index];
-    return .owned;
-}
-
-fn releaseTrackedSlots(vm: *Vm, slots: []runtime_abi.Value, owned: []const bool) void {
-    for (slots, owned) |slot, is_owned| if (is_owned) vm.heap.dropValue(slot);
 }

@@ -135,7 +135,39 @@ fn markReferencedTypesInExpr(
             try markReferencedTypesInExpr(allocator, program, referenced, node.index);
         },
         .callback => |node| for (node.body) |statement| try markReferencedTypesInStatement(allocator, program, referenced, statement),
+        .builder_array => |node| try markReferencedTypesInBuilderBlock(allocator, program, referenced, node.builder),
         else => {},
+    }
+}
+
+fn markReferencedTypesInBuilderBlock(
+    allocator: std.mem.Allocator,
+    program: model.Program,
+    referenced: *std.StringHashMapUnmanaged(void),
+    builder: model.BuilderBlock,
+) anyerror!void {
+    for (builder.items) |item| {
+        switch (item) {
+            .expr => |expr_item| try markReferencedTypesInExpr(allocator, program, referenced, expr_item.expr),
+            .if_item => |if_item| {
+                try markReferencedTypesInExpr(allocator, program, referenced, if_item.condition);
+                try markReferencedTypesInBuilderBlock(allocator, program, referenced, if_item.then_block);
+                if (if_item.else_block) |else_block| try markReferencedTypesInBuilderBlock(allocator, program, referenced, else_block);
+            },
+            .for_item => |for_item| {
+                try markReferencedType(allocator, program, referenced, for_item.binding_ty);
+                try markReferencedTypesInExpr(allocator, program, referenced, for_item.iterator);
+                try markReferencedTypesInBuilderBlock(allocator, program, referenced, for_item.body);
+            },
+            .switch_item => |switch_item| {
+                try markReferencedTypesInExpr(allocator, program, referenced, switch_item.subject);
+                for (switch_item.cases) |case_node| {
+                    try markReferencedTypesInExpr(allocator, program, referenced, case_node.pattern);
+                    try markReferencedTypesInBuilderBlock(allocator, program, referenced, case_node.body);
+                }
+                if (switch_item.default_block) |default_block| try markReferencedTypesInBuilderBlock(allocator, program, referenced, default_block);
+            },
+        }
     }
 }
 
@@ -313,9 +345,15 @@ pub fn markReachableExpr(
             for (node.args) |arg| try markReachableExpr(allocator, program, reachable, arg);
         },
         .function_ref => |node| try markReachableFunction(allocator, program, reachable, node.function_id),
+        .namespace_ref => |node| {
+            if (functionIdByName(program, node.path)) |function_id| {
+                try markReachableFunction(allocator, program, reachable, function_id);
+            }
+        },
         .callback => |node| {
             for (node.body) |statement| try markReachableStatement(allocator, program, reachable, statement);
         },
+        .builder_array => |node| try markReachableBuilderBlock(allocator, program, reachable, node.builder),
         .call_value => |node| {
             try markReachableExpr(allocator, program, reachable, node.callee);
             for (node.args) |arg| try markReachableExpr(allocator, program, reachable, arg);
@@ -340,6 +378,36 @@ pub fn markReachableExpr(
             try markReachableExpr(allocator, program, reachable, node.index);
         },
         else => {},
+    }
+}
+
+fn markReachableBuilderBlock(
+    allocator: std.mem.Allocator,
+    program: model.Program,
+    reachable: *std.AutoHashMapUnmanaged(u32, void),
+    builder: model.BuilderBlock,
+) anyerror!void {
+    for (builder.items) |item| {
+        switch (item) {
+            .expr => |expr_item| try markReachableExpr(allocator, program, reachable, expr_item.expr),
+            .if_item => |if_item| {
+                try markReachableExpr(allocator, program, reachable, if_item.condition);
+                try markReachableBuilderBlock(allocator, program, reachable, if_item.then_block);
+                if (if_item.else_block) |else_block| try markReachableBuilderBlock(allocator, program, reachable, else_block);
+            },
+            .for_item => |for_item| {
+                try markReachableExpr(allocator, program, reachable, for_item.iterator);
+                try markReachableBuilderBlock(allocator, program, reachable, for_item.body);
+            },
+            .switch_item => |switch_item| {
+                try markReachableExpr(allocator, program, reachable, switch_item.subject);
+                for (switch_item.cases) |case_node| {
+                    try markReachableExpr(allocator, program, reachable, case_node.pattern);
+                    try markReachableBuilderBlock(allocator, program, reachable, case_node.body);
+                }
+                if (switch_item.default_block) |default_block| try markReachableBuilderBlock(allocator, program, reachable, default_block);
+            },
+        }
     }
 }
 
@@ -620,7 +688,7 @@ pub fn lowerMethodMembers(
     return lowered;
 }
 
-fn functionIdByName(program: model.Program, name: []const u8) ?u32 {
+pub fn functionIdByName(program: model.Program, name: []const u8) ?u32 {
     for (program.functions) |function_decl| {
         if (std.mem.eql(u8, function_decl.name, name)) return function_decl.id;
     }

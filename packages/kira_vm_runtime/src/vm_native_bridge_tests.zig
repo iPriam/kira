@@ -729,3 +729,125 @@ test "native state recovery validates the expected type id" {
     try std.testing.expectError(error.RuntimeFailure, vm.runFunctionById(&module, 0, &.{}, &discarding_5.writer, .{}));
     try std.testing.expect(std.mem.indexOf(u8, vm.lastError().?, "wrong state type") != null);
 }
+
+test "native construct-any fields materialize concrete widget values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var vm = Vm.init(arena.allocator());
+    const any_widget = bytecode.TypeRef{
+        .kind = .construct_any,
+        .name = "any Widget",
+        .construct_constraint = .{ .construct_name = "Widget" },
+    };
+    const module = bytecode.Module{
+        .constructs = @constCast(&[_]bytecode.Construct{.{ .name = "Widget" }}),
+        .construct_implementations = @constCast(&[_]bytecode.ConstructImplementation{
+            .{ .type_name = "Button", .construct_constraint = .{ .construct_name = "Widget" }, .fields = &.{}, .has_content = false, .lifecycle_hooks = &.{} },
+        }),
+        .types = @constCast(&[_]bytecode.TypeDecl{
+            .{ .name = "Button", .fields = &.{} },
+            .{
+                .name = "Layer",
+                .fields = @constCast(&[_]bytecode.Field{
+                    .{ .name = "content", .ty = any_widget },
+                }),
+            },
+        }),
+        .functions = &.{},
+        .entry_function_id = null,
+    };
+
+    const button_ptr = try vm.allocateStruct(&module, "Button");
+    defer vm.dropManagedValue(.{ .raw_ptr = button_ptr });
+    const native_button_ptr = try vm.copyStructToNativeLayout(&module, "Button", button_ptr);
+    defer vm.destroyStructNativeLayout(&module, "Button", native_button_ptr);
+
+    const layer_ptr = try vm.allocateStruct(&module, "Layer");
+    defer vm.dropManagedValue(.{ .raw_ptr = layer_ptr });
+    const native_layer_ptr = try vm.copyStructToNativeLayout(&module, "Layer", layer_ptr);
+    defer vm.destroyStructNativeLayout(&module, "Layer", native_layer_ptr);
+
+    const content_offset = try native_layout.fieldOffset(&module, "Layer", 0);
+    (@as(*usize, @ptrFromInt(native_layer_ptr + content_offset))).* = native_button_ptr;
+
+    const runtime_layer_ptr = try vm.copyStructFromNativeLayout(&module, "Layer", native_layer_ptr);
+    defer vm.dropManagedValue(.{ .raw_ptr = runtime_layer_ptr });
+    const runtime_fields: [*]align(1) const runtime_abi.Value = @ptrFromInt(runtime_layer_ptr);
+    try std.testing.expect(runtime_fields[0] == .raw_ptr);
+    try std.testing.expectEqualStrings("Button", vm.heap.getStructTypeName(runtime_fields[0].raw_ptr).?);
+}
+
+test "native construct-any results materialize concrete widget values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var vm = Vm.init(arena.allocator());
+    const any_widget = bytecode.TypeRef{
+        .kind = .construct_any,
+        .name = "any Widget",
+        .construct_constraint = .{ .construct_name = "Widget" },
+    };
+    const module = bytecode.Module{
+        .constructs = @constCast(&[_]bytecode.Construct{.{ .name = "Widget" }}),
+        .construct_implementations = @constCast(&[_]bytecode.ConstructImplementation{
+            .{ .type_name = "Button", .construct_constraint = .{ .construct_name = "Widget" }, .fields = &.{}, .has_content = false, .lifecycle_hooks = &.{} },
+        }),
+        .types = @constCast(&[_]bytecode.TypeDecl{
+            .{ .name = "Button", .fields = &.{} },
+        }),
+        .functions = &.{},
+        .entry_function_id = null,
+    };
+
+    const button_ptr = try vm.allocateStruct(&module, "Button");
+    defer vm.dropManagedValue(.{ .raw_ptr = button_ptr });
+    const native_button_ptr = try vm.copyStructToNativeLayout(&module, "Button", button_ptr);
+    defer vm.destroyStructNativeLayout(&module, "Button", native_button_ptr);
+
+    const result = try vm.materializeNativeResult(&module, any_widget, .{ .raw_ptr = native_button_ptr });
+    defer vm.dropManagedValue(result);
+    try std.testing.expect(result == .raw_ptr);
+    try std.testing.expectEqualStrings("Button", vm.heap.getStructTypeName(result.raw_ptr).?);
+}
+
+test "native widget arrays materialize concrete construct-any elements" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var vm = Vm.init(arena.allocator());
+    const module = bytecode.Module{
+        .constructs = @constCast(&[_]bytecode.Construct{.{ .name = "Widget" }}),
+        .construct_implementations = @constCast(&[_]bytecode.ConstructImplementation{
+            .{ .type_name = "Button", .construct_constraint = .{ .construct_name = "Widget" }, .fields = &.{}, .has_content = false, .lifecycle_hooks = &.{} },
+        }),
+        .types = @constCast(&[_]bytecode.TypeDecl{
+            .{ .name = "Button", .fields = &.{} },
+        }),
+        .functions = &.{},
+        .entry_function_id = null,
+    };
+
+    const runtime_button_ptr = try vm.allocateStruct(&module, "Button");
+    const native_button_ptr = try vm.copyStructToNativeLayout(&module, "Button", runtime_button_ptr);
+    vm.dropManagedValue(.{ .raw_ptr = runtime_button_ptr });
+    defer vm.destroyStructNativeLayout(&module, "Button", native_button_ptr);
+
+    const native_array = try vm.allocator.create(ArrayObject);
+    defer vm.allocator.destroy(native_array);
+    const native_items = try vm.allocator.alloc(runtime_abi.BridgeValue, 1);
+    defer vm.allocator.free(native_items);
+    native_items[0] = runtime_abi.bridgeValueFromValue(.{ .raw_ptr = native_button_ptr });
+    native_array.* = .{
+        .len = 1,
+        .items = native_items.ptr,
+    };
+
+    const runtime_array_ptr = try vm.copyArrayFromNativeLayout(&module, .{ .kind = .array, .name = "any Widget" }, @intFromPtr(native_array));
+    defer vm.dropManagedValue(.{ .raw_ptr = runtime_array_ptr });
+
+    const runtime_array: *const ArrayObject = @ptrFromInt(runtime_array_ptr);
+    const element = runtime_abi.bridgeValueToValue(runtime_array.items[0]);
+    try std.testing.expect(element == .raw_ptr);
+    try std.testing.expectEqualStrings("Button", vm.heap.getStructTypeName(element.raw_ptr).?);
+}

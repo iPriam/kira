@@ -13,6 +13,7 @@ const bytecode = @import("kira_bytecode");
 const runtime_abi = @import("kira_runtime_abi");
 const native_layout = @import("native_layout.zig");
 const helper_impl = @import("vm_helpers.zig");
+const construct_any = @import("vm_construct_any.zig");
 const ownership = @import("ownership.zig");
 const vm_mod = @import("vm.zig");
 
@@ -384,7 +385,8 @@ pub fn copyValueFromNativeLayout(self: *Vm, module: *const bytecode.Module, ty: 
             }, value.raw_ptr) };
         },
         .construct_any => blk: {
-            break :blk value;
+            if (value != .raw_ptr or value.raw_ptr == 0) break :blk .{ .raw_ptr = 0 };
+            break :blk try construct_any.materializeFromNativeIfNeeded(self, module, ty, value.raw_ptr);
         },
         .raw_ptr => try materializeCallbackValueFromNative(self, module, ty, value),
         else => value,
@@ -645,15 +647,23 @@ pub fn materializeNativeResult(
     return_ty: bytecode.TypeRef,
     value: runtime_abi.Value,
 ) !runtime_abi.Value {
-    if (return_ty.kind != .ffi_struct) return value;
-    if (value != .raw_ptr or value.raw_ptr == 0) {
-        self.rememberError("native struct result requires a valid pointer");
-        return error.RuntimeFailure;
-    }
-    return .{ .raw_ptr = try copyStructFromNativeLayout(self, module, return_ty.name orelse {
-        self.rememberError("native struct result is missing a type name");
-        return error.RuntimeFailure;
-    }, value.raw_ptr) };
+    return switch (return_ty.kind) {
+        .ffi_struct => blk: {
+            if (value != .raw_ptr or value.raw_ptr == 0) {
+                self.rememberError("native struct result requires a valid pointer");
+                return error.RuntimeFailure;
+            }
+            break :blk .{ .raw_ptr = try copyStructFromNativeLayout(self, module, return_ty.name orelse {
+                self.rememberError("native struct result is missing a type name");
+                return error.RuntimeFailure;
+            }, value.raw_ptr) };
+        },
+        .construct_any => blk: {
+            if (value != .raw_ptr or value.raw_ptr == 0) break :blk .{ .raw_ptr = 0 };
+            break :blk try construct_any.materializeFromNativeIfNeeded(self, module, return_ty, value.raw_ptr);
+        },
+        else => value,
+    };
 }
 
 pub fn copyStructFromNativeLayout(self: *Vm, module: *const bytecode.Module, type_name: []const u8, native_ptr: usize) anyerror!usize {

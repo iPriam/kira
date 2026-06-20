@@ -7,6 +7,7 @@ const program_impl = @import("lower_from_hir_program.zig");
 const type_impl = @import("lower_from_hir_types.zig");
 const statement_impl = @import("lower_from_hir_statements.zig");
 const boxed_impl = @import("lower_from_hir_boxed.zig");
+const namespace_ref_impl = @import("lower_from_hir_namespace_refs.zig");
 
 pub const lowerTypeDecls = program_impl.lowerTypeDecls;
 pub const lowerEnumTypeDecls = program_impl.lowerEnumTypeDecls;
@@ -21,6 +22,8 @@ pub const lowerFfiTypeInfo = program_impl.lowerFfiTypeInfo;
 pub const lowerAssignmentStatement = program_impl.lowerAssignmentStatement;
 pub const findTypeFieldDefaultExpr = program_impl.findTypeFieldDefaultExpr;
 pub const fieldDeclIsTypeConstant = program_impl.fieldDeclIsTypeConstant;
+pub const functionIdByName = program_impl.functionIdByName;
+pub const lowerNamespaceRefExpr = namespace_ref_impl.lowerNamespaceRefExpr;
 pub const lowerResolvedType = type_impl.lowerResolvedType;
 pub const lowerNamedType = type_impl.lowerNamedType;
 pub const lowerExecutableCompareOperandType = type_impl.lowerExecutableCompareOperandType;
@@ -1190,12 +1193,8 @@ pub const Lowerer = struct {
                 break :blk dst orelse return error.UnsupportedExecutableFeature;
             },
             .namespace_ref => |node| blk: {
-                if (std.mem.indexOfScalar(u8, node.path, '.')) |index| {
-                    const type_name = node.path[0..index];
-                    const field_name = node.path[index + 1 ..];
-                    if (findTypeFieldDefaultExpr(self.program, type_name, field_name)) |default_value| {
-                        break :blk try self.lowerExpr(instructions, default_value);
-                    }
+                if (try lowerNamespaceRefExpr(self, instructions, node.path)) |lowered| {
+                    break :blk lowered;
                 }
                 return error.UnsupportedExecutableFeature;
             },

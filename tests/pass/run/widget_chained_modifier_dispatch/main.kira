@@ -1,0 +1,115 @@
+// Regression: a virtual call (`call_virtual`) must transfer ownership of moved receiver/argument
+// registers into the call, exactly like a direct `.call` does via `fillTransferredArgs`. A chain of
+// three or more `extend Widget` modifiers (`a.pad(..).bg(..).corner(..)`) lowers the first call as a
+// direct `.call` and the rest as `call_virtual`. Each modifier captures `self` into its `{ self }`
+// content channel, so `self` is consumed. Before the fix, `call_virtual` left the consumed receiver
+// register marked owned, so the frame epilogue double-freed the value the call had moved into the
+// result tree; the returned widget (and its `body`) then pointed at freed/zeroed memory and the
+// next dispatch failed with "virtual method could not be resolved" (actual_type fell back to the
+// family name). Executes on vm/llvm/hybrid.
+
+construct Widget {
+    @Required let body: Widget
+
+    function render() -> [String] {
+        return body.render()
+    }
+}
+
+Widget Leaf(text: String) {
+    function render() -> [String] {
+        return [text]
+    }
+}
+
+Widget Pad(length: Float) {
+    @Content let content: Widget
+
+    function render() -> [String] {
+        var out: [String] = ["pad"]
+        let inner = content.render()
+        var index = 0
+        while index < inner.count {
+            out.append(inner[index])
+            index = index + 1
+        }
+        return out
+    }
+}
+
+Widget Bg(fill: Widget) {
+    @Content let content: Widget
+
+    function render() -> [String] {
+        var out: [String] = ["bg"]
+        let painted = fill.render()
+        var paintedIndex = 0
+        while paintedIndex < painted.count {
+            out.append(painted[paintedIndex])
+            paintedIndex = paintedIndex + 1
+        }
+        let inner = content.render()
+        var innerIndex = 0
+        while innerIndex < inner.count {
+            out.append(inner[innerIndex])
+            innerIndex = innerIndex + 1
+        }
+        return out
+    }
+}
+
+Widget Corner(radius: Float) {
+    @Content let content: Widget
+
+    function render() -> [String] {
+        let ignored = radius + 0.0
+        var out: [String] = ["corner"]
+        let inner = content.render()
+        var index = 0
+        while index < inner.count {
+            out.append(inner[index])
+            index = index + 1
+        }
+        return out
+    }
+}
+
+extend Widget {
+    function pad(length: Float) -> Widget {
+        return Pad(length: length) {
+            self
+        }
+    }
+
+    function bg(fill: Widget) -> Widget {
+        return Bg(fill: fill) {
+            self
+        }
+    }
+
+    function corner(radius: Float) -> Widget {
+        return Corner(radius: radius) {
+            self
+        }
+    }
+}
+
+Widget Screen() {
+    body {
+        Leaf(text = "hi")
+            .pad(8.0)
+            .bg(Leaf(text = "fill"))
+            .corner(16.0)
+    }
+}
+
+@Main
+function main() {
+    let rendered = Screen().render()
+    var index = 0
+    while index < rendered.count {
+        print(rendered[index])
+        index = index + 1
+    }
+    return
+}
