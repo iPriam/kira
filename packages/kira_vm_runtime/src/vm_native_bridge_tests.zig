@@ -245,7 +245,7 @@ test "hybrid_native_bridge_materialization_cleanup" {
     batch_fields_ptr[0] = .{ .raw_ptr = array_ptr };
     vm.retainManagedValue(.{ .raw_ptr = array_ptr });
 
-    const native_batch_ptr = try vm.copyStructToNativeLayout(&module, "Batch", batch_ptr);
+    const native_batch_ptr = try vm.lowerStructToNativeLayout(&module, "Batch", batch_ptr);
     vm.destroyStructNativeLayout(&module, "Batch", native_batch_ptr);
 
     vm.dropManagedValue(.{ .raw_ptr = batch_ptr });
@@ -302,7 +302,7 @@ test "hybrid_native_bridge_repeated_materialization_cleanup" {
         batch_fields_ptr[1] = .{ .raw_ptr = weights_ptr };
         vm.retainManagedValue(.{ .raw_ptr = points_ptr });
         vm.retainManagedValue(.{ .raw_ptr = weights_ptr });
-        const native_batch = try vm.copyStructToNativeLayout(&module, "Batch", batch_ptr);
+        const native_batch = try vm.lowerStructToNativeLayout(&module, "Batch", batch_ptr);
         vm.destroyStructNativeLayout(&module, "Batch", native_batch);
 
         vm.dropManagedValue(.{ .raw_ptr = batch_ptr });
@@ -404,7 +404,7 @@ test "hybrid_recursive_aggregate_sync_cleanup_stress" {
         scene_fields_ptr[0] = .{ .raw_ptr = rows_ptr };
         vm.retainManagedValue(.{ .raw_ptr = rows_ptr });
 
-        const native_scene = try vm.copyStructToNativeLayout(&module, "Scene", scene_ptr);
+        const native_scene = try vm.lowerStructToNativeLayout(&module, "Scene", scene_ptr);
         for (0..10) |_| {
             try vm.syncStructFromNativeLayout(&module, "Scene", scene_ptr, native_scene);
         }
@@ -760,12 +760,12 @@ test "native construct-any fields materialize concrete widget values" {
 
     const button_ptr = try vm.allocateStruct(&module, "Button");
     defer vm.dropManagedValue(.{ .raw_ptr = button_ptr });
-    const native_button_ptr = try vm.copyStructToNativeLayout(&module, "Button", button_ptr);
+    const native_button_ptr = try vm.lowerStructToNativeLayout(&module, "Button", button_ptr);
     defer vm.destroyStructNativeLayout(&module, "Button", native_button_ptr);
 
     const layer_ptr = try vm.allocateStruct(&module, "Layer");
     defer vm.dropManagedValue(.{ .raw_ptr = layer_ptr });
-    const native_layer_ptr = try vm.copyStructToNativeLayout(&module, "Layer", layer_ptr);
+    const native_layer_ptr = try vm.lowerStructToNativeLayout(&module, "Layer", layer_ptr);
     defer vm.destroyStructNativeLayout(&module, "Layer", native_layer_ptr);
 
     const content_offset = try native_layout.fieldOffset(&module, "Layer", 0);
@@ -802,7 +802,7 @@ test "native construct-any results materialize concrete widget values" {
 
     const button_ptr = try vm.allocateStruct(&module, "Button");
     defer vm.dropManagedValue(.{ .raw_ptr = button_ptr });
-    const native_button_ptr = try vm.copyStructToNativeLayout(&module, "Button", button_ptr);
+    const native_button_ptr = try vm.lowerStructToNativeLayout(&module, "Button", button_ptr);
     defer vm.destroyStructNativeLayout(&module, "Button", native_button_ptr);
 
     const result = try vm.materializeNativeResult(&module, any_widget, .{ .raw_ptr = native_button_ptr });
@@ -829,7 +829,7 @@ test "native widget arrays materialize concrete construct-any elements" {
     };
 
     const runtime_button_ptr = try vm.allocateStruct(&module, "Button");
-    const native_button_ptr = try vm.copyStructToNativeLayout(&module, "Button", runtime_button_ptr);
+    const native_button_ptr = try vm.lowerStructToNativeLayout(&module, "Button", runtime_button_ptr);
     vm.dropManagedValue(.{ .raw_ptr = runtime_button_ptr });
     defer vm.destroyStructNativeLayout(&module, "Button", native_button_ptr);
 

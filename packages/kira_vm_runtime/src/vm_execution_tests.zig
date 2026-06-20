@@ -601,7 +601,7 @@ test "array_get materializes native construct-any elements for virtual dispatch"
     };
 
     const runtime_button_ptr = try vm.allocateStruct(&module, "Button");
-    const native_button_ptr = try vm.copyStructToNativeLayout(&module, "Button", runtime_button_ptr);
+    const native_button_ptr = try vm.lowerStructToNativeLayout(&module, "Button", runtime_button_ptr);
     vm.dropManagedValue(.{ .raw_ptr = runtime_button_ptr });
     defer vm.destroyStructNativeLayout(&module, "Button", native_button_ptr);
 
@@ -617,7 +617,7 @@ test "array_get materializes native construct-any elements for virtual dispatch"
 
     var discard_buffer: [1]u8 = undefined;
     var discarding: std.Io.Writer.Discarding = .init(&discard_buffer);
-    try vm.runFunctionById(&module, 0, &.{.{ .raw_ptr = @intFromPtr(native_array) }}, &discarding.writer, .{});
+    _ = try vm.runFunctionById(&module, 0, &.{.{ .raw_ptr = @intFromPtr(native_array) }}, &discarding.writer, .{});
     try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
 }
 
@@ -695,12 +695,12 @@ test "ret materializes borrowed native construct-any values for virtual dispatch
     };
 
     const runtime_button_ptr = try vm.allocateStruct(&module, "Button");
-    const native_button_ptr = try vm.copyStructToNativeLayout(&module, "Button", runtime_button_ptr);
+    const native_button_ptr = try vm.lowerStructToNativeLayout(&module, "Button", runtime_button_ptr);
     vm.dropManagedValue(.{ .raw_ptr = runtime_button_ptr });
     defer vm.destroyStructNativeLayout(&module, "Button", native_button_ptr);
 
     var discard_buffer: [1]u8 = undefined;
     var discarding: std.Io.Writer.Discarding = .init(&discard_buffer);
-    try vm.runFunctionById(&module, 0, &.{.{ .raw_ptr = native_button_ptr }}, &discarding.writer, .{});
+    _ = try vm.runFunctionById(&module, 0, &.{.{ .raw_ptr = native_button_ptr }}, &discarding.writer, .{});
     try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
 }
