@@ -127,6 +127,23 @@ pub const HybridRuntime = struct {
                 materialized_args[index] = true;
                 continue;
             }
+            // An enum argument arrives as a native-layout `[u64 tag, u64 payload]` block, not a
+            // managed VM enum. Without materializing it the callee operates on raw native words
+            // reinterpreted as VM `Value` slots (tag 0 reads back as `.void`), and returning the
+            // argument hands `lowerEnumToNativeOwned` a bogus enum — the basic-kira-ui-app
+            // `effectiveGraphicsPlatform(requested) -> requested` "enum native lowering requires an
+            // integer tag slot" crash. Materialize it like an `ffi_struct` arg so the managed copy
+            // is dropped after the call (or survives as the result via the alias check below).
+            if (local_ty.kind == .enum_instance and runtime_args[index] == .raw_ptr and runtime_args[index].raw_ptr != 0 and !self.vm.isManagedStructPointer(runtime_args[index].raw_ptr)) {
+                native_arg_ptrs[index] = runtime_args[index].raw_ptr;
+                runtime_args[index] = .{ .raw_ptr = try self.vm.copyEnumFromNativeLayout(
+                    &self.module,
+                    local_ty.name orelse return error.RuntimeFailure,
+                    runtime_args[index].raw_ptr,
+                ) };
+                materialized_args[index] = true;
+                continue;
+            }
             if (local_ty.kind != .ffi_struct or runtime_args[index] != .raw_ptr or runtime_args[index].raw_ptr == 0) continue;
             native_arg_ptrs[index] = runtime_args[index].raw_ptr;
             runtime_args[index] = .{ .raw_ptr = try self.vm.materializeNativeStruct(
@@ -155,6 +172,9 @@ pub const HybridRuntime = struct {
             const writeback_mode = if (index < function_decl.param_ownership.len) function_decl.param_ownership[index] else .owned;
             if (writeback_mode != .borrow_mut) continue;
             const local_ty = function_decl.local_types[index];
+            // Struct-only sync: writeStructToNativeLayout walks struct fields. A `borrow mut` enum
+            // arg is materialized above but has no struct field layout to write back.
+            if (local_ty.kind != .ffi_struct) continue;
             try self.vm.writeStructToNativeLayout(
                 &self.module,
                 local_ty.name orelse return error.RuntimeFailure,

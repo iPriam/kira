@@ -38,3 +38,7 @@ pub const lowerProgram = @import("lower_from_hir.zig").lowerProgram;
 pub const lowerProgramWithOptions = @import("lower_from_hir.zig").lowerProgramWithOptions;
 pub const LowerProgramOptions = @import("lower_from_hir.zig").LowerProgramOptions;
 pub const nativeStateTypeId = @import("lower_from_hir.zig").nativeStateTypeId;
+
+test {
+    _ = @import("widget_executable_lowering_tests.zig");
+}
