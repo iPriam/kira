@@ -245,6 +245,7 @@ pub fn allocateNativeState(self: *Vm, module: *const bytecode.Module, type_name:
         .payload = @intFromPtr(native_payload.ptr),
         .runtime_payload = 0,
     };
+    try self.native_state_boxes.put(@intFromPtr(box), {});
     return @intFromPtr(box);
 }
 
@@ -277,10 +278,9 @@ pub fn materializeNativeStatePayload(self: *Vm, module: *const bytecode.Module, 
         return error.RuntimeFailure;
     };
     const native_payload: [*]const runtime_abi.BridgeValue = @ptrFromInt(native_payload_ptr);
-    const runtime_payload = try self.allocator.alloc(runtime_abi.BridgeValue, type_decl.fields.len);
+    const runtime_payload = try self.allocator.alloc(runtime_abi.Value, type_decl.fields.len);
     for (type_decl.fields, 0..) |field_decl, index| {
-        const value = try materializeNativeStateValue(self, module, field_decl.ty, runtime_abi.bridgeValueToValue(native_payload[index]));
-        runtime_payload[index] = runtime_abi.bridgeValueFromValue(value);
+        runtime_payload[index] = try materializeNativeStateValue(self, module, field_decl.ty, runtime_abi.bridgeValueToValue(native_payload[index]));
     }
     return @intFromPtr(runtime_payload.ptr);
 }

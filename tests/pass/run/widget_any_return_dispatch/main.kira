@@ -1,0 +1,43 @@
+// Returning `any Widget` from a helper must preserve dynamic dispatch across
+// vm, llvm, and hybrid.
+
+construct Node {
+    @Required let label: String
+}
+
+Node TextNode {
+    let text: String = ""
+
+    let label: String {
+        text
+    }
+}
+
+construct Widget {
+    @Required let body: Widget
+    let node: Node { body.node }
+}
+
+Widget Text {
+    let text: String = ""
+
+    let node: Node {
+        TextNode(text: text)
+    }
+}
+
+extend Widget {
+    function describe() -> String {
+        return self.node.label
+    }
+}
+
+function identity(widget: any Widget) -> any Widget {
+    return widget
+}
+
+@Main
+function main() {
+    print(identity(Text(text: "returned")).describe())
+    return
+}

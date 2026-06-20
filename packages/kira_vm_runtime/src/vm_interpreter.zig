@@ -38,6 +38,16 @@ const setSlotOwned = slot_impl.setSlotOwned;
 const setSlotPrimitive = slot_impl.setSlotPrimitive;
 const setSlotUnmanaged = slot_impl.setSlotUnmanaged;
 const transferSlot = slot_impl.transferSlot;
+const NativeStateBox = vm_mod.NativeStateBox;
+
+fn nativeStateConsumesRuntimeOwnership(field_ty: bytecode.TypeRef) bool {
+    return switch (field_ty.kind) {
+        .construct_any, .string => false,
+        .raw_ptr => if (field_ty.name) |name| Vm.isCallbackTypeName(name) else false,
+        .ffi_struct, .array, .enum_instance => true,
+        else => false,
+    };
+}
 
 pub fn runPrepared(
     vm: *Vm,
@@ -360,8 +370,25 @@ pub fn runPrepared(
                 vm.rememberError("native state field read requires a valid recovered state");
                 return error.RuntimeFailure;
             }
-            const payload: [*]const runtime_abi.BridgeValue = @ptrFromInt(state_value.raw_ptr);
-            setSlotBorrowed(vm, &registers[value.dst], &register_owned[value.dst], runtime_abi.bridgeValueToValue(payload[@intCast(value.field_index)]));
+            if (vm.native_state_boxes.contains(state_value.raw_ptr)) {
+                const box: *const NativeStateBox = @ptrFromInt(state_value.raw_ptr);
+                const payload_ptr = if (box.runtime_payload != 0) box.runtime_payload else box.payload;
+                if (payload_ptr == 0) {
+                    vm.rememberError("native state field read requires a valid state payload");
+                    return error.RuntimeFailure;
+                }
+                if (box.runtime_payload != 0) {
+                    const payload: [*]const runtime_abi.Value = @ptrFromInt(payload_ptr);
+                    setSlotBorrowed(vm, &registers[value.dst], &register_owned[value.dst], payload[@intCast(value.field_index)]);
+                } else {
+                    const payload: [*]const runtime_abi.BridgeValue = @ptrFromInt(payload_ptr);
+                    const materialized = try vm.materializeNativeStateValue(module, value.field_ty, runtime_abi.bridgeValueToValue(payload[@intCast(value.field_index)]));
+                    setSlotOwned(vm, &registers[value.dst], &register_owned[value.dst], materialized);
+                }
+            } else {
+                const payload: [*]const runtime_abi.Value = @ptrFromInt(state_value.raw_ptr);
+                setSlotBorrowed(vm, &registers[value.dst], &register_owned[value.dst], payload[@intCast(value.field_index)]);
+            }
             pc += 1;
             continue :dispatch code[pc];
         },
@@ -371,19 +398,55 @@ pub fn runPrepared(
                 vm.rememberError("native state field write requires a valid recovered state");
                 return error.RuntimeFailure;
             }
-            const payload: [*]runtime_abi.BridgeValue = @ptrFromInt(state_value.raw_ptr);
             const field_index: usize = @intCast(value.field_index);
-            const old = runtime_abi.bridgeValueToValue(payload[field_index]);
-            const stored = if (register_owned[value.src])
-                registers[value.src]
-            else
-                try vm.cloneBorrowedValueForStore(module, value.field_ty, registers[value.src]);
-            payload[field_index] = runtime_abi.bridgeValueFromValue(stored);
-            if (register_owned[value.src]) {
-                register_owned[value.src] = false;
-                registers[value.src] = .{ .void = {} };
+            if (vm.native_state_boxes.contains(state_value.raw_ptr)) {
+                const box: *NativeStateBox = @ptrFromInt(state_value.raw_ptr);
+                if (box.runtime_payload != 0) {
+                    const payload: [*]runtime_abi.Value = @ptrFromInt(box.runtime_payload);
+                    const old = payload[field_index];
+                    const stored = if (register_owned[value.src])
+                        registers[value.src]
+                    else
+                        try vm.cloneBorrowedValueForStore(module, value.field_ty, registers[value.src]);
+                    payload[field_index] = stored;
+                    if (register_owned[value.src]) {
+                        register_owned[value.src] = false;
+                        registers[value.src] = .{ .void = {} };
+                    }
+                    vm.heap.dropValue(old);
+                } else {
+                    if (box.payload == 0) {
+                        vm.rememberError("native state field write requires a valid state payload");
+                        return error.RuntimeFailure;
+                    }
+                    const payload: [*]runtime_abi.BridgeValue = @ptrFromInt(box.payload);
+                    const old = runtime_abi.bridgeValueToValue(payload[field_index]);
+                    const source = registers[value.src];
+                    const stored = try vm.preserveNativeStateValue(module, value.field_ty, source);
+                    payload[field_index] = runtime_abi.bridgeValueFromValue(stored);
+                    if (register_owned[value.src]) {
+                        if (nativeStateConsumesRuntimeOwnership(value.field_ty)) {
+                            vm.heap.dropValue(source);
+                        }
+                        register_owned[value.src] = false;
+                        registers[value.src] = .{ .void = {} };
+                    }
+                    vm.destroyPreservedNativeStateValue(module, value.field_ty, old);
+                }
+            } else {
+                const payload: [*]runtime_abi.Value = @ptrFromInt(state_value.raw_ptr);
+                const old = payload[field_index];
+                const stored = if (register_owned[value.src])
+                    registers[value.src]
+                else
+                    try vm.cloneBorrowedValueForStore(module, value.field_ty, registers[value.src]);
+                payload[field_index] = stored;
+                if (register_owned[value.src]) {
+                    register_owned[value.src] = false;
+                    registers[value.src] = .{ .void = {} };
+                }
+                vm.heap.dropValue(old);
             }
-            vm.heap.dropValue(old);
             pc += 1;
             continue :dispatch code[pc];
         },
@@ -644,7 +707,7 @@ pub fn runPrepared(
             const spill = value.args.len > arg_stack.len;
             const call_args = if (spill) try vm.allocator.alloc(runtime_abi.Value, value.args.len) else arg_stack[0..value.args.len];
             defer if (spill) vm.allocator.free(call_args);
-            fillTransferredArgs(call_args, registers, register_owned, value.args, callee.decl.param_ownership);
+            fillTransferredArgs(call_args, registers, register_owned, value.args, callee.decl.param_ownership, callee.decl.local_types, hooks.copy_struct_args_by_value);
             const result = try runPrepared(vm, prepared, callee, call_args, writer, hooks);
             if (value.dst) |dst| setSlotOwned(vm, &registers[dst], &register_owned[dst], result) else vm.heap.dropValue(result);
             pc += 1;
@@ -669,7 +732,10 @@ pub fn runPrepared(
         .call_virtual => |value| {
             const receiver_value = registers[value.receiver];
             if (receiver_value != .raw_ptr or receiver_value.raw_ptr == 0) {
-                vm.rememberError("virtual method call requires a valid class receiver");
+                vm.rememberFmt(
+                    "virtual method call requires a valid class receiver (receiver_register={d}, tag={s}, raw=0x{x})",
+                    .{ value.receiver, @tagName(receiver_value), if (receiver_value == .raw_ptr) receiver_value.raw_ptr else 0 },
+                );
                 return error.RuntimeFailure;
             }
             const actual_type_name = vm.heap.getStructTypeName(receiver_value.raw_ptr) orelse value.static_type_name;
@@ -701,8 +767,18 @@ pub fn runPrepared(
             // only transferable when the receiver pointer is not interior-adjusted; native methods
             // (no managed decl) keep copy semantics. param_ownership[0] is `self`.
             if (method_index_opt) |method_index| {
-                const param_ownership = prepared.functions[method_index].decl.param_ownership;
-                if (resolved_method.receiver_offset == 0) {
+                const callee_decl = prepared.functions[method_index].decl;
+                const param_ownership = callee_decl.param_ownership;
+                const param_types = callee_decl.local_types;
+                // A struct parameter under copy-by-value is deep-copied by the callee
+                // (bindArguments); the caller keeps ownership and frees it at frame exit,
+                // so its register must not be voided here (mirrors fillTransferredArgs).
+                const isCopiedStruct = struct {
+                    fn check(copy_bv: bool, types: []const bytecode.TypeRef, idx: usize) bool {
+                        return copy_bv and idx < types.len and types[idx].kind == .ffi_struct;
+                    }
+                }.check;
+                if (resolved_method.receiver_offset == 0 and !isCopiedStruct(hooks.copy_struct_args_by_value, param_types, 0)) {
                     switch (ownershipModeAt(param_ownership, 0)) {
                         .owned, .move => if (register_owned[value.receiver]) {
                             register_owned[value.receiver] = false;
@@ -712,6 +788,7 @@ pub fn runPrepared(
                     }
                 }
                 for (value.args, 0..) |register_index, index| {
+                    if (isCopiedStruct(hooks.copy_struct_args_by_value, param_types, index + 1)) continue;
                     switch (ownershipModeAt(param_ownership, index + 1)) {
                         .owned, .move => if (register_owned[register_index]) {
                             register_owned[register_index] = false;
@@ -750,7 +827,9 @@ pub fn runPrepared(
             const arg_spill = value.args.len > arg_stack.len;
             const call_args = if (arg_spill) try vm.allocator.alloc(runtime_abi.Value, value.args.len) else arg_stack[0..value.args.len];
             defer if (arg_spill) vm.allocator.free(call_args);
-            fillTransferredArgs(call_args, registers, register_owned, value.args, value.param_ownership);
+            // call_value carries no parameter types, so struct args cannot be
+            // identified here; pass an empty type list (no copy-by-value skip).
+            fillTransferredArgs(call_args, registers, register_owned, value.args, value.param_ownership, &.{}, hooks.copy_struct_args_by_value);
             const result = if (vm.heap.getClosure(callee_value.raw_ptr)) |closure| closure_call: {
                 runtime_abi.emitExecutionTrace("CALLABLE", "INVOKE_CLOSURE", "raw=0x{x} fn={d} captures={d}", .{ callee_value.raw_ptr, closure.function_id, closure.captures.len });
                 const total_args = call_args.len + closure.captures.len;

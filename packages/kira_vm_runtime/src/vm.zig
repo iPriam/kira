@@ -44,6 +44,7 @@ pub const Vm = struct {
     heap: ownership.Heap,
     native_layout_stats: NativeLayoutStats = .{},
     native_state_materialized_types: std.StringHashMap(usize),
+    native_state_boxes: std.AutoHashMap(usize, void),
     exported_native_closures: std.AutoHashMap(usize, ExportedNativeClosure),
     last_error_buffer: [256]u8 = [_]u8{0} ** 256,
     last_error_len: usize = 0,
@@ -112,6 +113,7 @@ pub const Vm = struct {
             .allocator = allocator,
             .heap = ownership.Heap.init(allocator),
             .native_state_materialized_types = std.StringHashMap(usize).init(allocator),
+            .native_state_boxes = std.AutoHashMap(usize, void).init(allocator),
             .exported_native_closures = std.AutoHashMap(usize, ExportedNativeClosure).init(allocator),
         };
     }
@@ -197,6 +199,7 @@ pub const Vm = struct {
             self.allocator.free(words[0..word_count]);
         }
         self.exported_native_closures.deinit();
+        self.native_state_boxes.deinit();
         self.heap.deinit();
         self.native_state_materialized_types.deinit();
         if (self.prepared_cache) |prepared| {
@@ -412,6 +415,14 @@ pub const Vm = struct {
 
     pub fn materializeNativeStateValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) anyerror!runtime_abi.Value {
         return native_bridge.materializeNativeStateValue(self, module, ty, value);
+    }
+
+    pub fn preserveNativeStateValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) anyerror!runtime_abi.Value {
+        return native_bridge.preserveNativeStateValue(self, module, ty, value);
+    }
+
+    pub fn destroyPreservedNativeStateValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) void {
+        native_bridge.destroyPreservedNativeStateValue(self, module, ty, value);
     }
 
     pub fn copyStructFromNativeLayout(self: *Vm, module: *const bytecode.Module, type_name: []const u8, native_ptr: usize) anyerror!usize {

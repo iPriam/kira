@@ -10,6 +10,7 @@ const Vm = vm_mod.Vm;
 const NativeStateBox = vm_mod.NativeStateBox;
 const native_layout = @import("native_layout.zig");
 const ArrayObject = @import("ownership.zig").ArrayObject;
+const construct_any_test = @import("vm_construct_any_test_helpers.zig");
 
 test "materializes native closure struct captures using external metadata" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -235,7 +236,6 @@ test "hybrid_native_bridge_materialization_cleanup" {
     const array_ptr = try vm.allocateArray(0);
     const array_object: *ArrayObject = @ptrFromInt(array_ptr);
     try vm.heap.appendArrayItem(array_object, .{ .raw_ptr = point_ptr });
-    vm.dropManagedValue(.{ .raw_ptr = point_ptr });
 
     const native_array_ptr = try vm.copyArrayToNativeLayout(&module, .{ .kind = .array, .name = "Point" }, array_ptr);
     vm.destroyArrayNativeLayout(&module, .{ .kind = .array, .name = "Point" }, native_array_ptr);
@@ -243,13 +243,11 @@ test "hybrid_native_bridge_materialization_cleanup" {
     const batch_ptr = try vm.allocateStruct(&module, "Batch");
     const batch_fields_ptr: [*]runtime_abi.Value = @ptrFromInt(batch_ptr);
     batch_fields_ptr[0] = .{ .raw_ptr = array_ptr };
-    vm.retainManagedValue(.{ .raw_ptr = array_ptr });
 
     const native_batch_ptr = try vm.lowerStructToNativeLayout(&module, "Batch", batch_ptr);
     vm.destroyStructNativeLayout(&module, "Batch", native_batch_ptr);
 
     vm.dropManagedValue(.{ .raw_ptr = batch_ptr });
-    vm.dropManagedValue(.{ .raw_ptr = array_ptr });
     try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
 }
 
@@ -287,7 +285,6 @@ test "hybrid_native_bridge_repeated_materialization_cleanup" {
             fields[0] = .{ .integer = @intCast(iteration + index) };
             fields[1] = .{ .integer = @intCast((iteration + 1) * (index + 1)) };
             try vm.heap.appendArrayItem(points, .{ .raw_ptr = point_ptr });
-            vm.dropManagedValue(.{ .raw_ptr = point_ptr });
             try vm.heap.appendArrayItem(weights, .{ .integer = @intCast(index) });
         }
 
@@ -300,14 +297,10 @@ test "hybrid_native_bridge_repeated_materialization_cleanup" {
         const batch_fields_ptr: [*]runtime_abi.Value = @ptrFromInt(batch_ptr);
         batch_fields_ptr[0] = .{ .raw_ptr = points_ptr };
         batch_fields_ptr[1] = .{ .raw_ptr = weights_ptr };
-        vm.retainManagedValue(.{ .raw_ptr = points_ptr });
-        vm.retainManagedValue(.{ .raw_ptr = weights_ptr });
         const native_batch = try vm.lowerStructToNativeLayout(&module, "Batch", batch_ptr);
         vm.destroyStructNativeLayout(&module, "Batch", native_batch);
 
         vm.dropManagedValue(.{ .raw_ptr = batch_ptr });
-        vm.dropManagedValue(.{ .raw_ptr = points_ptr });
-        vm.dropManagedValue(.{ .raw_ptr = weights_ptr });
         try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
     }
 }
@@ -387,22 +380,17 @@ test "hybrid_recursive_aggregate_sync_cleanup_stress" {
                 fields[0] = .{ .integer = @intCast(iteration + row_index) };
                 fields[1] = .{ .integer = @intCast(point_index) };
                 try vm.heap.appendArrayItem(points, .{ .raw_ptr = point_ptr });
-                vm.dropManagedValue(.{ .raw_ptr = point_ptr });
             }
 
             const row_ptr = try vm.allocateStruct(&module, "Row");
             const row_fields_ptr: [*]runtime_abi.Value = @ptrFromInt(row_ptr);
             row_fields_ptr[0] = .{ .raw_ptr = points_ptr };
-            vm.retainManagedValue(.{ .raw_ptr = points_ptr });
             try vm.heap.appendArrayItem(rows, .{ .raw_ptr = row_ptr });
-            vm.dropManagedValue(.{ .raw_ptr = row_ptr });
-            vm.dropManagedValue(.{ .raw_ptr = points_ptr });
         }
 
         const scene_ptr = try vm.allocateStruct(&module, "Scene");
         const scene_fields_ptr: [*]runtime_abi.Value = @ptrFromInt(scene_ptr);
         scene_fields_ptr[0] = .{ .raw_ptr = rows_ptr };
-        vm.retainManagedValue(.{ .raw_ptr = rows_ptr });
 
         const native_scene = try vm.lowerStructToNativeLayout(&module, "Scene", scene_ptr);
         for (0..10) |_| {
@@ -411,7 +399,6 @@ test "hybrid_recursive_aggregate_sync_cleanup_stress" {
         vm.destroyStructNativeLayout(&module, "Scene", native_scene);
 
         vm.dropManagedValue(.{ .raw_ptr = scene_ptr });
-        vm.dropManagedValue(.{ .raw_ptr = rows_ptr });
         try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
     }
 }
@@ -471,11 +458,14 @@ test "hybrid_native_state_field_set_releases_replaced_managed_values" {
     };
     defer {
         if (box.runtime_payload != 0) {
-            const runtime_payload: [*]runtime_abi.BridgeValue = @ptrFromInt(box.runtime_payload);
-            vm.heap.dropValue(runtime_abi.bridgeValueToValue(runtime_payload[0]));
-            vm.allocator.free(@as([]runtime_abi.BridgeValue, runtime_payload[0..1]));
+            const runtime_payload: [*]runtime_abi.Value = @ptrFromInt(box.runtime_payload);
+            vm.heap.dropValue(runtime_payload[0]);
+            vm.allocator.free(@as([]runtime_abi.Value, runtime_payload[0..1]));
         }
-        vm.allocator.free(native_payload);
+        if (box.payload != 0) {
+            const current_payload: [*]runtime_abi.BridgeValue = @ptrFromInt(box.payload);
+            vm.allocator.free(@as([]runtime_abi.BridgeValue, current_payload[0..1]));
+        }
         vm.allocator.destroy(box);
     }
 
@@ -760,8 +750,8 @@ test "native construct-any fields materialize concrete widget values" {
 
     const button_ptr = try vm.allocateStruct(&module, "Button");
     defer vm.dropManagedValue(.{ .raw_ptr = button_ptr });
-    const native_button_ptr = try vm.lowerStructToNativeLayout(&module, "Button", button_ptr);
-    defer vm.destroyStructNativeLayout(&module, "Button", native_button_ptr);
+    const native_button = try construct_any_test.allocateHeaderedNativeStruct(&vm, &module, "Button", button_ptr);
+    defer construct_any_test.destroyHeaderedNativeStruct(&vm, &module, "Button", native_button);
 
     const layer_ptr = try vm.allocateStruct(&module, "Layer");
     defer vm.dropManagedValue(.{ .raw_ptr = layer_ptr });
@@ -769,7 +759,7 @@ test "native construct-any fields materialize concrete widget values" {
     defer vm.destroyStructNativeLayout(&module, "Layer", native_layer_ptr);
 
     const content_offset = try native_layout.fieldOffset(&module, "Layer", 0);
-    (@as(*usize, @ptrFromInt(native_layer_ptr + content_offset))).* = native_button_ptr;
+    (@as(*usize, @ptrFromInt(native_layer_ptr + content_offset))).* = native_button.payload_ptr;
 
     const runtime_layer_ptr = try vm.copyStructFromNativeLayout(&module, "Layer", native_layer_ptr);
     defer vm.dropManagedValue(.{ .raw_ptr = runtime_layer_ptr });
@@ -802,10 +792,10 @@ test "native construct-any results materialize concrete widget values" {
 
     const button_ptr = try vm.allocateStruct(&module, "Button");
     defer vm.dropManagedValue(.{ .raw_ptr = button_ptr });
-    const native_button_ptr = try vm.lowerStructToNativeLayout(&module, "Button", button_ptr);
-    defer vm.destroyStructNativeLayout(&module, "Button", native_button_ptr);
+    const native_button = try construct_any_test.allocateHeaderedNativeStruct(&vm, &module, "Button", button_ptr);
+    defer construct_any_test.destroyHeaderedNativeStruct(&vm, &module, "Button", native_button);
 
-    const result = try vm.materializeNativeResult(&module, any_widget, .{ .raw_ptr = native_button_ptr });
+    const result = try vm.materializeNativeResult(&module, any_widget, .{ .raw_ptr = native_button.payload_ptr });
     defer vm.dropManagedValue(result);
     try std.testing.expect(result == .raw_ptr);
     try std.testing.expectEqualStrings("Button", vm.heap.getStructTypeName(result.raw_ptr).?);
@@ -829,15 +819,15 @@ test "native widget arrays materialize concrete construct-any elements" {
     };
 
     const runtime_button_ptr = try vm.allocateStruct(&module, "Button");
-    const native_button_ptr = try vm.lowerStructToNativeLayout(&module, "Button", runtime_button_ptr);
+    const native_button = try construct_any_test.allocateHeaderedNativeStruct(&vm, &module, "Button", runtime_button_ptr);
     vm.dropManagedValue(.{ .raw_ptr = runtime_button_ptr });
-    defer vm.destroyStructNativeLayout(&module, "Button", native_button_ptr);
+    defer construct_any_test.destroyHeaderedNativeStruct(&vm, &module, "Button", native_button);
 
     const native_array = try vm.allocator.create(ArrayObject);
     defer vm.allocator.destroy(native_array);
     const native_items = try vm.allocator.alloc(runtime_abi.BridgeValue, 1);
     defer vm.allocator.free(native_items);
-    native_items[0] = runtime_abi.bridgeValueFromValue(.{ .raw_ptr = native_button_ptr });
+    native_items[0] = runtime_abi.bridgeValueFromValue(.{ .raw_ptr = native_button.payload_ptr });
     native_array.* = .{
         .len = 1,
         .items = native_items.ptr,

@@ -348,6 +348,14 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run_tests.step);
     }
 
+    const vm_runtime_test_step = b.step("test-vm-runtime", "Run only the kira_vm_runtime unit tests");
+    const vm_runtime_test_module = safetyTestModule(b, "kira_vm_runtime", &modules, &safety_test_modules, target, optimize);
+    const vm_runtime_unit_tests = b.addTest(.{
+        .root_module = vm_runtime_test_module,
+    });
+    const run_vm_runtime_tests = b.addRunArtifact(vm_runtime_unit_tests);
+    vm_runtime_test_step.dependOn(&run_vm_runtime_tests.step);
+
     const bootstrapper_tests = b.addTest(.{
         .root_module = bootstrapper_module,
     });
@@ -578,6 +586,7 @@ fn safetyTestModule(
         .target = target,
         .optimize = optimize,
     });
+    if (std.mem.eql(u8, name, "kira_vm_runtime")) module.link_libc = true;
     safety_modules.put(b.allocator, name, module) catch @panic("failed to register safety test module");
     for (pkg.imports) |import_name| {
         module.addImport(import_name, safetyTestModule(b, import_name, main_modules, safety_modules, target, optimize));

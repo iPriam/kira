@@ -65,9 +65,19 @@ pub fn fillTransferredArgs(
     register_owned: []bool,
     argument_registers: []const u32,
     param_ownership: []const bytecode.OwnershipMode,
+    param_types: []const bytecode.TypeRef,
+    copy_struct_args_by_value: bool,
 ) void {
     for (argument_registers, 0..) |register_index, index| {
         values[index] = registers[register_index];
+        // In copy-by-value (VM) mode a struct argument is passed as an
+        // independent deep copy made by the callee (see bindArguments), and the
+        // caller keeps ownership of the original — it is freed at the caller's
+        // frame exit. Voiding the caller's register here would orphan that
+        // original (a leak), and the callee cannot free it either because the
+        // caller may have passed a borrow. So leave struct-arg registers alone
+        // in copy-by-value mode regardless of the declared ownership mode.
+        if (copy_struct_args_by_value and index < param_types.len and param_types[index].kind == .ffi_struct) continue;
         switch (ownershipModeAt(param_ownership, index)) {
             .owned, .move => {
                 if (register_owned[register_index]) {
