@@ -34,10 +34,15 @@ pub const ArrayLen = ir.ArrayLen;
 pub const ArrayGet = ir.ArrayGet;
 pub const ArraySet = ir.ArraySet;
 pub const ArrayAppend = ir.ArrayAppend;
+pub const MidProgram = @import("mid_ir.zig").Program;
+pub const CheckedMidProgram = @import("mid_ir.zig").CheckedProgram;
 pub const lowerProgram = @import("lower_from_hir.zig").lowerProgram;
 pub const lowerProgramWithOptions = @import("lower_from_hir.zig").lowerProgramWithOptions;
 pub const LowerProgramOptions = @import("lower_from_hir.zig").LowerProgramOptions;
 pub const nativeStateTypeId = @import("lower_from_hir.zig").nativeStateTypeId;
+pub const prepareProgram = @import("mid_ir_pipeline.zig").prepareProgram;
+pub const lowerCheckedProgram = @import("mid_ir_pipeline.zig").lowerCheckedProgram;
+pub const lowerProgramWithDiagnostics = @import("mid_ir_pipeline.zig").lowerProgramWithDiagnostics;
 
 // Explicit compiler-phase types + obligation verifier. Backends accept only VerifiedProgram.
 const program_phases = @import("program_phases.zig");
@@ -52,4 +57,5 @@ pub const verify = program_phases.verify;
 test {
     _ = @import("widget_executable_lowering_tests.zig");
     _ = @import("program_phases.zig");
+    _ = @import("mid_ir_check.zig");
 }

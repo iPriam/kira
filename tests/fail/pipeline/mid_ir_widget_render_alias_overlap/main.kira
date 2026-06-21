@@ -1,0 +1,30 @@
+struct Cell { var value: Int }
+
+construct Widget {
+    @Required let body: Widget
+
+    function render() -> [String] {
+        return body.render()
+    }
+}
+
+function updateBoth(a: borrow mut Cell, b: borrow mut Cell) {
+    a.value = a.value + 3
+    b.value = b.value + 4
+    return
+}
+
+Widget BadWidget() {
+    function render() -> [String] {
+        var numbers: [Cell] = [Cell { value: 1 }, Cell { value: 2 }, Cell { value: 3 }]
+        updateBoth(numbers[0], numbers[1])
+        return ["bad"]
+    }
+}
+
+@Main
+function main() {
+    let rendered = BadWidget().render()
+    print(rendered[0])
+    return
+}

@@ -40,7 +40,7 @@ const packages = [_]Package{
     .{ .name = "kira_msl_backend", .path = "packages/kira_msl_backend/src/root.zig", .imports = &.{ "kira_diagnostics", "kira_shader_model", "kira_shader_ir" } },
     .{ .name = "kira_spirv_backend", .path = "packages/kira_spirv_backend/src/root.zig", .imports = &.{ "kira_diagnostics", "kira_shader_model", "kira_shader_ir" } },
     .{ .name = "kira_semantics", .path = "packages/kira_semantics/src/root.zig", .imports = &.{ "kira_core", "kira_source", "kira_syntax_model", "kira_diagnostics", "kira_semantics_model", "kira_runtime_abi", "kira_lexer", "kira_parser" } },
-    .{ .name = "kira_ir", .path = "packages/kira_ir/src/root.zig", .imports = &.{ "kira_core", "kira_semantics_model", "kira_runtime_abi" } },
+    .{ .name = "kira_ir", .path = "packages/kira_ir/src/root.zig", .imports = &.{ "kira_core", "kira_source", "kira_diagnostics", "kira_semantics_model", "kira_runtime_abi" } },
     .{ .name = "kira_hybrid_definition", .path = "packages/kira_hybrid_definition/src/root.zig", .imports = &.{ "kira_core", "kira_runtime_abi" } },
     .{ .name = "kira_native_lib_definition", .path = "packages/kira_native_lib_definition/src/root.zig", .imports = &.{ "kira_core", "kira_runtime_abi" } },
     .{ .name = "kira_dynamic_ffi", .path = "packages/kira_dynamic_ffi/src/root.zig", .imports = &.{} },

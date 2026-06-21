@@ -1,0 +1,17 @@
+struct Cell { var value: Int }
+struct Node { var cell: Cell }
+struct Tree { var nodes: [Node] }
+
+function overwrite(tree: borrow mut Tree) {
+    var alias = tree
+    tree.nodes = [Node { cell: Cell { value: 40 } }]
+    alias.nodes[0].cell.value = alias.nodes[0].cell.value + 1
+    return
+}
+
+@Main
+function main() {
+    var tree = Tree { nodes: [Node { cell: Cell { value: 1 } }, Node { cell: Cell { value: 2 } }] }
+    overwrite(tree)
+    return
+}

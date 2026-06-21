@@ -1,0 +1,13 @@
+backends = ["hybrid", "vm", "llvm"]
+
+[phases.check]
+result = "fail"
+diagnostic_code = "KIR002"
+diagnostic_title = "place is only partially live after a move"
+stage = "ir"
+
+[phases.build]
+result = "blocked"
+
+[phases.run]
+result = "blocked"

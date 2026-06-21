@@ -1,0 +1,16 @@
+struct Cell { var value: Int }
+struct Pair { var left: Cell; var right: Cell }
+struct Holder { var pair: Pair }
+
+function touch(pair: borrow mut Pair, leaf: borrow mut Cell) {
+    pair.right.value = pair.right.value + 1
+    leaf.value = leaf.value + 10
+    return
+}
+
+@Main
+function main() {
+    var holder = Holder { pair: Pair { left: Cell { value: 4 }, right: Cell { value: 9 } } }
+    touch(holder.pair, holder.pair.left)
+    return
+}

@@ -213,9 +213,9 @@ pub fn compileFileToIrForTargetWithOptions(
     timingPrint("[kira:timing] semantics.analyzeWithImports path={s} ns={d}\n", .{ parsed.source.path, elapsedNs(semantics_start) });
 
     const ir_start = nowNs();
-    const ir_program = ir.lowerProgramWithOptions(allocator, hir, .{
+    const ir_program = ir.lowerProgramWithDiagnostics(allocator, hir, .{
         .include_tests = options.test_mode,
-    }) catch |err| switch (err) {
+    }, &diags) catch |err| switch (err) {
         error.UnsupportedExecutableFeature, error.UnsupportedType => {
             try diags.append(diag_messages.BackendMessages.unsupportedExecutableFeature());
             timingPrint("[kira:timing] ir.lowerProgram path={s} ns={d}\n", .{ parsed.source.path, elapsedNs(ir_start) });
@@ -229,6 +229,16 @@ pub fn compileFileToIrForTargetWithOptions(
             };
         },
         else => return err,
+    } orelse {
+        timingPrint("[kira:timing] ir.lowerProgram path={s} ns={d}\n", .{ parsed.source.path, elapsedNs(ir_start) });
+        timingPrint("[kira:timing] compileFileToIr.total path={s} ns={d}\n", .{ path, elapsedNs(total_start) });
+        return .{
+            .source = parsed.source,
+            .diagnostics = try diags.toOwnedSlice(),
+            .ir_program = null,
+            .native_libraries = native_libraries,
+            .failure_stage = .ir,
+        };
     };
     timingPrint("[kira:timing] ir.lowerProgram path={s} ns={d}\n", .{ parsed.source.path, elapsedNs(ir_start) });
     timingPrint("[kira:timing] compileFileToIr.total path={s} ns={d}\n", .{ path, elapsedNs(total_start) });
@@ -535,7 +545,7 @@ pub fn checkFileFrontend(allocator: std.mem.Allocator, path: []const u8) !CheckP
     timingPrint("[kira:timing] validateImports path={s} imports={d} ns={d}\n", .{ parsed.source.path, merged_program.imports.len, elapsedNs(validate_start) });
 
     const semantics_start = nowNs();
-    _ = semantics.analyzeWithImports(allocator, merged_program, .{}, &diags) catch |err| switch (err) {
+    const hir = semantics.analyzeWithImports(allocator, merged_program, .{}, &diags) catch |err| switch (err) {
         error.DiagnosticsEmitted => {
             timingPrint("[kira:timing] semantics.analyzeWithImports path={s} ns={d}\n", .{ parsed.source.path, elapsedNs(semantics_start) });
             timingPrint("[kira:timing] checkFileFrontend.total path={s} reached_ir=false reached_bytecode=false reached_llvm=false ns={d}\n", .{ path, elapsedNs(total_start) });
@@ -548,6 +558,17 @@ pub fn checkFileFrontend(allocator: std.mem.Allocator, path: []const u8) !CheckP
         else => return err,
     };
     timingPrint("[kira:timing] semantics.analyzeWithImports path={s} ns={d}\n", .{ parsed.source.path, elapsedNs(semantics_start) });
+    const mid_start = nowNs();
+    const prepared = try ir.prepareProgram(allocator, hir, .{}, &diags);
+    timingPrint("[kira:timing] ir.prepareProgram path={s} ns={d}\n", .{ parsed.source.path, elapsedNs(mid_start) });
+    if (prepared == .failed) {
+        timingPrint("[kira:timing] checkFileFrontend.total path={s} reached_ir=false reached_bytecode=false reached_llvm=false ns={d}\n", .{ path, elapsedNs(total_start) });
+        return .{
+            .source = parsed.source,
+            .diagnostics = try diags.toOwnedSlice(),
+            .failure_stage = .ir,
+        };
+    }
     timingPrint("[kira:timing] checkFileFrontend.total path={s} reached_ir=false reached_bytecode=false reached_llvm=false ns={d}\n", .{ path, elapsedNs(total_start) });
 
     return .{

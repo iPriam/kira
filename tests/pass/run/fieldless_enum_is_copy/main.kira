@@ -1,0 +1,37 @@
+// A fieldless enum (every variant payload-less) is copied by value, not moved, so passing
+// the same enum field to an owned parameter twice — and then reading the rest of the struct —
+// is allowed. The runtime already copies such enums by value, so the checker mirrors that
+// instead of treating the by-value pass as an ownership transfer. This is the accepting
+// counterpart to the payload-enum move-tracking cases (e.g. partial_move_field_reuse).
+enum Axis {
+    Horizontal
+    Vertical
+}
+
+function code(axis: Axis) -> Int {
+    if axis == Axis.Horizontal {
+        return 1
+    }
+    return 2
+}
+
+struct Descriptor {
+    let axis: Axis
+    let weight: Int
+}
+
+function score(descriptor: Descriptor) -> Int {
+    let first = code(descriptor.axis)
+    let second = code(descriptor.axis)
+    return first + second + descriptor.weight
+}
+
+@Main
+function main() {
+    let descriptor = Descriptor {
+        axis: Axis.Vertical
+        weight: 5
+    }
+    print(score(move descriptor))
+    return
+}
