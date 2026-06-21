@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const manifest = @import("kira_manifest");
 const native = @import("kira_native_lib_definition");
 
@@ -92,13 +93,20 @@ fn expandEnvPath(allocator: std.mem.Allocator, value: []const u8) !?[]const u8 {
 }
 
 fn envVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
-    var environ = try std.process.Environ.createMap(.{ .block = .global }, allocator);
-    defer environ.deinit();
-    const value = environ.get(name) orelse {
-        if (std.mem.eql(u8, name, "WINDOWS_KITS_10_INCLUDE")) return discoverWindowsKitsInclude(allocator);
-        return error.EnvironmentVariableNotFound;
-    };
-    return allocator.dupe(u8, value);
+    // `Environ.createMap(.{ .block = .global }, ...)` only compiles on Windows; POSIX has no
+    // `.global` environ block. Read through libc on POSIX, mirroring the repo's other
+    // env-var helpers, and keep the Windows Kits fallback for the one synthetic name.
+    if (builtin.os.tag == .windows or (builtin.os.tag == .wasi and !builtin.link_libc)) {
+        var environ = try std.process.Environ.createMap(.{ .block = .global }, allocator);
+        defer environ.deinit();
+        if (environ.get(name)) |value| return allocator.dupe(u8, value);
+    } else if (builtin.link_libc) {
+        const name_z = try allocator.dupeZ(u8, name);
+        defer allocator.free(name_z);
+        if (std.c.getenv(name_z.ptr)) |value| return allocator.dupe(u8, std.mem.span(value));
+    }
+    if (std.mem.eql(u8, name, "WINDOWS_KITS_10_INCLUDE")) return discoverWindowsKitsInclude(allocator);
+    return error.EnvironmentVariableNotFound;
 }
 
 fn discoverWindowsKitsInclude(allocator: std.mem.Allocator) ![]u8 {
