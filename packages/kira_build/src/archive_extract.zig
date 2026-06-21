@@ -51,21 +51,18 @@ fn extractTarXz(
 }
 
 fn extractTarGz(
-    allocator: std.mem.Allocator,
+    _: std.mem.Allocator,
     archive_path: []const u8,
     destination_path: []const u8,
 ) !void {
-    const result = try std.process.run(allocator, std.Options.debug_io, .{
+    var child = try std.process.spawn(std.Options.debug_io, .{
         .argv = &.{ "tar", "-xzf", archive_path, "-C", destination_path },
         .expand_arg0 = .expand,
-        .stdout_limit = .limited(64 * 1024),
-        .stderr_limit = .limited(64 * 1024),
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .inherit,
     });
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    if (result.term == .exited and result.term.exited == 0) return;
-    if (result.stdout.len != 0) std.debug.print("{s}", .{result.stdout});
-    if (result.stderr.len != 0) std.debug.print("{s}", .{result.stderr});
+    const term = try child.wait(std.Options.debug_io);
+    if (term == .exited and term.exited == 0) return;
     return error.ExternalCommandFailed;
 }
