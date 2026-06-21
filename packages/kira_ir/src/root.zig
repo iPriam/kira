@@ -58,4 +58,6 @@ test {
     _ = @import("widget_executable_lowering_tests.zig");
     _ = @import("program_phases.zig");
     _ = @import("mid_ir_check.zig");
+    _ = @import("mid_ir_place.zig");
+    _ = @import("mid_ir_state.zig");
 }

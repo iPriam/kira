@@ -3,6 +3,33 @@ const diagnostics = @import("kira_diagnostics");
 const source_pkg = @import("kira_source");
 const model = @import("kira_semantics_model");
 const mid = @import("mid_ir.zig");
+const place_algebra = @import("mid_ir_place.zig");
+const state_mod = @import("mid_ir_state.zig");
+
+// Place/value algebra and dataflow-state types live in sibling modules; alias them
+// here so the checker body can reference them unqualified.
+const PlaceRelation = place_algebra.PlaceRelation;
+const rootLocalId = place_algebra.rootLocalId;
+const isMovablePlaceValue = place_algebra.isMovablePlaceValue;
+const placeHasIndexProjection = place_algebra.placeHasIndexProjection;
+const valueType = place_algebra.valueType;
+const isTriviallyCopyableType = place_algebra.isTriviallyCopyableType;
+const placeRelation = place_algebra.placeRelation;
+const rootsEqual = place_algebra.rootsEqual;
+const placesEqual = place_algebra.placesEqual;
+const placesEqualOptional = place_algebra.placesEqualOptional;
+const placeSliceContains = place_algebra.placeSliceContains;
+
+const LocalAvailability = state_mod.LocalAvailability;
+const AliasKind = state_mod.AliasKind;
+const LocalState = state_mod.LocalState;
+const State = state_mod.State;
+const resolvePlace = state_mod.resolvePlace;
+const aliasAccessLocalId = state_mod.aliasAccessLocalId;
+const joinAvailability = state_mod.joinAvailability;
+const scopedLocalIds = state_mod.scopedLocalIds;
+const clearMovedPaths = state_mod.clearMovedPaths;
+const resetScopedLocal = state_mod.resetScopedLocal;
 
 pub fn checkProgram(
     allocator: std.mem.Allocator,
@@ -25,26 +52,6 @@ const Control = enum {
     returned,
 };
 
-const LocalAvailability = enum {
-    uninitialized,
-    live,
-    moved,
-    maybe_moved,
-};
-
-const AliasKind = enum {
-    none,
-    reborrow,
-};
-
-const PlaceRelation = enum {
-    same,
-    ancestor,
-    descendant,
-    disjoint,
-    overlap,
-};
-
 const PathUseKind = enum {
     read,
     borrow_shared,
@@ -59,62 +66,6 @@ const PathAccess = struct {
     kind: PathUseKind,
     span: source_pkg.Span,
     ignore_alias_local_id: ?u32 = null,
-};
-
-const LocalState = struct {
-    local: mid.Local,
-    availability: LocalAvailability = .uninitialized,
-    alias_kind: AliasKind = .none,
-    alias_place: ?mid.Place = null,
-    move_span: ?source_pkg.Span = null,
-    moved_paths: std.array_list.Managed(mid.Place) = undefined,
-
-    fn init(allocator: std.mem.Allocator, local: mid.Local, initially_live: bool) LocalState {
-        return .{
-            .local = local,
-            .availability = if (initially_live) .live else .uninitialized,
-            .moved_paths = std.array_list.Managed(mid.Place).init(allocator),
-        };
-    }
-
-    fn clone(self: LocalState, allocator: std.mem.Allocator) !LocalState {
-        var cloned = self;
-        cloned.moved_paths = std.array_list.Managed(mid.Place).init(allocator);
-        try cloned.moved_paths.appendSlice(self.moved_paths.items);
-        return cloned;
-    }
-
-    fn deinit(self: *LocalState) void {
-        self.moved_paths.deinit();
-    }
-};
-
-const State = struct {
-    allocator: std.mem.Allocator,
-    locals: std.AutoHashMapUnmanaged(u32, LocalState) = .{},
-
-    fn init(allocator: std.mem.Allocator) State {
-        return .{ .allocator = allocator };
-    }
-
-    fn clone(self: *const State) !State {
-        var cloned = State.init(self.allocator);
-        var it = self.locals.iterator();
-        while (it.next()) |entry| {
-            try cloned.locals.put(self.allocator, entry.key_ptr.*, try entry.value_ptr.clone(self.allocator));
-        }
-        return cloned;
-    }
-
-    fn deinit(self: *State) void {
-        var it = self.locals.iterator();
-        while (it.next()) |entry| entry.value_ptr.deinit();
-        self.locals.deinit(self.allocator);
-    }
-
-    fn putLocal(self: *State, local: mid.Local, initially_live: bool) !void {
-        try self.locals.put(self.allocator, local.id, LocalState.init(self.allocator, local, initially_live));
-    }
 };
 
 const Checker = struct {
@@ -938,220 +889,3 @@ const Checker = struct {
     }
 };
 
-fn resolvePlace(state: *State, place: mid.Place) ?mid.Place {
-    const local_id = rootLocalId(place.root) orelse return place;
-    const local_state = state.locals.get(local_id) orelse return place;
-    const alias_place = local_state.alias_place orelse return place;
-    var projections = std.array_list.Managed(mid.Projection).init(state.allocator);
-    defer projections.deinit();
-    projections.appendSlice(alias_place.projections) catch return alias_place;
-    projections.appendSlice(place.projections) catch return alias_place;
-    return .{
-        .root = alias_place.root,
-        .projections = projections.toOwnedSlice() catch alias_place.projections,
-        .ty = place.ty,
-        .span = place.span,
-    };
-}
-
-fn aliasAccessLocalId(state: *State, place: mid.Place) ?u32 {
-    const local_id = rootLocalId(place.root) orelse return null;
-    const local_state = state.locals.get(local_id) orelse return null;
-    return if (local_state.alias_kind != .none) local_id else null;
-}
-
-fn rootLocalId(root: mid.Place.Root) ?u32 {
-    return switch (root) {
-        .local => |id| id,
-        .capture => |id| id,
-        .return_slot => null,
-    };
-}
-
-/// A place argument that can be moved out of its source: a local or a chain of
-/// struct-field projections. A projection chain that reaches through an array
-/// element (`arr[i]`) is excluded, because Kira (like Rust) cannot leave a hole
-/// in indexed content; such reads are cloned instead of moved.
-fn isMovablePlaceValue(value: mid.Value) bool {
-    return switch (value) {
-        .place => |node| !placeHasIndexProjection(node.place),
-        else => false,
-    };
-}
-
-fn placeHasIndexProjection(place: mid.Place) bool {
-    for (place.projections) |projection| {
-        if (projection == .index) return true;
-    }
-    return false;
-}
-
-fn valueType(value: mid.Value) model.ResolvedType {
-    return switch (value) {
-        .integer => |node| node.ty,
-        .float => |node| node.ty,
-        .string => |node| node.ty,
-        .boolean => |node| node.ty,
-        .null_ptr => |node| node.ty,
-        .function_ref => |node| node.ty,
-        .place => |node| node.place.ty,
-        .namespace_ref => |node| node.ty,
-        .call => |node| node.ty,
-        .virtual_call => |node| node.ty,
-        .callback => |node| node.ty,
-        .call_value => |node| node.ty,
-        .construct => |node| node.ty,
-        .construct_enum_variant => |node| node.ty,
-        .array => |node| node.ty,
-        .builder_array => |node| node.ty,
-        .binary => |node| node.ty,
-        .unary => |node| node.ty,
-        .conditional => |node| node.ty,
-        .native_state => |node| node.ty,
-        .native_user_data => |node| node.ty,
-        .native_recover => |node| node.ty,
-        .c_string_to_string => |node| node.ty,
-        .array_len => |node| node.ty,
-        .string_len => |node| node.ty,
-        .opaque_member => |node| node.ty,
-        .opaque_index => |node| node.ty,
-    };
-}
-
-fn isTriviallyCopyableType(ty: model.ResolvedType) bool {
-    return switch (ty.kind) {
-        .void, .integer, .float, .boolean, .c_string, .raw_ptr => true,
-        else => false,
-    };
-}
-
-fn joinAvailability(lhs: LocalAvailability, rhs: LocalAvailability) LocalAvailability {
-    if (lhs == rhs) return lhs;
-    if (lhs == .live and rhs == .uninitialized) return .maybe_moved;
-    if (lhs == .uninitialized and rhs == .live) return .maybe_moved;
-    if (lhs == .moved or rhs == .moved) return .maybe_moved;
-    if (lhs == .maybe_moved or rhs == .maybe_moved) return .maybe_moved;
-    return .maybe_moved;
-}
-
-fn scopedLocalIds(allocator: std.mem.Allocator, block: mid.Block) []u32 {
-    var items = std.array_list.Managed(u32).init(allocator);
-    for (block.statements) |statement| {
-        switch (statement) {
-            .let_stmt => |node| items.append(node.local.id) catch {},
-            .for_stmt => |node| items.append(node.binding.id) catch {},
-            else => {},
-        }
-    }
-    return items.toOwnedSlice() catch &.{};
-}
-
-fn clearMovedPaths(root_state: *LocalState, assigned_place: mid.Place) void {
-    var index: usize = 0;
-    while (index < root_state.moved_paths.items.len) {
-        const moved_place = root_state.moved_paths.items[index];
-        const relation = placeRelation(moved_place, assigned_place);
-        switch (relation) {
-            .same, .ancestor, .descendant => _ = root_state.moved_paths.swapRemove(index),
-            .disjoint, .overlap => index += 1,
-        }
-    }
-}
-
-fn resetScopedLocal(local_state: *LocalState) void {
-    local_state.availability = .uninitialized;
-    local_state.alias_kind = .none;
-    local_state.alias_place = null;
-    local_state.move_span = null;
-    local_state.moved_paths.clearRetainingCapacity();
-}
-
-fn placeRelation(lhs: mid.Place, rhs: mid.Place) PlaceRelation {
-    if (!rootsEqual(lhs.root, rhs.root)) return .disjoint;
-    var index: usize = 0;
-    while (index < lhs.projections.len and index < rhs.projections.len) : (index += 1) {
-        const lhs_projection = lhs.projections[index];
-        const rhs_projection = rhs.projections[index];
-        switch (lhs_projection) {
-            .field => |lhs_field| switch (rhs_projection) {
-                .field => |rhs_field| {
-                    if (lhs_field.field_index == rhs_field.field_index) continue;
-                    return .disjoint;
-                },
-                else => return .overlap,
-            },
-            .index => |lhs_index| switch (rhs_projection) {
-                .index => |rhs_index| {
-                    if (lhs_index.index != null and rhs_index.index != null and lhs_index.index.? == rhs_index.index.?) continue;
-                    return .overlap;
-                },
-                else => return .overlap,
-            },
-            .parent_view => |lhs_parent| switch (rhs_projection) {
-                .parent_view => |rhs_parent| {
-                    if (lhs_parent.offset == rhs_parent.offset) continue;
-                    return .overlap;
-                },
-                else => return .overlap,
-            },
-        }
-    }
-    if (lhs.projections.len == rhs.projections.len) return .same;
-    if (lhs.projections.len < rhs.projections.len) return .ancestor;
-    return .descendant;
-}
-
-fn rootsEqual(lhs: mid.Place.Root, rhs: mid.Place.Root) bool {
-    return switch (lhs) {
-        .local => |id| switch (rhs) {
-            .local => |other| id == other,
-            else => false,
-        },
-        .capture => |id| switch (rhs) {
-            .capture => |other| id == other,
-            else => false,
-        },
-        .return_slot => rhs == .return_slot,
-    };
-}
-
-fn placesEqual(lhs: mid.Place, rhs: mid.Place) bool {
-    if (!rootsEqual(lhs.root, rhs.root)) return false;
-    if (lhs.projections.len != rhs.projections.len) return false;
-    for (lhs.projections, rhs.projections) |lhs_projection, rhs_projection| {
-        switch (lhs_projection) {
-            .field => |lhs_field| switch (rhs_projection) {
-                .field => |rhs_field| {
-                    if (lhs_field.field_index != rhs_field.field_index) return false;
-                },
-                else => return false,
-            },
-            .index => |lhs_index| switch (rhs_projection) {
-                .index => |rhs_index| {
-                    if (lhs_index.index != rhs_index.index) return false;
-                },
-                else => return false,
-            },
-            .parent_view => |lhs_parent| switch (rhs_projection) {
-                .parent_view => |rhs_parent| {
-                    if (lhs_parent.offset != rhs_parent.offset) return false;
-                },
-                else => return false,
-            },
-        }
-    }
-    return true;
-}
-
-fn placesEqualOptional(lhs: ?mid.Place, rhs: ?mid.Place) bool {
-    if (lhs == null and rhs == null) return true;
-    if (lhs == null or rhs == null) return false;
-    return placesEqual(lhs.?, rhs.?);
-}
-
-fn placeSliceContains(items: []const mid.Place, needle: mid.Place) bool {
-    for (items) |item| {
-        if (placesEqual(item, needle)) return true;
-    }
-    return false;
-}
