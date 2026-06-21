@@ -60,4 +60,5 @@ test {
     _ = @import("mid_ir_check.zig");
     _ = @import("mid_ir_place.zig");
     _ = @import("mid_ir_state.zig");
+    _ = @import("mid_ir_consume.zig");
 }
