@@ -26,6 +26,45 @@ const isCallableValueExpr = parent.isCallableValueExpr;
 const flattenCalleeName = parent.flattenCalleeName;
 const flattenMemberExpr = parent.flattenMemberExpr;
 const qualifiedLeaf = parent.qualifiedLeaf;
+/// A lowered value that *aliases* existing owned storage rather than producing a fresh
+/// owned value: a bare local read (unless explicitly `move`d), a field read, or an element
+/// read. Fresh values (array/struct/enum literals, calls, conditionals) own what they yield.
+fn isAliasingAggregateRead(value: model.Expr) bool {
+    return switch (value) {
+        .local => |node| node.ownership != .move,
+        .field, .index => true,
+        else => false,
+    };
+}
+
+/// Reject initializing an array-typed struct field from an aliasing array read.
+///
+/// Kira has no deep copy for arrays (KSEM116) and the backend cannot transfer ownership of
+/// an array *field* out of a struct, so `Foo { items: other.items }` / `Foo { items: local }`
+/// would make the new struct share the source's backing store. When the source is then
+/// dropped (e.g. a by-value parameter at function exit), the field dangles — the latent
+/// use-after-free behind the widget-lowering `enum native copy could not resolve discriminant`
+/// crash. Until ownership transfer/copy of array fields is implemented, this is rejected at
+/// `check` instead of detonating at runtime under allocation churn.
+fn rejectAliasedArrayField(
+    ctx: *shared.Context,
+    field_ty: model.ResolvedType,
+    field_value: *const model.Expr,
+    span: source_pkg.Span,
+) !void {
+    if (field_ty.kind != .array) return;
+    if (!isAliasingAggregateRead(field_value.*)) return;
+    try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
+        .severity = .@"error",
+        .code = "KSEM118",
+        .title = "array field aliases an existing array",
+        .message = "Initializing an array-typed field from an existing array value shares its backing store. Kira cannot yet copy or transfer ownership of an array field, so the field would dangle when the source is freed.",
+        .labels = &.{diagnostics.primaryLabel(span, "this array field aliases an existing array")},
+        .help = "Build the array fresh in place (an array literal, or a call that returns a new array), or `move` an owned local array into the field.",
+    });
+    return error.DiagnosticsEmitted;
+}
+
 pub fn lowerStructLiteralExpr(
     ctx: *shared.Context,
     node: syntax.ast.StructLiteralExpr,
@@ -123,6 +162,7 @@ pub fn lowerTypeConstruction(
                 try lowerExpectedValue(ctx, arg.value, field_ty, imports, scope, headers, arg.span)
             else
                 try lowerExpr(ctx, arg.value, imports, scope, function_headers);
+            try rejectAliasedArrayField(ctx, field_ty, field_value, arg.span);
             const field_name = if (type_header) |header| header.fields[field_index].name else imported_type.?.fields[field_index].name;
             try fields.append(.{
                 .field_name = try ctx.allocator.dupe(u8, field_name),
@@ -151,6 +191,7 @@ pub fn lowerTypeConstruction(
                 try lowerExpectedValue(ctx, field.value, field_ty, imports, scope, headers, field.span)
             else
                 try lowerExpr(ctx, field.value, imports, scope, function_headers);
+            try rejectAliasedArrayField(ctx, field_ty, field_value, field.span);
             try fields.append(.{
                 .field_name = try ctx.allocator.dupe(u8, field.name),
                 .field_index = @as(u32, @intCast(field_index)),

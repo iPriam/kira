@@ -39,6 +39,63 @@ pub const LoweredLocalDeclaration = struct {
     initialized: bool,
 };
 
+const BindingMoveTarget = struct {
+    root: []const u8,
+    /// The top-level field read out of `root`, or null for a bare whole-local read.
+    field: ?[]const u8,
+};
+
+/// Resolve a binding initializer to the owned local it consumes, and which top-level
+/// field of that local (if any). A bare identifier is a whole read (`field == null`);
+/// a field chain (`a.b.c`) roots at `a` and names the field directly under the root (`b`),
+/// because the move model tracks one level below the binding root. Anything else (calls,
+/// literals, index reads) has no single owning root, so it returns null. Namespaced paths
+/// like `Kit.Card` still produce a root segment, but the scope lookup at the use site
+/// rejects it because it is not a local binding.
+fn bindingMoveTarget(value_expr: *syntax.ast.Expr) ?BindingMoveTarget {
+    return switch (value_expr.*) {
+        .identifier => |node| .{ .root = node.name.segments[0].text, .field = null },
+        .member => |node| blk: {
+            const inner = bindingMoveTarget(node.object) orelse break :blk null;
+            break :blk .{ .root = inner.root, .field = inner.field orelse node.member };
+        },
+        else => null,
+    };
+}
+
+/// Apply Rust-style implicit move when a binding initializer reads an owned aggregate that
+/// the binding lowering would otherwise *alias*. Arrays and enums lower to `store_local`
+/// (a shared reference), so `let x = y` / `let x = obj.field` leave two owners pointing at
+/// one heap object — the use-after-free under allocation churn that `check` never saw.
+///
+/// A bare local read is a whole move: the source binding is marked moved (any later use is
+/// KSEM107) and the lowered read is re-tagged as a move so codegen transfers ownership
+/// instead of aliasing. A field read is a *partial* move: only that field is recorded as
+/// moved, so the base cannot be used as a whole until the field is re-initialized
+/// (`obj.field = ...`), exactly mirroring Rust. This keeps the in-place mutation idiom
+/// (`var x = obj.arr; x[i] = ...; obj.arr = x`) legal while rejecting a persisted alias.
+/// Structs already deep-copy via `copy_indirect`, so struct-valued bindings stay safe and
+/// are left untouched. Code that wants an independent value must say `copy`.
+fn applyBindingMove(ctx: *shared.Context, scope: *model.Scope, value_expr: *syntax.ast.Expr, lowered_value: *model.Expr) !void {
+    const target = bindingMoveTarget(value_expr) orelse return;
+    const binding = scope.entries.getPtr(target.root) orelse return;
+    if (binding.moved) return;
+    if (binding.ownership != .owned) return;
+    // Only the aggregates that actually alias on binding need move enforcement. The bound
+    // value's own type (the field type for a field read, the local type for a bare read)
+    // is what decides this, so a trivially-copyable field like `obj.count` never moves `obj`.
+    const bound_ty = model.hir.exprType(lowered_value.*);
+    if (bound_ty.kind != .array and bound_ty.kind != .enum_instance) return;
+    if (target.field) |field_name| {
+        try binding.markFieldMoved(ctx.allocator, field_name);
+        if (binding.move_span == null) binding.move_span = exprSpan(value_expr.*);
+    } else {
+        if (lowered_value.* == .local) lowered_value.local.ownership = .move;
+        binding.moved = true;
+        binding.move_span = exprSpan(value_expr.*);
+    }
+}
+
 pub fn lowerLocalDeclaration(
     ctx: *shared.Context,
     node: syntax.ast.LetStatement,
@@ -53,6 +110,12 @@ pub fn lowerLocalDeclaration(
             try lowerExpectedValue(ctx, value_expr, declared_type, imports, scope, function_headers, exprSpan(value_expr.*))
         else
             try lowerExpr(ctx, value_expr, imports, scope, function_headers);
+
+        // Rust ownership: binding a bare owned, non-trivially-copyable local consumes it.
+        // Without this, `let alias = values` leaves both bindings owning the same heap object
+        // (a use-after-free under allocation churn that `check` never saw). The move makes any
+        // later use a compile error (KSEM107); independence requires explicit `copy`.
+        try applyBindingMove(ctx, scope, value_expr, lowered_value);
 
         if (explicit_type) |declared_type| {
             const actual_type = model.hir.exprType(lowered_value.*);

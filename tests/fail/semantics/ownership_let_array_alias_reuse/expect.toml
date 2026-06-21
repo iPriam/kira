@@ -1,0 +1,19 @@
+backends = ["hybrid", "vm", "llvm"]
+
+# Binding an owned aggregate (array/enum) to a new `let` moves it, because the
+# binding lowering aliases the same backing store instead of deep-copying. Reusing
+# the original name afterwards is a use-after-move and must be rejected at `check`
+# rather than aliasing into a runtime use-after-free. See ownership enforcement in
+# lower_exprs_types.applyBindingMove.
+
+[phases.check]
+result = "fail"
+diagnostic_code = "KSEM107"
+diagnostic_title = "local was moved"
+stage = "semantics"
+
+[phases.build]
+result = "blocked"
+
+[phases.run]
+result = "blocked"

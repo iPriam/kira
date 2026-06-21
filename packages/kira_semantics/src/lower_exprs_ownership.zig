@@ -29,6 +29,13 @@ pub fn lowerCallArgument(
             try emitUseAfterMove(ctx, binding.name, exprSpan(syntax_arg.*), binding.binding.move_span);
             return error.DiagnosticsEmitted;
         }
+        // A binding with an outstanding partial move cannot be passed as a whole: one of
+        // its fields was moved out (`let x = obj.field`) and not re-initialized, so the
+        // aggregate is incomplete. Re-store the field (`obj.field = ...`) before reuse.
+        if (binding.binding.hasMovedFields()) {
+            try emitUseAfterPartialMove(ctx, binding.name, exprSpan(syntax_arg.*), binding.binding.move_span);
+            return error.DiagnosticsEmitted;
+        }
     }
 
     if (ownership == .borrow_read or ownership == .borrow_mut) {
@@ -201,6 +208,24 @@ pub fn emitUseAfterMove(ctx: *shared.Context, name: []const u8, use_span: source
     });
 }
 
+pub fn emitUseAfterPartialMove(ctx: *shared.Context, name: []const u8, use_span: source_pkg.Span, move_span: ?source_pkg.Span) !void {
+    const labels = if (move_span) |span|
+        &.{
+            diagnostics.primaryLabel(use_span, "cannot use partially moved value"),
+            diagnostics.secondaryLabel(span, "a field was moved out here"),
+        }
+    else
+        &.{diagnostics.primaryLabel(use_span, "cannot use partially moved value")};
+    try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
+        .severity = .@"error",
+        .code = "KSEM107",
+        .title = "local was moved",
+        .message = try std.fmt.allocPrint(ctx.allocator, "`{s}` had a field moved out and cannot be used as a whole here.", .{name}),
+        .labels = labels,
+        .help = "Re-initialize the moved field (`x.field = ...`) before using the value again, or `copy` the field instead of moving it.",
+    });
+}
+
 fn emitAlreadyMoved(ctx: *shared.Context, name: []const u8, move_span: source_pkg.Span, previous_move_span: ?source_pkg.Span) !void {
     const labels = if (previous_move_span) |span|
         &.{
@@ -315,3 +340,4 @@ fn emitNonTrivialCopyNotImplemented(ctx: *shared.Context, span: source_pkg.Span,
         .help = "Borrow the value, move it, or add explicit clone semantics before using `copy` on this type.",
     });
 }
+

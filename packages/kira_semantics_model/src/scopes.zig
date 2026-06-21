@@ -14,6 +14,40 @@ pub const LocalBinding = struct {
     moved: bool = false,
     move_span: ?source_pkg.Span = null,
     decl_span: source_pkg.Span,
+    /// Top-level fields moved out of this binding (`let x = obj.field` on an
+    /// aliasing aggregate). A binding with any moved field cannot be used as a
+    /// whole until the field is re-initialized (`obj.field = ...`), mirroring
+    /// Rust's partial-move rules. Stored as field names because the move model
+    /// tracks one level below the binding root.
+    moved_fields: std.ArrayListUnmanaged([]const u8) = .empty,
+
+    pub fn fieldMoved(self: *const LocalBinding, name: []const u8) bool {
+        for (self.moved_fields.items) |field| {
+            if (std.mem.eql(u8, field, name)) return true;
+        }
+        return false;
+    }
+
+    pub fn hasMovedFields(self: *const LocalBinding) bool {
+        return self.moved_fields.items.len > 0;
+    }
+
+    pub fn markFieldMoved(self: *LocalBinding, allocator: std.mem.Allocator, name: []const u8) !void {
+        if (self.fieldMoved(name)) return;
+        try self.moved_fields.append(allocator, name);
+    }
+
+    /// Re-initialize a moved field (`obj.field = ...`), making it whole again.
+    pub fn clearFieldMoved(self: *LocalBinding, name: []const u8) void {
+        var index: usize = 0;
+        while (index < self.moved_fields.items.len) {
+            if (std.mem.eql(u8, self.moved_fields.items[index], name)) {
+                _ = self.moved_fields.swapRemove(index);
+            } else {
+                index += 1;
+            }
+        }
+    }
 };
 
 pub const Scope = struct {

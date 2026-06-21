@@ -1,0 +1,25 @@
+// An array-typed struct field initialized from an existing array value (here the
+// `bag.items` field of an owned parameter) would share the source's backing store.
+// Kira has no deep copy for arrays and the backend cannot transfer ownership of an
+// array *field*, so the new struct's `items` would dangle once `bag` is dropped at
+// function exit — the latent use-after-free behind the widget-lowering crash
+// `enum native copy could not resolve discriminant`. This must be rejected at `check`.
+struct Item {
+    let v: Int
+}
+
+struct Bag {
+    var items: [Item]
+}
+
+function rebuild(bag: Bag) -> Bag {
+    return Bag { items: bag.items }
+}
+
+@Main
+function main() {
+    let bag = Bag { items: [Item { v: 1 }] }
+    let next = rebuild(bag)
+    print(next.items.count)
+    return
+}

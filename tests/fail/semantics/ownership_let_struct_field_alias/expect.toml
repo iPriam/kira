@@ -1,0 +1,19 @@
+backends = ["hybrid", "vm", "llvm"]
+
+# `let valuesAlias = document.values` moves an array field out of `document` (arrays
+# alias on binding, so this is a partial move, not a copy). Using `document` as a whole
+# afterwards (passing it to the native mutator) is a use of a partially-moved value and
+# must be rejected at `check`. Re-initializing the field (`document.values = ...`) would
+# make it whole again; without that, allowing it aliases into a runtime use-after-free.
+
+[phases.check]
+result = "fail"
+diagnostic_code = "KSEM107"
+diagnostic_title = "local was moved"
+stage = "semantics"
+
+[phases.build]
+result = "blocked"
+
+[phases.run]
+result = "blocked"
