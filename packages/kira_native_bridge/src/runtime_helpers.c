@@ -58,6 +58,12 @@ typedef struct {
     KiraBridgeValue *items;
 } KiraArray;
 
+/* Native-backend native-state token. These three fields are the C-ABI prefix shared with
+ * the VM's `NativeStateBox` (packages/kira_vm_runtime/src/vm.zig). The VM appends VM-internal
+ * metadata fields after this prefix, but tokens are never cast across backends: the native
+ * path allocates/reads only this 3-field struct, and its `payload` is a raw byte buffer, while
+ * the VM's payload holds Zig BridgeValue/Value arrays. A comptime assertion on the Zig side
+ * enforces that this prefix layout stays in sync. */
 typedef struct {
     uint64_t type_id;
     void *payload;
