@@ -241,7 +241,7 @@ Never accept these as done: "the app launched, so the platform works"; "the brow
 
 ## Working With GitHub And PRs
 
-When tracking an open PR, periodically fetch status via background `gh` API calls. After pushing a branch or opening a draft PR, request reviews by commenting `@Codex review` and `@Coderabbit review`.
+After pushing a branch with committed work, open a pull request yourself with `gh pr create` without waiting to be asked; do not leave pushed work without a PR. When tracking an open PR, periodically fetch status via background `gh` API calls. After pushing a branch or opening a draft PR, request reviews by commenting `@Codex review` and `@Coderabbit review`.
 
 Create small, focused signed commits during implementation. Do not bypass commit signing with `--no-gpg-sign`, `commit.gpgsign=false`, or equivalent. If signing fails, diagnose and fix signing or stop with the exact blocker; never create an unsigned commit. Do not squash or force-push during development. Work on a branch, never `main` because `main` only accepts reviewed/merged PRs. When ready for review: rebase onto latest `main`; squash fixups into coherent logical parents; do not add a PR description because Coderabbit does it; keep multiple commits only if independently reviewable.
 
