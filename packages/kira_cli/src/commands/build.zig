@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const build = @import("kira_build");
 const build_def = @import("kira_build_definition");
 const manifest = @import("kira_manifest");
 const kira_main = @import("kira_main");
@@ -8,7 +10,11 @@ pub fn execute(allocator: std.mem.Allocator, args: []const []const u8, stdout: a
     const parsed = try parseArgs(args);
     _ = parsed.offline;
     _ = parsed.locked;
-    _ = parsed.timings;
+    // Honor `--timings` (and KIRA_TIMINGS) so `kira build` emits the same per-stage
+    // breakdown `kira run` does; previously the flag was parsed but ignored.
+    const previous_timings = build.timingsEnabled();
+    build.setTimingsEnabled(parsed.timings or timingsEnvEnabled());
+    defer build.setTimingsEnabled(previous_timings);
     const path = try allocator.dupeZ(u8, parsed.input_path);
     defer allocator.free(path);
     const developer = kira_main.kira_developer_create() orelse return error.OutOfMemory;
@@ -96,7 +102,10 @@ fn profileBackend(profile: ?manifest.BuildProfile) ?build_def.ExecutionTarget {
 }
 
 fn timingsEnvEnabled() bool {
-    return false;
+    if (!builtin.link_libc) return false;
+    const raw = std.c.getenv("KIRA_TIMINGS") orelse return false;
+    const value = std.mem.span(raw);
+    return value.len != 0 and !std.mem.eql(u8, value, "0") and !std.mem.eql(u8, value, "false");
 }
 
 fn parseBackend(arg: []const u8) ?build_def.ExecutionTarget {

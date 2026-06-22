@@ -43,7 +43,7 @@ fn compileHelperSource(
     var argv = std.array_list.Managed([]const u8).init(allocator);
     try argv.append(driver_path);
     try clang_driver.appendClangDriverArgs(allocator, &argv, selector);
-    if (pic and builtin.os.tag != .windows) try argv.append("-fPIC");
+    if (pic and !isWindowsTarget(selector)) try argv.append("-fPIC");
     try argv.appendSlice(&.{ "-c", helper_source, "-o", helper_object });
     try runCommand(allocator, argv.items);
 }
@@ -61,8 +61,8 @@ pub fn linkExecutable(
     try argv.append(driver_path);
     try clang_driver.appendClangDriverArgs(allocator, &argv, selector);
     try argv.appendSlice(&.{ "-o", executable_path });
-    if (builtin.os.tag == .windows) {
-        try argv.append("-Wl,/subsystem:console");
+    if (windowsConsoleSubsystemArg(selector)) |subsystem_arg| {
+        try argv.append(subsystem_arg);
     }
     try appendNativeLibraryPaths(allocator, &argv);
     for (object_paths) |path| try argv.append(path);
@@ -113,7 +113,7 @@ pub fn linkSharedLibrary(
 
 fn appendDefaultSystemLibraries(argv: *std.array_list.Managed([]const u8), selector: ?native.TargetSelector) !void {
     if (emscripten.isSelector(selector)) return;
-    if (builtin.os.tag == .linux) try argv.append("-lm");
+    if (isLinuxTarget(selector)) try argv.append("-lm");
 }
 
 fn appendNativeLibraryPaths(allocator: std.mem.Allocator, argv: *std.array_list.Managed([]const u8)) !void {
@@ -170,4 +170,58 @@ fn runCommand(allocator: std.mem.Allocator, argv: []const []const u8) !void {
 fn ensureParentDir(path: []const u8) !void {
     const maybe_dir = std.fs.path.dirname(path) orelse return;
     try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, maybe_dir);
+}
+
+fn shouldAddWindowsConsoleSubsystem(selector: ?native.TargetSelector) bool {
+    return isWindowsTarget(selector) and !emscripten.isSelector(selector);
+}
+
+fn windowsConsoleSubsystemArg(selector: ?native.TargetSelector) ?[]const u8 {
+    if (!shouldAddWindowsConsoleSubsystem(selector)) return null;
+    const value = selector orelse return "-Wl,/subsystem:console";
+    return if (std.mem.eql(u8, value.abi, "gnu"))
+        "-Wl,--subsystem,console"
+    else
+        "-Wl,/subsystem:console";
+}
+
+fn isWindowsTarget(selector: ?native.TargetSelector) bool {
+    const value = selector orelse return builtin.os.tag == .windows;
+    return std.mem.eql(u8, value.operating_system, "windows");
+}
+
+fn isLinuxTarget(selector: ?native.TargetSelector) bool {
+    const value = selector orelse return builtin.os.tag == .linux;
+    return std.mem.eql(u8, value.operating_system, "linux");
+}
+
+test "windows console subsystem only applies to native windows targets" {
+    try std.testing.expect(shouldAddWindowsConsoleSubsystem(.{
+        .architecture = "x86_64",
+        .operating_system = "windows",
+        .abi = "msvc",
+    }));
+    try std.testing.expect(!shouldAddWindowsConsoleSubsystem(.{
+        .architecture = "x86_64",
+        .operating_system = "linux",
+        .abi = "gnu",
+    }));
+    try std.testing.expect(!shouldAddWindowsConsoleSubsystem(.{
+        .architecture = "wasm32",
+        .operating_system = "emscripten",
+        .abi = "unknown",
+    }));
+}
+
+test "windows console subsystem flag matches windows toolchain abi" {
+    try std.testing.expectEqualStrings("-Wl,/subsystem:console", windowsConsoleSubsystemArg(.{
+        .architecture = "x86_64",
+        .operating_system = "windows",
+        .abi = "msvc",
+    }).?);
+    try std.testing.expectEqualStrings("-Wl,--subsystem,console", windowsConsoleSubsystemArg(.{
+        .architecture = "x86_64",
+        .operating_system = "windows",
+        .abi = "gnu",
+    }).?);
 }

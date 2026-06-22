@@ -16,7 +16,10 @@ pub const NativeEmitOptions = struct {
 
 pub const CompileRequest = struct {
     mode: BackendMode,
-    program: *const ir.Program,
+    /// Native/LLVM emission accepts only a verified-executable program. A backend cannot be
+    /// built around a raw `ir.Program`; obtain a `VerifiedProgram` from `ir.verify` (or, for
+    /// trusted/test IR, `ir.VerifiedProgram.assumeVerified`).
+    program: *const ir.VerifiedProgram,
     module_name: []const u8,
     emit: NativeEmitOptions,
     target_selector: ?native.TargetSelector = null,

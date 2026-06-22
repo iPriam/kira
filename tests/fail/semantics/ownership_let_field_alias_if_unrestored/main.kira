@@ -1,0 +1,18 @@
+struct Bag {
+    var items: [Int]
+}
+
+function leak(flag: Bool, bag: Bag) -> Int {
+    if flag {
+        let alias = bag.items
+        return alias.count
+    }
+    return 0
+}
+
+@Main
+function main() {
+    let bag = Bag { items: [1, 2, 3] }
+    print(leak(true, bag))
+    return
+}

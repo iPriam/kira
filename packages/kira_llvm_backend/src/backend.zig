@@ -278,20 +278,20 @@ fn lowerProgram(
     var functions = std.AutoHashMapUnmanaged(u32, llvm.c.LLVMValueRef){};
     defer functions.deinit(allocator);
 
-    for (request.program.functions) |function_decl| {
+    for (request.program.programPtr().functions) |function_decl| {
         if (!shouldLowerFunction(function_decl.execution, request.mode)) continue;
         const function_value = try declareFunction(allocator, api, module_ref, function_decl, request.mode, types);
         try functions.put(allocator, function_decl.id, function_value);
     }
 
-    for (request.program.functions) |function_decl| {
+    for (request.program.programPtr().functions) |function_decl| {
         if (!shouldLowerFunction(function_decl.execution, request.mode)) continue;
         const function_value = functions.get(function_decl.id) orelse return error.MissingFunctionDeclaration;
         try lowerFunction(allocator, api, builder, module_ref, types, runtime_decls, request, &functions, function_decl, function_value);
     }
 
     if (request.mode == .llvm_native) {
-        const entry_decl = request.program.functions[request.program.entry_index];
+        const entry_decl = request.program.programPtr().functions[request.program.programPtr().entry_index];
         if (!shouldLowerFunction(entry_decl.execution, request.mode)) return error.RuntimeEntrypointInNativeBuild;
         const entry_function = functions.get(entry_decl.id) orelse return error.MissingFunctionDeclaration;
         try buildHostMain(api, builder, module_ref, types, entry_function);
@@ -357,7 +357,7 @@ fn lowerFunction(
     const entry_block = api.LLVMAppendBasicBlockInContext(types.context, function_value, "entry");
     api.LLVMPositionBuilderAtEnd(builder, entry_block);
 
-    const register_types = try inferRegisterTypes(allocator, request.program.*, function_decl);
+    const register_types = try inferRegisterTypes(allocator, request.program.programPtr().*, function_decl);
     const register_values = try allocator.alloc(llvm.c.LLVMValueRef, function_decl.register_count);
     const locals = try allocator.alloc(llvm.c.LLVMValueRef, function_decl.local_count);
 
@@ -398,7 +398,7 @@ fn lowerFunction(
             .print => |value| try lowerPrint(api, builder, runtime_decls, register_types[value.src], register_values[value.src]),
             .call => |value| {
                 if (value.args.len != 0 or value.dst != null) return error.UnsupportedExecutableFeature;
-                try lowerCall(api, builder, types, runtime_decls, request.mode, request.program, functions, value.callee);
+                try lowerCall(api, builder, types, runtime_decls, request.mode, request.program.programPtr(), functions, value.callee);
             },
             .call_value => return error.UnsupportedExecutableFeature,
             .ret => |value| {

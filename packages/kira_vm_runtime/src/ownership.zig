@@ -315,6 +315,7 @@ pub const Heap = struct {
 
     pub fn deinit(self: *Heap) void {
         while (self.pin_frames.items.len != 0) self.endBoundaryPinScope();
+        self.pin_frames.deinit(self.allocator);
         while (self.objects.count() != 0) {
             var iterator = self.objects.iterator();
             if (iterator.next()) |entry| self.dropPtr(entry.key);
@@ -639,7 +640,6 @@ test "boundary pin scopes do not own managed graphs" {
 
     heap.dropValue(.{ .raw_ptr = root_ptr });
     try std.testing.expectEqual(@as(usize, 0), heap.count());
-    heap.endBoundaryPinScope();
 }
 
 test "empty structs use managed non-zero storage" {

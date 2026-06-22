@@ -903,6 +903,11 @@ pub fn lowerFunction(
         });
         return error.DiagnosticsEmitted;
     };
+    // A partial field move that was never written back leaves the base owning storage it has
+    // already handed to another owner; dropping it at scope exit double-frees. Reject before
+    // the function returns (the in-place idiom clears the field via write-back, so it passes).
+    if (foreign == null) try exprs.rejectOutstandingMovedFields(ctx, &scope);
+
     const return_type = if (foreign != null)
         (if (explicit_return_type.kind == .unknown) model.ResolvedType{ .kind = .void } else explicit_return_type)
     else

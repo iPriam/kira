@@ -56,7 +56,7 @@ fn validateAttempt(
 
         // Lower the operand in a throwaway copy of the scope to learn its type without
         // disturbing the real scope's move/initialization state.
-        var clone = model.Scope{ .entries = try scope.entries.clone(ctx.allocator) };
+        var clone = try scope.clone(ctx.allocator);
         defer clone.deinit(ctx.allocator);
         const lowered = try exprs.lowerExpr(ctx, operand, imports, &clone, function_headers);
         const ty = model.hir.exprType(lowered.*);

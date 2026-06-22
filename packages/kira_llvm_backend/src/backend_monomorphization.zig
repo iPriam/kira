@@ -76,12 +76,12 @@ pub fn buildPlan(allocator: std.mem.Allocator, request: backend_api.CompileReque
     var index: usize = 0;
     while (index < pending.items.len) : (index += 1) {
         if (pending.items[index].state == .resolved) continue;
-        try resolveVariant(allocator, request.program, request.mode, &pending, index);
+        try resolveVariant(allocator, request.program.programPtr(), request.mode, &pending, index);
     }
 
     const variants = try allocator.alloc(FunctionVariant, pending.items.len);
     for (pending.items, 0..) |item, i| variants[i] = item.variant;
-    return .{ .allocator = allocator, .program = request.program, .mode = request.mode, .variants = variants };
+    return .{ .allocator = allocator, .program = request.program.programPtr(), .mode = request.mode, .variants = variants };
 }
 
 fn ensureVariant(

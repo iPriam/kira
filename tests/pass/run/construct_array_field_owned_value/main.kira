@@ -1,0 +1,38 @@
+// The sound alternatives to aliasing an array into a struct field (KSEM118):
+//   * `move` an owned local array (ownership transfers; the source is consumed)
+//   * initialize from a freshly built array (literal or a call that returns a new array)
+// Both give the field a value it owns outright, so nothing dangles. Validated across
+// vm/llvm/hybrid to prove the move/transfer path is real, not VM-only.
+struct Item {
+    let v: Int
+}
+
+struct Bag {
+    var items: [Item]
+}
+
+function freshItems() -> [Item] {
+    return [Item { v: 10 }, Item { v: 20 }]
+}
+
+function total(bag: borrow Bag) -> Int {
+    var sum = 0
+    var index = 0
+    while index < bag.items.count {
+        sum = sum + bag.items[index].v
+        index = index + 1
+    }
+    return sum
+}
+
+@Main
+function main() {
+    let local = [Item { v: 1 }, Item { v: 2 }, Item { v: 3 }]
+    let moved = Bag { items: move local }
+    let built = Bag { items: freshItems() }
+    print(moved.items.count)
+    print(total(moved))
+    print(built.items.count)
+    print(total(built))
+    return
+}

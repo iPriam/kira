@@ -29,6 +29,13 @@ pub fn lowerCallArgument(
             try emitUseAfterMove(ctx, binding.name, exprSpan(syntax_arg.*), binding.binding.move_span);
             return error.DiagnosticsEmitted;
         }
+        // A binding with an outstanding partial move cannot be passed as a whole: one of
+        // its fields was moved out (`let x = obj.field`) and not re-initialized, so the
+        // aggregate is incomplete. Re-store the field (`obj.field = ...`) before reuse.
+        if (binding.binding.hasMovedFields()) {
+            try emitUseAfterPartialMove(ctx, binding.name, exprSpan(syntax_arg.*), binding.binding.move_span);
+            return error.DiagnosticsEmitted;
+        }
     }
 
     if (ownership == .borrow_read or ownership == .borrow_mut) {
@@ -131,6 +138,10 @@ fn lowerMoveExpr(
             try emitAlreadyMoved(ctx, local.name, node.span, local.binding.move_span);
             return error.DiagnosticsEmitted;
         }
+        if (local.binding.hasMovedFields()) {
+            try emitUseAfterPartialMove(ctx, local.name, node.span, local.binding.move_span);
+            return error.DiagnosticsEmitted;
+        }
         if (local.binding.ownership == .borrow_read or local.binding.ownership == .borrow_mut) {
             try emitMoveBorrowedValue(ctx, local.name, node.span, local.binding.decl_span);
             return error.DiagnosticsEmitted;
@@ -198,6 +209,48 @@ pub fn emitUseAfterMove(ctx: *shared.Context, name: []const u8, use_span: source
         .message = try std.fmt.allocPrint(ctx.allocator, "`{s}` was moved and is no longer available here.", .{name}),
         .labels = labels,
         .help = "Move a value at most once, or pass it to borrowing functions without `move`.",
+    });
+}
+
+/// At scope exit, a binding that still has a field moved out (a partial move that was never
+/// restored) cannot be dropped safely: a field read aliases the source field rather than
+/// transferring it, so both the field's new owner and the base own the same array/enum
+/// backing. Writing the field back (`x.field = ...`) clears the mark and makes the base whole
+/// again (the in-place mutation idiom); anything else is the same double-free/use-after-free
+/// class KSEM107 prevents and must be rejected here rather than at runtime.
+pub fn rejectOutstandingMovedFields(ctx: *shared.Context, scope: *model.Scope) !void {
+    var it = scope.entries.iterator();
+    while (it.next()) |entry| {
+        const binding = entry.value_ptr;
+        if (!binding.hasMovedFields()) continue;
+        const span = binding.move_span orelse binding.decl_span;
+        try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
+            .severity = .@"error",
+            .code = "KSEM107",
+            .title = "local was moved",
+            .message = try std.fmt.allocPrint(ctx.allocator, "`{s}` has a field (`{s}`) moved out and never restored, so it cannot be dropped safely.", .{ entry.key_ptr.*, binding.moved_fields.items[0] }),
+            .labels = &.{diagnostics.primaryLabel(span, "a field was moved out here and never written back")},
+            .help = "Re-initialize the moved field (`x.field = ...`) before the value goes out of scope, or `move` the whole value instead of a single field.",
+        });
+        return error.DiagnosticsEmitted;
+    }
+}
+
+pub fn emitUseAfterPartialMove(ctx: *shared.Context, name: []const u8, use_span: source_pkg.Span, move_span: ?source_pkg.Span) !void {
+    const labels = if (move_span) |span|
+        &.{
+            diagnostics.primaryLabel(use_span, "cannot use partially moved value"),
+            diagnostics.secondaryLabel(span, "a field was moved out here"),
+        }
+    else
+        &.{diagnostics.primaryLabel(use_span, "cannot use partially moved value")};
+    try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
+        .severity = .@"error",
+        .code = "KSEM107",
+        .title = "local was moved",
+        .message = try std.fmt.allocPrint(ctx.allocator, "`{s}` had a field moved out and cannot be used as a whole here.", .{name}),
+        .labels = labels,
+        .help = "Re-initialize the moved field (`x.field = ...`) before using the value again, or `copy` the field instead of moving it.",
     });
 }
 

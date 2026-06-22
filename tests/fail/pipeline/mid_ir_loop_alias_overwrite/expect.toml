@@ -1,0 +1,13 @@
+backends = ["hybrid", "vm", "llvm"]
+
+[phases.check]
+result = "fail"
+diagnostic_code = "KIR002"
+diagnostic_title = "overlapping place access is not executable safely"
+stage = "ir"
+
+[phases.build]
+result = "blocked"
+
+[phases.run]
+result = "blocked"

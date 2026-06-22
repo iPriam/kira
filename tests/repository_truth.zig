@@ -70,6 +70,11 @@ fn skipPath(path: []const u8) bool {
         startsWithPath(path, "zig-out/") or
         startsWithPath(path, "generated/") or
         startsWithPath(path, "third_party/") or
+        // Downloaded Emscripten SDK (CI `setup-emsdk` actions-cache-folder). It is a
+        // vendored toolchain, not repo source, and ships its own Python tooling — the same
+        // reason .zig-cache/ and third_party/ are excluded. Without this the repository-truth
+        // Python guard trips on emsdk's `tools/ports/*.py` on every CI run that builds WASM.
+        startsWithPath(path, "emsdk-cache/") or
         startsWithPath(path, "tests/pass/") or
         startsWithPath(path, "tests/fail/") or
         startsWithPath(path, "zig-pkg/") or

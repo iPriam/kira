@@ -93,7 +93,7 @@ pub const FunctionCodegen = struct {
         try drop.setup(self);
         defer drop.teardown(self);
 
-        self.register_types = try inferRegisterTypes(self.allocator, self.request.program.*, self.function_decl);
+        self.register_types = try inferRegisterTypes(self.allocator, self.request.program.programPtr().*, self.function_decl);
         defer self.allocator.free(self.register_types);
         self.registers = try self.allocator.alloc(llvm.c.LLVMValueRef, self.function_decl.register_count);
         defer self.allocator.free(self.registers);
@@ -294,7 +294,7 @@ pub const FunctionCodegen = struct {
                 // type and reclaim the clone by tracking dst as struct_contents (aliasing
                 // would double-free, since src and dst are separate drop slots).
                 const clone_default = blk: {
-                    const td = utils.findTypeDecl(self.request.program, v.type_name) orelse break :blk false;
+                    const td = utils.findTypeDecl(self.request.program.programPtr(), v.type_name) orelse break :blk false;
                     break :blk td.ffi == null;
                 };
                 if ((self.drop_enabled or clone_default)) {
@@ -371,31 +371,41 @@ pub const FunctionCodegen = struct {
         const api = self.api;
         const operand_kind = if (v.lhs < self.register_types.len) self.register_types[v.lhs].kind else ir.ValueType.Kind.integer;
         if (operand_kind == .float) {
-            const pred: c_int = switch (v.op) {
-                .equal => llvm.c.LLVMRealOEQ,
-                .not_equal => llvm.c.LLVMRealONE,
-                .less => llvm.c.LLVMRealOLT,
-                .less_equal => llvm.c.LLVMRealOLE,
-                .greater => llvm.c.LLVMRealOGT,
-                .greater_equal => llvm.c.LLVMRealOGE,
-            };
-            return api.LLVMBuildFCmp(self.builder, pred, self.registers[v.lhs], self.registers[v.rhs], "fcmp");
+            return api.LLVMBuildFCmp(
+                self.builder,
+                switch (v.op) {
+                    .equal => llvm.c.LLVMRealOEQ,
+                    .not_equal => llvm.c.LLVMRealONE,
+                    .less => llvm.c.LLVMRealOLT,
+                    .less_equal => llvm.c.LLVMRealOLE,
+                    .greater => llvm.c.LLVMRealOGT,
+                    .greater_equal => llvm.c.LLVMRealOGE,
+                },
+                self.registers[v.lhs],
+                self.registers[v.rhs],
+                "fcmp",
+            );
         }
         // Integer / boolean / pointer comparison. Equality is valid for all;
         // ordering uses signed predicates (Kira Int is signed).
-        const pred: c_int = switch (v.op) {
-            .equal => llvm.c.LLVMIntEQ,
-            .not_equal => llvm.c.LLVMIntNE,
-            .less => llvm.c.LLVMIntSLT,
-            .less_equal => llvm.c.LLVMIntSLE,
-            .greater => llvm.c.LLVMIntSGT,
-            .greater_equal => llvm.c.LLVMIntSGE,
-        };
-        return api.LLVMBuildICmp(self.builder, pred, self.registers[v.lhs], self.registers[v.rhs], "icmp");
+        return api.LLVMBuildICmp(
+            self.builder,
+            switch (v.op) {
+                .equal => llvm.c.LLVMIntEQ,
+                .not_equal => llvm.c.LLVMIntNE,
+                .less => llvm.c.LLVMIntSLT,
+                .less_equal => llvm.c.LLVMIntSLE,
+                .greater => llvm.c.LLVMIntSGT,
+                .greater_equal => llvm.c.LLVMIntSGE,
+            },
+            self.registers[v.lhs],
+            self.registers[v.rhs],
+            "icmp",
+        );
     }
 
     pub fn storageType(self: *FunctionCodegen, value_type: ir.ValueType) !llvm.c.LLVMTypeRef {
-        return capi.fieldStorageType(self.types, self.struct_types.*, self.request.program, value_type);
+        return capi.fieldStorageType(self.types, self.struct_types.*, self.request.program.programPtr(), value_type);
     }
 
     // Read a value through a pointer (register i64), converting the in-memory

@@ -1,0 +1,17 @@
+struct Cell { var value: Int }
+struct Pair { var left: Cell; var right: Cell }
+
+function updateBoth(a: borrow mut Cell, b: borrow mut Cell) {
+    a.value = a.value + 10
+    b.value = b.value + 20
+    return
+}
+
+@Main
+function main() {
+    var pair = Pair { left: Cell { value: 1 }, right: Cell { value: 2 } }
+    updateBoth(pair.left, pair.right)
+    print(pair.left.value)
+    print(pair.right.value)
+    return
+}

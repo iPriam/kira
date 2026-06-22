@@ -105,7 +105,7 @@ pub fn setup(fc: *FunctionCodegen) !void {
                 // array). Track it so the caller frees it at scope exit unless it is
                 // consumed/moved first (onEscape nulls the slot; a direct return skips it).
                 const dst = v.dst orelse continue;
-                const callee = runtime_utils.functionById(fc.request.program.*, v.callee) orelse continue;
+                const callee = runtime_utils.functionById(fc.request.program.programPtr().*, v.callee) orelse continue;
                 const kind: OwnedKind = switch (callee.return_type.kind) {
                     .ffi_struct => .struct_heap,
                     .array => .array,
@@ -373,7 +373,7 @@ fn freeSlot(fc: *FunctionCodegen, index: u32) void {
     const ptr = api.LLVMBuildLoad2(b, fc.types.ptr_ty, owned.alloca, "drop.load");
     switch (owned.kind) {
         .array => {
-            const elem = fc.dtors.elementDestroy(fc.request.program, owned.ty);
+            const elem = fc.dtors.elementDestroy(fc.request.program.programPtr(), owned.ty);
             var args = [_]llvm.c.LLVMValueRef{ ptr, elem orelse api.LLVMConstNull(fc.types.ptr_ty) };
             _ = api.LLVMBuildCall2(b, fc.runtime_decls.array_release.ty, fc.runtime_decls.array_release.fn_value, &args, args.len, "");
         },

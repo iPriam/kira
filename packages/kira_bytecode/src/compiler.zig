@@ -9,7 +9,11 @@ pub const CompileMode = enum {
     hybrid_runtime,
 };
 
-pub fn compileProgram(allocator: std.mem.Allocator, program: ir_pkg.Program, mode: CompileMode) !bytecode.Module {
+// Accepts only a `VerifiedProgram`: the bytecode backend cannot be handed a program that
+// has not passed the executable-obligation verifier. The wrapper is unwrapped once here;
+// the rest of the compiler operates on the inner `ir.Program` unchanged.
+pub fn compileProgram(allocator: std.mem.Allocator, verified: ir_pkg.VerifiedProgram, mode: CompileMode) !bytecode.Module {
+    const program = verified.programPtr().*;
     var constructs = std.array_list.Managed(bytecode.Construct).init(allocator);
     for (program.constructs) |construct_decl| {
         try constructs.append(.{ .name = construct_decl.name });
@@ -411,7 +415,7 @@ test "emits hybrid bytecode for runtime and native calls" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const module = try compileProgram(arena.allocator(), program, .hybrid_runtime);
+    const module = try compileProgram(arena.allocator(), ir_pkg.VerifiedProgram.assumeVerified(program), .hybrid_runtime);
     try std.testing.expectEqual(@as(usize, 2), module.functions.len);
     try std.testing.expectEqual(@as(?u32, 0), module.entry_function_id);
     try std.testing.expect(module.functions[0].instructions[0] == .call_runtime);
@@ -454,7 +458,7 @@ test "preserves function constants in bytecode" {
         .entry_index = 0,
     };
 
-    const module = try compileProgram(arena.allocator(), program, .vm);
+    const module = try compileProgram(arena.allocator(), ir_pkg.VerifiedProgram.assumeVerified(program), .vm);
     try std.testing.expect(module.functions[0].instructions[0] == .const_function);
     try std.testing.expectEqual(@as(u32, 1), module.functions[0].instructions[0].const_function.function_id);
 }
@@ -487,7 +491,7 @@ test "preserves native state instructions in bytecode" {
         .entry_index = 0,
     };
 
-    const module = try compileProgram(arena.allocator(), program, .vm);
+    const module = try compileProgram(arena.allocator(), ir_pkg.VerifiedProgram.assumeVerified(program), .vm);
     try std.testing.expect(module.functions[0].instructions[1] == .alloc_native_state);
     try std.testing.expectEqual(@as(u64, 123), module.functions[0].instructions[1].alloc_native_state.type_id);
     try std.testing.expect(module.functions[0].instructions[2] == .recover_native_state);
@@ -523,7 +527,7 @@ test "preserves construct metadata in bytecode" {
         .entry_index = 0,
     };
 
-    const module = try compileProgram(arena.allocator(), program, .vm);
+    const module = try compileProgram(arena.allocator(), ir_pkg.VerifiedProgram.assumeVerified(program), .vm);
     try std.testing.expectEqual(@as(usize, 1), module.constructs.len);
     try std.testing.expectEqualStrings("Widget", module.constructs[0].name);
     try std.testing.expectEqual(@as(usize, 1), module.construct_implementations.len);

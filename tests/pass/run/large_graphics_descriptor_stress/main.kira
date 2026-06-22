@@ -103,11 +103,11 @@ function makeDescriptor() -> RenderPipelineDescriptor {
         ShaderResourceDescriptor { binding: 6, kind: 3, stageMask: 1 }
     ]
     return RenderPipelineDescriptor {
-        vertexLayout: VertexLayoutDescriptor { stride: 48, stepMode: 0, attributes: attrs },
-        colorTargets: colors,
+        vertexLayout: VertexLayoutDescriptor { stride: 48, stepMode: 0, attributes: move attrs },
+        colorTargets: move colors,
         depth: DepthStencilDescriptor { enabled: true, compare: 5, writeEnabled: true, bias: 13 },
-        uniformBlocks: uniforms,
-        shaderResources: resources
+        uniformBlocks: move uniforms,
+        shaderResources: move resources
     }
 }
 

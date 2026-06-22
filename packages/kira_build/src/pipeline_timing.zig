@@ -9,6 +9,10 @@ pub fn setTimingsEnabled(enabled: bool) void {
     program_graph.setTimingsEnabled(enabled);
 }
 
+pub fn timingsEnabled() bool {
+    return timings_enabled;
+}
+
 pub fn nowNs() i128 {
     if (builtin.os.tag == .windows) {
         var counter: std.os.windows.LARGE_INTEGER = undefined;

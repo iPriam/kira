@@ -168,7 +168,7 @@ fn buildProjectBundle(allocator: std.mem.Allocator, args: BuildProjectBundleArgs
         if (library_path) |path| try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, std.fs.path.dirname(path) orelse ".");
         _ = llvm_backend.compile(allocator, .{
             .mode = .hybrid,
-            .program = &compiled.ir_program.?,
+            .program = &compiled.verified_program.?,
             .module_name = std.fs.path.stem(args.entrypoint_path),
             .emit = .{
                 .object_path = object_path,

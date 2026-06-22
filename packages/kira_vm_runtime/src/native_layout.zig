@@ -144,6 +144,6 @@ test "empty native types still occupy one byte and shift later fields" {
 
     const empty_layout = try structLayout(&module, "EmptyClass");
     try std.testing.expectEqual(@as(usize, 1), empty_layout.size);
-    try std.testing.expectEqual(@as(usize, 1), try fieldOffset(&module, "Node", 1));
+    try std.testing.expectEqual(@as(usize, 8), try fieldOffset(&module, "Node", 1));
     try std.testing.expectEqual(@as(usize, 16), try fieldOffset(&module, "Node", 2));
 }

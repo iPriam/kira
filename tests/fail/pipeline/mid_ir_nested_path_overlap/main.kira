@@ -1,0 +1,25 @@
+struct Cell { var value: Int }
+struct Leaf { var payload: [Cell] }
+struct Branch { var leaves: [Leaf] }
+struct Root { var branches: [Branch] }
+
+function rewrite(branch: borrow mut Branch, cell: borrow mut Cell) {
+    branch.leaves[0].payload = [Cell { value: 7 }, Cell { value: 8 }, Cell { value: 9 }]
+    cell.value = cell.value + 1
+    return
+}
+
+@Main
+function main() {
+    var root = Root {
+        branches: [
+            Branch {
+                leaves: [
+                    Leaf { payload: [Cell { value: 1 }, Cell { value: 2 }, Cell { value: 3 }] }
+                ]
+            }
+        ]
+    }
+    rewrite(root.branches[0], root.branches[0].leaves[0].payload[1])
+    return
+}

@@ -282,7 +282,7 @@ pub fn buildModule(
 
     var struct_types = std.StringHashMapUnmanaged(llvm.c.LLVMTypeRef){};
     defer struct_types.deinit(allocator);
-    try buildStructTypes(allocator, api, types, request.program, &struct_types);
+    try buildStructTypes(allocator, api, types, request.program.programPtr(), &struct_types);
 
     // The per-type destructor/clone helpers are always generated: the clone helpers
     // (kira_clone_contents_<T>) implement affine deep-copy in copy_indirect, which is the
@@ -291,12 +291,12 @@ pub fn buildModule(
     // KIRA_CAPI_DROP while it is validated; with drop off, the destroy helpers are simply
     // never called, so generating them is free of behavior change or double-free risk.
     const drop_enabled = dropEnabled();
-    var dtors: drop.Destructors = try drop.build(allocator, api, module_ref, types, &struct_types, request.program, runtime_decls);
+    var dtors: drop.Destructors = try drop.build(allocator, api, module_ref, types, &struct_types, request.program.programPtr(), runtime_decls);
     defer dtors.deinit(allocator);
 
     // Declare one dispatcher function per distinct call_value signature; bodies are
     // generated after the concrete functions are declared.
-    const dispatcher_sigs = try dispatch.collectCallValueDispatchers(allocator, request.program.*);
+    const dispatcher_sigs = try dispatch.collectCallValueDispatchers(allocator, request.program.programPtr().*);
     defer allocator.free(dispatcher_sigs);
     var dispatchers = std.AutoHashMapUnmanaged(u64, dispatch.DispatcherDecl){};
     defer dispatchers.deinit(allocator);
@@ -315,12 +315,12 @@ pub fn buildModule(
     var functions = std.AutoHashMapUnmanaged(u32, llvm.c.LLVMValueRef){};
     defer functions.deinit(allocator);
 
-    for (request.program.functions) |function_decl| {
+    for (request.program.programPtr().functions) |function_decl| {
         if (!shouldLowerFunction(function_decl.execution, request.mode)) continue;
         // Extern functions are real C symbols: declare them with their C ABI signature so
         // call sites (lowered through backend_capi_ffi) match the declaration.
         const function_ty = if (function_decl.is_extern)
-            try ffi.externFunctionType(allocator, api, types, &struct_types, request.program, function_decl)
+            try ffi.externFunctionType(allocator, api, types, &struct_types, request.program.programPtr(), function_decl)
         else
             try types.functionType(allocator, function_decl);
         const name = try functionSymbolName(allocator, function_decl, request.mode);
@@ -332,7 +332,7 @@ pub fn buildModule(
         try functions.put(allocator, function_decl.id, function_value);
     }
 
-    for (request.program.functions) |function_decl| {
+    for (request.program.programPtr().functions) |function_decl| {
         if (!shouldLowerFunction(function_decl.execution, request.mode)) continue;
         if (function_decl.is_extern) continue;
         const function_value = functions.get(function_decl.id) orelse return error.MissingFunctionDeclaration;
@@ -364,7 +364,7 @@ pub fn buildModule(
     // Hybrid mode: emit the kira_native_fn_{id} trampoline the VM calls for each
     // native function, wrapping the kira_native_impl_{id} body.
     if (request.mode == .hybrid) {
-        for (request.program.functions) |function_decl| {
+        for (request.program.programPtr().functions) |function_decl| {
             if (!shouldLowerFunction(function_decl.execution, request.mode)) continue;
             if (function_decl.is_extern) continue;
             const impl_fn = functions.get(function_decl.id) orelse return error.MissingFunctionDeclaration;
@@ -374,7 +374,7 @@ pub fn buildModule(
     }
 
     if (request.mode == .llvm_native) {
-        const entry_decl = request.program.functions[request.program.entry_index];
+        const entry_decl = request.program.programPtr().functions[request.program.programPtr().entry_index];
         if (!shouldLowerFunction(entry_decl.execution, request.mode)) return error.RuntimeEntrypointInNativeBuild;
         const entry_value = functions.get(entry_decl.id) orelse return error.MissingFunctionDeclaration;
         try buildHostMain(allocator, api, builder, module_ref, types, entry_decl, entry_value);

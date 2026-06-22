@@ -1,0 +1,19 @@
+struct Bag {
+    var items: [Int]
+}
+
+function consume(bag: Bag) -> Int {
+    return bag.items.count
+}
+
+function leak(bag: Bag) -> Int {
+    let alias = bag.items
+    return alias.count + consume(move bag)
+}
+
+@Main
+function main() {
+    let bag = Bag { items: [1, 2, 3] }
+    print(leak(bag))
+    return
+}

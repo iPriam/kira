@@ -861,9 +861,12 @@ fn discoverProjectManifestPath(allocator: std.mem.Allocator, source_path: []cons
 fn discoverProjectRootFromPath(allocator: std.mem.Allocator, start_path: []const u8) ![]const u8 {
     var cursor = try absolutize(allocator, start_path);
     errdefer allocator.free(cursor);
+    const fallback = try allocator.dupe(u8, cursor);
+    errdefer allocator.free(fallback);
 
     while (true) {
         if (try findManifestInDirectory(allocator, cursor)) |_| {
+            allocator.free(fallback);
             return cursor;
         }
 
@@ -874,7 +877,8 @@ fn discoverProjectRootFromPath(allocator: std.mem.Allocator, start_path: []const
         cursor = copy;
     }
 
-    return cursor;
+    allocator.free(cursor);
+    return fallback;
 }
 
 fn findManifestInDirectory(allocator: std.mem.Allocator, directory: []const u8) !?[]const u8 {
@@ -898,6 +902,17 @@ fn fileExists(path: []const u8) bool {
 
 fn makePath(path: []const u8) !void {
     try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, path);
+}
+
+fn processTempRoot() ?[]const u8 {
+    if (!builtin.link_libc) return null;
+    if (builtin.os.tag == .windows) {
+        if (std.c.getenv("TEMP")) |raw| return std.mem.span(raw);
+        if (std.c.getenv("TMP")) |raw| return std.mem.span(raw);
+    } else if (std.c.getenv("TMPDIR")) |raw| {
+        return std.mem.span(raw);
+    }
+    return null;
 }
 
 test "macOS framework-backed C source compiles as Objective-C" {
@@ -1027,4 +1042,47 @@ test "native artifact freshness tracks C and header content changes" {
     try std.testing.expectEqualStrings(header_fingerprint, fingerprint4);
     try std.testing.expect(!std.mem.eql(u8, artifact3, artifact4));
     try std.testing.expect(try nativeArtifactIsFresh(allocator, artifact_path, fingerprint_path, fingerprint4));
+}
+
+test "native metadata stays inside the library root without a project manifest" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const scratch_parent = processTempRoot() orelse return error.SkipZigTest;
+    const unique = try std.fmt.allocPrint(allocator, "{x}", .{nowTimestamp().raw.toNanoseconds()});
+    const scratch_root = try std.fs.path.join(allocator, &.{ scratch_parent, "kirac-ffi-support-no-manifest", unique });
+    try makePath(scratch_root);
+
+    var parent_dir = try std.Io.Dir.openDirAbsolute(std.testing.io, scratch_parent, .{});
+    defer parent_dir.close(std.testing.io);
+    defer parent_dir.deleteTree(std.testing.io, std.fs.path.basename(scratch_root)) catch {};
+
+    var scratch_dir = try std.Io.Dir.openDirAbsolute(std.testing.io, scratch_root, .{});
+    defer scratch_dir.close(std.testing.io);
+    try scratch_dir.createDirPath(std.testing.io, "Native");
+    try scratch_dir.writeFile(std.testing.io, .{
+        .sub_path = "Native/example.c",
+        .data = "int kira_native_example(void) { return 0; }\n",
+    });
+
+    const root = try std.fs.path.join(allocator, &.{ scratch_root, "Native" });
+    const source_path = try std.fs.path.join(allocator, &.{ scratch_root, "Native", "example.c" });
+    const library: native.ResolvedNativeLibrary = .{
+        .manifest_path = null,
+        .name = "example",
+        .link_mode = .static,
+        .abi = .c,
+        .artifact_path = try std.fs.path.join(allocator, &.{ root, "libexample.a" }),
+        .target = try hostTargetSelector(allocator),
+        .headers = .{},
+        .build = .{
+            .sources = &.{source_path},
+        },
+        .link = .{},
+    };
+
+    const metadata_root = try nativeMetadataRoot(allocator, library);
+    const expected = try std.fs.path.join(allocator, &.{ root, ".kira-build", "native" });
+    try std.testing.expectEqualStrings(expected, metadata_root);
 }

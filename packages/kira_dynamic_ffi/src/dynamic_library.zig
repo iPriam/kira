@@ -8,7 +8,11 @@ pub const DynamicLibrary = struct {
 
     pub fn open(allocator: std.mem.Allocator, path: []const u8) !DynamicLibrary {
         if (builtin.os.tag == .windows) return .{ .inner = try WindowsNativeLibrary.open(allocator, path) };
-        return .{ .inner = try std.DynLib.open(path) };
+        // Normalize POSIX `std.DynLib.open` failures to the same error the Windows path
+        // returns, so `DynamicLibrary.open` has one error set across platforms. Without this,
+        // callers that switch on `error.NativeLibraryLoadFailed` (e.g. libffi tests) fail to
+        // compile on POSIX because the error is not in std.DynLib's set.
+        return .{ .inner = std.DynLib.open(path) catch return error.NativeLibraryLoadFailed };
     }
 
     pub fn close(self: *DynamicLibrary) void {

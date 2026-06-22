@@ -6,10 +6,12 @@ const model = @import("kira_semantics_model");
 const shared = @import("lower_shared.zig");
 const function_types = @import("function_types.zig");
 const calls = @import("lower_exprs_calls.zig");
+const builder = @import("lower_exprs_builder.zig");
 const members = @import("lower_exprs_members.zig");
 const native_state = @import("lower_exprs_native_state.zig");
 const matches = @import("lower_stmts_match.zig");
 const attempts = @import("lower_stmts_attempt.zig");
+const scope_flow = @import("lower_exprs_scope_flow.zig");
 const types = @import("lower_exprs_types.zig");
 
 pub const lowerStructLiteralExpr = calls.lowerStructLiteralExpr;
@@ -21,6 +23,7 @@ pub const lowerNativeStateExpr = native_state.lowerNativeStateExpr;
 pub const lowerNativeUserDataExpr = native_state.lowerNativeUserDataExpr;
 pub const lowerNativeRecoverExpr = native_state.lowerNativeRecoverExpr;
 pub const lowerMatchStatement = matches.lowerMatchStatement;
+pub const rejectOutstandingMovedFields = types.rejectOutstandingMovedFields;
 
 pub const lowerImplicitSelfFieldExpr = members.lowerImplicitSelfFieldExpr;
 pub const lowerImplicitSelfMethodCall = members.lowerImplicitSelfMethodCall;
@@ -53,6 +56,7 @@ pub const lowerCallArgument = types.lowerCallArgument;
 pub const lowerOwnershipExpr = types.lowerOwnershipExpr;
 pub const lowerExpectedValue = types.lowerExpectedValue;
 pub const lowerAssignmentTarget = types.lowerAssignmentTarget;
+pub const commitAssignmentTarget = types.commitAssignmentTarget;
 pub const lowerCallbackArgument = types.lowerCallbackArgument;
 pub const canPassArgument = types.canPassArgument;
 pub const callbackTypesCompatible = types.callbackTypesCompatible;
@@ -74,6 +78,8 @@ pub const resolveArrayElementType = types.resolveArrayElementType;
 pub const flattenCalleeName = types.flattenCalleeName;
 pub const flattenMemberExpr = types.flattenMemberExpr;
 pub const flattenMemberExprPath = types.flattenMemberExprPath;
+pub const stripContentModifiers = builder.stripContentModifiers;
+pub const lowerBuilderBlock = builder.lowerBuilderBlock;
 const emitUseAfterMove = types.emitUseAfterMove;
 pub const lowerEnumVariantExprExpected = lowerEnumVariantExprExpectedInternal;
 
@@ -190,6 +196,7 @@ pub fn lowerStatement(
         .assign_stmt => |node| blk: {
             const target = try lowerAssignmentTarget(ctx, node.target, imports, scope, function_headers);
             const value = try lowerExpectedValue(ctx, node.value, model.hir.exprType(target.*), imports, scope, function_headers, node.span);
+            commitAssignmentTarget(scope, node.target);
             try markInitializedFromAssignment(scope, target.*);
             break :blk .{ .assign_stmt = .{
                 .target = target,
@@ -203,20 +210,20 @@ pub fn lowerStatement(
         } },
         .if_stmt => |node| blk: {
             const condition = try lowerExpr(ctx, node.condition, imports, scope, function_headers);
-            var then_scope = try cloneScope(ctx.allocator, scope.*);
+            var then_scope = try scope_flow.cloneScope(ctx.allocator, scope.*);
             defer then_scope.deinit(ctx.allocator);
             const then_body = try lowerBlockStatements(ctx, node.then_block, imports, &then_scope, locals, next_local_id, function_headers, loop_depth, expected_return_type);
 
             var else_scope: ?model.Scope = null;
             defer if (else_scope) |*value| value.deinit(ctx.allocator);
             const else_body = if (node.else_block) |else_block| else_body: {
-                var branch_scope = try cloneScope(ctx.allocator, scope.*);
+                var branch_scope = try scope_flow.cloneScope(ctx.allocator, scope.*);
                 const lowered_else = try lowerBlockStatements(ctx, else_block, imports, &branch_scope, locals, next_local_id, function_headers, loop_depth, expected_return_type);
                 else_scope = branch_scope;
                 break :else_body lowered_else;
             } else null;
 
-            mergeIfInitialization(scope, then_scope, else_scope);
+            try scope_flow.mergeIfState(ctx.allocator, scope, then_scope, else_scope);
             break :blk .{ .if_stmt = .{
                 .condition = condition,
                 .then_body = then_body,
@@ -228,7 +235,7 @@ pub fn lowerStatement(
             const iterator = try lowerExpr(ctx, node.iterator, imports, scope, function_headers);
             const binding_ty = try resolveArrayElementType(ctx, model.hir.exprType(iterator.*), node.span);
             if (iterator.* == .array and iterator.array.elements.len == 0 and binding_ty.kind == .unknown) {
-                var empty_body_scope = try cloneScope(ctx.allocator, scope.*);
+                var empty_body_scope = try scope_flow.cloneScope(ctx.allocator, scope.*);
                 defer empty_body_scope.deinit(ctx.allocator);
                 break :blk .{ .for_stmt = .{
                     .binding_name = try ctx.allocator.dupe(u8, node.binding_name),
@@ -242,7 +249,7 @@ pub fn lowerStatement(
             const local_id = next_local_id.*;
             next_local_id.* += 1;
 
-            var body_scope = try cloneScope(ctx.allocator, scope.*);
+            var body_scope = try scope_flow.cloneScope(ctx.allocator, scope.*);
             defer body_scope.deinit(ctx.allocator);
             try body_scope.put(ctx.allocator, node.binding_name, .{
                 .id = local_id,
@@ -258,7 +265,7 @@ pub fn lowerStatement(
                 .ownership = .owned,
                 .span = node.span,
             });
-            break :blk .{ .for_stmt = .{
+            const lowered: model.Statement = .{ .for_stmt = .{
                 .binding_name = try ctx.allocator.dupe(u8, node.binding_name),
                 .binding_local_id = local_id,
                 .binding_ty = binding_ty,
@@ -266,15 +273,19 @@ pub fn lowerStatement(
                 .body = try lowerBlockStatements(ctx, node.body, imports, &body_scope, locals, next_local_id, function_headers, loop_depth + 1, expected_return_type),
                 .span = node.span,
             } };
+            try scope_flow.mergeLoopState(ctx.allocator, scope, body_scope);
+            break :blk lowered;
         },
         .while_stmt => |node| blk: {
-            var body_scope = try cloneScope(ctx.allocator, scope.*);
+            var body_scope = try scope_flow.cloneScope(ctx.allocator, scope.*);
             defer body_scope.deinit(ctx.allocator);
-            break :blk .{ .while_stmt = .{
+            const lowered: model.Statement = .{ .while_stmt = .{
                 .condition = try lowerExpr(ctx, node.condition, imports, scope, function_headers),
                 .body = try lowerBlockStatements(ctx, node.body, imports, &body_scope, locals, next_local_id, function_headers, loop_depth + 1, expected_return_type),
                 .span = node.span,
             } };
+            try scope_flow.mergeLoopState(ctx.allocator, scope, body_scope);
+            break :blk lowered;
         },
         .break_stmt => |node| blk: {
             if (loop_depth == 0) {
@@ -324,7 +335,7 @@ pub fn lowerStatement(
                 case_scopes.deinit();
             }
             for (node.cases) |case_node| {
-                var case_scope = try cloneScope(ctx.allocator, scope.*);
+                var case_scope = try scope_flow.cloneScope(ctx.allocator, scope.*);
                 try cases.append(.{
                     .pattern = try lowerExpr(ctx, case_node.pattern, imports, scope, function_headers),
                     .body = try lowerBlockStatements(ctx, case_node.body, imports, &case_scope, locals, next_local_id, function_headers, loop_depth, expected_return_type),
@@ -335,12 +346,12 @@ pub fn lowerStatement(
             var default_scope: ?model.Scope = null;
             defer if (default_scope) |*value| value.deinit(ctx.allocator);
             const default_body = if (node.default_block) |default_block| default_body: {
-                var branch_scope = try cloneScope(ctx.allocator, scope.*);
+                var branch_scope = try scope_flow.cloneScope(ctx.allocator, scope.*);
                 const lowered_default = try lowerBlockStatements(ctx, default_block, imports, &branch_scope, locals, next_local_id, function_headers, loop_depth, expected_return_type);
                 default_scope = branch_scope;
                 break :default_body lowered_default;
             } else null;
-            mergeSwitchInitialization(scope, case_scopes.items, default_scope);
+            try scope_flow.mergeSwitchState(ctx.allocator, scope, case_scopes.items, default_scope);
             break :blk .{ .switch_stmt = .{
                 .subject = subject,
                 .cases = try cases.toOwnedSlice(),
@@ -381,70 +392,11 @@ fn markInitializedFromAssignment(scope: *model.Scope, target: model.Expr) !void 
             while (iterator.next()) |entry| {
                 if (entry.value_ptr.id != node.local_id) continue;
                 entry.value_ptr.initialized = true;
-                entry.value_ptr.moved = false;
-                entry.value_ptr.move_span = null;
+                entry.value_ptr.clearMoveState();
                 return;
             }
         },
         else => {},
-    }
-}
-
-fn cloneScope(allocator: std.mem.Allocator, scope: model.Scope) !model.Scope {
-    var cloned = model.Scope{};
-    var iterator = scope.entries.iterator();
-    while (iterator.next()) |entry| {
-        try cloned.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
-    }
-    return cloned;
-}
-
-fn mergeIfInitialization(scope: *model.Scope, then_scope: model.Scope, else_scope: ?model.Scope) void {
-    var iterator = scope.entries.iterator();
-    while (iterator.next()) |entry| {
-        const then_binding = then_scope.get(entry.key_ptr.*) orelse continue;
-        if (then_binding.id == entry.value_ptr.id and then_binding.moved) {
-            entry.value_ptr.moved = true;
-            entry.value_ptr.move_span = then_binding.move_span;
-        }
-        const resolved_else = else_scope orelse continue;
-        const else_binding = resolved_else.get(entry.key_ptr.*) orelse continue;
-        if (then_binding.id != entry.value_ptr.id or else_binding.id != entry.value_ptr.id) continue;
-        entry.value_ptr.initialized = entry.value_ptr.initialized or (then_binding.initialized and else_binding.initialized);
-        if (else_binding.moved) {
-            entry.value_ptr.moved = true;
-            entry.value_ptr.move_span = else_binding.move_span;
-        }
-    }
-}
-
-fn mergeSwitchInitialization(scope: *model.Scope, case_scopes: []const model.Scope, default_scope: ?model.Scope) void {
-    const resolved_default = default_scope orelse return;
-    var iterator = scope.entries.iterator();
-    while (iterator.next()) |entry| {
-        const default_binding = resolved_default.get(entry.key_ptr.*) orelse continue;
-        if (default_binding.id != entry.value_ptr.id or !default_binding.initialized) continue;
-        if (default_binding.moved) {
-            entry.value_ptr.moved = true;
-            entry.value_ptr.move_span = default_binding.move_span;
-        }
-
-        var initialized_in_all_cases = true;
-        for (case_scopes) |case_scope| {
-            const case_binding = case_scope.get(entry.key_ptr.*) orelse {
-                initialized_in_all_cases = false;
-                break;
-            };
-            if (case_binding.id == entry.value_ptr.id and case_binding.moved) {
-                entry.value_ptr.moved = true;
-                entry.value_ptr.move_span = case_binding.move_span;
-            }
-            if (case_binding.id != entry.value_ptr.id or !case_binding.initialized) {
-                initialized_in_all_cases = false;
-                break;
-            }
-        }
-        if (initialized_in_all_cases) entry.value_ptr.initialized = true;
     }
 }
 
@@ -476,112 +428,6 @@ fn emitUninitializedLocalUse(
         },
         .help = "Assign to the local before reading it, or add an initializer expression to the declaration.",
     });
-}
-
-// Unwrap a content expression's trailing modifier chain down to the base widget construction.
-// A modifier call is a `.call` whose callee is a `.member` access (`Base(..).modifier(..)`);
-// the base widget is reached once the callee is no longer a member access (e.g. `Text(..)`).
-pub fn stripContentModifiers(expr: *syntax.ast.Expr) *syntax.ast.Expr {
-    var current = expr;
-    while (current.* == .call and current.call.callee.* == .member) {
-        current = current.call.callee.member.object;
-    }
-    return current;
-}
-
-pub fn lowerBuilderBlock(
-    ctx: *shared.Context,
-    builder: syntax.ast.BuilderBlock,
-    imports: []const model.Import,
-    scope: ?*model.Scope,
-) anyerror!model.BuilderBlock {
-    var empty_scope = model.Scope{};
-    defer empty_scope.deinit(ctx.allocator);
-    const active_scope = if (scope) |actual| actual else &empty_scope;
-
-    var items = std.array_list.Managed(model.BuilderItem).init(ctx.allocator);
-    for (builder.items) |item| {
-        switch (item) {
-            .expr => |value| try items.append(.{ .expr = .{
-                // Content items may be modifier chains (`Text(..).font(..)`). Modifiers are
-                // `extend` declarations that are validated but not yet lowered to runtime, so the
-                // runtime content array carries the base widget — matching how non-control-flow
-                // content (which stays check-only) already ignores modifiers at runtime.
-                .expr = try lowerExpr(ctx, stripContentModifiers(value.expr), imports, active_scope, null),
-                .span = value.span,
-            } }),
-            .if_item => |value| try items.append(.{ .if_item = .{
-                .condition = try lowerExpr(ctx, value.condition, imports, active_scope, null),
-                .then_block = try lowerBuilderBlock(ctx, value.then_block, imports, active_scope),
-                .else_block = if (value.else_block) |else_block| try lowerBuilderBlock(ctx, else_block, imports, active_scope) else null,
-                .span = value.span,
-            } }),
-            .for_item => |value| blk: {
-                const iterator = try lowerExpr(ctx, value.iterator, imports, active_scope, null);
-                var binding_local_id: u32 = 0;
-                var binding_ty: model.ResolvedType = .{ .kind = .unknown };
-                var loop_scope_ptr = active_scope;
-                var loop_scope_storage = model.Scope{};
-                var has_loop_scope = false;
-                defer if (has_loop_scope) loop_scope_storage.deinit(ctx.allocator);
-
-                if (ctx.active_locals != null and ctx.active_next_local_id != null) {
-                    binding_ty = try resolveArrayElementType(ctx, model.hir.exprType(iterator.*), value.span);
-                    binding_local_id = ctx.active_next_local_id.?.*;
-                    ctx.active_next_local_id.?.* += 1;
-                    try ctx.active_locals.?.append(.{
-                        .id = binding_local_id,
-                        .name = try ctx.allocator.dupe(u8, value.binding_name),
-                        .ty = binding_ty,
-                        .ownership = .owned,
-                        .span = value.span,
-                    });
-                    loop_scope_storage = try cloneScope(ctx.allocator, active_scope.*);
-                    has_loop_scope = true;
-                    try loop_scope_storage.put(ctx.allocator, value.binding_name, .{
-                        .id = binding_local_id,
-                        .ty = binding_ty,
-                        .storage = .immutable,
-                        .initialized = true,
-                        .decl_span = value.span,
-                    });
-                    loop_scope_ptr = &loop_scope_storage;
-                }
-
-                try items.append(.{ .for_item = .{
-                    .binding_name = try ctx.allocator.dupe(u8, value.binding_name),
-                    .binding_local_id = binding_local_id,
-                    .binding_ty = binding_ty,
-                    .iterator = iterator,
-                    .body = try lowerBuilderBlock(ctx, value.body, imports, loop_scope_ptr),
-                    .span = value.span,
-                } });
-                break :blk;
-            },
-            .switch_item => |value| blk: {
-                var cases = std.array_list.Managed(model.BuilderSwitchCase).init(ctx.allocator);
-                for (value.cases) |case_node| {
-                    try cases.append(.{
-                        .pattern = try lowerExpr(ctx, case_node.pattern, imports, active_scope, null),
-                        .body = try lowerBuilderBlock(ctx, case_node.body, imports, active_scope),
-                        .span = case_node.span,
-                    });
-                }
-                try items.append(.{ .switch_item = .{
-                    .subject = try lowerExpr(ctx, value.subject, imports, active_scope, null),
-                    .cases = try cases.toOwnedSlice(),
-                    .default_block = if (value.default_block) |default_block| try lowerBuilderBlock(ctx, default_block, imports, active_scope) else null,
-                    .span = value.span,
-                } });
-                break :blk;
-            },
-        }
-    }
-
-    return .{
-        .items = try items.toOwnedSlice(),
-        .span = builder.span,
-    };
 }
 
 fn lowerEnumVariantExprExpectedInternal(

@@ -7,6 +7,7 @@ const bytecode = @import("kira_bytecode");
 const runtime_abi = @import("kira_runtime_abi");
 const Vm = @import("vm.zig").Vm;
 const ArrayObject = @import("ownership.zig").ArrayObject;
+const construct_any_test = @import("vm_construct_any_test_helpers.zig");
 
 test "executes nested runtime calls" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -116,7 +117,7 @@ test "resolves function constants through hooks" {
                 .local_count = 0,
                 .local_types = &.{},
                 .instructions = @constCast(&[_]bytecode.Instruction{
-                    .{ .const_function = .{ .dst = 0, .function_id = 7 } },
+                    .{ .const_function = .{ .dst = 0, .function_id = 7, .representation = .native_callback } },
                     .{ .ret = .{ .src = 0 } },
                 }),
             },
@@ -165,7 +166,6 @@ test "copies struct arguments by value for runtime calls" {
                     .{ .field_ptr = .{ .dst = 1, .base = 0, .base_type_name = "Pair", .field_index = 0, .field_ty = .{ .kind = .integer, .name = "I64" } } },
                     .{ .const_int = .{ .dst = 2, .value = 1 } },
                     .{ .store_indirect = .{ .ptr = 1, .src = 2, .ty = .{ .kind = .integer, .name = "I64" } } },
-                    .{ .store_local = .{ .local = 0, .src = 0 } },
                     .{ .call_runtime = .{ .function_id = 1, .args = &.{0} } },
                     .{ .field_ptr = .{ .dst = 3, .base = 0, .base_type_name = "Pair", .field_index = 0, .field_ty = .{ .kind = .integer, .name = "I64" } } },
                     .{ .load_indirect = .{ .dst = 4, .ptr = 3, .ty = .{ .kind = .integer, .name = "I64" } } },
@@ -176,6 +176,7 @@ test "copies struct arguments by value for runtime calls" {
                 .id = 1,
                 .name = "mutate",
                 .param_count = 1,
+                .param_ownership = @constCast(&[_]bytecode.OwnershipMode{.copy}),
                 .register_count = 3,
                 .local_count = 1,
                 .local_types = @constCast(&[_]bytecode.TypeRef{.{ .kind = .ffi_struct, .name = "Pair" }}),
@@ -601,15 +602,15 @@ test "array_get materializes native construct-any elements for virtual dispatch"
     };
 
     const runtime_button_ptr = try vm.allocateStruct(&module, "Button");
-    const native_button_ptr = try vm.copyStructToNativeLayout(&module, "Button", runtime_button_ptr);
+    const native_button = try construct_any_test.allocateHeaderedNativeStruct(&vm, &module, "Button", runtime_button_ptr);
     vm.dropManagedValue(.{ .raw_ptr = runtime_button_ptr });
-    defer vm.destroyStructNativeLayout(&module, "Button", native_button_ptr);
+    defer construct_any_test.destroyHeaderedNativeStruct(&vm, &module, "Button", native_button);
 
     const native_array = try vm.allocator.create(ArrayObject);
     defer vm.allocator.destroy(native_array);
     const native_items = try vm.allocator.alloc(runtime_abi.BridgeValue, 1);
     defer vm.allocator.free(native_items);
-    native_items[0] = runtime_abi.bridgeValueFromValue(.{ .raw_ptr = native_button_ptr });
+    native_items[0] = runtime_abi.bridgeValueFromValue(.{ .raw_ptr = native_button.payload_ptr });
     native_array.* = .{
         .len = 1,
         .items = native_items.ptr,
@@ -617,7 +618,7 @@ test "array_get materializes native construct-any elements for virtual dispatch"
 
     var discard_buffer: [1]u8 = undefined;
     var discarding: std.Io.Writer.Discarding = .init(&discard_buffer);
-    try vm.runFunctionById(&module, 0, &.{.{ .raw_ptr = @intFromPtr(native_array) }}, &discarding.writer, .{});
+    _ = try vm.runFunctionById(&module, 0, &.{.{ .raw_ptr = @intFromPtr(native_array) }}, &discarding.writer, .{});
     try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
 }
 
@@ -657,6 +658,7 @@ test "ret materializes borrowed native construct-any values for virtual dispatch
                 .local_count = 1,
                 .local_types = @constCast(&[_]bytecode.TypeRef{any_widget}),
                 .instructions = @constCast(&[_]bytecode.Instruction{
+                    .{ .load_local = .{ .dst = 0, .local = 0, .ownership = .borrow_read } },
                     .{ .call_runtime = .{ .function_id = 1, .args = &.{0}, .dst = 0 } },
                     .{ .call_virtual = .{ .receiver = 0, .static_type_name = "Widget", .method_name = "lower", .args = &.{} } },
                     .{ .ret = .{ .src = null } },
@@ -695,12 +697,19 @@ test "ret materializes borrowed native construct-any values for virtual dispatch
     };
 
     const runtime_button_ptr = try vm.allocateStruct(&module, "Button");
-    const native_button_ptr = try vm.copyStructToNativeLayout(&module, "Button", runtime_button_ptr);
+    const native_button = try construct_any_test.allocateHeaderedNativeStruct(&vm, &module, "Button", runtime_button_ptr);
     vm.dropManagedValue(.{ .raw_ptr = runtime_button_ptr });
-    defer vm.destroyStructNativeLayout(&module, "Button", native_button_ptr);
+    defer construct_any_test.destroyHeaderedNativeStruct(&vm, &module, "Button", native_button);
 
     var discard_buffer: [1]u8 = undefined;
     var discarding: std.Io.Writer.Discarding = .init(&discard_buffer);
-    try vm.runFunctionById(&module, 0, &.{.{ .raw_ptr = native_button_ptr }}, &discarding.writer, .{});
+    const identity_result = try vm.runFunctionById(&module, 1, &.{.{ .raw_ptr = native_button.payload_ptr }}, &discarding.writer, .{});
+    try std.testing.expect(identity_result == .raw_ptr);
+    try std.testing.expect(identity_result.raw_ptr != 0);
+    try std.testing.expectEqualStrings("Button", vm.heap.getStructTypeName(identity_result.raw_ptr) orelse return error.TestExpectedEqual);
+    vm.dropManagedValue(identity_result);
+    try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
+
+    _ = try vm.runFunctionById(&module, 0, &.{.{ .raw_ptr = native_button.payload_ptr }}, &discarding.writer, .{});
     try std.testing.expectEqual(@as(usize, 0), vm.heap.count());
 }

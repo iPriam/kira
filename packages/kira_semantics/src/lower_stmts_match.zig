@@ -5,6 +5,7 @@ const syntax = @import("kira_syntax_model");
 const model = @import("kira_semantics_model");
 const shared = @import("lower_shared.zig");
 const parent = @import("lower_exprs.zig");
+const scope_flow = @import("lower_exprs_scope_flow.zig");
 const lowerExpr = parent.lowerExpr;
 const lowerBlockStatements = parent.lowerBlockStatements;
 
@@ -46,13 +47,17 @@ pub fn lowerMatchStatement(
     };
 
     var arms = std.array_list.Managed(model.MatchArm).init(ctx.allocator);
+    var arm_scopes = std.array_list.Managed(model.Scope).init(ctx.allocator);
+    defer {
+        for (arm_scopes.items) |*arm_scope| arm_scope.deinit(ctx.allocator);
+        arm_scopes.deinit();
+    }
     var covered = std.AutoHashMapUnmanaged(u32, source_pkg.Span){};
     defer covered.deinit(ctx.allocator);
 
     for (node.arms) |arm_node| {
         for (arm_node.patterns) |pattern_node| {
-            var arm_scope = try cloneScope(ctx.allocator, scope.*);
-            defer arm_scope.deinit(ctx.allocator);
+            var arm_scope = try scope_flow.cloneScope(ctx.allocator, scope.*);
             const lowered_pattern = try lowerPattern(
                 ctx,
                 pattern_node,
@@ -90,6 +95,7 @@ pub fn lowerMatchStatement(
                 .body = body,
                 .span = arm_node.span,
             });
+            try arm_scopes.append(arm_scope);
         }
     }
 
@@ -110,6 +116,11 @@ pub fn lowerMatchStatement(
         });
         return error.DiagnosticsEmitted;
     }
+
+    const has_guards = for (node.arms) |arm_node| {
+        if (arm_node.guard != null) break true;
+    } else false;
+    try scope_flow.mergeMatchState(ctx.allocator, scope, arm_scopes.items, has_guards);
 
     return .{
         .subject = subject,
@@ -312,13 +323,4 @@ fn matchPatternSpan(pattern: syntax.ast.MatchPattern) source_pkg.Span {
         .destructure => |node| node.span,
         .as_binding => |node| node.span,
     };
-}
-
-fn cloneScope(allocator: std.mem.Allocator, scope: model.Scope) !model.Scope {
-    var cloned = model.Scope{};
-    var iterator = scope.entries.iterator();
-    while (iterator.next()) |entry| {
-        try cloned.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
-    }
-    return cloned;
 }

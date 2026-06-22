@@ -293,12 +293,12 @@ pub const BuildSystem = struct {
             };
         }
 
-        const ir_program = compiled.ir_program.?;
+        const verified_program = compiled.verified_program.?;
         const object_path = try defaultObjectPath(self.allocator, request.output_path);
         const emit_start = nowTimestamp();
         const backend_result = llvm_backend.compile(self.allocator, .{
             .mode = .llvm_native,
-            .program = &ir_program,
+            .program = &verified_program,
             .module_name = std.fs.path.stem(request.source_path),
             .emit = .{
                 .object_path = object_path,
@@ -354,6 +354,7 @@ pub const BuildSystem = struct {
         }
 
         const ir_program = compiled.ir_program.?;
+        const verified_program = compiled.verified_program.?;
         const bytecode_path = try replaceExtension(self.allocator, request.output_path, ".kbc");
         const object_path = try replaceExtension(self.allocator, request.output_path, objectExtension());
         const library_path = try replaceExtension(self.allocator, request.output_path, sharedLibraryExtension());
@@ -371,7 +372,7 @@ pub const BuildSystem = struct {
         const emit_start = nowTimestamp();
         const backend_result = llvm_backend.compile(self.allocator, .{
             .mode = .hybrid,
-            .program = &ir_program,
+            .program = &verified_program,
             .module_name = std.fs.path.stem(request.source_path),
             .emit = .{
                 .object_path = object_path,

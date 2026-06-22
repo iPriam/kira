@@ -7,4 +7,8 @@ pub const FfiDispatcher = @import("vm_ffi.zig").Dispatcher;
 
 test {
     _ = @import("vm_ffi.zig");
+    _ = @import("vm.zig");
+    // Keep vm.zig imported so the interpreter/execution/native-bridge suites
+    // run under the normal package test entrypoint. These tests previously
+    // existed but were dormant because root.zig only imported vm_ffi.zig.
 }

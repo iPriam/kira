@@ -1,0 +1,40 @@
+// Regression: once a field has been moved out of an owned aggregate, using the whole
+// aggregate is forbidden -- Kira cannot transfer or drop a value that is only partially
+// live. Here `total(move bag.items)` moves the `items` field, then `takeBag(move bag)`
+// moves the whole struct. Before partial moves were tracked this compiled and the whole-
+// struct move re-took ownership of the already-moved `items`, double-freeing it at runtime
+// (the program printed a value instead of being rejected). It must be rejected at check.
+struct Bag {
+    let items: [Int]
+    let label: String
+}
+
+function total(items: [Int]) -> Int {
+    var sum = 0
+    var index = 0
+    while index < items.count {
+        sum = sum + items[index]
+        index = index + 1
+    }
+    return sum
+}
+
+function takeBag(bag: Bag) -> Int {
+    return bag.items.count
+}
+
+function describe(bag: Bag) -> Int {
+    let t = total(move bag.items)
+    let u = takeBag(move bag)
+    return t + u
+}
+
+@Main
+function main() {
+    let bag = Bag {
+        items: [1, 2, 3]
+        label: "three"
+    }
+    print(describe(move bag))
+    return
+}

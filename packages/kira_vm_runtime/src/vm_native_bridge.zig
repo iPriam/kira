@@ -240,11 +240,8 @@ pub fn allocateNativeState(self: *Vm, module: *const bytecode.Module, type_name:
     }
 
     const box = try self.allocator.create(NativeStateBox);
-    box.* = .{
-        .type_id = type_id,
-        .payload = @intFromPtr(native_payload.ptr),
-        .runtime_payload = 0,
-    };
+    box.* = NativeStateBox.init(module, type_name, type_id, type_decl.fields.len, @intFromPtr(native_payload.ptr));
+    try self.native_state_boxes.put(@intFromPtr(box), {});
     return @intFromPtr(box);
 }
 
@@ -277,10 +274,9 @@ pub fn materializeNativeStatePayload(self: *Vm, module: *const bytecode.Module, 
         return error.RuntimeFailure;
     };
     const native_payload: [*]const runtime_abi.BridgeValue = @ptrFromInt(native_payload_ptr);
-    const runtime_payload = try self.allocator.alloc(runtime_abi.BridgeValue, type_decl.fields.len);
+    const runtime_payload = try self.allocator.alloc(runtime_abi.Value, type_decl.fields.len);
     for (type_decl.fields, 0..) |field_decl, index| {
-        const value = try materializeNativeStateValue(self, module, field_decl.ty, runtime_abi.bridgeValueToValue(native_payload[index]));
-        runtime_payload[index] = runtime_abi.bridgeValueFromValue(value);
+        runtime_payload[index] = try materializeNativeStateValue(self, module, field_decl.ty, runtime_abi.bridgeValueToValue(native_payload[index]));
     }
     return @intFromPtr(runtime_payload.ptr);
 }
@@ -308,6 +304,28 @@ pub fn destroyNativeStatePayload(self: *Vm, module: *const bytecode.Module, type
         destroyPreservedNativeStateValue(self, module, field_decl.ty, runtime_abi.bridgeValueToValue(native_payload[index]));
     }
     self.allocator.free(native_payload[0..type_decl.fields.len]);
+}
+
+pub fn destroyMaterializedNativeStatePayload(self: *Vm, runtime_payload_ptr: usize, field_count: usize) void {
+    if (runtime_payload_ptr == 0) return;
+    const runtime_payload: [*]runtime_abi.Value = @ptrFromInt(runtime_payload_ptr);
+    self.heap.dropSlots(runtime_payload[0..field_count]);
+    self.allocator.free(runtime_payload[0..field_count]);
+}
+
+pub fn deinitTrackedNativeStates(self: *Vm) void {
+    var iterator = self.native_state_boxes.iterator();
+    while (iterator.next()) |entry| {
+        const box: *NativeStateBox = @ptrFromInt(entry.key_ptr.*);
+        if (box.payload != 0) {
+            destroyNativeStatePayload(self, box.module, box.typeName(), box.payload);
+        }
+        if (box.runtime_payload != 0) {
+            destroyMaterializedNativeStatePayload(self, box.runtime_payload, box.field_count);
+        }
+        self.allocator.destroy(box);
+    }
+    self.native_state_boxes.deinit();
 }
 
 pub fn destroyPreservedNativeStateValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) void {

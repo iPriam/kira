@@ -1,0 +1,16 @@
+struct Cell { var value: Int }
+struct CellRow { var cells: [Cell] }
+struct Grid { var rows: [CellRow] }
+
+function updateBoth(a: borrow mut Cell, b: borrow mut Cell) {
+    a.value = a.value + 10
+    b.value = b.value + 20
+    return
+}
+
+@Main
+function main() {
+    var grid = Grid { rows: [CellRow { cells: [Cell { value: 1 }, Cell { value: 2 }, Cell { value: 3 }] }] }
+    updateBoth(grid.rows[0].cells[0], grid.rows[0].cells[1])
+    return
+}

@@ -360,7 +360,7 @@ test "lowerProgram accepts imported type constant accessors used by widget code"
         \\    }
         \\}
         \\
-        \\function lowerAll(context: borrow FoundationUiContext, children: [any Widget]) -> FoundationView {
+        \\function lowerAll(context: borrow FoundationUiContext, children: borrow [any Widget]) -> FoundationView {
         \\    var index = 0
         \\    var last = FoundationView {}
         \\    while index < children.count {

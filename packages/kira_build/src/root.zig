@@ -24,6 +24,7 @@ pub const VmPipelineResult = @import("pipeline.zig").VmPipelineResult;
 pub const CompileOptions = @import("pipeline.zig").CompileOptions;
 pub const checkFileForBackend = @import("pipeline.zig").checkFileForBackend;
 pub const setTimingsEnabled = @import("pipeline.zig").setTimingsEnabled;
+pub const timingsEnabled = @import("pipeline.zig").timingsEnabled;
 pub const timingPrint = @import("pipeline.zig").timingPrint;
 pub const compileFileToIr = @import("pipeline.zig").compileFileToIr;
 pub const compileFileToIrForTarget = @import("pipeline.zig").compileFileToIrForTarget;

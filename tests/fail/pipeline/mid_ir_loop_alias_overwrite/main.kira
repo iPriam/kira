@@ -1,0 +1,21 @@
+struct Cell { var value: Int }
+struct Node { var cell: Cell }
+struct Tree { var nodes: [Node] }
+
+function trigger(tree: borrow mut Tree) {
+    var index = 0
+    while index < 2 {
+        var alias = tree
+        tree.nodes = [Node { cell: Cell { value: index } }]
+        alias.nodes[0].cell.value = alias.nodes[0].cell.value + 1
+        index = index + 1
+    }
+    return
+}
+
+@Main
+function main() {
+    var tree = Tree { nodes: [Node { cell: Cell { value: 9 } }] }
+    trigger(tree)
+    return
+}

@@ -1,0 +1,35 @@
+// Partial field moves are allowed (Rust-style): distinct, disjoint owned fields may each
+// be moved out of an aggregate. `sink(move p.a)` and `sink(move p.b)` move two different
+// fields; neither the moved fields nor the whole struct are used afterward, so this is
+// safe and must compile and run on every backend. This is the accepting counterpart to the
+// `partial_move_field_reuse` / `partial_move_whole_struct_use` rejection cases.
+struct Pair {
+    let a: [Int]
+    let b: [Int]
+}
+
+function sink(values: [Int]) -> Int {
+    var sum = 0
+    var index = 0
+    while index < values.count {
+        sum = sum + values[index]
+        index = index + 1
+    }
+    return sum
+}
+
+function consume(pair: Pair) -> Int {
+    let left = sink(move pair.a)
+    let right = sink(move pair.b)
+    return left + right
+}
+
+@Main
+function main() {
+    let pair = Pair {
+        a: [1, 2, 3]
+        b: [10, 20]
+    }
+    print(consume(move pair))
+    return
+}

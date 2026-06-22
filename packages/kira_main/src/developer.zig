@@ -40,8 +40,13 @@ pub const DeveloperFacade = struct {
             .library => try system.checkPackageRoot(input.target.source_root.?),
             .executable, .example, .source_file => blk: {
                 const source_path = input.target.source_path.?;
-                if (target_backend) |value| break :blk try system.checkForBackend(source_path, value);
-                break :blk try system.checkFrontend(source_path);
+                // `kira check` is the public executable-validity contract: it runs the
+                // executable-obligation verifier for the backend the program would build/run
+                // with (explicit backend > project default > vm), not a frontend-only pass.
+                // A program that passes `kira check --backend X` is guaranteed to clear the
+                // executable phase gate for X, so build/run cannot later hit a lowering gap.
+                const resolved_backend = target_backend orelse input.default_backend orelse .vm;
+                break :blk try system.checkForBackend(source_path, resolved_backend);
             },
         };
         if (!diagnostics.hasErrors(result.diagnostics)) {

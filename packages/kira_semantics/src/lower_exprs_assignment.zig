@@ -114,3 +114,15 @@ pub fn lowerAssignmentTarget(
         },
     };
 }
+
+pub fn commitAssignmentTarget(scope: *model.Scope, expr: *syntax.ast.Expr) void {
+    // Re-initializing a previously moved-out field (`obj.field = ...`) makes the
+    // base whole again, mirroring Rust. Only a full single-level field store counts:
+    // element writes (`obj.field[i] = ...`) or deeper chains do not restore the field.
+    if (expr.* == .member and expr.member.object.* == .identifier) {
+        const root = expr.member.object.identifier.name.segments[0].text;
+        if (scope.entries.getPtr(root)) |binding| {
+            binding.clearFieldMoved(expr.member.member);
+        }
+    }
+}

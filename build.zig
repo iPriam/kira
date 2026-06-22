@@ -2,6 +2,7 @@ const std = @import("std");
 const kira_toolchain = @import("packages/kira_toolchain/src/root.zig");
 const llvm_metadata = @import("packages/kira_build/src/llvm_metadata.zig");
 const toolchain_layout = @import("packages/kira_llvm_toolchain_layout/src/root.zig");
+const llvm_probe = @import("build_support/llvm_probe.zig");
 const managed_install = @import("build_support/managed_install.zig");
 const test_roots = @import("build_support/test_roots.zig").test_roots;
 const kirac_version = "0.1.0";
@@ -39,7 +40,7 @@ const packages = [_]Package{
     .{ .name = "kira_msl_backend", .path = "packages/kira_msl_backend/src/root.zig", .imports = &.{ "kira_diagnostics", "kira_shader_model", "kira_shader_ir" } },
     .{ .name = "kira_spirv_backend", .path = "packages/kira_spirv_backend/src/root.zig", .imports = &.{ "kira_diagnostics", "kira_shader_model", "kira_shader_ir" } },
     .{ .name = "kira_semantics", .path = "packages/kira_semantics/src/root.zig", .imports = &.{ "kira_core", "kira_source", "kira_syntax_model", "kira_diagnostics", "kira_semantics_model", "kira_runtime_abi", "kira_lexer", "kira_parser" } },
-    .{ .name = "kira_ir", .path = "packages/kira_ir/src/root.zig", .imports = &.{ "kira_core", "kira_semantics_model", "kira_runtime_abi" } },
+    .{ .name = "kira_ir", .path = "packages/kira_ir/src/root.zig", .imports = &.{ "kira_core", "kira_source", "kira_diagnostics", "kira_semantics_model", "kira_runtime_abi" } },
     .{ .name = "kira_hybrid_definition", .path = "packages/kira_hybrid_definition/src/root.zig", .imports = &.{ "kira_core", "kira_runtime_abi" } },
     .{ .name = "kira_native_lib_definition", .path = "packages/kira_native_lib_definition/src/root.zig", .imports = &.{ "kira_core", "kira_runtime_abi" } },
     .{ .name = "kira_dynamic_ffi", .path = "packages/kira_dynamic_ffi/src/root.zig", .imports = &.{} },
@@ -84,7 +85,7 @@ pub fn build(b: *std.Build) void {
         @panic("failed to parse llvm-metadata.toml");
     const llvm_version = metadata.llvm_version;
     const llvm_host_key = toolchain_layout.hostLlvmBundleKey(b.graph.host.result) orelse "unsupported-host";
-    const llvm_probe = discoverLlvmHeaders(b.allocator, repo_root, llvm_version, llvm_host_key, b.graph.environ_map.get("KIRA_LLVM_HOME"));
+    const llvm_headers = llvm_probe.discoverLlvmHeaders(b.allocator, repo_root, llvm_version, llvm_host_key, b.graph.environ_map.get("KIRA_LLVM_HOME"));
     var modules: std.StringArrayHashMapUnmanaged(*std.Build.Module) = .empty;
     defer modules.deinit(b.allocator);
     const cli_dep = b.dependency("cli", .{ .target = target, .optimize = optimize });
@@ -142,9 +143,23 @@ pub fn build(b: *std.Build) void {
     live_options.addOption([]const u8, "static_file_server_path", b.getInstallPath(.bin, "kira-static-file-server"));
     modules.get("kira_live").?.addOptions("kira_live_build_options", live_options);
 
-    if (llvm_probe) |probe| {
+    if (llvm_headers) |probe| {
         for (probe.include_dirs) |dir| {
             modules.get("kira_llvm_backend").?.addIncludePath(.{ .cwd_relative = dir });
+        }
+        if (probe.library_dir) |dir| {
+            if (probe.link_name) |name| {
+                const llvm_backend = modules.get("kira_llvm_backend").?;
+                llvm_backend.addLibraryPath(.{ .cwd_relative = dir });
+                llvm_backend.linkSystemLibrary(name, .{
+                    .use_pkg_config = .no,
+                    .preferred_link_mode = .dynamic,
+                    .search_strategy = .paths_first,
+                });
+                if (target.result.os.tag != .windows) {
+                    llvm_backend.addRPath(.{ .cwd_relative = dir });
+                }
+            }
         }
     }
     if (apple_sdk.len > 0) {
@@ -348,6 +363,14 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run_tests.step);
     }
 
+    const vm_runtime_test_step = b.step("test-vm-runtime", "Run only the kira_vm_runtime unit tests");
+    const vm_runtime_test_module = safetyTestModule(b, "kira_vm_runtime", &modules, &safety_test_modules, target, optimize);
+    const vm_runtime_unit_tests = b.addTest(.{
+        .root_module = vm_runtime_test_module,
+    });
+    const run_vm_runtime_tests = b.addRunArtifact(vm_runtime_unit_tests);
+    vm_runtime_test_step.dependOn(&run_vm_runtime_tests.step);
+
     const bootstrapper_tests = b.addTest(.{
         .root_module = bootstrapper_module,
     });
@@ -459,96 +482,6 @@ fn preferredDefaultTarget(host: std.Target) std.Target.Query {
     };
 }
 
-const LlvmHeaderProbe = struct {
-    include_dirs: []const []const u8,
-};
-
-fn discoverLlvmHeaders(
-    allocator: std.mem.Allocator,
-    repo_root: []const u8,
-    llvm_version: []const u8,
-    llvm_host_key: []const u8,
-    env_home: ?[]const u8,
-) ?LlvmHeaderProbe {
-    if (env_home) |path| {
-        if (headerProbeForHome(allocator, path)) |probe| return probe;
-    }
-
-    if (llvm_version.len > 0 and !std.mem.eql(u8, llvm_host_key, "unsupported-host")) {
-        const shared_home = kira_toolchain.managedLlvmHome(allocator, llvm_version, llvm_host_key) catch return null;
-        if (headerProbeForHome(allocator, shared_home)) |probe| return probe;
-    }
-
-    if (llvm_version.len > 0 and !std.mem.eql(u8, llvm_host_key, "unsupported-host")) {
-        const managed_home = toolchain_layout.managedLlvmHome(allocator, repo_root, llvm_version, llvm_host_key) catch return null;
-        if (headerProbeForHome(allocator, managed_home)) |probe| return probe;
-    }
-
-    const legacy_current = toolchain_layout.legacyLlvmCurrentHome(allocator, repo_root) catch return null;
-    if (headerProbeForHome(allocator, legacy_current)) |probe| return probe;
-
-    if (llvm_version.len > 0 and !std.mem.eql(u8, llvm_host_key, "unsupported-host")) {
-        const legacy_versioned = toolchain_layout.legacyLlvmVersionedHome(allocator, repo_root, llvm_version, llvm_host_key) catch return null;
-        if (headerProbeForHome(allocator, legacy_versioned)) |probe| return probe;
-    }
-
-    return null;
-}
-
-fn headerProbeForHome(allocator: std.mem.Allocator, home: []const u8) ?LlvmHeaderProbe {
-    const install_include = std.fs.path.join(allocator, &.{ home, "include" }) catch return null;
-    if (isValidLlvmIncludeDir(install_include)) {
-        return .{ .include_dirs = allocator.dupe([]const u8, &.{install_include}) catch return null };
-    }
-
-    const source_include = std.fs.path.join(allocator, &.{ home, "llvm-project", "llvm", "include" }) catch return null;
-    if (!isDir(source_include)) return null;
-
-    const build_variants = [_][]const u8{
-        "build/include",
-        "build-msvc/include",
-        "build-release/include",
-        "build-debug/include",
-    };
-    for (build_variants) |suffix| {
-        const build_include = std.fs.path.join(allocator, &.{ home, suffix }) catch continue;
-        if (isValidLlvmSplitIncludeDirs(source_include, build_include)) {
-            return .{
-                .include_dirs = allocator.dupe([]const u8, &.{ source_include, build_include }) catch return null,
-            };
-        }
-    }
-    return null;
-}
-
-fn isValidLlvmIncludeDir(include_dir: []const u8) bool {
-    const core_header = std.fs.path.join(std.heap.page_allocator, &.{ include_dir, "llvm-c", "Core.h" }) catch return false;
-    defer std.heap.page_allocator.free(core_header);
-    const config_header = std.fs.path.join(std.heap.page_allocator, &.{ include_dir, "llvm", "Config", "llvm-config.h" }) catch return false;
-    defer std.heap.page_allocator.free(config_header);
-    return isFile(core_header) and isFile(config_header);
-}
-
-fn isValidLlvmSplitIncludeDirs(source_include: []const u8, build_include: []const u8) bool {
-    const core_header = std.fs.path.join(std.heap.page_allocator, &.{ source_include, "llvm-c", "Core.h" }) catch return false;
-    defer std.heap.page_allocator.free(core_header);
-    const config_header = std.fs.path.join(std.heap.page_allocator, &.{ build_include, "llvm", "Config", "llvm-config.h" }) catch return false;
-    defer std.heap.page_allocator.free(config_header);
-    return isFile(core_header) and isFile(config_header);
-}
-
-fn isDir(path: []const u8) bool {
-    var dir = std.Io.Dir.openDirAbsolute(std.Options.debug_io, path, .{}) catch std.Io.Dir.cwd().openDir(std.Options.debug_io, path, .{}) catch return false;
-    dir.close(std.Options.debug_io);
-    return true;
-}
-
-fn isFile(path: []const u8) bool {
-    var file = std.Io.Dir.openFileAbsolute(std.Options.debug_io, path, .{}) catch std.Io.Dir.cwd().openFile(std.Options.debug_io, path, .{}) catch return false;
-    file.close(std.Options.debug_io);
-    return true;
-}
-
 fn hostExecutableName(host: std.Target, base_name: []const u8) []const u8 {
     return if (host.os.tag == .windows)
         std.fmt.allocPrint(std.heap.page_allocator, "{s}.exe", .{base_name}) catch @panic("out of memory")
@@ -578,6 +511,7 @@ fn safetyTestModule(
         .target = target,
         .optimize = optimize,
     });
+    if (std.mem.eql(u8, name, "kira_vm_runtime")) module.link_libc = true;
     safety_modules.put(b.allocator, name, module) catch @panic("failed to register safety test module");
     for (pkg.imports) |import_name| {
         module.addImport(import_name, safetyTestModule(b, import_name, main_modules, safety_modules, target, optimize));

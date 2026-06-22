@@ -10,7 +10,7 @@ const FunctionCodegen = @import("backend_capi_codegen.zig").FunctionCodegen;
 pub fn lowerAllocNativeState(fc: *FunctionCodegen, v: ir.AllocNativeState) !void {
     const api = fc.api;
     const b = fc.builder;
-    const type_decl = utils.findTypeDecl(fc.request.program, v.type_name) orelse return error.UnsupportedExecutableFeature;
+    const type_decl = utils.findTypeDecl(fc.request.program.programPtr(), v.type_name) orelse return error.UnsupportedExecutableFeature;
     const struct_ty = fc.struct_types.get(v.type_name) orelse return error.UnsupportedExecutableFeature;
     const payload_arr_ty = api.LLVMArrayType2(fc.types.bridge_ty, type_decl.fields.len);
     const size = api.LLVMSizeOf(payload_arr_ty);
@@ -70,14 +70,14 @@ pub fn lowerStoreIndirect(fc: *FunctionCodegen, v: ir.StoreIndirect) !void {
             api.LLVMPositionBuilderAtEnd(b, work_block);
             // Drop-before-overwrite: free the field's (different) prior array. Borrow-checking
             // keeps any borrowed read of the old value from being live across this store.
-            const reldtor = fc.dtors.elementDestroy(fc.request.program, v.ty);
+            const reldtor = fc.dtors.elementDestroy(fc.request.program.programPtr(), v.ty);
             var rargs = [_]llvm.c.LLVMValueRef{ old, reldtor orelse api.LLVMConstNull(fc.types.ptr_ty) };
             _ = api.LLVMBuildCall2(b, fc.runtime_decls.array_release.ty, fc.runtime_decls.array_release.fn_value, &rargs, rargs.len, "");
             if (!drop.isOwned(fc, v.src)) {
                 // Borrowed array into an owned field: deep clone so the struct owns
                 // independent storage (its destructor frees the clone; the original is untouched).
                 const sptr = api.LLVMBuildIntToPtr(b, src, fc.types.ptr_ty, "store.arr.src");
-                const elem = fc.dtors.elementClone(fc.request.program, v.ty);
+                const elem = fc.dtors.elementClone(fc.request.program.programPtr(), v.ty);
                 var cargs = [_]llvm.c.LLVMValueRef{ sptr, elem orelse api.LLVMConstNull(fc.types.ptr_ty) };
                 const clone = api.LLVMBuildCall2(b, fc.runtime_decls.array_clone.ty, fc.runtime_decls.array_clone.fn_value, &cargs, cargs.len, "store.arr.clone");
                 _ = api.LLVMBuildStore(b, clone, ptr);
@@ -195,7 +195,7 @@ pub fn lowerArraySet(fc: *FunctionCodegen, v: ir.ArraySet) !void {
     // kira_array_store_release guards old==new so storing a borrowed element back to its
     // own slot is a no-op, not a use-after-free. Primitive elements (no destructor) keep
     // the plain store.
-    const elem_destroy = if (fc.drop_enabled) fc.dtors.elementDestroy(fc.request.program, fc.register_types[v.src]) else null;
+    const elem_destroy = if (fc.drop_enabled) fc.dtors.elementDestroy(fc.request.program.programPtr(), fc.register_types[v.src]) else null;
     if (elem_destroy) |destroy_fn| {
         var args = [_]llvm.c.LLVMValueRef{ arr, fc.registers[v.index], slot, destroy_fn };
         _ = api.LLVMBuildCall2(b, fc.runtime_decls.array_store_release.ty, fc.runtime_decls.array_store_release.fn_value, &args, args.len, "");

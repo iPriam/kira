@@ -1,0 +1,21 @@
+struct Cell { var value: Int }
+struct Buffer { var values: [Cell] }
+
+function updateBoth(a: borrow mut Cell, b: borrow mut Cell) {
+    a.value = a.value + 1
+    b.value = b.value + 2
+    return
+}
+
+function trigger(buffer: borrow mut Buffer) {
+    var alias = buffer
+    updateBoth(buffer.values[0], alias.values[1])
+    return
+}
+
+@Main
+function main() {
+    var buffer = Buffer { values: [Cell { value: 5 }, Cell { value: 6 }, Cell { value: 7 }] }
+    trigger(buffer)
+    return
+}

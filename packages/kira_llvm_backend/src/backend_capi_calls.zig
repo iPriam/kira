@@ -34,7 +34,7 @@ pub fn lowerCStringToString(fc: *FunctionCodegen, v: ir.CStringToString) !llvm.c
 }
 
 pub fn lowerCallVirtual(fc: *FunctionCodegen, v: ir.VirtualCall) !void {
-    if (utils.findTypeDecl(fc.request.program, v.static_type_name)) |type_decl| {
+    if (utils.findTypeDecl(fc.request.program.programPtr(), v.static_type_name)) |type_decl| {
         return lowerStaticVirtualCall(fc, v, type_decl);
     }
     return lowerConstructFamilyVirtualCall(fc, v);
@@ -73,9 +73,9 @@ fn lowerConstructFamilyVirtualCall(fc: *FunctionCodegen, v: ir.VirtualCall) !voi
 
     var current_test = api.LLVMGetInsertBlock(b);
     var matched: usize = 0;
-    for (fc.request.program.construct_implementations) |implementation| {
+    for (fc.request.program.programPtr().construct_implementations) |implementation| {
         if (!implementationSatisfiesFamily(implementation, v.static_type_name)) continue;
-        const method_id = constructMethodId(fc.request.program.*, implementation.type_name, v.method_name) orelse continue;
+        const method_id = constructMethodId(fc.request.program.programPtr().*, implementation.type_name, v.method_name) orelse continue;
         matched += 1;
 
         api.LLVMPositionBuilderAtEnd(b, current_test);
@@ -131,8 +131,8 @@ fn constructMethodId(program: ir.Program, type_name: []const u8, method_name: []
 
 pub fn lowerCall(fc: *FunctionCodegen, call: ir.Call) !void {
     const api = fc.api;
-    const callee_decl = functionById(fc.request.program.*, call.callee) orelse return error.UnknownFunction;
-    const callee_execution = functionExecutionById(fc.request.program.*, call.callee) orelse return error.UnknownFunction;
+    const callee_decl = functionById(fc.request.program.programPtr().*, call.callee) orelse return error.UnknownFunction;
+    const callee_execution = functionExecutionById(fc.request.program.programPtr().*, call.callee) orelse return error.UnknownFunction;
     switch (resolveExecution(callee_execution, fc.request.mode)) {
         .native => {
             // An extern function is a real C symbol with a C ABI; marshal across the

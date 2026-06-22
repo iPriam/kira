@@ -151,7 +151,7 @@ fn marshalArg(fc: *FunctionCodegen, param_type: ir.ValueType, arg_reg: u32, cstr
         .ffi_struct => {
             const struct_ty = fc.struct_types.get(param_type.name orelse return error.UnsupportedExecutableFeature) orelse return error.UnsupportedExecutableFeature;
             const ptr = api.LLVMBuildIntToPtr(b, arg, fc.types.ptr_ty, "carg.struct.ptr");
-            const size = try utils.valueAbiSize(fc.request.program, param_type);
+            const size = try utils.valueAbiSize(fc.request.program.programPtr(), param_type);
             if (size <= 8) {
                 const abi = structAbiInt(api, fc.types, size);
                 return api.LLVMBuildLoad2(b, abi, ptr, "carg.struct.int");
@@ -201,9 +201,9 @@ pub fn lowerExternCall(fc: *FunctionCodegen, call: ir.Call, callee_decl: ir.Func
     const api = fc.api;
     const b = fc.builder;
     const callee_fn = fc.functions.get(call.callee) orelse return error.MissingFunctionDeclaration;
-    const fn_ty = try externFunctionType(fc.allocator, api, fc.types, fc.struct_types, fc.request.program, callee_decl);
+    const fn_ty = try externFunctionType(fc.allocator, api, fc.types, fc.struct_types, fc.request.program.programPtr(), callee_decl);
 
-    const sret = usesSret(fc.request.program, callee_decl.return_type);
+    const sret = usesSret(fc.request.program.programPtr(), callee_decl.return_type);
     const extra: usize = if (sret) 1 else 0;
     const args = try fc.allocator.alloc(llvm.c.LLVMValueRef, call.args.len + extra);
     defer fc.allocator.free(args);

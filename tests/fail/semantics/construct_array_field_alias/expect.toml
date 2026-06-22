@@ -1,0 +1,13 @@
+backends = ["hybrid", "vm", "llvm"]
+
+[phases.check]
+result = "fail"
+diagnostic_code = "KSEM118"
+diagnostic_title = "array field aliases an existing array"
+stage = "semantics"
+
+[phases.build]
+result = "blocked"
+
+[phases.run]
+result = "blocked"

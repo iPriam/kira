@@ -110,7 +110,7 @@ function makeStyle(base: Int) -> WidgetStyle {
     }
 }
 
-function makeRun(base: Int, style: TextStyle) -> GlyphRun {
+function makeRun(base: Int, style: borrow TextStyle) -> GlyphRun {
     return GlyphRun {
         glyphs: [
             GlyphInfo { codepoint: base, advance: 8, x: 0, y: 0 },
@@ -121,7 +121,7 @@ function makeRun(base: Int, style: TextStyle) -> GlyphRun {
     }
 }
 
-function makeNode(id: Int, style: WidgetStyle, base: Int) -> LayoutNode {
+function makeNode(id: Int, style: borrow WidgetStyle, base: Int) -> LayoutNode {
     return LayoutNode {
         id: id,
         constraints: LayoutConstraints { minWidth: base * 10, maxWidth: base * 20, minHeight: base * 5, maxHeight: base * 10 },

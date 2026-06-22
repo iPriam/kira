@@ -232,13 +232,13 @@ pub fn buildDispatcher(
     // Direct path: switch on the function id (native or runtime callee).
     api.LLVMPositionBuilderAtEnd(builder, direct);
     var direct_count: u32 = 0;
-    for (request.program.functions) |fd| {
+    for (request.program.programPtr().functions) |fd| {
         if (fd.is_extern or !dispatchable(ctx, fd)) continue;
         if (!sameSignature(sig.param_types, sig.return_type, fd.param_types, fd.return_type)) continue;
         direct_count += 1;
     }
     const direct_switch = api.LLVMBuildSwitch(builder, function_id, default_block, direct_count);
-    for (request.program.functions) |fd| {
+    for (request.program.programPtr().functions) |fd| {
         if (fd.is_extern or !dispatchable(ctx, fd)) continue;
         if (!sameSignature(sig.param_types, sig.return_type, fd.param_types, fd.return_type)) continue;
         const case_block = api.LLVMAppendBasicBlockInContext(ctxp, fn_value, "dcase");
@@ -256,13 +256,13 @@ pub fn buildDispatcher(
     const slots = api.LLVMBuildInBoundsGEP2(builder, types.i8, closure_ptr, &slots_idx, slots_idx.len, "closure.slots");
 
     var closure_count: u32 = 0;
-    for (request.program.functions) |fd| {
+    for (request.program.programPtr().functions) |fd| {
         if (fd.is_extern or !dispatchable(ctx, fd)) continue;
         if (!closureSignature(sig.param_types, sig.return_type, fd.param_types, fd.return_type)) continue;
         closure_count += 1;
     }
     const closure_switch = api.LLVMBuildSwitch(builder, closure_id, default_block, closure_count);
-    for (request.program.functions) |fd| {
+    for (request.program.programPtr().functions) |fd| {
         if (fd.is_extern or !dispatchable(ctx, fd)) continue;
         if (!closureSignature(sig.param_types, sig.return_type, fd.param_types, fd.return_type)) continue;
         const case_block = api.LLVMAppendBasicBlockInContext(ctxp, fn_value, "ccase");

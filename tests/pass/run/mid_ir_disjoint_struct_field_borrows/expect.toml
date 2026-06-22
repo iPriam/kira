@@ -1,4 +1,4 @@
-backends = ["hybrid"]
+backends = ["vm", "llvm", "hybrid"]
 
 [phases.check]
 result = "pass"
@@ -8,4 +8,4 @@ result = "pass"
 
 [phases.run]
 result = "pass"
-stdout = "307\n4\n1418\n4\n1418\n3\n13431\n3\n13431\n"
+stdout = "11\n22\n"

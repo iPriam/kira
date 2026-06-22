@@ -87,7 +87,7 @@ pub fn writeStructValue(fc: *FunctionCodegen, value_type: ir.ValueType, value_re
         writeCall(fc, fc.runtime_decls.write_ptr, &args);
         return;
     };
-    const type_decl = utils.findTypeDecl(fc.request.program, type_name) orelse {
+    const type_decl = utils.findTypeDecl(fc.request.program.programPtr(), type_name) orelse {
         var args = [_]llvm.c.LLVMValueRef{value_ref};
         writeCall(fc, fc.runtime_decls.write_ptr, &args);
         return;
@@ -115,7 +115,7 @@ pub fn writeEnumValue(fc: *FunctionCodegen, value_type: ir.ValueType, value_ref:
     const api = fc.api;
     const b = fc.builder;
     const enum_name = value_type.name orelse return error.UnsupportedExecutableFeature;
-    const enum_decl = findEnumDecl(fc.request.program, enum_name) orelse {
+    const enum_decl = findEnumDecl(fc.request.program.programPtr(), enum_name) orelse {
         var args = [_]llvm.c.LLVMValueRef{value_ref};
         writeCall(fc, fc.runtime_decls.write_ptr, &args);
         return;

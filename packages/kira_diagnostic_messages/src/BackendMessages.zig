@@ -71,6 +71,35 @@ pub fn hybridBuildRequiresExplicitExecution() diagnostics.Diagnostic {
     });
 }
 
+/// Raised when the program-phase verifier finds an executable obligation undischarged
+/// (e.g. a call target that was never lowered, an aggregate with no known layout). This is
+/// a lowering/compiler integrity gap surfaced as an early compile error, instead of letting
+/// the half-lowered program reach codegen/runtime and detonate there. `summary`,
+/// `function_name`, and `detail` come from the verifier's `VerifyFailure`.
+pub fn executableObligationUnmet(
+    allocator: std.mem.Allocator,
+    summary: []const u8,
+    function_name: []const u8,
+    detail: []const u8,
+) !diagnostics.Diagnostic {
+    const location = if (function_name.len != 0)
+        try std.fmt.allocPrint(allocator, " in function `{s}`", .{function_name})
+    else
+        try allocator.dupe(u8, "");
+    const named = if (detail.len != 0)
+        try std.fmt.allocPrint(allocator, ": `{s}`", .{detail})
+    else
+        try allocator.dupe(u8, "");
+    return message.build(.{
+        .code = .KIR001_InvalidLoweredNode,
+        .domain = .lowering,
+        .phase = .backend_prepare,
+        .title = "program is not executable: a lowering obligation was left undischarged",
+        .message = try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ summary, location, named }),
+        .help = "The program reached backend emission without complete lowering. This is a compiler/lowering gap, not a runtime fault; it is rejected here so it cannot fail later at runtime. Run `kira check` to validate the frontend shape.",
+    });
+}
+
 pub fn unsupportedExecutableFeature() diagnostics.Diagnostic {
     return message.build(.{
         .code = .KIR001_InvalidLoweredNode,

@@ -347,13 +347,13 @@ fn buildNativeArch(allocator: std.mem.Allocator, base_target: live.ResolvedLiveT
     const arch_out = try std.fs.path.join(allocator, &.{ work_root, arch.label });
     try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, arch_out);
     const compiled = try build.compileFileForBackendWithSelector(allocator, base_target.validation_entrypoint_path, .llvm_native, selector, &.{});
-    if (compiled.failed() or compiled.ir_program == null) return error.LiveBundleBuildFailed;
+    if (compiled.failed() or compiled.verified_program == null) return error.LiveBundleBuildFailed;
     const object_dir = try std.fs.path.join(allocator, &.{ arch_out, "native" });
     try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, object_dir);
     const object_path = try std.fs.path.join(allocator, &.{ object_dir, "kira_native_app.o" });
     _ = llvm_backend.compile(allocator, .{
         .mode = .llvm_native,
-        .program = &compiled.ir_program.?,
+        .program = &compiled.verified_program.?,
         .module_name = std.fs.path.stem(base_target.validation_entrypoint_path),
         .emit = .{ .object_path = object_path },
         .target_selector = selector,

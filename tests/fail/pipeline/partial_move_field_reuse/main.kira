@@ -1,0 +1,46 @@
+// Regression: a partial field move must invalidate the moved field for the rest of
+// the current control-flow state. `countEffects(move s.effects)` moves the `[Effect]`
+// field out of the owned `s`, so the second `countEffects(s.effects)` reads a field
+// that was already moved. Before partial moves were tracked, the `move` on a field was
+// silently dropped, so this compiled and the moved-then-reused array aliased storage the
+// callee already consumed -- the latent use-after-free behind the hybrid native enum-copy
+// crash (`enum native copy could not resolve discriminant`). It must be rejected at check.
+//
+// The four-variant, mixed payload/no-payload enum mirrors UI Foundation's `FoundationEffect`
+// shape so the regression covers the same enum-in-array ownership path.
+struct Glow {
+    let radius: Float
+    let intensity: Float
+}
+
+enum Effect {
+    None
+    Backdrop(Glow)
+    Layer(Glow)
+    Tint(Float)
+}
+
+struct Surface {
+    let effects: [Effect]
+    let label: String
+}
+
+function countEffects(effects: [Effect]) -> Int {
+    return effects.count
+}
+
+function audit(s: Surface) -> Int {
+    let first = countEffects(move s.effects)
+    let second = countEffects(s.effects)
+    return first + second
+}
+
+@Main
+function main() {
+    let surface = Surface {
+        effects: [Effect.Layer(Glow { radius: 1.0, intensity: 2.0 })]
+        label: "panel"
+    }
+    print(audit(move surface))
+    return
+}

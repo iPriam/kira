@@ -1,0 +1,22 @@
+struct Bag {
+    var items: [Int]
+}
+
+function leak(value: Int, bag: Bag) -> Int {
+    switch value {
+        0 => {
+            let alias = bag.items
+            return alias.count
+        }
+        default => {
+            return 0
+        }
+    }
+}
+
+@Main
+function main() {
+    let bag = Bag { items: [1, 2, 3] }
+    print(leak(0, bag))
+    return
+}

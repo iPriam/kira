@@ -1,0 +1,22 @@
+// `let alias = bag.items` partially moves the array field out of `bag`. The field read
+// aliases the same backing store rather than transferring it, and the field is never
+// written back. Even though `bag` is never used as a whole again, dropping `bag` at
+// function exit would free an array that `alias` also owns — the use-after-free /
+// double-free that the partial-move bookkeeping must catch at the scope boundary, not
+// just on whole-base reuse. Reinitializing the field (`bag.items = ...`) before exit, or
+// moving the whole value, is the sound alternative.
+struct Bag {
+    var items: [Int]
+}
+
+function leak(bag: Bag) -> Int {
+    let alias = bag.items
+    return alias.count
+}
+
+@Main
+function main() {
+    let bag = Bag { items: [1, 2, 3] }
+    print(leak(bag))
+    return
+}

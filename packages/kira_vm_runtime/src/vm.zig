@@ -14,7 +14,51 @@ const native_bridge = @import("vm_native_bridge.zig");
 const ArrayObject = ownership.ArrayObject;
 const ClosureObject = ownership.ClosureObject;
 
-pub const NativeStateBox = extern struct { type_id: u64, payload: usize, runtime_payload: usize };
+/// VM-side native-state token.
+///
+/// The leading three fields (`type_id`, `payload`, `runtime_payload`) are the C-ABI prefix
+/// shared with the native backend's `KiraNativeState` in
+/// `packages/kira_native_bridge/src/runtime_helpers.c`. Everything after that prefix is
+/// VM-internal metadata used to clean up Zig-allocated payloads at shutdown
+/// (see `deinitTrackedNativeStates`); the native backend never reads those fields.
+///
+/// Tokens are NOT cast across backends: VM tokens are always allocated and read here
+/// (`allocateNativeState`/`recoverNativeState`), and their `payload`/`runtime_payload` hold
+/// Zig `BridgeValue`/`Value` arrays, whereas the C path's payload is a raw byte buffer with
+/// incompatible semantics. The `comptime` block below enforces the shared prefix layout so the
+/// two structs cannot silently drift apart at the C-visible boundary.
+pub const NativeStateBox = extern struct {
+    type_id: u64,
+    payload: usize,
+    runtime_payload: usize,
+    module: *const bytecode.Module,
+    type_name_ptr: [*]const u8,
+    type_name_len: usize,
+    field_count: usize,
+
+    comptime {
+        // Must match the 3-field `KiraNativeState` C struct prefix exactly.
+        std.debug.assert(@offsetOf(NativeStateBox, "type_id") == 0);
+        std.debug.assert(@offsetOf(NativeStateBox, "payload") == @sizeOf(u64));
+        std.debug.assert(@offsetOf(NativeStateBox, "runtime_payload") == @sizeOf(u64) + @sizeOf(usize));
+    }
+
+    pub fn init(module: *const bytecode.Module, type_name: []const u8, type_id: u64, field_count: usize, payload: usize) NativeStateBox {
+        return .{
+            .type_id = type_id,
+            .payload = payload,
+            .runtime_payload = 0,
+            .module = module,
+            .type_name_ptr = type_name.ptr,
+            .type_name_len = type_name.len,
+            .field_count = field_count,
+        };
+    }
+
+    pub fn typeName(self: *const NativeStateBox) []const u8 {
+        return self.type_name_ptr[0..self.type_name_len];
+    }
+};
 
 pub const ExportedNativeClosure = struct {
     native_ptr: usize,
@@ -44,6 +88,7 @@ pub const Vm = struct {
     heap: ownership.Heap,
     native_layout_stats: NativeLayoutStats = .{},
     native_state_materialized_types: std.StringHashMap(usize),
+    native_state_boxes: std.AutoHashMap(usize, void),
     exported_native_closures: std.AutoHashMap(usize, ExportedNativeClosure),
     last_error_buffer: [256]u8 = [_]u8{0} ** 256,
     last_error_len: usize = 0,
@@ -112,6 +157,7 @@ pub const Vm = struct {
             .allocator = allocator,
             .heap = ownership.Heap.init(allocator),
             .native_state_materialized_types = std.StringHashMap(usize).init(allocator),
+            .native_state_boxes = std.AutoHashMap(usize, void).init(allocator),
             .exported_native_closures = std.AutoHashMap(usize, ExportedNativeClosure).init(allocator),
         };
     }
@@ -197,6 +243,7 @@ pub const Vm = struct {
             self.allocator.free(words[0..word_count]);
         }
         self.exported_native_closures.deinit();
+        native_bridge.deinitTrackedNativeStates(self);
         self.heap.deinit();
         self.native_state_materialized_types.deinit();
         if (self.prepared_cache) |prepared| {
@@ -412,6 +459,14 @@ pub const Vm = struct {
 
     pub fn materializeNativeStateValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) anyerror!runtime_abi.Value {
         return native_bridge.materializeNativeStateValue(self, module, ty, value);
+    }
+
+    pub fn preserveNativeStateValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) anyerror!runtime_abi.Value {
+        return native_bridge.preserveNativeStateValue(self, module, ty, value);
+    }
+
+    pub fn destroyPreservedNativeStateValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) void {
+        native_bridge.destroyPreservedNativeStateValue(self, module, ty, value);
     }
 
     pub fn copyStructFromNativeLayout(self: *Vm, module: *const bytecode.Module, type_name: []const u8, native_ptr: usize) anyerror!usize {
