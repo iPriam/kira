@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const llvm_metadata = @import("llvm_metadata.zig");
 
 pub fn extractArchive(
@@ -51,17 +52,53 @@ fn extractTarXz(
 }
 
 fn extractTarGz(
-    allocator: std.mem.Allocator,
+    _: std.mem.Allocator,
     archive_path: []const u8,
     destination_path: []const u8,
 ) !void {
-    const result = try std.process.run(allocator, std.Options.debug_io, .{
+    var child = try std.process.spawn(std.Options.debug_io, .{
         .argv = &.{ "tar", "-xzf", archive_path, "-C", destination_path },
         .expand_arg0 = .expand,
-        .stdout_limit = .limited(64 * 1024),
-        .stderr_limit = .limited(64 * 1024),
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .inherit,
     });
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-    if (result.term != .exited or result.term.exited != 0) return error.ExternalCommandFailed;
+    const term = try child.wait(std.Options.debug_io);
+    if (term == .exited and term.exited == 0) return;
+    return error.ExternalCommandFailed;
+}
+
+test "extractTarGz extracts archive with system tar" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "source/payload");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "source/payload/hello.txt", .data = "hello from tar.gz" });
+    try tmp.dir.createDirPath(std.testing.io, "out");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "sample.tar.gz", .data = "" });
+
+    const archive_path = try tmp.dir.realPathFileAlloc(std.testing.io, "sample.tar.gz", std.testing.allocator);
+    defer std.testing.allocator.free(archive_path);
+    const source_path = try tmp.dir.realPathFileAlloc(std.testing.io, "source", std.testing.allocator);
+    defer std.testing.allocator.free(source_path);
+    const output_path = try tmp.dir.realPathFileAlloc(std.testing.io, "out", std.testing.allocator);
+    defer std.testing.allocator.free(output_path);
+
+    var create_child = try std.process.spawn(std.Options.debug_io, .{
+        .argv = &.{ "tar", "-czf", archive_path, "-C", source_path, "." },
+        .expand_arg0 = .expand,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .inherit,
+    });
+    const create_term = try create_child.wait(std.Options.debug_io);
+    try std.testing.expectEqual(@as(std.process.Child.Term, .{ .exited = 0 }), create_term);
+
+    try extractTarGz(std.testing.allocator, archive_path, output_path);
+
+    const extracted = try tmp.dir.readFileAlloc(std.testing.io, "out/payload/hello.txt", std.testing.allocator, .limited(64));
+    defer std.testing.allocator.free(extracted);
+    try std.testing.expectEqualStrings("hello from tar.gz", extracted);
 }
