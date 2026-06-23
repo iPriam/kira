@@ -1,0 +1,40 @@
+// Regression: `==` / `!=` on payload-less enums must compare discriminant tags,
+// not the boxed enum handle. Previously every enum equality compared heap value
+// identity, so `e == E.Variant` was always false and chained `if` checks fell
+// through to the last branch (e.g. KiraUI `material == Material.Flat` resolved to
+// the LayeredGlass fallback, painting blue backdrops). The fix extracts enum tags
+// before the IR compare, matching how `match` already lowered. Must agree across
+// all backends.
+enum Color { Red Green Blue }
+
+struct Box { let c: Color }
+
+function rank(c: Color) -> Int {
+    if c == Color.Red { return 1 }
+    if c == Color.Green { return 2 }
+    return 3
+}
+
+function isBlue(b: borrow Box) -> Bool {
+    return b.c == Color.Blue
+}
+
+@Main
+function main() {
+    // `==` on a function parameter: 1 + 2 + 3 = 6 (broken would give 3+3+3 = 9).
+    var total = rank(Color.Red) + rank(Color.Green) + rank(Color.Blue)
+
+    // `!=` on enum locals.
+    let red = Color.Red
+    let green = Color.Green
+    if red != green { total = total + 10 }
+
+    // `==` on a struct field (returned as a Bool, compared as a binary expr to
+    // avoid a trailing-builder parse on a bare call in the `if` condition).
+    let blueBox = Box { c: Color.Blue }
+    let blueResult = isBlue(blueBox)
+    if blueResult == true { total = total + 100 }
+
+    print(total)
+    return
+}

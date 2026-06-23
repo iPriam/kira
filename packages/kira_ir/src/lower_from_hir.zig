@@ -1510,11 +1510,24 @@ pub const Lowerer = struct {
                         try instructions.append(.{ .modulo = .{ .dst = dst, .lhs = lhs, .rhs = rhs } });
                     },
                     .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => {
-                        _ = try lowerExecutableCompareOperandType(self.program, model.hir.exprType(node.lhs.*), node.op);
+                        const operand_vt = try lowerExecutableCompareOperandType(self.program, model.hir.exprType(node.lhs.*), node.op);
+                        var cmp_lhs = lhs;
+                        var cmp_rhs = rhs;
+                        if (operand_vt.kind == .enum_instance) {
+                            // Enum equality compares discriminant tags, not heap value
+                            // identity. Without this, `e == E.A` always compares the
+                            // boxed enum handles (never equal) and falls through.
+                            const lhs_tag = self.freshRegister();
+                            try instructions.append(.{ .enum_tag = .{ .dst = lhs_tag, .src = lhs } });
+                            const rhs_tag = self.freshRegister();
+                            try instructions.append(.{ .enum_tag = .{ .dst = rhs_tag, .src = rhs } });
+                            cmp_lhs = lhs_tag;
+                            cmp_rhs = rhs_tag;
+                        }
                         try instructions.append(.{ .compare = .{
                             .dst = dst,
-                            .lhs = lhs,
-                            .rhs = rhs,
+                            .lhs = cmp_lhs,
+                            .rhs = cmp_rhs,
                             .op = lowerCompareOp(node.op),
                         } });
                     },
