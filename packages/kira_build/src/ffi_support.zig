@@ -531,6 +531,9 @@ fn collectNativeInputFilesInDir(
 fn isNativeBuildInput(path: []const u8) bool {
     const ext = std.fs.path.extension(path);
     return std.mem.eql(u8, ext, ".c") or
+        std.mem.eql(u8, ext, ".cc") or
+        std.mem.eql(u8, ext, ".cpp") or
+        std.mem.eql(u8, ext, ".cxx") or
         std.mem.eql(u8, ext, ".h") or
         std.mem.eql(u8, ext, ".hpp") or
         std.mem.eql(u8, ext, ".hh") or
