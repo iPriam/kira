@@ -398,6 +398,14 @@ pub fn parsePostfix(self: *Parser) anyerror!*syntax.ast.Expr {
             continue;
         }
         if (self.match(.l_paren)) {
+            // Argument lists are delimited by parens, so the trailing-block
+            // ambiguity that `allow_trailing_block_call` guards against cannot
+            // arise here. Re-enable it while parsing arguments so nested
+            // builder/callback calls still work even inside a control-flow
+            // condition, then restore the outer setting to decide whether *this*
+            // call may take a trailing block.
+            const outer_block_call = self.allow_trailing_block_call;
+            self.allow_trailing_block_call = true;
             var args = std.array_list.Managed(syntax.ast.CallArg).init(self.allocator);
             while (!self.at(.r_paren) and !self.at(.eof)) {
                 const start_token = self.peek();
@@ -415,10 +423,14 @@ pub fn parsePostfix(self: *Parser) anyerror!*syntax.ast.Expr {
                 if (!self.match(.comma)) break;
             }
             const close = try self.expect(.r_paren, "expected ')' after call arguments", "close the argument list here");
+            self.allow_trailing_block_call = outer_block_call;
             var trailing_builder: ?syntax.ast.BuilderBlock = null;
             var trailing_callback: ?syntax.ast.CallbackBlock = null;
             var end = close.span.end;
-            if (self.at(.l_brace)) {
+            // Only attach a trailing block when the current context permits it.
+            // In a control-flow header (`if f(x) { ... }`) the `{` belongs to the
+            // block, not to the call.
+            if (self.allow_trailing_block_call and self.at(.l_brace)) {
                 if (self.looksLikeCallbackBlock()) {
                     trailing_callback = try self.parseCallbackBlock();
                     end = trailing_callback.?.span.end;
@@ -557,7 +569,12 @@ pub fn parsePrimary(self: *Parser) anyerror!*syntax.ast.Expr {
         return expr;
     }
     if (self.match(.l_paren)) {
+        // A parenthesized group is explicitly delimited, so trailing blocks are
+        // unambiguous inside it even within a control-flow condition.
+        const outer_block_call = self.allow_trailing_block_call;
+        self.allow_trailing_block_call = true;
         const expr = try self.parseExpression();
+        self.allow_trailing_block_call = outer_block_call;
         _ = try self.expect(.r_paren, "expected ')' after grouped expression", "close the grouped expression here");
         return expr;
     }
