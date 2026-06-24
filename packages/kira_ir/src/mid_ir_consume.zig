@@ -219,7 +219,13 @@ pub fn consumeCapture(self: *Checker, state: *State, source_place: mid.Place, ca
     const use_kind: PathUseKind = switch (capture.ownership) {
         .borrow_read => .borrow_shared,
         .borrow_mut => .borrow_mut,
-        .move, .owned, .copy => .move,
+        // A by-value `.copy` capture reads the (Copy) value into the closure
+        // environment without consuming the source. Semantics only ever assigns
+        // `.copy` ownership to trivially-copyable captures (see
+        // lower_shared_captures.zig), so the original place stays usable and may
+        // be captured by additional closures — the core of the callback pattern.
+        .copy => .read,
+        .move, .owned => .move,
     };
     try self.consumeValue(state, .{ .place = .{ .place = source_place } }, use_kind);
     _ = span;
