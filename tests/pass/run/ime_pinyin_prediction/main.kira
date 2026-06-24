@@ -1,0 +1,137 @@
+// Backend-parity test for the Kira-owned pinyin -> Hanzi IME engine model used
+// by UI Foundation. The engine is pure integer logic (codepoints in, codepoint
+// candidates out), so it must behave identically on VM, LLVM/native and hybrid.
+// This mirrors the algorithm in ui-foundation/app/Core/InputMethod.kira: pack
+// pinyin letters into a base-27 key, predict ordered Hanzi candidates, and
+// commit by index.
+
+struct Comp {
+    var letters: [Int] = []
+    var candidates: [Int] = []
+    var activeIndex: Int = 0
+}
+
+function cloneInts(src: borrow [Int]) -> [Int] {
+    var out: [Int] = []
+    var index = 0
+    while index < src.count {
+        out.append(src[index])
+        index = index + 1
+    }
+    return out
+}
+
+function lowerIndex(codepoint: Int) -> Int {
+    if codepoint >= 65 && codepoint <= 90 {
+        return codepoint - 65 + 1
+    }
+    if codepoint >= 97 && codepoint <= 122 {
+        return codepoint - 97 + 1
+    }
+    return 0
+}
+
+function keyFromLetters(letters: borrow [Int]) -> Int {
+    var key = 0
+    var index = 0
+    while index < letters.count {
+        key = key * 27 + lowerIndex(letters[index])
+        index = index + 1
+    }
+    return key
+}
+
+function sylKey(a: Int, b: Int, c: Int) -> Int {
+    var key = 0
+    if a > 0 {
+        key = key * 27 + a
+    }
+    if b > 0 {
+        key = key * 27 + b
+    }
+    if c > 0 {
+        key = key * 27 + c
+    }
+    return key
+}
+
+function candidatesForKey(key: Int) -> [Int] {
+    let kNi = sylKey(14, 9, 0)
+    if key == kNi {
+        return [20320, 24744, 23612]
+    }
+    let kHao = sylKey(8, 1, 15)
+    if key == kHao {
+        return [22909, 21495, 27627]
+    }
+    let kWo = sylKey(23, 15, 0)
+    if key == kWo {
+        return [25105, 25569]
+    }
+    return []
+}
+
+function appendLetter(comp: borrow Comp, codepoint: Int) -> Comp {
+    var letters = cloneInts(comp.letters)
+    letters.append(codepoint)
+    let candidates = candidatesForKey(keyFromLetters(letters))
+    return Comp {
+        letters: move letters
+        candidates: move candidates
+        activeIndex: 0
+    }
+}
+
+function backspace(comp: borrow Comp) -> Comp {
+    var letters: [Int] = []
+    var index = 0
+    let keep = comp.letters.count - 1
+    while index < keep {
+        letters.append(comp.letters[index])
+        index = index + 1
+    }
+    let candidates = candidatesForKey(keyFromLetters(letters))
+    return Comp {
+        letters: move letters
+        candidates: move candidates
+        activeIndex: 0
+    }
+}
+
+function candidateAt(comp: borrow Comp, index: Int) -> Int {
+    if comp.candidates.count == 0 {
+        return 0
+    }
+    var clamped = index
+    if clamped < 0 {
+        clamped = 0
+    }
+    if clamped >= comp.candidates.count {
+        clamped = comp.candidates.count - 1
+    }
+    return comp.candidates[clamped]
+}
+
+@Main
+function main() {
+    // Type "ni" (n=110, i=105): the top candidate is 你 (U+4F60 = 20320).
+    var comp = Comp {}
+    comp = appendLetter(comp, 110)
+    comp = appendLetter(comp, 105)
+    print(comp.candidates.count)
+    print(candidateAt(comp, 0))
+    // Second candidate is 您 (U+60A8 = 24744).
+    print(candidateAt(comp, 1))
+
+    // Backspacing to just "n" is an incomplete syllable: no prediction.
+    let trimmed = backspace(comp)
+    print(trimmed.candidates.count)
+
+    // Type "hao": the top candidate is 好 (U+597D = 22909).
+    var second = Comp {}
+    second = appendLetter(second, 104)
+    second = appendLetter(second, 97)
+    second = appendLetter(second, 111)
+    print(candidateAt(second, 0))
+    return
+}
