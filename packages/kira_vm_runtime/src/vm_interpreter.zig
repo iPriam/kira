@@ -49,8 +49,6 @@ fn nativeStateConsumesRuntimeOwnership(field_ty: bytecode.TypeRef) bool {
     };
 }
 
-var dbg_call_depth: usize = 0;
-
 pub fn runPrepared(
     vm: *Vm,
     prepared: *const PreparedModule,
@@ -60,12 +58,6 @@ pub fn runPrepared(
     hooks: Hooks,
 ) anyerror!runtime_abi.Value {
     const decl = function.decl;
-    dbg_call_depth += 1;
-    defer dbg_call_depth -= 1;
-    if (dbg_call_depth > 600 and std.c.getenv("KIRA_DBG") != null) {
-        if (dbg_call_depth % 50 == 0 or dbg_call_depth > 1400) std.debug.print("DBG depth={d} fn={s}\n", .{ dbg_call_depth, decl.name });
-        if (dbg_call_depth > 1500) return error.RuntimeFailure;
-    }
     const module = prepared.module;
     const code = function.code;
     const register_count: usize = decl.register_count;
@@ -131,7 +123,7 @@ pub fn runPrepared(
             continue :dispatch code[pc];
         },
         .const_closure => |value| {
-            const closure_ptr = try vm.allocateClosure(module, registers, value.function_id, value.captures, value.capture_ownership);
+            const closure_ptr = try vm.allocateClosure(registers, value.function_id, value.captures, value.capture_ownership);
             runtime_abi.emitExecutionTrace("CALLABLE", "CONST_CLOSURE", "dst={d} fn={d} raw=0x{x} captures={d}", .{ value.dst, value.function_id, closure_ptr, value.captures.len });
             setSlotManaged(vm, &registers[value.dst], &register_owned[value.dst], .{ .raw_ptr = closure_ptr });
             pc += 1;

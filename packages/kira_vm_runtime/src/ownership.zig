@@ -521,7 +521,6 @@ pub const Heap = struct {
         if (ptr == 0) return;
         const removed = self.objects.fetchRemove(ptr) orelse return;
         self.recordFree(removed.kind);
-        if (std.c.getenv("KIRA_LEAK_HEAP") != null) return; // diagnostic: leak everything
         self.destroy(removed.kind);
     }
 

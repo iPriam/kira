@@ -451,7 +451,7 @@ pub fn build(b: *std.Build) void {
     }
     full_test_step.dependOn(&run_full_corpus.step);
 
-    b.default_step = b.getInstallStep(); // Default to build + install, not tests
+    b.default_step = test_step; // Default to simple (fast) mode
 }
 
 fn addCorpusRun(

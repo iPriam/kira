@@ -157,14 +157,12 @@ pub const HybridRuntime = struct {
             ) };
             materialized_args[index] = true;
         }
-        if (std.c.getenv("KIRA_DBG") != null) std.debug.print("DBG invoke fn={s}({d}) args={d} -> runFunctionById START\n", .{ function_decl.name, function_id, args.len });
         const result = try self.vm.runFunctionById(&self.module, function_decl.id, runtime_args, context.writer, .{
             .context = @as(?*anyopaque, @ptrCast(context)),
             .call_native = nativeCallHook(@TypeOf(context.*)),
             .resolve_function = resolveFunctionHook(@TypeOf(context.*)),
             .copy_struct_args_by_value = false,
         });
-        if (std.c.getenv("KIRA_DBG") != null) std.debug.print("DBG invoke fn={d} -> runFunctionById DONE result_tag={s}\n", .{ function_id, @tagName(result) });
         for (native_arg_ptrs, 0..) |native_ptr, index| {
             if (native_ptr == 0) continue;
             // Only a `borrow mut` param can be mutated by the callee, so only it needs to
@@ -412,10 +410,6 @@ fn callNative(self: *HybridRuntime, function_id: u32, args: []const runtime_abi.
     defer self.vm.endNativeBoundary();
 
     const function_decl = findFunction(self.manifest.functions, function_id) orelse return error.UnknownFunction;
-    if (std.c.getenv("KIRA_DBG") != null) {
-        const kname = if (self.module.findFunctionById(function_id)) |fd| fd.name else "<none>";
-        std.debug.print("DBG callNative fn={s} kira={s}({d}) args={d} ret={s}\n", .{ function_decl.exported_name orelse "?", kname, function_id, args.len, @tagName(function_decl.return_type.kind) });
-    }
     const lowered_args = try self.allocator.alloc(runtime_abi.Value, args.len);
     defer self.allocator.free(lowered_args);
     const native_arg_ptrs = try self.allocator.alloc(usize, args.len);
@@ -488,9 +482,7 @@ fn callNative(self: *HybridRuntime, function_id: u32, args: []const runtime_abi.
         }
     }
 
-    if (std.c.getenv("KIRA_DBG") != null) std.debug.print("DBG callNative fn={d} -> bridge.call START\n", .{function_id});
     const result = try self.bridge.call(function_id, lowered_args);
-    if (std.c.getenv("KIRA_DBG") != null) std.debug.print("DBG callNative fn={d} -> bridge.call DONE tag={s}\n", .{ function_id, @tagName(result) });
     self.vm.retainManagedValue(result);
     for (native_arg_ptrs, 0..) |native_ptr, index| {
         if (native_ptr == 0) continue;

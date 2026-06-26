@@ -2,10 +2,6 @@
   "$schema": "https://opencode.ai/config.json",
   "default_agent": "orchestrator",
   "permission": "allow",
-  "compaction": {
-    "auto": true,
-    "context_threshold": 0.95
-  },
 
   "agent": {
     "orchestrator": {

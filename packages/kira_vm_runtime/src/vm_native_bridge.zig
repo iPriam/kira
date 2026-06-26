@@ -116,13 +116,6 @@ pub fn writeStructToNativeLayout(self: *Vm, module: *const bytecode.Module, type
 }
 
 pub fn copyArrayToNativeLayout(self: *Vm, module: *const bytecode.Module, array_ty: bytecode.TypeRef, runtime_array_ptr: usize) anyerror!usize {
-    if (self.heap.getArray(runtime_array_ptr) == null) {
-        self.rememberFmt(
-            "array native copy was handed an unmanaged/dangling array pointer: ty={s} ptr=0x{x}",
-            .{ array_ty.name orelse "?", runtime_array_ptr },
-        );
-        return error.RuntimeFailure;
-    }
     const source: *const ArrayObject = @ptrFromInt(runtime_array_ptr);
     const object = try self.allocator.create(ArrayObject);
     const items = try self.allocator.alloc(runtime_abi.BridgeValue, @max(source.len, 1));
@@ -239,8 +232,7 @@ fn destroyStructNativeLayoutWithOwner(self: *Vm, module: *const bytecode.Module,
     const layout = native_layout.structLayout(module, type_name) catch return;
     const word_count = @max(1, std.math.divCeil(usize, layout.size, @sizeOf(u64)) catch unreachable);
     const words: [*]u64 = @ptrFromInt(native_ptr);
-    const free_owner: NativeLayoutOwner = if (std.c.getenv("KIRA_RESULT_VM_FREE") != null) .vm else owner;
-    switch (free_owner) {
+    switch (owner) {
         .vm => self.allocator.free(words[0..word_count]),
         .c => std.heap.c_allocator.free(words[0..word_count]),
     }
@@ -277,7 +269,6 @@ pub fn allocateNativeState(self: *Vm, module: *const bytecode.Module, type_name:
     const src_ptr: [*]align(1) runtime_abi.Value = @ptrFromInt(src_payload);
     const native_payload = try self.allocator.alloc(runtime_abi.BridgeValue, type_decl.fields.len);
     for (type_decl.fields, 0..) |field_decl, index| {
-        if (std.c.getenv("KIRA_DBG") != null) std.debug.print("DBG preserveNativeState type={s} field[{d}] kind={s} name={s}\n", .{ type_name, index, @tagName(field_decl.ty.kind), field_decl.ty.name orelse "?" });
         const native_value = try preserveNativeStateValue(self, module, field_decl.ty, src_ptr[index]);
         native_payload[index] = runtime_abi.bridgeValueFromValue(native_value);
     }
@@ -289,7 +280,6 @@ pub fn allocateNativeState(self: *Vm, module: *const bytecode.Module, type_name:
 }
 
 pub fn recoverNativeState(self: *Vm, module: *const bytecode.Module, type_name: []const u8, state_token: usize, expected_type_id: u64) !usize {
-    if (std.c.getenv("KIRA_DBG") != null) std.debug.print("DBG recoverNativeState type={s} token=0x{x}\n", .{ type_name, state_token });
     self.native_layout_stats.native_state_recovers += 1;
     const box: *NativeStateBox = @ptrFromInt(state_token);
     if (box.type_id != expected_type_id) {
@@ -302,16 +292,13 @@ pub fn recoverNativeState(self: *Vm, module: *const bytecode.Module, type_name: 
         if (!result.found_existing) result.value_ptr.* = 0;
         result.value_ptr.* += 1;
         box.runtime_payload = try materializeNativeStatePayload(self, module, type_name, box.payload);
-        if (std.c.getenv("KIRA_DBG") != null) std.debug.print("DBG recover {s}: materialized, destroying box.payload\n", .{type_name});
-        if (std.c.getenv("KIRA_SKIP_STATE_DESTROY") == null) destroyNativeStatePayload(self, module, type_name, box.payload);
-        if (std.c.getenv("KIRA_DBG") != null) std.debug.print("DBG recover {s}: destroyed box.payload\n", .{type_name});
+        destroyNativeStatePayload(self, module, type_name, box.payload);
         box.payload = 0;
     }
     if (box.runtime_payload == 0) {
         self.rememberError("nativeRecover used a userdata token with no state payload");
         return error.RuntimeFailure;
     }
-    if (std.c.getenv("KIRA_DBG") != null) std.debug.print("DBG recover {s}: returning runtime_payload\n", .{type_name});
     return box.runtime_payload;
 }
 
@@ -323,10 +310,6 @@ pub fn materializeNativeStatePayload(self: *Vm, module: *const bytecode.Module, 
     const native_payload: [*]const runtime_abi.BridgeValue = @ptrFromInt(native_payload_ptr);
     const runtime_payload = try self.allocator.alloc(runtime_abi.Value, type_decl.fields.len);
     for (type_decl.fields, 0..) |field_decl, index| {
-        if (std.c.getenv("KIRA_DBG") != null) {
-            const v = runtime_abi.bridgeValueToValue(native_payload[index]);
-            std.debug.print("DBG materialize type={s} field[{d}] kind={s} name={s} raw=0x{x}\n", .{ type_name, index, @tagName(field_decl.ty.kind), field_decl.ty.name orelse "?", if (v == .raw_ptr) v.raw_ptr else 0 });
-        }
         runtime_payload[index] = try materializeNativeStateValue(self, module, field_decl.ty, runtime_abi.bridgeValueToValue(native_payload[index]));
     }
     return @intFromPtr(runtime_payload.ptr);
@@ -334,31 +317,14 @@ pub fn materializeNativeStatePayload(self: *Vm, module: *const bytecode.Module, 
 
 pub fn preserveNativeStateValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) !runtime_abi.Value {
     return switch (ty.kind) {
-        // `construct_any` is normally passed across the native boundary verbatim
-        // (the managed VM pointer stays valid for the duration of a synchronous
-        // call). Native *state*, however, outlives the frame that built it: the
-        // builder returns and frame cleanup frees the boxed value, leaving the
-        // stored pointer dangling (a hybrid use-after-free that surfaces when the
-        // app's stored root is later recovered and dispatched on — e.g. the KiraUI
-        // `KiraAppInternal { root: Widget }` rootBuilder). Deep-clone so the state
-        // box owns an independent copy that frame cleanup cannot free.
-        .construct_any => try self.cloneBorrowedManagedValueDynamic(module, value),
-        .ffi_struct, .array, .enum_instance, .raw_ptr => try copyValueToNativeLayout(self, module, ty, value),
+        .ffi_struct, .array, .enum_instance, .construct_any, .raw_ptr => try copyValueToNativeLayout(self, module, ty, value),
         else => value,
     };
 }
 
 pub fn materializeNativeStateValue(self: *Vm, module: *const bytecode.Module, ty: bytecode.TypeRef, value: runtime_abi.Value) !runtime_abi.Value {
     return switch (ty.kind) {
-        // Recovery materializes the box payload into a fresh runtime payload and
-        // then destroys the box payload (see `recoverNativeState`). Clone the
-        // preserved `construct_any` so the recovered value is independent of the
-        // box copy that is about to be dropped, mirroring `preserveNativeStateValue`.
-        .construct_any => if (self.heap.isManagedValue(value))
-            try self.cloneBorrowedManagedValueDynamic(module, value)
-        else
-            try copyValueFromNativeLayout(self, module, ty, value),
-        .ffi_struct, .array, .enum_instance => try copyValueFromNativeLayout(self, module, ty, value),
+        .ffi_struct, .array, .enum_instance, .construct_any => try copyValueFromNativeLayout(self, module, ty, value),
         .raw_ptr => try materializeCallbackValueFromNative(self, module, ty, value),
         else => value,
     };
@@ -797,7 +763,6 @@ fn materializeNativeResultWithOwner(
     value: runtime_abi.Value,
     owner: NativeLayoutOwner,
 ) !runtime_abi.Value {
-    const leak_results = std.c.getenv("KIRA_LEAK_RESULTS") != null;
     return switch (return_ty.kind) {
         .ffi_struct => blk: {
             if (value != .raw_ptr or value.raw_ptr == 0) {
@@ -809,9 +774,9 @@ fn materializeNativeResultWithOwner(
                 return error.RuntimeFailure;
             };
             // Release the native result storage even if materialization fails.
-            errdefer if (!leak_results) destroyStructNativeLayoutWithOwner(self, module, type_name, value.raw_ptr, owner);
+            errdefer destroyStructNativeLayoutWithOwner(self, module, type_name, value.raw_ptr, owner);
             const copied = try copyStructFromNativeLayout(self, module, type_name, value.raw_ptr);
-            if (!leak_results) destroyStructNativeLayoutWithOwner(self, module, type_name, value.raw_ptr, owner);
+            destroyStructNativeLayoutWithOwner(self, module, type_name, value.raw_ptr, owner);
             break :blk .{ .raw_ptr = copied };
         },
         .array => blk: {
@@ -819,7 +784,7 @@ fn materializeNativeResultWithOwner(
             // Release the native result storage even if materialization fails.
             errdefer destroyArrayNativeLayoutWithOwner(self, module, return_ty, value.raw_ptr, owner);
             const copied = try copyArrayFromNativeLayout(self, module, return_ty, value.raw_ptr);
-            if (!leak_results) destroyArrayNativeLayoutWithOwner(self, module, return_ty, value.raw_ptr, owner);
+            destroyArrayNativeLayoutWithOwner(self, module, return_ty, value.raw_ptr, owner);
             break :blk .{ .raw_ptr = copied };
         },
         .enum_instance => blk: {
@@ -829,9 +794,9 @@ fn materializeNativeResultWithOwner(
                 return error.RuntimeFailure;
             };
             // Release the native result storage even if materialization fails.
-            errdefer if (!leak_results) destroyEnumNativeLayoutWithOwner(self, module, type_name, value.raw_ptr, owner);
+            errdefer destroyEnumNativeLayoutWithOwner(self, module, type_name, value.raw_ptr, owner);
             const copied = try copyEnumFromNativeLayout(self, module, type_name, value.raw_ptr);
-            if (!leak_results) destroyEnumNativeLayoutWithOwner(self, module, type_name, value.raw_ptr, owner);
+            destroyEnumNativeLayoutWithOwner(self, module, type_name, value.raw_ptr, owner);
             break :blk .{ .raw_ptr = copied };
         },
         .construct_any => blk: {
@@ -855,10 +820,7 @@ pub fn copyStructFromNativeLayout(self: *Vm, module: *const bytecode.Module, typ
         for (fields[0..initialized]) |field| self.heap.dropValue(field);
         self.allocator.free(fields);
     }
-    const dbg = std.c.getenv("KIRA_DBG") != null;
-    if (dbg) std.debug.print("DBG copyStructFromNative type={s} fields={d} native=0x{x}\n", .{ type_name, type_decl.fields.len, native_ptr });
     for (type_decl.fields, 0..) |field_decl, index| {
-        if (dbg) std.debug.print("DBG   readField type={s} field[{d}]={s} kind={s} name={s}\n", .{ type_name, index, field_decl.name, @tagName(field_decl.ty.kind), field_decl.ty.name orelse "?" });
         fields[index] = try helper_impl.readNativeFieldValue(self, module, type_name, field_decl, index, native_ptr);
         initialized += 1;
     }
@@ -928,13 +890,6 @@ pub fn copyStructToNativeLayoutInto(self: *Vm, module: *const bytecode.Module, t
         self.rememberError("struct type could not be resolved");
         return error.RuntimeFailure;
     };
-    if (runtime_abi.isTaggedNativeClosurePointer(runtime_ptr) or !self.isManagedStructPointer(runtime_ptr)) {
-        self.rememberFmt(
-            "struct native copy was handed a non-struct (tagged/dangling) pointer: type={s} ptr=0x{x}",
-            .{ type_name, runtime_ptr },
-        );
-        return error.RuntimeFailure;
-    }
     const fields: [*]align(1) const runtime_abi.Value = @ptrFromInt(runtime_ptr);
     for (type_decl.fields, 0..) |field_decl, index| {
         const offset = try native_layout.fieldOffset(module, type_name, index);

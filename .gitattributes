@@ -1,5 +1,2 @@
 # Normalize text files to LF across platforms.
 * text=auto eol=lf
-
-# Ensure all Zig source files use LF only.
-*.zig text eol=lf

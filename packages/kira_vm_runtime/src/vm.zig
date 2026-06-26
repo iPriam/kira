@@ -516,7 +516,6 @@ pub const Vm = struct {
 
     pub fn allocateClosure(
         self: *Vm,
-        module: *const bytecode.Module,
         registers: []const runtime_abi.Value,
         function_id: u32,
         capture_registers: []const u32,
@@ -527,21 +526,7 @@ pub const Vm = struct {
         for (captures) |*capture| capture.* = .{ .void = {} };
         for (capture_registers, 0..) |reg, index| {
             switch (captureOwnershipAt(capture_ownership, index)) {
-                .owned, .move => self.heap.assignTransferred(&captures[index], registers[reg]),
-                // A by-value `.copy` capture must NOT consume the source register —
-                // the original place stays owned by the enclosing frame and is
-                // dropped at frame cleanup. Shallow-copying a *managed* pointer here
-                // would alias one heap object into both the frame slot and the
-                // closure environment; when the frame frees it, the closure capture
-                // dangles (a use-after-free surfacing later as a hard fault when the
-                // closure runs — e.g. hybrid widget builders). Clone managed values
-                // so the closure owns an independent copy. Unmanaged values (plain
-                // primitives, native/state RawPtr handles) are returned unchanged by
-                // the dynamic clone, preserving the intended shared-handle semantics.
-                .copy => {
-                    const captured = try self.cloneBorrowedManagedValueDynamic(module, registers[reg]);
-                    self.heap.assignTransferred(&captures[index], captured);
-                },
+                .owned, .move, .copy => self.heap.assignTransferred(&captures[index], registers[reg]),
                 .borrow_read, .borrow_mut => self.heap.assignBorrowed(&captures[index], registers[reg]),
             }
         }
