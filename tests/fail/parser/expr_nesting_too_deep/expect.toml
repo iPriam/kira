@@ -1,0 +1,13 @@
+backends = ["vm", "hybrid"]
+
+[phases.check]
+result = "fail"
+diagnostic_code = "KPAR014"
+diagnostic_title = "expression nesting too deep"
+stage = "parser"
+
+[phases.build]
+result = "blocked"
+
+[phases.run]
+result = "blocked"

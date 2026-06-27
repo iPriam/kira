@@ -155,9 +155,17 @@ currently under-covered.
 
 ## Frontend / compiler robustness (from the frontend-robustness sweep)
 
-### FE1. Parser stack-overflow segfault on deep nesting — no recursion-depth guard (high)
+### FE1. Parser stack-overflow segfault on deep nesting — FIXED
 
-The recursive-descent parser has no depth bound. ~1100+ nested parens
+FIXED in `packages/kira_parser/src/parser.zig` + `parser_types_exprs.zig`: added an
+`expr_depth` guard (max 256) at the `parseExpression` chokepoint, through which
+every level of expression nesting recurses. Pathologically deep input now yields a
+clean located `error[KPAR014]: expression nesting too deep` instead of SIGSEGV.
+Regression test `tests/fail/parser/expr_nesting_too_deep`. (FE2 — the analogous
+unguarded recursion in semantic *lowering* on long flat chains — is still open; it
+needs guards at multiple lowering recursion sites.)
+
+Original report: The recursive-descent parser has no depth bound. ~1100+ nested parens
 (`let x = ((((…1…))))`), or deeply nested array/struct/call/closure/`match`
 expressions (~1500–3000 deep), SIGSEGV `kira check`/`kira ast` (stack overflow in
 `packages/kira_parser/src/parser_types_exprs.zig`). Should emit a clean located

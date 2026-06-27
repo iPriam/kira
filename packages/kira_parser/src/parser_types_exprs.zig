@@ -125,6 +125,31 @@ pub fn parseTypeExpr(self: *Parser) anyerror!*syntax.ast.TypeExpr {
 }
 
 pub fn parseExpression(self: *Parser) anyerror!*syntax.ast.Expr {
+    // Depth guard: every level of expression nesting (parens, call args, array /
+    // struct literals, closures, match scrutinees) recurses through here, so one
+    // bound here prevents the recursive-descent parser from overflowing the native
+    // stack on pathologically deep input.
+    self.expr_depth += 1;
+    defer self.expr_depth -= 1;
+    if (self.expr_depth > Parser.max_expr_depth) {
+        const token = self.peek();
+        const detail = try std.fmt.allocPrint(
+            self.allocator,
+            "Kira stopped parsing after {d} levels of nested expression to avoid a stack overflow.",
+            .{Parser.max_expr_depth},
+        );
+        try diagnostics.appendOwned(self.allocator, self.diagnostics, .{
+            .severity = .@"error",
+            .code = "KPAR014",
+            .title = "expression nesting too deep",
+            .message = detail,
+            .labels = &.{
+                diagnostics.primaryLabel(token.span, "expression nested too deeply here"),
+            },
+            .help = "Split this into smaller subexpressions or named `let` bindings.",
+        });
+        return error.DiagnosticsEmitted;
+    }
     return self.parseConditional();
 }
 
