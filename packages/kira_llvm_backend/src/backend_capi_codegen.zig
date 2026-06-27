@@ -59,6 +59,13 @@ pub const FunctionCodegen = struct {
     reg_local: []?u32 = &.{},
     // local -> struct_contents cleanup slot index for copy_indirect destinations.
     copy_dest_slot: []?u32 = &.{},
+    // local -> per-local cleanup slot index for owned enum locals (`var`/`let` of enum
+    // type). Mirrors copy_dest_slot for structs: one slot per enum local holding the
+    // local's current live heap enum block, reused across reassignments (drop-before-
+    // overwrite), freed once at exit, escaped on return. Without it each alloc_enum gets
+    // its own slot and a branch-reassigned enum var's return frees the wrong (last-
+    // lowered) branch's slot, freeing the live returned enum (use-after-free).
+    enum_local_slot: []?u32 = &.{},
 
     // Build a scratch `alloca` in the function entry block regardless of where the
     // builder is currently positioned. LLVM only reclaims (and SROA/mem2reg only
@@ -196,7 +203,7 @@ pub const FunctionCodegen = struct {
             },
             .store_local => |v| {
                 _ = api.LLVMBuildStore(b, self.registers[v.src], self.locals[v.local]);
-                drop.onStoreLocal(self, v.local, v.src);
+                drop.onStoreLocal(self, v.local, v.src, v.borrow);
             },
             .load_local => |v| {
                 self.registers[v.dst] = api.LLVMBuildLoad2(b, self.types.llvmType(self.function_decl.local_types[v.local]), self.locals[v.local], "load");

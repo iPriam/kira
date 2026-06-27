@@ -70,6 +70,8 @@ pub fn setup(fc: *FunctionCodegen) !void {
     @memset(fc.reg_local, null);
     fc.copy_dest_slot = try fc.allocator.alloc(?u32, fc.function_decl.local_count);
     @memset(fc.copy_dest_slot, null);
+    fc.enum_local_slot = try fc.allocator.alloc(?u32, fc.function_decl.local_count);
+    @memset(fc.enum_local_slot, null);
     if (!fc.drop_enabled) return;
     const api = fc.api;
 
@@ -86,6 +88,28 @@ pub fn setup(fc: *FunctionCodegen) !void {
             },
             .local_ptr => |v| if (v.dst < scan_reg_local.len) {
                 scan_reg_local[v.dst] = v.local;
+            },
+            .store_local => |v| {
+                // One per-local cleanup slot for an owned enum local, reused across
+                // reassignments. An enum value is a heap block (alloc_enum mallocs a
+                // 16-byte { tag, payload }); a `var s: Enum` reassigned in branches would
+                // otherwise leave its live value in whichever branch's per-producer slot
+                // ran, and the return frees the wrong (last-lowered) slot — freeing the
+                // live returned enum (the F1 use-after-free). A per-local slot tracks the
+                // local's current value at runtime, so reassignment drops the dead value
+                // and the live one is escaped on return regardless of which branch ran.
+                // A reborrow store (`var r = <borrow>`) is a non-owning alias and must not
+                // be tracked here; onStoreLocal also guards on borrow and on the source
+                // being a tracked owned value before it routes through this slot.
+                if (v.borrow) continue;
+                if (v.local >= fc.function_decl.local_types.len) continue;
+                if (fc.function_decl.local_types[v.local].kind != .enum_instance) continue;
+                if (v.local >= fc.enum_local_slot.len or fc.enum_local_slot[v.local] != null) continue;
+                const slot = api.LLVMBuildAlloca(fc.builder, fc.types.ptr_ty, "drop.enumlocal.slot");
+                _ = api.LLVMBuildStore(fc.builder, api.LLVMConstNull(fc.types.ptr_ty), slot);
+                const index: u32 = @intCast(fc.drop_slots.items.len);
+                try fc.drop_slots.append(fc.allocator, .{ .alloca = slot, .kind = .raw, .ty = fc.function_decl.local_types[v.local] });
+                fc.enum_local_slot[v.local] = index;
             },
             .copy_indirect => |v| {
                 // One struct_contents cleanup slot per destination local (reused across
@@ -242,6 +266,7 @@ pub fn teardown(fc: *FunctionCodegen) void {
     fc.allocator.free(fc.local_slot);
     fc.allocator.free(fc.reg_local);
     fc.allocator.free(fc.copy_dest_slot);
+    fc.allocator.free(fc.enum_local_slot);
 }
 
 // Record the runtime pointer of a freshly heap-allocated owned value into its
@@ -347,8 +372,29 @@ pub fn moveOrCloneToHeap(fc: *FunctionCodegen, src_reg: u32, type_name: ?[]const
     return src_val;
 }
 
-pub fn onStoreLocal(fc: *FunctionCodegen, local: u32, src: u32) void {
+pub fn onStoreLocal(fc: *FunctionCodegen, local: u32, src: u32, borrow: bool) void {
     if (!fc.drop_enabled) return;
+    // Owned enum local: move ownership of the stored enum block into the local's
+    // dedicated per-local cleanup slot (allocated in setup). This is the analogue of
+    // onCopyDest for structs. Only a tracked, owned, non-reborrow source transfers:
+    // a reborrow (`borrow`) or an untracked source (a borrow has no producer slot)
+    // must not be recorded, or exit cleanup would free storage the local does not own.
+    if (!borrow and local < fc.enum_local_slot.len) {
+        if (fc.enum_local_slot[local]) |index| {
+            if (src < fc.register_slot.len and fc.register_slot[src] != null) {
+                // Drop the local's prior live value before overwriting it (reassignment /
+                // loop re-entry); null-safe on the first store.
+                dropPriorOccupant(fc, index);
+                const ptr = fc.api.LLVMBuildIntToPtr(fc.builder, fc.registers[src], fc.types.ptr_ty, "drop.enumlocal");
+                _ = fc.api.LLVMBuildStore(fc.builder, ptr, fc.drop_slots.items[index].alloca);
+                // Ownership moved out of the source's slot (a fresh alloc_enum producer,
+                // a call result, or another enum local) into this per-local slot.
+                onEscape(fc, src);
+                fc.local_slot[local] = index;
+                return;
+            }
+        }
+    }
     if (src < fc.register_slot.len and local < fc.local_slot.len) fc.local_slot[local] = fc.register_slot[src];
 }
 

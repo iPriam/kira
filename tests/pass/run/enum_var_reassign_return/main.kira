@@ -1,0 +1,59 @@
+// Regression: a mutable `var` local of enum type, reassigned in branches and then
+// returned, must read back correctly on every backend. The LLVM drop elaboration
+// tracked ownership with compile-time slots, so the returned enum's heap block was
+// freed at function exit (the wrong, last-lowered branch slot was escaped) — a
+// use-after-free that made llvm return garbage/0 while vm/hybrid were correct.
+enum Shade { Light Dark Mid }
+
+function shadeWeight(s: borrow Shade) -> Int {
+    match s {
+        Light -> { return 1 }
+        Dark -> { return 2 }
+        Mid -> { return 3 }
+    }
+}
+
+function shadeFor(i: Int) -> Shade {
+    var s = Shade.Light
+    switch i % 3 {
+        case 0 { s = Shade.Light }
+        case 1 { s = Shade.Dark }
+        case 2 { s = Shade.Mid }
+        default { s = Shade.Light }
+    }
+    return s
+}
+
+// Single-payload enum var reassigned across branches and returned.
+enum Box { Empty  Val(Int) }
+
+function boxVal(b: borrow Box) -> Int {
+    match b {
+        Empty -> { return 0 }
+        Val(v) -> { return v }
+    }
+}
+
+function pick(i: Int) -> Box {
+    var b = Box.Empty
+    if i % 2 == 0 { b = Box.Val(i * 10) }
+    if i % 3 == 0 { b = Box.Val(i * 100) }
+    return b
+}
+
+@Main
+function main() {
+    var acc = 0
+    var i = 0
+    while i < 60 {
+        acc = acc + shadeWeight(shadeFor(i))
+        i = i + 1
+    }
+    var j = 0
+    while j < 20 {
+        acc = acc + boxVal(pick(j))
+        j = j + 1
+    }
+    print(acc)
+    return
+}
