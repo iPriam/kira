@@ -1,0 +1,291 @@
+// Generics: generic Result<T, E> exercised in depth.
+//
+// Result is the language's generic sum type. This section stresses it with
+// every payload shape Kira supports for T (Int, struct, enum, owned array),
+// chained matching where each Ok feeds the next fallible call, Results stored
+// in struct fields and array elements then matched, both Ok and Error paths,
+// and an error-code helper resolved via match. Everything folds into one
+// deterministic Int checksum.
+
+enum GenErr {
+    DivByZero
+    Negative
+    Overflow
+    NotFound
+    Empty
+    BadColor
+}
+
+enum GenColor {
+    Red
+    Green
+    Blue
+}
+
+struct GenPoint {
+    var x: Int
+    var y: Int
+
+    function norm() -> Int {
+        return self.x * self.x + self.y * self.y
+    }
+}
+
+// A struct that stores a generic Result in a field, matched later.
+struct GenSlot {
+    var code: Int
+    var r: Result<Int, GenErr>
+}
+
+// Error-code helper resolved entirely via match. Negative codes so they fold
+// distinctly from success values.
+function genErrCode(e: borrow GenErr) -> Int {
+    match e {
+        DivByZero -> { return 0 - 1 }
+        Negative -> { return 0 - 2 }
+        Overflow -> { return 0 - 3 }
+        NotFound -> { return 0 - 4 }
+        Empty -> { return 0 - 5 }
+        BadColor -> { return 0 - 6 }
+    }
+}
+
+function genColorValue(c: borrow GenColor) -> Int {
+    match c {
+        Red -> { return 100 }
+        Green -> { return 200 }
+        Blue -> { return 300 }
+    }
+}
+
+// Fold a borrowed Result<Int, GenErr> to an Int. Matching a value through a
+// declared parameter type is the supported way to match a Result that lives in
+// an array element: `match arr[i]` directly is rejected (KSEM104, the element
+// type is not carried), so the element is passed here by borrow instead.
+function genResultValue(r: borrow Result<Int, GenErr>) -> Int {
+    match r {
+        Ok(x) -> { return x }
+        Error(e) -> { return genErrCode(e) }
+    }
+}
+
+// --- Result with T = Int ------------------------------------------------
+
+function genDivInt(a: Int, b: Int) -> Result<Int, GenErr> {
+    if b == 0 {
+        return Result.Error(GenErr.DivByZero)
+    }
+    if a < 0 {
+        return Result.Error(GenErr.Negative)
+    }
+    return Result.Ok(a / b)
+}
+
+// --- Result with T = struct ---------------------------------------------
+
+function genMakePoint(x: Int, y: Int) -> Result<GenPoint, GenErr> {
+    if x < 0 || y < 0 {
+        return Result.Error(GenErr.Negative)
+    }
+    if x > 1000 {
+        return Result.Error(GenErr.Overflow)
+    }
+    return Result.Ok(GenPoint { x: x, y: y })
+}
+
+function genPointNorm(x: Int, y: Int) -> Int {
+    let r = genMakePoint(x, y)
+    match r {
+        Ok(p) -> { return p.norm() }
+        Error(e) -> { return genErrCode(e) }
+    }
+}
+
+// --- Result with T = enum -----------------------------------------------
+
+function genColorFor(i: Int) -> Result<GenColor, GenErr> {
+    switch i % 4 {
+        case 0 { return Result.Ok(GenColor.Red) }
+        case 1 { return Result.Ok(GenColor.Green) }
+        case 2 { return Result.Ok(GenColor.Blue) }
+        default { return Result.Error(GenErr.BadColor) }
+    }
+}
+
+function genColorScore(i: Int) -> Int {
+    let r = genColorFor(i)
+    match r {
+        Ok(c) -> { return genColorValue(c) }
+        Error(e) -> { return genErrCode(e) }
+    }
+}
+
+// --- Result with T = owned array ----------------------------------------
+
+function genRange(n: Int) -> Result<[Int], GenErr> {
+    if n <= 0 {
+        return Result.Error(GenErr.Empty)
+    }
+    if n > 500 {
+        return Result.Error(GenErr.Overflow)
+    }
+    var xs: [Int] = []
+    var i = 0
+    while i < n {
+        xs.append(i * 2)
+        i = i + 1
+    }
+    return Result.Ok(move xs)
+}
+
+function genSumRange(n: Int) -> Int {
+    let r = genRange(n)
+    match r {
+        Ok(xs) -> {
+            var total = 0
+            var i = 0
+            while i < xs.count {
+                total = total + xs[i]
+                i = i + 1
+            }
+            return total
+        }
+        Error(e) -> { return genErrCode(e) }
+    }
+}
+
+// --- Chained Result matching: each Ok feeds the next fallible call -------
+
+function genChainDiv(a: Int, b: Int, c: Int) -> Int {
+    let r1 = genDivInt(a, b)
+    match r1 {
+        Ok(x) -> {
+            let r2 = genDivInt(x + 100, c)
+            match r2 {
+                Ok(y) -> {
+                    let r3 = genDivInt(y + 50, 2)
+                    match r3 {
+                        Ok(z) -> { return x + y + z }
+                        Error(e) -> { return genErrCode(e) }
+                    }
+                }
+                Error(e) -> { return genErrCode(e) }
+            }
+        }
+        Error(e) -> { return genErrCode(e) }
+    }
+}
+
+// A combinator that threads a Result: Ok advances the computation, Error
+// propagates unchanged (the explicit-match analogue of `try`).
+function genStep(r: Result<Int, GenErr>, k: Int) -> Result<Int, GenErr> {
+    match r {
+        Ok(x) -> { return genDivInt(x + k, k) }
+        Error(e) -> { return Result.Error(e) }
+    }
+}
+
+function genPipeline(seed: Int) -> Int {
+    let r0 = genDivInt(seed, 1)
+    let r1 = genStep(move r0, 2)
+    let r2 = genStep(move r1, 3)
+    let r3 = genStep(move r2, 0)
+    match r3 {
+        Ok(v) -> { return v }
+        Error(e) -> { return genErrCode(e) }
+    }
+}
+
+// --- Result stored in struct fields, then matched -----------------------
+
+function genSlotValue(slot: borrow GenSlot) -> Int {
+    match slot.r {
+        Ok(x) -> { return x + slot.code }
+        Error(e) -> { return slot.code + genErrCode(e) }
+    }
+}
+
+// --- Result stored in array elements, then matched ----------------------
+
+function genArrayOfResults() -> Int {
+    var results: [Result<Int, GenErr>] = []
+    var i = 0
+    while i < 20 {
+        // i == 5 -> b == 0 -> DivByZero; i < 5 -> b negative but a positive (Ok);
+        // i > 5 -> Ok. A mixed Ok/Error population.
+        results.append(genDivInt(120, i - 5))
+        i = i + 1
+    }
+    var acc = 0
+    var j = 0
+    while j < results.count {
+        acc = acc + genResultValue(results[j])
+        j = j + 1
+    }
+    return acc
+}
+
+// --- Section entry ------------------------------------------------------
+
+function genSection() -> Int {
+    var acc = 0
+
+    // T = Int: direct match of both Ok and Error in a loop.
+    var i = 0
+    while i < 60 {
+        let r = genDivInt(1000, (i % 7) - 3)
+        match r {
+            Ok(x) -> { acc = acc + x }
+            Error(e) -> { acc = acc + genErrCode(e) }
+        }
+        i = i + 1
+    }
+
+    // T = struct: norm via Result, including Negative/Overflow errors.
+    var j = 0
+    while j < 40 {
+        acc = acc + genPointNorm(j - 5, j)
+        j = j + 1
+    }
+    acc = acc + genPointNorm(2000, 1)
+
+    // T = enum: all three Ok variants plus the BadColor error.
+    var k = 0
+    while k < 48 {
+        acc = acc + genColorScore(k)
+        k = k + 1
+    }
+
+    // T = owned array: sum of a built range, plus the Empty/Overflow errors.
+    var m = 1
+    while m < 12 {
+        acc = acc + genSumRange(m)
+        m = m + 1
+    }
+    acc = acc + genSumRange(0)
+    acc = acc + genSumRange(600)
+
+    // Chained matching: each Ok feeds the next call; cover success and a
+    // divide-by-zero in the middle of the chain.
+    acc = acc + genChainDiv(50, 5, 3)
+    acc = acc + genChainDiv(50, 0, 3)
+    acc = acc + genChainDiv(50, 5, 0)
+
+    // Threaded combinator pipeline (Ok advances, Error propagates).
+    acc = acc + genPipeline(10)
+    acc = acc + genPipeline(20)
+
+    // Result stored in struct fields, matched via a borrow.
+    var s = 0
+    while s < 30 {
+        let slot = GenSlot { code: s, r: genDivInt(200, s - 4) }
+        acc = acc + genSlotValue(slot)
+        s = s + 1
+    }
+
+    // Result stored in array elements, matched on read-back.
+    acc = acc + genArrayOfResults()
+
+    return acc
+}
+

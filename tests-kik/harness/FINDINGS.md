@@ -271,6 +271,17 @@ stack per Kira call frame with no depth bound. Needs a recursion-depth guard in 
 VM interpreter that raises a clean runtime error (the analogue of FE1 for the VM,
 and related to FE2). Real programs with deepish recursion hit this.
 
+### S7. Property access on a call's temporary fails to lower (KIR001) (medium, OPEN)
+
+Reading a field/property directly off the value returned by a call — e.g.
+`strPick(i).count` where `strPick(i) -> String` — fails to lower with
+`KIR001: a lowering obligation was left undischarged`, on all backends. Binding
+the result to a local first works: `let s = strPick(i); ... s.count`. The harness
+modules bind call results before projecting off them as a workaround. Likely the
+IR lowering of a member/index projection whose base is a call result (a temporary
+with no place) doesn't materialize the temporary. Surfaced while authoring the
+strings module.
+
 ## Coverage gaps to expand next
 
 - attempt/try/handle (blocked by F4)

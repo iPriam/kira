@@ -28,6 +28,11 @@ function main() {
     print(enumsSection())
     print(closuresSection())
     print(ownershipSection())
+    print(strSection())
+    print(genSection())
+    print(clsSection())
+    print(cfSection())
+    print(aggSection())
     print("kik-harness-end")
     return
 }
