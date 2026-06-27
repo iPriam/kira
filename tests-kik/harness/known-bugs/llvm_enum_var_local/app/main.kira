@@ -1,0 +1,49 @@
+// BUG (LLVM backend, correctness/parity): a mutable `var` local of enum type that
+// is reassigned and then read back miscompiles on the LLVM/native backend. The VM
+// and hybrid backends compute the correct result (120); LLVM produces a wrong value
+// (0 for the switch form below, off-by-one for an if/else form).
+//
+// Reproduce:
+//   kira run --backend vm     tests-kik/harness/known-bugs/llvm_enum_var_local   -> 120
+//   kira run --backend hybrid tests-kik/harness/known-bugs/llvm_enum_var_local   -> 120
+//   kira run --backend llvm   tests-kik/harness/known-bugs/llvm_enum_var_local   -> 0  (WRONG)
+//
+// Root cause is in the C-API/LLVM drop elaboration for enum_instance locals
+// (packages/kira_llvm_backend/src/backend_capi_drop.zig onStoreLocal/freeSlot):
+// reassigning an owned enum `var` does not preserve the live value across the
+// store/overwrite as the VM does. Returning the enum directly from each branch
+// (no intermediate `var`) is a correct workaround and is what the harness uses.
+
+enum Shade { Light Dark Mid }
+
+function shadeWeight(s: borrow Shade) -> Int {
+    match s {
+        Light -> { return 1 }
+        Dark -> { return 2 }
+        Mid -> { return 3 }
+    }
+}
+
+// The miscompiled form: assign into a mutable enum local, then return it.
+function shadeFor(i: Int) -> Shade {
+    var s = Shade.Light
+    switch i % 3 {
+        case 0 { s = Shade.Light }
+        case 1 { s = Shade.Dark }
+        case 2 { s = Shade.Mid }
+        default { s = Shade.Light }
+    }
+    return s
+}
+
+@Main
+function main() {
+    var acc = 0
+    var i = 0
+    while i < 60 {
+        acc = acc + shadeWeight(shadeFor(i))
+        i = i + 1
+    }
+    print(acc)
+    return
+}

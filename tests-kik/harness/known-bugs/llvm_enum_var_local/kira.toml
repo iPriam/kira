@@ -1,0 +1,9 @@
+[package]
+name = "llvm_enum_var_local"
+version = "0.1.0"
+kind = "app"
+kira = "0.1.0"
+
+[defaults]
+execution_mode = "hybrid"
+build_target = "host"

@@ -1,0 +1,61 @@
+// Closures: function types, named references, inline literals, higher-order
+// functions, immutable by-value captures, and shared mutable `var` captures.
+
+function clAdd(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+function clApplyTwice(f: (Int) -> Int, x: Int) -> Int {
+    return f(f(x))
+}
+
+function clReduce(xs: borrow [Int], f: (Int) -> Int) -> Int {
+    var total = 0
+    var i = 0
+    while i < xs.count {
+        total = total + f(xs[i])
+        i = i + 1
+    }
+    return total
+}
+
+function closuresSection() -> Int {
+    var acc = 0
+
+    // Named function reference passed as a value.
+    let f: (Int, Int) -> Int = clAdd
+    acc = acc + f(20, 22)
+
+    // Inline literal + higher-order application.
+    let inc: (Int) -> Int = { x in return x + 1 }
+    acc = acc + clApplyTwice(move inc, 10)
+
+    // Immutable by-value capture.
+    let base = 1000
+    let addBase: (Int) -> Int = { x in return x + base }
+    var i = 0
+    while i < 20 {
+        acc = acc + addBase(i)
+        i = i + 1
+    }
+
+    // Closure passed into a reducer.
+    let data: [Int] = [1, 2, 3, 4, 5, 6, 7, 8]
+    let square: (Int) -> Int = { x in return x * x }
+    acc = acc + clReduce(data, move square)
+
+    // Shared mutable `var` capture: the closure mutates an outer local.
+    var total = 0
+    let accumulate: (Int) -> Int = { x in
+        total = total + x
+        return total
+    }
+    var j = 1
+    while j <= 10 {
+        let _running = accumulate(j)
+        j = j + 1
+    }
+    acc = acc + total
+
+    return acc
+}

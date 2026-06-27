@@ -1,0 +1,85 @@
+// Arrays: literals, append in loops, indexing, iteration, nesting, and arrays
+// of structs. Exercises the handle-based array runtime under allocation churn.
+
+struct ColPoint {
+    var x: Int
+    var y: Int
+}
+
+struct ColRow {
+    var cells: [Int]
+}
+
+function colSumArray(xs: borrow [Int]) -> Int {
+    var total = 0
+    var i = 0
+    while i < xs.count {
+        total = total + xs[i]
+        i = i + 1
+    }
+    return total
+}
+
+function colBuild(n: Int) -> [Int] {
+    var xs: [Int] = []
+    var i = 0
+    while i < n {
+        xs.append(i * i)
+        i = i + 1
+    }
+    return xs
+}
+
+function collectionsSection() -> Int {
+    var acc = 0
+
+    // Build-and-sum many times to churn array allocations (leak/UAF stress).
+    var round = 0
+    while round < 200 {
+        let xs = colBuild(40)
+        acc = acc + colSumArray(xs)
+        round = round + 1
+    }
+
+    // for-in iteration over a literal.
+    for v in [3, 5, 7, 11, 13] {
+        acc = acc + v
+    }
+
+    // Nesting via structs holding owned array fields (the supported idiom; the
+    // grid rows are independently owned arrays churned through a container).
+    var grid: [ColRow] = []
+    var r = 0
+    while r < 8 {
+        var row: [Int] = []
+        var c = 0
+        while c < 8 {
+            row.append(r * 8 + c)
+            c = c + 1
+        }
+        grid.append(ColRow { cells: move row })
+        r = r + 1
+    }
+    var gi = 0
+    while gi < grid.count {
+        acc = acc + colSumArray(grid[gi].cells)
+        gi = gi + 1
+    }
+
+    // Arrays of structs, with mutation through indexing.
+    var pts: [ColPoint] = []
+    var p = 0
+    while p < 50 {
+        pts.append(ColPoint { x: p, y: p * 2 })
+        p = p + 1
+    }
+    var ps = 0
+    var pi = 0
+    while pi < pts.count {
+        ps = ps + pts[pi].x + pts[pi].y
+        pi = pi + 1
+    }
+    acc = acc + ps
+
+    return acc
+}
