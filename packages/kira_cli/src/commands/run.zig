@@ -535,10 +535,46 @@ fn runExecutableBounded(
         .stdout = .inherit,
         .stderr = .inherit,
     });
+    return waitBoundedChild(io, &child, quit_after_ns, "native executable", path, project_root, stderr);
+}
+
+/// Wait for a bounded (quit-after) child up to the deadline, then decide success
+/// vs. failure based on how it ended — instead of blind-sleeping and reporting
+/// success unconditionally (which masked first-frame crashes, a Core Law #2 false
+/// success surface). A child still alive at the deadline is the legitimate
+/// quit-after case: we kill it and report success. A clean self-exit (code 0,
+/// e.g. KIRA_GRAPHICS_QUIT_AFTER_FRAMES reached) is also success. Any abnormal
+/// early exit (non-zero code, signal, stopped) is surfaced and propagated as a
+/// failure.
+fn waitBoundedChild(
+    io: std.Io,
+    child: *std.process.Child,
+    quit_after_ns: u64,
+    label: []const u8,
+    path: []const u8,
+    project_root: ?[]const u8,
+    stderr: anytype,
+) !void {
     const grace_ns = 5 * std.time.ns_per_s;
-    try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(quit_after_ns + grace_ns)), .awake);
+    if (try kira_live.waitChildTermBefore(child, quit_after_ns + grace_ns)) |term| {
+        if (term == .exited and term.exited == 0) {
+            try stderr.print("{s} quit-after elapsed: {s}\n", .{ label, path });
+            return;
+        }
+        try stderr.print("{s} crashed before quit-after: {s}\n", .{ label, path });
+        switch (term) {
+            .exited => |code| try stderr.print("  exit code: {d}\n", .{code}),
+            .signal => |sig| try stderr.print("  signal: {d}\n", .{@intFromEnum(sig)}),
+            .stopped => |sig| try stderr.print("  stopped by signal: {d}\n", .{@intFromEnum(sig)}),
+            .unknown => |code| try stderr.print("  status: {d}\n", .{code}),
+        }
+        try writeNativeFailureGuidance(term, stderr);
+        if (project_root) |cwd| try stderr.print("  cwd: {s}\n", .{cwd});
+        return error.NativeRunFailed;
+    }
+    // Still running at the deadline: legitimate quit-after. Kill and report success.
     child.kill(io);
-    try stderr.print("native executable quit-after elapsed: {s}\n", .{path});
+    try stderr.print("{s} quit-after elapsed: {s}\n", .{ label, path });
 }
 
 fn runHybridArtifactBounded(
@@ -574,10 +610,7 @@ fn runHybridArtifactBounded(
         .stdout = .inherit,
         .stderr = .inherit,
     });
-    const grace_ns = 5 * std.time.ns_per_s;
-    try std.Options.debug_io.sleep(.fromNanoseconds(@intCast(quit_after_ns + grace_ns)), .awake);
-    child.kill(io);
-    try stderr.print("hybrid runtime quit-after elapsed: {s}\n", .{manifest_path});
+    return waitBoundedChild(io, &child, quit_after_ns, "hybrid runtime", manifest_path, project_root, stderr);
 }
 
 fn resolveKiracExecutable(allocator: std.mem.Allocator) ![]const u8 {

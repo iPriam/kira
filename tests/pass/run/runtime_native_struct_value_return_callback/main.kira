@@ -1,0 +1,28 @@
+@Native
+struct Size {
+    var width: Int
+    var height: Int
+}
+
+@Native
+function rootSize() -> Size {
+    return Size { width: 320, height: 240 }
+}
+
+// native -> VM closure -> native struct return. This routes through
+// kira_hybrid_host_call_runtime exactly like sokol's drawRect -> onFrame closure ->
+// rootViewportSize(), the production crash sandwich, but without a window.
+@Native
+function invokeCallback(callback: (Int) -> Int, seed: Int) -> Int {
+    return callback(seed)
+}
+
+@Main
+function main() {
+    let callback: (Int) -> Int = { seed in
+        let s = rootSize()
+        return s.width + s.height + seed
+    }
+    print(invokeCallback(move callback, 0))
+    return
+}
