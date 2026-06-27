@@ -240,9 +240,11 @@ fn mkHandlerMatch(
 ) !ast.Statement {
     var arms = std.array_list.Managed(ast.MatchArm).init(ctx.allocator);
     for (handlers) |handler| {
-        const binding = handler.binding_name orelse "_";
+        // A handle case binds the failure payload only when it declares a binding name. With no
+        // binding the case matches the bare variant, which is the only valid pattern for a
+        // payload-less failure variant (e.g. `A`/`B` of `enum E { A B }`).
         try arms.append(.{
-            .patterns = try mkPatternList(ctx, try mkVariantPattern(ctx, handler.variant_name, binding, handler.span)),
+            .patterns = try mkPatternList(ctx, try mkVariantPattern(ctx, handler.variant_name, handler.binding_name, handler.span)),
             .guard = null,
             .body = handler.body,
             .span = handler.span,
@@ -255,10 +257,14 @@ fn mkHandlerMatch(
     } };
 }
 
-// `Variant(binding)` — destructure a variant, binding its payload to `binding`.
-fn mkVariantPattern(ctx: *shared.Context, variant_name: []const u8, binding: []const u8, span: source_pkg.Span) !ast.MatchPattern {
+// A match pattern for one variant. With a `binding`, it destructures the variant and binds its
+// payload (`Variant(binding)`); without one it matches the bare variant (`Variant`). A handle case
+// for a payload-less failure variant (e.g. `A` of `enum E { A B }`) must lower to a bare variant
+// pattern, because destructuring a payload-less variant is rejected by match lowering (KSEM105).
+fn mkVariantPattern(ctx: *shared.Context, variant_name: []const u8, binding: ?[]const u8, span: source_pkg.Span) !ast.MatchPattern {
+    const payload = binding orelse return .{ .bare_variant = .{ .name = variant_name, .span = span } };
     const inner = try ctx.allocator.create(ast.MatchPattern);
-    inner.* = .{ .bare_variant = .{ .name = binding, .span = span } };
+    inner.* = .{ .bare_variant = .{ .name = payload, .span = span } };
     return .{ .destructure = .{ .variant_name = variant_name, .inner = inner, .span = span } };
 }
 

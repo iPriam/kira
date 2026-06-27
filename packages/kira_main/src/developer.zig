@@ -5,6 +5,7 @@ const build_def = @import("kira_build_definition");
 const bytecode = @import("kira_bytecode");
 const diagnostics = @import("kira_diagnostics");
 const kira_project = @import("kira_project");
+const source_pkg = @import("kira_source");
 const runtime_abi = @import("kira_runtime_abi");
 const vm_runtime = @import("kira_vm_runtime");
 const wrappers = @import("runtime_wrappers.zig");
@@ -53,7 +54,7 @@ pub const DeveloperFacade = struct {
             try self.setReport("check passed\n");
             return true;
         }
-        try self.setDiagnosticsReport(result.diagnostics);
+        try self.setDiagnosticsReport(&result.source, result.diagnostics);
         return false;
     }
 
@@ -69,7 +70,7 @@ pub const DeveloperFacade = struct {
         if (input.target.target_kind == .library) {
             const result = try system.checkPackageRoot(input.target.source_root.?);
             if (diagnostics.hasErrors(result.diagnostics)) {
-                try self.setDiagnosticsReport(result.diagnostics);
+                try self.setDiagnosticsReport(&result.source, result.diagnostics);
                 return false;
             }
             try self.setReportFmt("built library {s}\n", .{input.target.source_root.?});
@@ -91,7 +92,7 @@ pub const DeveloperFacade = struct {
             .target = .{ .execution = resolved_backend },
         });
         if (result.failed()) {
-            try self.setDiagnosticsReport(result.diagnostics);
+            try self.setDiagnosticsReport(if (result.source) |*compiled_source| compiled_source else null, result.diagnostics);
             return false;
         }
         var output: std.Io.Writer.Allocating = .init(allocator);
@@ -157,7 +158,7 @@ pub const DeveloperFacade = struct {
                 try writer.print("FAIL {s} (wrong diagnostic: expected {s}, got {s})\n", .{ input.target.displayPath(), expected, if (actual.len == 0) "<none>" else actual });
                 return .{ .failed = 1, .total = 1 };
             }
-            try writeDiagnostics(writer, result.diagnostics);
+            try writeDiagnostics(writer, &result.source, result.diagnostics);
             return .{ .failed = 1, .total = 1 };
         }
         if (expected_diagnostic) |expected| {
@@ -167,10 +168,10 @@ pub const DeveloperFacade = struct {
         return executeCompiledTests(allocator, result, writer);
     }
 
-    fn setDiagnosticsReport(self: *DeveloperFacade, items: []const diagnostics.Diagnostic) !void {
+    fn setDiagnosticsReport(self: *DeveloperFacade, source: ?*const source_pkg.SourceFile, items: []const diagnostics.Diagnostic) !void {
         var output: std.Io.Writer.Allocating = .init(self.arena.allocator());
         defer output.deinit();
-        try writeDiagnostics(&output.writer, items);
+        try writeDiagnostics(&output.writer, source, items);
         try self.setReport(output.written());
     }
 
@@ -555,7 +556,14 @@ fn firstErrorCode(items: []const diagnostics.Diagnostic) ?[]const u8 {
     return null;
 }
 
-fn writeDiagnostics(writer: anytype, items: []const diagnostics.Diagnostic) !void {
+// Render `kira check`/`build`/`test` diagnostics. With the compiled source available, route through
+// the shared diagnostics renderer so every error reports its `--> path:line:column` location and
+// source snippet; without a source (no entrypoint resolved) fall back to a code/title/help summary.
+fn writeDiagnostics(writer: anytype, source: ?*const source_pkg.SourceFile, items: []const diagnostics.Diagnostic) !void {
+    if (source) |compiled_source| {
+        try diagnostics.renderer.renderAll(writer, compiled_source, items);
+        return;
+    }
     for (items) |item| {
         const severity = switch (item.severity) {
             .@"error" => "error",

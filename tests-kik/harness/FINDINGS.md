@@ -126,9 +126,21 @@ callback-return ownership model needs to decide that a return MOVED into a
 native-owned structure is owned by native and must not also be freed by the
 pending-returns cleanup.
 
-### F4. Spurious diagnostic for attempt/handle + closure, with no location (medium)
+### F4. Spurious diagnostic for attempt/handle + closure, with no location — FIXED
 
-`repro: known-bugs/attempt_handle_closure_diag`
+`repro: known-bugs/attempt_handle_closure_diag` (now checks clean);
+regression test `tests/pass/run/attempt_handle_payloadless_variant` (vm/llvm/hybrid).
+
+FIXED in `packages/kira_semantics/src/lower_stmts_attempt.zig`: the attempt->match
+desugaring built a `destructure` pattern `Variant(binding)` for EVERY handle case
+(binding defaulting to "_"), so a payload-LESS failure variant was destructured as
+if it had a payload → match-lowering's KSEM105. Now a handle case with no binding
+lowers to a bare-variant pattern. The companion "no source location" defect (FE4)
+is fixed in `packages/kira_main/src/developer.zig` (+build.zig): `writeDiagnostics`
+now routes through `diagnostics.renderer.renderAll` with the compiled source, so
+`kira check`/`build`/`test` emit `--> file:line:col` with the source snippet.
+
+Original report:
 
 A package containing both an `attempt`/`try`/`handle` block and a closure with a
 parameter emits a spurious `KSEM012: unknown local name 'x'` (or `KSEM105: match
