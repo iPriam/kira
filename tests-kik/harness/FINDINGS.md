@@ -105,9 +105,26 @@ the hybrid execution path (`copy_struct_args_by_value = false`). Suspect:
 ownership/drop of owned aggregate params in the VM interpreter when invoked
 through `kira_hybrid_runtime` vs. pure VM.
 
-### F3. Hybrid double-free of a callback-returned enum moved into a struct (high)
+### F3. Hybrid double-free of a callback-returned enum moved into a struct — FIXED
 
-`repro: tests/pass/run/runtime_native_enum_bridge` (currently RED on hybrid)
+`repro/regression: tests/pass/run/runtime_native_enum_bridge` (now PASSES on hybrid).
+
+FIXED across `packages/kira_llvm_backend/src/backend_capi_drop.zig` (enum call/
+call_value/call_virtual results are now drop-tracked in hybrid too, not only
+llvm_native) + `packages/kira_hybrid_runtime/src/runtime.zig`
+(`cleanupPendingCallbackReturns` no longer frees `pending_callback_native_enums`).
+A `@Runtime`-returned enum is lowered to a libc-allocated native block
+(`lowerEnumToNativeOwned`) that the native CALLER owns and frees exactly once — via
+its own scope-exit drop when transient, or via the containing struct's
+`release_contents` when moved into a field. The runtime previously ALSO freed it at
+teardown → double free. Native now consistently owns+frees these (which also
+reclaims the per-frame `graphicsEventKindFromRaw` enum leak the old hybrid `continue`
+left). The managed VM enum stays retained in `pending_callback_return_values` for
+borrowed-payload lifetime. Verified: enum-bridge clean (1/2), native blocks freed
+(nativeStructs=0), kira_ui renders, corpus green (enum-bridge now passes; only the
+libffi env skip remains).
+
+Original report:
 
 When a `@Runtime` function returns an enum to native (`pickShade() -> Shade`), the
 runtime lowers it to a libc native block and retains it in
@@ -199,6 +216,26 @@ supports it). FIXED together with F4: `writeDiagnostics` now routes through
 
 Like FE3: `match x {}` consumes `{}` as a struct literal and then reports
 `KPAR001: expected '{' to start match body` pointing at the next token.
+
+## Open (lower priority)
+
+### F6. Unbounded `pending_callback_return_values` growth in hybrid (medium)
+
+`HybridRuntime.pending_callback_return_values` retains the managed VM value of EVERY
+`@Runtime`-callback return for the whole runtime lifetime (dropped only at deinit;
+`trimPendingCallbackReturns` is a no-op). A program returning aggregates from
+callbacks accumulates them: 500 enum returns → `structs current=1500` held until
+exit. Freed at teardown (so not a leak at process exit), but a real per-run memory
+growth — for a long-running UI app returning values from per-frame callbacks it
+grows without bound. Pre-existing (predates F3). A proper fix needs the retention
+trimmed once native no longer references the value (e.g. confirm
+`lowerEnumToNativeOwned`/struct/array lowering COPIES the payload rather than
+aliasing the managed value, then drop it immediately instead of retaining).
+
+### FE2. Semantic-lowering stack overflow on long flat chains (high, open)
+
+(see the Frontend section) — still open; needs depth guards at the lowering
+recursion sites (`registerExpr`, the main expr lowering, ternary lowering).
 
 ## Coverage gaps to expand next
 

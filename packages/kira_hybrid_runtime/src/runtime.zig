@@ -259,9 +259,13 @@ pub const HybridRuntime = struct {
             self.vm.destroyArrayNativeLayout(&self.module, item.ty, item.ptr);
         }
         self.pending_callback_native_arrays.clearRetainingCapacity();
-        for (self.pending_callback_native_enums.items) |item| {
-            self.vm.destroyOwnedEnumNativeLayout(&self.module, item.type_name, item.ptr);
-        }
+        // The native enum block returned to native (lowerEnumToNativeOwned, libc-
+        // allocated) is OWNED by the native caller: native drops it once — via its
+        // own scope-exit drop when transient, or via the containing struct's
+        // `release_contents` when moved into a field. Freeing it here too is a
+        // double free (the basic enum-bridge `Swatch.shade` case). We still retain
+        // the original managed VM enum in `pending_callback_return_values` (dropped
+        // below) so any payload the native block borrows stays alive until teardown.
         self.pending_callback_native_enums.clearRetainingCapacity();
         for (self.pending_callback_native_structs.items) |item| {
             self.vm.destroyStructNativeLayout(&self.module, item.type_name, item.ptr);

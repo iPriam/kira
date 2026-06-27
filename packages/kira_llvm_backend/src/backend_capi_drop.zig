@@ -133,12 +133,15 @@ pub fn setup(fc: *FunctionCodegen) !void {
                 const kind: OwnedKind = switch (callee.return_type.kind) {
                     .ffi_struct => .struct_heap,
                     .array => .array,
-                    // A returned enum is a fresh heap block the callee allocated and handed
-                    // over; the caller owns it and frees it at scope exit unless it is moved
-                    // on (a store into a field moves it; a borrow-arg pass keeps it). Native
-                    // only — a hybrid runtime call returns a VM-owned enum. This is the
-                    // per-frame `graphicsEventKindFromRaw`/`...ButtonFromRaw` leak.
-                    .enum_instance => if (fc.request.mode == .llvm_native) .raw else continue,
+                    // A returned enum is a fresh heap block the callee (or, for a hybrid
+                    // call into the VM, `lowerEnumToNativeOwned`) handed over as a libc-
+                    // allocated `{tag,payload}`; the caller owns it and frees it at scope
+                    // exit unless it is moved on (a store into a field moves it; a borrow-
+                    // arg pass keeps it). Tracked in hybrid too: the runtime no longer
+                    // double-frees these (see HybridRuntime.cleanupPendingCallbackReturns),
+                    // which also reclaims the per-frame `graphicsEventKindFromRaw`/
+                    // `...ButtonFromRaw` enum that previously leaked.
+                    .enum_instance => .raw,
                     else => continue,
                 };
                 if (dst >= fc.register_slot.len or fc.register_slot[dst] != null) continue;
@@ -155,7 +158,7 @@ pub fn setup(fc: *FunctionCodegen) !void {
                 const kind: OwnedKind = switch (v.return_type.kind) {
                     .ffi_struct => .struct_heap,
                     .array => .array,
-                    .enum_instance => if (fc.request.mode == .llvm_native) .raw else continue,
+                    .enum_instance => .raw,
                     else => continue,
                 };
                 if (dst >= fc.register_slot.len or fc.register_slot[dst] != null) continue;
@@ -171,7 +174,7 @@ pub fn setup(fc: *FunctionCodegen) !void {
                     .ffi_struct => .struct_heap,
                     .construct_any => .struct_ptr,
                     .array => .array,
-                    .enum_instance => if (fc.request.mode == .llvm_native) .raw else continue,
+                    .enum_instance => .raw,
                     else => continue,
                 };
                 if (dst >= fc.register_slot.len or fc.register_slot[dst] != null) continue;
