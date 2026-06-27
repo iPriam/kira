@@ -362,6 +362,7 @@ pub fn markReachableExpr(
         .parent_view => |node| try markReachableExpr(allocator, program, reachable, node.object),
         .c_string_to_string => |node| try markReachableExpr(allocator, program, reachable, node.value),
         .array_len => |node| try markReachableExpr(allocator, program, reachable, node.object),
+        .string_len => |node| try markReachableExpr(allocator, program, reachable, node.object),
         .field => |node| try markReachableExpr(allocator, program, reachable, node.object),
         .binary => |node| {
             try markReachableExpr(allocator, program, reachable, node.lhs);
