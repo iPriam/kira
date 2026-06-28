@@ -42,10 +42,21 @@ pub const ResolvedNativeLibrary = struct {
 pub fn resolveLibrary(allocator: std.mem.Allocator, spec: native.NativeLibrarySpec, active_target: TargetSelector) !ResolvedNativeLibrary {
     for (spec.targets) |target_spec| {
         if (target_spec.selector.eql(active_target)) {
-            const artifact_path = if (spec.link_mode == .static)
-                (target_spec.static_lib orelse return error.UnsupportedTarget)
+            // A target may provide a built artifact (static/dynamic lib), OR be a
+            // pure-linkage target that only contributes system frameworks/libraries
+            // (e.g. a from-scratch Metal backend that drives Metal/Cocoa through the
+            // Objective-C runtime via FFI, with no compiled shim of its own). In the
+            // pure-linkage case there is no artifact path; `artifact_path` stays empty
+            // and the linker still emits the declared `-framework`/`-l` flags.
+            const declared_artifact = if (spec.link_mode == .static)
+                target_spec.static_lib
             else
-                (target_spec.dynamic_lib orelse return error.UnsupportedTarget);
+                target_spec.dynamic_lib;
+            const has_linkage = target_spec.link.frameworks.len > 0 or target_spec.link.system_libs.len > 0;
+            const artifact_path = declared_artifact orelse blk: {
+                if (!has_linkage) return error.UnsupportedTarget;
+                break :blk "";
+            };
 
             return .{
                 .name = spec.name,

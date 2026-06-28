@@ -319,6 +319,23 @@ pub fn buildModule(
     var functions = std.AutoHashMapUnmanaged(u32, llvm.c.LLVMValueRef){};
     defer functions.deinit(allocator);
 
+    // Distinct C symbols already declared as extern LLVM globals, keyed by symbol name.
+    // Several `@FFI.Extern` declarations may bind the SAME C symbol with different Kira
+    // signatures (the canonical case is `objc_msgSend`, which a from-scratch Metal/Cocoa
+    // backend calls with many argument/return shapes). LLVM permits only one global per
+    // symbol name; declaring the symbol twice makes LLVM rename the second to
+    // `objc_msgSend.1`, which then fails to link. We declare each distinct C symbol once
+    // and share that global across every Kira function that binds it. This is sound
+    // because extern call sites supply their own per-callsite function type via
+    // LLVMBuildCall2 (see backend_capi_ffi.lowerExternCall), independent of the global's
+    // nominal type.
+    var extern_symbols = std.StringHashMapUnmanaged(llvm.c.LLVMValueRef){};
+    defer {
+        var key_it = extern_symbols.keyIterator();
+        while (key_it.next()) |key| allocator.free(key.*);
+        extern_symbols.deinit(allocator);
+    }
+
     for (request.program.programPtr().functions) |function_decl| {
         if (!shouldLowerFunction(function_decl.execution, request.mode)) continue;
         // Extern functions are real C symbols: declare them with their C ABI signature so
@@ -329,7 +346,12 @@ pub fn buildModule(
             try types.functionType(allocator, function_decl);
         const name = try functionSymbolName(allocator, function_decl, request.mode);
         defer allocator.free(name);
-        const function_value = api.LLVMAddFunction(module_ref, name.ptr, function_ty);
+        const function_value = if (function_decl.is_extern) blk: {
+            if (extern_symbols.get(name)) |existing| break :blk existing;
+            const declared = api.LLVMAddFunction(module_ref, name.ptr, function_ty);
+            try extern_symbols.put(allocator, try allocator.dupe(u8, name), declared);
+            break :blk declared;
+        } else api.LLVMAddFunction(module_ref, name.ptr, function_ty);
         if (request.mode == .hybrid and builtin.os.tag == .windows) {
             api.LLVMSetDLLStorageClass(function_value, llvm.c.LLVMDLLExportStorageClass);
         }
