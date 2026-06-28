@@ -261,10 +261,23 @@ pub const BuildSystem = struct {
             (llvm_backend.emscripten.selector(self.allocator) catch return null)
         else
             request.target.selector;
-        const libs = ffi_support.prepareNativeLibrariesForTarget(self.allocator, request.source_path, &.{}, selector) catch return null;
-        if (libs.len == 0) return null;
+        // The linker draws from the project's resolved native libraries (which
+        // already include transitive package dependencies) AND any explicit
+        // pre-resolved libraries carried on the request, so the fingerprint must
+        // cover both -- otherwise a change to an explicit/dependency artifact
+        // would not invalidate the cached executable.
+        const resolved = ffi_support.prepareNativeLibrariesForTarget(self.allocator, request.source_path, &.{}, selector) catch return null;
+        if (resolved.len == 0 and request.native_libraries.len == 0) return null;
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         hasher.update("native-deps-v1\n");
+        self.hashNativeLibrarySet(&hasher, resolved);
+        self.hashNativeLibrarySet(&hasher, request.native_libraries);
+        var digest: [32]u8 = undefined;
+        hasher.final(&digest);
+        return self.allocator.dupe(u8, &digest) catch null;
+    }
+
+    fn hashNativeLibrarySet(self: BuildSystem, hasher: anytype, libs: []const native.ResolvedNativeLibrary) void {
         for (libs) |lib| {
             hasher.update(lib.name);
             hasher.update("\x00");
@@ -278,9 +291,6 @@ pub const BuildSystem = struct {
             }
             hasher.update("\n");
         }
-        var digest: [32]u8 = undefined;
-        hasher.final(&digest);
-        return self.allocator.dupe(u8, &digest) catch null;
     }
 
     fn buildUncached(self: BuildSystem, request: build_def.BuildRequest) !BuildArtifactOutcome {
