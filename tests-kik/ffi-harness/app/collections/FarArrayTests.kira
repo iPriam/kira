@@ -1,0 +1,950 @@
+// FarArrayTests.kira — Deep FFI/native-bridge tests exercising arrays across
+// the hybrid boundary. All top-level names use the `far`/`Far` prefix.
+// No imports — Foundation is in scope via main.kira in the flat package.
+
+// ---------------------------------------------------------------------------
+// @Runtime structs used as array element types
+// ---------------------------------------------------------------------------
+
+@Runtime
+struct FarPoint {
+    var x: Int
+    var y: Int
+}
+
+@Runtime
+struct FarRow {
+    var label: Int
+    var cells: [Int]
+}
+
+// ---------------------------------------------------------------------------
+// @Native functions: [Int] borrow / owned / mutation
+// ---------------------------------------------------------------------------
+
+@Native
+function farSumBorrow(xs: borrow [Int]) -> Int {
+    var total = 0
+    var i = 0
+    while i < xs.count {
+        total = total + xs[i]
+        i = i + 1
+    }
+    return total
+}
+
+@Native
+function farSumOwned(xs: [Int]) -> Int {
+    var total = 0
+    var i = 0
+    while i < xs.count {
+        total = total + xs[i]
+        i = i + 1
+    }
+    return total
+}
+
+@Native
+function farNthInt(xs: borrow [Int], i: Int) -> Int {
+    return xs[i]
+}
+
+@Native
+function farProduct(xs: borrow [Int]) -> Int {
+    var p = 1
+    var i = 0
+    while i < xs.count {
+        p = p * xs[i]
+        i = i + 1
+    }
+    return p
+}
+
+@Native
+function farCount(xs: borrow [Int]) -> Int {
+    return xs.count
+}
+
+@Native
+function farAppendInt(xs: borrow mut [Int], v: Int) {
+    xs.append(v)
+    return
+}
+
+@Native
+function farSetInt(xs: borrow mut [Int], i: Int, v: Int) {
+    xs[i] = v
+    return
+}
+
+@Native
+function farDoubleAll(xs: borrow mut [Int]) {
+    var i = 0
+    while i < xs.count {
+        xs[i] = xs[i] * 2
+        i = i + 1
+    }
+    return
+}
+
+@Native
+function farScaleAndSum(xs: borrow [Int], factor: Int) -> Int {
+    var total = 0
+    var i = 0
+    while i < xs.count {
+        total = total + xs[i] * factor
+        i = i + 1
+    }
+    return total
+}
+
+@Native
+function farDotProduct(a: borrow [Int], b: borrow [Int]) -> Int {
+    var total = 0
+    var i = 0
+    while i < a.count {
+        total = total + a[i] * b[i]
+        i = i + 1
+    }
+    return total
+}
+
+@Native
+function farSumSquares(xs: borrow [Int]) -> Int {
+    var total = 0
+    var i = 0
+    while i < xs.count {
+        total = total + xs[i] * xs[i]
+        i = i + 1
+    }
+    return total
+}
+
+// ---------------------------------------------------------------------------
+// @Runtime functions: array builders passed to @Native
+// ---------------------------------------------------------------------------
+
+@Runtime
+function farBuildRange(n: Int) -> [Int] {
+    var xs: [Int] = []
+    var i = 0
+    while i < n {
+        xs.append(i + 1)
+        i = i + 1
+    }
+    return xs
+}
+
+@Runtime
+function farBuildEven(n: Int) -> [Int] {
+    var xs: [Int] = []
+    var i = 0
+    while i < n {
+        xs.append(i * 2)
+        i = i + 1
+    }
+    return xs
+}
+
+@Runtime
+function farBuildPoints(n: Int) -> [FarPoint] {
+    var pts: [FarPoint] = []
+    var i = 0
+    while i < n {
+        pts.append(FarPoint { x: i * 3, y: i * 3 + 1 })
+        i = i + 1
+    }
+    return pts
+}
+
+// ---------------------------------------------------------------------------
+// @Native functions: arrays of @Runtime structs
+// ---------------------------------------------------------------------------
+
+@Native
+function farSumPoints(pts: borrow [FarPoint]) -> Int {
+    var total = 0
+    var i = 0
+    while i < pts.count {
+        total = total + pts[i].x + pts[i].y
+        i = i + 1
+    }
+    return total
+}
+
+@Native
+function farNthPointX(pts: borrow [FarPoint], i: Int) -> Int {
+    return pts[i].x
+}
+
+@Native
+function farNthPointY(pts: borrow [FarPoint], i: Int) -> Int {
+    return pts[i].y
+}
+
+@Native
+function farMutatePoint(pts: borrow mut [FarPoint], i: Int, x: Int, y: Int) {
+    pts[i].x = x
+    pts[i].y = y
+    return
+}
+
+@Native
+function farAppendPoint(pts: borrow mut [FarPoint], x: Int, y: Int) {
+    pts.append(FarPoint { x: x, y: y })
+    return
+}
+
+@Native
+function farSumPointsWeighted(pts: borrow [FarPoint]) -> Int {
+    var total = 0
+    var i = 0
+    while i < pts.count {
+        total = total + pts[i].x * 3 + pts[i].y * 5
+        i = i + 1
+    }
+    return total
+}
+
+// ---------------------------------------------------------------------------
+// @Native functions: FarRow (struct with [Int] field)
+// ---------------------------------------------------------------------------
+
+@Native
+function farSumRow(row: borrow FarRow) -> Int {
+    var total = row.label
+    var i = 0
+    while i < row.cells.count {
+        total = total + row.cells[i]
+        i = i + 1
+    }
+    return total
+}
+
+@Native
+function farSumRows(rows: borrow [FarRow]) -> Int {
+    var total = 0
+    var i = 0
+    while i < rows.count {
+        total = total + rows[i].label
+        var j = 0
+        while j < rows[i].cells.count {
+            total = total + rows[i].cells[j]
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return total
+}
+
+// @Native appends a FarRow (with nested array fields) into an array
+@Native
+function farNativeAppendRow(rows: borrow mut [FarRow], label: Int, a: Int, b: Int) {
+    rows.append(FarRow { label: label, cells: [a, b] })
+    return
+}
+
+// @Native mutates an element's array field in an array of FarRow
+@Native
+function farNativeAppendRowCell(rows: borrow mut [FarRow], rowIdx: Int, v: Int) {
+    rows[rowIdx].cells.append(v)
+    return
+}
+
+@Native
+function farNativeSetRowCell(rows: borrow mut [FarRow], rowIdx: Int, cellIdx: Int, v: Int) {
+    rows[rowIdx].cells[cellIdx] = v
+    return
+}
+
+// @Runtime helpers for FarRow mutation (avoids borrow-mut-struct-with-array through native)
+@Runtime
+function farRtAppendToRow(row: borrow mut FarRow, v: Int) {
+    row.cells.append(v)
+    return
+}
+
+@Runtime
+function farRtSetRowCell(row: borrow mut FarRow, i: Int, v: Int) {
+    row.cells[i] = v
+    return
+}
+
+// ---------------------------------------------------------------------------
+// Tests: [Int] borrow — literal and variable
+// ---------------------------------------------------------------------------
+
+Test FarSumBorrowLiteral {
+    test {
+        let xs: [Int] = [1, 2, 3, 4, 5]
+        return farSumBorrow(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test FarSumBorrowDirect {
+    test {
+        return farSumBorrow([10, 20, 30])
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(60); return e }
+}
+
+Test FarSumOwnedLiteral {
+    test {
+        return farSumOwned([7, 8, 9])
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(24); return e }
+}
+
+Test FarNthIntFirst {
+    test {
+        let xs: [Int] = [100, 200, 300]
+        return farNthInt(xs, 0)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(100); return e }
+}
+
+Test FarNthIntMid {
+    test {
+        let xs: [Int] = [100, 200, 300]
+        return farNthInt(xs, 1)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(200); return e }
+}
+
+Test FarNthIntLast {
+    test {
+        let xs: [Int] = [100, 200, 300]
+        return farNthInt(xs, 2)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(300); return e }
+}
+
+Test FarProductLiteral {
+    test {
+        return farProduct([2, 3, 4, 5])
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(120); return e }
+}
+
+Test FarCountLiteral {
+    test {
+        let xs: [Int] = [10, 20, 30, 40, 50]
+        return farCount(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test FarScaleAndSumLiteral {
+    test {
+        let xs: [Int] = [1, 2, 3, 4]
+        return farScaleAndSum(xs, 10)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(100); return e }
+}
+
+Test FarDotProductLiteral {
+    test {
+        let a: [Int] = [1, 2, 3]
+        let b: [Int] = [4, 5, 6]
+        return farDotProduct(a, b)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(32); return e }
+}
+
+Test FarSumSquaresLiteral {
+    test {
+        let xs: [Int] = [3, 4, 5]
+        return farSumSquares(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(50); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: [Int] mutation through native
+// ---------------------------------------------------------------------------
+
+Test FarAppendThenSum {
+    test {
+        var xs: [Int] = [1, 2, 3]
+        farAppendInt(xs, 4)
+        return farSumBorrow(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test FarAppendMultiThenSum {
+    test {
+        var xs: [Int] = [0]
+        farAppendInt(xs, 10)
+        farAppendInt(xs, 20)
+        farAppendInt(xs, 30)
+        return farSumBorrow(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(60); return e }
+}
+
+Test FarSetIntThenSum {
+    test {
+        var xs: [Int] = [10, 20, 30]
+        farSetInt(xs, 1, 99)
+        return farSumBorrow(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(139); return e }
+}
+
+Test FarDoubleAllThenSum {
+    test {
+        var xs: [Int] = [1, 2, 3, 4]
+        farDoubleAll(xs)
+        return farSumBorrow(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test FarDoubleAllThenProduct {
+    test {
+        var xs: [Int] = [1, 2, 3]
+        farDoubleAll(xs)
+        return farProduct(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(48); return e }
+}
+
+Test FarNativeIndexAfterAppend {
+    test {
+        var xs: [Int] = [1, 2, 3]
+        farAppendInt(xs, 4)
+        farAppendInt(xs, 5)
+        return farNthInt(xs, 4) + farCount(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: @Runtime builds arrays, @Native processes them
+// ---------------------------------------------------------------------------
+
+Test FarRuntimeBuildNativeSum5 {
+    test {
+        let xs = farBuildRange(5)
+        return farSumBorrow(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test FarRuntimeBuildNativeSum10 {
+    test {
+        let xs = farBuildRange(10)
+        return farSumBorrow(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(55); return e }
+}
+
+Test FarRuntimeBuildNativeProduct {
+    test {
+        let xs = farBuildRange(4)
+        return farProduct(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(24); return e }
+}
+
+Test FarRuntimeBuildNativeCount {
+    test {
+        let xs = farBuildRange(7)
+        return farCount(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test FarRuntimeEvenBuildNativeSum {
+    test {
+        let xs = farBuildEven(5)
+        return farSumBorrow(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test FarRuntimeBuildNthInt {
+    test {
+        let xs = farBuildRange(5)
+        return farNthInt(xs, 3)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+Test FarRuntimeBuildAppendNativeSum {
+    test {
+        var xs = farBuildRange(3)
+        farAppendInt(xs, 100)
+        return farSumBorrow(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(106); return e }
+}
+
+Test FarBuildThenDoubleSum {
+    test {
+        var xs = farBuildRange(4)
+        farDoubleAll(xs)
+        return farSumBorrow(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test FarSumSquaresBuilt {
+    test {
+        let xs = farBuildRange(5)
+        return farSumSquares(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(55); return e }
+}
+
+Test FarDotProductBuilt {
+    test {
+        let a = farBuildRange(3)
+        let b = farBuildEven(3)
+        return farDotProduct(a, b)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(16); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: arrays of @Runtime structs across the bridge
+// ---------------------------------------------------------------------------
+
+Test FarSumPointsLiteral {
+    test {
+        let pts: [FarPoint] = [FarPoint { x: 1, y: 2 }, FarPoint { x: 3, y: 4 }]
+        return farSumPoints(pts)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test FarSumPointsBuilt {
+    test {
+        let pts = farBuildPoints(4)
+        return farSumPoints(pts)
+    }
+    // farBuildPoints(4): {0,1},{3,4},{6,7},{9,10} — sums: 1+7+13+19 = 40
+    expect { let e: Result<Int, TestFailure> = Result.Ok(40); return e }
+}
+
+Test FarNthPointXLiteral {
+    test {
+        let pts: [FarPoint] = [FarPoint { x: 10, y: 20 }, FarPoint { x: 30, y: 40 }]
+        return farNthPointX(pts, 1)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+Test FarNthPointYLiteral {
+    test {
+        let pts: [FarPoint] = [FarPoint { x: 10, y: 20 }, FarPoint { x: 30, y: 40 }]
+        return farNthPointY(pts, 0)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test FarMutatePointSync {
+    test {
+        var pts: [FarPoint] = [FarPoint { x: 10, y: 20 }, FarPoint { x: 30, y: 40 }]
+        farMutatePoint(pts, 0, 99, 88)
+        return pts[0].x + pts[0].y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(187); return e }
+}
+
+Test FarAppendPointSync {
+    test {
+        var pts: [FarPoint] = [FarPoint { x: 1, y: 2 }]
+        farAppendPoint(pts, 10, 20)
+        return farSumPoints(pts)
+    }
+    // {1,2} + {10,20} = 1+2+10+20 = 33
+    expect { let e: Result<Int, TestFailure> = Result.Ok(33); return e }
+}
+
+Test FarAppendPointCount {
+    test {
+        var pts: [FarPoint] = [FarPoint { x: 0, y: 0 }]
+        farAppendPoint(pts, 5, 6)
+        farAppendPoint(pts, 7, 8)
+        return pts.count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test FarSumPointsWeightedLiteral {
+    test {
+        let pts: [FarPoint] = [FarPoint { x: 2, y: 3 }, FarPoint { x: 4, y: 5 }]
+        return farSumPointsWeighted(pts)
+    }
+    // 2*3+3*5 + 4*3+5*5 = 6+15+12+25 = 58
+    expect { let e: Result<Int, TestFailure> = Result.Ok(58); return e }
+}
+
+Test FarPointBuildMutateSum {
+    test {
+        var pts = farBuildPoints(3)
+        farMutatePoint(pts, 0, 100, 200)
+        return farSumPoints(pts)
+    }
+    // initially {0,1},{3,4},{6,7}; after mutate[0]={100,200}: 100+200+3+4+6+7=320
+    expect { let e: Result<Int, TestFailure> = Result.Ok(320); return e }
+}
+
+Test FarBuildPointsNativeNth {
+    test {
+        let pts = farBuildPoints(5)
+        return farNthPointX(pts, 3) + farNthPointY(pts, 3)
+    }
+    // farBuildPoints i=3: x=9, y=10 => 19
+    expect { let e: Result<Int, TestFailure> = Result.Ok(19); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: FarRow — struct with [Int] field, native read
+// ---------------------------------------------------------------------------
+
+Test FarSumRowSimple {
+    test {
+        let row = FarRow { label: 10, cells: [1, 2, 3] }
+        return farSumRow(row)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(16); return e }
+}
+
+Test FarSumRowEmpty {
+    test {
+        let row = FarRow { label: 42, cells: [] }
+        return farSumRow(row)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test FarSumRowLarge {
+    test {
+        let row = FarRow { label: 0, cells: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] }
+        return farSumRow(row)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(55); return e }
+}
+
+Test FarSumRowsMulti {
+    test {
+        let rows: [FarRow] = [
+            FarRow { label: 1, cells: [10, 20] },
+            FarRow { label: 2, cells: [30, 40] },
+            FarRow { label: 3, cells: [50] }
+        ]
+        return farSumRows(rows)
+    }
+    // (1+10+20)+(2+30+40)+(3+50) = 31+72+53 = 156
+    expect { let e: Result<Int, TestFailure> = Result.Ok(156); return e }
+}
+
+Test FarSumRowsBuilt {
+    test {
+        let rows: [FarRow] = [
+            FarRow { label: 100, cells: [1, 2, 3] },
+            FarRow { label: 200, cells: [4, 5] }
+        ]
+        return farSumRows(rows)
+    }
+    // (100+1+2+3)+(200+4+5) = 106+209 = 315
+    expect { let e: Result<Int, TestFailure> = Result.Ok(315); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: FarRow mutation via @Runtime, then @Native read
+// ---------------------------------------------------------------------------
+
+Test FarRowRtAppendNativeRead {
+    test {
+        var row = FarRow { label: 5, cells: [1, 2] }
+        farRtAppendToRow(row, 10)
+        return farSumRow(row)
+    }
+    // 5+1+2+10 = 18
+    expect { let e: Result<Int, TestFailure> = Result.Ok(18); return e }
+}
+
+Test FarRowRtSetNativeRead {
+    test {
+        var row = FarRow { label: 0, cells: [10, 20, 30] }
+        farRtSetRowCell(row, 1, 99)
+        return farSumRow(row)
+    }
+    // 0+10+99+30 = 139
+    expect { let e: Result<Int, TestFailure> = Result.Ok(139); return e }
+}
+
+Test FarRowRtChurnAppend {
+    test {
+        var row = FarRow { label: 0, cells: [] }
+        var i = 0
+        while i < 10 {
+            farRtAppendToRow(row, i + 1)
+            i = i + 1
+        }
+        return farSumRow(row)
+    }
+    // 0 + (1+2+...+10) = 55
+    expect { let e: Result<Int, TestFailure> = Result.Ok(55); return e }
+}
+
+Test FarRowRtDoubleNativeRead {
+    test {
+        var row = FarRow { label: 0, cells: [1, 2, 3, 4, 5] }
+        farRtSetRowCell(row, 0, 2)
+        farRtSetRowCell(row, 1, 4)
+        farRtSetRowCell(row, 2, 6)
+        farRtSetRowCell(row, 3, 8)
+        farRtSetRowCell(row, 4, 10)
+        return farSumRow(row)
+    }
+    // 0+2+4+6+8+10 = 30
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: native appends FarRow into [FarRow], mutates nested array field
+// ---------------------------------------------------------------------------
+
+Test FarNativeAppendRowThenSum {
+    test {
+        var rows: [FarRow] = [FarRow { label: 1, cells: [10] }]
+        farNativeAppendRow(rows, 2, 20, 30)
+        return farSumRows(rows)
+    }
+    // (1+10)+(2+20+30) = 11+52 = 63
+    expect { let e: Result<Int, TestFailure> = Result.Ok(63); return e }
+}
+
+Test FarNativeAppendRowCellSync {
+    test {
+        var rows: [FarRow] = [FarRow { label: 0, cells: [1, 2, 3] }]
+        farNativeAppendRowCell(rows, 0, 100)
+        return farSumRows(rows)
+    }
+    // 0+1+2+3+100 = 106
+    expect { let e: Result<Int, TestFailure> = Result.Ok(106); return e }
+}
+
+Test FarNativeSetRowCellSync {
+    test {
+        var rows: [FarRow] = [FarRow { label: 5, cells: [10, 20, 30] }]
+        farNativeSetRowCell(rows, 0, 1, 99)
+        return farSumRows(rows)
+    }
+    // 5+10+99+30 = 144
+    expect { let e: Result<Int, TestFailure> = Result.Ok(144); return e }
+}
+
+Test FarNativeRowsMixedMutation {
+    test {
+        var rows: [FarRow] = [
+            FarRow { label: 10, cells: [1, 2] },
+            FarRow { label: 20, cells: [3, 4] }
+        ]
+        farNativeAppendRowCell(rows, 0, 50)
+        farNativeSetRowCell(rows, 1, 0, 99)
+        return farSumRows(rows)
+    }
+    // (10+1+2+50) + (20+99+4) = 63+123 = 186
+    expect { let e: Result<Int, TestFailure> = Result.Ok(186); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: allocation churn — build-and-discard arrays repeatedly
+// ---------------------------------------------------------------------------
+
+Test FarChurnSumSmall {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 5 {
+            let xs = farBuildRange(i + 1)
+            acc = acc + farSumBorrow(xs)
+            i = i + 1
+        }
+        return acc
+    }
+    // i=0:1, i=1:3, i=2:6, i=3:10, i=4:15 => 35
+    expect { let e: Result<Int, TestFailure> = Result.Ok(35); return e }
+}
+
+Test FarChurnNthRepeat {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 10 {
+            let xs = farBuildRange(3)
+            acc = acc + farNthInt(xs, 2)
+            i = i + 1
+        }
+        return acc
+    }
+    // each: xs=[1,2,3], nth[2]=3; 10*3=30
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+Test FarChurnNativeBuild {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 8 {
+            var xs: [Int] = [i]
+            farAppendInt(xs, i * 2)
+            acc = acc + farSumBorrow(xs)
+            i = i + 1
+        }
+        return acc
+    }
+    // i=0:[0,0]->0, i=1:[1,2]->3, i=2:[2,4]->6, i=3:[3,6]->9,
+    // i=4:[4,8]->12, i=5:[5,10]->15, i=6:[6,12]->18, i=7:[7,14]->21
+    // total = 84
+    expect { let e: Result<Int, TestFailure> = Result.Ok(84); return e }
+}
+
+Test FarChurnPoints {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 5 {
+            let pts = farBuildPoints(i + 1)
+            acc = acc + farSumPoints(pts)
+            i = i + 1
+        }
+        return acc
+    }
+    // n=1:1, n=2:8, n=3:21, n=4:40, n=5:65 => 135
+    expect { let e: Result<Int, TestFailure> = Result.Ok(135); return e }
+}
+
+Test FarChurnDotProducts {
+    test {
+        var total = 0
+        var k = 0
+        while k < 3 {
+            let a: [Int] = [k + 1, k + 2]
+            let b: [Int] = [k + 3, k + 4]
+            total = total + farDotProduct(a, b)
+            k = k + 1
+        }
+        return total
+    }
+    // k=0:[1,2]·[3,4]=11, k=1:[2,3]·[4,5]=23, k=2:[3,4]·[5,6]=39 => 73
+    expect { let e: Result<Int, TestFailure> = Result.Ok(73); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: multi-call native pass chains
+// ---------------------------------------------------------------------------
+
+Test FarNativeScoreLoop {
+    test {
+        var total = 0
+        var i = 0
+        while i < 10 {
+            total = total + farScaleAndSum([1, 2, 3], i + 1)
+            i = i + 1
+        }
+        return total
+    }
+    // sum_k=1..10 of 6k = 6*55 = 330
+    expect { let e: Result<Int, TestFailure> = Result.Ok(330); return e }
+}
+
+Test FarNativeNthLoop {
+    test {
+        var total = 0
+        let xs: [Int] = [10, 20, 30, 40, 50]
+        var i = 0
+        while i < 5 {
+            total = total + farNthInt(xs, i) * (i + 1)
+            i = i + 1
+        }
+        return total
+    }
+    // 10*1+20*2+30*3+40*4+50*5 = 10+40+90+160+250 = 550
+    expect { let e: Result<Int, TestFailure> = Result.Ok(550); return e }
+}
+
+Test FarMultiPassBorrowChain {
+    test {
+        let xs: [Int] = [3, 7, 2, 8, 1]
+        let s = farSumBorrow(xs)
+        let p = farProduct(xs)
+        let sc = farScaleAndSum(xs, 2)
+        return s + p + sc
+    }
+    // sum=21, product=3*7*2*8*1=336, scaled=42 => 399
+    expect { let e: Result<Int, TestFailure> = Result.Ok(399); return e }
+}
+
+Test FarMixedMutation {
+    test {
+        var xs: [Int] = [5, 10, 15]
+        var pts: [FarPoint] = [FarPoint { x: 1, y: 1 }]
+        farAppendInt(xs, 20)
+        farAppendPoint(pts, 2, 2)
+        return farSumBorrow(xs) + farSumPoints(pts)
+    }
+    // xs sum=5+10+15+20=50; pts sum=1+1+2+2=6 => 56
+    expect { let e: Result<Int, TestFailure> = Result.Ok(56); return e }
+}
+
+Test FarRowsAndIntsInterleaved {
+    test {
+        var xs: [Int] = [1, 2, 3]
+        var rows: [FarRow] = [FarRow { label: 10, cells: [4, 5] }]
+        farAppendInt(xs, 6)
+        farNativeAppendRow(rows, 20, 7, 8)
+        return farSumBorrow(xs) + farSumRows(rows)
+    }
+    // xs=[1,2,3,6] sum=12; rows: (10+4+5)+(20+7+8)=19+35=54 => 66
+    expect { let e: Result<Int, TestFailure> = Result.Ok(66); return e }
+}
+
+Test FarPointsAndIntsInterleaved {
+    test {
+        var pts = farBuildPoints(3)
+        var xs = farBuildRange(3)
+        farMutatePoint(pts, 1, 50, 60)
+        farDoubleAll(xs)
+        return farSumPoints(pts) + farSumBorrow(xs)
+    }
+    // pts initially {0,1},{3,4},{6,7}; after mutate[1]={50,60}: 0+1+50+60+6+7=124
+    // xs=[1,2,3] -> doubled=[2,4,6] sum=12
+    // total=136
+    expect { let e: Result<Int, TestFailure> = Result.Ok(136); return e }
+}
+
+Test FarCountAfterManyAppends {
+    test {
+        var xs: [Int] = [0]
+        var i = 0
+        while i < 20 {
+            farAppendInt(xs, i)
+            i = i + 1
+        }
+        return farCount(xs)
+    }
+    // started with 1, appended 20 more => 21
+    expect { let e: Result<Int, TestFailure> = Result.Ok(21); return e }
+}
+
+Test FarSumAfterManyAppends {
+    test {
+        var xs: [Int] = [0]
+        var i = 1
+        while i <= 10 {
+            farAppendInt(xs, i)
+            i = i + 1
+        }
+        return farSumBorrow(xs)
+    }
+    // [0,1,2,...,10] sum = 55
+    expect { let e: Result<Int, TestFailure> = Result.Ok(55); return e }
+}
