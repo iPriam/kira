@@ -504,10 +504,10 @@ pub fn materializeCallbackValueFromNative(self: *Vm, module: *const bytecode.Mod
 }
 
 pub fn exportRuntimeClosureToNative(self: *Vm, module: *const bytecode.Module, closure_ptr: usize) !usize {
-    if (self.exported_native_closures.get(closure_ptr)) |existing| {
-        return runtime_abi.tagNativeClosurePointer(existing.native_ptr);
-    }
-
+    // No pointer-keyed dedup: a consumed closure's pointer can be reused by a
+    // later, different closure, so caching by `closure_ptr` would hand the new
+    // closure the stale native block (FF1 — captured closures crossing the bridge
+    // dispatching to the wrong body). Always export a fresh block.
     const closure = self.heap.getClosure(closure_ptr) orelse {
         self.rememberError("callback value is not a valid runtime closure");
         return error.RuntimeFailure;
@@ -543,7 +543,7 @@ pub fn exportRuntimeClosureToNative(self: *Vm, module: *const bytecode.Module, c
         slots[index] = runtime_abi.bridgeValueFromValue(lowered);
     }
 
-    try self.exported_native_closures.put(closure_ptr, .{
+    try self.exported_native_closures.append(self.allocator, .{
         .native_ptr = raw_ptr,
         .captures = retained_captures,
     });

@@ -1,0 +1,42 @@
+// Regression (FF1): distinct VM closures that capture scalars, exported across
+// the hybrid @Native bridge, must each run their OWN body. A consumed closure's
+// pointer is freed and reused by the next closure; the export cache was keyed by
+// that pointer and returned the first closure's stale native block, so the second
+// closure ran the first's body+capture (gave 11/11 instead of 11/101). The export
+// is now always fresh.
+@Native
+function cedInvoke(cb: (Int) -> Int, x: Int) -> Int {
+    return cb(x)
+}
+
+@Native
+function cedInvokeTwo(f1: (Int) -> Int, f2: (Int) -> Int, a: Int, b: Int) -> Int {
+    return f1(a) + f2(b)
+}
+
+@Runtime
+function cedUseA() -> Int {
+    let a = 10
+    let cb: (Int) -> Int = { v in return v + a }
+    return cedInvoke(move cb, 1)
+}
+
+@Runtime
+function cedUseB() -> Int {
+    let b = 100
+    let cb: (Int) -> Int = { v in return v + b }
+    return cedInvoke(move cb, 1)
+}
+
+@Main
+@Runtime
+function main() {
+    print(cedUseA())   // 11
+    print(cedUseB())   // 101 (FF1 bug gave 11)
+    let p = 10
+    let cbA: (Int) -> Int = { x in return x + p }
+    let q = 100
+    let cbB: (Int) -> Int = { x in return x + q }
+    print(cedInvokeTwo(move cbA, move cbB, 1, 2))  // 11 + 102 = 113 (FF1 gave 23)
+    return
+}

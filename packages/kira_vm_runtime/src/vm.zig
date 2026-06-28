@@ -89,7 +89,12 @@ pub const Vm = struct {
     native_layout_stats: NativeLayoutStats = .{},
     native_state_materialized_types: std.StringHashMap(usize),
     native_state_boxes: std.AutoHashMap(usize, void),
-    exported_native_closures: std.AutoHashMap(usize, ExportedNativeClosure),
+    // Registry of native closure blocks exported to @Native (freed at deinit).
+    // A plain list, NOT keyed by the VM closure pointer: a consumed closure's
+    // pointer is freed and can be REUSED by a later, different closure, so a
+    // pointer-keyed dedup cache would hand the new closure the stale block (FF1).
+    // Every export creates a fresh block instead.
+    exported_native_closures: std.ArrayListUnmanaged(ExportedNativeClosure) = .empty,
     last_error_buffer: [256]u8 = [_]u8{0} ** 256,
     last_error_len: usize = 0,
     // Decoded form of the current module (resolved branch targets, function
@@ -158,7 +163,7 @@ pub const Vm = struct {
             .heap = ownership.Heap.init(allocator),
             .native_state_materialized_types = std.StringHashMap(usize).init(allocator),
             .native_state_boxes = std.AutoHashMap(usize, void).init(allocator),
-            .exported_native_closures = std.AutoHashMap(usize, ExportedNativeClosure).init(allocator),
+            .exported_native_closures = .empty,
         };
     }
 
@@ -232,9 +237,7 @@ pub const Vm = struct {
     }
 
     pub fn deinit(self: *Vm) void {
-        var exported_iterator = self.exported_native_closures.iterator();
-        while (exported_iterator.next()) |entry| {
-            const exported = entry.value_ptr.*;
+        for (self.exported_native_closures.items) |exported| {
             for (exported.captures) |capture| self.heap.dropValue(capture);
             self.allocator.free(exported.captures);
             const byte_len = 16 + exported.captures.len * @sizeOf(runtime_abi.BridgeValue);
@@ -242,7 +245,7 @@ pub const Vm = struct {
             const words: [*]u64 = @ptrFromInt(exported.native_ptr);
             self.allocator.free(words[0..word_count]);
         }
-        self.exported_native_closures.deinit();
+        self.exported_native_closures.deinit(self.allocator);
         native_bridge.deinitTrackedNativeStates(self);
         self.heap.deinit();
         self.native_state_materialized_types.deinit();
