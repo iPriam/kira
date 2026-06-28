@@ -18,7 +18,16 @@ pub const Cache = struct {
     }
 
     pub fn entryForBuild(self: Cache, source_path: []const u8, target: build_def.ExecutionTarget) !Entry {
-        const key = try fingerprintBuild(self.allocator, source_path, @tagName(target));
+        return self.entryForBuildWithNativeDeps(source_path, target, "");
+    }
+
+    /// Like `entryForBuild`, but mixes `native_deps_fingerprint` into the cache
+    /// key. Callers building an executable that links native static libraries
+    /// pass a fingerprint of those libraries' artifacts so that editing native
+    /// sources/headers (which relinks the binary) invalidates the cached
+    /// executable instead of restoring a stale one.
+    pub fn entryForBuildWithNativeDeps(self: Cache, source_path: []const u8, target: build_def.ExecutionTarget, native_deps_fingerprint: []const u8) !Entry {
+        const key = try fingerprintBuild(self.allocator, source_path, @tagName(target), native_deps_fingerprint);
         defer self.allocator.free(key);
         const backend_dir = backendName(target);
         const root = try std.fs.path.join(self.allocator, &.{ self.root_path, "cache", backend_dir, key });
@@ -27,7 +36,7 @@ pub const Cache = struct {
     }
 
     pub fn entryForFrontendCheck(self: Cache, source_path: []const u8) !Entry {
-        const key = try fingerprintBuild(self.allocator, source_path, "frontend-check");
+        const key = try fingerprintBuild(self.allocator, source_path, "frontend-check", "");
         defer self.allocator.free(key);
         const root = try std.fs.path.join(self.allocator, &.{ self.root_path, "cache", "frontend-check", key });
         try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, root);
@@ -35,7 +44,7 @@ pub const Cache = struct {
     }
 
     pub fn entryForPackageCheck(self: Cache, representative_source_path: []const u8) !Entry {
-        const key = try fingerprintBuild(self.allocator, representative_source_path, "package-check");
+        const key = try fingerprintBuild(self.allocator, representative_source_path, "package-check", "");
         defer self.allocator.free(key);
         const root = try std.fs.path.join(self.allocator, &.{ self.root_path, "cache", "package-check", key });
         try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, root);
@@ -251,10 +260,17 @@ const StageDir = struct {
     }
 };
 
-fn fingerprintBuild(allocator: std.mem.Allocator, source_path: []const u8, target_name: []const u8) ![]const u8 {
+fn fingerprintBuild(allocator: std.mem.Allocator, source_path: []const u8, target_name: []const u8, native_deps_fingerprint: []const u8) ![]const u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update("kira-build-cache-v2\n");
     hasher.update(target_name);
+    hasher.update("\n");
+    // Native static libraries linked into the executable. Including their
+    // fingerprint here means a change to native sources/headers (which produces
+    // a new .a) invalidates the cached executable so it is relinked rather than
+    // restored stale.
+    hasher.update("native-deps=");
+    hasher.update(native_deps_fingerprint);
     hasher.update("\n");
     const canonical_source = try absolutize(allocator, source_path);
     defer allocator.free(canonical_source);

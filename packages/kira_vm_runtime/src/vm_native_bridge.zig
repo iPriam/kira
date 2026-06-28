@@ -209,19 +209,22 @@ fn destroyArrayNativeLayoutWithOwner(self: *Vm, module: *const bytecode.Module, 
     const object: *ArrayObject = @ptrFromInt(native_array_ptr);
     const items = object.items[0..@max(object.len, 1)];
     const element_ty = self.arrayElementType(module, array_ty) catch .{ .kind = .raw_ptr };
+    // Elements keep the per-value `owner`: a native-owned array holds native-owned
+    // elements (e.g. `kira_struct_alloc`'d struct elements with their 8-byte header),
+    // which must be released by their own type-specific scheme.
     for (items[0..object.len]) |item| {
         destroyNativeLayoutValueWithOwner(self, module, element_ty, runtime_abi.bridgeValueToValue(item), owner);
     }
-    switch (owner) {
-        .vm => {
-            self.allocator.free(items);
-            self.allocator.destroy(object);
-        },
-        .c => {
-            std.heap.c_allocator.free(items);
-            std.heap.c_allocator.destroy(object);
-        },
-    }
+    // The array BLOCK (the `ArrayObject` and its `items` buffer) is always owned by
+    // `self.allocator`, for BOTH owners: VM-built native arrays come straight from
+    // `self.allocator` (`copyArrayToNativeLayout`), and native-built arrays come from
+    // `kira_array_alloc` -> `kira_bridge_alloc`, whose installed hook
+    // (`kira_hybrid_install_array_allocator`) is wired to this same allocator. (Unlike
+    // `kira_struct_alloc`, the array helpers route through the installed VM allocator,
+    // not raw libc.) Freeing the block with the C allocator hands libc an smp pointer
+    // -> "pointer being freed was not allocated".
+    self.allocator.free(items);
+    self.allocator.destroy(object);
     recordNativeArrayFree(self);
 }
 
@@ -241,8 +244,19 @@ fn destroyStructNativeLayoutWithOwner(self: *Vm, module: *const bytecode.Module,
     const words: [*]u64 = @ptrFromInt(native_ptr);
     const free_owner: NativeLayoutOwner = if (std.c.getenv("KIRA_RESULT_VM_FREE") != null) .vm else owner;
     switch (free_owner) {
+        // VM-allocated native-layout structs (`copyStructToNativeLayout`) are a bare
+        // `self.allocator.alloc(u64, ...)` with no header, so the payload pointer IS
+        // the base.
         .vm => self.allocator.free(words[0..word_count]),
-        .c => std.heap.c_allocator.free(words[0..word_count]),
+        // Native-owned structs (a `@Native`/native function result, or an owned heap
+        // element of a native-returned array/enum) are produced by `kira_struct_alloc`
+        // (runtime_helpers.c), which `malloc`s an 8-byte type-id header in front of the
+        // payload and returns `base + 8`. The matching deallocator is `kira_struct_free`
+        // = `free(ptr - 8)`. Freeing the payload pointer directly hands libc a non-base
+        // address ("pointer being freed was not allocated"), so free the real malloc
+        // base. The same `raw_ptr - @sizeOf(u64)` header convention is read in
+        // vm_construct_any.zig.
+        .c => std.c.free(@ptrFromInt(native_ptr - @sizeOf(u64))),
     }
     recordNativeStructFree(self);
 }
@@ -490,10 +504,10 @@ pub fn materializeCallbackValueFromNative(self: *Vm, module: *const bytecode.Mod
 }
 
 pub fn exportRuntimeClosureToNative(self: *Vm, module: *const bytecode.Module, closure_ptr: usize) !usize {
-    if (self.exported_native_closures.get(closure_ptr)) |existing| {
-        return runtime_abi.tagNativeClosurePointer(existing.native_ptr);
-    }
-
+    // No pointer-keyed dedup: a consumed closure's pointer can be reused by a
+    // later, different closure, so caching by `closure_ptr` would hand the new
+    // closure the stale native block (FF1 — captured closures crossing the bridge
+    // dispatching to the wrong body). Always export a fresh block.
     const closure = self.heap.getClosure(closure_ptr) orelse {
         self.rememberError("callback value is not a valid runtime closure");
         return error.RuntimeFailure;
@@ -529,7 +543,7 @@ pub fn exportRuntimeClosureToNative(self: *Vm, module: *const bytecode.Module, c
         slots[index] = runtime_abi.bridgeValueFromValue(lowered);
     }
 
-    try self.exported_native_closures.put(closure_ptr, .{
+    try self.exported_native_closures.append(self.allocator, .{
         .native_ptr = raw_ptr,
         .captures = retained_captures,
     });
@@ -770,6 +784,54 @@ fn destroyEnumNativePayloadWithOwner(self: *Vm, module: *const bytecode.Module, 
         },
         else => {},
     }
+}
+
+fn isFlatScalarKind(kind: bytecode.TypeRef.Kind) bool {
+    return switch (kind) {
+        .void, .integer, .float, .boolean => true,
+        else => false,
+    };
+}
+
+/// Whether the native layout produced for a callback return of `return_ty` (whose
+/// managed runtime value is at `runtime_ptr`) owns ALL of its data — so the
+/// managed VM value can be dropped immediately after lowering: a Rust-style move
+/// into native ownership, with no lingering alias and no per-call retention.
+///
+/// Returns false (the managed value MUST stay alive, because the native copy
+/// borrows its bytes) whenever any payload / field / element is a `string`,
+/// `raw_ptr`, or `construct_any`, or is a nested aggregate this conservative,
+/// allocation-free check does not descend into. Flat-scalar aggregates
+/// (an enum with a scalar/void payload, a struct of scalars, an array of scalars)
+/// are deep-copied wholesale by the lowering, so they are self-contained.
+pub fn nativeReturnIsSelfContained(
+    self: *Vm,
+    module: *const bytecode.Module,
+    return_ty: bytecode.TypeRef,
+    runtime_ptr: usize,
+) bool {
+    return switch (return_ty.kind) {
+        .enum_instance => blk: {
+            const type_name = return_ty.name orelse break :blk false;
+            const slots = resolveManagedEnumSlots(self, runtime_ptr) orelse break :blk false;
+            if (slots[0] != .integer) break :blk false;
+            const payload_ty = enumPayloadType(self, module, type_name, @intCast(slots[0].integer)) orelse break :blk false;
+            break :blk isFlatScalarKind(payload_ty.kind);
+        },
+        .array => blk: {
+            const element_ty = self.arrayElementType(module, return_ty) catch break :blk false;
+            break :blk isFlatScalarKind(element_ty.kind);
+        },
+        .ffi_struct => blk: {
+            const type_name = return_ty.name orelse break :blk false;
+            const type_decl = self.findTypeCached(module, type_name) orelse break :blk false;
+            for (type_decl.fields) |field_decl| {
+                if (!isFlatScalarKind(field_decl.ty.kind)) break :blk false;
+            }
+            break :blk true;
+        },
+        else => false,
+    };
 }
 
 pub fn materializeNativeResult(

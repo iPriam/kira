@@ -177,9 +177,11 @@ pub fn renderBindings(
     }
 
     try collectSelectedTypeDependencies(allocator, required_structs, required_aliases, &required_structs, &required_callbacks, &required_pointers, &required_aliases, &required_enums, &required_arrays, &index);
-    var callback_dep_iter = required_callbacks.iterator();
-    while (callback_dep_iter.next()) |entry| {
-        const typedef_decl = index.typedefs.get(entry.key_ptr.*) orelse continue;
+
+    const callback_names = try sortedMapKeys(allocator, required_callbacks);
+    defer allocator.free(callback_names);
+    for (callback_names) |name| {
+        const typedef_decl = index.typedefs.get(name) orelse continue;
         for (typedef_decl.callback_params) |param| {
             try collectTypeDependencies(allocator, param, &required_structs, &required_callbacks, &required_pointers, &required_aliases, &required_enums, &required_arrays, &index);
         }
@@ -187,13 +189,17 @@ pub fn renderBindings(
             try collectTypeDependencies(allocator, result_type, &required_structs, &required_callbacks, &required_pointers, &required_aliases, &required_enums, &required_arrays, &index);
         }
     }
-    var array_dep_iter = required_arrays.iterator();
-    while (array_dep_iter.next()) |entry| {
-        try collectTypeDependencies(allocator, entry.value_ptr.element_type, &required_structs, &required_callbacks, &required_pointers, &required_aliases, &required_enums, &required_arrays, &index);
+
+    const array_names = try sortedMapKeys(allocator, required_arrays);
+    defer allocator.free(array_names);
+    for (array_names) |name| {
+        const array_info = required_arrays.get(name) orelse continue;
+        try collectTypeDependencies(allocator, array_info.element_type, &required_structs, &required_callbacks, &required_pointers, &required_aliases, &required_enums, &required_arrays, &index);
     }
-    var inline_callback_struct_iter = required_structs.iterator();
-    while (inline_callback_struct_iter.next()) |entry| {
-        const name = entry.key_ptr.*;
+
+    const inline_callback_struct_names = try sortedMapKeys(allocator, required_structs);
+    defer allocator.free(inline_callback_struct_names);
+    for (inline_callback_struct_names) |name| {
         const record = resolveRecord(name, &index) orelse continue;
         for (record.fields) |field| {
             if (try parseInlineCallbackFromQualType(allocator, try syntheticFieldCallbackName(allocator, name, field.name), field.qual_type)) |callback_decl| {
@@ -434,17 +440,19 @@ fn collectSelectedTypeDependencies(
     required_arrays: *std.StringHashMapUnmanaged(ArrayTypeInfo),
     index: *const AstIndex,
 ) !void {
-    var struct_iter = selected_structs.iterator();
-    while (struct_iter.next()) |entry| {
-        const record = resolveRecord(entry.key_ptr.*, index) orelse continue;
+    const struct_names = try sortedMapKeys(allocator, selected_structs);
+    defer allocator.free(struct_names);
+    for (struct_names) |name| {
+        const record = resolveRecord(name, index) orelse continue;
         for (record.fields) |field| {
             try collectTypeDependencies(allocator, field.qual_type, required_structs, required_callbacks, required_pointers, required_aliases, required_enums, required_arrays, index);
         }
     }
 
-    var alias_iter = selected_aliases.iterator();
-    while (alias_iter.next()) |entry| {
-        const typedef_decl = index.typedefs.get(entry.key_ptr.*) orelse continue;
+    const alias_names = try sortedMapKeys(allocator, selected_aliases);
+    defer allocator.free(alias_names);
+    for (alias_names) |name| {
+        const typedef_decl = index.typedefs.get(name) orelse continue;
         switch (typedef_decl.kind) {
             .alias => try collectTypeDependencies(allocator, typedef_decl.qual_type, required_structs, required_callbacks, required_pointers, required_aliases, required_enums, required_arrays, index),
             .array => try collectTypeDependencies(allocator, typedef_decl.array_element_type orelse continue, required_structs, required_callbacks, required_pointers, required_aliases, required_enums, required_arrays, index),

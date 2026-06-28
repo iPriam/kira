@@ -1,0 +1,20 @@
+// Regression: a store to an array element through a place nested 2+ projections
+// below the index (`arr[i].inner.x = v`) was silently dropped on the VM/hybrid
+// because the materialized element copy was never written back via `array_set`.
+// LLVM was already correct; this asserts VM/LLVM/hybrid agree.
+struct Inner {
+    var x: Int
+}
+
+struct Outer {
+    var inner: Inner
+}
+
+@Main
+function main() {
+    var arr: [Outer] = []
+    arr.append(Outer { inner: Inner { x: 1 } })
+    arr[0].inner.x = 77
+    print(arr[0].inner.x)
+    return
+}

@@ -1,0 +1,1169 @@
+// StxStructTests: deep struct tests — construction, field access, methods,
+// borrow-mut writeback, value-copy independence, arrays of structs, and traps.
+//
+// All top-level names use the Stx/stx prefix to avoid harness namespace collisions.
+// No `import Foundation` — main.kira imports it for the whole package.
+
+// ---------------------------------------------------------------------------
+// Struct definitions
+// ---------------------------------------------------------------------------
+
+struct StxPoint {
+    var x: Int
+    var y: Int
+
+    function sum() -> Int { return self.x + self.y }
+    function scale(k: Int) -> StxPoint { return StxPoint { x: self.x * k, y: self.y * k } }
+    function product() -> Int { return self.x * self.y }
+    function max() -> Int { return self.x > self.y ? self.x : self.y }
+    function min() -> Int { return self.x < self.y ? self.x : self.y }
+}
+
+struct StxRect {
+    var origin: StxPoint
+    var size: StxPoint
+    var label: Int
+
+    function area() -> Int { return self.size.x * self.size.y }
+    function perimeter() -> Int { return 2 * (self.size.x + self.size.y) }
+    function labelPlusArea() -> Int { return self.label + self.area() }
+}
+
+struct StxCube {
+    var lo: StxPoint
+    var hi: StxPoint
+    var depth: Int
+
+    function volume() -> Int {
+        return (self.hi.x - self.lo.x) * (self.hi.y - self.lo.y) * self.depth
+    }
+    function span() -> Int {
+        return (self.hi.x - self.lo.x) + (self.hi.y - self.lo.y) + self.depth
+    }
+}
+
+struct StxBag {
+    var items: [Int]
+    var tag: Int
+
+    function total() -> Int {
+        var s = self.tag
+        var i = 0
+        while i < self.items.count {
+            s = s + self.items[i]
+            i = i + 1
+        }
+        return s
+    }
+    function count() -> Int { return self.items.count }
+}
+
+// ---------------------------------------------------------------------------
+// Top-level helper functions
+// ---------------------------------------------------------------------------
+
+function stxBumpX(p: borrow mut StxPoint) {
+    p.x = p.x + 1
+    return
+}
+
+function stxBumpY(p: borrow mut StxPoint) {
+    p.y = p.y + 1
+    return
+}
+
+function stxBumpBoth(p: borrow mut StxPoint) {
+    p.x = p.x + 1
+    p.y = p.y + 1
+    return
+}
+
+function stxAddN(p: borrow mut StxPoint, n: Int) {
+    p.x = p.x + n
+    p.y = p.y + n
+    return
+}
+
+function stxBumpRect(r: borrow mut StxRect) {
+    r.label = r.label + 1
+    r.origin.x = r.origin.x + 2
+    r.size.y = r.size.y + 3
+    return
+}
+
+function stxBumpCube(c: borrow mut StxCube) {
+    c.depth = c.depth + 5
+    c.lo.x = c.lo.x + 1
+    return
+}
+
+function stxMakeBag(n: Int) -> StxBag {
+    var xs: [Int] = []
+    var i = 0
+    while i < n {
+        xs.append(i + 1)
+        i = i + 1
+    }
+    return StxBag { items: move xs, tag: n }
+}
+
+function stxPointSum(p: borrow StxPoint) -> Int {
+    return p.x + p.y
+}
+
+// ---------------------------------------------------------------------------
+// Group 1: Basic construction + field access
+// ---------------------------------------------------------------------------
+
+Test StxConstX {
+    test { let p = StxPoint { x: 3, y: 7 }; return p.x }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test StxConstY {
+    test { let p = StxPoint { x: 3, y: 7 }; return p.y }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test StxFieldAdd {
+    test { let p = StxPoint { x: 5, y: 8 }; return p.x + p.y }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(13); return e }
+}
+
+Test StxFieldMul {
+    test { let p = StxPoint { x: 4, y: 6 }; return p.x * p.y }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(24); return e }
+}
+
+Test StxFieldSub {
+    test { let p = StxPoint { x: 10, y: 3 }; return p.x - p.y }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test StxMutateX {
+    test {
+        var p = StxPoint { x: 1, y: 2 }
+        p.x = 99
+        return p.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(99); return e }
+}
+
+Test StxMutateY {
+    test {
+        var p = StxPoint { x: 1, y: 2 }
+        p.y = 77
+        return p.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(77); return e }
+}
+
+Test StxRectOriginX {
+    test {
+        let r = StxRect {
+            origin: StxPoint { x: 10, y: 20 },
+            size: StxPoint { x: 5, y: 8 },
+            label: 3
+        }
+        return r.origin.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StxRectOriginY {
+    test {
+        let r = StxRect {
+            origin: StxPoint { x: 10, y: 20 },
+            size: StxPoint { x: 5, y: 8 },
+            label: 3
+        }
+        return r.origin.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test StxRectSizeY {
+    test {
+        let r = StxRect {
+            origin: StxPoint { x: 10, y: 20 },
+            size: StxPoint { x: 5, y: 8 },
+            label: 3
+        }
+        return r.size.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(8); return e }
+}
+
+Test StxRectLabel {
+    test {
+        let r = StxRect {
+            origin: StxPoint { x: 10, y: 20 },
+            size: StxPoint { x: 5, y: 8 },
+            label: 3
+        }
+        return r.label
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test StxCubeLoX {
+    test {
+        let c = StxCube {
+            lo: StxPoint { x: 1, y: 2 },
+            hi: StxPoint { x: 10, y: 20 },
+            depth: 5
+        }
+        return c.lo.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test StxCubeHiY {
+    test {
+        let c = StxCube {
+            lo: StxPoint { x: 1, y: 2 },
+            hi: StxPoint { x: 10, y: 20 },
+            depth: 5
+        }
+        return c.hi.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test StxCubeDepth {
+    test {
+        let c = StxCube {
+            lo: StxPoint { x: 1, y: 2 },
+            hi: StxPoint { x: 10, y: 20 },
+            depth: 5
+        }
+        return c.depth
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test StxZeroStruct {
+    test { let p = StxPoint { x: 0, y: 0 }; return p.sum() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Group 2: Methods
+// ---------------------------------------------------------------------------
+
+Test StxMethodSum {
+    test { let p = StxPoint { x: 3, y: 7 }; return p.sum() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StxMethodProduct {
+    test { let p = StxPoint { x: 4, y: 6 }; return p.product() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(24); return e }
+}
+
+Test StxMethodMax {
+    test { let p = StxPoint { x: 3, y: 7 }; return p.max() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test StxMethodMin {
+    test { let p = StxPoint { x: 3, y: 7 }; return p.min() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test StxMethodScaleX {
+    test { let p = StxPoint { x: 3, y: 7 }; let q = p.scale(2); return q.x }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(6); return e }
+}
+
+Test StxMethodScaleY {
+    test { let p = StxPoint { x: 3, y: 7 }; let q = p.scale(3); return q.y }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(21); return e }
+}
+
+Test StxMethodScaleSum {
+    // p={3,7}, scale(2) → {6,14}, sum=20
+    test { let p = StxPoint { x: 3, y: 7 }; let q = p.scale(2); return q.sum() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test StxMethodScaleChain {
+    // p={2,3}, scale(3)→{6,9}, scale(4)→{24,36}, x=24
+    test {
+        let p = StxPoint { x: 2, y: 3 }
+        let q1 = p.scale(3)
+        let q2 = q1.scale(4)
+        return q2.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(24); return e }
+}
+
+Test StxRectArea {
+    // size={6,7}, area=42
+    test {
+        let r = StxRect {
+            origin: StxPoint { x: 0, y: 0 },
+            size: StxPoint { x: 6, y: 7 },
+            label: 0
+        }
+        return r.area()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test StxRectPerimeter {
+    // size={6,7}, perimeter=2*(6+7)=26
+    test {
+        let r = StxRect {
+            origin: StxPoint { x: 0, y: 0 },
+            size: StxPoint { x: 6, y: 7 },
+            label: 0
+        }
+        return r.perimeter()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(26); return e }
+}
+
+Test StxRectLabelPlusArea {
+    // label=5, size={4,5}, area=20, labelPlusArea=25
+    test {
+        let r = StxRect {
+            origin: StxPoint { x: 0, y: 0 },
+            size: StxPoint { x: 4, y: 5 },
+            label: 5
+        }
+        return r.labelPlusArea()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(25); return e }
+}
+
+Test StxCubeVolume {
+    // lo={0,0}, hi={4,5}, depth=3, volume=4*5*3=60
+    test {
+        let c = StxCube {
+            lo: StxPoint { x: 0, y: 0 },
+            hi: StxPoint { x: 4, y: 5 },
+            depth: 3
+        }
+        return c.volume()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(60); return e }
+}
+
+Test StxCubeSpan {
+    // lo={0,0}, hi={4,5}, depth=3, span=(4-0)+(5-0)+3=12
+    test {
+        let c = StxCube {
+            lo: StxPoint { x: 0, y: 0 },
+            hi: StxPoint { x: 4, y: 5 },
+            depth: 3
+        }
+        return c.span()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
+}
+
+Test StxMethodLoop {
+    // i=0..9: p={x:i, y:i+1}, p.sum()=2i+1; sum=1+3+5+7+9+11+13+15+17+19=100
+    test {
+        var acc = 0
+        var i = 0
+        while i < 10 {
+            let p = StxPoint { x: i, y: i + 1 }
+            acc = acc + p.sum()
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(100); return e }
+}
+
+Test StxMethodArith {
+    // p={5,3}, sum=8, max=5, min=3, 8*5-3=37
+    test {
+        let p = StxPoint { x: 5, y: 3 }
+        return p.sum() * p.max() - p.min()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(37); return e }
+}
+
+Test StxPointSumHelper {
+    test { let p = StxPoint { x: 4, y: 6 }; return stxPointSum(p) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StxMethodMaxMin {
+    // p={7,4}, max=7, min=4, diff=3
+    test { let p = StxPoint { x: 7, y: 4 }; return p.max() - p.min() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test StxScaleMaxMin {
+    // p={3,2}, scale(5)={15,10}, max=15, min=10, diff=5
+    test { let p = StxPoint { x: 3, y: 2 }; let q = p.scale(5); return q.max() - q.min() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test StxAreaPerimeterSum {
+    // size={3,4}, area=12, perimeter=2*(3+4)=14, total=26
+    test {
+        let r = StxRect {
+            origin: StxPoint { x: 0, y: 0 },
+            size: StxPoint { x: 3, y: 4 },
+            label: 0
+        }
+        return r.area() + r.perimeter()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(26); return e }
+}
+
+Test StxCubeVolumeSpan {
+    // lo={1,2}, hi={5,6}, depth=2; volume=(4)*(4)*2=32; span=4+4+2=10; total=42
+    test {
+        let c = StxCube {
+            lo: StxPoint { x: 1, y: 2 },
+            hi: StxPoint { x: 5, y: 6 },
+            depth: 2
+        }
+        return c.volume() + c.span()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test StxScaleLoopAcc {
+    // i=0..4: p={x:i+1, y:i+1}, q=p.scale(i+1), q.sum()=2*(i+1)^2
+    // i=0: 2*1=2; i=1: 2*4=8; i=2: 2*9=18; i=3: 2*16=32; i=4: 2*25=50 → total=110
+    test {
+        var acc = 0
+        var i = 0
+        while i < 5 {
+            let p = StxPoint { x: i + 1, y: i + 1 }
+            let q = p.scale(i + 1)
+            acc = acc + q.sum()
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(110); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Group 3: borrow mut writeback
+// ---------------------------------------------------------------------------
+
+Test StxBorrowBumpX {
+    test {
+        var p = StxPoint { x: 5, y: 3 }
+        stxBumpX(p)
+        return p.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(6); return e }
+}
+
+Test StxBorrowBumpBoth {
+    // p={5,3}, bumpBoth → {6,4}, sum=10
+    test {
+        var p = StxPoint { x: 5, y: 3 }
+        stxBumpBoth(p)
+        return p.x + p.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StxBorrowBumpLoop {
+    // p={0,0}, 10x bumpBoth → {10,10}, return p.x=10
+    test {
+        var p = StxPoint { x: 0, y: 0 }
+        var i = 0
+        while i < 10 {
+            stxBumpBoth(p)
+            i = i + 1
+        }
+        return p.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StxBorrowBumpYSum {
+    // p={5,3}, 5x bumpY → y=8
+    test {
+        var p = StxPoint { x: 5, y: 3 }
+        var i = 0
+        while i < 5 {
+            stxBumpY(p)
+            i = i + 1
+        }
+        return p.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(8); return e }
+}
+
+Test StxBorrowAddN {
+    // p={1,2}, addN(7) → {8,9}, sum=17
+    test {
+        var p = StxPoint { x: 1, y: 2 }
+        stxAddN(p, 7)
+        return p.x + p.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(17); return e }
+}
+
+Test StxBorrowAddNLoop {
+    // p={0,0}, 5x addN(3) → x=15
+    test {
+        var p = StxPoint { x: 0, y: 0 }
+        var i = 0
+        while i < 5 {
+            stxAddN(p, 3)
+            i = i + 1
+        }
+        return p.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test StxBorrowRectLabel {
+    // r.label=1, bumpRect → label=2
+    test {
+        var r = StxRect {
+            origin: StxPoint { x: 10, y: 10 },
+            size: StxPoint { x: 5, y: 7 },
+            label: 1
+        }
+        stxBumpRect(r)
+        return r.label
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test StxBorrowRectOriginX {
+    // r.origin.x=10, bumpRect → origin.x=12
+    test {
+        var r = StxRect {
+            origin: StxPoint { x: 10, y: 10 },
+            size: StxPoint { x: 5, y: 7 },
+            label: 1
+        }
+        stxBumpRect(r)
+        return r.origin.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
+}
+
+Test StxBorrowRectSizeY {
+    // r.size.y=7, bumpRect → size.y=10
+    test {
+        var r = StxRect {
+            origin: StxPoint { x: 10, y: 10 },
+            size: StxPoint { x: 5, y: 7 },
+            label: 1
+        }
+        stxBumpRect(r)
+        return r.size.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StxBorrowRectLoop {
+    // r.label=0, origin.x=0, size.y=3, 10x bumpRect → label=10, origin.x=20, size.y=33
+    test {
+        var r = StxRect {
+            origin: StxPoint { x: 0, y: 0 },
+            size: StxPoint { x: 3, y: 3 },
+            label: 0
+        }
+        var i = 0
+        while i < 10 {
+            stxBumpRect(r)
+            i = i + 1
+        }
+        return r.label
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StxBorrowRectLoopSizeY {
+    // r.size.y=3, 10x bumpRect → size.y=3+30=33
+    test {
+        var r = StxRect {
+            origin: StxPoint { x: 0, y: 0 },
+            size: StxPoint { x: 3, y: 3 },
+            label: 0
+        }
+        var i = 0
+        while i < 10 {
+            stxBumpRect(r)
+            i = i + 1
+        }
+        return r.size.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(33); return e }
+}
+
+Test StxBorrowCubeDepth {
+    // c.depth=10, bumpCube → depth=15
+    test {
+        var c = StxCube {
+            lo: StxPoint { x: 1, y: 2 },
+            hi: StxPoint { x: 5, y: 5 },
+            depth: 10
+        }
+        stxBumpCube(c)
+        return c.depth
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test StxBorrowCubeLoX {
+    // c.lo.x=1, bumpCube → lo.x=2
+    test {
+        var c = StxCube {
+            lo: StxPoint { x: 1, y: 2 },
+            hi: StxPoint { x: 5, y: 5 },
+            depth: 10
+        }
+        stxBumpCube(c)
+        return c.lo.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test StxBorrowCubeLoop {
+    // c.depth=0, lo.x=0, 20x bumpCube → depth=100
+    test {
+        var c = StxCube {
+            lo: StxPoint { x: 0, y: 0 },
+            hi: StxPoint { x: 10, y: 10 },
+            depth: 0
+        }
+        var i = 0
+        while i < 20 {
+            stxBumpCube(c)
+            i = i + 1
+        }
+        return c.depth
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(100); return e }
+}
+
+Test StxBorrowBumpBothLoop25 {
+    // p={0,0}, 25x bumpBoth → y=25
+    test {
+        var p = StxPoint { x: 0, y: 0 }
+        var i = 0
+        while i < 25 {
+            stxBumpBoth(p)
+            i = i + 1
+        }
+        return p.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(25); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Group 4: Value-copy independence
+// ---------------------------------------------------------------------------
+
+Test StxCopyXIndep {
+    // copy struct, mutate copy.x, original.x unchanged
+    test {
+        let p = StxPoint { x: 5, y: 3 }
+        var q = p
+        q.x = 99
+        return p.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test StxCopyYIndep {
+    test {
+        let p = StxPoint { x: 5, y: 3 }
+        var q = p
+        q.y = 77
+        return p.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test StxCopyBothUnchanged {
+    // copy, mutate both fields of copy, original sum unchanged
+    test {
+        let p = StxPoint { x: 5, y: 3 }
+        var q = p
+        q.x = 1
+        q.y = 1
+        return p.x + p.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(8); return e }
+}
+
+Test StxCopyNestedOriginX {
+    test {
+        let r = StxRect {
+            origin: StxPoint { x: 10, y: 20 },
+            size: StxPoint { x: 5, y: 5 },
+            label: 0
+        }
+        var r2 = r
+        r2.origin.x = 999
+        return r.origin.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StxCopyNestedSizeY {
+    test {
+        let r = StxRect {
+            origin: StxPoint { x: 10, y: 20 },
+            size: StxPoint { x: 5, y: 5 },
+            label: 0
+        }
+        var r2 = r
+        r2.size.y = 888
+        return r.size.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test StxCopyMutateCopy {
+    // original 5, copy gets 100; copy.x + original.x = 105
+    test {
+        let p = StxPoint { x: 5, y: 5 }
+        var q = p
+        q.x = 100
+        return q.x + p.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(105); return e }
+}
+
+Test StxCopyBorrowMutNoEffect {
+    // borrow mut on copy; original.x unchanged
+    test {
+        let p = StxPoint { x: 3, y: 4 }
+        var q = p
+        stxBumpX(q)
+        return p.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test StxCopyLoopIndependence {
+    // i=0..4: copy p={i,i}, zero copy.x, acc += p.x = i; sum=0+1+2+3+4=10
+    test {
+        var acc = 0
+        var i = 0
+        while i < 5 {
+            let p = StxPoint { x: i, y: i }
+            var q = p
+            q.x = 0
+            acc = acc + p.x
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StxCopyScaleOriginalUnchanged {
+    // scale returns new struct; original p.x unchanged
+    test {
+        let p = StxPoint { x: 3, y: 5 }
+        let q = p.scale(10)
+        return p.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test StxCopyCubeDepth {
+    test {
+        let c = StxCube {
+            lo: StxPoint { x: 1, y: 2 },
+            hi: StxPoint { x: 5, y: 6 },
+            depth: 7
+        }
+        var c2 = c
+        c2.depth = 999
+        return c.depth
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Group 5: Arrays of structs
+// ---------------------------------------------------------------------------
+
+Test StxArrRead1X {
+    // pts[1].x=3
+    test {
+        var pts: [StxPoint] = []
+        pts.append(StxPoint { x: 1, y: 2 })
+        pts.append(StxPoint { x: 3, y: 4 })
+        pts.append(StxPoint { x: 5, y: 6 })
+        return pts[1].x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test StxArrRead2Y {
+    // pts[2].y=6
+    test {
+        var pts: [StxPoint] = []
+        pts.append(StxPoint { x: 1, y: 2 })
+        pts.append(StxPoint { x: 3, y: 4 })
+        pts.append(StxPoint { x: 5, y: 6 })
+        return pts[2].y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(6); return e }
+}
+
+Test StxArrSumX {
+    // sum pts[i].x for i=0..2 = 1+3+5=9
+    test {
+        var pts: [StxPoint] = []
+        pts.append(StxPoint { x: 1, y: 2 })
+        pts.append(StxPoint { x: 3, y: 4 })
+        pts.append(StxPoint { x: 5, y: 6 })
+        var s = 0
+        var i = 0
+        while i < pts.count {
+            s = s + pts[i].x
+            i = i + 1
+        }
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(9); return e }
+}
+
+Test StxArrForInSumY {
+    // for-in: sum pts[i].y for i=0..2 = 2+4+6=12
+    test {
+        var pts: [StxPoint] = []
+        pts.append(StxPoint { x: 1, y: 2 })
+        pts.append(StxPoint { x: 3, y: 4 })
+        pts.append(StxPoint { x: 5, y: 6 })
+        var s = 0
+        for p in pts {
+            s = s + p.y
+        }
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
+}
+
+Test StxArrWriteX {
+    test {
+        var pts: [StxPoint] = []
+        pts.append(StxPoint { x: 10, y: 20 })
+        pts[0].x = 77
+        return pts[0].x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(77); return e }
+}
+
+Test StxArrWriteY {
+    test {
+        var pts: [StxPoint] = []
+        pts.append(StxPoint { x: 10, y: 20 })
+        pts[0].y = 88
+        return pts[0].y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(88); return e }
+}
+
+Test StxArrDeepWriteRectOriginX {
+    test {
+        var rects: [StxRect] = []
+        rects.append(StxRect {
+            origin: StxPoint { x: 10, y: 20 },
+            size: StxPoint { x: 5, y: 5 },
+            label: 0
+        })
+        rects[0].origin.x = 77
+        return rects[0].origin.x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(77); return e }
+}
+
+Test StxArrDeepWriteRectSizeY {
+    test {
+        var rects: [StxRect] = []
+        rects.append(StxRect {
+            origin: StxPoint { x: 0, y: 0 },
+            size: StxPoint { x: 5, y: 5 },
+            label: 0
+        })
+        rects.append(StxRect {
+            origin: StxPoint { x: 1, y: 1 },
+            size: StxPoint { x: 3, y: 3 },
+            label: 1
+        })
+        rects[1].size.y = 44
+        return rects[1].size.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(44); return e }
+}
+
+Test StxArrMixedWrites {
+    // 4 pts, write to specific fields, sum=10+20+30+40=100
+    test {
+        var pts: [StxPoint] = []
+        pts.append(StxPoint { x: 0, y: 0 })
+        pts.append(StxPoint { x: 0, y: 0 })
+        pts.append(StxPoint { x: 0, y: 0 })
+        pts.append(StxPoint { x: 0, y: 0 })
+        pts[0].x = 10
+        pts[1].y = 20
+        pts[2].x = 30
+        pts[3].y = 40
+        return pts[0].x + pts[1].y + pts[2].x + pts[3].y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(100); return e }
+}
+
+Test StxArrLoop100 {
+    // 100 pts where x=i, y=100-i; sum of p.sum()=100 each; total=10000
+    test {
+        var pts: [StxPoint] = []
+        var i = 0
+        while i < 100 {
+            pts.append(StxPoint { x: i, y: 100 - i })
+            i = i + 1
+        }
+        var acc = 0
+        var j = 0
+        while j < pts.count {
+            acc = acc + pts[j].sum()
+            j = j + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10000); return e }
+}
+
+Test StxArrCount {
+    // append 7 pts, count=7
+    test {
+        var pts: [StxPoint] = []
+        var i = 0
+        while i < 7 {
+            pts.append(StxPoint { x: i, y: 0 })
+            i = i + 1
+        }
+        return pts.count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test StxArrForInMethodSum {
+    // i=0..4: p={x:i, y:i*2}, p.sum()=3i; total=0+3+6+9+12=30
+    test {
+        var pts: [StxPoint] = []
+        var i = 0
+        while i < 5 {
+            pts.append(StxPoint { x: i, y: i * 2 })
+            i = i + 1
+        }
+        var acc = 0
+        for p in pts {
+            acc = acc + p.sum()
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+Test StxArrAfterDeepWrite {
+    // pts=[{x:1},{x:2},{x:3}], set pts[1].x=50, sum x = 1+50+3=54
+    test {
+        var pts: [StxPoint] = []
+        pts.append(StxPoint { x: 1, y: 0 })
+        pts.append(StxPoint { x: 2, y: 0 })
+        pts.append(StxPoint { x: 3, y: 0 })
+        pts[1].x = 50
+        var s = 0
+        var i = 0
+        while i < pts.count {
+            s = s + pts[i].x
+            i = i + 1
+        }
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(54); return e }
+}
+
+Test StxArrTrapEmpty {
+    test {
+        var pts: [StxPoint] = []
+        return pts[0].x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test StxArrTrapOOB {
+    test {
+        var pts: [StxPoint] = []
+        pts.append(StxPoint { x: 1, y: 2 })
+        return pts[99].x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Group 6: StxBag (struct with array field)
+// ---------------------------------------------------------------------------
+
+Test StxBagTotal5 {
+    // stxMakeBag(5): tag=5, items=[1,2,3,4,5], total=5+15=20
+    test {
+        var b = stxMakeBag(5)
+        return b.total()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test StxBagTotal0 {
+    // stxMakeBag(0): tag=0, items=[], total=0
+    test {
+        var b = stxMakeBag(0)
+        return b.total()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test StxBagCount10 {
+    test {
+        var b = stxMakeBag(10)
+        return b.count()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StxBagItems2 {
+    // stxMakeBag(5).items=[1,2,3,4,5], items[2]=3
+    test {
+        var b = stxMakeBag(5)
+        return b.items[2]
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test StxBagTag {
+    test {
+        var b = stxMakeBag(5)
+        return b.tag
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test StxBagTotal1 {
+    // stxMakeBag(1): tag=1, items=[1], total=2
+    test {
+        var b = stxMakeBag(1)
+        return b.total()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test StxBagTotal3 {
+    // stxMakeBag(3): tag=3, items=[1,2,3], total=9
+    test {
+        var b = stxMakeBag(3)
+        return b.total()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(9); return e }
+}
+
+Test StxBagLoopTotal {
+    // n=1..5: total(n)=n+n*(n+1)/2 → 2+5+9+14+20=50
+    test {
+        var acc = 0
+        var n = 1
+        while n <= 5 {
+            var b = stxMakeBag(n)
+            acc = acc + b.total()
+            n = n + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(50); return e }
+}
+
+Test StxBagItems0 {
+    // stxMakeBag(3).items[0]=1
+    test {
+        var b = stxMakeBag(3)
+        return b.items[0]
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test StxBagItems1 {
+    // stxMakeBag(3).items[1]=2
+    test {
+        var b = stxMakeBag(3)
+        return b.items[1]
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Group 7: Trap tests
+// ---------------------------------------------------------------------------
+
+Test StxTrapDivZeroField {
+    // p.x / p.y where p.y=0 → trap
+    test {
+        let p = StxPoint { x: 5, y: 0 }
+        return p.x / p.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test StxTrapModZero {
+    test { return 7 % 0 }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test StxTrapDivZeroConst {
+    test { return 1 / 0 }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test StxTrapArrLargeIndex {
+    test {
+        var pts: [StxPoint] = []
+        pts.append(StxPoint { x: 1, y: 2 })
+        pts.append(StxPoint { x: 3, y: 4 })
+        return pts[99].x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test StxTrapDeepWriteOOB {
+    test {
+        var rects: [StxRect] = []
+        rects.append(StxRect {
+            origin: StxPoint { x: 0, y: 0 },
+            size: StxPoint { x: 5, y: 5 },
+            label: 1
+        })
+        return rects[5].label
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test StxTrapBagOOB {
+    test {
+        var b = stxMakeBag(3)
+        return b.items[99]
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test StxTrapModZeroField {
+    test {
+        let p = StxPoint { x: 5, y: 0 }
+        return p.x % p.y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}

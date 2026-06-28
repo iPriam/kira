@@ -1,0 +1,38 @@
+// Regression: deeper/mixed places rooted at an array index must round-trip on all
+// backends: a 3-deep field chain (`arr[i].b.a.c = v`) and an element-of-a-nested
+// -array followed by an index (`grid[i].cells[j].xs[k] = v`).
+struct A {
+    var c: Int
+}
+
+struct B {
+    var a: A
+}
+
+struct C {
+    var b: B
+}
+
+struct Cell {
+    var xs: [Int]
+}
+
+struct Grid {
+    var cells: [Cell]
+}
+
+@Main
+function main() {
+    var deep: [C] = []
+    deep.append(C { b: B { a: A { c: 1 } } })
+    deep[0].b.a.c = 333
+    print(deep[0].b.a.c)
+
+    var grid: [Grid] = []
+    grid.append(Grid { cells: [] })
+    grid[0].cells.append(Cell { xs: [7, 8, 9] })
+    grid[0].cells[0].xs[2] = 555
+    print(grid[0].cells[0].xs[2])
+    print(grid[0].cells[0].xs[0])
+    return
+}

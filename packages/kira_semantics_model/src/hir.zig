@@ -483,6 +483,7 @@ pub const Expr = union(enum) {
     native_recover: NativeRecoverExpr,
     binary: BinaryExpr,
     unary: UnaryExpr,
+    cast: CastExpr,
     conditional: ConditionalExpr,
     construct: ConstructExpr,
     construct_enum_variant: ConstructEnumVariantExpr,
@@ -615,6 +616,14 @@ pub const BinaryExpr = struct {
 
 pub const UnaryExpr = struct {
     op: UnaryOp,
+    operand: *Expr,
+    ty: ResolvedType,
+    span: source_pkg.Span,
+};
+
+// `Int(x)` / `Float(x)` numeric cast. `ty` is the destination numeric type
+// (integer or float); `operand` is the (already type-checked numeric) source.
+pub const CastExpr = struct {
     operand: *Expr,
     ty: ResolvedType,
     span: source_pkg.Span,
@@ -773,6 +782,7 @@ pub fn exprType(expr: Expr) ResolvedType {
         .native_recover => |node| node.ty,
         .binary => |node| node.ty,
         .unary => |node| node.ty,
+        .cast => |node| node.ty,
         .conditional => |node| node.ty,
         .construct => |node| node.ty,
         .construct_enum_variant => |node| node.ty,

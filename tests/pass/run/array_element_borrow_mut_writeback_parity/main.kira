@@ -1,0 +1,21 @@
+// Regression: passing an array element `arr[i]` to a `borrow mut` parameter
+// mutated only the VM's materialized element copy; the write-back into the array
+// was missing, so the mutation was lost on VM/hybrid.
+struct Row {
+    var v: Int
+}
+
+function bump(r: borrow mut Row) {
+    r.v = r.v + 1
+    return
+}
+
+@Main
+function main() {
+    var arr: [Row] = []
+    arr.append(Row { v: 5 })
+    bump(arr[0])
+    bump(arr[0])
+    print(arr[0].v)
+    return
+}

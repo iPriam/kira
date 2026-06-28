@@ -47,6 +47,11 @@ pub const OpCode = enum(u8) {
     call_virtual,
     call_value,
     ret,
+    // Numeric Int<->Float cast. Appended after the last pre-existing serialized
+    // opcode (rather than inserted mid-enum) so it does not shift the serialized
+    // tag of any earlier instruction; old KBC modules still deserialize. New
+    // modules carrying it are written as KBC7.
+    convert,
     // --- VM-internal fused instructions ------------------------------------
     // Produced exclusively by the VM's decode pass (vm_prepare.zig) inside its
     // private per-function code copies. They never appear in compiler output
@@ -110,6 +115,10 @@ pub const Instruction = union(OpCode) {
     call_virtual: struct { receiver: u32, static_type_name: []const u8, method_name: []const u8, args: []const u32, return_ty: TypeRef = .{ .kind = .void }, dst: ?u32 = null },
     call_value: struct { callee: u32, args: []const u32, param_ownership: []const ownership_mode.OwnershipMode = &.{}, dst: ?u32 = null },
     ret: struct { src: ?u32 = null },
+    // Numeric cast; `to_float` selects the target (true => Int->Float, false =>
+    // Float->Int, truncating/saturating). Placed after `ret` to match the
+    // OpCode enum's serialization-stable ordering.
+    convert: struct { dst: u32, src: u32, to_float: bool },
     // VM-internal fused forms; see the OpCode comment above.
     // compare(dst, lhs, rhs); branch(dst, ...) where dst is pattern-private.
     fused_compare_branch: struct { lhs: u32, rhs: u32, op: CompareOp, true_target: u32, false_target: u32 },

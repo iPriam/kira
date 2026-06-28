@@ -1,0 +1,38 @@
+// Kira in-depth stress harness.
+//
+// A single monolithic app that exercises the executable surface of Kira in
+// depth and prints a deterministic sequence of checksums. It is meant to be run
+// across every backend:
+//
+//   kira run --backend vm     tests-kik/harness
+//   kira run --backend llvm   tests-kik/harness
+//   kira run --backend hybrid tests-kik/harness
+//
+// The printed output must be byte-identical across all three backends; any
+// divergence is a parity bug. Running under KIRA_RUNTIME_MEMORY_REPORT=1 must
+// report zero live heap/native objects at exit; any non-zero "current" count is
+// a leak. A crash on any backend is a memory-safety bug.
+//
+// Each section function returns a deterministic Int checksum derived from the
+// values it computes, so a single wrong value anywhere changes the printed
+// checksum and is caught by the cross-backend diff and the expect.toml.
+
+import Foundation
+
+@Main
+function main() {
+    print("kik-harness-begin")
+    print(scalarsSection())
+    print(collectionsSection())
+    print(structsSection())
+    print(enumsSection())
+    print(closuresSection())
+    print(ownershipSection())
+    print(strSection())
+    print(genSection())
+    print(clsSection())
+    print(cfSection())
+    print(aggSection())
+    print("kik-harness-end")
+    return
+}

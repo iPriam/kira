@@ -1,0 +1,25 @@
+// Exercises the Int()/Float() numeric cast across all backends: widening,
+// truncation toward zero (including negatives), identity casts, casts used
+// inside arithmetic and loops, and out-of-range Float->Int saturation (which
+// must agree between the VM's clamp and the LLVM backend's saturating lowering).
+@Main
+function main() {
+    print(Float(7))
+    print(Int(2.9))
+    print(Int(0.0 - 2.9))
+    print(Float(10) / 4.0)
+    print(Int(2.5))
+    print(Int(Float(5)))
+    print(Float(Int(3.99)))
+    var sum = 0
+    var i = 0
+    while i < 5 {
+        sum = sum + Int(1.5)
+        i = i + 1
+    }
+    print(sum)
+    let big = 1000000000000000000000000000000.0
+    print(Int(big))
+    print(Int(0.0 - big))
+    return
+}

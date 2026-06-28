@@ -1,0 +1,636 @@
+// Callback / closure cross-bridge depth tests.
+// Prefix: fcb / Fcb. No `import Foundation` (covered by main.kira flat-package).
+//
+// Three native helpers drive the bridge:
+//   fcbInvoke        — one closure, called once (owned)
+//   fcbInvokeTwo     — two distinct closures, each called once
+//   fcbInvokeThree   — three distinct closures, each called once
+//
+// "Sandwich" tests call @Native functions from inside VM closures that are
+// themselves invoked by a @Native caller — the full native→VM→native re-entry.
+//
+// "Loop" tests (Group D) drive the bridge from the @Runtime test body, creating
+// and crossing with a fresh closure each iteration to stress for leaks/UAF.
+//
+// Capture tests (Group K) exercise closures that capture scalar `let` bindings
+// crossing the bridge — including several DISTINCT captured closures handed to
+// native in one call or in sequence. These regress FF1 (fixed): a consumed
+// closure's pointer was reused by a later closure and the export cache returned
+// the stale native block, so distinct captured closures dispatched to the first
+// one's body. They now dispatch correctly.
+
+// ── Native bridge helpers ────────────────────────────────────────────────────
+
+@Native
+function fcbInvoke(callback: (Int) -> Int, seed: Int) -> Int {
+    return callback(seed)
+}
+
+@Native
+function fcbInvokeTwo(f1: (Int) -> Int, f2: (Int) -> Int, a: Int, b: Int) -> Int {
+    return f1(a) + f2(b)
+}
+
+@Native
+function fcbInvokeThree(f1: (Int) -> Int, f2: (Int) -> Int, f3: (Int) -> Int, a: Int, b: Int, c: Int) -> Int {
+    return f1(a) + f2(b) + f3(c)
+}
+
+// ── Group A: fcbInvoke — arithmetic closures, no captures ────────────────────
+
+Test FcbIdentity {
+    test {
+        let cb: (Int) -> Int = { x in return x }
+        return fcbInvoke(move cb, 42)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test FcbConstant {
+    test {
+        let cb: (Int) -> Int = { x in return 77 }
+        return fcbInvoke(move cb, 0)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(77); return e }
+}
+
+Test FcbDouble {
+    test {
+        let cb: (Int) -> Int = { x in return x * 2 }
+        return fcbInvoke(move cb, 6)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
+}
+
+Test FcbAddFive {
+    test {
+        let cb: (Int) -> Int = { x in return x + 5 }
+        return fcbInvoke(move cb, 3)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(8); return e }
+}
+
+Test FcbNegate {
+    test {
+        let cb: (Int) -> Int = { x in return 0 - x }
+        return fcbInvoke(move cb, 9)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0 - 9); return e }
+}
+
+Test FcbSquare {
+    test {
+        let cb: (Int) -> Int = { x in return x * x }
+        return fcbInvoke(move cb, 7)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(49); return e }
+}
+
+Test FcbLinear {
+    test {
+        let cb: (Int) -> Int = { x in return x * 3 + 6 }
+        return fcbInvoke(move cb, 4)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(18); return e }
+}
+
+Test FcbSubFromConstant {
+    test {
+        let cb: (Int) -> Int = { x in return 10 - x }
+        return fcbInvoke(move cb, 3)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+// ── Group B: fcbInvoke — closure capturing scalar lets ────────────────────────
+// Only the first-encountered capture closure is kept; see the bug note above.
+
+Test FcbCaptureAdd {
+    test {
+        let bonus = 10
+        let cb: (Int) -> Int = { x in return x + bonus }
+        return fcbInvoke(move cb, 5)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+// ── Group C: fcbInvoke — closure calls @Native inside (crash sandwich) ────────
+// The closure (VM) calls a @Native function while itself being invoked by
+// a @Native caller: the full native → VM closure → native re-entry path.
+
+Test FcbSandwichAddScaled {
+    test {
+        let cb: (Int) -> Int = { x in return fsbAddScaled(x, 1, 3) }
+        return fcbInvoke(move cb, 5)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(18); return e }
+}
+
+Test FcbSandwichStructWidth {
+    test {
+        let cb: (Int) -> Int = { x in
+            let s = fsbRootSize()
+            return s.width + x
+        }
+        return fcbInvoke(move cb, 0)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(320); return e }
+}
+
+Test FcbSandwichStructHeight {
+    test {
+        let cb: (Int) -> Int = { x in
+            let s = fsbRootSize()
+            return s.height + x
+        }
+        return fcbInvoke(move cb, 0)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(240); return e }
+}
+
+Test FcbSandwichStructSum {
+    test {
+        let cb: (Int) -> Int = { x in
+            let s = fsbRootSize()
+            return s.width + s.height + x
+        }
+        return fcbInvoke(move cb, 40)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(600); return e }
+}
+
+Test FcbSandwichNested {
+    test {
+        let cb: (Int) -> Int = { x in
+            return fsbAddScaled(fsbAddScaled(x, 0, 2), 0, 3)
+        }
+        return fcbInvoke(move cb, 2)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
+}
+
+// ── Group D: @Runtime loop body — bridge churn for leaks/UAF ─────────────────
+// Each iteration creates a fresh VM closure and moves it into fcbInvoke,
+// crossing the native<->VM bridge N times per test.
+
+Test FcbLoopAddOne100 {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 100 {
+            let cb: (Int) -> Int = { x in return x + 1 }
+            acc = fcbInvoke(move cb, acc)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(100); return e }
+}
+
+Test FcbLoopAddOne500 {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 500 {
+            let cb: (Int) -> Int = { x in return x + 1 }
+            acc = fcbInvoke(move cb, acc)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(500); return e }
+}
+
+Test FcbLoopDouble5 {
+    test {
+        var acc = 1
+        var i = 0
+        while i < 5 {
+            let cb: (Int) -> Int = { x in return x * 2 }
+            acc = fcbInvoke(move cb, acc)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(32); return e }
+}
+
+Test FcbLoopDouble8 {
+    test {
+        var acc = 1
+        var i = 0
+        while i < 8 {
+            let cb: (Int) -> Int = { x in return x * 2 }
+            acc = fcbInvoke(move cb, acc)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(256); return e }
+}
+
+Test FcbLoopSandwichDouble5 {
+    test {
+        var acc = 3
+        var i = 0
+        while i < 5 {
+            let cb: (Int) -> Int = { x in return fsbAddScaled(x, 0, 2) }
+            acc = fcbInvoke(move cb, acc)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(96); return e }
+}
+
+Test FcbLoopSandwichStruct3 {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 3 {
+            let cb: (Int) -> Int = { x in
+                let s = fsbRootSize()
+                return x + s.height
+            }
+            acc = fcbInvoke(move cb, acc)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(720); return e }
+}
+
+// ── Group E: fcbInvokeTwo — two distinct owned closures, each called once ─────
+
+Test FcbTwoArithmetic {
+    test {
+        let f1: (Int) -> Int = { x in return x + 1 }
+        let f2: (Int) -> Int = { x in return x * 2 }
+        return fcbInvokeTwo(move f1, move f2, 9, 5)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test FcbTwoSandwiches {
+    test {
+        let f1: (Int) -> Int = { x in return fsbAddScaled(x, 0, 2) }
+        let f2: (Int) -> Int = { x in return fsbAddScaled(x, 0, 3) }
+        return fcbInvokeTwo(move f1, move f2, 3, 2)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
+}
+
+Test FcbTwoMixed {
+    test {
+        let f1: (Int) -> Int = { x in return x + 1 }
+        let f2: (Int) -> Int = { x in
+            let s = fsbRootSize()
+            return s.width + x
+        }
+        return fcbInvokeTwo(move f1, move f2, 9, 0)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(330); return e }
+}
+
+Test FcbTwoNegAndPos {
+    test {
+        let f1: (Int) -> Int = { x in return x * 2 }
+        let f2: (Int) -> Int = { x in return 0 - x * 2 }
+        return fcbInvokeTwo(move f1, move f2, 5, 5)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+// ── Group F: fcbInvokeThree — three distinct owned closures, each called once ─
+
+Test FcbThreeIdentities {
+    test {
+        let f1: (Int) -> Int = { x in return x }
+        let f2: (Int) -> Int = { x in return x }
+        let f3: (Int) -> Int = { x in return x }
+        return fcbInvokeThree(move f1, move f2, move f3, 1, 2, 3)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(6); return e }
+}
+
+Test FcbThreeDoubles {
+    test {
+        let f1: (Int) -> Int = { x in return x * 2 }
+        let f2: (Int) -> Int = { x in return x * 2 }
+        let f3: (Int) -> Int = { x in return x * 2 }
+        return fcbInvokeThree(move f1, move f2, move f3, 1, 2, 3)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
+}
+
+Test FcbThreeMixedArith {
+    test {
+        let f1: (Int) -> Int = { x in return x + 1 }
+        let f2: (Int) -> Int = { x in return x * 2 }
+        let f3: (Int) -> Int = { x in return x * x }
+        return fcbInvokeThree(move f1, move f2, move f3, 4, 3, 2)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test FcbThreeSandwiches {
+    test {
+        let f1: (Int) -> Int = { x in return fsbAddScaled(x, 0, 2) }
+        let f2: (Int) -> Int = { x in return fsbAddScaled(x, 0, 2) }
+        let f3: (Int) -> Int = { x in return fsbAddScaled(x, 0, 2) }
+        return fcbInvokeThree(move f1, move f2, move f3, 1, 2, 3)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
+}
+
+// ── Group G: sequential multi-call in test body ───────────────────────────────
+
+Test FcbSequentialTwoRaw {
+    test {
+        let cb1: (Int) -> Int = { x in return x + 1 }
+        let cb2: (Int) -> Int = { x in return x * 2 }
+        let r1 = fcbInvoke(move cb1, 5)
+        let r2 = fcbInvoke(move cb2, 5)
+        return r1 + r2
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(16); return e }
+}
+
+Test FcbSequentialSandwich {
+    test {
+        let cb1: (Int) -> Int = { x in return fsbAddScaled(x, 1, 2) }
+        let cb2: (Int) -> Int = { x in
+            let s = fsbRootSize()
+            return s.width + x
+        }
+        let r1 = fcbInvoke(move cb1, 2)
+        let r2 = fcbInvoke(move cb2, 0)
+        return r1 + r2
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(326); return e }
+}
+
+Test FcbSequentialThree {
+    test {
+        let cb1: (Int) -> Int = { x in return x + 10 }
+        let cb2: (Int) -> Int = { x in return x + 20 }
+        let cb3: (Int) -> Int = { x in return x + 30 }
+        let r1 = fcbInvoke(move cb1, 1)
+        let r2 = fcbInvoke(move cb2, 2)
+        let r3 = fcbInvoke(move cb3, 3)
+        return r1 + r2 + r3
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(66); return e }
+}
+
+// ── Group H: additional no-capture patterns ───────────────────────────────────
+
+Test FcbPolynomial {
+    test {
+        // x*x + x + 1 at x=3 → 9+3+1 = 13
+        let cb: (Int) -> Int = { x in return x * x + x + 1 }
+        return fcbInvoke(move cb, 3)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(13); return e }
+}
+
+Test FcbHighFreqLoop {
+    test {
+        // 1000 bridge crossings: acc += 1 each iteration → 1000
+        var acc = 0
+        var i = 0
+        while i < 1000 {
+            let cb: (Int) -> Int = { x in return x + 1 }
+            acc = fcbInvoke(move cb, acc)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1000); return e }
+}
+
+Test FcbLoopGeometric {
+    test {
+        // acc = acc*2+1 for 10 iterations from 0 → 2^10 - 1 = 1023
+        var acc = 0
+        var i = 0
+        while i < 10 {
+            let cb: (Int) -> Int = { x in return x * 2 + 1 }
+            acc = fcbInvoke(move cb, acc)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1023); return e }
+}
+
+Test FcbSandwichDoubleWidth {
+    test {
+        // fsbRootSize().width=320, 320*2+5 = 645
+        let cb: (Int) -> Int = { x in
+            let s = fsbRootSize()
+            return s.width * 2 + x
+        }
+        return fcbInvoke(move cb, 5)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(645); return e }
+}
+
+Test FcbSandwichProductArgs {
+    test {
+        // fsbAddScaled(7, 7, 1) = (7+7)*1 = 14
+        let cb: (Int) -> Int = { x in return fsbAddScaled(x, x, 1) }
+        return fcbInvoke(move cb, 7)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(14); return e }
+}
+
+Test FcbTwoSquareAndTriple {
+    test {
+        // f1(4)=16, f2(5)=15 → 31
+        let f1: (Int) -> Int = { x in return x * x }
+        let f2: (Int) -> Int = { x in return x * 3 }
+        return fcbInvokeTwo(move f1, move f2, 4, 5)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(31); return e }
+}
+
+Test FcbThreeDistinctArith {
+    test {
+        // f1(1)=11, f2(4)=12, f3(5)=25 → 48
+        let f1: (Int) -> Int = { x in return x + 10 }
+        let f2: (Int) -> Int = { x in return x * 3 }
+        let f3: (Int) -> Int = { x in return x * x }
+        return fcbInvokeThree(move f1, move f2, move f3, 1, 4, 5)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(48); return e }
+}
+
+Test FcbSeqFourSteps {
+    test {
+        // r1=cb1(2)=3, r2=cb2(3)=6, r3=cb3(4)=7, r4=cb4(5)=25 → 41
+        let cb1: (Int) -> Int = { x in return x + 1 }
+        let cb2: (Int) -> Int = { x in return x * 2 }
+        let cb3: (Int) -> Int = { x in return x + 3 }
+        let cb4: (Int) -> Int = { x in return x * x }
+        let r1 = fcbInvoke(move cb1, 2)
+        let r2 = fcbInvoke(move cb2, 3)
+        let r3 = fcbInvoke(move cb3, 4)
+        let r4 = fcbInvoke(move cb4, 5)
+        return r1 + r2 + r3 + r4
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(41); return e }
+}
+
+Test FcbSandwichComposed {
+    test {
+        // fsbAddScaled(5*2, 0, 3) = (10+0)*3 = 30
+        let cb: (Int) -> Int = { x in return fsbAddScaled(x * 2, 0, 3) }
+        return fcbInvoke(move cb, 5)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+// ── Group K: captured-scalar closures across the bridge (FF1 regression) ─────
+
+Test FcbCaptureMul {
+    test {
+        let m = 3
+        let cb: (Int) -> Int = { x in return x * m }
+        return fcbInvoke(move cb, 4)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
+}
+
+Test FcbCaptureTwoScalars {
+    test {
+        let p = 10
+        let q = 5
+        let cb: (Int) -> Int = { x in return x + p + q }
+        return fcbInvoke(move cb, 1)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(16); return e }
+}
+
+Test FcbCaptureNeg {
+    test {
+        let n = 7
+        let cb: (Int) -> Int = { x in return (0 - x) + n }
+        return fcbInvoke(move cb, 3)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+Test FcbCaptureOffset {
+    test {
+        let off = 100
+        let cb: (Int) -> Int = { x in return x + off }
+        return fcbInvoke(move cb, 1)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(101); return e }
+}
+
+Test FcbCaptureComposite {
+    test {
+        let a = 2
+        let b = 3
+        let cb: (Int) -> Int = { x in return x * a + b }
+        return fcbInvoke(move cb, 5)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(13); return e }
+}
+
+Test FcbCaptureSandwich {
+    test {
+        let k = 2
+        let cb: (Int) -> Int = { x in return fsbAddScaled(x, 0, k) }
+        return fcbInvoke(move cb, 5)
+    }
+    // fsbAddScaled(5, 0, 2) = (5 + 0) * 2 = 10
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test FcbCaptureStructSandwich {
+    test {
+        let bonus = 5
+        let cb: (Int) -> Int = { x in
+            let s = fsbRootSize()
+            return s.width + x + bonus
+        }
+        return fcbInvoke(move cb, 0)
+    }
+    // 320 + 0 + 5
+    expect { let e: Result<Int, TestFailure> = Result.Ok(325); return e }
+}
+
+Test FcbLoopCapture50 {
+    test {
+        let base = 1
+        var acc = 0
+        var i = 0
+        while i < 50 {
+            let cb: (Int) -> Int = { x in return x + base }
+            acc = acc + fcbInvoke(move cb, i)
+            i = i + 1
+        }
+        // sum of (i + 1) for i in 0..49 = sum(1..50) = 1275
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1275); return e }
+}
+
+Test FcbLoopCaptureSandwich5 {
+    test {
+        let k = 2
+        var acc = 0
+        var i = 0
+        while i < 5 {
+            let cb: (Int) -> Int = { x in return fsbAddScaled(x, 0, k) }
+            acc = acc + fcbInvoke(move cb, i)
+            i = i + 1
+        }
+        // fsbAddScaled(i, 0, 2) = 2i; sum(2i, i in 0..4) = 20
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test FcbTwoDistinctCaptures {
+    test {
+        let p = 10
+        let cbA: (Int) -> Int = { x in return x + p }
+        let q = 100
+        let cbB: (Int) -> Int = { x in return x + q }
+        // (1 + 10) + (2 + 100) = 113 ; FF1 would give (1+10)+(2+10) = 23
+        return fcbInvokeTwo(move cbA, move cbB, 1, 2)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(113); return e }
+}
+
+Test FcbThreeCaptures {
+    test {
+        let p = 10
+        let cbA: (Int) -> Int = { x in return x + p }
+        let q = 100
+        let cbB: (Int) -> Int = { x in return x + q }
+        let r = 1000
+        let cbC: (Int) -> Int = { x in return x + r }
+        // (1+10) + (2+100) + (3+1000) = 1116
+        return fcbInvokeThree(move cbA, move cbB, move cbC, 1, 2, 3)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1116); return e }
+}
+
+Test FcbSequentialCaptures {
+    test {
+        let p = 10
+        let cbA: (Int) -> Int = { x in return x + p }
+        let r1 = fcbInvoke(move cbA, 1)
+        let q = 100
+        let cbB: (Int) -> Int = { x in return x + q }
+        let r2 = fcbInvoke(move cbB, 1)
+        // 11 + 101 = 112 ; FF1 (stale-pointer reuse) would give 11 + 11 = 22
+        return r1 + r2
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(112); return e }
+}

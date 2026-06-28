@@ -1,0 +1,13 @@
+backends = ["vm", "hybrid"]
+
+[phases.check]
+result = "fail"
+diagnostic_code = "KSEM155"
+diagnostic_title = "expression nests too deeply"
+stage = "semantics"
+
+[phases.build]
+result = "blocked"
+
+[phases.run]
+result = "blocked"

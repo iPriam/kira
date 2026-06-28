@@ -527,6 +527,43 @@ pub fn lowerCallExpr(
         return;
     }
 
+    // `Int(x)` / `Float(x)` numeric casts. Recognized before ordinary function
+    // and constructor resolution: `Int` and `Float` are primitive type names,
+    // not user-callable functions, so a call against them is always a cast.
+    if ((std.mem.eql(u8, callee_name, "Int") or std.mem.eql(u8, callee_name, "Float")) and scope.get(callee_name) == null) {
+        const target_type: model.ResolvedType = if (callee_name[0] == 'I') .{ .kind = .integer } else .{ .kind = .float };
+        if (node.args.len != 1 or node.args[0].label != null) {
+            try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
+                .severity = .@"error",
+                .code = "KSEM118",
+                .title = "invalid numeric cast",
+                .message = try std.fmt.allocPrint(ctx.allocator, "`{s}(...)` is a numeric cast and takes exactly one positional argument.", .{callee_name}),
+                .labels = &.{diagnostics.primaryLabel(node.span, "cast call has the wrong arguments")},
+                .help = "Write the cast as `Int(value)` or `Float(value)` with a single numeric value.",
+            });
+            return error.DiagnosticsEmitted;
+        }
+        const operand = try lowerExpr(ctx, node.args[0].value, imports, scope, function_headers);
+        const operand_ty = model.hir.exprType(operand.*);
+        if (operand_ty.kind != .integer and operand_ty.kind != .float) {
+            try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
+                .severity = .@"error",
+                .code = "KSEM118",
+                .title = "invalid numeric cast",
+                .message = try std.fmt.allocPrint(ctx.allocator, "`{s}(...)` can only convert `Int` or `Float` values.", .{callee_name}),
+                .labels = &.{diagnostics.primaryLabel(node.span, "operand is not a numeric value")},
+                .help = "Pass an `Int` or `Float` expression to the cast.",
+            });
+            return error.DiagnosticsEmitted;
+        }
+        lowered.* = .{ .cast = .{
+            .operand = operand,
+            .ty = target_type,
+            .span = node.span,
+        } };
+        return;
+    }
+
     const imported_qualified = if (function_headers != null)
         shared.importedQualifiedName(ctx, imports, callee_name)
     else

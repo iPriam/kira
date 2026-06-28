@@ -1,0 +1,7 @@
+[project]
+name = "numeric_cast_parity"
+version = "0.1.0"
+
+[defaults]
+execution_mode = "hybrid"
+build_target = "host"

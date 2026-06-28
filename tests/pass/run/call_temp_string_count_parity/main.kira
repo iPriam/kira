@@ -1,0 +1,20 @@
+// Regression (S7): a property access on a call's temporary result
+// (`pick(0).count`, where `pick -> String`) lowered to a `.string_len`
+// node whose `.object` is the call. The function-reachability pass walked
+// `.array_len`/`.field` but NOT `.string_len`, so `pick` was never marked
+// reachable and never lowered, producing `error[KIR001]: ... a lowering
+// obligation was left undischarged`. This asserts VM/LLVM/hybrid all lower
+// and agree.
+function pick(i: Int) -> String {
+    if i == 0 {
+        return "hello"
+    }
+    return "worldwide"
+}
+
+@Main
+function main() {
+    print(pick(0).count)
+    print(pick(1).count)
+    return
+}

@@ -1,0 +1,7 @@
+[project]
+name = "attempt_handle_payloadless_variant"
+version = "0.1.0"
+
+[defaults]
+execution_mode = "hybrid"
+build_target = "host"

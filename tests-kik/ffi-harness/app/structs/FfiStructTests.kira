@@ -1,0 +1,74 @@
+// Native struct & scalar bridging across @Native <-> @Runtime, as Test
+// constructs. No `import Foundation` (main.kira covers the flat package).
+// All top-level names use the `fsb`/`Fsb` prefix.
+
+@Native
+struct FsbSize {
+    var width: Int
+    var height: Int
+}
+
+// @Native function returning a struct BY VALUE (the kira_struct_alloc payload
+// path the VM must free via the matching scheme).
+@Native
+function fsbRootSize() -> FsbSize {
+    return FsbSize { width: 320, height: 240 }
+}
+
+@Native
+function fsbAddScaled(a: Int, b: Int, k: Int) -> Int {
+    return (a + b) * k
+}
+
+// @Native struct passed by borrow into a @Runtime function (native -> VM arg).
+@Runtime
+function fsbArea(s: borrow FsbSize) -> Int {
+    return s.width * s.height
+}
+
+// native -> VM closure -> native struct return (the production "crash sandwich").
+@Native
+function fsbInvoke(callback: (Int) -> Int, seed: Int) -> Int {
+    return callback(seed)
+}
+
+Test FsbStructReturnByValue {
+    test {
+        let s = fsbRootSize()
+        return s.width + s.height
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(560); return e }
+}
+
+Test FsbStructBorrowIntoRuntime {
+    test {
+        let s = fsbRootSize()
+        return fsbArea(s)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(76800); return e }
+}
+
+Test FsbScalarRoundTripLoop {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 50 {
+            acc = acc + fsbAddScaled(i, i + 1, 2)
+            i = i + 1
+        }
+        // sum over i in 0..49 of (2i+1)*2 = 2 * 2500 = 5000
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5000); return e }
+}
+
+Test FsbNativeCallbackBridge {
+    test {
+        let cb: (Int) -> Int = { seed in
+            let inner = fsbRootSize()
+            return inner.width + inner.height + seed
+        }
+        return fsbInvoke(move cb, 100)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(660); return e }
+}

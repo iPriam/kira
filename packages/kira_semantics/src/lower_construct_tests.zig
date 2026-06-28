@@ -187,7 +187,10 @@ fn resultTypeFromResolved(ctx: *shared.Context, value_type: model.ResolvedType) 
 }
 
 fn memberName(allocator: std.mem.Allocator, form_name: []const u8, member: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ form_name, member });
+    // `Foo__test` / `Foo__expect` are valid Kira identifiers (no `.`), so the
+    // synthesized pure-Kira test driver can call them directly. The Zig test
+    // runner reconstructs the same `{name}__{member}` form.
+    return std.fmt.allocPrint(allocator, "{s}__{s}", .{ form_name, member });
 }
 
 fn emit(ctx: *shared.Context, code: []const u8, title: []const u8, span: source_pkg.Span, label: []const u8, help: []const u8) !void {

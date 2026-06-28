@@ -1,0 +1,1378 @@
+// CfxScalarExtraTests.kira
+// Deep scalar test suite: arithmetic identities, operator precedence, integer
+// div/mod edge cases, comparison matrices, boolean truth tables, ternary chains,
+// float checksums, and Gauss/triangular/square-number cross-checks.
+// All top-level names use prefix cfxs / CfxS.
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function cfxsSumTo(n: Int) -> Int {
+    var s = 0
+    var i = 1
+    while i <= n {
+        s = s + i
+        i = i + 1
+    }
+    return s
+}
+
+function cfxsSquareSum(n: Int) -> Int {
+    var s = 0
+    var i = 1
+    while i <= n {
+        s = s + i * i
+        i = i + 1
+    }
+    return s
+}
+
+function cfxsPow(base: Int, exp: Int) -> Int {
+    var r = 1
+    var i = 0
+    while i < exp {
+        r = r * base
+        i = i + 1
+    }
+    return r
+}
+
+function cfxsAbs(n: Int) -> Int {
+    return n >= 0 ? n : (0 - n)
+}
+
+function cfxsGcd(a: Int, b: Int) -> Int {
+    var x = a
+    var y = b
+    while y != 0 {
+        let t = x % y
+        x = y
+        y = t
+    }
+    return x
+}
+
+function cfxsMin(a: Int, b: Int) -> Int {
+    return a < b ? a : b
+}
+
+function cfxsMax(a: Int, b: Int) -> Int {
+    return a > b ? a : b
+}
+
+// ---------------------------------------------------------------------------
+// Arithmetic identities
+// ---------------------------------------------------------------------------
+
+Test CfxSArithIdentityAddZero {
+    test { return 12345 + 0 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12345); return e }
+}
+
+Test CfxSArithIdentityMulOne {
+    test { return 9876 * 1 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(9876); return e }
+}
+
+Test CfxSArithIdentitySubSelf {
+    test { let x = 54321; return x - x }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxSArithIdentityMulZero {
+    test { return 99999 * 0 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxSArithIdentityDivSelf {
+    test { let x = 777; return x / x }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSArithIdentityModSelf {
+    test { let x = 888; return x % x }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxSArithIdentityCommutesAdd {
+    test { return (17 + 25) == (25 + 17) ? 1 : 0 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSArithIdentityCommutesMul {
+    test { return (13 * 7) == (7 * 13) ? 1 : 0 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSArithIdentityAssociatesAdd {
+    test { return ((3 + 4) + 5) == (3 + (4 + 5)) ? 1 : 0 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSArithIdentityDistributes {
+    test { return (3 * (4 + 5)) == (3 * 4 + 3 * 5) ? 1 : 0 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSArithNegNeg {
+    test {
+        let n = 42
+        let neg = 0 - n
+        let negneg = 0 - neg
+        return negneg
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test CfxSArithNegSum {
+    test { return (0 - 15) + (0 - 27) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0 - 42); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Operator precedence
+// ---------------------------------------------------------------------------
+
+Test CfxSPrecMulBeforeAdd {
+    test { return 2 + 3 * 4 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(14); return e }
+}
+
+Test CfxSPrecAddBeforeEq {
+    test { return (1 + 2 == 3) ? 1 : 0 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSPrecParensOverrideMul {
+    test { return (2 + 3) * 4 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test CfxSPrecChainedMulDiv {
+    test { return 120 / 6 / 4 }
+    // left-assoc: (120/6)/4 = 20/4 = 5
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test CfxSPrecChainedSubtract {
+    test { return 100 - 30 - 20 - 10 }
+    // left-assoc: ((100-30)-20)-10 = 40
+    expect { let e: Result<Int, TestFailure> = Result.Ok(40); return e }
+}
+
+Test CfxSPrecMixedAll {
+    test { return 1 + 2 * 3 - 4 / 2 + 5 % 3 }
+    // 1 + 6 - 2 + 2 = 7
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test CfxSPrecNegatedMul {
+    test { return 0 - (3 * (4 + 5)) }
+    // -(3*9) = -27
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0 - 27); return e }
+}
+
+Test CfxSPrecAndBeforeOr {
+    test { return (false || true && false) ? 1 : 0 }
+    // true&&false=false, false||false=false
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxSPrecNotHighest {
+    test { return (!false && !false) ? 1 : 0 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSPrecCmpChain {
+    test {
+        let x = 5
+        return (x > 3 && x < 10) ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Integer div/mod edge cases
+// ---------------------------------------------------------------------------
+
+Test CfxSDivIdentitySmall {
+    test { return 1 / 1 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSDivByLarger {
+    test { return 3 / 10 }
+    // truncates to 0
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxSDivNegNumerator {
+    test { return (0 - 7) / 2 }
+    // truncates toward zero: -3
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0 - 3); return e }
+}
+
+Test CfxSDivNegDenominator {
+    test { return 7 / (0 - 2) }
+    // truncates toward zero: -3
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0 - 3); return e }
+}
+
+Test CfxSDivBothNeg {
+    test { return (0 - 7) / (0 - 2) }
+    // (-7)/(-2) = 3
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test CfxSDivModIdentity {
+    test {
+        let a = 12345
+        let b = 71
+        return (a / b) * b + (a % b)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12345); return e }
+}
+
+// CfxSDivModIdentityNeg removed: identity breaks when / and % have mismatched
+// sign conventions for negative operands (Kira bug documented in report).
+
+Test CfxSModPositive {
+    test { return 17 % 5 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test CfxSModExact {
+    test { return 15 % 5 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+// CfxSModNegNum removed: Kira's modulo for negative left operand does not match
+// truncated-toward-zero convention (bug: % sign may differ from /). Documented below.
+
+Test CfxSModLargeBase {
+    test { return 3 % 1000 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test CfxSModCycleSum {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 28 {
+            acc = acc + (i % 7)
+            i = i + 1
+        }
+        // 4 full cycles of 0+1+2+3+4+5+6=21 => 84
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(84); return e }
+}
+
+Test CfxSDivModLoopIdentity {
+    test {
+        var ok = 0
+        var i = 1
+        while i <= 50 {
+            var j = 1
+            while j <= 10 {
+                let check = (i / j) * j + (i % j)
+                if check == i { ok = ok + 1 }
+                j = j + 1
+            }
+            i = i + 1
+        }
+        // 50*10 = 500 checks, all should pass
+        return ok
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(500); return e }
+}
+
+Test CfxSLargeArith {
+    test {
+        let a = 1000000
+        let b = 999999
+        return a * b
+    }
+    // 999999000000
+    expect { let e: Result<Int, TestFailure> = Result.Ok(999999000000); return e }
+}
+
+Test CfxSLargeDiv {
+    test {
+        let a = 1000000000
+        let b = 333333
+        return a / b
+    }
+    // 1000000000 / 333333 = 3000 (exact: 333333*3000=999999000, r=1000)
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3000); return e }
+}
+
+Test CfxSLargeMod {
+    test {
+        let a = 1000000000
+        let b = 333333
+        return a % b
+    }
+    // 1000000000 - 3000*333333 = 1000000000 - 999999000 = 1000
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1000); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Comparison matrix folded to counts
+// ---------------------------------------------------------------------------
+
+Test CfxSCmpEqualCount {
+    test {
+        var count = 0
+        let xs: [Int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        for a in xs {
+            for b in xs {
+                if a == b { count = count + 1 }
+            }
+        }
+        // diagonal: 10
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test CfxSCmpLessCount {
+    test {
+        var count = 0
+        let xs: [Int] = [1, 2, 3, 4, 5]
+        for a in xs {
+            for b in xs {
+                if a < b { count = count + 1 }
+            }
+        }
+        // upper triangle: 5*4/2 = 10
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test CfxSCmpSymmetry {
+    test {
+        var lt_count = 0
+        var gt_count = 0
+        let xs: [Int] = [1, 2, 3, 4, 5, 6]
+        for a in xs {
+            for b in xs {
+                if a < b { lt_count = lt_count + 1 }
+                if a > b { gt_count = gt_count + 1 }
+            }
+        }
+        return lt_count == gt_count ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSCmpTransitive {
+    test {
+        var ok = 0
+        let xs: [Int] = [1, 3, 5, 7, 9]
+        for a in xs {
+            for b in xs {
+                for c in xs {
+                    if a < b && b < c {
+                        if a < c { ok = ok + 1 }
+                    }
+                }
+            }
+        }
+        // all transitivity checks pass; count = C(5,3)=10
+        return ok
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test CfxSCmpLeGeRelation {
+    test {
+        var count = 0
+        var i = 0
+        while i < 20 {
+            if i <= 10 { count = count + 1 }
+            if i >= 10 { count = count + 10 }
+            i = i + 1
+        }
+        // i<=10: 0..10 => 11 times (+11)
+        // i>=10: 10..19 => 10 times (+100)
+        // total = 111
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(111); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Boolean truth-table folds
+// ---------------------------------------------------------------------------
+
+Test CfxSBoolAndTable {
+    test {
+        var trues = 0
+        var a = 0
+        while a < 2 {
+            var b = 0
+            while b < 2 {
+                let av = a == 1
+                let bv = b == 1
+                if av && bv { trues = trues + 1 }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        // only T,T => 1
+        return trues
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSBoolOrTable {
+    test {
+        var trues = 0
+        var a = 0
+        while a < 2 {
+            var b = 0
+            while b < 2 {
+                let av = a == 1
+                let bv = b == 1
+                if av || bv { trues = trues + 1 }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        // F,T; T,F; T,T => 3
+        return trues
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test CfxSBoolXorTable {
+    test {
+        var trues = 0
+        var a = 0
+        while a < 2 {
+            var b = 0
+            while b < 2 {
+                let av = a == 1
+                let bv = b == 1
+                if (av || bv) && !(av && bv) { trues = trues + 1 }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        // XOR: F,T and T,F => 2
+        return trues
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test CfxSBoolNandTable {
+    test {
+        var trues = 0
+        var a = 0
+        while a < 2 {
+            var b = 0
+            while b < 2 {
+                let av = a == 1
+                let bv = b == 1
+                if !(av && bv) { trues = trues + 1 }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        // NAND: F,F; F,T; T,F => 3
+        return trues
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test CfxSBoolNorTable {
+    test {
+        var trues = 0
+        var a = 0
+        while a < 2 {
+            var b = 0
+            while b < 2 {
+                let av = a == 1
+                let bv = b == 1
+                if !(av || bv) { trues = trues + 1 }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        // NOR: only F,F => 1
+        return trues
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSBoolThreeVar {
+    test {
+        var trues = 0
+        var a = 0
+        while a < 2 {
+            var b = 0
+            while b < 2 {
+                var c = 0
+                while c < 2 {
+                    let av = a == 1
+                    let bv = b == 1
+                    let cv = c == 1
+                    if (av && bv) || (bv && cv) || (av && cv) {
+                        trues = trues + 1
+                    }
+                    c = c + 1
+                }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        // majority function: true when >=2 of 3 are true
+        // (T,T,F),(T,F,T),(F,T,T),(T,T,T) = 4
+        return trues
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+Test CfxSBoolShortCircuit {
+    test {
+        var sideEffect = 0
+        let alwaysFalse = false
+        if alwaysFalse && (sideEffect == 0) {
+            sideEffect = 999
+        }
+        return sideEffect
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxSBoolDeMorgan1 {
+    test {
+        var ok = 0
+        var a = 0
+        while a < 2 {
+            var b = 0
+            while b < 2 {
+                let av = a == 1
+                let bv = b == 1
+                let lhs = !(av && bv)
+                let rhs = (!av) || (!bv)
+                if lhs == rhs { ok = ok + 1 }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        // all 4 combos should match
+        return ok
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+Test CfxSBoolDeMorgan2 {
+    test {
+        var ok = 0
+        var a = 0
+        while a < 2 {
+            var b = 0
+            while b < 2 {
+                let av = a == 1
+                let bv = b == 1
+                let lhs = !(av || bv)
+                let rhs = (!av) && (!bv)
+                if lhs == rhs { ok = ok + 1 }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        return ok
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Ternary chains
+// ---------------------------------------------------------------------------
+
+Test CfxSTernarySimple {
+    test { return 5 > 3 ? 100 : 200 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(100); return e }
+}
+
+Test CfxSTernaryFalse {
+    test { return 2 > 3 ? 100 : 200 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(200); return e }
+}
+
+Test CfxSTernaryNested {
+    test {
+        let x = 55
+        var out = x > 100 ? 4 : (x > 50 ? 3 : (x > 20 ? 2 : (x > 0 ? 1 : 0)))
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test CfxSTernaryNestedLow {
+    test {
+        let x = 5
+        var out = x > 100 ? 4 : (x > 50 ? 3 : (x > 20 ? 2 : (x > 0 ? 1 : 0)))
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSTernaryZeroPath {
+    test {
+        let x = 0
+        var out = x > 100 ? 4 : (x > 50 ? 3 : (x > 20 ? 2 : (x > 0 ? 1 : 0)))
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxSTernaryFoldLoop {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 10 {
+            acc = acc + (i % 2 == 0 ? i * 2 : (0 - i))
+            i = i + 1
+        }
+        // i=0:0, i=1:-1, i=2:4, i=3:-3, i=4:8, i=5:-5, i=6:12, i=7:-7, i=8:16, i=9:-9
+        // sum = 0-1+4-3+8-5+12-7+16-9 = 15
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test CfxSTernaryBoolResult {
+    test {
+        let x = 7
+        let isLarge = x > 5 ? true : false
+        return isLarge ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSTernaryChainModulo {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 30 {
+            var v = i % 3 == 0 ? 3 : (i % 2 == 0 ? 2 : 1)
+            acc = acc + v
+            i = i + 1
+        }
+        // i=0..29: multiples of 3: 0,3,6,9,12,15,18,21,24,27 = 10 items => +30
+        // remaining even (not mult of 3): 2,4,8,10,14,16,20,22,26,28 = 10 items => +20
+        // remaining odd (not mult of 3): 1,5,7,11,13,17,19,23,25,29 = 10 items => +10
+        // total = 30+20+10 = 60
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(60); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Bit-ish arithmetic via % and /
+// ---------------------------------------------------------------------------
+
+Test CfxSModPow2 {
+    test { return 255 % 16 }
+    // 255 = 15*16 + 15 => 15
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test CfxSDivPow2 {
+    test { return 256 / 16 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(16); return e }
+}
+
+Test CfxSDigitExtract {
+    test {
+        let n = 98765
+        let d0 = n % 10
+        let d1 = (n / 10) % 10
+        let d2 = (n / 100) % 10
+        return d0 * 100 + d1 * 10 + d2
+    }
+    // d0=5, d1=6, d2=7 => 567
+    expect { let e: Result<Int, TestFailure> = Result.Ok(567); return e }
+}
+
+Test CfxSDigitSumLoop {
+    test {
+        var n = 9999
+        var s = 0
+        while n > 0 {
+            s = s + n % 10
+            n = n / 10
+        }
+        // 9+9+9+9 = 36
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(36); return e }
+}
+
+Test CfxSBitwiseMirrorDiv {
+    test {
+        var acc = 0
+        var i = 1
+        while i <= 8 {
+            acc = acc + (256 / cfxsPow(2, i))
+            i = i + 1
+        }
+        // 128+64+32+16+8+4+2+1 = 255
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(255); return e }
+}
+
+Test CfxSPow2Mod {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 8 {
+            acc = acc + cfxsPow(2, i) % 7
+            i = i + 1
+        }
+        // 1%7=1, 2%7=2, 4%7=4, 8%7=1, 16%7=2, 32%7=4, 64%7=1, 128%7=2
+        // sum = 1+2+4+1+2+4+1+2 = 17
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(17); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Float accumulation to Int checksums
+// ---------------------------------------------------------------------------
+
+Test CfxSFloatExactSum {
+    test {
+        var f = 0.0
+        var i = 0
+        while i < 40 {
+            f = f + 0.25
+            i = i + 1
+        }
+        // 40 * 0.25 = 10.0
+        return f == 10.0 ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSFloatExactProduct {
+    test {
+        var f = 1.0
+        var i = 0
+        while i < 8 {
+            f = f * 0.5
+            i = i + 1
+        }
+        // 0.5^8 = 1/256 = 0.00390625
+        return f == 0.00390625 ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSFloatCompareLoop {
+    test {
+        var above = 0
+        var f = 0.0
+        var i = 0
+        while i < 20 {
+            f = f + 1.5
+            if f > 15.0 { above = above + 1 }
+            i = i + 1
+        }
+        // f at step i+1 = 1.5*(i+1); >15 when i+1>10 => i>=10 => steps 10..19 = 10
+        return above
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test CfxSFloatNegArith {
+    test {
+        let a = (-3.5) + 1.5
+        return a == (-2.0) ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSFloatDiv {
+    test {
+        let q = 9.0 / 4.0
+        return q == 2.25 ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSFloatMod {
+    test {
+        let r = 9.0 % 4.0
+        return r == 1.0 ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSFloatAccumChecksum {
+    test {
+        var f = 0.0
+        var k = 0
+        while k < 30 {
+            f = f + 1.5 * 2.0 - 0.5
+            k = k + 1
+        }
+        // each step: 3.0 - 0.5 = 2.5; 30 * 2.5 = 75.0
+        if f > 74.9 && f < 75.1 {
+            return 7500
+        }
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7500); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Gauss / triangular / square-number cross-checks
+// ---------------------------------------------------------------------------
+
+Test CfxSGaussFormula10 {
+    test {
+        let n = 10
+        let loop_sum = cfxsSumTo(n)
+        let formula = n * (n + 1) / 2
+        return loop_sum == formula ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSGaussFormula100 {
+    test {
+        let n = 100
+        let loop_sum = cfxsSumTo(n)
+        let formula = n * (n + 1) / 2
+        return loop_sum
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5050); return e }
+}
+
+Test CfxSGaussFormula200 {
+    test {
+        let n = 200
+        return n * (n + 1) / 2
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20100); return e }
+}
+
+Test CfxSSquareSumFormula {
+    test {
+        let n = 10
+        let loop_val = cfxsSquareSum(n)
+        let formula = n * (n + 1) * (2 * n + 1) / 6
+        return loop_val == formula ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSSquareSumValue {
+    test {
+        return cfxsSquareSum(10)
+    }
+    // 1+4+9+16+25+36+49+64+81+100 = 385
+    expect { let e: Result<Int, TestFailure> = Result.Ok(385); return e }
+}
+
+Test CfxSCubeSum {
+    test {
+        var s = 0
+        var i = 1
+        while i <= 5 {
+            s = s + i * i * i
+            i = i + 1
+        }
+        // 1+8+27+64+125 = 225
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(225); return e }
+}
+
+Test CfxSCubeSumEqualsSquareGauss {
+    test {
+        // sum of cubes 1..n = (n*(n+1)/2)^2
+        let n = 8
+        var cube_sum = 0
+        var i = 1
+        while i <= n {
+            cube_sum = cube_sum + i * i * i
+            i = i + 1
+        }
+        let gauss = n * (n + 1) / 2
+        let gauss_sq = gauss * gauss
+        return cube_sum == gauss_sq ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSTriangularNumbers {
+    test {
+        var s = 0
+        var i = 1
+        while i <= 10 {
+            s = s + i * (i + 1) / 2
+            i = i + 1
+        }
+        // T(1)=1,T(2)=3,T(3)=6,T(4)=10,T(5)=15,T(6)=21,T(7)=28,T(8)=36,T(9)=45,T(10)=55
+        // sum = 220
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(220); return e }
+}
+
+Test CfxSOblong {
+    test {
+        var s = 0
+        var i = 1
+        while i <= 8 {
+            s = s + i * (i + 1)
+            i = i + 1
+        }
+        // 2+6+12+20+30+42+56+72 = 240
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(240); return e }
+}
+
+Test CfxSPentagonal {
+    test {
+        // Pentagonal(n) = n*(3n-1)/2
+        var s = 0
+        var i = 1
+        while i <= 6 {
+            s = s + i * (3 * i - 1) / 2
+            i = i + 1
+        }
+        // 1,5,12,22,35,51 => sum=126
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(126); return e }
+}
+
+Test CfxSPerfectSquareCount {
+    test {
+        var count = 0
+        var i = 1
+        while i <= 100 {
+            let root = cfxsSumTo(0)  // we'll test differently
+            var j = 1
+            var found = false
+            while j * j <= i {
+                if j * j == i { found = true }
+                j = j + 1
+            }
+            if found { count = count + 1 }
+            i = i + 1
+        }
+        // perfect squares 1..100: 1,4,9,16,25,36,49,64,81,100 = 10
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Large safe values
+// ---------------------------------------------------------------------------
+
+Test CfxSLargeSafe1 {
+    test { return 100000 * 100000 }
+    // 10^10 = 10000000000
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10000000000); return e }
+}
+
+Test CfxSLargeSafe2 {
+    test { return 999999 * 999999 }
+    // 999998000001
+    expect { let e: Result<Int, TestFailure> = Result.Ok(999998000001); return e }
+}
+
+Test CfxSLargeSafe3 {
+    test {
+        let a = 123456789
+        let b = 9
+        return a * b
+    }
+    // 1111111101
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1111111101); return e }
+}
+
+Test CfxSLargeDiv2 {
+    test {
+        let a = 1000000000000
+        let b = 1000000
+        return a / b
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1000000); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GCD cross-checks
+// ---------------------------------------------------------------------------
+
+Test CfxSGcdIdentity {
+    test { return cfxsGcd(42, 42) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test CfxSGcdWithOne {
+    test { return cfxsGcd(1, 999) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSGcdSymmetric {
+    test {
+        let g1 = cfxsGcd(48, 18)
+        let g2 = cfxsGcd(18, 48)
+        return g1 == g2 ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSGcdChain {
+    test {
+        var g = cfxsGcd(360, 240)
+        g = cfxsGcd(g, 180)
+        g = cfxsGcd(g, 120)
+        return g
+    }
+    // gcd(360,240)=120, gcd(120,180)=60, gcd(60,120)=60
+    expect { let e: Result<Int, TestFailure> = Result.Ok(60); return e }
+}
+
+Test CfxSGcdLcmProduct {
+    test {
+        let a = 12
+        let b = 18
+        let g = cfxsGcd(a, b)
+        let lcm = a * b / g
+        return lcm
+    }
+    // gcd(12,18)=6, lcm=36
+    expect { let e: Result<Int, TestFailure> = Result.Ok(36); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Min/Max helpers
+// ---------------------------------------------------------------------------
+
+Test CfxSMinBasic {
+    test { return cfxsMin(7, 13) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test CfxSMaxBasic {
+    test { return cfxsMax(7, 13) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(13); return e }
+}
+
+Test CfxSMinEq {
+    test { return cfxsMin(5, 5) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test CfxSAbsPos {
+    test { return cfxsAbs(42) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test CfxSAbsNeg {
+    test { return cfxsAbs(0 - 42) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test CfxSAbsZero {
+    test { return cfxsAbs(0) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxSMinOverArray {
+    test {
+        var mn = 1000000
+        let xs: [Int] = [42, 7, 99, 3, 55, 1, 88]
+        for v in xs {
+            mn = cfxsMin(mn, v)
+        }
+        return mn
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxSMaxOverArray {
+    test {
+        var mx = 0
+        let xs: [Int] = [42, 7, 99, 3, 55, 1, 88]
+        for v in xs {
+            mx = cfxsMax(mx, v)
+        }
+        return mx
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(99); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Mixed operator loop folds
+// ---------------------------------------------------------------------------
+
+Test CfxSMixedLoop1 {
+    test {
+        var acc = 0
+        var i = 1
+        while i <= 20 {
+            acc = acc + i * 2 - i / 3 + i % 5
+            i = i + 1
+        }
+        // sum: i*2=420, -sum(i/3)=sum(0,0,1,1,1,2,2,2,3,3,3,4,4,4,5,5,5,6,6,6)=63
+        // +sum(i%5)=sum(1,2,3,4,0,1,2,3,4,0,1,2,3,4,0,1,2,3,4,0)=40
+        // total = 420-63+40 = 397
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(397); return e }
+}
+
+Test CfxSMixedLoop2 {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 30 {
+            acc = acc + (i % 2 == 0 ? i * i : (0 - i))
+            i = i + 1
+        }
+        // evens 0,2,...,28: sum(i^2) = 4*sum(k^2,k=0..14) = 4*(14*15*29/6) = 4*1015 = 4060
+        // odds 1,3,...,29 negated: -(1+3+...+29) = -(15^2) = -225
+        // total = 4060-225 = 3835
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3835); return e }
+}
+
+Test CfxSMixedLoop3 {
+    test {
+        var acc = 0
+        var i = 1
+        while i <= 10 {
+            acc = acc + cfxsPow(2, i) - cfxsPow(i, 2)
+            i = i + 1
+        }
+        // 2^i: 2,4,8,16,32,64,128,256,512,1024 sum=2046
+        // i^2: 1,4,9,16,25,36,49,64,81,100 sum=385
+        // total = 2046-385 = 1661
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1661); return e }
+}
+
+// ---------------------------------------------------------------------------
+// String .count (no concat)
+// ---------------------------------------------------------------------------
+
+Test CfxSStringCountHello {
+    test {
+        let s = "hello"
+        return s.count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test CfxSStringCountEmpty {
+    test {
+        let s = ""
+        return s.count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxSStringCountLong {
+    test {
+        let s = "abcdefghij"
+        return s.count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+// ---------------------------------------------------------------------------
+// TRAP tests
+// ---------------------------------------------------------------------------
+
+Test CfxSTrapDivZero {
+    test {
+        let a = 7
+        let b = 0
+        return a / b
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxSTrapModZero {
+    test {
+        let a = 100
+        let b = 0
+        return a % b
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxSTrapArrayOOB {
+    test {
+        let xs: [Int] = [1, 2, 3]
+        let _ = xs[100]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxSTrapDivZeroNeg {
+    test {
+        let a = 0 - 5
+        let b = 0
+        return a / b
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxSTrapDivZeroLarge {
+    test {
+        let a = 9999999999
+        let b = 0
+        return a / b
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxSTrapOOBSingleElem {
+    test {
+        let xs: [Int] = [99]
+        let _ = xs[1]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxSTrapModZeroLoop {
+    test {
+        var d = 3
+        var i = 0
+        while i < 5 {
+            if i == 3 { d = 0 }
+            let _ = 10 % d
+            i = i + 1
+        }
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Negative `%` truncates toward zero (S8)
+//
+// `%` must truncate (sign follows the dividend) to match `/` (@divTrunc), the
+// LLVM backend's srem, and Rust — NOT floored (@mod). These previously failed
+// on the VM (floored gave 3 / -3) and disagreed with the LLVM backend.
+// ---------------------------------------------------------------------------
+
+Test CfxSModNegDividendPosDivisor {
+    test { return (0 - 17) % 5 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0 - 2); return e }
+}
+
+Test CfxSModPosDividendNegDivisor {
+    test { return 17 % (0 - 5) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test CfxSModNegDividendNegDivisor {
+    test { return (0 - 17) % (0 - 5) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0 - 2); return e }
+}
+
+Test CfxSModNegExact {
+    test { return (0 - 20) % 5 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxSDivModIdentityNegDividend {
+    test {
+        let a = 0 - 17
+        let b = 5
+        return (a / b) * b + (a % b)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0 - 17); return e }
+}
+
+Test CfxSDivModIdentityNegDivisor {
+    test {
+        let a = 17
+        let b = 0 - 5
+        return (a / b) * b + (a % b)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(17); return e }
+}
+
+Test CfxSDivModIdentityGridMixedSigns {
+    test {
+        // (a/b)*b + a%b == a over a grid of signed operands; count the holds.
+        var ok = 0
+        var a = 0 - 12
+        while a <= 12 {
+            var b = 0 - 4
+            while b <= 4 {
+                if b != 0 {
+                    if (a / b) * b + (a % b) == a {
+                        ok = ok + 1
+                    }
+                }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        // a in [-12,12] = 25 values; b in [-4,4] \ {0} = 8 -> 200 holds.
+        return ok
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(200); return e }
+}
+
+Test CfxSFloatModNegTruncates {
+    test {
+        let r = (0.0 - 9.0) % 4.0
+        // truncated remainder: sign follows dividend -> -1.0 (floored would be 3.0)
+        return r == (0.0 - 1.0) ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+// ---------------------------------------------------------------------------
+// VM recursion-depth guard (S6)
+//
+// The bytecode interpreter recurses on the native stack once per Kira call.
+// Recursing past the guard now raises a clean runtime failure instead of
+// overflowing the native stack (previously SIGABRT with no diagnostic).
+// Shallow recursion is unaffected.
+// ---------------------------------------------------------------------------
+
+function cfxsDeepRec(d: Int) -> Int {
+    if d <= 0 {
+        return 0
+    }
+    return 1 + cfxsDeepRec(d - 1)
+}
+
+Test CfxSShallowRecursionOk {
+    test { return cfxsDeepRec(200) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(200); return e }
+}
+
+Test CfxSDeepRecursionTrapsCleanly {
+    test {
+        // 1000 nested calls exceeds the 256-frame VM guard -> clean RuntimeFailure.
+        return cfxsDeepRec(1000)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("recursion")); return e }
+}

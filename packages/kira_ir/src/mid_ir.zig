@@ -170,6 +170,7 @@ pub const Value = union(enum) {
     builder_array: BuilderArrayValue,
     binary: BinaryValue,
     unary: UnaryValue,
+    cast: UnaryValue,
     conditional: ConditionalValue,
     native_state: UnaryWrapperValue,
     native_user_data: UnaryWrapperValue,

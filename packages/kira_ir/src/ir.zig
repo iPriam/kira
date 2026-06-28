@@ -158,6 +158,7 @@ pub const Instruction = union(enum) {
     multiply: Binary,
     divide: Binary,
     modulo: Binary,
+    convert: Convert,
     compare: Compare,
     unary: Unary,
     store_local: StoreLocal,
@@ -279,6 +280,17 @@ pub const Binary = struct {
     dst: u32,
     lhs: u32,
     rhs: u32,
+};
+
+// Numeric conversion between Int and Float (the `Int(x)` / `Float(x)` cast
+// surface). `target` is the destination numeric kind; the source kind is read
+// from the operand register's inferred type (LLVM) or its runtime tag (VM).
+// Float->Int truncates toward zero; Int->Float is an exact widening; a cast to
+// the kind a value already has is an identity copy.
+pub const Convert = struct {
+    dst: u32,
+    src: u32,
+    target: ValueType.Kind,
 };
 
 pub const Compare = struct {

@@ -250,6 +250,40 @@ pub fn waitChildExitBefore(child: *std.process.Child, timeout_ns: u64) !bool {
     return try pollChildExited(child);
 }
 
+/// Like `pollChildExited`, but preserves the child's `Term` (exit code / signal)
+/// instead of discarding it. Returns `null` while the child is still running (or
+/// when status cannot be reaped here, e.g. windows/wasi). On exit it reaps the
+/// child (clearing `child.id`, so a later `kill` is a no-op) and decodes the
+/// wait status into a `Term`.
+pub fn pollChildTerm(child: *std.process.Child) !?std.process.Child.Term {
+    const pid = child.id orelse return null;
+    switch (builtin.os.tag) {
+        .windows, .wasi => return null,
+        else => {
+            var status: c_int = 0;
+            const result = std.c.waitpid(pid, &status, @intCast(std.c.W.NOHANG));
+            if (result == 0) return null;
+            if (result == pid) {
+                child.id = null;
+                return std.Io.Threaded.statusToTerm(@bitCast(status));
+            }
+            return null;
+        },
+    }
+}
+
+/// Poll for the child's `Term` up to `timeout_ns`. Returns the `Term` if the
+/// child stopped on its own before the deadline, or `null` if it is still alive
+/// (the caller is then expected to terminate it deliberately).
+pub fn waitChildTermBefore(child: *std.process.Child, timeout_ns: u64) !?std.process.Child.Term {
+    const start = std.Io.Clock.Timestamp.now(std.Options.debug_io, .awake);
+    while (elapsedSince(start) < timeout_ns) {
+        if (try pollChildTerm(child)) |term| return term;
+        try std.Options.debug_io.sleep(.fromNanoseconds(100 * std.time.ns_per_ms), .awake);
+    }
+    return try pollChildTerm(child);
+}
+
 pub const SourceSnapshot = struct {
     mtime_ns: i96,
     size: u64,

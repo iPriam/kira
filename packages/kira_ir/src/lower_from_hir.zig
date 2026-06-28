@@ -8,6 +8,7 @@ const type_impl = @import("lower_from_hir_types.zig");
 const statement_impl = @import("lower_from_hir_statements.zig");
 const boxed_impl = @import("lower_from_hir_boxed.zig");
 const namespace_ref_impl = @import("lower_from_hir_namespace_refs.zig");
+const places_impl = @import("lower_from_hir_places.zig");
 
 pub const lowerTypeDecls = program_impl.lowerTypeDecls;
 pub const lowerEnumTypeDecls = program_impl.lowerEnumTypeDecls;
@@ -54,6 +55,10 @@ pub fn lowerProgramWithOptions(allocator: std.mem.Allocator, program: model.Prog
             try markReachableFunctionByName(allocator, program, &reachable, test_case.test_function);
             try markReachableFunctionByName(allocator, program, &reachable, test_case.expect_function);
         }
+        // The synthesized pure-Kira test driver (when present) is the entry the
+        // test runner invokes by name; keep it (and everything it calls) live.
+        // No-op when the driver was not synthesized.
+        try markReachableFunctionByName(allocator, program, &reachable, "__kira_test_main");
     }
 
     const constructs = try lowerConstructs(allocator, program);
@@ -535,6 +540,7 @@ fn countCallbacksInExpr(expr: *model.Expr) u32 {
         .binary => |node| countCallbacksInExpr(node.lhs) + countCallbacksInExpr(node.rhs),
         .conditional => |node| countCallbacksInExpr(node.condition) + countCallbacksInExpr(node.then_expr) + countCallbacksInExpr(node.else_expr),
         .unary => |node| countCallbacksInExpr(node.operand),
+        .cast => |node| countCallbacksInExpr(node.operand),
         .array => |node| blk: {
             var count: u32 = 0;
             for (node.elements) |element| count += countCallbacksInExpr(element);
@@ -738,12 +744,19 @@ fn lowerExprStatement(lowerer: *Lowerer, instructions: *std.array_list.Managed(i
             if (call.trailing_builder != null) return error.UnsupportedExecutableFeature;
             if (std.mem.eql(u8, call.callee_name, "array.append")) {
                 if (call.args.len != 2) return error.UnsupportedExecutableFeature;
-                const array = try lowerer.lowerExpr(instructions, call.args[0]);
+                // `arr[i].xs.append(v)`: the receiver array is reached through an array
+                // element materialized by value, so the append only grows a transient
+                // copy unless the element is written back. `lowerMutableObject` records
+                // that write-back (none for a plain local-array receiver).
+                var writebacks = places_impl.WritebackList.init(lowerer.allocator);
+                defer writebacks.deinit();
+                const array = try places_impl.lowerMutableObject(lowerer, instructions, call.args[0], &writebacks);
                 const src = try lowerer.lowerExpr(instructions, call.args[1]);
                 try instructions.append(.{ .array_append = .{
                     .array = array,
                     .src = src,
                 } });
+                try places_impl.emitWritebacks(instructions, &writebacks);
                 return;
             }
             if (std.mem.eql(u8, call.callee_name, "print")) {
@@ -756,14 +769,18 @@ fn lowerExprStatement(lowerer: *Lowerer, instructions: *std.array_list.Managed(i
                 return;
             }
             if (call.function_id == null) return error.UnsupportedExecutableFeature;
-            var args = std.array_list.Managed(u32).init(lowerer.allocator);
-            defer args.deinit();
-            for (call.args) |arg| try args.append(try lowerer.lowerExpr(instructions, arg));
+            // An array-element argument passed to a `borrow mut` parameter is mutated by
+            // the callee in place on the VM's materialized element copy; persist those
+            // mutations back into the array after the call.
+            var writebacks = places_impl.WritebackList.init(lowerer.allocator);
+            defer writebacks.deinit();
+            const arg_regs = try places_impl.lowerDirectCallArgs(lowerer, instructions, call.args, call.function_id.?, &writebacks);
             try instructions.append(.{ .call = .{
                 .callee = call.function_id.?,
-                .args = try args.toOwnedSlice(),
+                .args = arg_regs,
                 .dst = null,
             } });
+            try places_impl.emitWritebacks(instructions, &writebacks);
         },
         .builder_array => |node| {
             _ = try lowerBuilderArrayExpr(lowerer, instructions, node);
@@ -1422,15 +1439,18 @@ pub const Lowerer = struct {
             .call => |node| blk: {
                 if (node.function_id == null) return error.UnsupportedExecutableFeature;
                 if (node.ty.kind == .void) return error.UnsupportedExecutableFeature;
-                var args = std.array_list.Managed(u32).init(self.allocator);
-                defer args.deinit();
-                for (node.args) |arg| try args.append(try self.lowerExpr(instructions, arg));
+                // Persist `borrow mut` array-element arguments after the call (see the
+                // statement-call path); other arguments lower by value unchanged.
+                var writebacks = places_impl.WritebackList.init(self.allocator);
+                defer writebacks.deinit();
+                const arg_regs = try places_impl.lowerDirectCallArgs(self, instructions, node.args, node.function_id.?, &writebacks);
                 const dst = self.freshRegister();
                 try instructions.append(.{ .call = .{
                     .callee = node.function_id.?,
-                    .args = try args.toOwnedSlice(),
+                    .args = arg_regs,
                     .dst = dst,
                 } });
+                try places_impl.emitWritebacks(instructions, &writebacks);
                 break :blk dst;
             },
             .local => |node| blk: {
@@ -1546,6 +1566,13 @@ pub const Lowerer = struct {
                     },
                     .logical_and, .logical_or => unreachable,
                 }
+                break :blk dst;
+            },
+            .cast => |node| blk: {
+                const src = try self.lowerExpr(instructions, node.operand);
+                const target_vt = try lowerResolvedType(self.program, node.ty);
+                const dst = self.freshRegister();
+                try instructions.append(.{ .convert = .{ .dst = dst, .src = src, .target = target_vt.kind } });
                 break :blk dst;
             },
             .conditional => |node| try self.lowerConditionalExpr(instructions, node),

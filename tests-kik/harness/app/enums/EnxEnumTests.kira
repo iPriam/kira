@@ -1,0 +1,1282 @@
+// EnxEnumTests.kira — Deep enum test suite.
+// Covers: payload-less enums (4-variant, 3-variant, 4-variant), single-payload
+// Int enums, mixed payload/payload-less enums, enums as struct fields, arrays
+// of enums matched via borrow-param helpers, state-machine transitions, and
+// trap tests.  All top-level names use prefix enx / Enx.
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum EnxDir {
+    North
+    South
+    East
+    West
+}
+
+enum EnxPriority {
+    Low
+    Medium
+    High
+}
+
+enum EnxSeason {
+    Spring
+    Summer
+    Autumn
+    Winter
+}
+
+enum EnxToken {
+    Num(Int)
+    Paren(Int)
+    Op(Int)
+}
+
+enum EnxEvent {
+    Click(Int)
+    Key(Int)
+    Scroll(Int)
+    Idle
+}
+
+// Mixed: one payload-less variant + three single-Int variants.
+enum EnxStatus {
+    Dormant
+    Running(Int)
+    Done(Int)
+    Failed(Int)
+}
+
+// Three variants: two payload, one payload-less.
+enum EnxNode {
+    Leaf(Int)
+    Tagged(Int)
+    Empty
+}
+
+// ---------------------------------------------------------------------------
+// Structs
+// ---------------------------------------------------------------------------
+
+struct EnxItem {
+    var priority: EnxPriority
+    var value: Int
+}
+
+// ---------------------------------------------------------------------------
+// Helper functions — enums returned DIRECTLY from each branch (never via
+// a mutable local that is reassigned, which miscompiles on LLVM).
+// ---------------------------------------------------------------------------
+
+function enxDirWeight(d: borrow EnxDir) -> Int {
+    match d {
+        North -> { return 1 }
+        South -> { return 2 }
+        East  -> { return 3 }
+        West  -> { return 4 }
+    }
+}
+
+// Returns an EnxDir for index i (by switch so variant comes from each arm).
+function enxDirFor(i: Int) -> EnxDir {
+    switch i % 4 {
+        case 0 { return EnxDir.North }
+        case 1 { return EnxDir.South }
+        case 2 { return EnxDir.East }
+        case 3 { return EnxDir.West }
+        default { return EnxDir.North }
+    }
+}
+
+function enxPriorityScore(p: borrow EnxPriority) -> Int {
+    match p {
+        Low    -> { return 1 }
+        Medium -> { return 5 }
+        High   -> { return 10 }
+    }
+}
+
+function enxPriorityFor(i: Int) -> EnxPriority {
+    switch i % 3 {
+        case 0 { return EnxPriority.Low }
+        case 1 { return EnxPriority.Medium }
+        case 2 { return EnxPriority.High }
+        default { return EnxPriority.Low }
+    }
+}
+
+function enxSeasonCode(s: borrow EnxSeason) -> Int {
+    match s {
+        Spring -> { return 10 }
+        Summer -> { return 20 }
+        Autumn -> { return 30 }
+        Winter -> { return 40 }
+    }
+}
+
+function enxSeasonFor(i: Int) -> EnxSeason {
+    switch i % 4 {
+        case 0 { return EnxSeason.Spring }
+        case 1 { return EnxSeason.Summer }
+        case 2 { return EnxSeason.Autumn }
+        case 3 { return EnxSeason.Winter }
+        default { return EnxSeason.Spring }
+    }
+}
+
+function enxTokenVal(t: borrow EnxToken) -> Int {
+    match t {
+        Num(v)   -> { return v }
+        Paren(v) -> { return v * 2 }
+        Op(v)    -> { return v * 3 }
+    }
+}
+
+function enxTokenFor(i: Int) -> EnxToken {
+    switch i % 3 {
+        case 0 { return EnxToken.Num(i) }
+        case 1 { return EnxToken.Paren(i) }
+        case 2 { return EnxToken.Op(i) }
+        default { return EnxToken.Num(0) }
+    }
+}
+
+function enxEventScore(e: borrow EnxEvent) -> Int {
+    match e {
+        Click(v)  -> { return v }
+        Key(v)    -> { return v * 10 }
+        Scroll(v) -> { return v * 100 }
+        Idle      -> { return 0 }
+    }
+}
+
+// Returns status code: Dormant=0, Running(n)=n, Done(n)=n+100, Failed(n)=-(n)
+function enxStatusCode(s: borrow EnxStatus) -> Int {
+    match s {
+        Dormant    -> { return 0 }
+        Running(n) -> { return n }
+        Done(n)    -> { return n + 100 }
+        Failed(n)  -> { return 0 - n }
+    }
+}
+
+function enxStatusFor(i: Int) -> EnxStatus {
+    switch i % 4 {
+        case 0 { return EnxStatus.Dormant }
+        case 1 { return EnxStatus.Running(i) }
+        case 2 { return EnxStatus.Done(i) }
+        case 3 { return EnxStatus.Failed(i) }
+        default { return EnxStatus.Dormant }
+    }
+}
+
+function enxNodeVal(n: borrow EnxNode) -> Int {
+    match n {
+        Leaf(v)   -> { return v }
+        Tagged(v) -> { return v * 10 }
+        Empty     -> { return 0 }
+    }
+}
+
+// Scoring an EnxItem: Low uses raw value, Medium*5, High*10.
+function enxItemScore(item: borrow EnxItem) -> Int {
+    match item.priority {
+        Low    -> { return item.value }
+        Medium -> { return item.value * 5 }
+        High   -> { return item.value * 10 }
+    }
+}
+
+// Helpers for for-in / indexed matching (KSEM104: cannot match arr[i] or
+// for-in bindings directly — must pass through a borrow-param function).
+
+function enxIsIdleEvent(e: borrow EnxEvent) -> Int {
+    match e {
+        Idle      -> { return 1 }
+        Click(v)  -> { return 0 }
+        Key(v)    -> { return 0 }
+        Scroll(v) -> { return 0 }
+    }
+}
+
+function enxClickPayload(e: borrow EnxEvent) -> Int {
+    match e {
+        Click(v)  -> { return v }
+        Key(v)    -> { return 0 }
+        Scroll(v) -> { return 0 }
+        Idle      -> { return 0 }
+    }
+}
+
+function enxIsLeaf(n: borrow EnxNode) -> Int {
+    match n {
+        Leaf(v)   -> { return 1 }
+        Tagged(v) -> { return 0 }
+        Empty     -> { return 0 }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Payload-less enum tests — EnxDir
+// ---------------------------------------------------------------------------
+
+Test EnxDirWeightNorth {
+    test { return enxDirWeight(EnxDir.North) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test EnxDirWeightSouth {
+    test { return enxDirWeight(EnxDir.South) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test EnxDirWeightEast {
+    test { return enxDirWeight(EnxDir.East) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test EnxDirWeightWest {
+    test { return enxDirWeight(EnxDir.West) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+// Sum weights for i=0..59: 15 each of N,S,E,W -> 15*(1+2+3+4)=150
+Test EnxDirFold60 {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 60 {
+            let d = enxDirFor(i)
+            acc = acc + enxDirWeight(d)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(150); return e }
+}
+
+// Specific array: N,E,S,W,N -> weights 1+3+2+4+1=11
+Test EnxDirSpecificArray {
+    test {
+        let ds: [EnxDir] = [EnxDir.North, EnxDir.East, EnxDir.South, EnxDir.West, EnxDir.North]
+        var s = 0
+        for d in ds {
+            s = s + enxDirWeight(d)
+        }
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(11); return e }
+}
+
+// enxDirFor(0)=North, weight=1
+Test EnxDirSwitchIndex0 {
+    test {
+        let d = enxDirFor(0)
+        return enxDirWeight(d)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+// enxDirFor(7): 7%4=3=West, weight=4
+Test EnxDirSwitchIndex7 {
+    test {
+        let d = enxDirFor(7)
+        return enxDirWeight(d)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+// Count Wests in i=0..11: i%4=3 at i=3,7,11 -> 3
+Test EnxDirCountWest {
+    test {
+        var count = 0
+        var i = 0
+        while i < 12 {
+            let d = enxDirFor(i)
+            var isWest = 0
+            match d {
+                West  -> { isWest = 1 }
+                North -> { isWest = 0 }
+                South -> { isWest = 0 }
+                East  -> { isWest = 0 }
+            }
+            count = count + isWest
+            i = i + 1
+        }
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+// sum i * enxDirWeight(enxDirFor(i)) for i=0..7:
+// i=0:0*1=0, i=1:1*2=2, i=2:2*3=6, i=3:3*4=12,
+// i=4:4*1=4, i=5:5*2=10, i=6:6*3=18, i=7:7*4=28 -> sum=80
+Test EnxDirWeightedFold {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 8 {
+            let d = enxDirFor(i)
+            acc = acc + i * enxDirWeight(d)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(80); return e }
+}
+
+// Count North+South (weight<=2) in i=0..11: N at 0,4,8 + S at 1,5,9 = 6
+Test EnxDirCountNorthSouth {
+    test {
+        var count = 0
+        var i = 0
+        while i < 12 {
+            let d = enxDirFor(i)
+            let w = enxDirWeight(d)
+            if w <= 2 { count = count + 1 }
+            i = i + 1
+        }
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(6); return e }
+}
+
+// Two complete cycles of N,S,E,W (8 items): 2*(1+2+3+4)=20
+Test EnxDirFold8 {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 8 {
+            acc = acc + enxDirWeight(enxDirFor(i))
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+// Inline match in test block (var out pattern): East matches -> 3
+Test EnxDirInlineMatchEast {
+    test {
+        let d = EnxDir.East
+        var out = 0
+        match d {
+            North -> { out = 1 }
+            South -> { out = 2 }
+            East  -> { out = 3 }
+            West  -> { out = 4 }
+        }
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Payload-less enum tests — EnxPriority
+// ---------------------------------------------------------------------------
+
+Test EnxPriorityScoreLow {
+    test { return enxPriorityScore(EnxPriority.Low) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test EnxPriorityScoreMedium {
+    test { return enxPriorityScore(EnxPriority.Medium) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test EnxPriorityScoreHigh {
+    test { return enxPriorityScore(EnxPriority.High) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+// 30 iters, 10 each of L,M,H: 10*(1+5+10)=160
+Test EnxPriorityFold30 {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 30 {
+            let p = enxPriorityFor(i)
+            acc = acc + enxPriorityScore(p)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(160); return e }
+}
+
+// Count High in i=0..8: i%3=2 at i=2,5,8 -> 3
+Test EnxPriorityCountHigh {
+    test {
+        var count = 0
+        var i = 0
+        while i < 9 {
+            let p = enxPriorityFor(i)
+            var isH = 0
+            match p {
+                High   -> { isH = 1 }
+                Medium -> { isH = 0 }
+                Low    -> { isH = 0 }
+            }
+            count = count + isH
+            i = i + 1
+        }
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+// sum i * enxPriorityScore(enxPriorityFor(i)) for i=0..8:
+// i=0:0*1=0, i=1:1*5=5, i=2:2*10=20, i=3:3*1=3, i=4:4*5=20,
+// i=5:5*10=50, i=6:6*1=6, i=7:7*5=35, i=8:8*10=80 -> sum=219
+Test EnxPriorityWeightedFold {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 9 {
+            let p = enxPriorityFor(i)
+            acc = acc + i * enxPriorityScore(p)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(219); return e }
+}
+
+// Array of priorities, fold scores: [L,M,H,L,M] = 1+5+10+1+5=22
+Test EnxPriorityArrayFold {
+    test {
+        let ps: [EnxPriority] = [EnxPriority.Low, EnxPriority.Medium, EnxPriority.High, EnxPriority.Low, EnxPriority.Medium]
+        var s = 0
+        for p in ps {
+            s = s + enxPriorityScore(p)
+        }
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(22); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Payload-less enum tests — EnxSeason
+// ---------------------------------------------------------------------------
+
+Test EnxSeasonCodeSpring {
+    test { return enxSeasonCode(EnxSeason.Spring) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test EnxSeasonCodeSummer {
+    test { return enxSeasonCode(EnxSeason.Summer) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test EnxSeasonCodeAutumn {
+    test { return enxSeasonCode(EnxSeason.Autumn) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+Test EnxSeasonCodeWinter {
+    test { return enxSeasonCode(EnxSeason.Winter) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(40); return e }
+}
+
+// 40 iters, 10 each: 10*(10+20+30+40)=1000
+Test EnxSeasonFold40 {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 40 {
+            let s = enxSeasonFor(i)
+            acc = acc + enxSeasonCode(s)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1000); return e }
+}
+
+// Literal array: [Spr,Sum,Aut,Win,Spr] = 10+20+30+40+10=110
+Test EnxSeasonSpecificArray {
+    test {
+        let ss: [EnxSeason] = [EnxSeason.Spring, EnxSeason.Summer, EnxSeason.Autumn, EnxSeason.Winter, EnxSeason.Spring]
+        var acc = 0
+        for s in ss {
+            acc = acc + enxSeasonCode(s)
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(110); return e }
+}
+
+// Count warm seasons (code <= 20, i.e. Spring+Summer) in i=0..11: 3+3=6
+Test EnxSeasonCountWarm {
+    test {
+        var count = 0
+        var i = 0
+        while i < 12 {
+            let s = enxSeasonFor(i)
+            let c = enxSeasonCode(s)
+            if c <= 20 { count = count + 1 }
+            i = i + 1
+        }
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(6); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Single-payload enum tests — EnxToken
+// ---------------------------------------------------------------------------
+
+// Num(42) -> 42
+Test EnxTokenNumDirect {
+    test { return enxTokenVal(EnxToken.Num(42)) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+// Paren(7) -> 7*2=14
+Test EnxTokenParenDirect {
+    test { return enxTokenVal(EnxToken.Paren(7)) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(14); return e }
+}
+
+// Op(3) -> 3*3=9
+Test EnxTokenOpDirect {
+    test { return enxTokenVal(EnxToken.Op(3)) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(9); return e }
+}
+
+// Fold for i=0..29:
+// Nums(i=0,3,6,9,12,15,18,21,24,27): vals = 0+3+6+9+12+15+18+21+24+27=135
+// Parens(i=1,4,7,10,13,16,19,22,25,28): sum=145, *2=290
+// Ops(i=2,5,8,11,14,17,20,23,26,29): sum=155, *3=465
+// total=135+290+465=890
+Test EnxTokenFold30 {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 30 {
+            let t = enxTokenFor(i)
+            acc = acc + enxTokenVal(t)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(890); return e }
+}
+
+// Literal array: [Num(7),Paren(3),Op(2),Num(1),Paren(5)] -> 7+6+6+1+10=30
+Test EnxTokenLiteralArrayFold {
+    test {
+        let ts: [EnxToken] = [EnxToken.Num(7), EnxToken.Paren(3), EnxToken.Op(2), EnxToken.Num(1), EnxToken.Paren(5)]
+        var s = 0
+        for t in ts {
+            s = s + enxTokenVal(t)
+        }
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+// Indexed access via borrow helper: tokens[j] passed to enxTokenVal(borrow EnxToken)
+// Array: [Num(10), Op(4), Paren(3)] -> 10+12+6=28
+Test EnxTokenIndexedAccessFold {
+    test {
+        var ts: [EnxToken] = []
+        ts.append(EnxToken.Num(10))
+        ts.append(EnxToken.Op(4))
+        ts.append(EnxToken.Paren(3))
+        var acc = 0
+        var j = 0
+        while j < ts.count {
+            acc = acc + enxTokenVal(ts[j])
+            j = j + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(28); return e }
+}
+
+// sum (i+1)*enxTokenVal(enxTokenFor(i)) for i=0..5:
+// i=0:Num(0)->0, 1*0=0
+// i=1:Paren(1)->2, 2*2=4
+// i=2:Op(2)->6, 3*6=18
+// i=3:Num(3)->3, 4*3=12
+// i=4:Paren(4)->8, 5*8=40
+// i=5:Op(5)->15, 6*15=90
+// total=0+4+18+12+40+90=164
+Test EnxTokenWeightedFold {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 6 {
+            let t = enxTokenFor(i)
+            acc = acc + (i + 1) * enxTokenVal(t)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(164); return e }
+}
+
+// Inline match in test block (var out pattern)
+// Num(5) -> out=5
+Test EnxTokenInlineMatchNum {
+    test {
+        let t = EnxToken.Num(5)
+        var out = 0
+        match t {
+            Num(v)   -> { out = v }
+            Paren(v) -> { out = v * 2 }
+            Op(v)    -> { out = v * 3 }
+        }
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+// Inline match in test block: Op(4) -> 12
+Test EnxTokenInlineMatchOp {
+    test {
+        let t = EnxToken.Op(4)
+        var out = 0
+        match t {
+            Num(v)   -> { out = v }
+            Paren(v) -> { out = v * 2 }
+            Op(v)    -> { out = v * 3 }
+        }
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
+}
+
+// Sum only Num values in i=0..8 (ignore Paren/Op):
+// Nums at i%3=0: i=0,3,6 -> Num(0)->0, Num(3)->3, Num(6)->6 -> sum=9
+Test EnxTokenSumNumsOnly {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 9 {
+            let t = enxTokenFor(i)
+            var v = 0
+            match t {
+                Num(x)   -> { v = x }
+                Paren(x) -> { v = 0 }
+                Op(x)    -> { v = 0 }
+            }
+            acc = acc + v
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(9); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Single-payload + payload-less enum tests — EnxEvent
+// ---------------------------------------------------------------------------
+
+Test EnxEventClickDirect {
+    test { return enxEventScore(EnxEvent.Click(7)) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test EnxEventKeyDirect {
+    test { return enxEventScore(EnxEvent.Key(3)) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+Test EnxEventScrollDirect {
+    test { return enxEventScore(EnxEvent.Scroll(2)) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(200); return e }
+}
+
+Test EnxEventIdleDirect {
+    test { return enxEventScore(EnxEvent.Idle) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+// [Click(3),Key(2),Scroll(1),Idle,Click(5),Key(1)] -> 3+20+100+0+5+10=138
+Test EnxEventArrayFold {
+    test {
+        let es: [EnxEvent] = [EnxEvent.Click(3), EnxEvent.Key(2), EnxEvent.Scroll(1), EnxEvent.Idle, EnxEvent.Click(5), EnxEvent.Key(1)]
+        var s = 0
+        for ev in es {
+            s = s + enxEventScore(ev)
+        }
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(138); return e }
+}
+
+// Indexed access via borrow helper
+// events[j] via enxEventScore(events[j])
+// [Click(10), Idle, Key(3), Scroll(1)] -> 10+0+30+100=140
+Test EnxEventIndexedFold {
+    test {
+        var events: [EnxEvent] = []
+        events.append(EnxEvent.Click(10))
+        events.append(EnxEvent.Idle)
+        events.append(EnxEvent.Key(3))
+        events.append(EnxEvent.Scroll(1))
+        var acc = 0
+        var j = 0
+        while j < events.count {
+            acc = acc + enxEventScore(events[j])
+            j = j + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(140); return e }
+}
+
+// Count non-Idle events in [Click(1),Idle,Key(2),Scroll(3),Idle,Click(4)] -> 4
+Test EnxEventCountNonIdle {
+    test {
+        let es: [EnxEvent] = [EnxEvent.Click(1), EnxEvent.Idle, EnxEvent.Key(2), EnxEvent.Scroll(3), EnxEvent.Idle, EnxEvent.Click(4)]
+        var count = 0
+        for ev in es {
+            if enxIsIdleEvent(ev) == 0 { count = count + 1 }
+        }
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+// Sum only Click payloads in [Click(5),Key(2),Click(8),Idle,Click(1)]: 5+8+1=14
+Test EnxEventSumClicksOnly {
+    test {
+        let es: [EnxEvent] = [EnxEvent.Click(5), EnxEvent.Key(2), EnxEvent.Click(8), EnxEvent.Idle, EnxEvent.Click(1)]
+        var acc = 0
+        for ev in es {
+            acc = acc + enxClickPayload(ev)
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(14); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Mixed payload/payload-less enum tests — EnxStatus
+// ---------------------------------------------------------------------------
+
+Test EnxStatusDormantDirect {
+    test { return enxStatusCode(EnxStatus.Dormant) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test EnxStatusRunningDirect {
+    test { return enxStatusCode(EnxStatus.Running(42)) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+// Done(15) -> 15+100=115
+Test EnxStatusDoneDirect {
+    test { return enxStatusCode(EnxStatus.Done(15)) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(115); return e }
+}
+
+// Failed(8) -> 0-8 = -8
+Test EnxStatusFailedDirect {
+    test { return enxStatusCode(EnxStatus.Failed(8)) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0 - 8); return e }
+}
+
+// i=0..11: enxStatusFor(i) then code:
+// Dormant: i=0,4,8 -> codes 0,0,0 = 0
+// Running: i=1,5,9 -> codes 1,5,9 = 15
+// Done: i=2,6,10 -> codes 102,106,110 = 318
+// Failed: i=3,7,11 -> codes -3,-7,-11 = -21
+// total = 0+15+318-21 = 312
+Test EnxStatusFold12 {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 12 {
+            let s = enxStatusFor(i)
+            acc = acc + enxStatusCode(s)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(312); return e }
+}
+
+// Count Running+Done (active) in i=0..11: Running=3, Done=3 -> 6
+Test EnxStatusCountActive {
+    test {
+        var count = 0
+        var i = 0
+        while i < 12 {
+            let s = enxStatusFor(i)
+            var active = 0
+            match s {
+                Dormant    -> { active = 0 }
+                Running(n) -> { active = 1 }
+                Done(n)    -> { active = 1 }
+                Failed(n)  -> { active = 0 }
+            }
+            count = count + active
+            i = i + 1
+        }
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(6); return e }
+}
+
+// Sum Running payload values in i=0..11: Running at i=1,5,9 -> 1+5+9=15
+Test EnxStatusRunningSum {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 12 {
+            let s = enxStatusFor(i)
+            var v = 0
+            match s {
+                Running(n) -> { v = n }
+                Dormant    -> { v = 0 }
+                Done(n)    -> { v = 0 }
+                Failed(n)  -> { v = 0 }
+            }
+            acc = acc + v
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+// Indexed access via borrow helper: statusFor is called, result passed to enxStatusCode(statuses[j])
+// Build [Dormant, Running(10), Done(5), Failed(3), Running(20)]
+// codes: 0+10+105-3+20=132
+Test EnxStatusIndexedFold {
+    test {
+        var statuses: [EnxStatus] = []
+        statuses.append(EnxStatus.Dormant)
+        statuses.append(EnxStatus.Running(10))
+        statuses.append(EnxStatus.Done(5))
+        statuses.append(EnxStatus.Failed(3))
+        statuses.append(EnxStatus.Running(20))
+        var acc = 0
+        var j = 0
+        while j < statuses.count {
+            acc = acc + enxStatusCode(statuses[j])
+            j = j + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(132); return e }
+}
+
+// ---------------------------------------------------------------------------
+// EnxNode — mixed payload/payload-less (Leaf, Tagged, Empty)
+// ---------------------------------------------------------------------------
+
+Test EnxNodeLeafDirect {
+    test { return enxNodeVal(EnxNode.Leaf(7)) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test EnxNodeTaggedDirect {
+    test { return enxNodeVal(EnxNode.Tagged(4)) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(40); return e }
+}
+
+Test EnxNodeEmptyDirect {
+    test { return enxNodeVal(EnxNode.Empty) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+// [Leaf(5),Tagged(3),Empty,Leaf(7),Tagged(1),Empty,Leaf(2)] -> 5+30+0+7+10+0+2=54
+Test EnxNodeArrayFold {
+    test {
+        let ns: [EnxNode] = [EnxNode.Leaf(5), EnxNode.Tagged(3), EnxNode.Empty, EnxNode.Leaf(7), EnxNode.Tagged(1), EnxNode.Empty, EnxNode.Leaf(2)]
+        var s = 0
+        for n in ns {
+            s = s + enxNodeVal(n)
+        }
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(54); return e }
+}
+
+// Indexed access via borrow helper
+// [Leaf(3), Tagged(2), Empty, Leaf(10)] via enxNodeVal(nodes[j])
+// 3+20+0+10=33
+Test EnxNodeIndexedFold {
+    test {
+        var nodes: [EnxNode] = []
+        nodes.append(EnxNode.Leaf(3))
+        nodes.append(EnxNode.Tagged(2))
+        nodes.append(EnxNode.Empty)
+        nodes.append(EnxNode.Leaf(10))
+        var acc = 0
+        var j = 0
+        while j < nodes.count {
+            acc = acc + enxNodeVal(nodes[j])
+            j = j + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(33); return e }
+}
+
+// Count Leaf nodes in [Leaf(1),Empty,Leaf(2),Tagged(3),Leaf(4),Empty] -> 3
+Test EnxNodeCountLeaves {
+    test {
+        let ns: [EnxNode] = [EnxNode.Leaf(1), EnxNode.Empty, EnxNode.Leaf(2), EnxNode.Tagged(3), EnxNode.Leaf(4), EnxNode.Empty]
+        var count = 0
+        for n in ns {
+            count = count + enxIsLeaf(n)
+        }
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Enum as struct field — EnxItem
+// ---------------------------------------------------------------------------
+
+// EnxItem{Low, 4} -> 4
+Test EnxItemScoreLow {
+    test {
+        let item = EnxItem { priority: EnxPriority.Low, value: 4 }
+        return enxItemScore(item)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+// EnxItem{Medium, 3} -> 15
+Test EnxItemScoreMedium {
+    test {
+        let item = EnxItem { priority: EnxPriority.Medium, value: 3 }
+        return enxItemScore(item)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+// EnxItem{High, 2} -> 20
+Test EnxItemScoreHigh {
+    test {
+        let item = EnxItem { priority: EnxPriority.High, value: 2 }
+        return enxItemScore(item)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+// [L(2),M(3),H(1),L(4),H(2),M(1)] -> 2+15+10+4+20+5=56
+Test EnxItemLiteralArrayFold {
+    test {
+        let items: [EnxItem] = [
+            EnxItem { priority: EnxPriority.Low,    value: 2 },
+            EnxItem { priority: EnxPriority.Medium, value: 3 },
+            EnxItem { priority: EnxPriority.High,   value: 1 },
+            EnxItem { priority: EnxPriority.Low,    value: 4 },
+            EnxItem { priority: EnxPriority.High,   value: 2 },
+            EnxItem { priority: EnxPriority.Medium, value: 1 }
+        ]
+        var s = 0
+        for item in items {
+            s = s + enxItemScore(item)
+        }
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(56); return e }
+}
+
+// Dynamic build: i=0..5, item{priorityFor(i%3), value: i+1}
+// i=0:L,v=1->1; i=1:M,v=2->10; i=2:H,v=3->30; i=3:L,v=4->4; i=4:M,v=5->25; i=5:H,v=6->60
+// sum=130
+Test EnxItemDynFold {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 6 {
+            let item = EnxItem { priority: enxPriorityFor(i), value: i + 1 }
+            acc = acc + enxItemScore(item)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(130); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Combined / cross-enum tests
+// ---------------------------------------------------------------------------
+
+// sum (enxDirWeight(enxDirFor(i)) + enxSeasonCode(enxSeasonFor(i))) for i=0..7:
+// i=0: N(1)+Spr(10)=11, i=1: S(2)+Sum(20)=22, i=2: E(3)+Aut(30)=33, i=3: W(4)+Win(40)=44
+// i=4: N(1)+Spr(10)=11, i=5: S(2)+Sum(20)=22, i=6: E(3)+Aut(30)=33, i=7: W(4)+Win(40)=44
+// sum=220
+Test EnxDirSeasonCombinedFold {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 8 {
+            let dw = enxDirWeight(enxDirFor(i))
+            let sc = enxSeasonCode(enxSeasonFor(i))
+            acc = acc + dw + sc
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(220); return e }
+}
+
+// sum (enxTokenVal(enxTokenFor(i)) + enxPriorityScore(enxPriorityFor(i))) for i=0..5:
+// i=0:Num(0)->0+Low->1=1
+// i=1:Paren(1)->2+Med->5=7
+// i=2:Op(2)->6+High->10=16
+// i=3:Num(3)->3+Low->1=4
+// i=4:Paren(4)->8+Med->5=13
+// i=5:Op(5)->15+High->10=25
+// sum=66
+Test EnxTokenPriorityPairFold {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 6 {
+            let tv = enxTokenVal(enxTokenFor(i))
+            let pv = enxPriorityScore(enxPriorityFor(i))
+            acc = acc + tv + pv
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(66); return e }
+}
+
+// Dirs 0..11 + Seasons 0..11:
+// dirs: 3*(1+2+3+4)=30, seasons: 3*(10+20+30+40)=300 -> 330
+Test EnxDirPlusSeasonFolds {
+    test {
+        var dirAcc = 0
+        var seaAcc = 0
+        var i = 0
+        while i < 12 {
+            dirAcc = dirAcc + enxDirWeight(enxDirFor(i))
+            seaAcc = seaAcc + enxSeasonCode(enxSeasonFor(i))
+            i = i + 1
+        }
+        return dirAcc + seaAcc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(330); return e }
+}
+
+// Nested: for each priority band, sum token values with that priority weight as multiplier.
+// i=0..8: token(i) value * priorityScore(priorityFor(i))
+// i=0:Num(0)*L(1)=0, i=1:Paren(1)*M(5)=10, i=2:Op(2)*H(10)=60
+// i=3:Num(3)*L(1)=3, i=4:Paren(4)*M(5)=40, i=5:Op(5)*H(10)=150
+// i=6:Num(6)*L(1)=6, i=7:Paren(7)*M(5)=70, i=8:Op(8)*H(10)=240
+// sum=0+10+60+3+40+150+6+70+240=579
+Test EnxTokenPriorityMultiplyFold {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 9 {
+            let tv = enxTokenVal(enxTokenFor(i))
+            let ps = enxPriorityScore(enxPriorityFor(i))
+            acc = acc + tv * ps
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(579); return e }
+}
+
+// Event scores + dir weights for same index i=0..5:
+// i=0: Click(0)=0+North=1=1... wait, EnxEvent doesn't have a For function.
+// Let me just do [Click(1),Key(1),Scroll(1),Idle,Click(2),Key(2)] scores=1+10+100+0+2+20=133
+// plus Dir 0..5 weights: 1+2+3+4+1+2=13
+// total=146
+Test EnxEventPlusDirFold {
+    test {
+        let es: [EnxEvent] = [EnxEvent.Click(1), EnxEvent.Key(1), EnxEvent.Scroll(1), EnxEvent.Idle, EnxEvent.Click(2), EnxEvent.Key(2)]
+        var eAcc = 0
+        for ev in es {
+            eAcc = eAcc + enxEventScore(ev)
+        }
+        var dAcc = 0
+        var i = 0
+        while i < 6 {
+            dAcc = dAcc + enxDirWeight(enxDirFor(i))
+            i = i + 1
+        }
+        return eAcc + dAcc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(146); return e }
+}
+
+// ---------------------------------------------------------------------------
+// State-machine-style tests (Status transitions as scalar sequence)
+// ---------------------------------------------------------------------------
+
+// Simulate: 3 steps of Running(n) advancing n by 5 each step, check final code
+// n0=7, n1=12, n2=17: code of Running(17)=17
+Test EnxStatusRunningProgress {
+    test {
+        var n = 7
+        var steps = 0
+        while steps < 3 {
+            n = n + 5
+            steps = steps + 1
+        }
+        return enxStatusCode(EnxStatus.Running(n))
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(22); return e }
+}
+
+// Status code sum for a specific sequence:
+// [Dormant, Running(3), Running(6), Done(3), Failed(1), Done(10)]
+// codes: 0+3+6+103+(-1)+110=221
+Test EnxStatusSequenceFold {
+    test {
+        let ss: [EnxStatus] = [
+            EnxStatus.Dormant,
+            EnxStatus.Running(3),
+            EnxStatus.Running(6),
+            EnxStatus.Done(3),
+            EnxStatus.Failed(1),
+            EnxStatus.Done(10)
+        ]
+        var acc = 0
+        for s in ss {
+            acc = acc + enxStatusCode(s)
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(221); return e }
+}
+
+// Max status code in [Running(5), Done(2), Running(8), Failed(3)]:
+// codes: 5, 102, 8, -3 -> max=102
+Test EnxStatusMaxCode {
+    test {
+        let ss: [EnxStatus] = [EnxStatus.Running(5), EnxStatus.Done(2), EnxStatus.Running(8), EnxStatus.Failed(3)]
+        var mx = 0 - 99999
+        for s in ss {
+            let c = enxStatusCode(s)
+            if c > mx { mx = c }
+        }
+        return mx
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(102); return e }
+}
+
+// ---------------------------------------------------------------------------
+// TRAP tests
+// ---------------------------------------------------------------------------
+
+// OOB on array of EnxDir
+Test EnxTrapDirArrayOOB {
+    test {
+        let ds: [EnxDir] = [EnxDir.North, EnxDir.South, EnxDir.East]
+        let _ = enxDirWeight(ds[10])
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// OOB on array of EnxToken
+Test EnxTrapTokenArrayOOB {
+    test {
+        let ts: [EnxToken] = [EnxToken.Num(1), EnxToken.Paren(2)]
+        let _ = enxTokenVal(ts[5])
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// OOB on array of EnxStatus
+Test EnxTrapStatusArrayOOB {
+    test {
+        var ss: [EnxStatus] = []
+        ss.append(EnxStatus.Dormant)
+        ss.append(EnxStatus.Running(1))
+        let _ = enxStatusCode(ss[100])
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// Div by zero derived from enum payload: Token.Num(0) -> val=0, then 10/val
+Test EnxTrapDivByTokenPayload {
+    test {
+        let t = EnxToken.Num(0)
+        let val = enxTokenVal(t)
+        return 10 / val
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// Mod by zero derived from enum payload
+Test EnxTrapModByTokenPayload {
+    test {
+        let t = EnxToken.Op(0)
+        let val = enxTokenVal(t)
+        return 42 % val
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// OOB on empty EnxNode array
+Test EnxTrapNodeEmptyArrayOOB {
+    test {
+        let ns: [EnxNode] = []
+        let _ = enxNodeVal(ns[0])
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// Div zero via status payload: Failed(0) -> code = 0-0 = 0, then 5/0
+Test EnxTrapDivByStatusCode {
+    test {
+        let s = EnxStatus.Failed(0)
+        let code = enxStatusCode(s)
+        return 5 / code
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// OOB via computed index from enum: Leaf(100) -> val=100, index into 3-elem array
+Test EnxTrapOOBFromLeafPayload {
+    test {
+        let n = EnxNode.Leaf(100)
+        let idx = enxNodeVal(n)
+        let xs: [Int] = [1, 2, 3]
+        let _ = xs[idx]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// OOB in loop that scans an array of EnxEvent with wrong count
+Test EnxTrapEventOOBInLoop {
+    test {
+        let events: [EnxEvent] = [EnxEvent.Click(1), EnxEvent.Idle]
+        var acc = 0
+        var i = 0
+        while i < 10 {
+            acc = acc + enxEventScore(events[i])
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// Div zero from direction weight difference: North(1)-North(1)=0, then 7/(w1-w2)
+Test EnxTrapDivByDirDiff {
+    test {
+        let d1 = EnxDir.North
+        let d2 = EnxDir.North
+        let diff = enxDirWeight(d1) - enxDirWeight(d2)
+        return 7 / diff
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}

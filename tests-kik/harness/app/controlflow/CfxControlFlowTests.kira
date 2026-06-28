@@ -1,0 +1,1552 @@
+// CfxControlFlowTests.kira
+// Deep control-flow test suite: nested if/else, while, for-in, switch, match,
+// early return, recursion, and trap tests.
+// All top-level names use prefix cfx / Cfx.
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum CfxColor {
+    Red
+    Green
+    Blue
+}
+
+enum CfxShape {
+    Circle(Int)
+    Rect(Int)
+    Point
+}
+
+enum CfxSign {
+    Pos(Int)
+    Neg(Int)
+    Zero
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function cfxColorCode(c: borrow CfxColor) -> Int {
+    match c {
+        Red -> { return 1 }
+        Green -> { return 2 }
+        Blue -> { return 4 }
+    }
+}
+
+function cfxShapeArea(s: borrow CfxShape) -> Int {
+    match s {
+        Circle(r) -> { return r * r }
+        Rect(side) -> { return side * side * 2 }
+        Point -> { return 0 }
+    }
+}
+
+function cfxSignVal(s: borrow CfxSign) -> Int {
+    match s {
+        Pos(v) -> { return v }
+        Neg(v) -> { return 0 - v }
+        Zero -> { return 0 }
+    }
+}
+
+function cfxFactorial(n: Int) -> Int {
+    if n <= 1 { return 1 }
+    return n * cfxFactorial(n - 1)
+}
+
+function cfxFib(n: Int) -> Int {
+    if n < 2 { return n }
+    return cfxFib(n - 1) + cfxFib(n - 2)
+}
+
+function cfxGcd(a: Int, b: Int) -> Int {
+    var x = a
+    var y = b
+    while y != 0 {
+        let t = x % y
+        x = y
+        y = t
+    }
+    return x
+}
+
+function cfxSumRange(lo: Int, hi: Int) -> Int {
+    var s = 0
+    var i = lo
+    while i <= hi {
+        s = s + i
+        i = i + 1
+    }
+    return s
+}
+
+function cfxPow(base: Int, exp: Int) -> Int {
+    var r = 1
+    var i = 0
+    while i < exp {
+        r = r * base
+        i = i + 1
+    }
+    return r
+}
+
+function cfxIsEven(n: Int) -> Bool {
+    if n == 0 { return true }
+    return cfxIsOdd(n - 1)
+}
+
+function cfxIsOdd(n: Int) -> Bool {
+    if n == 0 { return false }
+    return cfxIsEven(n - 1)
+}
+
+function cfxTriangle(n: Int) -> Int {
+    if n <= 0 { return 0 }
+    return n + cfxTriangle(n - 1)
+}
+
+function cfxDigitSum(n: Int) -> Int {
+    var v = n
+    var s = 0
+    while v > 0 {
+        s = s + (v % 10)
+        v = v / 10
+    }
+    return s
+}
+
+function cfxCountDiv(n: Int, d: Int) -> Int {
+    var count = 0
+    var i = 1
+    while i <= n {
+        if i % d == 0 { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
+
+function cfxSwitchBand(x: Int) -> Int {
+    var out = 0
+    switch x {
+        case 0 { out = 10 }
+        case 1 { out = 20 }
+        case 2 { out = 30 }
+        case 3 { out = 40 }
+        case 4 { out = 50 }
+        case 5 { out = 60 }
+        case 6 { out = 70 }
+        case 7 { out = 80 }
+        case 8 { out = 90 }
+        case 9 { out = 100 }
+        default { out = 0 }
+    }
+    return out
+}
+
+// ---------------------------------------------------------------------------
+// Nested if/else tests
+// ---------------------------------------------------------------------------
+
+Test CfxIfElseSimple {
+    test {
+        var x = 5
+        var out = 0
+        if x > 3 { out = 1 } else { out = 2 }
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxIfElseFalse {
+    test {
+        var x = 2
+        var out = 0
+        if x > 3 { out = 1 } else { out = 2 }
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test CfxIfElseIfChain {
+    test {
+        var score = 75
+        var grade = 0
+        if score >= 90 {
+            grade = 4
+        } else if score >= 80 {
+            grade = 3
+        } else if score >= 70 {
+            grade = 2
+        } else if score >= 60 {
+            grade = 1
+        } else {
+            grade = 0
+        }
+        return grade
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test CfxIfElseIfChainTop {
+    test {
+        var score = 95
+        var grade = 0
+        if score >= 90 {
+            grade = 4
+        } else if score >= 80 {
+            grade = 3
+        } else if score >= 70 {
+            grade = 2
+        } else if score >= 60 {
+            grade = 1
+        } else {
+            grade = 0
+        }
+        return grade
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+Test CfxIfElseIfChainBottom {
+    test {
+        var score = 40
+        var grade = 0
+        if score >= 90 {
+            grade = 4
+        } else if score >= 80 {
+            grade = 3
+        } else if score >= 70 {
+            grade = 2
+        } else if score >= 60 {
+            grade = 1
+        } else {
+            grade = 0
+        }
+        return grade
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxDeeplyNestedIf {
+    test {
+        var a = 3
+        var b = 7
+        var c = 2
+        var out = 0
+        if a < b {
+            if b > c {
+                if a != c {
+                    if (a + c) < b {
+                        out = 999
+                    } else {
+                        out = 888
+                    }
+                } else {
+                    out = 777
+                }
+            } else {
+                out = 666
+            }
+        } else {
+            out = 555
+        }
+        return out
+    }
+    // a=3,b=7,c=2: a<b T; b>c T; a!=c T; a+c=5 < b=7 T => 999
+    expect { let e: Result<Int, TestFailure> = Result.Ok(999); return e }
+}
+
+Test CfxIfCountEvenOdd {
+    test {
+        var evens = 0
+        var odds = 0
+        var i = 0
+        while i < 20 {
+            if i % 2 == 0 { evens = evens + 1 } else { odds = odds + 1 }
+            i = i + 1
+        }
+        return evens * 100 + odds
+    }
+    // 0..19: 10 evens, 10 odds
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1010); return e }
+}
+
+Test CfxIfNestedAccumulate {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 10 {
+            if i > 3 {
+                if i < 7 {
+                    acc = acc + i
+                }
+            }
+            i = i + 1
+        }
+        // i in 4,5,6 => 15
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test CfxIfBoolExprComplex {
+    test {
+        var count = 0
+        var i = 0
+        while i < 30 {
+            let a = i % 2 == 0
+            let b = i % 3 == 0
+            if (a && b) || (!a && !b) { count = count + 1 }
+            i = i + 1
+        }
+        // i%2==0 && i%3==0: multiples of 6 in 0..29: 0,6,12,18,24 = 5
+        // !a && !b: odd and not mult of 3 in 0..29: 1,5,7,11,13,17,19,23,25,29 = 10
+        // total = 15
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test CfxIfElseTernaryMix {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 10 {
+            var v = 0
+            if i % 2 == 0 {
+                v = i * 3
+            } else {
+                v = 0 - i
+            }
+            acc = acc + v
+            i = i + 1
+        }
+        // i=0: 0, i=1:-1, i=2:6, i=3:-3, i=4:12, i=5:-5, i=6:18, i=7:-7, i=8:24, i=9:-9
+        // sum = 0-1+6-3+12-5+18-7+24-9 = 35
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(35); return e }
+}
+
+// ---------------------------------------------------------------------------
+// while loop tests
+// ---------------------------------------------------------------------------
+
+Test CfxWhileCountdown {
+    test {
+        var n = 10
+        var steps = 0
+        while n > 0 {
+            n = n - 1
+            steps = steps + 1
+        }
+        return steps
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test CfxWhileAccumulate {
+    test {
+        var sum = 0
+        var i = 1
+        while i <= 100 {
+            sum = sum + i
+            i = i + 1
+        }
+        return sum
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5050); return e }
+}
+
+Test CfxWhileMultiply {
+    test {
+        var prod = 1
+        var i = 1
+        while i <= 10 {
+            prod = prod * i
+            i = i + 1
+        }
+        return prod
+    }
+    // 10! = 3628800
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3628800); return e }
+}
+
+Test CfxWhileEarlyReturn {
+    test {
+        var i = 0
+        while i < 1000 {
+            if i * i > 500 {
+                return i
+            }
+            i = i + 1
+        }
+        return 0 - 1
+    }
+    // i=23: 23*23=529 > 500 => return 23
+    expect { let e: Result<Int, TestFailure> = Result.Ok(23); return e }
+}
+
+Test CfxWhileNestedSum {
+    test {
+        var total = 0
+        var i = 1
+        while i <= 5 {
+            var j = 1
+            while j <= 5 {
+                total = total + i * j
+                j = j + 1
+            }
+            i = i + 1
+        }
+        // (1+2+3+4+5)^2 = 15^2 = 225
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(225); return e }
+}
+
+Test CfxWhileNestedSkip {
+    test {
+        var count = 0
+        var i = 0
+        while i < 8 {
+            var j = 0
+            while j < 8 {
+                if i != j {
+                    count = count + 1
+                }
+                j = j + 1
+            }
+            i = i + 1
+        }
+        // 8*8 - 8 = 56
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(56); return e }
+}
+
+Test CfxWhileNestedMatrix {
+    test {
+        var acc = 0
+        var r = 0
+        while r < 4 {
+            var c = 0
+            while c < 4 {
+                acc = acc + r * 4 + c
+                c = c + 1
+            }
+            r = r + 1
+        }
+        // sum 0..15 = 120
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(120); return e }
+}
+
+Test CfxWhileTripleNested {
+    test {
+        var acc = 0
+        var a = 0
+        while a < 3 {
+            var b = 0
+            while b < 3 {
+                var c = 0
+                while c < 3 {
+                    acc = acc + a + b + c
+                    c = c + 1
+                }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        // each of a,b,c contributes sum over 3*3=9 times: 9*(0+1+2)=27 each, total=81
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(81); return e }
+}
+
+Test CfxWhileCountDivisibleBy7 {
+    test {
+        var count = 0
+        var i = 1
+        while i <= 100 {
+            if i % 7 == 0 { count = count + 1 }
+            i = i + 1
+        }
+        return count
+    }
+    // floor(100/7) = 14
+    expect { let e: Result<Int, TestFailure> = Result.Ok(14); return e }
+}
+
+Test CfxWhileSumSquares {
+    test {
+        var s = 0
+        var i = 1
+        while i <= 10 {
+            s = s + i * i
+            i = i + 1
+        }
+        // 1+4+9+16+25+36+49+64+81+100 = 385
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(385); return e }
+}
+
+Test CfxWhileCollatz {
+    test {
+        var n = 27
+        var steps = 0
+        while n != 1 {
+            if n % 2 == 0 {
+                n = n / 2
+            } else {
+                n = n * 3 + 1
+            }
+            steps = steps + 1
+        }
+        return steps
+    }
+    // Collatz(27) = 111 steps
+    expect { let e: Result<Int, TestFailure> = Result.Ok(111); return e }
+}
+
+Test CfxWhileCountUp {
+    test {
+        var n = 0
+        var steps = 0
+        while n < 50 {
+            n = n + 3
+            steps = steps + 1
+        }
+        // n goes: 3,6,...,48,51 => 17 steps
+        return steps
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(17); return e }
+}
+
+// ---------------------------------------------------------------------------
+// for-in tests
+// ---------------------------------------------------------------------------
+
+Test CfxForInLiteralSum {
+    test {
+        var s = 0
+        for x in [1, 2, 3, 4, 5] {
+            s = s + x
+        }
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test CfxForInProduct {
+    test {
+        var p = 1
+        for x in [1, 2, 3, 4, 5] {
+            p = p * x
+        }
+        return p
+    }
+    // 5! = 120
+    expect { let e: Result<Int, TestFailure> = Result.Ok(120); return e }
+}
+
+Test CfxForInCount {
+    test {
+        var count = 0
+        for x in [10, 20, 30, 40, 50, 60, 70, 80, 90, 100] {
+            if x > 50 { count = count + 1 }
+        }
+        return count
+    }
+    // 60,70,80,90,100 = 5
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test CfxForInBuiltArray {
+    test {
+        var xs: [Int] = []
+        var i = 0
+        while i < 10 {
+            xs.append(i * i)
+            i = i + 1
+        }
+        var s = 0
+        for v in xs {
+            s = s + v
+        }
+        // 0+1+4+9+16+25+36+49+64+81 = 285
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(285); return e }
+}
+
+Test CfxForInNested {
+    test {
+        var acc = 0
+        let outer: [Int] = [1, 2, 3]
+        let inner: [Int] = [10, 20, 30]
+        for a in outer {
+            for b in inner {
+                acc = acc + a * b
+            }
+        }
+        // (1+2+3)*(10+20+30) = 6*60 = 360
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(360); return e }
+}
+
+Test CfxForInSingleElement {
+    test {
+        var s = 0
+        for x in [42] {
+            s = s + x
+        }
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test CfxForInMaxFinder {
+    test {
+        var mx = 0
+        for x in [5, 3, 9, 1, 7, 4, 8, 2, 6] {
+            if x > mx { mx = x }
+        }
+        return mx
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(9); return e }
+}
+
+Test CfxForInMinFinder {
+    test {
+        var mn = 1000000
+        for x in [5, 3, 9, 1, 7, 4, 8, 2, 6] {
+            if x < mn { mn = x }
+        }
+        return mn
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxForInEvenSum {
+    test {
+        var s = 0
+        for x in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] {
+            if x % 2 == 0 { s = s + x }
+        }
+        // 2+4+6+8+10+12 = 42
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test CfxForInCountLiteral {
+    test {
+        var xs: [Int] = [10, 20, 30, 40, 50]
+        return xs.count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test CfxForInAppendAndCount {
+    test {
+        var xs: [Int] = []
+        var i = 0
+        while i < 7 {
+            xs.append(i)
+            i = i + 1
+        }
+        return xs.count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+// ---------------------------------------------------------------------------
+// switch tests
+// ---------------------------------------------------------------------------
+
+Test CfxSwitchExact {
+    test {
+        var out = 0
+        var i = 0
+        while i < 10 {
+            out = out + cfxSwitchBand(i)
+            i = i + 1
+        }
+        // 10+20+30+40+50+60+70+80+90+100 = 550
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(550); return e }
+}
+
+Test CfxSwitchDefault {
+    test {
+        var out = 0
+        switch 99 {
+            case 0 { out = 1 }
+            case 1 { out = 2 }
+            default { out = 3 }
+        }
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test CfxSwitchZero {
+    test {
+        var out = 0
+        switch 0 {
+            case 0 { out = 100 }
+            case 1 { out = 200 }
+            default { out = 300 }
+        }
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(100); return e }
+}
+
+Test CfxSwitchNegativeDefault {
+    test {
+        var out = 0
+        switch 0 - 1 {
+            case 0 { out = 1 }
+            case 1 { out = 2 }
+            default { out = 42 }
+        }
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test CfxSwitchFoldModulo {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 15 {
+            var v = 0
+            switch i % 3 {
+                case 0 { v = 1 }
+                case 1 { v = 10 }
+                case 2 { v = 100 }
+                default { v = 0 }
+            }
+            acc = acc + v
+            i = i + 1
+        }
+        // 5*(1+10+100) = 555
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(555); return e }
+}
+
+Test CfxSwitchManyArms {
+    test {
+        var s = 0
+        var i = 0
+        while i < 12 {
+            var v = 0
+            switch i {
+                case 0 { v = 0 }
+                case 1 { v = 1 }
+                case 2 { v = 4 }
+                case 3 { v = 9 }
+                case 4 { v = 16 }
+                case 5 { v = 25 }
+                case 6 { v = 36 }
+                case 7 { v = 49 }
+                case 8 { v = 64 }
+                case 9 { v = 81 }
+                case 10 { v = 100 }
+                case 11 { v = 121 }
+                default { v = 0 }
+            }
+            s = s + v
+            i = i + 1
+        }
+        // sum of i^2 for i=0..11 = 0+1+4+9+16+25+36+49+64+81+100+121 = 506
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(506); return e }
+}
+
+Test CfxSwitchLargeScrutinee {
+    test {
+        var out = 0
+        switch 1000 {
+            case 999 { out = 1 }
+            case 1000 { out = 2 }
+            case 1001 { out = 3 }
+            default { out = 4 }
+        }
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test CfxSwitchDrivenByLoop {
+    test {
+        var ones = 0
+        var twos = 0
+        var threes = 0
+        var other = 0
+        var i = 0
+        while i < 20 {
+            switch i % 4 {
+                case 1 { ones = ones + 1 }
+                case 2 { twos = twos + 1 }
+                case 3 { threes = threes + 1 }
+                default { other = other + 1 }
+            }
+            i = i + 1
+        }
+        return ones * 1000 + twos * 100 + threes * 10 + other
+    }
+    // i=0..19: 20 values, 5 each of 0,1,2,3 mod 4
+    // ones=5, twos=5, threes=5, other=5
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5555); return e }
+}
+
+// ---------------------------------------------------------------------------
+// match on payload-less enums
+// ---------------------------------------------------------------------------
+
+Test CfxMatchPayloadless {
+    test {
+        let c = CfxColor.Green
+        var out = 0
+        out = cfxColorCode(c)
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test CfxMatchPayloadlessSum {
+    test {
+        let colors: [CfxColor] = [CfxColor.Red, CfxColor.Green, CfxColor.Blue, CfxColor.Red]
+        var s = 0
+        for c in colors {
+            s = s + cfxColorCode(c)
+        }
+        // 1+2+4+1 = 8
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(8); return e }
+}
+
+// ---------------------------------------------------------------------------
+// match on single-payload enums
+// ---------------------------------------------------------------------------
+
+Test CfxMatchPayloadCircle {
+    test {
+        let s = CfxShape.Circle(5)
+        return cfxShapeArea(s)
+    }
+    // 5*5 = 25
+    expect { let e: Result<Int, TestFailure> = Result.Ok(25); return e }
+}
+
+Test CfxMatchPayloadRect {
+    test {
+        let s = CfxShape.Rect(3)
+        return cfxShapeArea(s)
+    }
+    // 3*3*2 = 18
+    expect { let e: Result<Int, TestFailure> = Result.Ok(18); return e }
+}
+
+Test CfxMatchPayloadPoint {
+    test {
+        let s = CfxShape.Point
+        return cfxShapeArea(s)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxMatchPayloadSum {
+    test {
+        let shapes: [CfxShape] = [CfxShape.Circle(3), CfxShape.Rect(2), CfxShape.Point, CfxShape.Circle(4)]
+        var s = 0
+        for sh in shapes {
+            s = s + cfxShapeArea(sh)
+        }
+        // 9 + 8 + 0 + 16 = 33
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(33); return e }
+}
+
+Test CfxMatchSignPos {
+    test {
+        let s = CfxSign.Pos(42)
+        return cfxSignVal(s)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test CfxMatchSignNeg {
+    test {
+        let s = CfxSign.Neg(7)
+        return cfxSignVal(s)
+    }
+    // 0 - 7 = -7
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0 - 7); return e }
+}
+
+Test CfxMatchSignZero {
+    test {
+        let s = CfxSign.Zero
+        return cfxSignVal(s)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxMatchSignFold {
+    test {
+        var acc = 0
+        let sigs: [CfxSign] = [CfxSign.Pos(10), CfxSign.Neg(3), CfxSign.Zero, CfxSign.Pos(5), CfxSign.Neg(2)]
+        for sg in sigs {
+            acc = acc + cfxSignVal(sg)
+        }
+        // 10 - 3 + 0 + 5 - 2 = 10
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Recursion tests
+// ---------------------------------------------------------------------------
+
+Test CfxRecursionFactorial5 {
+    test { return cfxFactorial(5) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(120); return e }
+}
+
+Test CfxRecursionFactorial10 {
+    test { return cfxFactorial(10) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3628800); return e }
+}
+
+Test CfxRecursionFib10 {
+    test { return cfxFib(10) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(55); return e }
+}
+
+Test CfxRecursionFib15 {
+    test { return cfxFib(15) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(610); return e }
+}
+
+Test CfxRecursionFib20 {
+    test { return cfxFib(20) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(6765); return e }
+}
+
+Test CfxRecursionGcd {
+    test { return cfxGcd(48, 18) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(6); return e }
+}
+
+Test CfxRecursionGcdCoprime {
+    test { return cfxGcd(17, 13) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxRecursionGcdLarge {
+    test { return cfxGcd(1071, 462) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(21); return e }
+}
+
+Test CfxRecursionTriangle {
+    test { return cfxTriangle(10) }
+    // 55
+    expect { let e: Result<Int, TestFailure> = Result.Ok(55); return e }
+}
+
+Test CfxRecursionTriangle50 {
+    test { return cfxTriangle(50) }
+    // 1275
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1275); return e }
+}
+
+Test CfxMutualRecursionEven {
+    test { return cfxIsEven(20) }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+}
+
+Test CfxMutualRecursionOdd {
+    test { return cfxIsOdd(15) }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+}
+
+Test CfxMutualRecursionEvenFalse {
+    test { return cfxIsEven(7) }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(false); return e }
+}
+
+Test CfxRecursionPow {
+    test { return cfxPow(3, 10) }
+    // 59049
+    expect { let e: Result<Int, TestFailure> = Result.Ok(59049); return e }
+}
+
+Test CfxRecursionDigitSum {
+    test { return cfxDigitSum(123456789) }
+    // 1+2+3+4+5+6+7+8+9 = 45
+    expect { let e: Result<Int, TestFailure> = Result.Ok(45); return e }
+}
+
+Test CfxRecursionSumRange {
+    test { return cfxSumRange(1, 50) }
+    // 1275
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1275); return e }
+}
+
+Test CfxRecursionCountDiv {
+    test { return cfxCountDiv(100, 7) }
+    // floor(100/7) = 14
+    expect { let e: Result<Int, TestFailure> = Result.Ok(14); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Early-return patterns
+// ---------------------------------------------------------------------------
+
+Test CfxEarlyReturnFromBranch {
+    test {
+        var i = 0
+        while i < 100 {
+            if i * i >= 200 {
+                return i
+            }
+            i = i + 1
+        }
+        return 0 - 1
+    }
+    // i=15: 225>=200 => 15
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test CfxEarlyReturnSwitch {
+    test {
+        var i = 0
+        while i < 50 {
+            var hit = false
+            switch i % 7 {
+                case 0 { hit = true }
+                default { hit = false }
+            }
+            if hit && i > 0 {
+                return i
+            }
+            i = i + 1
+        }
+        return 0 - 1
+    }
+    // first positive multiple of 7 = 7
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test CfxEarlyReturnForIn {
+    test {
+        let xs: [Int] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5]
+        for v in xs {
+            if v > 7 {
+                return v
+            }
+        }
+        return 0 - 1
+    }
+    // 9 is first > 7
+    expect { let e: Result<Int, TestFailure> = Result.Ok(9); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Combined control-flow folds
+// ---------------------------------------------------------------------------
+
+Test CfxCombinedFibSwitch {
+    test {
+        var acc = 0
+        var i = 0
+        while i <= 10 {
+            let f = cfxFib(i)
+            var v = 0
+            switch f % 3 {
+                case 0 { v = 1 }
+                case 1 { v = 2 }
+                case 2 { v = 3 }
+                default { v = 0 }
+            }
+            acc = acc + v
+            i = i + 1
+        }
+        // fib: 0,1,1,2,3,5,8,13,21,34,55
+        // %3:  0,1,1,2,0,2,2,1,0,1,1
+        // v:   1,2,2,3,1,3,3,2,1,2,2 => sum=22
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(22); return e }
+}
+
+Test CfxCombinedForIfRecurse {
+    test {
+        var acc = 0
+        let ns: [Int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        for n in ns {
+            if cfxIsEven(n) {
+                acc = acc + cfxTriangle(n)
+            }
+        }
+        // even n in 1..10: 2,4,6,8,10
+        // triangle: 3,10,21,36,55 => sum=125
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(125); return e }
+}
+
+Test CfxCombinedWhileForMatch {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 5 {
+            let shapes: [CfxShape] = [CfxShape.Circle(i + 1), CfxShape.Rect(i + 1), CfxShape.Point]
+            for sh in shapes {
+                acc = acc + cfxShapeArea(sh)
+            }
+            i = i + 1
+        }
+        // i=0: Circle(1)=1, Rect(1)=2, Point=0 => 3
+        // i=1: Circle(2)=4, Rect(2)=8, Point=0 => 12
+        // i=2: Circle(3)=9, Rect(3)=18, Point=0 => 27
+        // i=3: Circle(4)=16, Rect(4)=32, Point=0 => 48
+        // i=4: Circle(5)=25, Rect(5)=50, Point=0 => 75
+        // total = 3+12+27+48+75 = 165
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(165); return e }
+}
+
+Test CfxCombinedNestedWhileSwitch {
+    test {
+        var acc = 0
+        var r = 0
+        while r < 5 {
+            var c = 0
+            while c < 5 {
+                var v = 0
+                switch (r + c) % 4 {
+                    case 0 { v = 1 }
+                    case 1 { v = 2 }
+                    case 2 { v = 4 }
+                    case 3 { v = 8 }
+                    default { v = 0 }
+                }
+                acc = acc + v
+                c = c + 1
+            }
+            r = r + 1
+        }
+        // 5x5 grid, (r+c)%4:
+        // count each residue: diagonal stripes
+        // 0: (0,0),(0,4),(1,3),(2,2),(3,1),(4,0),(1,7->skip),(4,4) ...
+        // Let me count: r+c ranges 0..8
+        // residue 0: sums 0,4,8 -> (0,0),(0,4),(1,3),(2,2),(3,1),(4,0),(4,4) = 7 pairs
+        // residue 1: sums 1,5 -> (0,1),(1,0),(0,5->skip),(1,4),(2,3),(3,2),(4,1),(1+4=5:no,c<=4)
+        //   sum1: (0,1),(1,0) = 2; sum5: (1,4),(2,3),(3,2),(4,1) = 4 => 6
+        // residue 2: sums 2,6 -> sum2:(0,2),(1,1),(2,0)=3; sum6:(2,4),(3,3),(4,2)=3 => 6
+        // residue 3: sums 3,7 -> sum3:(0,3),(1,2),(2,1),(3,0)=4; sum7:(3,4),(4,3)=2 => 6
+        // check: 7+6+6+6=25 ✓
+        // acc = 7*1 + 6*2 + 6*4 + 6*8 = 7+12+24+48 = 91
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(91); return e }
+}
+
+Test CfxCombinedGaussCheck {
+    test {
+        let n = 50
+        let loop_sum = cfxSumRange(1, n)
+        let formula = n * (n + 1) / 2
+        return loop_sum == formula ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxCombinedFactorialVsLoop {
+    test {
+        let rec_val = cfxFactorial(8)
+        var loop_val = 1
+        var i = 1
+        while i <= 8 {
+            loop_val = loop_val * i
+            i = i + 1
+        }
+        return rec_val == loop_val ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test CfxForInColorFold {
+    test {
+        var acc = 0
+        let cs: [CfxColor] = [CfxColor.Red, CfxColor.Blue, CfxColor.Green, CfxColor.Blue, CfxColor.Red]
+        for c in cs {
+            acc = acc + cfxColorCode(c)
+        }
+        // 1+4+2+4+1 = 12
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
+}
+
+Test CfxNestedIfEarlyReturn {
+    test {
+        var i = 1
+        while i <= 100 {
+            if i > 10 {
+                if i % 3 == 0 {
+                    if i % 5 == 0 {
+                        return i
+                    }
+                }
+            }
+            i = i + 1
+        }
+        return 0 - 1
+    }
+    // first i>10 divisible by 15: 15
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test CfxLoopBuildAndScanArray {
+    test {
+        var xs: [Int] = []
+        var i = 0
+        while i < 20 {
+            if i % 3 != 0 {
+                xs.append(i)
+            }
+            i = i + 1
+        }
+        var s = 0
+        for v in xs {
+            s = s + v
+        }
+        // sum of 1..19 excluding multiples of 3
+        // sum(1..19) = 190, multiples of 3: 3+6+9+12+15+18 = 63 => 127
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(127); return e }
+}
+
+Test CfxSwitchInsideFor {
+    test {
+        var acc = 0
+        for x in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] {
+            var v = 0
+            switch x % 3 {
+                case 0 { v = x * 10 }
+                case 1 { v = x }
+                case 2 { v = 0 - x }
+                default { v = 0 }
+            }
+            acc = acc + v
+        }
+        // x=0: 0%3=0 => 0, x=1: 1%3=1 => 1, x=2: 2%3=2 => -2
+        // x=3: 0 => 30, x=4: 1 => 4, x=5: 2 => -5
+        // x=6: 0 => 60, x=7: 1 => 7, x=8: 2 => -8, x=9: 0 => 90
+        // sum = 0+1-2+30+4-5+60+7-8+90 = 177
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(177); return e }
+}
+
+// ---------------------------------------------------------------------------
+// TRAP tests
+// ---------------------------------------------------------------------------
+
+Test CfxTrapArrayOOB {
+    test {
+        let xs: [Int] = [1, 2, 3]
+        let _ = xs[10]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapDivZero {
+    test {
+        let a = 42
+        let b = 0
+        return a / b
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapModZero {
+    test {
+        let a = 100
+        let b = 0
+        return a % b
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapOOBEmptyArray {
+    test {
+        let xs: [Int] = []
+        let _ = xs[0]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapOOBNegativeIndex {
+    test {
+        let xs: [Int] = [1, 2, 3]
+        let _ = xs[0 - 1]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapOOBExactEnd {
+    test {
+        let xs: [Int] = [10, 20, 30]
+        let _ = xs[3]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapDivZeroInLoop {
+    test {
+        var i = 5
+        while i >= 0 {
+            let _ = 10 / i
+            i = i - 1
+        }
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapModZeroInLoop {
+    test {
+        var i = 3
+        while i >= 0 {
+            let _ = 100 % i
+            i = i - 1
+        }
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapOOBInLoop {
+    test {
+        let xs: [Int] = [1, 2, 3, 4, 5]
+        var i = 0
+        while i < 10 {
+            let _ = xs[i]
+            i = i + 1
+        }
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapOOBAfterAppend {
+    test {
+        var xs: [Int] = []
+        xs.append(1)
+        xs.append(2)
+        let _ = xs[5]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapDivZeroAfterBranch {
+    test {
+        var x = 10
+        if x > 5 { x = 0 }
+        return 100 / x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapOOBFromFor {
+    test {
+        let xs: [Int] = [1, 2, 3]
+        let idx: [Int] = [0, 1, 2, 5]
+        for i in idx {
+            let _ = xs[i]
+        }
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapModZeroSwitch {
+    test {
+        var d = 1
+        var i = 0
+        while i < 5 {
+            switch i {
+                case 3 { d = 0 }
+                default { d = 1 }
+            }
+            let _ = 42 % d
+            i = i + 1
+        }
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapDivZeroRecursive {
+    test {
+        let n = cfxFactorial(0) - 1
+        return 10 / n
+    }
+    // cfxFactorial(0)=1, so n=0 => div by zero
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test CfxTrapOOBLargeIndex {
+    test {
+        let xs: [Int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        let _ = xs[1000000]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Additional edge/misc tests
+// ---------------------------------------------------------------------------
+
+Test CfxWhileNoIterations {
+    test {
+        var acc = 99
+        var i = 10
+        while i < 5 {
+            acc = acc + 1
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(99); return e }
+}
+
+Test CfxForInEmpty {
+    test {
+        var acc = 77
+        let empty: [Int] = []
+        for x in empty {
+            acc = acc + x
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(77); return e }
+}
+
+Test CfxIfOnlyThen {
+    test {
+        var x = 0
+        if true { x = 5 }
+        return x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test CfxIfFalseSkipsThen {
+    test {
+        var x = 7
+        if false { x = 100 }
+        return x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test CfxRecursionPow2_20 {
+    test { return cfxPow(2, 20) }
+    // 1048576
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1048576); return e }
+}
+
+Test CfxMatchDrivenBySwitchResult {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 6 {
+            var sh = CfxShape.Point
+            switch i % 3 {
+                case 0 { sh = CfxShape.Circle(i + 1) }
+                case 1 { sh = CfxShape.Rect(i + 1) }
+                case 2 { sh = CfxShape.Point }
+                default { sh = CfxShape.Point }
+            }
+            acc = acc + cfxShapeArea(sh)
+            i = i + 1
+        }
+        // i=0: Circle(1)=1, i=1: Rect(2)=8, i=2: Point=0
+        // i=3: Circle(4)=16, i=4: Rect(5)=50, i=5: Point=0
+        // total = 1+8+0+16+50+0 = 75
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(75); return e }
+}
+
+Test CfxDoubleForInCount {
+    test {
+        let xs: [Int] = [2, 4, 6, 8, 10]
+        let ys: [Int] = [1, 3, 5, 7, 9]
+        var count = 0
+        for x in xs {
+            for y in ys {
+                if x > y { count = count + 1 }
+            }
+        }
+        // x=2: y in {1} => 1; x=4: y in {1,3} => 2; x=6: y in {1,3,5} => 3
+        // x=8: y in {1,3,5,7} => 4; x=10: y in {1,3,5,7,9} => 5
+        // total = 15
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test CfxSumOfFibs {
+    test {
+        var s = 0
+        var i = 0
+        while i <= 15 {
+            s = s + cfxFib(i)
+            i = i + 1
+        }
+        // fib(0..15): 0,1,1,2,3,5,8,13,21,34,55,89,144,233,377,610
+        // sum = 1596
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1596); return e }
+}
+
+Test CfxGcdArray {
+    test {
+        var g = cfxGcd(120, 168)
+        g = cfxGcd(g, 252)
+        return g
+    }
+    // gcd(120,168)=24, gcd(24,252)=12
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
+}

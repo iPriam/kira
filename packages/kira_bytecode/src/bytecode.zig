@@ -21,7 +21,10 @@ pub const Module = struct {
     }
 
     pub fn readFromFile(allocator: std.mem.Allocator, path: []const u8) !Module {
-        const bytes = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, path, allocator, .limited(1024 * 1024));
+        // Our own build artifact: a large monolithic program (e.g. a test suite
+        // whose synthesized driver runs hundreds of tests) easily exceeds a few
+        // MiB, so keep a generous bound rather than the old 1 MiB cap.
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, path, allocator, .limited(256 * 1024 * 1024));
         return deserialize(allocator, bytes);
     }
 

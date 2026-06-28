@@ -1,0 +1,115 @@
+// Enums: payload-less and single-payload variants, exhaustive match with
+// payload binding, generic Result<T, E>, and linear attempt/try/handle.
+
+enum EnShade {
+    Light
+    Dark
+    Mid
+}
+
+enum EnNode {
+    Leaf(Int)
+    Tagged(Int)
+    Empty
+}
+
+enum EnMathError {
+    DivByZero
+    Negative
+}
+
+function enShadeWeight(s: borrow EnShade) -> Int {
+    match s {
+        Light -> { return 1 }
+        Dark -> { return 2 }
+        Mid -> { return 3 }
+    }
+}
+
+function enNodeValue(n: borrow EnNode) -> Int {
+    match n {
+        Leaf(v) -> { return v }
+        Tagged(v) -> { return v * 10 }
+        Empty -> { return 0 }
+    }
+}
+
+function enSafeDiv(a: Int, b: Int) -> Result<Int, EnMathError> {
+    if b == 0 {
+        return Result.Error(EnMathError.DivByZero)
+    }
+    if a < 0 {
+        return Result.Error(EnMathError.Negative)
+    }
+    return Result.Ok(a / b)
+}
+
+function enErrCode(e: borrow EnMathError) -> Int {
+    match e {
+        DivByZero -> { return 0 - 1 }
+        Negative -> { return 0 - 2 }
+    }
+}
+
+function enChain(a: Int, b: Int, c: Int) -> Int {
+    let r1 = enSafeDiv(a, b)
+    match r1 {
+        Ok(x) -> {
+            let r2 = enSafeDiv(x, c)
+            match r2 {
+                Ok(y) -> { return x + y }
+                Error(e) -> { return enErrCode(e) }
+            }
+        }
+        Error(e) -> { return enErrCode(e) }
+    }
+}
+
+function enumsSection() -> Int {
+    var acc = 0
+
+    // Payload-less enum match over a loop.
+    var i = 0
+    while i < 60 {
+        let s = enShadeFor(i)
+        acc = acc + enShadeWeight(s)
+        i = i + 1
+    }
+
+    // Single-payload enums.
+    var j = 0
+    while j < 50 {
+        let n = enNodeFor(j)
+        acc = acc + enNodeValue(n)
+        j = j + 1
+    }
+
+    // Result + attempt/handle: success and both failure modes.
+    acc = acc + enChain(100, 5, 2)
+    acc = acc + enChain(100, 0, 2)
+    acc = acc + enChain(0 - 4, 2, 1)
+
+    return acc
+}
+
+// NOTE: these intentionally return the enum directly from each branch. The
+// `var s = EnShade.X; s = EnShade.Y; return s` form (a mutable enum local
+// reassigned, then returned) miscompiles on the LLVM backend — see
+// FINDINGS.md (#1) and known-bugs/llvm_enum_var_local.
+function enShadeFor(i: Int) -> EnShade {
+    switch i % 3 {
+        case 0 { return EnShade.Light }
+        case 1 { return EnShade.Dark }
+        case 2 { return EnShade.Mid }
+        default { return EnShade.Light }
+    }
+}
+
+function enNodeFor(j: Int) -> EnNode {
+    switch j % 3 {
+        case 0 { return EnNode.Leaf(j) }
+        case 1 { return EnNode.Tagged(j) }
+        case 2 { return EnNode.Empty }
+        default { return EnNode.Empty }
+    }
+}

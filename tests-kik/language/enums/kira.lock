@@ -1,7 +1,0 @@
-version = 1
-
-[root]
-name = "KikLanguageEnums"
-version = "0.1.0"
-kind = "app"
-kira = "0.1.0"

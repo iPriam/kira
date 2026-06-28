@@ -1,3 +1,4 @@
+const std = @import("std");
 const bytecode = @import("kira_bytecode");
 const runtime_abi = @import("kira_runtime_abi");
 
@@ -55,6 +56,20 @@ pub fn compareValues(vm: anytype, lhs: runtime_abi.Value, rhs: runtime_abi.Value
                 .not_equal => lhs_value != rhs.raw_ptr,
                 else => {
                     vm.rememberError("vm compare does not support ordered pointer comparisons");
+                    return error.RuntimeFailure;
+                },
+            };
+        },
+        .string => |lhs_value| {
+            if (rhs != .string) {
+                vm.rememberFmt("vm compare expects matching operand types (lhs={s}, rhs={s})", .{ @tagName(lhs), @tagName(rhs) });
+                return error.RuntimeFailure;
+            }
+            return switch (op) {
+                .equal => std.mem.eql(u8, lhs_value, rhs.string),
+                .not_equal => !std.mem.eql(u8, lhs_value, rhs.string),
+                else => {
+                    vm.rememberError("vm compare does not support ordered string comparisons");
                     return error.RuntimeFailure;
                 },
             };
@@ -186,6 +201,41 @@ pub fn divideValues(vm: anytype, lhs: runtime_abi.Value, rhs: runtime_abi.Value)
     };
 }
 
+// Truncate a float toward zero into an i64, saturating out-of-range and NaN
+// inputs so the VM never hits Zig's `@intFromFloat` UB. In-range values match
+// the LLVM backend's `fptosi`.
+fn floatToIntTruncate(f: f64) i64 {
+    if (std.math.isNan(f)) return 0;
+    const max_f: f64 = @floatFromInt(std.math.maxInt(i64));
+    const min_f: f64 = @floatFromInt(std.math.minInt(i64));
+    if (f >= max_f) return std.math.maxInt(i64);
+    if (f <= min_f) return std.math.minInt(i64);
+    return @intFromFloat(@trunc(f));
+}
+
+// `Int(x)` / `Float(x)` numeric cast. `to_float` selects the target. A cast to
+// a value's existing kind is an identity copy; Float->Int truncates toward zero.
+pub fn convertValue(vm: anytype, src: runtime_abi.Value, to_float: bool) !runtime_abi.Value {
+    if (to_float) {
+        return switch (src) {
+            .float => src,
+            .integer => |value| .{ .float = @floatFromInt(value) },
+            else => {
+                vm.rememberError("vm Float() expects a numeric operand");
+                return error.RuntimeFailure;
+            },
+        };
+    }
+    return switch (src) {
+        .integer => src,
+        .float => |value| .{ .integer = floatToIntTruncate(value) },
+        else => {
+            vm.rememberError("vm Int() expects a numeric operand");
+            return error.RuntimeFailure;
+        },
+    };
+}
+
 pub fn moduloValues(vm: anytype, lhs: runtime_abi.Value, rhs: runtime_abi.Value) !runtime_abi.Value {
     return switch (lhs) {
         .integer => |lhs_value| blk: {
@@ -197,7 +247,10 @@ pub fn moduloValues(vm: anytype, lhs: runtime_abi.Value, rhs: runtime_abi.Value)
                 vm.rememberError("vm modulo does not allow division by zero");
                 return error.RuntimeFailure;
             }
-            break :blk .{ .integer = @mod(lhs_value, rhs.integer) };
+            // Truncated remainder (toward zero) to match `@divTrunc` above, the
+            // LLVM backend's `srem`, and Rust's `%`, so `(a/b)*b + a%b == a`
+            // holds for negative operands and vm/llvm/hybrid agree (S8).
+            break :blk .{ .integer = @rem(lhs_value, rhs.integer) };
         },
         .float => |lhs_value| blk: {
             if (rhs != .float) {
@@ -208,7 +261,9 @@ pub fn moduloValues(vm: anytype, lhs: runtime_abi.Value, rhs: runtime_abi.Value)
                 vm.rememberError("vm modulo does not allow division by zero");
                 return error.RuntimeFailure;
             }
-            break :blk .{ .float = @mod(lhs_value, rhs.float) };
+            // Truncated remainder (toward zero) to match integer `%`, the LLVM
+            // backend's `frem`, and Rust's `%` (S8).
+            break :blk .{ .float = @rem(lhs_value, rhs.float) };
         },
         else => {
             vm.rememberError("vm modulo expects numeric operands");

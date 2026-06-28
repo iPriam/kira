@@ -79,7 +79,8 @@ pub const HybridModuleManifest = struct {
     }
 
     pub fn readFromFile(allocator: std.mem.Allocator, path: []const u8) !HybridModuleManifest {
-        const bytes = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, path, allocator, .limited(1024 * 1024));
+        // Our own build artifact; a large program's manifest can exceed 1 MiB.
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, path, allocator, .limited(256 * 1024 * 1024));
         var reader_state = std.Io.Reader.fixed(bytes);
         const reader = &reader_state;
 

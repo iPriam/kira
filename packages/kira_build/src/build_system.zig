@@ -7,6 +7,7 @@ const hybrid = @import("kira_hybrid_definition");
 const runtime_abi = @import("kira_runtime_abi");
 const llvm_backend = @import("kira_llvm_backend");
 const native = @import("kira_native_lib_definition");
+const package_manager = @import("kira_package_manager");
 const pipeline = @import("pipeline.zig");
 const ffi_support = @import("ffi_support.zig");
 const builtin = @import("builtin");
@@ -162,21 +163,33 @@ pub const BuildSystem = struct {
     }
 
     pub fn compileForBackend(self: BuildSystem, request: build_def.BuildRequest) !pipeline.ExecutablePipelineResult {
-        return pipeline.compileFileForBackendWithSelector(
+        return pipeline.compileFileForBackendWithOptions(
             self.allocator,
             request.source_path,
             request.target.execution,
             request.target.selector,
             request.native_libraries,
+            .{
+                .allow_runtime_direct_ffi = request.target.execution == .vm,
+                .require_main = !request.test_mode,
+                .test_mode = request.test_mode,
+                .synthesize_test_driver = request.synthesize_test_driver,
+            },
         );
     }
 
     pub fn build(self: BuildSystem, request: build_def.BuildRequest) !BuildArtifactOutcome {
         const total_start = nowTimestamp();
+        // Test builds keep Test sections / the synthesized driver that a normal
+        // build drops, so the on-disk cache (keyed only by source+backend) must
+        // not serve a non-test artifact for them. Always rebuild uncached.
+        if (request.test_mode) return self.buildUncached(request);
         if (self.use_cache) {
             const maybe_cache = cache.Cache.initForSource(self.allocator, request.source_path) catch null;
             if (maybe_cache) |build_cache| {
-                const maybe_entry = build_cache.entryForBuild(request.source_path, request.target.execution) catch null;
+                const native_deps_fp = self.nativeDepsFingerprint(request);
+                defer if (native_deps_fp) |fp| self.allocator.free(fp);
+                const maybe_entry = build_cache.entryForBuildWithNativeDeps(request.source_path, request.target.execution, native_deps_fp orelse "") catch null;
                 if (maybe_entry) |entry| {
                     if (entry.hasArtifacts()) {
                         const restore_start = nowTimestamp();
@@ -229,6 +242,62 @@ pub const BuildSystem = struct {
     fn resolveCachedNativeLibraries(self: BuildSystem, request: build_def.BuildRequest) []const native.ResolvedNativeLibrary {
         if (request.target.execution != .vm) return &.{};
         return ffi_support.prepareNativeLibrariesForTarget(self.allocator, request.source_path, &.{}, request.target.selector) catch &.{};
+    }
+
+    /// A content fingerprint of the native static libraries an executable links,
+    /// folded into the build cache key. Resolving the libraries here also ensures
+    /// their artifacts are up to date (recompiling stale ones) before they are
+    /// hashed, so a change to a native source/header produces a new artifact, a
+    /// new fingerprint, and therefore a relink instead of a stale cache restore.
+    /// Returns null for VM (which loads native libraries dynamically at runtime,
+    /// so the bytecode artifact does not depend on their content) or when there
+    /// are no native libraries. Caller owns the returned slice.
+    fn nativeDepsFingerprint(self: BuildSystem, request: build_def.BuildRequest) ?[]const u8 {
+        if (request.target.execution == .vm) return null;
+        // Resolve with the target's real selector. The CLI leaves the selector
+        // null for wasm and the pipeline substitutes the Emscripten one later, so
+        // mirror that here -- otherwise the fingerprint would hash host libraries
+        // instead of the wasm ones the executable actually links.
+        const selector: ?native.TargetSelector = if (request.target.execution == .wasm32_emscripten and request.target.selector == null)
+            (llvm_backend.emscripten.selector(self.allocator) catch return null)
+        else
+            request.target.selector;
+        // Resolve the same native-library set the linker uses: the leaf's
+        // manifest libraries PLUS every dependency package's libraries reachable
+        // through the module map (the compile path resolves via the module map,
+        // not just the leaf manifest). Plus any explicit pre-resolved libraries
+        // on the request. Otherwise a change to a dependency/import-only or
+        // explicit artifact would not invalidate the cached executable. Falls
+        // back to the leaf-only set if the module map cannot be loaded.
+        const leaf = ffi_support.prepareNativeLibrariesForTarget(self.allocator, request.source_path, &.{}, selector) catch return null;
+        const resolved = blk: {
+            const module_map = package_manager.loadModuleMapForSource(self.allocator, request.source_path) catch break :blk leaf;
+            break :blk ffi_support.prepareDeclaredNativeLibrariesForTarget(self.allocator, leaf, module_map, selector) catch leaf;
+        };
+        if (resolved.len == 0 and request.native_libraries.len == 0) return null;
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update("native-deps-v1\n");
+        self.hashNativeLibrarySet(&hasher, resolved);
+        self.hashNativeLibrarySet(&hasher, request.native_libraries);
+        var digest: [32]u8 = undefined;
+        hasher.final(&digest);
+        return self.allocator.dupe(u8, &digest) catch null;
+    }
+
+    fn hashNativeLibrarySet(self: BuildSystem, hasher: anytype, libs: []const native.ResolvedNativeLibrary) void {
+        for (libs) |lib| {
+            hasher.update(lib.name);
+            hasher.update("\x00");
+            hasher.update(lib.artifact_path);
+            hasher.update("\x00");
+            if (lib.artifact_path.len > 0) {
+                if (std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, lib.artifact_path, self.allocator, .limited(256 * 1024 * 1024))) |contents| {
+                    defer self.allocator.free(contents);
+                    hasher.update(contents);
+                } else |_| {}
+            }
+            hasher.update("\n");
+        }
     }
 
     fn buildUncached(self: BuildSystem, request: build_def.BuildRequest) !BuildArtifactOutcome {

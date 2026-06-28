@@ -1,0 +1,15 @@
+// Regression (S8): integer `%` must truncate toward zero (sign follows the
+// dividend), matching `/` (`@divTrunc` / LLVM `srem`), so the division identity
+// `(a/b)*b + a%b == a` holds for negative operands. The VM previously used
+// floored modulo (`@mod`), which both broke the identity and disagreed with the
+// LLVM backend (a parity bug). This asserts vm/llvm/hybrid all agree.
+@Main
+function main() {
+    print((0 - 17) % 5)         // -2 (truncated; floored would be 3)
+    print(17 % (0 - 5))         // 2  (truncated; floored would be -3)
+    print((0 - 17) % (0 - 5))   // -2
+    print(17 % 5)               // 2  (positive case, unchanged)
+    // division identity for a negative dividend:
+    print((0 - 17) / 5 * 5 + (0 - 17) % 5)  // -17
+    return
+}

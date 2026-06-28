@@ -3,6 +3,7 @@ const ir = @import("ir.zig");
 const model = @import("kira_semantics_model");
 const runtime_abi = @import("kira_runtime_abi");
 const parent = @import("lower_from_hir.zig");
+const places = @import("lower_from_hir_places.zig");
 const Lowerer = parent.Lowerer;
 const lowerProgram = parent.lowerProgram;
 const lowerResolvedType = parent.lowerResolvedType;
@@ -361,6 +362,7 @@ pub fn markReachableExpr(
         .parent_view => |node| try markReachableExpr(allocator, program, reachable, node.object),
         .c_string_to_string => |node| try markReachableExpr(allocator, program, reachable, node.value),
         .array_len => |node| try markReachableExpr(allocator, program, reachable, node.object),
+        .string_len => |node| try markReachableExpr(allocator, program, reachable, node.object),
         .field => |node| try markReachableExpr(allocator, program, reachable, node.object),
         .binary => |node| {
             try markReachableExpr(allocator, program, reachable, node.lhs);
@@ -566,53 +568,17 @@ pub fn lowerAssignmentStatement(
         },
         .field => |target| {
             const target_ty = try lowerResolvedType(program, target.ty);
-            // `arr[i].field = value`: a struct array element is materialized by
-            // value (the VM has no element-pointer op), so writing through a
-            // `field_ptr` into that element mutates a transient copy and the
-            // store is lost. Read the element, mutate the field, then write the
-            // element back into the array via `array_set` so the mutation
-            // survives. Backend-agnostic: LLVM produces the same result.
-            if (target.object.* == .index) {
-                const idx_expr = target.object.index;
-                const elem_ty = try lowerResolvedType(program, model.hir.exprType(target.object.*));
-                const arr_reg = try lowerer.lowerExpr(instructions, idx_expr.object);
-                const index_reg = try lowerer.lowerExpr(instructions, idx_expr.index);
-                const elem_reg = lowerer.freshRegister();
-                try instructions.append(.{ .array_get = .{
-                    .dst = elem_reg,
-                    .array = arr_reg,
-                    .index = index_reg,
-                    .ty = elem_ty,
-                } });
-                const elem_ptr = lowerer.freshRegister();
-                try instructions.append(.{ .field_ptr = .{
-                    .dst = elem_ptr,
-                    .base = elem_reg,
-                    .base_type_name = target.container_type_name,
-                    .field_index = target.field_index,
-                    .field_ty = target_ty,
-                } });
-                if (target_ty.kind == .ffi_struct) {
-                    try instructions.append(.{ .copy_indirect = .{
-                        .dst_ptr = elem_ptr,
-                        .src_ptr = value_reg,
-                        .type_name = target_ty.name orelse return error.UnsupportedExecutableFeature,
-                    } });
-                } else {
-                    try instructions.append(.{ .store_indirect = .{
-                        .ptr = elem_ptr,
-                        .src = value_reg,
-                        .ty = target_ty,
-                    } });
-                }
-                try instructions.append(.{ .array_set = .{
-                    .array = arr_reg,
-                    .index = index_reg,
-                    .src = elem_reg,
-                } });
-                return;
-            }
-            const base_reg = try lowerer.lowerExpr(instructions, target.object);
+            // Resolve the field's base object as a mutable place. When the place chain
+            // roots at an array index (`arr[i].field`, `arr[i].a.b`, `arr[i].xs[j].f`,
+            // ...) the element is materialized by value (the VM has no element-pointer
+            // op), so the mutation only touches a transient copy unless the element is
+            // written back into its array with `array_set`. `lowerMutableObject` mirrors
+            // the read lowering of the same place and records those write-backs; plain
+            // local-struct fields produce no write-backs and lower exactly as before.
+            // Backend-agnostic: LLVM/native round-trip `array_get`/`array_set` the same.
+            var writebacks = places.WritebackList.init(lowerer.allocator);
+            defer writebacks.deinit();
+            const base_reg = try places.lowerMutableObject(lowerer, instructions, target.object, &writebacks);
             if (model.hir.exprType(target.object.*).kind == .native_state_view) {
                 try instructions.append(.{ .native_state_field_set = .{
                     .state = base_reg,
@@ -620,6 +586,7 @@ pub fn lowerAssignmentStatement(
                     .src = value_reg,
                     .field_ty = target_ty,
                 } });
+                try places.emitWritebacks(instructions, &writebacks);
                 return;
             }
             const ptr_reg = lowerer.freshRegister();
@@ -643,15 +610,23 @@ pub fn lowerAssignmentStatement(
                     .ty = target_ty,
                 } });
             }
+            try places.emitWritebacks(instructions, &writebacks);
         },
         .index => |target| {
-            const array_reg = try lowerer.lowerExpr(instructions, target.object);
+            // `arr[i] = v` lowers to a plain `array_set`. When the indexed array is
+            // itself rooted at an array element (`arr[i].xs[j] = v`), `lowerMutableObject`
+            // materializes the parent element by value and records the `array_set`
+            // write-back needed to persist the mutated nested array back into it.
+            var writebacks = places.WritebackList.init(lowerer.allocator);
+            defer writebacks.deinit();
+            const array_reg = try places.lowerMutableObject(lowerer, instructions, target.object, &writebacks);
             const index_reg = try lowerer.lowerExpr(instructions, target.index);
             try instructions.append(.{ .array_set = .{
                 .array = array_reg,
                 .index = index_reg,
                 .src = value_reg,
             } });
+            try places.emitWritebacks(instructions, &writebacks);
         },
         else => return error.UnsupportedExecutableFeature,
     }
@@ -812,6 +787,60 @@ test "lowers native callback state into dedicated IR instructions" {
         if (std.mem.eql(u8, type_decl.name, "CounterState")) found_counter_state = true;
     }
     try std.testing.expect(found_counter_state);
+}
+
+test "lowers a deep array-element field store with an array_set write-back" {
+    // Regression: `arr[i].inner.x = v` (a store nested 2+ projections below the array
+    // index) must read-modify-write the element back via `array_set`; without the
+    // write-back the VM silently dropped the store. Assert the lowered `entry` contains
+    // an `array_get` for the element and an `array_set` *after* the field `store_indirect`.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    var diags = std.array_list.Managed(@import("kira_diagnostics").Diagnostic).init(allocator);
+    const source_pkg = @import("kira_source");
+    const lexer = @import("kira_lexer");
+    const parser = @import("kira_parser");
+    const semantics = @import("kira_semantics");
+
+    const source = try source_pkg.SourceFile.initOwned(
+        allocator,
+        "test.kira",
+        "struct Inner { var x: Int }\n" ++
+            "struct Outer { var inner: Inner }\n" ++
+            "@Main function entry() { var arr: [Outer] = []; arr.append(Outer { inner: Inner { x: 1 } }); arr[0].inner.x = 77; return; }",
+    );
+    const tokens = try lexer.tokenize(allocator, &source, &diags);
+    const parsed = try parser.parse(allocator, tokens, &diags);
+    const analyzed = try semantics.analyze(allocator, parsed, &diags);
+    try std.testing.expectEqual(@as(usize, 0), diags.items.len);
+
+    const lowered = try lowerProgram(allocator, analyzed);
+    const entry = blk: {
+        for (lowered.functions) |function_decl| {
+            if (std.mem.eql(u8, function_decl.name, "entry")) break :blk function_decl;
+        }
+        return error.TestUnexpectedResult;
+    };
+
+    var saw_array_get = false;
+    var last_store_indirect: ?usize = null;
+    var array_set_after_store = false;
+    for (entry.instructions, 0..) |instruction, index| {
+        switch (instruction) {
+            .array_get => saw_array_get = true,
+            .store_indirect => last_store_indirect = index,
+            .array_set => {
+                if (last_store_indirect) |store_index| {
+                    if (index > store_index) array_set_after_store = true;
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(saw_array_get);
+    try std.testing.expect(array_set_after_store);
 }
 
 test "lowers construct metadata and any construct types into IR" {

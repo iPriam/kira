@@ -21,6 +21,12 @@ pub const Parser = struct {
     index: usize = 0,
     allow_trailing_block_call: bool = true,
     diagnostics: *std.array_list.Managed(diagnostics.Diagnostic),
+    // Bounds expression-parsing recursion. The recursive-descent parser otherwise
+    // overflows the native stack and SIGSEGVs on pathologically deep nesting
+    // (e.g. ~1100 nested parens / calls / arrays / closures); past this depth we
+    // emit a clean diagnostic instead. Far above any realistic expression nesting.
+    expr_depth: u32 = 0,
+    pub const max_expr_depth: u32 = 256;
     const decl_impl = @import("parser_decls.zig");
     const statement_impl = @import("parser_statements.zig");
     const block_impl = @import("parser_blocks.zig");

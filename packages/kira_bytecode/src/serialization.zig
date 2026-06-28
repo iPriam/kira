@@ -21,7 +21,7 @@ const Function = bytecode.Function;
 const OwnershipMode = bytecode.OwnershipMode;
 
 pub fn serialize(writer: anytype, module: Module) !void {
-    try writer.writeAll("KBC6");
+    try writer.writeAll("KBC7");
     try writer.writeInt(u32, @as(u32, @intCast(module.constructs.len)), .little);
     try writer.writeInt(u32, @as(u32, @intCast(module.construct_implementations.len)), .little);
     try writer.writeInt(u32, @as(u32, @intCast(module.types.len)), .little);
@@ -178,6 +178,11 @@ pub fn serialize(writer: anytype, module: Module) !void {
                     try writer.writeInt(u32, value.dst, .little);
                     try writer.writeInt(u32, value.lhs, .little);
                     try writer.writeInt(u32, value.rhs, .little);
+                },
+                .convert => |value| {
+                    try writer.writeInt(u32, value.dst, .little);
+                    try writer.writeInt(u32, value.src, .little);
+                    try writer.writeByte(if (value.to_float) 1 else 0);
                 },
                 .compare => |value| {
                     try writer.writeInt(u32, value.dst, .little);
@@ -337,12 +342,16 @@ pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !Module {
     try reader.readSliceAll(&magic);
     const is_kbc5 = std.mem.eql(u8, &magic, "KBC5");
     const is_kbc6 = std.mem.eql(u8, &magic, "KBC6");
-    const has_function_ownership = std.mem.eql(u8, &magic, "KBC1") or std.mem.eql(u8, &magic, "KBC3") or std.mem.eql(u8, &magic, "KBC4") or is_kbc5 or is_kbc6;
-    const has_closure_ownership = std.mem.eql(u8, &magic, "KBC3") or std.mem.eql(u8, &magic, "KBC4") or is_kbc5 or is_kbc6;
-    const has_load_ownership = std.mem.eql(u8, &magic, "KBC3") or std.mem.eql(u8, &magic, "KBC4") or is_kbc5 or is_kbc6;
-    const has_indirect_call_ownership = std.mem.eql(u8, &magic, "KBC4") or is_kbc5 or is_kbc6;
-    const has_ffi_metadata = is_kbc5 or is_kbc6;
-    const has_construct_families = is_kbc6;
+    // KBC7 is KBC6 plus the appended `convert` opcode; the container layout and
+    // every feature flag are otherwise identical to KBC6.
+    const is_kbc7 = std.mem.eql(u8, &magic, "KBC7");
+    const is_kbc6_or_later = is_kbc6 or is_kbc7;
+    const has_function_ownership = std.mem.eql(u8, &magic, "KBC1") or std.mem.eql(u8, &magic, "KBC3") or std.mem.eql(u8, &magic, "KBC4") or is_kbc5 or is_kbc6_or_later;
+    const has_closure_ownership = std.mem.eql(u8, &magic, "KBC3") or std.mem.eql(u8, &magic, "KBC4") or is_kbc5 or is_kbc6_or_later;
+    const has_load_ownership = std.mem.eql(u8, &magic, "KBC3") or std.mem.eql(u8, &magic, "KBC4") or is_kbc5 or is_kbc6_or_later;
+    const has_indirect_call_ownership = std.mem.eql(u8, &magic, "KBC4") or is_kbc5 or is_kbc6_or_later;
+    const has_ffi_metadata = is_kbc5 or is_kbc6_or_later;
+    const has_construct_families = is_kbc6_or_later;
     if (!has_function_ownership and
         !std.mem.eql(u8, &magic, "KBC0") and
         !std.mem.eql(u8, &magic, "KBC2"))
@@ -575,6 +584,11 @@ pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !Module {
                     .dst = try reader.takeInt(u32, .little),
                     .lhs = try reader.takeInt(u32, .little),
                     .rhs = try reader.takeInt(u32, .little),
+                } }),
+                .convert => try instructions.append(.{ .convert = .{
+                    .dst = try reader.takeInt(u32, .little),
+                    .src = try reader.takeInt(u32, .little),
+                    .to_float = (try reader.takeByte()) != 0,
                 } }),
                 .compare => try instructions.append(.{ .compare = .{
                     .dst = try reader.takeInt(u32, .little),

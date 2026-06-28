@@ -924,6 +924,7 @@ fn instructionReadsRegister(inst: bytecode.Instruction, register: u32) bool {
         .multiply => |value| return value.lhs == register or value.rhs == register,
         .divide => |value| return value.lhs == register or value.rhs == register,
         .modulo => |value| return value.lhs == register or value.rhs == register,
+        .convert => |value| return value.src == register,
         .compare => |value| return value.lhs == register or value.rhs == register,
         .unary => |value| return value.src == register,
         .store_local => |value| return value.src == register,
@@ -1048,6 +1049,7 @@ fn countRegisterReads(allocator: std.mem.Allocator, instructions: []const byteco
                 bumpRead(reads, value.lhs);
                 bumpRead(reads, value.rhs);
             },
+            .convert => |value| bumpRead(reads, value.src),
             .compare => |value| {
                 bumpRead(reads, value.lhs);
                 bumpRead(reads, value.rhs);

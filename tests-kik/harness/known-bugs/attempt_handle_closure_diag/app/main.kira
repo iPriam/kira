@@ -1,0 +1,50 @@
+// BUG (frontend semantics + diagnostics): when a package contains BOTH an
+// `attempt`/`try`/`handle` block AND a closure with a parameter, the semantic
+// analyzer emits a spurious, wrong diagnostic — e.g. `KSEM012: unknown local
+// name 'x'` (the closure parameter) or `KSEM105: match pattern payload is
+// invalid` — even though both constructs are individually valid. Crucially the
+// diagnostic carries NO source location (a second, diagnostic-quality defect:
+// the user cannot tell which line is implicated).
+//
+// Reproduce:
+//   kira check --backend vm tests-kik/harness/known-bugs/attempt_handle_closure_diag
+//     -> error[KSEM012]/[KSEM105] with no `-->` location  (SPURIOUS)
+//
+// Removing either the attempt/handle block or the closure makes the error vanish,
+// confirming it is a cross-construct analysis interaction in the attempt/handle
+// desugaring (which lowers to enum `match`). The harness works around this by
+// expressing fallible flows with explicit `Result` matching instead of
+// attempt/handle, so attempt/handle is currently UNDER-COVERED by the harness.
+
+import Foundation
+
+enum E { A B }
+
+function risky(b: Int) -> Result<Int, E> {
+    if b == 0 {
+        return Result.Error(E.A)
+    }
+    return Result.Ok(10 / b)
+}
+
+function viaAttempt(b: Int) -> Int {
+    attempt {
+        let v = try risky(b)
+        return v
+    } handle {
+        A { return 0 - 1 }
+        B { return 0 - 2 }
+    }
+}
+
+function useClosure() -> Int {
+    let f: (Int) -> Int = { x in return x + 1 }
+    return f(41)
+}
+
+@Main
+function main() {
+    print(viaAttempt(2))
+    print(useClosure())
+    return
+}

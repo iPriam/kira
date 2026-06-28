@@ -75,6 +75,46 @@ pub const HybridRuntime = struct {
         }
     }
 
+    /// Invoke a single @Runtime function by id, writing its output to `writer`,
+    /// with the @Native bridge installed exactly as `run` sets it up. Used by
+    /// `kira test --backend hybrid` to run the synthesized pure-Kira test driver
+    /// (so its @Native/FFI calls bridge) and capture its PASS/FAIL/SKIP output.
+    pub fn runFunctionWithWriter(self: *HybridRuntime, function_id: u32, writer: anytype) !void {
+        const Context = RuntimeContext(@TypeOf(writer));
+        var runtime_context = Context{
+            .runtime = self,
+            .writer = writer,
+        };
+        native_bridge.installRuntimeInvoker(&runtime_context, runtimeInvoke(Context));
+        defer native_bridge.clearRuntimeInvoker();
+        try self.invokeRuntime(&runtime_context, function_id, &.{}, null);
+    }
+
+    /// Run a zero-argument @Runtime function by id THROUGH THE BRIDGE (the
+    /// @Native invoker installed exactly as `run` sets it up) and return its
+    /// managed VM `runtime_abi.Value`. Unlike `runFunctionWithWriter` this hands
+    /// back the value instead of writing markers, and unlike `invokeRuntime` it
+    /// does not lower the result into a native-layout copy — the caller wants the
+    /// managed VM value to decode in Kira terms (used by `kira test` to evaluate a
+    /// trap test's `__expect()` whose body may call @Native/FFI). The returned
+    /// value is owned by the caller; drop it via `self.vm.dropManagedValue`.
+    pub fn runFunctionForValue(self: *HybridRuntime, function_id: u32, writer: anytype) !runtime_abi.Value {
+        const Context = RuntimeContext(@TypeOf(writer));
+        var runtime_context = Context{
+            .runtime = self,
+            .writer = writer,
+        };
+        native_bridge.installRuntimeInvoker(&runtime_context, runtimeInvoke(Context));
+        defer native_bridge.clearRuntimeInvoker();
+        const function_decl = self.module.findFunctionById(function_id) orelse return error.UnknownFunction;
+        return self.vm.runFunctionById(&self.module, function_decl.id, &.{}, writer, .{
+            .context = @as(?*anyopaque, @ptrCast(&runtime_context)),
+            .call_native = nativeCallHook(Context),
+            .resolve_function = resolveFunctionHook(Context),
+            .copy_struct_args_by_value = false,
+        });
+    }
+
     fn invokeRuntime(self: *HybridRuntime, context: anytype, function_id: u32, args: []const runtime_abi.BridgeValue, out_result: ?*runtime_abi.BridgeValue) !void {
         const function_decl = self.module.findFunctionById(function_id) orelse return error.UnknownFunction;
         runtime_abi.emitExecutionTrace("CALLBACK", "ENTER", "native->runtime fn={s}({d}) args={d}", .{
@@ -209,8 +249,15 @@ pub const HybridRuntime = struct {
                 .type_name = type_name,
                 .ptr = native_result,
             });
-            try self.pending_callback_return_values.append(self.allocator, result);
-            result_owned_by_pending = true;
+            if (self.vm.nativeReturnIsSelfContained(&self.module, function_decl.return_type, result.raw_ptr)) {
+                // The native copy owns all of its data, so this is a Rust-style
+                // move into native ownership: drop the managed VM value immediately
+                // (via the trailing drop below) instead of retaining it for the
+                // whole runtime lifetime, which otherwise grows without bound (F6).
+            } else {
+                try self.pending_callback_return_values.append(self.allocator, result);
+                result_owned_by_pending = true;
+            }
             bridge_result = runtime_abi.bridgeValueFromValue(.{ .raw_ptr = native_result });
         } else if (function_decl.return_type.kind == .array and result == .raw_ptr and result.raw_ptr != 0) {
             const array_ty = function_decl.return_type;
@@ -220,8 +267,15 @@ pub const HybridRuntime = struct {
                 .ty = array_ty,
                 .ptr = native_array,
             });
-            try self.pending_callback_return_values.append(self.allocator, result);
-            result_owned_by_pending = true;
+            if (self.vm.nativeReturnIsSelfContained(&self.module, function_decl.return_type, result.raw_ptr)) {
+                // The native copy owns all of its data, so this is a Rust-style
+                // move into native ownership: drop the managed VM value immediately
+                // (via the trailing drop below) instead of retaining it for the
+                // whole runtime lifetime, which otherwise grows without bound (F6).
+            } else {
+                try self.pending_callback_return_values.append(self.allocator, result);
+                result_owned_by_pending = true;
+            }
             bridge_result = runtime_abi.bridgeValueFromValue(.{ .raw_ptr = native_array });
         } else if (function_decl.return_type.kind == .enum_instance and result == .raw_ptr and result.raw_ptr != 0) {
             // An enum returned to native is moved into a native struct field as a raw pointer
@@ -237,12 +291,32 @@ pub const HybridRuntime = struct {
                 .type_name = type_name,
                 .ptr = native_enum,
             });
-            try self.pending_callback_return_values.append(self.allocator, result);
-            result_owned_by_pending = true;
+            if (self.vm.nativeReturnIsSelfContained(&self.module, function_decl.return_type, result.raw_ptr)) {
+                // The native copy owns all of its data, so this is a Rust-style
+                // move into native ownership: drop the managed VM value immediately
+                // (via the trailing drop below) instead of retaining it for the
+                // whole runtime lifetime, which otherwise grows without bound (F6).
+            } else {
+                try self.pending_callback_return_values.append(self.allocator, result);
+                result_owned_by_pending = true;
+            }
             bridge_result = runtime_abi.bridgeValueFromValue(.{ .raw_ptr = native_enum });
-        } else {
-            try self.pending_callback_return_values.append(self.allocator, result);
-            result_owned_by_pending = true;
+        } else switch (result) {
+            // A scalar/void return owns no heap and is handed to native BY VALUE
+            // (the bridge value carries the scalar itself, not a pointer into the
+            // managed value), so native cannot borrow into it and there is nothing
+            // to keep alive. Leave it for the trailing drop below instead of
+            // retaining it for the whole runtime lifetime — otherwise a callback
+            // invoked every frame grows `pending_callback_return_values` without
+            // bound (F6). String/raw_ptr returns are still retained because the
+            // bridge value borrows their bytes until runtime teardown; bounding
+            // those needs the native lowering to deep-copy the borrowed payload
+            // (the affine ownership rework that F3 touches).
+            .void, .integer, .float, .boolean => {},
+            else => {
+                try self.pending_callback_return_values.append(self.allocator, result);
+                result_owned_by_pending = true;
+            },
         }
         self.trimPendingCallbackReturns();
         if (out_result) |ptr| ptr.* = bridge_result;
@@ -259,9 +333,13 @@ pub const HybridRuntime = struct {
             self.vm.destroyArrayNativeLayout(&self.module, item.ty, item.ptr);
         }
         self.pending_callback_native_arrays.clearRetainingCapacity();
-        for (self.pending_callback_native_enums.items) |item| {
-            self.vm.destroyOwnedEnumNativeLayout(&self.module, item.type_name, item.ptr);
-        }
+        // The native enum block returned to native (lowerEnumToNativeOwned, libc-
+        // allocated) is OWNED by the native caller: native drops it once — via its
+        // own scope-exit drop when transient, or via the containing struct's
+        // `release_contents` when moved into a field. Freeing it here too is a
+        // double free (the basic enum-bridge `Swatch.shade` case). We still retain
+        // the original managed VM enum in `pending_callback_return_values` (dropped
+        // below) so any payload the native block borrows stays alive until teardown.
         self.pending_callback_native_enums.clearRetainingCapacity();
         for (self.pending_callback_native_structs.items) |item| {
             self.vm.destroyStructNativeLayout(&self.module, item.type_name, item.ptr);
@@ -544,7 +622,13 @@ fn callNativeFunction(self: *HybridRuntime, function_id: u32, args: []const runt
 const DirectStdoutWriter = struct {
     pub fn writeAll(_: DirectStdoutWriter, bytes: []const u8) !void {
         var buffer: [1024]u8 = undefined;
-        var writer = std.Io.File.stdout().writer(std.Options.debug_io, &buffer);
+        // STREAMING, not the default positional, writer. `File.writer()` defaults to
+        // positional writes from logical offset 0; a fresh writer per call therefore
+        // re-clobbered offset 0 on a seekable destination
+        // (`kira run --backend hybrid > out.txt`), losing all but a fragment of the
+        // last print — silent data loss a pipe/TTY masked. Streaming mode uses the
+        // shared, advancing fd offset, so sequential prints append for files and pipes.
+        var writer = std.Io.File.stdout().writerStreaming(std.Options.debug_io, &buffer);
         defer writer.interface.flush() catch {};
         try writer.interface.writeAll(bytes);
     }

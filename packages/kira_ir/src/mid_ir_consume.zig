@@ -123,6 +123,7 @@ pub fn consumeValue(self: *Checker, state: *State, value: mid.Value, mode: PathU
             try self.consumeValue(state, node.rhs.*, .read);
         },
         .unary => |node| try self.consumeValue(state, node.operand.*, .read),
+        .cast => |node| try self.consumeValue(state, node.operand.*, .read),
         .conditional => |node| {
             try self.consumeValue(state, node.condition.*, .read);
             var then_state = try state.clone();

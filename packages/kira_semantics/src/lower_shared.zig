@@ -48,7 +48,44 @@ pub const Context = struct {
     /// ordinary runtime functions through LibFFI, so the KSEM093 "@Native"
     /// requirement is lifted. Set per-target by the build pipeline.
     allow_runtime_direct_ffi: bool = false,
+    /// Current depth of the recursive expression walkers (enum registration and
+    /// type lowering). Bounded by `max_lower_depth` so a pathologically deep
+    /// expression tree (e.g. a long flat `1 + 1 + 1 + ...` chain, which the parser
+    /// builds iteratively and so escapes the parser's nesting guard) raises a clean
+    /// diagnostic instead of overflowing the native stack.
+    lower_depth: u32 = 0,
 };
+
+/// Maximum recursion depth of the semantic expression walkers. Kept well below
+/// the observed native-stack overflow threshold (~900 frames for the type-lowering
+/// walker on an 8 MiB stack) while remaining far above any realistic hand- or
+/// machine-written expression.
+pub const max_lower_depth: u32 = 512;
+
+/// The span of an arbitrary expression node, used to locate depth-limit
+/// diagnostics. Mirrors the per-variant `.span` accessor the parser exposes.
+pub fn exprSpan(expr: syntax.ast.Expr) source_pkg.Span {
+    return switch (expr) {
+        inline else => |node| node.span,
+    };
+}
+
+/// Enter one level of an expression walker (the caller must pair this with a
+/// `defer ctx.lower_depth -= 1;`). Emits KSEM155 and returns
+/// `error.DiagnosticsEmitted` once the nesting/chain depth exceeds
+/// `max_lower_depth`, before the walker can overflow the native stack.
+pub fn checkLoweringDepth(ctx: *Context, span: source_pkg.Span) !void {
+    if (ctx.lower_depth <= max_lower_depth) return;
+    try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
+        .severity = .@"error",
+        .code = "KSEM155",
+        .title = "expression nests too deeply",
+        .message = "This expression exceeds the maximum nesting/chain depth the compiler can lower without overflowing its stack.",
+        .labels = &.{diagnostics.primaryLabel(span, "expression too deeply nested")},
+        .help = "Split this into smaller subexpressions bound to intermediate `let` values.",
+    });
+    return error.DiagnosticsEmitted;
+}
 
 pub const CallbackCaptureFrame = struct {
     source_scope: *const model.Scope,

@@ -1,0 +1,46 @@
+// BUG (hybrid backend, memory leak): a struct holding an owned array field, moved
+// into a consuming function, is not dropped in hybrid mode. The VM frees it
+// correctly; hybrid leaks both the struct shell and its array on every iteration.
+//
+// Reproduce (the printed value is identical across backends; the leak only shows
+// in the runtime memory report):
+//   KIRA_RUNTIME_MEMORY_REPORT=1 kira run --backend vm     tests-kik/harness/known-bugs/hybrid_struct_array_move_leak
+//     -> heap arrays current=0  structs current=0   (clean)
+//   KIRA_RUNTIME_MEMORY_REPORT=1 kira run --backend hybrid tests-kik/harness/known-bugs/hybrid_struct_array_move_leak
+//     -> heap arrays current=100 structs current=100 (LEAK: one struct + one array per iteration)
+//
+// The consumer takes the struct by value (owned) and should drop it (and its
+// owned array field) at end of scope. In hybrid the VM-heap drop of a moved-in
+// struct-with-array param is skipped.
+
+struct Bucket {
+    var items: [Int]
+    var tag: Int
+}
+
+function makeBucket(n: Int) -> Bucket {
+    var xs: [Int] = []
+    var i = 0
+    while i < n {
+        xs.append(i)
+        i = i + 1
+    }
+    return Bucket { items: move xs, tag: n }
+}
+
+function consume(b: Bucket) -> Int {
+    return b.tag + b.items.count
+}
+
+@Main
+function main() {
+    var acc = 0
+    var j = 0
+    while j < 100 {
+        let b = makeBucket(8)
+        acc = acc + consume(move b)
+        j = j + 1
+    }
+    print(acc)
+    return
+}

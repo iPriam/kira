@@ -1,0 +1,7 @@
+version = 1
+
+[root]
+name = "attempt_handle_payloadless_variant"
+version = "0.1.0"
+kind = "app"
+kira = "0.1.0"

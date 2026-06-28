@@ -12,6 +12,7 @@ const native = @import("kira_native_lib_definition");
 const ffi_support = @import("ffi_support.zig");
 const package_manager = @import("kira_package_manager");
 const program_graph = @import("kira_program_graph");
+const synth_test_driver = @import("synth_test_driver.zig");
 const frontend_pipeline = @import("pipeline_frontend.zig");
 const timing = @import("pipeline_timing.zig");
 
@@ -107,6 +108,10 @@ pub const CompileOptions = struct {
     allow_runtime_direct_ffi: bool = false,
     require_main: bool = true,
     test_mode: bool = false,
+    /// Synthesize a pure-Kira test driver entry (`__kira_test_main`) that runs
+    /// every `Test` and prints PASS/FAIL/SKIP, so the suite executes as ordinary
+    /// Kira on the selected backend instead of through a Zig comparison runner.
+    synthesize_test_driver: bool = false,
 };
 
 pub fn compileFileToIrForTargetWithOptions(
@@ -192,8 +197,16 @@ pub fn compileFileToIrForTargetWithOptions(
     };
     timingPrint("[kira:timing] validateImports path={s} imports={d} ns={d}\n", .{ parsed.source.path, merged_program.imports.len, elapsedNs(validate_start) });
 
+    // In test mode, synthesize a pure-Kira driver entry that runs every Test and
+    // prints PASS/FAIL/SKIP, so the suite executes as ordinary Kira on the chosen
+    // backend (the runner invokes the driver instead of comparing in Zig).
+    const program_for_analysis = if (options.synthesize_test_driver)
+        try synth_test_driver.injectTestDriver(allocator, merged_program, &diags)
+    else
+        merged_program;
+
     const semantics_start = nowNs();
-    const hir = semantics.analyzeWithImportsOptions(allocator, merged_program, .{}, .{
+    const hir = semantics.analyzeWithImportsOptions(allocator, program_for_analysis, .{}, .{
         .allow_runtime_direct_ffi = options.allow_runtime_direct_ffi,
         .require_main = options.require_main,
     }, &diags) catch |err| switch (err) {

@@ -1,0 +1,317 @@
+// Deep `kira test` suite for scalar arithmetic, comparisons, boolean logic,
+// conditional expressions, integer-division/modulo edge cases, and recursion.
+//
+// Every `Test` reduces its work to a single Int/Bool/String and asserts a
+// hand-computed expected value via `Result.Ok(...)`. The Test runner compares
+// only scalar values (struct/array equality is NOT structural), so aggregate
+// behaviour is always folded down to a deterministic scalar here.
+//
+// All top-level names in this file use the `sct`/`Scalar` prefix so they never
+// collide in the harness's single flat package namespace.
+//
+// NOTE: do NOT `import Foundation` here — the harness `app/` is one flat package
+// and main.kira already imports it package-wide; a second import is a duplicate
+// top-level name (KSEM003). `Test`, `Result`, and `TestFailure` are in scope.
+
+// --- helpers ---------------------------------------------------------------
+
+function sctFactorial(n: Int) -> Int {
+    if n <= 1 {
+        return 1
+    }
+    return n * sctFactorial(n - 1)
+}
+
+function sctFib(n: Int) -> Int {
+    if n < 2 {
+        return n
+    }
+    return sctFib(n - 1) + sctFib(n - 2)
+}
+
+function sctGcd(a: Int, b: Int) -> Int {
+    var x = a
+    var y = b
+    while y != 0 {
+        let t = x % y
+        x = y
+        y = t
+    }
+    return x
+}
+
+function sctPow(base: Int, exp: Int) -> Int {
+    var acc = 1
+    var i = 0
+    while i < exp {
+        acc = acc * base
+        i = i + 1
+    }
+    return acc
+}
+
+function sctSumTo(n: Int) -> Int {
+    var total = 0
+    var i = 1
+    while i <= n {
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+
+function sctClassify(n: Int) -> Int {
+    switch n % 3 {
+        case 0 { return 100 }
+        case 1 { return 200 }
+        case 2 { return 300 }
+        default { return 0 }
+    }
+}
+
+// --- arithmetic ------------------------------------------------------------
+
+Test ScalarAddCommutes {
+    test { return 17 + 25 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test ScalarSubtractNegativeResult {
+    test { return 10 - 31 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0 - 21); return e }
+}
+
+Test ScalarMultiply {
+    test { return 6 * 7 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test ScalarPrecedenceMulBeforeAdd {
+    test { return 2 + 3 * 4 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(14); return e }
+}
+
+Test ScalarPrecedenceParens {
+    test { return (2 + 3) * 4 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test ScalarNestedGrouping {
+    test { return 0 - (3 * (4 + 5)) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0 - 27); return e }
+}
+
+Test ScalarUnaryMinusFold {
+    test {
+        let a = 0 - 5
+        let b = 0 - a
+        return a + b + (0 - 0)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test ScalarLeftAssocSubtraction {
+    test { return 100 - 30 - 20 - 5 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(45); return e }
+}
+
+// --- integer division / modulo --------------------------------------------
+
+Test ScalarDivTruncatesTowardZero {
+    test { return 7 / 2 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test ScalarModuloPositive {
+    test { return 17 % 5 }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test ScalarDivModIdentity {
+    test {
+        let a = 12345
+        let b = 71
+        return (a / b) * b + (a % b)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12345); return e }
+}
+
+Test ScalarModuloCycleSum {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 30 {
+            acc = acc + (i % 7)
+            i = i + 1
+        }
+        return acc
+    }
+    // sum of (i%7) for i in 0..29: 4 full cycles of (0..6)=21 -> 84, +28%7=0 +29%7=1
+    expect { let e: Result<Int, TestFailure> = Result.Ok(85); return e }
+}
+
+// --- comparisons -----------------------------------------------------------
+
+Test ScalarLessThanTrue {
+    test { return 3 < 7 }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+}
+
+Test ScalarGreaterEqualBoundary {
+    test { return 7 >= 7 }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+}
+
+Test ScalarNotEqual {
+    test { return 5 != 6 }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+}
+
+Test ScalarEqualityFalse {
+    test { return 5 == 6 }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(false); return e }
+}
+
+// --- boolean logic ---------------------------------------------------------
+
+Test ScalarAndShortCircuit {
+    test { return (4 > 2) && (10 % 2 == 0) }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+}
+
+Test ScalarOrFalseLeft {
+    test { return (1 > 2) || (3 > 2) }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+}
+
+Test ScalarNotComposition {
+    test { return !(1 > 2) && !(2 > 3) }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+}
+
+Test ScalarBooleanTruthTableFold {
+    test {
+        var trues = 0
+        var a = 0
+        while a < 2 {
+            var b = 0
+            while b < 2 {
+                let av = a == 1
+                let bv = b == 1
+                if (av && bv) || (av || bv) {
+                    trues = trues + 1
+                }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        // (av&&bv)||(av||bv) is true unless both false -> 3 of 4 combos
+        return trues
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+// --- conditional (ternary) expressions -------------------------------------
+
+Test ScalarTernaryPicksThen {
+    test {
+        let x = 9
+        return x > 5 ? 100 : 200
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(100); return e }
+}
+
+Test ScalarTernaryFoldOverRange {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 10 {
+            acc = acc + (i % 2 == 0 ? i : (0 - i))
+            i = i + 1
+        }
+        // +0 -1 +2 -3 +4 -5 +6 -7 +8 -9 = -5
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0 - 5); return e }
+}
+
+// --- recursion -------------------------------------------------------------
+
+Test ScalarFactorialTen {
+    test { return sctFactorial(10) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3628800); return e }
+}
+
+Test ScalarFibTwenty {
+    test { return sctFib(20) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(6765); return e }
+}
+
+Test ScalarGcdCoprime {
+    test { return sctGcd(1071, 462) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(21); return e }
+}
+
+Test ScalarGcdOne {
+    test { return sctGcd(17, 5) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test ScalarPowOfTwo {
+    test { return sctPow(2, 16) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(65536); return e }
+}
+
+// --- loop accumulation -----------------------------------------------------
+
+Test ScalarGaussSum {
+    test { return sctSumTo(100) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5050); return e }
+}
+
+Test ScalarMixedOperatorLoop {
+    test {
+        var acc = 0
+        var i = 1
+        while i <= 50 {
+            acc = acc + (i * 3) - (i / 2) + (i % 7)
+            i = i + 1
+        }
+        return acc
+    }
+    // sum(i*3)=3825, -sum(i/2)=625, +sum(i%7)=148 -> 3825-625+148
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3348); return e }
+}
+
+Test ScalarClassifySwitchFold {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 12 {
+            acc = acc + sctClassify(i)
+            i = i + 1
+        }
+        // 12 values cycling 100,200,300 -> 4*(100+200+300) = 2400
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2400); return e }
+}
+
+// --- float folded into an integer checksum ---------------------------------
+
+Test ScalarFloatAccumulatesToInt {
+    test {
+        var f = 0.0
+        var k = 0
+        while k < 30 {
+            f = f + 1.5 * 2.0 - 0.5
+            k = k + 1
+        }
+        // f == 30 * 2.5 == 75.0
+        if f > 74.9 && f < 75.1 {
+            return 7500
+        }
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7500); return e }
+}

@@ -1,0 +1,33 @@
+// Regression (FE3/FE5): an empty control-flow body `{}` was greedily consumed as
+// an empty struct literal on the condition/subject (KPAR013 for `if true {}`, or
+// a misleading downstream error). Control-flow headers now never treat a trailing
+// `{` as a struct literal; a struct literal that belongs in a condition must be
+// parenthesized (and parsing it inside `[ ]` / `( )` still works).
+struct EcfP { var ok: Bool }
+
+@Main
+function main() {
+    var n = 0
+    if true {
+    }
+    while false {
+    }
+    for x in [1, 2, 3] {
+    }
+    switch n {
+        case 0 { }
+        default { }
+    }
+    // struct literal in an array literal in iterator position still parses
+    for p in [EcfP { ok: true }, EcfP { ok: false }] {
+        if p.ok {
+            n = n + 1
+        }
+    }
+    // parenthesized struct literal as a condition still parses
+    if (EcfP { ok: true }).ok {
+        n = n + 10
+    }
+    print(n)
+    return
+}

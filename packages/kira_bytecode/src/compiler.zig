@@ -133,6 +133,7 @@ pub fn compileProgram(allocator: std.mem.Allocator, verified: ir_pkg.VerifiedPro
                 .multiply => |value| try instructions.append(.{ .multiply = .{ .dst = value.dst, .lhs = value.lhs, .rhs = value.rhs } }),
                 .divide => |value| try instructions.append(.{ .divide = .{ .dst = value.dst, .lhs = value.lhs, .rhs = value.rhs } }),
                 .modulo => |value| try instructions.append(.{ .modulo = .{ .dst = value.dst, .lhs = value.lhs, .rhs = value.rhs } }),
+                .convert => |value| try instructions.append(.{ .convert = .{ .dst = value.dst, .src = value.src, .to_float = value.target == .float } }),
                 .compare => |value| try instructions.append(.{ .compare = .{
                     .dst = value.dst,
                     .lhs = value.lhs,

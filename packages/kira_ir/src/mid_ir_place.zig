@@ -60,6 +60,7 @@ pub fn valueType(value: mid.Value) model.ResolvedType {
         .builder_array => |node| node.ty,
         .binary => |node| node.ty,
         .unary => |node| node.ty,
+        .cast => |node| node.ty,
         .conditional => |node| node.ty,
         .native_state => |node| node.ty,
         .native_user_data => |node| node.ty,

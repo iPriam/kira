@@ -1,0 +1,23 @@
+@Native
+struct Size {
+    var width: Int
+    var height: Int
+}
+
+// A @Native function returning a struct BY VALUE (mirrors rootViewportSize() -> Size).
+// In hybrid the result is a `kira_struct_alloc` payload (8-byte type-id header); the VM
+// must free it via the matching `kira_struct_free` scheme, not a raw libc free of the
+// payload pointer. Before the fix this aborted with "pointer being freed was not allocated".
+@Native
+function rootSize() -> Size {
+    return Size { width: 320, height: 240 }
+}
+
+@Main
+@Runtime
+function main() {
+    let s = rootSize()
+    print(s.width)
+    print(s.height)
+    return
+}

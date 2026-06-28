@@ -288,6 +288,9 @@ fn registerBuilderBlock(ctx: *shared.Context, block: syntax.ast.BuilderBlock) an
 }
 
 fn registerExpr(ctx: *shared.Context, expr: *syntax.ast.Expr) anyerror!void {
+    ctx.lower_depth += 1;
+    defer ctx.lower_depth -= 1;
+    try shared.checkLoweringDepth(ctx, shared.exprSpan(expr.*));
     switch (expr.*) {
         .array => |node| for (node.elements) |element| try registerExpr(ctx, element),
         .callback => |node| try registerBlock(ctx, node.body),

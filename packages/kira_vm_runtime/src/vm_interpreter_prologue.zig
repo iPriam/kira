@@ -147,6 +147,15 @@ pub fn bindArguments(
                 const dst_ptr: [*]align(1) runtime_abi.Value = @ptrFromInt(locals[index].raw_ptr);
                 const src_ptr: [*]align(1) runtime_abi.Value = @ptrFromInt(arg.raw_ptr);
                 try vm.copyStruct(module, type_decl, dst_ptr, src_ptr);
+            } else if ((struct_mode == .owned or struct_mode == .move) and vm.isManagedStructPointer(arg.raw_ptr)) {
+                // Hybrid (copy_struct_args_by_value=false): an owned/move struct param is
+                // ownership-transferred by the caller (owned struct args require `move` at the
+                // call site, so the caller will NOT drop it). When the incoming value is a
+                // managed VM struct, the callee is now the sole owner and must drop it at frame
+                // exit — otherwise it leaks (the struct shell and any owned array/struct fields).
+                // A native-layout struct (e.g. a sokol GraphicsFrame handed to a VM callback) is
+                // not a managed pointer, so it stays borrowed below: native still owns it.
+                setSlotOwned(vm, &locals[index], &local_owned[index], arg);
             } else setSlotBorrowed(vm, &locals[index], &local_owned[index], arg);
         } else {
             switch (ownershipModeAt(decl.param_ownership, index)) {

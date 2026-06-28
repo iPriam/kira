@@ -139,6 +139,12 @@ pub fn lowerValue(ctx: *Context, expr: *model.Expr) anyerror!mid.Value {
             .temp_id = nextTempId(ctx),
             .span = node.span,
         } },
+        .cast => |node| .{ .cast = .{
+            .operand = try allocValue(ctx, try lowerValue(ctx, node.operand)),
+            .ty = node.ty,
+            .temp_id = nextTempId(ctx),
+            .span = node.span,
+        } },
         .conditional => |node| .{ .conditional = .{
             .condition = try allocValue(ctx, try lowerValue(ctx, node.condition)),
             .then_value = try allocValue(ctx, try lowerValue(ctx, node.then_expr)),

@@ -1,0 +1,1105 @@
+// StrxClassTests.kira — deep class/inheritance coverage for `kira test`.
+// PREFIX: strx / Strx  (all top-level names use this prefix).
+//
+// PARITY RULE: no inherited base method ever calls self.<m>() where a
+// descendant overrides <m>. Super-calls use only parent-qualified
+// Parent.method() inside overrides. Inherited methods read only self fields
+// or call parent-qualified methods, which is consistent across all backends.
+
+// ---------------------------------------------------------------------------
+// H1: Three-level single inheritance, field-default overrides, super-calls
+// ---------------------------------------------------------------------------
+
+class StrxCBase {
+    var points: Int = 10
+    let rank: Int = 1
+
+    // reads only self fields -> consistent on any subclass instance
+    function score() -> Int {
+        return self.points * self.rank
+    }
+
+    function tier() -> Int {
+        return 1
+    }
+}
+
+class StrxCSilver extends StrxCBase {
+    override let rank = 3
+
+    override function tier() -> Int {
+        return 2
+    }
+
+    // parent-qualified super-call
+    function bonus() -> Int {
+        return StrxCBase.score() + self.points
+    }
+}
+
+class StrxCGold extends StrxCSilver {
+    override let rank = 7
+
+    override function tier() -> Int {
+        return 3
+    }
+}
+
+// ---------------------------------------------------------------------------
+// H2: Multiple inheritance with same-named members; parent-qualified dispatch
+// ---------------------------------------------------------------------------
+
+class StrxCX {
+    let v: Int = 10
+
+    function weight() -> Int {
+        return 5
+    }
+
+    function compute(n: Int) -> Int {
+        return n + 10
+    }
+}
+
+class StrxCY {
+    let v: Int = 20
+
+    function weight() -> Int {
+        return 8
+    }
+
+    function compute(n: Int) -> Int {
+        return n + 20
+    }
+}
+
+class StrxCMix extends StrxCX, StrxCY {
+    function vSum() -> Int {
+        return StrxCX.v + StrxCY.v
+    }
+
+    function wSum() -> Int {
+        return StrxCX.weight() + StrxCY.weight()
+    }
+
+    function cSum(n: Int) -> Int {
+        return StrxCX.compute(n) + StrxCY.compute(n)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// H3: Array of leaf instances; overridden method dispatch in loops
+// ---------------------------------------------------------------------------
+
+class StrxCShape {
+    let sides: Int = 0
+
+    function area(k: Int) -> Int {
+        return 0
+    }
+
+    // never overridden -> safe to call from any context
+    function baseFee() -> Int {
+        return 1
+    }
+}
+
+class StrxCTriangle extends StrxCShape {
+    override let sides = 3
+    var base_len: Int = 1
+
+    override function area(k: Int) -> Int {
+        return self.base_len * k
+    }
+}
+
+class StrxCRect extends StrxCShape {
+    override let sides = 4
+    var width: Int = 1
+    var height: Int = 1
+
+    override function area(k: Int) -> Int {
+        return self.width * self.height * k
+    }
+}
+
+// ---------------------------------------------------------------------------
+// H4: Parameterized override + super-call chain, three levels
+// ---------------------------------------------------------------------------
+
+class StrxCVehicle {
+    let base: Int = 5
+
+    function cost(km: Int) -> Int {
+        return self.base + km
+    }
+}
+
+class StrxCCar extends StrxCVehicle {
+    override let base = 10
+
+    override function cost(km: Int) -> Int {
+        return self.base + km * 2
+    }
+}
+
+class StrxCTruck extends StrxCCar {
+    override let base = 15
+
+    // super-call via parent-qualified
+    override function cost(km: Int) -> Int {
+        return StrxCCar.cost(km) + 3
+    }
+}
+
+// ---------------------------------------------------------------------------
+// H5: Stateful class with mutable field, inheritance of non-conflicting methods
+// ---------------------------------------------------------------------------
+
+class StrxCCounter {
+    var count: Int = 0
+
+    function increment() -> Int {
+        self.count = self.count + 1
+        return self.count
+    }
+
+    function getCount() -> Int {
+        return self.count
+    }
+
+    function reset() -> Int {
+        self.count = 0
+        return 0
+    }
+}
+
+class StrxCSmartCounter extends StrxCCounter {
+    var step: Int = 2
+
+    function incrementBy(n: Int) -> Int {
+        self.count = self.count + n
+        return self.count
+    }
+
+    function addStep() -> Int {
+        self.count = self.count + self.step
+        return self.count
+    }
+}
+
+// ---------------------------------------------------------------------------
+// H6: Three-level hierarchy, field override chain, super-call in describe
+// ---------------------------------------------------------------------------
+
+class StrxCNode {
+    var value: Int = 0
+    let label: Int = 1
+
+    function describe() -> Int {
+        return self.value + self.label
+    }
+}
+
+class StrxCLeaf extends StrxCNode {
+    override let label = 10
+
+    override function describe() -> Int {
+        return self.value * self.label
+    }
+}
+
+class StrxCDeepLeaf extends StrxCLeaf {
+    override let label = 100
+
+    // super-call: uses StrxCLeaf.describe() on self (self.label=100)
+    override function describe() -> Int {
+        return StrxCLeaf.describe() + self.label
+    }
+}
+
+// ---------------------------------------------------------------------------
+// H1 Tests
+// ---------------------------------------------------------------------------
+
+Test StrxClsBaseScore {
+    test {
+        let a = StrxCBase()
+        return a.score()
+    }
+    // 10 * 1 = 10
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StrxClsBaseTier {
+    test {
+        let a = StrxCBase()
+        return a.tier()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test StrxClsSilverScore {
+    test {
+        let s = StrxCSilver()
+        return s.score()
+    }
+    // 10 * 3 = 30
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+Test StrxClsSilverTier {
+    test {
+        let s = StrxCSilver()
+        return s.tier()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test StrxClsSilverBonus {
+    test {
+        let s = StrxCSilver()
+        return s.bonus()
+    }
+    // StrxCBase.score() = 10*3=30; + points=10 -> 40
+    expect { let e: Result<Int, TestFailure> = Result.Ok(40); return e }
+}
+
+Test StrxClsGoldScore {
+    test {
+        let g = StrxCGold()
+        return g.score()
+    }
+    // 10 * 7 = 70
+    expect { let e: Result<Int, TestFailure> = Result.Ok(70); return e }
+}
+
+Test StrxClsGoldTier {
+    test {
+        let g = StrxCGold()
+        return g.tier()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test StrxClsGoldBonus {
+    test {
+        let g = StrxCGold()
+        return g.bonus()
+    }
+    // inherited from Silver: StrxCBase.score()=10*7=70; + 10 = 80
+    expect { let e: Result<Int, TestFailure> = Result.Ok(80); return e }
+}
+
+Test StrxClsGoldMutPoints {
+    test {
+        var g = StrxCGold()
+        var i = 0
+        while i < 10 {
+            g.points = g.points + 7
+            i = i + 1
+        }
+        return g.points
+    }
+    // 10 + 70 = 80... wait 10 + 10*7 = 80
+    expect { let e: Result<Int, TestFailure> = Result.Ok(80); return e }
+}
+
+Test StrxClsGoldMutScore {
+    test {
+        var g = StrxCGold()
+        var i = 0
+        while i < 10 {
+            g.points = g.points + 7
+            i = i + 1
+        }
+        return g.score()
+    }
+    // points = 80; score = 80*7 = 560
+    expect { let e: Result<Int, TestFailure> = Result.Ok(560); return e }
+}
+
+Test StrxClsBaseRankField {
+    test {
+        let a = StrxCBase()
+        return a.rank
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test StrxClsSilverRankField {
+    test {
+        let s = StrxCSilver()
+        return s.rank
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test StrxClsGoldRankField {
+    test {
+        let g = StrxCGold()
+        return g.rank
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test StrxClsTierSum {
+    test {
+        let a = StrxCBase()
+        let s = StrxCSilver()
+        let g = StrxCGold()
+        return a.tier() + s.tier() + g.tier()
+    }
+    // 1 + 2 + 3 = 6
+    expect { let e: Result<Int, TestFailure> = Result.Ok(6); return e }
+}
+
+Test StrxClsScoreSum {
+    test {
+        let a = StrxCBase()
+        let s = StrxCSilver()
+        let g = StrxCGold()
+        return a.score() + s.score() + g.score()
+    }
+    // 10 + 30 + 70 = 110
+    expect { let e: Result<Int, TestFailure> = Result.Ok(110); return e }
+}
+
+Test StrxClsSilverMutBonus {
+    test {
+        var s = StrxCSilver()
+        s.points = 20
+        return s.bonus()
+    }
+    // StrxCBase.score() = 20*3=60; + 20 = 80
+    expect { let e: Result<Int, TestFailure> = Result.Ok(80); return e }
+}
+
+Test StrxClsH1Loop {
+    test {
+        let a = StrxCBase()
+        let s = StrxCSilver()
+        let g = StrxCGold()
+        var acc = 0
+        acc = acc + a.score() + a.tier()
+        acc = acc + s.score() + s.tier()
+        acc = acc + g.score() + g.tier()
+        return acc
+    }
+    // (10+1) + (30+2) + (70+3) = 11+32+73 = 116
+    expect { let e: Result<Int, TestFailure> = Result.Ok(116); return e }
+}
+
+// ---------------------------------------------------------------------------
+// H2 Tests
+// ---------------------------------------------------------------------------
+
+Test StrxClsMixVSum {
+    test {
+        let m = StrxCMix()
+        return m.vSum()
+    }
+    // 10 + 20 = 30
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+Test StrxClsMixWSum {
+    test {
+        let m = StrxCMix()
+        return m.wSum()
+    }
+    // 5 + 8 = 13
+    expect { let e: Result<Int, TestFailure> = Result.Ok(13); return e }
+}
+
+Test StrxClsMixCSum5 {
+    test {
+        let m = StrxCMix()
+        return m.cSum(5)
+    }
+    // (5+10) + (5+20) = 40
+    expect { let e: Result<Int, TestFailure> = Result.Ok(40); return e }
+}
+
+Test StrxClsMixCSum0 {
+    test {
+        let m = StrxCMix()
+        return m.cSum(0)
+    }
+    // (0+10) + (0+20) = 30
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+Test StrxClsMixCLoop {
+    test {
+        let m = StrxCMix()
+        var sum = 0
+        var n = 0
+        while n < 5 {
+            sum = sum + m.cSum(n)
+            n = n + 1
+        }
+        return sum
+    }
+    // n=0: 30; n=1: 32; n=2: 34; n=3: 36; n=4: 38 -> 170
+    expect { let e: Result<Int, TestFailure> = Result.Ok(170); return e }
+}
+
+Test StrxClsMixWLoopMul {
+    test {
+        let m = StrxCMix()
+        var acc = 0
+        var k = 0
+        while k < 4 {
+            acc = acc + m.wSum() * k
+            k = k + 1
+        }
+        return acc
+    }
+    // 0*13 + 1*13 + 2*13 + 3*13 = 0+13+26+39 = 78
+    expect { let e: Result<Int, TestFailure> = Result.Ok(78); return e }
+}
+
+Test StrxClsMixAllFields {
+    test {
+        let m = StrxCMix()
+        return m.vSum() + m.wSum()
+    }
+    // 30 + 13 = 43
+    expect { let e: Result<Int, TestFailure> = Result.Ok(43); return e }
+}
+
+// ---------------------------------------------------------------------------
+// H3 Tests
+// ---------------------------------------------------------------------------
+
+Test StrxClsTriSides {
+    test {
+        let t = StrxCTriangle()
+        return t.sides
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test StrxClsRectSides {
+    test {
+        let r = StrxCRect()
+        return r.sides
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+Test StrxClsTriArea {
+    test {
+        var t = StrxCTriangle()
+        t.base_len = 5
+        return t.area(2)
+    }
+    // 5 * 2 = 10
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StrxClsRectArea {
+    test {
+        var r = StrxCRect()
+        r.width = 3
+        r.height = 4
+        return r.area(2)
+    }
+    // 3 * 4 * 2 = 24
+    expect { let e: Result<Int, TestFailure> = Result.Ok(24); return e }
+}
+
+Test StrxClsTriBaseFee {
+    test {
+        let t = StrxCTriangle()
+        return t.baseFee()
+    }
+    // inherited, not overridden -> 1
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test StrxClsRectBaseFee {
+    test {
+        let r = StrxCRect()
+        return r.baseFee()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test StrxClsArrTriLoop {
+    test {
+        var tris: [StrxCTriangle] = []
+        var i = 0
+        while i < 5 {
+            var t = StrxCTriangle()
+            t.base_len = i + 1
+            tris.append(move t)
+            i = i + 1
+        }
+        var total = 0
+        var j = 0
+        while j < tris.count {
+            total = total + tris[j].area(2)
+            j = j + 1
+        }
+        return total
+    }
+    // area(2): 1*2+2*2+3*2+4*2+5*2 = 2+4+6+8+10 = 30
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+Test StrxClsArrTriSides {
+    test {
+        var tris: [StrxCTriangle] = []
+        var i = 0
+        while i < 5 {
+            tris.append(StrxCTriangle())
+            i = i + 1
+        }
+        var total = 0
+        var j = 0
+        while j < tris.count {
+            total = total + tris[j].sides
+            j = j + 1
+        }
+        return total
+    }
+    // 5 * 3 = 15
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test StrxClsArrTriAcc {
+    test {
+        var tris: [StrxCTriangle] = []
+        var i = 0
+        while i < 5 {
+            var t = StrxCTriangle()
+            t.base_len = i + 1
+            tris.append(move t)
+            i = i + 1
+        }
+        var total = 0
+        var j = 0
+        while j < tris.count {
+            total = total + tris[j].area(2) + tris[j].sides + tris[j].baseFee()
+            j = j + 1
+        }
+        return total
+    }
+    // area: 30; sides: 5*3=15; baseFee: 5*1=5 -> 50
+    expect { let e: Result<Int, TestFailure> = Result.Ok(50); return e }
+}
+
+Test StrxClsArrRectLoop {
+    test {
+        var rects: [StrxCRect] = []
+        var i = 0
+        while i < 4 {
+            var r = StrxCRect()
+            r.width = i + 1
+            r.height = 2
+            rects.append(move r)
+            i = i + 1
+        }
+        var total = 0
+        var j = 0
+        while j < rects.count {
+            total = total + rects[j].area(1)
+            j = j + 1
+        }
+        return total
+    }
+    // width*2*1: 1*2+2*2+3*2+4*2 = 2+4+6+8 = 20
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test StrxClsArrRectSides {
+    test {
+        var rects: [StrxCRect] = []
+        var i = 0
+        while i < 3 {
+            rects.append(StrxCRect())
+            i = i + 1
+        }
+        var total = 0
+        var j = 0
+        while j < rects.count {
+            total = total + rects[j].sides
+            j = j + 1
+        }
+        return total
+    }
+    // 3 * 4 = 12
+    expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
+}
+
+// ---------------------------------------------------------------------------
+// H4 Tests
+// ---------------------------------------------------------------------------
+
+Test StrxClsVehicleCost5 {
+    test {
+        let v = StrxCVehicle()
+        return v.cost(5)
+    }
+    // 5 + 5 = 10
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StrxClsCarCost5 {
+    test {
+        let c = StrxCCar()
+        return c.cost(5)
+    }
+    // 10 + 5*2 = 20
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test StrxClsTruckCost5 {
+    test {
+        let t = StrxCTruck()
+        return t.cost(5)
+    }
+    // StrxCCar.cost(5) = 15+10 = 25; +3 = 28
+    expect { let e: Result<Int, TestFailure> = Result.Ok(28); return e }
+}
+
+Test StrxClsVehicleLoop {
+    test {
+        let v = StrxCVehicle()
+        var acc = 0
+        var km = 0
+        while km < 5 {
+            acc = acc + v.cost(km)
+            km = km + 1
+        }
+        return acc
+    }
+    // sum(5+km for km=0..4) = 5+6+7+8+9 = 35
+    expect { let e: Result<Int, TestFailure> = Result.Ok(35); return e }
+}
+
+Test StrxClsCarLoop {
+    test {
+        let c = StrxCCar()
+        var acc = 0
+        var km = 0
+        while km < 5 {
+            acc = acc + c.cost(km)
+            km = km + 1
+        }
+        return acc
+    }
+    // sum(10+km*2 for km=0..4) = 10+12+14+16+18 = 70
+    expect { let e: Result<Int, TestFailure> = Result.Ok(70); return e }
+}
+
+Test StrxClsTruckLoop {
+    test {
+        let t = StrxCTruck()
+        var acc = 0
+        var km = 0
+        while km < 5 {
+            acc = acc + t.cost(km)
+            km = km + 1
+        }
+        return acc
+    }
+    // StrxCCar.cost(km)=15+km*2 then +3; sum(18+km*2 for km=0..4) = 18+20+22+24+26 = 110
+    expect { let e: Result<Int, TestFailure> = Result.Ok(110); return e }
+}
+
+Test StrxClsVehicleBase {
+    test {
+        let v = StrxCVehicle()
+        return v.base
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test StrxClsCarBase {
+    test {
+        let c = StrxCCar()
+        return c.base
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StrxClsTruckBase {
+    test {
+        let t = StrxCTruck()
+        return t.base
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test StrxClsVehicleCost10 {
+    test {
+        let v = StrxCVehicle()
+        return v.cost(10)
+    }
+    // 5+10 = 15
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test StrxClsCarCost10 {
+    test {
+        let c = StrxCCar()
+        return c.cost(10)
+    }
+    // 10+10*2 = 30
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+Test StrxClsTruckCost10 {
+    test {
+        let t = StrxCTruck()
+        return t.cost(10)
+    }
+    // StrxCCar.cost(10)=15+20=35; +3=38
+    expect { let e: Result<Int, TestFailure> = Result.Ok(38); return e }
+}
+
+Test StrxClsBaseFieldSum {
+    test {
+        let v = StrxCVehicle()
+        let c = StrxCCar()
+        let t = StrxCTruck()
+        return v.base + c.base + t.base
+    }
+    // 5 + 10 + 15 = 30
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+// ---------------------------------------------------------------------------
+// H5 Tests
+// ---------------------------------------------------------------------------
+
+Test StrxClsCounterInc {
+    test {
+        var c = StrxCCounter()
+        let _ = c.increment()
+        return c.getCount()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test StrxClsCounterLoop {
+    test {
+        var c = StrxCCounter()
+        var i = 0
+        while i < 10 {
+            let _ = c.increment()
+            i = i + 1
+        }
+        return c.getCount()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StrxClsCounterReset {
+    test {
+        var c = StrxCCounter()
+        var i = 0
+        while i < 5 {
+            let _ = c.increment()
+            i = i + 1
+        }
+        let _ = c.reset()
+        return c.getCount()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test StrxClsSmartInc {
+    test {
+        var sc = StrxCSmartCounter()
+        let _ = sc.incrementBy(7)
+        return sc.getCount()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test StrxClsSmartStep {
+    test {
+        var sc = StrxCSmartCounter()
+        let _ = sc.addStep()
+        return sc.getCount()
+    }
+    // step=2, count=0+2=2
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test StrxClsSmartLoop5 {
+    test {
+        var sc = StrxCSmartCounter()
+        var i = 0
+        while i < 5 {
+            let _ = sc.addStep()
+            i = i + 1
+        }
+        return sc.getCount()
+    }
+    // 5 * 2 = 10
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StrxClsSmartCustomStep {
+    test {
+        var sc = StrxCSmartCounter()
+        sc.step = 5
+        var i = 0
+        while i < 3 {
+            let _ = sc.addStep()
+            i = i + 1
+        }
+        return sc.getCount()
+    }
+    // 3 * 5 = 15
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test StrxClsSmartMixedOps {
+    test {
+        var sc = StrxCSmartCounter()
+        let _ = sc.increment()
+        let _ = sc.increment()
+        let _ = sc.addStep()
+        let _ = sc.incrementBy(3)
+        return sc.getCount()
+    }
+    // 1+1+2+3 = 7
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test StrxClsCounterMultiple {
+    test {
+        var total = 0
+        var k = 0
+        while k < 5 {
+            var c = StrxCCounter()
+            let _ = c.increment()
+            let _ = c.increment()
+            let _ = c.increment()
+            total = total + c.getCount()
+            k = k + 1
+        }
+        return total
+    }
+    // 5 * 3 = 15
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test StrxClsCounterResetLoop {
+    test {
+        var c = StrxCCounter()
+        var i = 0
+        while i < 20 {
+            let _ = c.increment()
+            i = i + 1
+        }
+        let _ = c.reset()
+        let _ = c.increment()
+        let _ = c.increment()
+        return c.getCount()
+    }
+    // reset then +1+1 = 2
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+// ---------------------------------------------------------------------------
+// H6 Tests
+// ---------------------------------------------------------------------------
+
+Test StrxClsNodeDesc {
+    test {
+        var n = StrxCNode()
+        n.value = 5
+        return n.describe()
+    }
+    // 5 + 1 = 6
+    expect { let e: Result<Int, TestFailure> = Result.Ok(6); return e }
+}
+
+Test StrxClsLeafDesc {
+    test {
+        var l = StrxCLeaf()
+        l.value = 5
+        return l.describe()
+    }
+    // 5 * 10 = 50
+    expect { let e: Result<Int, TestFailure> = Result.Ok(50); return e }
+}
+
+Test StrxClsDeepLeafDesc {
+    test {
+        var d = StrxCDeepLeaf()
+        d.value = 5
+        return d.describe()
+    }
+    // StrxCLeaf.describe() = 5*100=500; + label=100 -> 600
+    expect { let e: Result<Int, TestFailure> = Result.Ok(600); return e }
+}
+
+Test StrxClsLeafArr {
+    test {
+        var leaves: [StrxCLeaf] = []
+        var i = 0
+        while i < 4 {
+            var l = StrxCLeaf()
+            l.value = i
+            leaves.append(move l)
+            i = i + 1
+        }
+        var total = 0
+        var j = 0
+        while j < leaves.count {
+            total = total + leaves[j].describe()
+            j = j + 1
+        }
+        return total
+    }
+    // value=0..3: 0*10+1*10+2*10+3*10 = 0+10+20+30 = 60
+    expect { let e: Result<Int, TestFailure> = Result.Ok(60); return e }
+}
+
+Test StrxClsLabelNode {
+    test {
+        let n = StrxCNode()
+        return n.label
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test StrxClsLabelLeaf {
+    test {
+        let l = StrxCLeaf()
+        return l.label
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test StrxClsLabelDeep {
+    test {
+        let d = StrxCDeepLeaf()
+        return d.label
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(100); return e }
+}
+
+Test StrxClsDeepArr {
+    test {
+        var ds: [StrxCDeepLeaf] = []
+        var i = 0
+        while i < 3 {
+            var d = StrxCDeepLeaf()
+            d.value = i + 1
+            ds.append(move d)
+            i = i + 1
+        }
+        var total = 0
+        var j = 0
+        while j < ds.count {
+            total = total + ds[j].describe()
+            j = j + 1
+        }
+        return total
+    }
+    // value=1: 1*100+100=200; value=2: 2*100+100=300; value=3: 3*100+100=400 -> 900
+    expect { let e: Result<Int, TestFailure> = Result.Ok(900); return e }
+}
+
+Test StrxClsLabelSum {
+    test {
+        let n = StrxCNode()
+        let l = StrxCLeaf()
+        let d = StrxCDeepLeaf()
+        return n.label + l.label + d.label
+    }
+    // 1 + 10 + 100 = 111
+    expect { let e: Result<Int, TestFailure> = Result.Ok(111); return e }
+}
+
+Test StrxClsLeafMutDesc {
+    test {
+        var l = StrxCLeaf()
+        l.value = 7
+        return l.describe()
+    }
+    // 7 * 10 = 70
+    expect { let e: Result<Int, TestFailure> = Result.Ok(70); return e }
+}
+
+Test StrxClsDeepMutDesc {
+    test {
+        var d = StrxCDeepLeaf()
+        d.value = 3
+        return d.describe()
+    }
+    // StrxCLeaf.describe()=3*100=300; +100=400
+    expect { let e: Result<Int, TestFailure> = Result.Ok(400); return e }
+}
+
+Test StrxClsNodeDescLoop {
+    test {
+        var total = 0
+        var i = 0
+        while i < 5 {
+            var n = StrxCNode()
+            n.value = i
+            total = total + n.describe()
+            i = i + 1
+        }
+        return total
+    }
+    // (0+1)+(1+1)+(2+1)+(3+1)+(4+1) = 1+2+3+4+5 = 15
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Trap tests
+// ---------------------------------------------------------------------------
+
+Test StrxClsTrapArrOob {
+    test {
+        var tris: [StrxCTriangle] = []
+        tris.append(StrxCTriangle())
+        tris.append(StrxCTriangle())
+        let _ = tris[99].sides
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test StrxClsTrapDivZero {
+    test {
+        let a = 5
+        let b = 0
+        return a / b
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test StrxClsTrapModZero {
+    test {
+        let a = 10
+        let b = 0
+        return a % b
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test StrxClsTrapLeafArrOob {
+    test {
+        var leaves: [StrxCLeaf] = []
+        var i = 0
+        while i < 3 {
+            leaves.append(StrxCLeaf())
+            i = i + 1
+        }
+        let _ = leaves[10].label
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}

@@ -21,6 +21,7 @@ const slot_impl = @import("vm_slot_utils.zig");
 const value_impl = @import("vm_values.zig");
 const prologue = @import("vm_interpreter_prologue.zig");
 const fused = @import("vm_interpreter_fused.zig");
+const native_state = @import("vm_interpreter_native_state.zig");
 const vm_prepare = @import("vm_prepare.zig");
 const vm_mod = @import("vm.zig");
 
@@ -40,16 +41,16 @@ const setSlotUnmanaged = slot_impl.setSlotUnmanaged;
 const transferSlot = slot_impl.transferSlot;
 const NativeStateBox = vm_mod.NativeStateBox;
 
-fn nativeStateConsumesRuntimeOwnership(field_ty: bytecode.TypeRef) bool {
-    return switch (field_ty.kind) {
-        .construct_any, .string => false,
-        .raw_ptr => if (field_ty.name) |name| Vm.isCallbackTypeName(name) else false,
-        .ffi_struct, .array, .enum_instance => true,
-        else => false,
-    };
-}
-
-var dbg_call_depth: usize = 0;
+/// Process-global native-call-stack depth for the bytecode interpreter, which
+/// recurses on the native stack once per Kira call frame (`runPrepared` calls
+/// itself for nested calls). Bounded by `max_call_depth` so deep or runaway
+/// recursion raises a clean `RuntimeFailure` instead of overflowing the native
+/// stack and aborting (SIGABRT/SIGSEGV with no diagnostic). The limit is
+/// conservative because each `runPrepared` frame is large (~26 KiB on the
+/// observed build): the native-stack overflow cliff sits just above ~315 frames
+/// on a default 8 MiB stack, so the bound is kept comfortably below it. (S6)
+var call_depth: usize = 0;
+const max_call_depth: usize = 256;
 
 pub fn runPrepared(
     vm: *Vm,
@@ -60,11 +61,11 @@ pub fn runPrepared(
     hooks: Hooks,
 ) anyerror!runtime_abi.Value {
     const decl = function.decl;
-    dbg_call_depth += 1;
-    defer dbg_call_depth -= 1;
-    if (dbg_call_depth > 600 and std.c.getenv("KIRA_DBG") != null) {
-        if (dbg_call_depth % 50 == 0 or dbg_call_depth > 1400) std.debug.print("DBG depth={d} fn={s}\n", .{ dbg_call_depth, decl.name });
-        if (dbg_call_depth > 1500) return error.RuntimeFailure;
+    call_depth += 1;
+    defer call_depth -= 1;
+    if (call_depth > max_call_depth) {
+        vm.rememberError("recursion depth limit exceeded (256 nested calls)");
+        return error.RuntimeFailure;
     }
     const module = prepared.module;
     const code = function.code;
@@ -239,6 +240,12 @@ pub fn runPrepared(
             pc += 1;
             continue :dispatch code[pc];
         },
+        .convert => |value| {
+            const src = registers[value.src];
+            setSlotPrimitive(vm, &registers[value.dst], &register_owned[value.dst], try value_impl.convertValue(vm, src, value.to_float));
+            pc += 1;
+            continue :dispatch code[pc];
+        },
         .compare => |value| {
             const lhs = registers[value.lhs];
             const rhs = registers[value.rhs];
@@ -363,98 +370,17 @@ pub fn runPrepared(
             continue :dispatch code[pc];
         },
         .recover_native_state => |value| {
-            const state_value = registers[value.state];
-            if (state_value != .raw_ptr or state_value.raw_ptr == 0) {
-                vm.rememberError("nativeRecover requires a valid native state token");
-                return error.RuntimeFailure;
-            }
-            setSlotUnmanaged(vm, &registers[value.dst], &register_owned[value.dst], .{ .raw_ptr = try vm.recoverNativeState(module, value.type_name, state_value.raw_ptr, value.type_id) });
+            try native_state.recoverNativeState(vm, module, registers, register_owned, value);
             pc += 1;
             continue :dispatch code[pc];
         },
         .native_state_field_get => |value| {
-            const state_value = registers[value.state];
-            if (state_value != .raw_ptr or state_value.raw_ptr == 0) {
-                vm.rememberError("native state field read requires a valid recovered state");
-                return error.RuntimeFailure;
-            }
-            if (vm.native_state_boxes.contains(state_value.raw_ptr)) {
-                const box: *const NativeStateBox = @ptrFromInt(state_value.raw_ptr);
-                const payload_ptr = if (box.runtime_payload != 0) box.runtime_payload else box.payload;
-                if (payload_ptr == 0) {
-                    vm.rememberError("native state field read requires a valid state payload");
-                    return error.RuntimeFailure;
-                }
-                if (box.runtime_payload != 0) {
-                    const payload: [*]const runtime_abi.Value = @ptrFromInt(payload_ptr);
-                    setSlotBorrowed(vm, &registers[value.dst], &register_owned[value.dst], payload[@intCast(value.field_index)]);
-                } else {
-                    const payload: [*]const runtime_abi.BridgeValue = @ptrFromInt(payload_ptr);
-                    const materialized = try vm.materializeNativeStateValue(module, value.field_ty, runtime_abi.bridgeValueToValue(payload[@intCast(value.field_index)]));
-                    setSlotOwned(vm, &registers[value.dst], &register_owned[value.dst], materialized);
-                }
-            } else {
-                const payload: [*]const runtime_abi.Value = @ptrFromInt(state_value.raw_ptr);
-                setSlotBorrowed(vm, &registers[value.dst], &register_owned[value.dst], payload[@intCast(value.field_index)]);
-            }
+            try native_state.nativeStateFieldGet(vm, module, registers, register_owned, value);
             pc += 1;
             continue :dispatch code[pc];
         },
         .native_state_field_set => |value| {
-            const state_value = registers[value.state];
-            if (state_value != .raw_ptr or state_value.raw_ptr == 0) {
-                vm.rememberError("native state field write requires a valid recovered state");
-                return error.RuntimeFailure;
-            }
-            const field_index: usize = @intCast(value.field_index);
-            if (vm.native_state_boxes.contains(state_value.raw_ptr)) {
-                const box: *NativeStateBox = @ptrFromInt(state_value.raw_ptr);
-                if (box.runtime_payload != 0) {
-                    const payload: [*]runtime_abi.Value = @ptrFromInt(box.runtime_payload);
-                    const old = payload[field_index];
-                    const stored = if (register_owned[value.src])
-                        registers[value.src]
-                    else
-                        try vm.cloneBorrowedValueForStore(module, value.field_ty, registers[value.src]);
-                    payload[field_index] = stored;
-                    if (register_owned[value.src]) {
-                        register_owned[value.src] = false;
-                        registers[value.src] = .{ .void = {} };
-                    }
-                    vm.heap.dropValue(old);
-                } else {
-                    if (box.payload == 0) {
-                        vm.rememberError("native state field write requires a valid state payload");
-                        return error.RuntimeFailure;
-                    }
-                    const payload: [*]runtime_abi.BridgeValue = @ptrFromInt(box.payload);
-                    const old = runtime_abi.bridgeValueToValue(payload[field_index]);
-                    const source = registers[value.src];
-                    const stored = try vm.preserveNativeStateValue(module, value.field_ty, source);
-                    payload[field_index] = runtime_abi.bridgeValueFromValue(stored);
-                    if (register_owned[value.src]) {
-                        if (nativeStateConsumesRuntimeOwnership(value.field_ty)) {
-                            vm.heap.dropValue(source);
-                        }
-                        register_owned[value.src] = false;
-                        registers[value.src] = .{ .void = {} };
-                    }
-                    vm.destroyPreservedNativeStateValue(module, value.field_ty, old);
-                }
-            } else {
-                const payload: [*]runtime_abi.Value = @ptrFromInt(state_value.raw_ptr);
-                const old = payload[field_index];
-                const stored = if (register_owned[value.src])
-                    registers[value.src]
-                else
-                    try vm.cloneBorrowedValueForStore(module, value.field_ty, registers[value.src]);
-                payload[field_index] = stored;
-                if (register_owned[value.src]) {
-                    register_owned[value.src] = false;
-                    registers[value.src] = .{ .void = {} };
-                }
-                vm.heap.dropValue(old);
-            }
+            try native_state.nativeStateFieldSet(vm, module, registers, register_owned, value);
             pc += 1;
             continue :dispatch code[pc];
         },

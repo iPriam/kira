@@ -59,6 +59,13 @@ pub const FunctionCodegen = struct {
     reg_local: []?u32 = &.{},
     // local -> struct_contents cleanup slot index for copy_indirect destinations.
     copy_dest_slot: []?u32 = &.{},
+    // local -> per-local cleanup slot index for owned enum locals (`var`/`let` of enum
+    // type). Mirrors copy_dest_slot for structs: one slot per enum local holding the
+    // local's current live heap enum block, reused across reassignments (drop-before-
+    // overwrite), freed once at exit, escaped on return. Without it each alloc_enum gets
+    // its own slot and a branch-reassigned enum var's return frees the wrong (last-
+    // lowered) branch's slot, freeing the live returned enum (use-after-free).
+    enum_local_slot: []?u32 = &.{},
 
     // Build a scratch `alloca` in the function entry block regardless of where the
     // builder is currently positioned. LLVM only reclaims (and SROA/mem2reg only
@@ -172,6 +179,33 @@ pub const FunctionCodegen = struct {
         return reg < self.register_types.len and self.register_types[reg].kind == .float;
     }
 
+    /// Float -> Int conversion matching the VM's `convertValue`: truncate toward
+    /// zero, but saturate out-of-range magnitudes to i64 min/max and map NaN to
+    /// 0. A bare `fptosi` is poison for those inputs, so VM and LLVM would
+    /// otherwise diverge (Core Law #1). `raw` is only selected when the source
+    /// is in range and non-NaN, so its poison value never reaches the result.
+    fn lowerFloatToIntSaturating(self: *FunctionCodegen, src: llvm.c.LLVMValueRef) llvm.c.LLVMValueRef {
+        const api = self.api;
+        const b = self.builder;
+        const i64_ty = self.types.i64;
+        const f64_ty = self.types.double_ty;
+        const raw = api.LLVMBuildFPToSI(b, src, i64_ty, "fptosi");
+        // i64 bounds as doubles (these round to +/-2^63, matching the VM's
+        // `@floatFromInt(maxInt/minInt)` comparison thresholds).
+        const max_f = api.LLVMConstReal(f64_ty, @as(f64, @floatFromInt(std.math.maxInt(i64))));
+        const min_f = api.LLVMConstReal(f64_ty, @as(f64, @floatFromInt(std.math.minInt(i64))));
+        const max_i = api.LLVMConstInt(i64_ty, @bitCast(@as(i64, std.math.maxInt(i64))), 1);
+        const min_i = api.LLVMConstInt(i64_ty, @bitCast(@as(i64, std.math.minInt(i64))), 1);
+        const zero_i = api.LLVMConstInt(i64_ty, 0, 1);
+        const ge_max = api.LLVMBuildFCmp(b, llvm.c.LLVMRealOGE, src, max_f, "sat.ge");
+        const le_min = api.LLVMBuildFCmp(b, llvm.c.LLVMRealOLE, src, min_f, "sat.le");
+        const is_nan = api.LLVMBuildFCmp(b, llvm.c.LLVMRealUNO, src, src, "sat.nan");
+        var result = api.LLVMBuildSelect(b, ge_max, max_i, raw, "sat.hi");
+        result = api.LLVMBuildSelect(b, le_min, min_i, result, "sat.lo");
+        result = api.LLVMBuildSelect(b, is_nan, zero_i, result, "sat.nan.sel");
+        return result;
+    }
+
     fn lowerInstruction(self: *FunctionCodegen, instruction: ir.Instruction) !void {
         const api = self.api;
         const b = self.builder;
@@ -189,6 +223,16 @@ pub const FunctionCodegen = struct {
             .multiply => |v| self.registers[v.dst] = if (self.isFloat(v.lhs)) api.LLVMBuildFMul(b, self.registers[v.lhs], self.registers[v.rhs], "fmul") else api.LLVMBuildMul(b, self.registers[v.lhs], self.registers[v.rhs], "mul"),
             .divide => |v| self.registers[v.dst] = if (self.isFloat(v.lhs)) api.LLVMBuildFDiv(b, self.registers[v.lhs], self.registers[v.rhs], "fdiv") else api.LLVMBuildSDiv(b, self.registers[v.lhs], self.registers[v.rhs], "sdiv"),
             .modulo => |v| self.registers[v.dst] = if (self.isFloat(v.lhs)) api.LLVMBuildFRem(b, self.registers[v.lhs], self.registers[v.rhs], "frem") else api.LLVMBuildSRem(b, self.registers[v.lhs], self.registers[v.rhs], "srem"),
+            .convert => |v| {
+                const src_is_float = self.isFloat(v.src);
+                if (v.target == .float) {
+                    // Int -> Float is sitofp; Float -> Float is identity.
+                    self.registers[v.dst] = if (src_is_float) self.registers[v.src] else api.LLVMBuildSIToFP(b, self.registers[v.src], self.types.double_ty, "sitofp");
+                } else {
+                    // Float -> Int truncates toward zero; Int -> Int is identity.
+                    self.registers[v.dst] = if (src_is_float) self.lowerFloatToIntSaturating(self.registers[v.src]) else self.registers[v.src];
+                }
+            },
             .compare => |v| self.registers[v.dst] = try self.lowerCompare(v),
             .unary => |v| self.registers[v.dst] = switch (v.op) {
                 .negate => if (self.isFloat(v.src)) api.LLVMBuildFNeg(b, self.registers[v.src], "fneg") else api.LLVMBuildNeg(b, self.registers[v.src], "neg"),
@@ -196,7 +240,7 @@ pub const FunctionCodegen = struct {
             },
             .store_local => |v| {
                 _ = api.LLVMBuildStore(b, self.registers[v.src], self.locals[v.local]);
-                drop.onStoreLocal(self, v.local, v.src);
+                drop.onStoreLocal(self, v.local, v.src, v.borrow);
             },
             .load_local => |v| {
                 self.registers[v.dst] = api.LLVMBuildLoad2(b, self.types.llvmType(self.function_decl.local_types[v.local]), self.locals[v.local], "load");
@@ -370,6 +414,33 @@ pub const FunctionCodegen = struct {
     fn lowerCompare(self: *FunctionCodegen, v: ir.Compare) !llvm.c.LLVMValueRef {
         const api = self.api;
         const operand_kind = if (v.lhs < self.register_types.len) self.register_types[v.lhs].kind else ir.ValueType.Kind.integer;
+        if (operand_kind == .string) {
+            // String content equality: a `{ptr,len}` value equals another iff the
+            // lengths match and the first `min(len)` bytes compare equal. memcmp
+            // over min(len) is always in-bounds for both buffers; the length check
+            // distinguishes a string from its own prefix.
+            const b = self.builder;
+            const lhs = self.registers[v.lhs];
+            const rhs = self.registers[v.rhs];
+            const len_a = api.LLVMBuildExtractValue(b, lhs, 1, "streq.alen");
+            const len_b = api.LLVMBuildExtractValue(b, rhs, 1, "streq.blen");
+            const ptr_a = api.LLVMBuildExtractValue(b, lhs, 0, "streq.aptr");
+            const ptr_b = api.LLVMBuildExtractValue(b, rhs, 0, "streq.bptr");
+            const len_eq = api.LLVMBuildICmp(b, llvm.c.LLVMIntEQ, len_a, len_b, "streq.leneq");
+            const a_shorter = api.LLVMBuildICmp(b, llvm.c.LLVMIntULT, len_a, len_b, "streq.ashorter");
+            const min_len = api.LLVMBuildSelect(b, a_shorter, len_a, len_b, "streq.min");
+            var args = [_]llvm.c.LLVMValueRef{ ptr_a, ptr_b, min_len };
+            const cmp = api.LLVMBuildCall2(b, self.runtime_decls.memcmp.ty, self.runtime_decls.memcmp.fn_value, &args, args.len, "streq.memcmp");
+            const zero = api.LLVMConstInt(self.types.i32, 0, 0);
+            const bytes_eq = api.LLVMBuildICmp(b, llvm.c.LLVMIntEQ, cmp, zero, "streq.byteseq");
+            const equal = api.LLVMBuildAnd(b, len_eq, bytes_eq, "streq.eq");
+            return switch (v.op) {
+                .equal => equal,
+                .not_equal => api.LLVMBuildNot(b, equal, "streq.ne"),
+                // The compare-operand gate rejects ordered string comparisons.
+                else => equal,
+            };
+        }
         if (operand_kind == .float) {
             return api.LLVMBuildFCmp(
                 self.builder,

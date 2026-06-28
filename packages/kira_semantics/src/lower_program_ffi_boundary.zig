@@ -111,6 +111,7 @@ fn findDirectFfiUseInExpr(
             if (findDirectFfiUseInExpr(node.rhs.*, function_headers)) |use| return use;
         },
         .unary => |node| return findDirectFfiUseInExpr(node.operand.*, function_headers),
+        .cast => |node| return findDirectFfiUseInExpr(node.operand.*, function_headers),
         .conditional => |node| {
             if (findDirectFfiUseInExpr(node.condition.*, function_headers)) |use| return use;
             if (findDirectFfiUseInExpr(node.then_expr.*, function_headers)) |use| return use;

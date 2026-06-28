@@ -1,0 +1,47 @@
+import Foundation
+
+// Regression: an attempt/handle whose failure enum has PAYLOAD-LESS variants. The
+// attempt->match desugaring emitted a destructure pattern `Variant(binding)` for
+// every handle case, even payload-less ones, which match-lowering rejects with a
+// spurious KSEM105 ("match pattern payload is invalid") — and the error surfaced
+// (with no source location) only when the package also held a closure, so it looked
+// unrelated. Payload-less handle cases must lower to a bare-variant pattern.
+enum ClampError {
+    TooSmall
+    TooBig
+}
+
+function clamp(n: Int) -> Result<Int, ClampError> {
+    if n < 0 {
+        return Result.Error(ClampError.TooSmall)
+    }
+    if n > 100 {
+        return Result.Error(ClampError.TooBig)
+    }
+    return Result.Ok(n)
+}
+
+function process(n: Int) -> Int {
+    attempt {
+        let v = try clamp(n)
+        return v * 2
+    } handle {
+        TooSmall { return 0 - 1 }
+        TooBig { return 0 - 2 }
+    }
+}
+
+// A closure with a parameter in the same package — part of the original trigger.
+function bump(x: Int) -> Int {
+    let f: (Int) -> Int = { v in return v + 1 }
+    return f(x)
+}
+
+@Main
+function main() {
+    print(process(50))
+    print(process(0 - 5))
+    print(process(200))
+    print(bump(41))
+    return
+}

@@ -156,6 +156,7 @@ fn resolveVariant(
             .multiply => |value| register_types[value.dst] = register_types[value.lhs],
             .divide => |value| register_types[value.dst] = register_types[value.lhs],
             .modulo => |value| register_types[value.dst] = register_types[value.lhs],
+            .convert => |value| register_types[value.dst] = .{ .kind = value.target },
             .compare => |value| register_types[value.dst] = .{ .kind = .boolean },
             .unary => |value| register_types[value.dst] = switch (value.op) {
                 .negate => register_types[value.src],

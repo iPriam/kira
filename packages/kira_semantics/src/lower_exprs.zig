@@ -570,6 +570,9 @@ pub fn lowerExpr(
     scope: *model.Scope,
     function_headers: ?*const std.StringHashMapUnmanaged(shared.FunctionHeader),
 ) anyerror!*model.Expr {
+    ctx.lower_depth += 1;
+    defer ctx.lower_depth -= 1;
+    try shared.checkLoweringDepth(ctx, shared.exprSpan(expr.*));
     if (try lowerEnumVariantExpr(ctx, expr, .{ .kind = .unknown }, imports, scope, function_headers)) |enum_expr| {
         return enum_expr;
     }

@@ -1,0 +1,238 @@
+// Strings in depth: literals and `.count`, `String` struct fields (flat and
+// nested), passing strings by `move` and by `borrow` in and out of functions,
+// returning strings from functions and struct methods, strings stored in arrays
+// and iterated, arrays of structs that carry string fields, a single
+// String-payload enum matched out, and per-iteration string building in loops
+// whose lengths are summed. Every result folds into one deterministic Int
+// checksum so any divergence across vm/llvm/hybrid changes the printed value.
+//
+// NOTE (compiler bug worked around here): reading a property off the *temporary*
+// returned by a String-returning call — e.g. `strPick(i).count` — fails to lower
+// (KIR001, "a lowering obligation was left undischarged"). Binding the result to
+// a local first (`let s = strPick(i)  ... s.count`) lowers correctly on every
+// backend, so this module always binds String call results before measuring them.
+
+// Consume a string by value (requires `move` at the call site) and report length.
+function strLen(s: String) -> Int {
+    return s.count
+}
+
+// Borrow a string (no ownership transfer) so the caller can keep using it.
+function strBorrowLen(s: borrow String) -> Int {
+    return s.count
+}
+
+// Return a string selected by index. Returns directly from each branch.
+function strPick(i: Int) -> String {
+    let m = i % 5
+    if m == 0 { return "alpha" }
+    if m == 1 { return "be" }
+    if m == 2 { return "gamma" }
+    if m == 3 { return "d" }
+    return ""
+}
+
+// A second selector with different lengths to vary the fold.
+function strTagFor(i: Int) -> String {
+    let m = i % 3
+    if m == 0 { return "lo" }
+    if m == 1 { return "high" }
+    return "mid"
+}
+
+struct StrPair {
+    var first: String
+    var second: String
+    var weight: Int
+
+    function lenSum() -> Int {
+        return self.first.count + self.second.count
+    }
+
+    function pick(useFirst: Bool) -> String {
+        if useFirst {
+            return self.first
+        }
+        return self.second
+    }
+}
+
+struct StrInner {
+    var word: String
+}
+
+struct StrDoc {
+    var head: StrInner
+    var note: String
+    var n: Int
+}
+
+// Single String-payload enum plus a payload-less variant.
+enum StrTok {
+    Word(String)
+    Blank
+}
+
+// Read a string field out of a nested struct through a borrow (struct stays live).
+function strDocLen(d: borrow StrDoc) -> Int {
+    return d.head.word.count + d.note.count + d.n
+}
+
+// Match the String payload out of a borrowed enum and measure it.
+function strTokLen(t: borrow StrTok) -> Int {
+    match t {
+        Word(n) -> { return n.count }
+        Blank -> { return 0 }
+    }
+}
+
+// Produce a token, returning the enum directly from each branch.
+function strTokFor(i: Int) -> StrTok {
+    let m = i % 3
+    if m == 0 { return StrTok.Word("redred") }
+    if m == 1 { return StrTok.Blank }
+    return StrTok.Word("xy")
+}
+
+// Bump an Int field of a local struct through `borrow mut` (writeback to a local).
+function strBumpWeight(p: borrow mut StrPair) {
+    p.weight = p.weight + 1
+    return
+}
+
+function strSection() -> Int {
+    var acc = 0
+
+    // 1. Literal lengths, including the empty string. Mix direct `.count` on a
+    //    literal with a borrow-based reader so both code paths are exercised.
+    acc = acc + "alpha".count          // 5
+    acc = acc + "".count               // 0
+    acc = acc + "a longer phrase".count // 15
+    acc = acc + strBorrowLen("xyz")    // 3
+    acc = acc + strBorrowLen("")       // 0
+
+    // 2. Passing strings by `move` (consumed) and by `borrow` (reusable).
+    let kept = "reusable"
+    acc = acc + strBorrowLen(kept)     // 8
+    acc = acc + strBorrowLen(kept)     // 8 (still live after borrow)
+    let consumed = "consumed"
+    acc = acc + strLen(move consumed)  // 8
+
+    // 3. Returning strings from a function; bind the result before measuring.
+    var pickTotal = 0
+    var i = 0
+    while i < 40 {
+        let s = strPick(i)
+        pickTotal = pickTotal + s.count
+        i = i + 1
+    }
+    // Per period of 5: 5+2+5+1+0 = 13; 40/5 = 8 periods -> 104.
+    acc = acc + pickTotal
+
+    // 4. String struct fields: build pairs in a loop, fold method results and a
+    //    cheap derived field, then exercise the string-returning method.
+    var pairTotal = 0
+    var p = 0
+    while p < 30 {
+        let tagA = strTagFor(p)
+        let tagB = strTagFor(p + 1)
+        let pair = StrPair { first: move tagA, second: move tagB, weight: p }
+        pairTotal = pairTotal + pair.lenSum() + pair.weight
+        let chosen = pair.pick(p % 2 == 0)
+        pairTotal = pairTotal + chosen.count
+        p = p + 1
+    }
+    acc = acc + pairTotal
+
+    // 5. borrow mut writeback to a local struct carrying string fields.
+    var bumped = StrPair { first: "keepme", second: "and", weight: 0 }
+    var b = 0
+    while b < 25 {
+        strBumpWeight(bumped)
+        b = b + 1
+    }
+    acc = acc + bumped.weight + bumped.first.count + bumped.second.count // 25+6+3
+
+    // 6. Value-copy independence: copying a struct with string fields must not
+    //    alias; mutating the copy's Int field leaves the original untouched.
+    let orig = StrPair { first: "left", second: "right", weight: 7 }
+    var copy = orig
+    copy.weight = 999
+    acc = acc + orig.weight + copy.weight + orig.first.count + copy.second.count // 7+999+4+5
+
+    // 7. Nested struct with a string field, read through a borrow and directly.
+    let doc = StrDoc { head: StrInner { word: "abcd" }, note: "xy", n: 100 }
+    acc = acc + strDocLen(doc)         // 4+2+100 = 106
+    acc = acc + doc.head.word.count    // 4 (still live)
+    acc = acc + doc.note.count         // 2
+
+    // 8. Strings stored in arrays: a literal array iterated with for-in.
+    let words = ["one", "three", "f", ""]
+    var litTotal = 0
+    for w in words {
+        litTotal = litTotal + w.count
+    }
+    acc = acc + litTotal               // 3+5+1+0 = 9
+
+    // 9. Build an owned [String] across a loop (per-iteration strings), summing
+    //    each length, then re-sum by indexing to prove the stored copies match.
+    var built: [String] = []
+    var buildTotal = 0
+    var k = 0
+    while k < 60 {
+        let s = strPick(k)
+        buildTotal = buildTotal + s.count
+        built.append(move s)
+        k = k + 1
+    }
+    var indexedTotal = 0
+    var bi = 0
+    while bi < built.count {
+        indexedTotal = indexedTotal + built[bi].count
+        bi = bi + 1
+    }
+    acc = acc + buildTotal + indexedTotal // 60/5 = 12 periods * 13 = 156 each -> 312
+    acc = acc + built.count               // 60
+
+    // 10. Array of structs that carry string fields; read fields by indexing
+    //     (multi-projection reads are fine; only deep stores are unsupported).
+    var pairs: [StrPair] = []
+    var pj = 0
+    while pj < 24 {
+        let a = strTagFor(pj)
+        let c = strTagFor(pj + 2)
+        pairs.append(StrPair { first: move a, second: move c, weight: pj })
+        pj = pj + 1
+    }
+    var fieldTotal = 0
+    var fp = 0
+    while fp < pairs.count {
+        fieldTotal = fieldTotal + pairs[fp].first.count + pairs[fp].second.count
+        fp = fp + 1
+    }
+    acc = acc + fieldTotal + pairs.count
+
+    // 11. Single String-payload enum: direct matches plus an array of tokens
+    //     iterated and matched (payload-less and payload-carrying interleaved).
+    let w1 = StrTok.Word("hello")
+    let w2 = StrTok.Blank
+    acc = acc + strTokLen(w1) + strTokLen(w2) // 5 + 0
+
+    var toks: [StrTok] = []
+    var ti = 0
+    while ti < 45 {
+        toks.append(strTokFor(ti))
+        ti = ti + 1
+    }
+    var tokTotal = 0
+    var tj = 0
+    while tj < toks.count {
+        tokTotal = tokTotal + strTokLen(toks[tj])
+        tj = tj + 1
+    }
+    // Per period of 3: "redred"(6) + Blank(0) + "xy"(2) = 8; 45/3 = 15 -> 120.
+    acc = acc + tokTotal
+
+    return acc
+}
+
