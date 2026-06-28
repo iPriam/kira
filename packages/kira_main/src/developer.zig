@@ -110,8 +110,8 @@ pub const DeveloperFacade = struct {
         // FFI / native-bridge code be exercised as Foundation `Test` declarations.
         // llvm/wasm produce a standalone native artifact rather than VM-runnable
         // Test functions, so they remain unsupported here.
-        if (backend == .llvm or backend == .wasm32_emscripten) {
-            try self.setReport("error[KCLI020]: unsupported test backend\n  kira test executes Test functions through the VM runner (optionally dispatching into @Native packages under hybrid); llvm/wasm are not supported.\n");
+        if (backend == .wasm32_emscripten) {
+            try self.setReport("error[KCLI020]: unsupported test backend\n  kira test executes Test functions through the build-time VM; wasm is not supported.\n");
             return false;
         }
         build.setNativePreparationMode(.artifacts_only);
@@ -154,6 +154,12 @@ pub const DeveloperFacade = struct {
         // produce native libraries the VM dispatches into, letting FFI /
         // native-bridge code be exercised as `Test` declarations. Bare `kira test`
         // stays on the VM (fast) regardless of the project's default backend.
+        // Tests EXECUTE on the build-time VM (comptime; backend-independent), so
+        // the verdict is identical on every backend. A non-vm `--backend` is a
+        // parity check: the program must additionally compile/codegen for that
+        // backend (verified below), but the test outcome itself is the single
+        // build-time result. @Native packages can't build for vm, so they execute
+        // under the hybrid bridge instead.
         const test_backend: build_def.ExecutionTarget = if (backend == .hybrid) .hybrid else .vm;
         // Opt-in pure-Kira driver: synthesize a Kira entry that runs every Test
         // and prints PASS/FAIL/SKIP, then execute *that* (no Zig comparison
@@ -181,6 +187,18 @@ pub const DeveloperFacade = struct {
         if (expected_diagnostic) |expected| {
             try writer.print("FAIL {s} (expected diagnostic {s}, but program succeeded)\n", .{ input.target.displayPath(), expected });
             return .{ .failed = 1, .total = 1 };
+        }
+        // Full backend parity: `--backend llvm` additionally proves the program
+        // clears the LLVM executable phase gate (codegens for native). The test
+        // verdict itself is the backend-independent build-time VM run below.
+        if (backend == .llvm) {
+            var system = build.BuildSystem.init(allocator);
+            const llvm_check = try system.checkForBackend(source_path, .llvm_native);
+            if (llvm_check.failed()) {
+                try writer.print("FAIL {s} (llvm backend parity: program does not codegen for llvm)\n", .{input.target.displayPath()});
+                try writeDiagnostics(writer, &llvm_check.source, llvm_check.diagnostics);
+                return .{ .failed = 1, .total = 1 };
+            }
         }
         if (pure_test) return executeViaDriver(allocator, result, writer);
         return executeCompiledTests(allocator, result, writer);
