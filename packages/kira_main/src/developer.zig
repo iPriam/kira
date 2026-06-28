@@ -467,12 +467,16 @@ fn tallyDriverOutput(allocator: std.mem.Allocator, output: []const u8, writer: a
         const line = raw_line[1..];
         if (std.mem.startsWith(u8, line, "KTRAP ")) {
             const name = line["KTRAP ".len..];
-            if (try trap_ctx.traps(allocator, name)) {
+            const outcome = try trap_ctx.traps(allocator, name);
+            if (outcome.trapped and outcome.message_matched) {
                 report.passed += 1;
                 try writer.print("PASS {s}\n", .{name});
-            } else {
+            } else if (!outcome.trapped) {
                 report.failed += 1;
                 try writer.print("FAIL {s} (expected a runtime trap, but the test produced a value)\n", .{name});
+            } else {
+                report.failed += 1;
+                try writer.print("FAIL {s} (trap message mismatch: expected to contain \"{s}\", got \"{s}\")\n", .{ name, outcome.expected, outcome.actual });
             }
         } else {
             try writer.print("{s}\n", .{line});
@@ -487,43 +491,104 @@ fn tallyDriverOutput(allocator: std.mem.Allocator, output: []const u8, writer: a
     return report;
 }
 
+/// The expected runtime-failure message for a trap test: run its `__expect()`
+/// (pure Kira) and decode the `Result.Error(TestFailure ...)` payload. Returns
+/// "" when there is no specific message to match (or anything fails to decode),
+/// in which case any trap is accepted -- matching the legacy substring check's
+/// empty-message case. The result is duped so it survives the subsequent
+/// `__test()` run (which clobbers the VM's error buffer).
+fn expectedTrapMessage(
+    allocator: std.mem.Allocator,
+    vm: *vm_runtime.Vm,
+    module: *const bytecode.Module,
+    name: []const u8,
+    run_options: vm_runtime.Hooks,
+) []const u8 {
+    const expect_name = std.fmt.allocPrint(allocator, "{s}__expect", .{name}) catch return "";
+    const expect_fn = findFunctionByName(module.*, expect_name) orelse return "";
+    var discard: std.Io.Writer.Allocating = .init(allocator);
+    defer discard.deinit();
+    const value = vm.runFunctionById(module, expect_fn.id, &.{}, &discard.writer, run_options) catch return "";
+    const expectation = decodeTestExpectation(vm, module, expect_fn.return_type, value) catch return "";
+    return switch (expectation) {
+        .expected_error => |expected_error| allocator.dupe(u8, expected_error.message) catch "",
+        .ok => "",
+    };
+}
+
+/// Outcome of re-running a trap-expectation test's `test()` in isolation.
+const TrapResult = struct {
+    /// The test raised a runtime trap (the abort the driver could not catch).
+    trapped: bool,
+    /// The trap's message contained the expected substring, or no specific
+    /// message was named. Only meaningful when `trapped`.
+    message_matched: bool,
+    actual: []const u8 = "",
+    expected: []const u8 = "",
+};
+
 /// Re-runs a trap-expectation test's `test()` on the build-time VM and reports
-/// whether it raised a runtime failure (the abort the driver could not catch).
+/// whether it raised the expected runtime failure: it must trap, and (when the
+/// test named a specific failure message) the trap's message must contain it, so
+/// a divide-by-zero cannot satisfy a test that expected a "recursion" trap.
 const VmTrapChecker = struct {
     vm: *vm_runtime.Vm,
     module: *const bytecode.Module,
     ffi_dispatcher: *vm_runtime.FfiDispatcher,
 
-    fn traps(self: VmTrapChecker, allocator: std.mem.Allocator, name: []const u8) !bool {
-        const fn_name = try std.fmt.allocPrint(allocator, "{s}__test", .{name});
-        const func = findFunctionByName(self.module.*, fn_name) orelse return false;
-        var discard: std.Io.Writer.Allocating = .init(allocator);
-        defer discard.deinit();
-        _ = self.vm.runFunctionById(self.module, func.id, &.{}, &discard.writer, .{
+    fn traps(self: VmTrapChecker, allocator: std.mem.Allocator, name: []const u8) !TrapResult {
+        const run_options = vm_runtime.Hooks{
             .context = self.ffi_dispatcher,
             .call_native = vm_runtime.FfiDispatcher.hook,
-        }) catch return true;
-        return false;
+        };
+        const expected = expectedTrapMessage(allocator, self.vm, self.module, name, run_options);
+        const fn_name = try std.fmt.allocPrint(allocator, "{s}__test", .{name});
+        const func = findFunctionByName(self.module.*, fn_name) orelse return .{ .trapped = false, .message_matched = false };
+        var discard: std.Io.Writer.Allocating = .init(allocator);
+        defer discard.deinit();
+        _ = self.vm.runFunctionById(self.module, func.id, &.{}, &discard.writer, run_options) catch {
+            const actual = allocator.dupe(u8, self.vm.lastError() orelse "") catch "";
+            return .{
+                .trapped = true,
+                .message_matched = expected.len == 0 or std.mem.indexOf(u8, actual, expected) != null,
+                .actual = actual,
+                .expected = expected,
+            };
+        };
+        return .{ .trapped = false, .message_matched = false };
     }
 };
 
 /// Same, but re-runs the trap test through the hybrid runtime (so a trapping
-/// @Native-bridged test is detected too).
+/// @Native-bridged test is detected too). The expected-message check matches the
+/// VM path: the trap must occur and, when a message was named, contain it. The
+/// expected message is decoded by running `__expect()` on the hybrid runtime's
+/// embedded VM (it is pure Kira), and the actual trap message comes from that
+/// same VM's error buffer.
 const HybridTrapChecker = struct {
     runtime: *hybrid_runtime.HybridRuntime,
 
-    fn traps(self: HybridTrapChecker, allocator: std.mem.Allocator, name: []const u8) !bool {
+    fn traps(self: HybridTrapChecker, allocator: std.mem.Allocator, name: []const u8) !TrapResult {
+        const expected = expectedTrapMessage(allocator, &self.runtime.vm, &self.runtime.module, name, vm_runtime.Hooks{});
         const fn_name = try std.fmt.allocPrint(allocator, "{s}__test", .{name});
         const fn_id = blk: {
             for (self.runtime.manifest.functions) |function| {
                 if (std.mem.eql(u8, function.name, fn_name)) break :blk function.id;
             }
-            return false;
+            return .{ .trapped = false, .message_matched = false };
         };
         var discard: std.Io.Writer.Allocating = .init(allocator);
         defer discard.deinit();
-        self.runtime.runFunctionWithWriter(fn_id, &discard.writer) catch return true;
-        return false;
+        self.runtime.runFunctionWithWriter(fn_id, &discard.writer) catch {
+            const actual = allocator.dupe(u8, self.runtime.vm.lastError() orelse "") catch "";
+            return .{
+                .trapped = true,
+                .message_matched = expected.len == 0 or std.mem.indexOf(u8, actual, expected) != null,
+                .actual = actual,
+                .expected = expected,
+            };
+        };
+        return .{ .trapped = false, .message_matched = false };
     }
 };
 
