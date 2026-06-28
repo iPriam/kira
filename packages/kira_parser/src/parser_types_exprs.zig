@@ -411,7 +411,12 @@ pub fn parsePostfix(self: *Parser) anyerror!*syntax.ast.Expr {
             continue;
         }
         if (self.match(.l_bracket)) {
+            // `[ ... ]` is self-delimited; re-enable trailing-block parsing inside
+            // it so a struct-literal index works even in a control-flow header.
+            const outer_block_call = self.allow_trailing_block_call;
+            self.allow_trailing_block_call = true;
             const index = try self.parseExpression();
+            self.allow_trailing_block_call = outer_block_call;
             const close = try self.expect(.r_bracket, "expected ']' after index expression", "close the index expression here");
             const node = try self.allocator.create(syntax.ast.Expr);
             node.* = .{ .index = .{
@@ -503,7 +508,14 @@ pub fn parsePostfix(self: *Parser) anyerror!*syntax.ast.Expr {
             expr = node;
             continue;
         }
-        if (self.at(.l_brace) and self.looksLikeStructLiteral()) {
+        // A trailing `{ ... }` is only a struct literal when the context permits
+        // a trailing block. In a control-flow header (`if cond {}`, `while c {}`,
+        // `for x in xs {}`, `match s {}`, `switch s {}`) the `{` opens the body,
+        // not a struct literal — otherwise an empty body `{}` is misparsed as an
+        // empty struct literal (KPAR013 / a misleading downstream error). A
+        // struct literal that genuinely belongs in a condition must be
+        // parenthesized (`if (Foo { x: 1 }).ok {}`); parens re-enable the flag.
+        if (self.allow_trailing_block_call and self.at(.l_brace) and self.looksLikeStructLiteral()) {
             expr = try self.parseStructLiteral(expr);
             continue;
         }
@@ -605,6 +617,14 @@ pub fn parsePrimary(self: *Parser) anyerror!*syntax.ast.Expr {
     }
     if (self.match(.l_bracket)) {
         const start = self.previous().span.start;
+        // `[ ... ]` is self-delimited, so the trailing-block ambiguity that
+        // `allow_trailing_block_call` guards against in a control-flow header
+        // cannot arise inside it. Re-enable it while parsing elements so a struct
+        // literal element (`for p in [Foo { x: 1 }] {}`) still parses, then
+        // restore the outer setting (same pattern as the `(` argument list).
+        const outer_block_call = self.allow_trailing_block_call;
+        self.allow_trailing_block_call = true;
+        defer self.allow_trailing_block_call = outer_block_call;
         var elements = std.array_list.Managed(*syntax.ast.Expr).init(self.allocator);
         while (!self.at(.r_bracket) and !self.at(.eof)) {
             try elements.append(try self.parseExpression());

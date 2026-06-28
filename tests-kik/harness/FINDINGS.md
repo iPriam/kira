@@ -195,13 +195,22 @@ Distinct from FE1 (parser accepts these). ~700+ `+ 1` terms, or long unary
 (`packages/kira_semantics/src/lower_program_enums.zig` `registerExpr`, unguarded
 recursion over the expression tree). Needs a depth bound or iterative lowering.
 
-### FE3. Empty control-flow body misparsed as a struct literal (medium)
+### FE3. Empty control-flow body misparsed as a struct literal — FIXED
 
-`if true {}` reports `error[KPAR013]: struct literal requires a type name` — the
-empty body `{}` is greedily consumed as an empty struct literal on the condition.
-Same for `for/switch/match … {}`. With an identifier scrutinee the `{}` is silently
-accepted as `v {}` and the parser then blames the token AFTER the body. Should
-accept empty bodies or name the real issue and point at the empty body.
+`if true {}` reported `error[KPAR013]: struct literal requires a type name` — the
+empty body `{}` was greedily consumed as an empty struct literal on the condition
+(same for `for`/`while`/`switch`/`match … {}`; with an identifier scrutinee the
+`{}` was silently taken as `v {}` and the parser blamed the token after the body).
+Root cause: `parsePostfix` (`parser_types_exprs.zig`) parsed a trailing `{` as a
+struct literal WITHOUT checking `allow_trailing_block_call` (the flag the
+control-flow-header parser turns off, and which already guarded trailing
+builder/callback blocks). FIXED by gating the struct-literal branch on that flag,
+AND re-enabling the flag inside the self-delimited `[ … ]` array-literal and index
+contexts (mirroring the `( … )` argument-list re-enable) so a struct-literal
+element/index in a header (`for p in [Foo { x: 1 }] {}`) still parses. A struct
+literal that genuinely belongs in a condition must now be parenthesized
+(`if (Foo { x: 1 }).ok {}`), Rust-style. Regression test
+`tests/pass/run/empty_control_flow_bodies`. This also fixes FE5.
 
 ### FE4. `kira check` emits every diagnostic WITHOUT a source location — FIXED
 
