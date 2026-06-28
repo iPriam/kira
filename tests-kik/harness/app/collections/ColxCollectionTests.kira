@@ -1,0 +1,1324 @@
+// ColxCollectionTests.kira
+// Deep array test suite. All top-level names use colx / Colx prefix.
+// ~85 tests (including ~20 trap tests).
+
+// ---------------------------------------------------------------------------
+// Struct types
+// ---------------------------------------------------------------------------
+
+struct ColxPt {
+    var x: Int
+    var y: Int
+}
+
+struct ColxBox {
+    var lo: Int
+    var hi: Int
+
+    function size() -> Int {
+        return self.hi - self.lo
+    }
+
+    function mid() -> Int {
+        return (self.lo + self.hi) / 2
+    }
+}
+
+struct ColxGrid {
+    var cells: [Int]
+
+    function sum() -> Int {
+        var t = 0
+        var i = 0
+        while i < self.cells.count {
+            t = t + self.cells[i]
+            i = i + 1
+        }
+        return t
+    }
+
+    function cellCount() -> Int {
+        return self.cells.count
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper functions
+// ---------------------------------------------------------------------------
+
+function colxSum(xs: borrow [Int]) -> Int {
+    var total = 0
+    var i = 0
+    while i < xs.count {
+        total = total + xs[i]
+        i = i + 1
+    }
+    return total
+}
+
+function colxMin(xs: borrow [Int]) -> Int {
+    var m = xs[0]
+    var i = 1
+    while i < xs.count {
+        if xs[i] < m {
+            m = xs[i]
+        }
+        i = i + 1
+    }
+    return m
+}
+
+function colxMax(xs: borrow [Int]) -> Int {
+    var m = xs[0]
+    var i = 1
+    while i < xs.count {
+        if xs[i] > m {
+            m = xs[i]
+        }
+        i = i + 1
+    }
+    return m
+}
+
+function colxContainsVal(xs: borrow [Int], val: Int) -> Bool {
+    var i = 0
+    while i < xs.count {
+        if xs[i] == val {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+function colxBuildRange(n: Int) -> [Int] {
+    var xs: [Int] = []
+    var i = 0
+    while i < n {
+        xs.append(i)
+        i = i + 1
+    }
+    return xs
+}
+
+function colxBuildSquares(n: Int) -> [Int] {
+    var xs: [Int] = []
+    var i = 0
+    while i < n {
+        xs.append(i * i)
+        i = i + 1
+    }
+    return xs
+}
+
+function colxBuildFib(n: Int) -> [Int] {
+    var xs: [Int] = []
+    if n == 0 {
+        return xs
+    }
+    xs.append(0)
+    if n == 1 {
+        return xs
+    }
+    xs.append(1)
+    var i = 2
+    while i < n {
+        let p1 = xs[i - 1]
+        let p2 = xs[i - 2]
+        xs.append(p1 + p2)
+        i = i + 1
+    }
+    return xs
+}
+
+function colxReverse(xs: borrow [Int]) -> [Int] {
+    var out: [Int] = []
+    var i = xs.count
+    while i > 0 {
+        i = i - 1
+        out.append(xs[i])
+    }
+    return out
+}
+
+function colxCountGt(xs: borrow [Int], thresh: Int) -> Int {
+    var c = 0
+    var i = 0
+    while i < xs.count {
+        if xs[i] > thresh {
+            c = c + 1
+        }
+        i = i + 1
+    }
+    return c
+}
+
+function colxProduct(xs: borrow [Int]) -> Int {
+    var p = 1
+    var i = 0
+    while i < xs.count {
+        p = p * xs[i]
+        i = i + 1
+    }
+    return p
+}
+
+// ---------------------------------------------------------------------------
+// GROUP A - Empty / count
+// ---------------------------------------------------------------------------
+
+Test ColxEmptyCount {
+    test {
+        let xs: [Int] = []
+        return xs.count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test ColxOneAppendCount {
+    test {
+        var xs: [Int] = []
+        xs.append(42)
+        return xs.count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test ColxFiveAppendCount {
+    test {
+        var xs: [Int] = []
+        xs.append(1)
+        xs.append(2)
+        xs.append(3)
+        xs.append(4)
+        xs.append(5)
+        return xs.count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test ColxTrapEmptyIdx0 {
+    test {
+        var xs: [Int] = []
+        let _ = xs[0]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test ColxTrapEmptyIdx99 {
+    test {
+        var xs: [Int] = []
+        let _ = xs[99]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GROUP B - Sums via helpers
+// ---------------------------------------------------------------------------
+
+Test ColxSumLiteral {
+    test {
+        var xs: [Int] = []
+        xs.append(1)
+        xs.append(2)
+        xs.append(3)
+        xs.append(4)
+        xs.append(5)
+        return colxSum(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test ColxSumRange10 {
+    test {
+        let xs = colxBuildRange(10)
+        return colxSum(xs)
+    }
+    // 0+1+...+9 = 45
+    expect { let e: Result<Int, TestFailure> = Result.Ok(45); return e }
+}
+
+Test ColxSumSquares5 {
+    test {
+        let xs = colxBuildSquares(5)
+        return colxSum(xs)
+    }
+    // 0+1+4+9+16 = 30
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+Test ColxSumSquares10 {
+    test {
+        let xs = colxBuildSquares(10)
+        return colxSum(xs)
+    }
+    // 0+1+4+9+16+25+36+49+64+81 = 285
+    expect { let e: Result<Int, TestFailure> = Result.Ok(285); return e }
+}
+
+Test ColxSumFib8 {
+    test {
+        let xs = colxBuildFib(8)
+        return colxSum(xs)
+    }
+    // [0,1,1,2,3,5,8,13] -> 33
+    expect { let e: Result<Int, TestFailure> = Result.Ok(33); return e }
+}
+
+Test ColxForInSumLiteral {
+    test {
+        var acc = 0
+        for v in [10, 20, 30, 40, 50] {
+            acc = acc + v
+        }
+        return acc
+    }
+    // 10+20+30+40+50 = 150
+    expect { let e: Result<Int, TestFailure> = Result.Ok(150); return e }
+}
+
+Test ColxForInProductLiteral {
+    test {
+        var p = 1
+        for v in [1, 2, 3, 4, 5] {
+            p = p * v
+        }
+        return p
+    }
+    // 1*2*3*4*5 = 120
+    expect { let e: Result<Int, TestFailure> = Result.Ok(120); return e }
+}
+
+Test ColxForInCountGt4 {
+    test {
+        var c = 0
+        for v in [3, 1, 4, 1, 5, 9, 2, 6, 5, 3] {
+            if v > 4 {
+                c = c + 1
+            }
+        }
+        return c
+    }
+    // elements >4: 5,9,6,5 => 4
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+Test ColxForInMax {
+    test {
+        var m = 0
+        for v in [3, 1, 4, 1, 5, 9, 2, 6, 5, 3] {
+            if v > m {
+                m = v
+            }
+        }
+        return m
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(9); return e }
+}
+
+Test ColxForInSquaresSum {
+    test {
+        var acc = 0
+        for v in [1, 2, 3, 4, 5] {
+            acc = acc + v * v
+        }
+        return acc
+    }
+    // 1+4+9+16+25 = 55
+    expect { let e: Result<Int, TestFailure> = Result.Ok(55); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GROUP C - Min / Max
+// ---------------------------------------------------------------------------
+
+Test ColxMinManual5 {
+    test {
+        var xs: [Int] = []
+        xs.append(5)
+        xs.append(3)
+        xs.append(8)
+        xs.append(2)
+        xs.append(7)
+        return colxMin(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test ColxMaxManual5 {
+    test {
+        var xs: [Int] = []
+        xs.append(5)
+        xs.append(3)
+        xs.append(8)
+        xs.append(2)
+        xs.append(7)
+        return colxMax(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(8); return e }
+}
+
+Test ColxMinAppend5 {
+    test {
+        var xs: [Int] = []
+        xs.append(3)
+        xs.append(1)
+        xs.append(4)
+        xs.append(1)
+        xs.append(5)
+        return colxMin(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test ColxMaxRange10 {
+    test {
+        let xs = colxBuildRange(10)
+        return colxMax(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(9); return e }
+}
+
+Test ColxMinSquares8 {
+    test {
+        let xs = colxBuildSquares(8)
+        return colxMin(xs)
+    }
+    // squares[0]=0
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test ColxMaxSquares5 {
+    test {
+        let xs = colxBuildSquares(5)
+        return colxMax(xs)
+    }
+    // [0,1,4,9,16] -> max=16
+    expect { let e: Result<Int, TestFailure> = Result.Ok(16); return e }
+}
+
+Test ColxMinFib8 {
+    test {
+        let xs = colxBuildFib(8)
+        return colxMin(xs)
+    }
+    // [0,1,1,2,3,5,8,13] -> min=0
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test ColxMaxFib8 {
+    test {
+        let xs = colxBuildFib(8)
+        return colxMax(xs)
+    }
+    // max=13
+    expect { let e: Result<Int, TestFailure> = Result.Ok(13); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GROUP D - Contains
+// ---------------------------------------------------------------------------
+
+Test ColxContainsTrue {
+    test {
+        let xs = colxBuildRange(10)
+        return colxContainsVal(xs, 5)
+    }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+}
+
+Test ColxContainsFalse {
+    test {
+        let xs = colxBuildRange(10)
+        return colxContainsVal(xs, 10)
+    }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(false); return e }
+}
+
+Test ColxContainsFirst {
+    test {
+        let xs = colxBuildRange(10)
+        return colxContainsVal(xs, 0)
+    }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+}
+
+Test ColxContainsLast {
+    test {
+        let xs = colxBuildRange(10)
+        return colxContainsVal(xs, 9)
+    }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+}
+
+Test ColxContainsMissing {
+    test {
+        var xs: [Int] = []
+        xs.append(2)
+        xs.append(4)
+        xs.append(6)
+        xs.append(8)
+        return colxContainsVal(xs, 5)
+    }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(false); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GROUP E - Index reads / writes
+// ---------------------------------------------------------------------------
+
+Test ColxIndexRead0 {
+    test {
+        var xs: [Int] = []
+        xs.append(100)
+        xs.append(200)
+        xs.append(300)
+        return xs[0]
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(100); return e }
+}
+
+Test ColxIndexRead1 {
+    test {
+        var xs: [Int] = []
+        xs.append(100)
+        xs.append(200)
+        xs.append(300)
+        return xs[1]
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(200); return e }
+}
+
+Test ColxIndexReadLast {
+    test {
+        var xs: [Int] = []
+        xs.append(100)
+        xs.append(200)
+        xs.append(300)
+        return xs[2]
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(300); return e }
+}
+
+Test ColxIndexWrite {
+    test {
+        var xs: [Int] = []
+        xs.append(1)
+        xs.append(2)
+        xs.append(3)
+        xs[1] = 42
+        return xs[1]
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+Test ColxIndexWriteSum {
+    test {
+        var xs: [Int] = []
+        xs.append(10)
+        xs.append(20)
+        xs.append(30)
+        xs[0] = 5
+        xs[2] = 50
+        return colxSum(xs)
+    }
+    // 5+20+50 = 75
+    expect { let e: Result<Int, TestFailure> = Result.Ok(75); return e }
+}
+
+Test ColxIndexSwap {
+    test {
+        var xs: [Int] = []
+        xs.append(1)
+        xs.append(2)
+        xs.append(3)
+        let tmp = xs[0]
+        xs[0] = xs[2]
+        xs[2] = tmp
+        return xs[0] * 10 + xs[2]
+    }
+    // xs[0]=3, xs[2]=1 -> 31
+    expect { let e: Result<Int, TestFailure> = Result.Ok(31); return e }
+}
+
+Test ColxSquaresIndex3 {
+    test {
+        let xs = colxBuildSquares(8)
+        return xs[3]
+    }
+    // 3^2 = 9
+    expect { let e: Result<Int, TestFailure> = Result.Ok(9); return e }
+}
+
+Test ColxSquaresIndex7 {
+    test {
+        let xs = colxBuildSquares(8)
+        return xs[7]
+    }
+    // 7^2 = 49
+    expect { let e: Result<Int, TestFailure> = Result.Ok(49); return e }
+}
+
+Test ColxModifyInLoop {
+    test {
+        var xs = colxBuildRange(5)
+        var j = 0
+        while j < xs.count {
+            xs[j] = xs[j] * 3
+            j = j + 1
+        }
+        return colxSum(xs)
+    }
+    // [0,3,6,9,12] -> 30
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+Test ColxBuildRangeMultiIndex {
+    test {
+        let xs = colxBuildRange(15)
+        return xs[5] + xs[10] + xs[14]
+    }
+    // 5+10+14 = 29
+    expect { let e: Result<Int, TestFailure> = Result.Ok(29); return e }
+}
+
+Test ColxTrapIndexJustPast {
+    test {
+        var xs: [Int] = []
+        xs.append(10)
+        xs.append(20)
+        xs.append(30)
+        let _ = xs[3]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test ColxTrapIndexFarPast {
+    test {
+        var xs: [Int] = []
+        xs.append(10)
+        xs.append(20)
+        xs.append(30)
+        let _ = xs[100]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GROUP F - Reverse
+// ---------------------------------------------------------------------------
+
+Test ColxReverseFirst {
+    test {
+        let xs = colxBuildRange(5)
+        let rev = colxReverse(xs)
+        return rev[0]
+    }
+    // reversed [0,1,2,3,4] -> [4,3,2,1,0], first=4
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+Test ColxReverseLast {
+    test {
+        let xs = colxBuildRange(5)
+        let rev = colxReverse(xs)
+        return rev[4]
+    }
+    // last=0
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test ColxReverseSum {
+    test {
+        let xs = colxBuildRange(5)
+        let rev = colxReverse(xs)
+        return colxSum(rev)
+    }
+    // same elements, sum=10
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test ColxReverseCount {
+    test {
+        let xs = colxBuildRange(5)
+        let rev = colxReverse(xs)
+        return rev.count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test ColxReverseSumManual {
+    test {
+        var xs: [Int] = []
+        xs.append(3)
+        xs.append(1)
+        xs.append(4)
+        xs.append(1)
+        xs.append(5)
+        let rev = colxReverse(xs)
+        return colxSum(rev)
+    }
+    // 3+1+4+1+5 = 14
+    expect { let e: Result<Int, TestFailure> = Result.Ok(14); return e }
+}
+
+Test ColxTrapReverseOOB {
+    test {
+        let xs = colxBuildRange(3)
+        let rev = colxReverse(xs)
+        let _ = rev[3]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GROUP G - CountGt and Product
+// ---------------------------------------------------------------------------
+
+Test ColxCountGtRange {
+    test {
+        let xs = colxBuildRange(10)
+        return colxCountGt(xs, 5)
+    }
+    // elements 6,7,8,9 -> 4
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+Test ColxCountGtSquares {
+    test {
+        let xs = colxBuildSquares(10)
+        return colxCountGt(xs, 30)
+    }
+    // [0,1,4,9,16,25,36,49,64,81] -> >30: 36,49,64,81 -> 4
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4); return e }
+}
+
+Test ColxCountGtZero {
+    test {
+        var xs: [Int] = []
+        xs.append(1)
+        xs.append(2)
+        xs.append(0)
+        xs.append(3)
+        xs.append(0)
+        return colxCountGt(xs, 0)
+    }
+    // 1,2,3 -> 3
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test ColxProductManual3 {
+    test {
+        var xs: [Int] = []
+        xs.append(2)
+        xs.append(3)
+        xs.append(4)
+        return colxProduct(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(24); return e }
+}
+
+Test ColxProductManual5 {
+    test {
+        var xs: [Int] = []
+        xs.append(1)
+        xs.append(2)
+        xs.append(3)
+        xs.append(4)
+        xs.append(5)
+        return colxProduct(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(120); return e }
+}
+
+Test ColxProductSingle {
+    test {
+        var xs: [Int] = []
+        xs.append(7)
+        return colxProduct(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test ColxProductEmpty {
+    test {
+        let xs: [Int] = []
+        return colxProduct(xs)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1); return e }
+}
+
+Test ColxProductFibLike {
+    test {
+        var xs: [Int] = []
+        xs.append(1)
+        xs.append(1)
+        xs.append(2)
+        xs.append(3)
+        xs.append(5)
+        return colxProduct(xs)
+    }
+    // 1*1*2*3*5 = 30
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GROUP H - Arrays of structs
+// ---------------------------------------------------------------------------
+
+Test ColxPtArrayCount {
+    test {
+        var pts: [ColxPt] = []
+        var i = 0
+        while i < 5 {
+            pts.append(ColxPt { x: i, y: i * 2 })
+            i = i + 1
+        }
+        return pts.count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(5); return e }
+}
+
+Test ColxPtSumX {
+    test {
+        var pts: [ColxPt] = []
+        var i = 0
+        while i < 5 {
+            pts.append(ColxPt { x: i, y: i * 2 })
+            i = i + 1
+        }
+        var s = 0
+        var j = 0
+        while j < pts.count {
+            s = s + pts[j].x
+            j = j + 1
+        }
+        return s
+    }
+    // x=0+1+2+3+4 = 10
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test ColxPtSumY {
+    test {
+        var pts: [ColxPt] = []
+        var i = 0
+        while i < 5 {
+            pts.append(ColxPt { x: i, y: i * 2 })
+            i = i + 1
+        }
+        var s = 0
+        var j = 0
+        while j < pts.count {
+            s = s + pts[j].y
+            j = j + 1
+        }
+        return s
+    }
+    // y=0+2+4+6+8 = 20
+    expect { let e: Result<Int, TestFailure> = Result.Ok(20); return e }
+}
+
+Test ColxPtSumBoth {
+    test {
+        var pts: [ColxPt] = []
+        var i = 0
+        while i < 5 {
+            pts.append(ColxPt { x: i, y: i + 1 })
+            i = i + 1
+        }
+        var s = 0
+        var j = 0
+        while j < pts.count {
+            s = s + pts[j].x + pts[j].y
+            j = j + 1
+        }
+        return s
+    }
+    // x: 0+1+2+3+4=10, y: 1+2+3+4+5=15, total=25
+    expect { let e: Result<Int, TestFailure> = Result.Ok(25); return e }
+}
+
+Test ColxPtMutateByIndex {
+    test {
+        var pts: [ColxPt] = []
+        pts.append(ColxPt { x: 1, y: 1 })
+        pts.append(ColxPt { x: 2, y: 2 })
+        pts.append(ColxPt { x: 3, y: 3 })
+        var local = pts[1]
+        local.x = 100
+        local.y = 200
+        pts[1] = local
+        return pts[1].x + pts[1].y
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(300); return e }
+}
+
+Test ColxPtBuildLarge {
+    test {
+        var pts: [ColxPt] = []
+        var i = 0
+        while i < 20 {
+            pts.append(ColxPt { x: i, y: i + 1 })
+            i = i + 1
+        }
+        var s = 0
+        var j = 0
+        while j < pts.count {
+            s = s + pts[j].x + pts[j].y
+            j = j + 1
+        }
+        return s
+    }
+    // sum x=0+1+...+19=190, sum y=1+2+...+20=210, total=400
+    expect { let e: Result<Int, TestFailure> = Result.Ok(400); return e }
+}
+
+Test ColxBoxSumSizes {
+    test {
+        var boxes: [ColxBox] = []
+        boxes.append(ColxBox { lo: 0, hi: 10 })
+        boxes.append(ColxBox { lo: 5, hi: 15 })
+        boxes.append(ColxBox { lo: 2, hi: 8 })
+        var s = 0
+        var i = 0
+        while i < boxes.count {
+            s = s + boxes[i].size()
+            i = i + 1
+        }
+        return s
+    }
+    // sizes: 10+10+6 = 26
+    expect { let e: Result<Int, TestFailure> = Result.Ok(26); return e }
+}
+
+Test ColxBoxSumMids {
+    test {
+        var boxes: [ColxBox] = []
+        boxes.append(ColxBox { lo: 0, hi: 10 })
+        boxes.append(ColxBox { lo: 4, hi: 12 })
+        boxes.append(ColxBox { lo: 6, hi: 20 })
+        var s = 0
+        var i = 0
+        while i < boxes.count {
+            s = s + boxes[i].mid()
+            i = i + 1
+        }
+        return s
+    }
+    // mids: (0+10)/2=5, (4+12)/2=8, (6+20)/2=13 -> 26
+    expect { let e: Result<Int, TestFailure> = Result.Ok(26); return e }
+}
+
+Test ColxPtWritebackLoop {
+    test {
+        var pts: [ColxPt] = []
+        var i = 0
+        while i < 5 {
+            pts.append(ColxPt { x: i, y: i })
+            i = i + 1
+        }
+        var j = 0
+        while j < pts.count {
+            var local = pts[j]
+            local.x = local.x * 2
+            pts[j] = local
+            j = j + 1
+        }
+        var s = 0
+        var k = 0
+        while k < pts.count {
+            s = s + pts[k].x + pts[k].y
+            k = k + 1
+        }
+        return s
+    }
+    // doubled x: 0+2+4+6+8=20, y unchanged: 0+1+2+3+4=10, total=30
+    expect { let e: Result<Int, TestFailure> = Result.Ok(30); return e }
+}
+
+Test ColxPtCount50 {
+    test {
+        var pts: [ColxPt] = []
+        var i = 0
+        while i < 50 {
+            pts.append(ColxPt { x: i, y: i })
+            i = i + 1
+        }
+        return pts.count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(50); return e }
+}
+
+Test ColxPtSumX20 {
+    test {
+        var pts: [ColxPt] = []
+        var i = 0
+        while i < 20 {
+            pts.append(ColxPt { x: i, y: 0 })
+            i = i + 1
+        }
+        var s = 0
+        var j = 0
+        while j < pts.count {
+            s = s + pts[j].x
+            j = j + 1
+        }
+        return s
+    }
+    // 0+1+...+19 = 190
+    expect { let e: Result<Int, TestFailure> = Result.Ok(190); return e }
+}
+
+Test ColxTrapPtArrayOOB {
+    test {
+        var pts: [ColxPt] = []
+        pts.append(ColxPt { x: 1, y: 1 })
+        pts.append(ColxPt { x: 2, y: 2 })
+        pts.append(ColxPt { x: 3, y: 3 })
+        let _ = pts[5].x
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GROUP I - ColxGrid
+// ---------------------------------------------------------------------------
+
+Test ColxGridSum5 {
+    test {
+        var cells: [Int] = []
+        cells.append(1)
+        cells.append(2)
+        cells.append(3)
+        cells.append(4)
+        cells.append(5)
+        let grid = ColxGrid { cells: move cells }
+        return grid.sum()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+Test ColxGridCellCount7 {
+    test {
+        var cells: [Int] = []
+        var i = 0
+        while i < 7 {
+            cells.append(i)
+            i = i + 1
+        }
+        let grid = ColxGrid { cells: move cells }
+        return grid.cellCount()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+Test ColxGridLarge100 {
+    test {
+        var cells: [Int] = []
+        var i = 0
+        while i < 100 {
+            cells.append(i)
+            i = i + 1
+        }
+        let grid = ColxGrid { cells: move cells }
+        return grid.sum()
+    }
+    // 0+1+...+99 = 4950
+    expect { let e: Result<Int, TestFailure> = Result.Ok(4950); return e }
+}
+
+Test ColxGridMultiRowSum {
+    test {
+        // 3 grids with 4 cells each: grid r has cells r*4, r*4+1, r*4+2, r*4+3
+        var total = 0
+        var r = 0
+        while r < 3 {
+            var cells: [Int] = []
+            var c = 0
+            while c < 4 {
+                cells.append(r * 4 + c)
+                c = c + 1
+            }
+            let grid = ColxGrid { cells: move cells }
+            total = total + grid.sum()
+            r = r + 1
+        }
+        return total
+    }
+    // r=0: 0+1+2+3=6, r=1: 4+5+6+7=22, r=2: 8+9+10+11=38 -> 66
+    expect { let e: Result<Int, TestFailure> = Result.Ok(66); return e }
+}
+
+Test ColxGridEmptySum {
+    test {
+        let cells: [Int] = []
+        let grid = ColxGrid { cells: move cells }
+        return grid.sum()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test ColxGridEmptyCount {
+    test {
+        let cells: [Int] = []
+        let grid = ColxGrid { cells: move cells }
+        return grid.cellCount()
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test ColxGridRangeSum {
+    test {
+        let cells = colxBuildRange(10)
+        let grid = ColxGrid { cells: move cells }
+        return grid.sum()
+    }
+    // 0+1+...+9 = 45
+    expect { let e: Result<Int, TestFailure> = Result.Ok(45); return e }
+}
+
+Test ColxGridSquaresSum {
+    test {
+        let cells = colxBuildSquares(8)
+        let grid = ColxGrid { cells: move cells }
+        return grid.sum()
+    }
+    // 0+1+4+9+16+25+36+49 = 140
+    expect { let e: Result<Int, TestFailure> = Result.Ok(140); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GROUP J - Allocation churn
+// ---------------------------------------------------------------------------
+
+Test ColxChurnRange100 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 100 {
+            let xs = colxBuildRange(5)
+            total = total + colxSum(xs)
+            round = round + 1
+        }
+        return total
+    }
+    // 10 per round * 100 = 1000
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1000); return e }
+}
+
+Test ColxChurnSquares50 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 50 {
+            let xs = colxBuildSquares(10)
+            total = total + colxSum(xs)
+            round = round + 1
+        }
+        return total
+    }
+    // 285 per round * 50 = 14250
+    expect { let e: Result<Int, TestFailure> = Result.Ok(14250); return e }
+}
+
+Test ColxChurnFib30 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 30 {
+            let xs = colxBuildFib(8)
+            total = total + colxSum(xs)
+            round = round + 1
+        }
+        return total
+    }
+    // 33 per round * 30 = 990
+    expect { let e: Result<Int, TestFailure> = Result.Ok(990); return e }
+}
+
+Test ColxChurnReverse20 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 20 {
+            let xs = colxBuildRange(8)
+            let rev = colxReverse(xs)
+            total = total + rev[0]
+            round = round + 1
+        }
+        return total
+    }
+    // rev[0]=7 per round, 7*20=140
+    expect { let e: Result<Int, TestFailure> = Result.Ok(140); return e }
+}
+
+Test ColxChurnStructs40 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 40 {
+            var pts: [ColxPt] = []
+            var i = 0
+            while i < 5 {
+                pts.append(ColxPt { x: i, y: 0 })
+                i = i + 1
+            }
+            var s = 0
+            var j = 0
+            while j < pts.count {
+                s = s + pts[j].x
+                j = j + 1
+            }
+            total = total + s
+            round = round + 1
+        }
+        return total
+    }
+    // sum x = 10 per round * 40 = 400
+    expect { let e: Result<Int, TestFailure> = Result.Ok(400); return e }
+}
+
+Test ColxChurnGrids25 {
+    test {
+        var total = 0
+        var r = 0
+        while r < 25 {
+            var cells: [Int] = []
+            cells.append(r)
+            cells.append(r + 1)
+            cells.append(r + 2)
+            let grid = ColxGrid { cells: move cells }
+            total = total + grid.sum()
+            r = r + 1
+        }
+        return total
+    }
+    // r-th round sum=3r+3; total=sum(3r+3 for r=0..24)=3*(0+...+24)+3*25=3*300+75=975
+    expect { let e: Result<Int, TestFailure> = Result.Ok(975); return e }
+}
+
+Test ColxChurnLarge200 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 200 {
+            let xs = colxBuildSquares(20)
+            total = total + colxSum(xs)
+            round = round + 1
+        }
+        return total
+    }
+    // sum(i^2 for i=0..19)=19*20*39/6=2470; 2470*200=494000
+    expect { let e: Result<Int, TestFailure> = Result.Ok(494000); return e }
+}
+
+Test ColxChurnMixed30 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 30 {
+            let a = colxBuildRange(5)
+            let b = colxBuildSquares(5)
+            let c = colxBuildFib(5)
+            total = total + colxSum(a) + colxSum(b) + colxSum(c)
+            round = round + 1
+        }
+        return total
+    }
+    // range(5)=10, squares(5)=30, fib(5)=[0,1,1,2,3]=7; 47*30=1410
+    expect { let e: Result<Int, TestFailure> = Result.Ok(1410); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GROUP K - Arithmetic and write traps
+// ---------------------------------------------------------------------------
+
+Test ColxTrapDivByZero {
+    test {
+        let x = 10 / 0
+        return x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test ColxTrapModByZero {
+    test {
+        let x = 10 % 0
+        return x
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test ColxTrapDivByZeroVar {
+    test {
+        var xs: [Int] = []
+        xs.append(0)
+        let result = 100 / xs[0]
+        return result
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test ColxTrapModByZeroVar {
+    test {
+        var xs: [Int] = []
+        xs.append(0)
+        let result = 100 % xs[0]
+        return result
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test ColxTrapIndexAtCount {
+    test {
+        let xs = colxBuildRange(5)
+        let _ = xs[xs.count]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test ColxTrapLoopOOB {
+    test {
+        var xs: [Int] = []
+        xs.append(1)
+        xs.append(2)
+        xs.append(3)
+        var i = 0
+        var acc = 0
+        while i <= xs.count {
+            acc = acc + xs[i]
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test ColxTrapWriteOOB {
+    test {
+        var xs: [Int] = []
+        xs.append(1)
+        xs.append(2)
+        xs[2] = 99
+        return xs[2]
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}
+
+Test ColxTrapFibOOBDirect {
+    test {
+        let xs = colxBuildFib(5)
+        let _ = xs[5]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Error(TestFailure.Runtime("")); return e }
+}

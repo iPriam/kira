@@ -284,16 +284,29 @@ stack per Kira call frame with no depth bound. Needs a recursion-depth guard in 
 VM interpreter that raises a clean runtime error (the analogue of FE1 for the VM,
 and related to FE2). Real programs with deepish recursion hit this.
 
-### S7. Property access on a call's temporary fails to lower (KIR001) (medium, OPEN)
+### S7. Property access on a call's temporary fails to lower (KIR001) — FIXED
 
 Reading a field/property directly off the value returned by a call — e.g.
-`strPick(i).count` where `strPick(i) -> String` — fails to lower with
-`KIR001: a lowering obligation was left undischarged`, on all backends. Binding
-the result to a local first works: `let s = strPick(i); ... s.count`. The harness
-modules bind call results before projecting off them as a workaround. Likely the
-IR lowering of a member/index projection whose base is a call result (a temporary
-with no place) doesn't materialize the temporary. Surfaced while authoring the
-strings module.
+`strPick(i).count` where `strPick(i) -> String` — failed to lower with
+`KIR001: a lowering obligation was left undischarged`. Root cause: the
+function-reachability walk (`lower_from_hir_program.zig markReachableExpr`)
+handled `.array_len`/`.field` but had no `.string_len` case, so a `String`
+`.count` whose object is a call fell through to the no-op `else` and never
+marked the callee reachable → never lowered. FIXED by adding the missing
+`.string_len` case (commit b05596d); regression test
+`tests/pass/run/call_temp_string_count_parity`. `call().count` now lowers on
+vm/llvm/hybrid.
+
+### S8. Negative `%` uses floored modulo while `/` truncates toward zero (medium, OPEN)
+
+Surfaced by the `kira test` suite migration. `(0 - 17) % 5` returns `3`
+(Python/floored modulo) but `(0 - 17) / 5` returns `-3` (truncated toward zero),
+so the standard division identity `(a / b) * b + (a % b) == a` is BROKEN for
+negative `a`. `/` and `%` must agree on rounding. Kira models Rust affine
+ownership and Rust uses truncated modulo (`-17 % 5 == -2`), so the fix is to make
+`%` truncate toward zero to match `/` — and it must be fixed across BOTH the VM
+interpreter and the LLVM backend for parity. Minimal repro:
+`test { return (0 - 17) % 5 } expect { Result.Ok(0 - 2) }` fails (gets 3).
 
 ## Coverage gaps to expand next
 
