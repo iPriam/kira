@@ -240,9 +240,22 @@ pub const HybridRuntime = struct {
             try self.pending_callback_return_values.append(self.allocator, result);
             result_owned_by_pending = true;
             bridge_result = runtime_abi.bridgeValueFromValue(.{ .raw_ptr = native_enum });
-        } else {
-            try self.pending_callback_return_values.append(self.allocator, result);
-            result_owned_by_pending = true;
+        } else switch (result) {
+            // A scalar/void return owns no heap and is handed to native BY VALUE
+            // (the bridge value carries the scalar itself, not a pointer into the
+            // managed value), so native cannot borrow into it and there is nothing
+            // to keep alive. Leave it for the trailing drop below instead of
+            // retaining it for the whole runtime lifetime — otherwise a callback
+            // invoked every frame grows `pending_callback_return_values` without
+            // bound (F6). String/raw_ptr returns are still retained because the
+            // bridge value borrows their bytes until runtime teardown; bounding
+            // those needs the native lowering to deep-copy the borrowed payload
+            // (the affine ownership rework that F3 touches).
+            .void, .integer, .float, .boolean => {},
+            else => {
+                try self.pending_callback_return_values.append(self.allocator, result);
+                result_owned_by_pending = true;
+            },
         }
         self.trimPendingCallbackReturns();
         if (out_result) |ptr| ptr.* = bridge_result;

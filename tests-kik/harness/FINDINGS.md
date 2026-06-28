@@ -228,18 +228,31 @@ Like FE3: `match x {}` consumes `{}` as a struct literal and then reports
 
 ## Open (lower priority)
 
-### F6. Unbounded `pending_callback_return_values` growth in hybrid (medium)
+### F6. Unbounded `pending_callback_return_values` growth in hybrid — PARTIALLY FIXED
 
-`HybridRuntime.pending_callback_return_values` retains the managed VM value of EVERY
-`@Runtime`-callback return for the whole runtime lifetime (dropped only at deinit;
-`trimPendingCallbackReturns` is a no-op). A program returning aggregates from
-callbacks accumulates them: 500 enum returns → `structs current=1500` held until
-exit. Freed at teardown (so not a leak at process exit), but a real per-run memory
-growth — for a long-running UI app returning values from per-frame callbacks it
-grows without bound. Pre-existing (predates F3). A proper fix needs the retention
-trimmed once native no longer references the value (e.g. confirm
-`lowerEnumToNativeOwned`/struct/array lowering COPIES the payload rather than
-aliasing the managed value, then drop it immediately instead of retaining).
+`HybridRuntime.pending_callback_return_values` retained the managed VM value of
+EVERY `@Runtime`-callback return for the whole runtime lifetime (dropped only at
+deinit; `trimPendingCallbackReturns` is a no-op), so a callback invoked every
+frame grew memory without bound.
+
+PARTIAL FIX: scalar/void returns (`void`/`integer`/`float`/`boolean`) own no heap
+and are handed to native BY VALUE, so native cannot borrow into them — they are no
+longer retained (dropped immediately, a no-op). This bounds growth for the common
+case (a per-frame callback returning a status Int/Bool or nothing).
+
+STILL OPEN (the headline aggregate case): enum/struct/array/string returns are
+still retained until teardown. They genuinely MUST be, because the native block
+the callback hands back BORROWS into the managed value rather than owning a copy —
+e.g. `enumPayloadToNativeWord` (vm_native_bridge.zig) boxes a string payload as a
+`BridgeString { .ptr = value.string.ptr }` pointing straight at the managed VM
+string's bytes; dropping the managed enum would dangle it (a UAF — the same affine
+ownership boundary that produced the F3 double-free). Bounding these requires the
+native lowering (`lowerEnumToNativeOwned`, `lowerStructToNativeLayout`,
+`copyArrayToNativeLayout`, and the `BridgeString` string path) to DEEP-COPY borrowed
+payloads into native-owned (libc) memory that native frees, so the managed value
+becomes independent and droppable per-call. That is a cross-cutting ownership
+change in the F3 minefield and is deferred rather than risk reintroducing a
+double-free/UAF.
 
 ### FE2. Semantic-lowering stack overflow on long flat chains (high, open)
 
