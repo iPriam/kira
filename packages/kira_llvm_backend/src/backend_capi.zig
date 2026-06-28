@@ -141,6 +141,7 @@ pub const RuntimeDecls = struct {
     free: Decl,
     strlen: Decl,
     memcpy: Decl,
+    memcmp: Decl,
     array_alloc: Decl,
     array_len: Decl,
     array_load: Decl,
@@ -184,6 +185,8 @@ pub const RuntimeDecls = struct {
         const strlen_ty = api.LLVMFunctionType(types.i64, &strlen_args, strlen_args.len, 0);
         var memcpy_args = [_]llvm.c.LLVMTypeRef{ types.ptr_ty, types.ptr_ty, types.i64 };
         const memcpy_ty = api.LLVMFunctionType(types.ptr_ty, &memcpy_args, memcpy_args.len, 0);
+        var memcmp_args = [_]llvm.c.LLVMTypeRef{ types.ptr_ty, types.ptr_ty, types.i64 };
+        const memcmp_ty = api.LLVMFunctionType(types.i32, &memcmp_args, memcmp_args.len, 0);
         var alloc_args = [_]llvm.c.LLVMTypeRef{types.i64};
         const array_alloc_ty = api.LLVMFunctionType(types.ptr_ty, &alloc_args, alloc_args.len, 0);
         var len_args = [_]llvm.c.LLVMTypeRef{types.ptr_ty};
@@ -222,6 +225,7 @@ pub const RuntimeDecls = struct {
             .free = .{ .ty = free_ty, .fn_value = api.LLVMAddFunction(module_ref, "free", free_ty) },
             .strlen = .{ .ty = strlen_ty, .fn_value = api.LLVMAddFunction(module_ref, "strlen", strlen_ty) },
             .memcpy = .{ .ty = memcpy_ty, .fn_value = api.LLVMAddFunction(module_ref, "memcpy", memcpy_ty) },
+            .memcmp = .{ .ty = memcmp_ty, .fn_value = api.LLVMAddFunction(module_ref, "memcmp", memcmp_ty) },
             .array_alloc = .{ .ty = array_alloc_ty, .fn_value = api.LLVMAddFunction(module_ref, runtime_symbols.array_alloc, array_alloc_ty) },
             .array_len = .{ .ty = array_len_ty, .fn_value = api.LLVMAddFunction(module_ref, runtime_symbols.array_len, array_len_ty) },
             .array_load = .{ .ty = array_load_ty, .fn_value = api.LLVMAddFunction(module_ref, runtime_symbols.array_load, array_load_ty) },

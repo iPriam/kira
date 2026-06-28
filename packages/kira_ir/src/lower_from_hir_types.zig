@@ -57,6 +57,11 @@ pub fn lowerExecutableCompareOperandType(program: model.Program, ty: model.Resol
             .equal, .not_equal => lowered,
             else => error.UnsupportedExecutableFeature,
         },
+        // String content equality; ordering (`<`/`>`) is not defined.
+        .string => switch (op) {
+            .equal, .not_equal => lowered,
+            else => error.UnsupportedExecutableFeature,
+        },
         else => error.UnsupportedExecutableFeature,
     };
 }

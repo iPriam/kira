@@ -1,3 +1,4 @@
+const std = @import("std");
 const bytecode = @import("kira_bytecode");
 const runtime_abi = @import("kira_runtime_abi");
 
@@ -55,6 +56,20 @@ pub fn compareValues(vm: anytype, lhs: runtime_abi.Value, rhs: runtime_abi.Value
                 .not_equal => lhs_value != rhs.raw_ptr,
                 else => {
                     vm.rememberError("vm compare does not support ordered pointer comparisons");
+                    return error.RuntimeFailure;
+                },
+            };
+        },
+        .string => |lhs_value| {
+            if (rhs != .string) {
+                vm.rememberFmt("vm compare expects matching operand types (lhs={s}, rhs={s})", .{ @tagName(lhs), @tagName(rhs) });
+                return error.RuntimeFailure;
+            }
+            return switch (op) {
+                .equal => std.mem.eql(u8, lhs_value, rhs.string),
+                .not_equal => !std.mem.eql(u8, lhs_value, rhs.string),
+                else => {
+                    vm.rememberError("vm compare does not support ordered string comparisons");
                     return error.RuntimeFailure;
                 },
             };

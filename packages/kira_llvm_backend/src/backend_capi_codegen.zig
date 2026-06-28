@@ -377,6 +377,33 @@ pub const FunctionCodegen = struct {
     fn lowerCompare(self: *FunctionCodegen, v: ir.Compare) !llvm.c.LLVMValueRef {
         const api = self.api;
         const operand_kind = if (v.lhs < self.register_types.len) self.register_types[v.lhs].kind else ir.ValueType.Kind.integer;
+        if (operand_kind == .string) {
+            // String content equality: a `{ptr,len}` value equals another iff the
+            // lengths match and the first `min(len)` bytes compare equal. memcmp
+            // over min(len) is always in-bounds for both buffers; the length check
+            // distinguishes a string from its own prefix.
+            const b = self.builder;
+            const lhs = self.registers[v.lhs];
+            const rhs = self.registers[v.rhs];
+            const len_a = api.LLVMBuildExtractValue(b, lhs, 1, "streq.alen");
+            const len_b = api.LLVMBuildExtractValue(b, rhs, 1, "streq.blen");
+            const ptr_a = api.LLVMBuildExtractValue(b, lhs, 0, "streq.aptr");
+            const ptr_b = api.LLVMBuildExtractValue(b, rhs, 0, "streq.bptr");
+            const len_eq = api.LLVMBuildICmp(b, llvm.c.LLVMIntEQ, len_a, len_b, "streq.leneq");
+            const a_shorter = api.LLVMBuildICmp(b, llvm.c.LLVMIntULT, len_a, len_b, "streq.ashorter");
+            const min_len = api.LLVMBuildSelect(b, a_shorter, len_a, len_b, "streq.min");
+            var args = [_]llvm.c.LLVMValueRef{ ptr_a, ptr_b, min_len };
+            const cmp = api.LLVMBuildCall2(b, self.runtime_decls.memcmp.ty, self.runtime_decls.memcmp.fn_value, &args, args.len, "streq.memcmp");
+            const zero = api.LLVMConstInt(self.types.i32, 0, 0);
+            const bytes_eq = api.LLVMBuildICmp(b, llvm.c.LLVMIntEQ, cmp, zero, "streq.byteseq");
+            const equal = api.LLVMBuildAnd(b, len_eq, bytes_eq, "streq.eq");
+            return switch (v.op) {
+                .equal => equal,
+                .not_equal => api.LLVMBuildNot(b, equal, "streq.ne"),
+                // The compare-operand gate rejects ordered string comparisons.
+                else => equal,
+            };
+        }
         if (operand_kind == .float) {
             return api.LLVMBuildFCmp(
                 self.builder,
