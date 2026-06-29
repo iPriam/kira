@@ -1,0 +1,118 @@
+// Hybrid enum-field copy regression tests. Prefix: feb / Feb.
+// No imports — main.kira covers Foundation package-wide.
+//
+// Regresses the hybrid double-free where a @Native function (native-compiled in
+// a hybrid build) constructs an aggregate by copying an enum field FROM a
+// BORROWED source — `New { e: src.e }`. An enum value is a heap {tag,payload}
+// block owned by its struct; copying only the pointer aliases ONE block into TWO
+// owners, and both free it at scope exit -> "pointer being freed was not
+// allocated" (SIGABRT). The clone-on-store that prevents this was gated to the
+// pure-native backend (`request.mode == .llvm_native`) and skipped in hybrid, so
+// the alias survived. This is exactly the Kira Graphics Metal backend's first
+// hybrid run: `GraphicsFrame { backend: self.backend }` inside the @Native
+// `Graphics.frame()` method crashed before the first frame. See
+// backend_capi_aggregate.zig (store / native-state / enum-payload clone sites).
+//
+// Each Test reduces to an Int asserted via Result.Ok so a wrong copied tag is
+// caught as well as the crash.
+
+enum FebBackend { Metal Sokol Vulkan }
+
+@Native
+struct FebCtx {
+    var backend: FebBackend = FebBackend.Sokol
+    var tag: Int
+}
+
+@Native
+class FebGfx {
+    var backend: FebBackend = FebBackend.Sokol
+    var seed: Int
+
+    // The metalRunApplication shape: an @Native METHOD reading `self.<enum>` and
+    // copying it into a freshly built aggregate's enum field.
+    @Native
+    function frame() -> FebCtx {
+        return FebCtx { backend: self.backend, tag: self.seed + 1 }
+    }
+}
+
+// Free-function form: copy an enum field from a BORROWED struct argument.
+@Native
+function febCopy(src: borrow FebCtx) -> FebCtx {
+    return FebCtx { backend: src.backend, tag: src.tag + 1 }
+}
+
+// Decode the copied enum so a wrong tag fails the assertion too.
+@Native
+function febCode(c: borrow FebCtx) -> Int {
+    if c.backend == FebBackend.Metal { return 100 }
+    if c.backend == FebBackend.Sokol { return 200 }
+    return 300
+}
+
+// ── Group A: method copying self.<enum> into a new aggregate ──────────────────
+
+Test FebMethodEnumCopyMetal {
+    test {
+        let g = FebGfx { backend: FebBackend.Metal, seed: 10 }
+        let f = g.frame()
+        return febCode(f) + f.tag
+    }
+    // Metal -> 100, tag = 10 + 1 = 11
+    expect { let e: Result<Int, TestFailure> = Result.Ok(111); return e }
+}
+
+Test FebMethodEnumCopyVulkan {
+    test {
+        let g = FebGfx { backend: FebBackend.Vulkan, seed: 4 }
+        let f = g.frame()
+        return febCode(f) + f.tag
+    }
+    // Vulkan -> 300, tag = 5
+    expect { let e: Result<Int, TestFailure> = Result.Ok(305); return e }
+}
+
+// ── Group B: free function copying a borrowed struct's enum field ─────────────
+
+Test FebFreeEnumCopySokol {
+    test {
+        let a = FebCtx { backend: FebBackend.Sokol, tag: 7 }
+        let b = febCopy(a)
+        return febCode(b) + b.tag
+    }
+    // Sokol -> 200, tag = 8
+    expect { let e: Result<Int, TestFailure> = Result.Ok(208); return e }
+}
+
+// ── Group C: repeated copy/free churn — stresses the clone+drop pairing ───────
+
+Test FebMethodEnumCopyLoop {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 25 {
+            let g = FebGfx { backend: FebBackend.Metal, seed: i }
+            let f = g.frame()
+            acc = acc + febCode(f)
+            i = i + 1
+        }
+        // 25 * 100
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2500); return e }
+}
+
+Test FebFreeEnumCopyChain {
+    test {
+        // Copy three times in sequence; each copy reads the previous (borrowed)
+        // struct's enum field. A missing clone double-frees on the second copy.
+        let a = FebCtx { backend: FebBackend.Vulkan, tag: 1 }
+        let b = febCopy(a)
+        let c = febCopy(b)
+        let d = febCopy(c)
+        return febCode(d) + d.tag
+    }
+    // Vulkan preserved -> 300, tag = 1 + 3 = 4
+    expect { let e: Result<Int, TestFailure> = Result.Ok(304); return e }
+}

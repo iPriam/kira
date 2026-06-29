@@ -32,7 +32,7 @@ pub fn lowerAllocNativeState(fc: *FunctionCodegen, v: ir.AllocNativeState) !void
         // referencing freed memory (a use-after-free that reads a garbage tag on
         // recovery). Clone the block so the native state owns independent storage,
         // matching the borrowed-enum rule in lowerStoreIndirect.
-        if (field_decl.ty.kind == .enum_instance and fc.drop_enabled and fc.request.mode == .llvm_native) {
+        if (field_decl.ty.kind == .enum_instance and fc.drop_enabled and (fc.request.mode == .llvm_native or fc.request.mode == .hybrid)) {
             const sptr = api.LLVMBuildIntToPtr(b, field_value, fc.types.ptr_ty, "state.enum.src");
             var cargs = [_]llvm.c.LLVMValueRef{sptr};
             const clone = api.LLVMBuildCall2(b, fc.dtors.enum_clone.ty, fc.dtors.enum_clone.fn_value, &cargs, cargs.len, "state.enum.clone");
@@ -110,7 +110,12 @@ pub fn lowerStoreIndirect(fc: *FunctionCodegen, v: ir.StoreIndirect) !void {
             //                     storage and the borrowed original is untouched. Storing a
             //                     borrowed field (`Other { mode: src.mode }`) without cloning
             //                     would alias one enum into two owners -> double free.
-            if (fc.drop_enabled and fc.request.mode == .llvm_native and !drop.isOwned(fc, v.src)) {
+            // The clone must also run in HYBRID: this is native-compiled code (an @Native
+            // function in a hybrid build) building a native struct with native enum blocks —
+            // the VM is not party to this store, so without the clone the borrowed enum aliases
+            // into two owners and is freed twice (the `Frame { backend: self.backend }` double
+            // free that crashed the Metal backend's first hybrid run).
+            if (fc.drop_enabled and (fc.request.mode == .llvm_native or fc.request.mode == .hybrid) and !drop.isOwned(fc, v.src)) {
                 const sptr = api.LLVMBuildIntToPtr(b, src, fc.types.ptr_ty, "store.enum.src");
                 var cargs = [_]llvm.c.LLVMValueRef{sptr};
                 const clone = api.LLVMBuildCall2(b, fc.dtors.enum_clone.ty, fc.dtors.enum_clone.fn_value, &cargs, cargs.len, "store.enum.clone");
@@ -258,7 +263,7 @@ pub fn lowerAllocEnum(fc: *FunctionCodegen, v: ir.AllocEnum) !void {
         // payload is deep-cloned instead, so the new enum owns independent storage
         // and the borrowed original is left intact — mirrors the struct-field store
         // rule in lowerStoreAggregate.
-        if (src_ty.kind == .enum_instance and fc.drop_enabled and fc.request.mode == .llvm_native and !drop.isOwned(fc, src)) {
+        if (src_ty.kind == .enum_instance and fc.drop_enabled and (fc.request.mode == .llvm_native or fc.request.mode == .hybrid) and !drop.isOwned(fc, src)) {
             const sptr = api.LLVMBuildIntToPtr(b, fc.registers[src], fc.types.ptr_ty, "enum.payload.clonesrc");
             var cargs = [_]llvm.c.LLVMValueRef{sptr};
             const clone = api.LLVMBuildCall2(b, fc.dtors.enum_clone.ty, fc.dtors.enum_clone.fn_value, &cargs, cargs.len, "enum.payload.clone");
