@@ -1005,6 +1005,8 @@ pub const Vm = struct {
             return error.RuntimeFailure;
         }
         const payload_ty = native_bridge.enumPayloadType(self, module, type_name, @intCast(src[0].integer)) orelse bytecode.TypeRef{ .kind = .void };
+        // Cloning a payload-less variant returns the shared interned block: no alloc.
+        if (payload_ty.kind == .void) return .{ .raw_ptr = try self.internedPureEnum(type_name, @intCast(src[0].integer)) };
         const slots = try self.allocator.alloc(runtime_abi.Value, 2);
         errdefer self.allocator.free(slots);
         slots[0] = src[0];

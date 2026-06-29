@@ -714,6 +714,8 @@ pub fn copyEnumFromNativeLayout(self: *Vm, module: *const bytecode.Module, type_
         );
         return error.RuntimeFailure;
     };
+    // A payload-less variant materialised back from native interns to the shared block.
+    if (native_variant.payload_ty.kind == .void) return self.internedPureEnum(type_name, native_variant.discriminant);
     const slots = try self.allocator.alloc(runtime_abi.Value, 2);
     errdefer self.allocator.free(slots);
     slots[0] = .{ .integer = @intCast(native_variant.discriminant) };
