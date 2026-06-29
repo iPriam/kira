@@ -589,22 +589,32 @@ fn resolveManagedEnumSlots(self: *Vm, runtime_ptr: usize) ?[*]align(1) const run
     var candidate = runtime_ptr;
     var depth: usize = 0;
     while (candidate != 0 and depth < 8) : (depth += 1) {
+        // Only a managed block is a VM Value-array; an unmanaged pointer is native
+        // layout (a native-materialized enum or an interned payload-less enum) whose
+        // first word is a raw discriminant, NOT a Value tag — reading it as a Value
+        // would panic on an invalid union tag. Return null so the caller copies the
+        // native words verbatim.
+        if (!self.isManagedStructPointer(candidate)) return null;
         const slots: [*]align(1) const runtime_abi.Value = @ptrFromInt(candidate);
         if (slots[0] == .integer) return slots;
         if (slots[0] == .raw_ptr and slots[0].raw_ptr != 0 and slots[0].raw_ptr != candidate) {
             candidate = slots[0].raw_ptr;
             continue;
         }
-        if (self.isManagedStructPointer(candidate)) break;
-        return null;
+        break;
     }
     return null;
 }
 
 pub fn copyEnumToNativeLayout(self: *Vm, module: *const bytecode.Module, type_name: []const u8, runtime_ptr: usize) anyerror!usize {
     const src = resolveManagedEnumSlots(self, runtime_ptr) orelse {
-        self.rememberError("enum native copy requires a managed enum value");
-        return error.RuntimeFailure;
+        // Already native-layout (an interned payload-less enum, or a native-materialized
+        // enum crossing again): copy the {tag, payload-word} pair verbatim.
+        const native_words: [*]const u64 = @ptrFromInt(runtime_ptr);
+        const words = try self.allocator.alloc(u64, 2);
+        words[0] = native_words[0];
+        words[1] = native_words[1];
+        return @intFromPtr(words.ptr);
     };
     if (src[0] != .integer) {
         self.rememberError("enum native copy requires an integer tag slot");
@@ -640,8 +650,14 @@ pub fn copyEnumToNativeLayout(self: *Vm, module: *const bytecode.Module, type_na
 /// `kira_enum_clone`'s verbatim 16-byte copy.
 pub fn lowerEnumToNativeOwned(self: *Vm, module: *const bytecode.Module, type_name: []const u8, runtime_ptr: usize) anyerror!usize {
     const src = resolveManagedEnumSlots(self, runtime_ptr) orelse {
-        self.rememberError("enum native lowering requires a managed enum value");
-        return error.RuntimeFailure;
+        // Already native-layout (an interned payload-less enum, or a native-materialized
+        // enum crossing again): copy verbatim onto the C heap so the native clone/free
+        // pair stays heap-consistent.
+        const native_words: [*]const u64 = @ptrFromInt(runtime_ptr);
+        const words = try std.heap.c_allocator.alloc(u64, 2);
+        words[0] = native_words[0];
+        words[1] = native_words[1];
+        return @intFromPtr(words.ptr);
     };
     if (src[0] != .integer) {
         self.rememberFmt(
