@@ -1094,6 +1094,9 @@ fn destroyStructNativeLayoutFieldsWithOwner(self: *Vm, module: *const bytecode.M
             .array => {
                 const array_ptr = (@as(*const usize, @ptrFromInt(address))).*;
                 destroyArrayNativeLayoutWithOwner(self, module, field_decl.ty, array_ptr, owner);
+                // Clear the slot so a subsequent overwrite (releaseNativeFieldBeforeOverwrite ->
+                // re-entry on the same address) does not free this now-stale pointer again.
+                (@as(*usize, @ptrFromInt(address))).* = 0;
             },
             .ffi_struct => if (field_decl.ty.name) |nested_name| {
                 destroyStructNativeLayoutFieldsWithOwner(self, module, nested_name, address, owner);
@@ -1101,6 +1104,7 @@ fn destroyStructNativeLayoutFieldsWithOwner(self: *Vm, module: *const bytecode.M
             .enum_instance => {
                 const enum_ptr = (@as(*const usize, @ptrFromInt(address))).*;
                 destroyEnumNativeLayoutWithOwner(self, module, field_decl.ty.name orelse return, enum_ptr, owner);
+                (@as(*usize, @ptrFromInt(address))).* = 0;
             },
             .construct_any => {},
             else => {},

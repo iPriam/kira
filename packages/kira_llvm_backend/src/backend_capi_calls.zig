@@ -251,18 +251,21 @@ pub fn lowerRuntimeCall(fc: *FunctionCodegen, call: ir.Call, callee_decl: ir.Fun
     if (call.dst) |dst| {
         const bv = api.LLVMBuildLoad2(b, fc.types.bridge_ty, result_slot, "rt.result.bv");
         const unpacked = try fc.unpackBridge(callee_decl.return_type, bv);
+        var cloned_owned = false;
         fc.registers[dst] = switch (callee_decl.return_type.kind) {
             .ffi_struct => blk: {
                 const type_name = callee_decl.return_type.name orelse break :blk unpacked;
                 const helpers = fc.dtors.map.get(type_name) orelse break :blk unpacked;
                 var clone_args = [_]llvm.c.LLVMValueRef{unpacked};
-                break :blk api.LLVMBuildCall2(b, helpers.clone.ty, helpers.clone.fn_value, &clone_args, clone_args.len, "rt.struct.clone");
+                const cloned = api.LLVMBuildCall2(b, helpers.clone.ty, helpers.clone.fn_value, &clone_args, clone_args.len, "rt.struct.clone");
+                cloned_owned = true;
+                break :blk cloned;
             },
             else => unpacked,
         };
-        switch (callee_decl.return_type.kind) {
-            .ffi_struct => drop.onAlloc(fc, dst),
-            else => {},
-        }
+        // Track for native drop ONLY when a native-owned clone was produced. Without clone
+        // metadata the value is the VM-returned (VM-owned) pointer; tracking it would have the
+        // native epilogue free VM-owned storage.
+        if (cloned_owned) drop.onAlloc(fc, dst);
     }
 }

@@ -708,8 +708,14 @@ pub const Vm = struct {
         block[0] = discriminant;
         block[1] = 0;
         const ptr = @intFromPtr(block.ptr);
-        try self.interned_enum_storage.append(self.allocator, block);
-        try self.interned_enums.put(self.allocator, key, ptr);
+        // Hand the block to storage first (it owns it, freed at deinit); free it directly if that
+        // fails so it never leaks. A failed put() is harmless — the map is only a lookup cache, the
+        // block is already owned by storage, so the next call simply re-interns. No double-free.
+        self.interned_enum_storage.append(self.allocator, block) catch |err| {
+            self.allocator.free(block);
+            return err;
+        };
+        self.interned_enums.put(self.allocator, key, ptr) catch {};
         return ptr;
     }
 

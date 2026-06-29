@@ -222,6 +222,11 @@ pub const HybridRuntime = struct {
             .copy_struct_args_by_value = false,
         });
         if (std.c.getenv("KIRA_DBG") != null) std.debug.print("DBG invoke fn={d} -> runFunctionById DONE result_tag={s}\n", .{ function_id, @tagName(result) });
+        // Armed before the fallible borrow-mut writeback below: a writeback error must release
+        // `result`, or the managed return value leaks. Cleared once ownership transfers to a
+        // pending-callback list further down.
+        var result_owned_by_pending = false;
+        errdefer if (!result_owned_by_pending) self.vm.dropManagedValue(result);
         for (native_arg_ptrs, 0..) |native_ptr, index| {
             if (native_ptr == 0) continue;
             // Only a `borrow mut` param can be mutated by the callee, so only it needs to
@@ -259,8 +264,6 @@ pub const HybridRuntime = struct {
         materialized_args_cleaned = true;
 
         var bridge_result = runtime_abi.bridgeValueFromValue(result);
-        var result_owned_by_pending = false;
-        errdefer if (!result_owned_by_pending) self.vm.dropManagedValue(result);
         if (function_decl.return_type.kind == .ffi_struct and result == .raw_ptr and result.raw_ptr != 0) {
             const type_name = function_decl.return_type.name orelse return error.RuntimeFailure;
             const native_result = try self.vm.lowerStructToNativeLayout(

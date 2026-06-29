@@ -85,6 +85,9 @@ pub fn callNative(self: anytype, function_id: u32, args: []const runtime_abi.Val
     const result = try self.bridge.call(function_id, lowered_args);
     if (std.c.getenv("KIRA_DBG") != null) std.debug.print("DBG callNative fn={d} -> bridge.call DONE tag={s}\n", .{ function_id, @tagName(result) });
     self.vm.retainManagedValue(result);
+    // The borrow-mut sync-back below is fallible; release the retain on error so the managed
+    // return value is not leaked. On success the caller owns the retained result.
+    errdefer self.vm.dropManagedValue(result);
     for (native_arg_ptrs, 0..) |native_ptr, index| {
         if (native_ptr == 0) continue;
         if (!ownershipSyncsBack(paramOwnershipAt(function_decl.param_ownership, index))) continue;
