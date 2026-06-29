@@ -1,0 +1,138 @@
+// Hybrid enum native-layout round-trip tests. Prefix: fer / Fer.
+// No imports — main.kira covers Foundation package-wide.
+//
+// Regresses the enum-interning breakage (reverted): interned native-layout enum
+// blocks were not interchangeable with managed Value-layout enums across the
+// bridge, which the Zig unit tests caught but the kik harness did not — because
+// no existing kik test crossed the paths that broke:
+//   - an @Native function RETURNING a bare enum (native -> VM materialization:
+//     copyEnumFromNativeLayout / materializeNativeResult), and
+//   - an @Native function TAKING an enum by value/borrow (VM -> native lowering:
+//     copyEnumToNativeLayout, including following a wrapper slot to the managed
+//     enum and preserving a payload).
+// These run on the hybrid bridge (the @Native/@Runtime mix is hybrid-only) and
+// reduce to scalars via Result.Ok so a wrong tag/payload or a crash both fail.
+
+enum FerKind { A B C }
+enum FerVal { Empty Loaded(Int) }
+
+// @Native — RETURN a bare enum (native -> VM materialization).
+@Native
+function ferMakeKind(i: Int) -> FerKind {
+    if i == 0 { return FerKind.A }
+    if i == 1 { return FerKind.B }
+    return FerKind.C
+}
+
+// @Native — RETURN an enum WITH a payload.
+@Native
+function ferMakeVal(i: Int) -> FerVal {
+    if i <= 0 { return FerVal.Empty }
+    return FerVal.Loaded(i * 10)
+}
+
+// @Native — TAKE a payload-less enum (VM -> native lowering) and dispatch.
+@Native
+function ferKindCode(k: borrow FerKind) -> Int {
+    match k {
+        A -> { return 1 }
+        B -> { return 2 }
+        C -> { return 3 }
+    }
+}
+
+// @Native — TAKE an enum WITH a payload by value.
+@Native
+function ferValSum(v: FerVal) -> Int {
+    match v {
+        Empty -> { return 0 }
+        Loaded(n) -> { return n }
+    }
+}
+
+// ── Group A: @Native returns a payload-less enum, matched in the VM ───────────
+
+Test FerNativeReturnsKindB {
+    test {
+        let k = ferMakeKind(1)
+        return ferKindCode(k)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+Test FerNativeReturnsKindC {
+    test {
+        let k = ferMakeKind(2)
+        return ferKindCode(k)
+    }
+    // C -> 3
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+// ── Group B: @Native returns an enum WITH a payload ──────────────────────────
+
+Test FerNativeReturnsLoadedPayload {
+    test {
+        let v = ferMakeVal(5)
+        return ferValSum(move v)
+    }
+    // Loaded(50)
+    expect { let e: Result<Int, TestFailure> = Result.Ok(50); return e }
+}
+
+Test FerNativeReturnsEmpty {
+    test {
+        let v = ferMakeVal(0)
+        return ferValSum(move v)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+@Runtime
+function ferValReadInVm(v: borrow FerVal) -> Int {
+    match v {
+        Empty -> { return 0 }
+        Loaded(n) -> { return n + 1 }
+    }
+}
+
+Test FerNativePayloadReadInVm {
+    test {
+        let v = ferMakeVal(7)
+        return ferValReadInVm(v)
+    }
+    // Loaded(70) -> 71 (enum returned from @Native, matched in a @Runtime fn)
+    expect { let e: Result<Int, TestFailure> = Result.Ok(71); return e }
+}
+
+// ── Group C: round-trip churn — return from native, pass back to native ──────
+
+Test FerNativeEnumRoundTripLoop {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 30 {
+            let k = ferMakeKind(i % 3)
+            acc = acc + ferKindCode(k)
+            i = i + 1
+        }
+        // ferKindCode over i%3 = 0,1,2 -> 1,2,3 repeating; sum per 3 = 6; 10 cycles = 60
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(60); return e }
+}
+
+Test FerNativePayloadRoundTripLoop {
+    test {
+        var acc = 0
+        var i = 1
+        while i <= 10 {
+            let v = ferMakeVal(i)
+            acc = acc + ferValSum(move v)
+            i = i + 1
+        }
+        // sum of i*10 for i in 1..10 = 10 * 55 = 550
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(550); return e }
+}
