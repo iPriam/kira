@@ -136,20 +136,6 @@ pub const Vm = struct {
     // payload-type / clone-by-name resolve, which the per-frame UI enum churn
     // made one of the largest remaining hybrid-frame costs.
     enum_ptr_cache: std.HashMapUnmanaged(SliceKey, ?bytecode.EnumTypeDecl, SliceKeyContext, std.hash_map.default_max_load_percentage) = .empty,
-    // Interned payload-less enum values. A no-payload enum variant (SizeMode.Hug,
-    // Alignment.Center, FoundationViewKind.Row, ...) is an immutable constant; the
-    // hybrid UI frame allocated ~70k of them per frame (half of all struct allocs)
-    // as fresh {tag,payload} blocks that were immediately cloned and dropped. Intern
-    // ONE shared native-layout block ({u64 discriminant, 0}) per (enum type, variant):
-    // it lives for the Vm, is NOT tracked in the heap object map (so dropPtr no-ops
-    // and clone returns it as-is), and is read through the existing native-layout
-    // enum path (enum_tag/enum_payload check isManagedStructPointer). Freed at deinit.
-    interned_enums: std.AutoHashMapUnmanaged(InternedEnumKey, usize) = .empty,
-    // Owns the interned blocks' backing allocations so deinit frees them with the
-    // exact slice type/length they were allocated with.
-    interned_enum_storage: std.ArrayListUnmanaged([]u64) = .empty,
-
-    pub const InternedEnumKey = struct { name_ptr: usize, name_len: usize, discriminant: u32 };
 
     pub const FrameBuf = struct { values: []runtime_abi.Value, owned: []bool };
 
@@ -286,9 +272,6 @@ pub const Vm = struct {
         self.element_type_cache.deinit(self.allocator);
         self.enum_cache.deinit(self.allocator);
         self.enum_ptr_cache.deinit(self.allocator);
-        for (self.interned_enum_storage.items) |block| self.allocator.free(block);
-        self.interned_enum_storage.deinit(self.allocator);
-        self.interned_enums.deinit(self.allocator);
     }
 
     pub fn managedObjectCount(self: *const Vm) usize {
@@ -685,38 +668,10 @@ pub const Vm = struct {
     /// transfers into the enum's slot so the payload outlives the constructing
     /// frame when the enum escapes (e.g. via `return`).
     pub fn allocateEnum(self: *Vm, enum_type_name: []const u8, discriminant: u32, payload: runtime_abi.Value) !usize {
-        // A payload-less variant is an immutable constant: return the shared interned
-        // block instead of allocating, cloning, tracking and dropping a fresh one.
-        if (payload == .void) return self.internedPureEnum(enum_type_name, discriminant);
         const slots = try self.heap.allocValueSlice(2);
         slots[0] = .{ .integer = @as(i64, @intCast(discriminant)) };
         slots[1] = payload;
         return self.heap.registerStruct(enum_type_name, slots);
-    }
-
-    /// Shared, immortal, native-layout block ({u64 discriminant, 0}) for a no-payload
-    /// enum variant. Untracked (not in the heap object map) so dropPtr no-ops and clone
-    /// returns it verbatim; read through the native-layout enum path. Freed at deinit.
-    pub fn internedPureEnum(self: *Vm, enum_type_name: []const u8, discriminant: u32) !usize {
-        const key = InternedEnumKey{
-            .name_ptr = @intFromPtr(enum_type_name.ptr),
-            .name_len = enum_type_name.len,
-            .discriminant = discriminant,
-        };
-        if (self.interned_enums.get(key)) |ptr| return ptr;
-        const block = try self.allocator.alloc(u64, 2);
-        block[0] = discriminant;
-        block[1] = 0;
-        const ptr = @intFromPtr(block.ptr);
-        // Hand the block to storage first (it owns it, freed at deinit); free it directly if that
-        // fails so it never leaks. A failed put() is harmless — the map is only a lookup cache, the
-        // block is already owned by storage, so the next call simply re-interns. No double-free.
-        self.interned_enum_storage.append(self.allocator, block) catch |err| {
-            self.allocator.free(block);
-            return err;
-        };
-        self.interned_enums.put(self.allocator, key, ptr) catch {};
-        return ptr;
     }
 
     /// Resolve the payload type of `enum_type_name`'s variant `discriminant`, or
@@ -976,11 +931,7 @@ pub const Vm = struct {
             var depth: usize = 0;
             while (depth < 8) : (depth += 1) {
                 const native_words: [*]const u64 = @ptrFromInt(native_candidate);
-                if (native_bridge.enumNativeVariant(self, module, type_name, native_words[0])) |variant| {
-                    // A payload-less variant interns to a shared block: no copy, no alloc.
-                    if (variant.payload_ty.kind == .void) {
-                        return .{ .raw_ptr = try self.internedPureEnum(type_name, @intCast(native_words[0])) };
-                    }
+                if (native_bridge.enumNativeVariant(self, module, type_name, native_words[0])) |_| {
                     return .{ .raw_ptr = try self.copyEnumFromNativeLayout(module, type_name, native_candidate) };
                 }
                 const next_candidate: usize = @intCast(native_words[0]);
@@ -1011,8 +962,6 @@ pub const Vm = struct {
             return error.RuntimeFailure;
         }
         const payload_ty = native_bridge.enumPayloadType(self, module, type_name, @intCast(src[0].integer)) orelse bytecode.TypeRef{ .kind = .void };
-        // Cloning a payload-less variant returns the shared interned block: no alloc.
-        if (payload_ty.kind == .void) return .{ .raw_ptr = try self.internedPureEnum(type_name, @intCast(src[0].integer)) };
         const slots = try self.allocator.alloc(runtime_abi.Value, 2);
         errdefer self.allocator.free(slots);
         slots[0] = src[0];
