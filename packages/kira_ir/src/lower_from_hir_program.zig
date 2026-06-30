@@ -568,6 +568,48 @@ pub fn lowerAssignmentStatement(
         },
         .field => |target| {
             const target_ty = try lowerResolvedType(program, target.ty);
+            // Peephole: `arr[i].f = v` storing a *scalar* field of an array element.
+            // The general path below materializes the element by value (a deep
+            // `array_get` clone) and writes it back with `array_set` — a full
+            // ~40-field LayoutNode clone per node geometry write in the layout
+            // engine. Borrow the element in place instead and store the scalar
+            // through the alias: no clone, no write-back. Sound because a scalar
+            // field owns no heap (plain overwrite) and the array keeps ownership;
+            // the native backend already mutates the element through its pointer,
+            // preserving vm/llvm/hybrid parity. Restricted to a direct `arr[i]`
+            // element with a scalar field.
+            if (target.object.* == .index and target_ty.kind != .ffi_struct and
+                model.hir.exprType(target.object.*).kind != .native_state_view)
+            {
+                const inner = target.object.index;
+                const elem_ty = try lowerResolvedType(program, inner.ty);
+                if (elem_ty.kind == .ffi_struct) {
+                    const array_reg = try lowerer.lowerExpr(instructions, inner.object);
+                    const index_reg = try lowerer.lowerExpr(instructions, inner.index);
+                    const elem_reg = lowerer.freshRegister();
+                    try instructions.append(.{ .array_get = .{
+                        .dst = elem_reg,
+                        .array = array_reg,
+                        .index = index_reg,
+                        .ty = elem_ty,
+                        .borrow = true,
+                    } });
+                    const inplace_ptr = lowerer.freshRegister();
+                    try instructions.append(.{ .field_ptr = .{
+                        .dst = inplace_ptr,
+                        .base = elem_reg,
+                        .base_type_name = target.container_type_name,
+                        .field_index = target.field_index,
+                        .field_ty = target_ty,
+                    } });
+                    try instructions.append(.{ .store_indirect = .{
+                        .ptr = inplace_ptr,
+                        .src = value_reg,
+                        .ty = target_ty,
+                    } });
+                    return;
+                }
+            }
             // Resolve the field's base object as a mutable place. When the place chain
             // roots at an array index (`arr[i].field`, `arr[i].a.b`, `arr[i].xs[j].f`,
             // ...) the element is materialized by value (the VM has no element-pointer

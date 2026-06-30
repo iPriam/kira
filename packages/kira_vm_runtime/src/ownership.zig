@@ -232,7 +232,12 @@ pub const Heap = struct {
     array_object_pool: std.ArrayListUnmanaged(*ArrayObject) = .empty,
     closure_object_pool: std.ArrayListUnmanaged(*ClosureObject) = .empty,
 
-    const max_pooled_slice_len = 16;
+    // Pool value/bridge slices up to this length. UI-Foundation's hot structs
+    // are wide all-scalar PODs — LayoutNode is ~40 fields and was copied
+    // thousands of times per resize frame; with a 16-element cap every one of
+    // those copies was a raw allocator.alloc+free. 64 covers the widest hot
+    // struct so the working set churns through the free-list instead of malloc.
+    const max_pooled_slice_len = 64;
     const max_pool_entries = 1024;
 
     pub fn allocValueSlice(self: *Heap, len: usize) ![]runtime_abi.Value {

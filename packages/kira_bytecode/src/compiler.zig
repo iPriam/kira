@@ -186,6 +186,7 @@ pub fn compileProgram(allocator: std.mem.Allocator, verified: ir_pkg.VerifiedPro
                     .array = value.array,
                     .index = value.index,
                     .ty = lowerTypeRef(value.ty),
+                    .borrow = value.borrow,
                 } }),
                 .array_set => |value| try instructions.append(.{ .array_set = .{
                     .array = value.array,

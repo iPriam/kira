@@ -256,6 +256,7 @@ pub fn serialize(writer: anytype, module: Module) !void {
                     try writer.writeInt(u32, value.array, .little);
                     try writer.writeInt(u32, value.index, .little);
                     try writeTypeRef(writer, value.ty);
+                    try writer.writeByte(if (value.borrow) 1 else 0);
                 },
                 .array_set => |value| {
                     try writer.writeInt(u32, value.array, .little);
@@ -320,15 +321,13 @@ pub fn serialize(writer: anytype, module: Module) !void {
                 .ret => |value| try writer.writeInt(i32, if (value.src) |src| @as(i32, @intCast(src)) else -1, .little),
                 // VM-internal fused instructions only exist inside the VM's
                 // private decoded code copies (vm_prepare.zig); a module that
-                // contains one is malformed and must not be serialized.
-                .fused_compare_branch,
-                .fused_compare_const_branch,
-                .fused_cmp_local_const_branch,
-                .fused_arith_locals_store,
-                .fused_arith_local_const_store,
-                .fused_arith_locals_ret,
-                .fused_array_bind_local,
-                => return error.InternalInstruction,
+                // contains one is malformed and must not be serialized. Every
+                // serializable opcode is handled explicitly above, so the only
+                // tags reaching here are the fused superinstructions.
+                else => {
+                    std.debug.assert(instruction.isFused(std.meta.activeTag(inst)));
+                    return error.InternalInstruction;
+                },
             }
         }
     }
@@ -662,6 +661,7 @@ pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !Module {
                     .array = try reader.takeInt(u32, .little),
                     .index = try reader.takeInt(u32, .little),
                     .ty = try readTypeRef(allocator, reader),
+                    .borrow = (try reader.takeByte()) != 0,
                 } }),
                 .array_set => try instructions.append(.{ .array_set = .{
                     .array = try reader.takeInt(u32, .little),
@@ -725,15 +725,13 @@ pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !Module {
                     },
                 } }),
                 // VM-internal fused instructions are never serialized; a file
-                // claiming to contain one is corrupt.
-                .fused_compare_branch,
-                .fused_compare_const_branch,
-                .fused_cmp_local_const_branch,
-                .fused_arith_locals_store,
-                .fused_arith_local_const_store,
-                .fused_arith_locals_ret,
-                .fused_array_bind_local,
-                => return error.InvalidBytecode,
+                // claiming to contain one is corrupt. Every real opcode is
+                // decoded explicitly above, so the only tags reaching here are
+                // the fused superinstructions.
+                else => {
+                    std.debug.assert(instruction.isFused(op));
+                    return error.InvalidBytecode;
+                },
             }
         }
         try functions.append(.{

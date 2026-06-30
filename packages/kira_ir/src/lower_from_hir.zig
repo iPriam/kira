@@ -1,6 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const ir = @import("ir.zig");
+const source = @import("kira_source");
 const model = @import("kira_semantics_model");
 const runtime_abi = @import("kira_runtime_abi");
 const program_impl = @import("lower_from_hir_program.zig");
@@ -44,7 +45,51 @@ pub fn lowerProgram(allocator: std.mem.Allocator, program: model.Program) !ir.Pr
 pub const LowerProgramOptions = struct {
     worker_count_override: ?usize = null,
     include_tests: bool = false,
+    /// Optional sink for locating an `error.UnsupportedExecutableFeature` /
+    /// `error.UnsupportedType` failure. When set, the lowerer records the span
+    /// and kind of the HIR construct it was lowering at the moment it gave up,
+    /// so the KIR001 diagnostic can point at the real expression instead of the
+    /// entry file. Left null by callers that don't surface diagnostics.
+    unsupported_out: ?*UnsupportedFeature = null,
 };
+
+/// Where an unsupported-feature lowering failure happened. `construct` is the
+/// HIR node kind (e.g. "virtual_call", "match_stmt"); `span` locates it in the
+/// originating source. Both empty/null when the failure had no node in scope.
+pub const UnsupportedFeature = struct {
+    span: ?source.Span = null,
+    construct: []const u8 = "",
+};
+
+/// Span of an HIR expression, regardless of variant — every `Expr` payload
+/// carries a `span`, so an `inline else` projects it without a per-variant arm.
+fn exprSpan(expr: *const model.Expr) source.Span {
+    return switch (expr.*) {
+        inline else => |node| node.span,
+    };
+}
+
+/// Span of an HIR statement; see `exprSpan`.
+fn statementSpan(statement: model.Statement) source.Span {
+    return switch (statement) {
+        inline else => |node| node.span,
+    };
+}
+
+/// Record the construct the lowerer failed on into `out`, first (innermost)
+/// writer wins so a failing callback body keeps its own span rather than the
+/// enclosing function's. No-op for errors that are not unsupported-feature
+/// failures, so unrelated errors (OOM, plan mismatch) don't claim a location.
+fn recordUnsupported(out: ?*UnsupportedFeature, span: ?source.Span, construct: []const u8, err: anyerror) void {
+    const capture = out orelse return;
+    switch (err) {
+        error.UnsupportedExecutableFeature, error.UnsupportedType => {},
+        else => return,
+    }
+    if (capture.span != null or capture.construct.len != 0) return;
+    capture.span = span;
+    capture.construct = construct;
+}
 
 pub fn lowerProgramWithOptions(allocator: std.mem.Allocator, program: model.Program, options: LowerProgramOptions) !ir.Program {
     var reachable = std.AutoHashMapUnmanaged(u32, void){};
@@ -70,7 +115,7 @@ pub fn lowerProgramWithOptions(allocator: std.mem.Allocator, program: model.Prog
     const batches = if (shouldParallelLower(options, plans.len))
         try lowerFunctionPlansParallel(allocator, program, plans, options)
     else
-        try lowerFunctionPlansSerial(allocator, program, plans);
+        try lowerFunctionPlansSerial(allocator, program, plans, options.unsupported_out);
     defer allocator.free(batches);
 
     var function_count: usize = 0;
@@ -99,7 +144,10 @@ pub fn lowerProgramWithOptions(allocator: std.mem.Allocator, program: model.Prog
         .types = types,
         .enums = enums,
         .functions = functions,
-        .entry_index = entry_index orelse return error.UnsupportedExecutableFeature,
+        .entry_index = entry_index orelse {
+            if (options.unsupported_out) |capture| capture.construct = "program entry point";
+            return error.UnsupportedExecutableFeature;
+        },
     };
 }
 
@@ -146,6 +194,10 @@ fn buildFunctionPlans(
 const FunctionLoweringState = struct {
     next_generated_function_id: u32,
     generated_functions: std.array_list.Managed(ir.Function),
+    /// Threaded from `LowerProgramOptions.unsupported_out`; the Lowerer records
+    /// the failing construct here via `recordUnsupported`. Null when the caller
+    /// is not collecting diagnostics.
+    unsupported: ?*UnsupportedFeature = null,
 };
 
 const LoweredFunctionBatch = struct {
@@ -165,10 +217,11 @@ fn lowerFunctionPlansSerial(
     allocator: std.mem.Allocator,
     program: model.Program,
     plans: []const FunctionPlan,
+    unsupported: ?*UnsupportedFeature,
 ) ![]LoweredFunctionBatch {
     const batches = try allocator.alloc(LoweredFunctionBatch, plans.len);
     for (plans, 0..) |plan, index| {
-        batches[index] = try lowerFunctionBatch(allocator, program, plan);
+        batches[index] = try lowerFunctionBatch(allocator, program, plan, unsupported);
     }
     return batches;
 }
@@ -177,10 +230,12 @@ fn lowerFunctionBatch(
     allocator: std.mem.Allocator,
     program: model.Program,
     plan: FunctionPlan,
+    unsupported: ?*UnsupportedFeature,
 ) !LoweredFunctionBatch {
     var state = FunctionLoweringState{
         .next_generated_function_id = plan.first_generated_id,
         .generated_functions = std.array_list.Managed(ir.Function).init(allocator),
+        .unsupported = unsupported,
     };
     errdefer state.generated_functions.deinit();
 
@@ -234,6 +289,7 @@ const ParallelLowerShared = struct {
     program: model.Program,
     plans: []const FunctionPlan,
     results: []ParallelLowerResult,
+    unsupported: ?*UnsupportedFeature = null,
     next_index: std.atomic.Value(usize) = .init(0),
 
     fn runUntilDone(self: *ParallelLowerShared) void {
@@ -253,7 +309,7 @@ const ParallelLowerShared = struct {
         arena_ptr.* = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
         const allocator = arena_ptr.allocator();
 
-        const batch = lowerFunctionBatch(allocator, self.program, self.plans[index]) catch |err| {
+        const batch = lowerFunctionBatch(allocator, self.program, self.plans[index], self.unsupported) catch |err| {
             result.arena = arena_ptr;
             result.err = err;
             return;
@@ -275,7 +331,7 @@ fn lowerFunctionPlansParallel(
     options: LowerProgramOptions,
 ) ![]LoweredFunctionBatch {
     const worker_count = resolveLowerWorkerCount(options, plans.len);
-    if (worker_count <= 1) return lowerFunctionPlansSerial(allocator, program, plans);
+    if (worker_count <= 1) return lowerFunctionPlansSerial(allocator, program, plans, options.unsupported_out);
 
     const results = try allocator.alloc(ParallelLowerResult, plans.len);
     for (results) |*result| result.* = .{};
@@ -288,6 +344,7 @@ fn lowerFunctionPlansParallel(
         .program = program,
         .plans = plans,
         .results = results,
+        .unsupported = options.unsupported_out,
     };
 
     const extra_workers = worker_count - 1;
@@ -359,6 +416,9 @@ fn lowerFunction(
     defer allocator.free(boxed_locals);
     defer lowerer.hidden_local_types.deinit();
     defer lowerer.loop_stack.deinit();
+    // On an unsupported-feature failure anywhere below, record the construct the
+    // lowerer was on so KIR001 can point at it. Innermost frame wins.
+    errdefer |err| recordUnsupported(state.unsupported, lowerer.current_span, lowerer.current_construct, err);
     var instructions = std.array_list.Managed(ir.Instruction).init(allocator);
     for (function_decl.locals) |local| {
         if (!local.is_param or !lowerer.isBoxedLocal(local.id)) continue;
@@ -425,6 +485,7 @@ fn lowerGeneratedCallbackFunction(
     defer allocator.free(boxed_locals);
     defer lowerer.hidden_local_types.deinit();
     defer lowerer.loop_stack.deinit();
+    errdefer |err| recordUnsupported(state.unsupported, lowerer.current_span, lowerer.current_construct, err);
 
     var instructions = std.array_list.Managed(ir.Instruction).init(allocator);
     for (callback.captures, 0..) |capture, index| {
@@ -975,6 +1036,11 @@ pub const Lowerer = struct {
     loop_stack: std.array_list.Managed(LoopLabels),
     boxed_locals: []const bool,
     local_remap: ?[]const u32 = null,
+    /// The HIR construct currently being lowered, updated on entry to
+    /// `lowerExpr`/`lowerStatement`. Read by the `errdefer` in `lowerFunction`
+    /// to attribute an unsupported-feature failure to the right source span.
+    current_span: ?source.Span = null,
+    current_construct: []const u8 = "",
 
     const LoopLabels = struct {
         break_label: u32,
@@ -1038,6 +1104,8 @@ pub const Lowerer = struct {
     }
 
     fn lowerStatement(self: *Lowerer, instructions: *std.array_list.Managed(ir.Instruction), statement: model.Statement) !bool {
+        self.current_span = statementSpan(statement);
+        self.current_construct = @tagName(statement);
         switch (statement) {
             .let_stmt => |node| {
                 const local_id = self.mapLocal(node.local_id);
@@ -1133,6 +1201,8 @@ pub const Lowerer = struct {
     }
 
     pub fn lowerExpr(self: *Lowerer, instructions: *std.array_list.Managed(ir.Instruction), expr: *model.Expr) anyerror!u32 {
+        self.current_span = exprSpan(expr);
+        self.current_construct = @tagName(expr.*);
         return switch (expr.*) {
             .integer => |node| blk: {
                 const dst = self.freshRegister();
@@ -1495,6 +1565,53 @@ pub const Lowerer = struct {
                 break :blk dst;
             },
             .field => |node| blk: {
+                // Peephole: `arr[i].f` reading a *scalar* field of an array
+                // element. Lowering `arr[i]` the normal way emits a deep-cloning
+                // `array_get` (the VM copies the whole element per access) only to
+                // read one scalar back out — the dominant per-frame cost in the
+                // layout engine, where every node field read cloned a ~40-field
+                // LayoutNode. Borrow the element in place instead: the alias is
+                // consumed immediately by the field load below, so the array is
+                // never mutated while the borrow is live. The native backend
+                // already returns the element pointer here, so this removes only a
+                // VM-side clone and preserves vm/llvm/hybrid parity. Restricted to
+                // a scalar field of a managed-struct element.
+                if (node.object.* == .index and
+                    model.hir.exprType(node.object.*).kind != .native_state_view)
+                {
+                    const peek_field_ty = try lowerResolvedType(self.program, node.ty);
+                    if (peek_field_ty.kind != .ffi_struct) {
+                        const inner = node.object.index;
+                        const elem_ty = try lowerResolvedType(self.program, inner.ty);
+                        if (elem_ty.kind == .ffi_struct) {
+                            const array_reg = try self.lowerExpr(instructions, inner.object);
+                            const index_reg = try self.lowerExpr(instructions, inner.index);
+                            const elem_reg = self.freshRegister();
+                            try instructions.append(.{ .array_get = .{
+                                .dst = elem_reg,
+                                .array = array_reg,
+                                .index = index_reg,
+                                .ty = elem_ty,
+                                .borrow = true,
+                            } });
+                            const peek_field_ptr = self.freshRegister();
+                            try instructions.append(.{ .field_ptr = .{
+                                .dst = peek_field_ptr,
+                                .base = elem_reg,
+                                .base_type_name = node.container_type_name,
+                                .field_index = node.field_index,
+                                .field_ty = peek_field_ty,
+                            } });
+                            const peek_dst = self.freshRegister();
+                            try instructions.append(.{ .load_indirect = .{
+                                .dst = peek_dst,
+                                .ptr = peek_field_ptr,
+                                .ty = peek_field_ty,
+                            } });
+                            break :blk peek_dst;
+                        }
+                    }
+                }
                 const object_reg = try self.lowerExpr(instructions, node.object);
                 const field_ty = try lowerResolvedType(self.program, node.ty);
                 if (model.hir.exprType(node.object.*).kind == .native_state_view) {

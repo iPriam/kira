@@ -392,6 +392,11 @@ pub const ArrayGet = struct {
     array: u32,
     index: u32,
     ty: ValueType,
+    // When set, the element feeds only a non-escaping read and the array cannot be
+    // mutated/freed while the alias is live, so the interpreter aliases a managed
+    // element instead of deep-cloning it (matching the native backend, which never
+    // copies a borrowed element). Set by the IR peepholes for `arr[i].scalar`.
+    borrow: bool = false,
 };
 
 pub const ArraySet = struct {
