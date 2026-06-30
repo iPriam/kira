@@ -61,6 +61,16 @@ fn dumpDecl(writer: anytype, decl: ast.Decl, depth: usize) anyerror!void {
             try writer.print("Extend {s}\n", .{qualifiedNameText(extend_decl.construct_name)});
             for (extend_decl.members) |member| try dumpBodyMember(writer, member, depth + 1);
         },
+        .macro_decl => |macro_decl| {
+            try indent(writer, depth);
+            try writer.print("Macro {s}\n", .{macro_decl.name});
+            if (macro_decl.expand_block) |block| try dumpBlock(writer, block, depth + 1);
+        },
+        .macro_invocation => |call| {
+            try indent(writer, depth);
+            try writer.writeAll("MacroInvocation\n");
+            try dumpExpr(writer, .{ .call = call }, depth + 1);
+        },
     }
 }
 
@@ -343,6 +353,10 @@ fn dumpExpr(writer: anytype, expr: ast.Expr, depth: usize) anyerror!void {
             try indent(writer, depth);
             try writer.writeAll("Try\n");
             try dumpExpr(writer, value.operand.*, depth + 1);
+        },
+        .quote => |value| {
+            try indent(writer, depth);
+            try writer.print("Quote parts={d}\n", .{value.parts.len});
         },
     }
 }

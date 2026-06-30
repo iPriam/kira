@@ -390,6 +390,7 @@ fn exprSpan(expr: syntax.ast.Expr) source_pkg.Span {
         .ownership => |node| node.span,
         .unary => |node| node.span,
         .binary => |node| node.span,
+        .quote => |node| node.span,
         .conditional => |node| node.span,
         .member => |node| node.span,
         .index => |node| node.span,

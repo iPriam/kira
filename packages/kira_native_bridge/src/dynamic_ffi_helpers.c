@@ -253,6 +253,55 @@ KIRA_BRIDGE_EXPORT void kira_dynamic_write_f64_at(void *ptr, uint64_t offset, do
     if (ptr != NULL) *(double *)((uint8_t *)ptr + offset) = value;
 }
 
+// Bulk float copy. Filling a GPU/vertex buffer one float at a time through
+// kira_dynamic_write_f32_at costs one native-boundary crossing per float; this
+// copies a whole span (e.g. a staged vertex run) in a single call. `dst`/`src`
+// are caller-owned native buffers and must not overlap.
+KIRA_BRIDGE_EXPORT void kira_dynamic_write_f32_span(void *dst, uint64_t offset, const void *src, uint32_t count) {
+    if (dst == NULL || src == NULL || count == 0) return;
+    memcpy((uint8_t *)dst + offset, src, (size_t)count * sizeof(float));
+}
+
+// Write one UI compositor quad (4 vertices x 23 floats) into the shared vertex
+// buffer in a single call. The UI batch previously issued 92 separate
+// `kira_dynamic_write_f32_at` FFI calls per quad; for text (one quad per glyph,
+// ~1000 glyphs/frame) that crossed the native boundary ~92k times per frame and
+// was the dominant render cost. The four corners (TL, TR, BR, BL) share all 17
+// non-positional attributes; only position/local differ per vertex.
+KIRA_BRIDGE_EXPORT void kira_ui_write_quad(
+    void *ptr, uint64_t base_floats,
+    float px0, float py0, float px1, float py1,
+    float lx0, float ly0, float lx1, float ly1,
+    float vw, float vh,
+    float halfW, float halfH, float radius, float borderWidth, float mode,
+    float fr, float fg, float fb, float fa,
+    float br, float bg, float bb, float ba,
+    float clipMinX, float clipMinY, float clipMaxX, float clipMaxY) {
+    if (ptr == NULL) return;
+    float *buf = (float *)ptr + base_floats;
+    const float pxs[4] = {px0, px1, px1, px0};
+    const float pys[4] = {py0, py0, py1, py1};
+    const float lxs[4] = {lx0, lx1, lx1, lx0};
+    const float lys[4] = {ly0, ly0, ly1, ly1};
+    for (int c = 0; c < 4; c++) {
+        float *v = buf + (size_t)c * 23;
+        v[0]  = pxs[c] / vw * 2.0f - 1.0f;
+        v[1]  = 1.0f - pys[c] / vh * 2.0f;
+        v[2]  = pxs[c];
+        v[3]  = pys[c];
+        v[4]  = lxs[c];
+        v[5]  = lys[c];
+        v[6]  = halfW;
+        v[7]  = halfH;
+        v[8]  = radius;
+        v[9]  = borderWidth;
+        v[10] = mode;
+        v[11] = fr; v[12] = fg; v[13] = fb; v[14] = fa;
+        v[15] = br; v[16] = bg; v[17] = bb; v[18] = ba;
+        v[19] = clipMinX; v[20] = clipMinY; v[21] = clipMaxX; v[22] = clipMaxY;
+    }
+}
+
 KIRA_BRIDGE_EXPORT void *kira_dynamic_cstring_dup(const char *text) {
     if (text == NULL) return NULL;
     size_t len = strlen(text);

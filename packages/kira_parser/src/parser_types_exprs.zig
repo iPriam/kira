@@ -399,6 +399,39 @@ pub fn parsePostfix(self: *Parser) anyerror!*syntax.ast.Expr {
     var expr = try self.parsePrimary();
 
     while (true) {
+        // `name!(args)` — a macro call. The trailing `!` immediately before `(` distinguishes it
+        // from an ordinary call; `callee` (an identifier) names the macro. The macro-expansion
+        // pass replaces this node before semantics.
+        if (self.at(.bang) and self.peekNext().kind == .l_paren) {
+            _ = self.advance(); // '!'
+            _ = self.advance(); // '('
+            const outer_block_call = self.allow_trailing_block_call;
+            self.allow_trailing_block_call = true;
+            var macro_args = std.array_list.Managed(syntax.ast.CallArg).init(self.allocator);
+            while (!self.at(.r_paren) and !self.at(.eof)) {
+                const start_token = self.peek();
+                const value = try self.parseExpression();
+                try macro_args.append(.{
+                    .label = null,
+                    .value = value,
+                    .span = source_pkg.Span.init(start_token.span.start, exprSpan(value.*).end),
+                });
+                if (!self.match(.comma)) break;
+            }
+            const close = try self.expect(.r_paren, "expected ')' after macro arguments", "close the macro argument list here");
+            self.allow_trailing_block_call = outer_block_call;
+            const node = try self.allocator.create(syntax.ast.Expr);
+            node.* = .{ .call = .{
+                .callee = expr,
+                .args = try macro_args.toOwnedSlice(),
+                .trailing_builder = null,
+                .trailing_callback = null,
+                .is_macro = true,
+                .span = source_pkg.Span.init(exprSpan(expr.*).start, close.span.end),
+            } };
+            expr = node;
+            continue;
+        }
         if (self.match(.dot)) {
             const member_token = try self.expect(.identifier, "expected member name after '.'", "write the member name here");
             const node = try self.allocator.create(syntax.ast.Expr);
@@ -526,6 +559,9 @@ pub fn parsePostfix(self: *Parser) anyerror!*syntax.ast.Expr {
 }
 
 pub fn parsePrimary(self: *Parser) anyerror!*syntax.ast.Expr {
+    if (self.at(.kw_quote)) {
+        return self.parseQuoteExpr();
+    }
     if (self.at(.l_brace) and self.looksLikeCallbackBlock()) {
         const expr = try self.allocator.create(syntax.ast.Expr);
         expr.* = .{ .callback = try self.parseCallbackBlock() };

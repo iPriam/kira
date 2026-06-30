@@ -150,10 +150,19 @@ pub fn finishForStatement(self: *Parser, start: usize) anyerror!syntax.ast.ForSt
     const name_token = try self.expect(.identifier, "expected loop binding name", "write the loop variable name here");
     _ = try self.expect(.kw_in, "expected 'in' after loop binding", "use 'in' to introduce the iterable");
     const iterator = try self.parseExpressionWithoutTrailingBlockCall();
+    // Numeric range: `for i in start..end`. The expression parser stops at the
+    // `..` token (it is not a value operator), so it is consumed here and the
+    // upper bound parsed as a second expression. The loop iterates the half-open
+    // range [start, end).
+    const range_end = if (self.match(.dot_dot))
+        try self.parseExpressionWithoutTrailingBlockCall()
+    else
+        null;
     const body = try self.parseBlock();
     return .{
         .binding_name = name_token.lexeme,
         .iterator = iterator,
+        .range_end = range_end,
         .body = body,
         .span = source_pkg.Span.init(start, body.span.end),
     };

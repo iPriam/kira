@@ -1,5 +1,6 @@
 const std = @import("std");
 const diagnostics = @import("kira_diagnostics");
+const source_pkg = @import("kira_source");
 const DiagnosticDomain = @import("DiagnosticDomain.zig").DiagnosticDomain;
 const CompilerPhase = @import("CompilerPhase.zig").CompilerPhase;
 const message = @import("DiagnosticMessage.zig");
@@ -100,13 +101,28 @@ pub fn executableObligationUnmet(
     });
 }
 
-pub fn unsupportedExecutableFeature() diagnostics.Diagnostic {
+/// `span`/`construct` locate the unlowered construct when the IR lowerer could
+/// capture them (it threads the failing HIR node's span and kind out through
+/// `LowerProgramOptions.unsupported_out`). When unavailable — e.g. a backend
+/// error that bubbles up without that context — pass `null`/`""` and the
+/// diagnostic degrades to the old entry-file-only form.
+pub fn unsupportedExecutableFeature(
+    allocator: std.mem.Allocator,
+    span: ?source_pkg.Span,
+    construct: []const u8,
+) !diagnostics.Diagnostic {
+    const detail = if (construct.len != 0)
+        try std.fmt.allocPrint(allocator, "This program uses a `{s}` construct that is not yet lowered into the shared executable IR.", .{construct})
+    else
+        try allocator.dupe(u8, "This program uses language constructs that are not yet lowered into the shared executable IR.");
     return message.build(.{
         .code = .KIR001_InvalidLoweredNode,
         .domain = .lowering,
         .phase = .lowering,
         .title = "feature is not executable in the current backend pipeline",
-        .message = "This program uses language constructs that are not yet lowered into the shared executable IR.",
+        .message = detail,
+        .span = span,
+        .label = if (construct.len != 0) "this construct is not lowered into the executable IR" else null,
         .help = "Use `kira check` to validate the frontend shape, or stay within the currently executable subset for `run` and `build`.",
     });
 }

@@ -11,6 +11,7 @@ const ffi_support = @import("ffi_support.zig");
 const package_manager = @import("kira_package_manager");
 const program_graph = @import("kira_program_graph");
 const timing = @import("pipeline_timing.zig");
+const macro_expand = @import("macro_expand.zig");
 
 const nowNs = timing.nowNs;
 const elapsedNs = timing.elapsedNs;
@@ -298,8 +299,17 @@ pub fn checkPackageRoot(allocator: std.mem.Allocator, source_root: []const u8) !
     };
     timingPrint("[kira:timing] buildProgramGraphFromFiles source_root={s} imports={d} declarations={d} functions={d} ns={d}\n", .{ source_root, merged_program.imports.len, merged_program.decls.len, merged_program.functions.len, elapsedNs(graph_start) });
 
+    const expanded_program = macro_expand.expandAndCheck(allocator, merged_program, &diags) catch |err| switch (err) {
+        error.DiagnosticsEmitted => return .{
+            .source = source,
+            .diagnostics = try diags.toOwnedSlice(),
+            .failure_stage = .semantics,
+        },
+        else => return err,
+    };
+
     const semantics_start = nowNs();
-    _ = semantics.analyzeLibrary(allocator, merged_program, .{}, &diags) catch |err| switch (err) {
+    _ = semantics.analyzeLibrary(allocator, expanded_program, .{}, &diags) catch |err| switch (err) {
         error.DiagnosticsEmitted => {
             timingPrint("[kira:timing] semantics.analyzeLibrary source_root={s} ns={d}\n", .{ source_root, elapsedNs(semantics_start) });
             timingPrint("[kira:timing] checkPackageRoot.total source_root={s} reached_ir=false reached_bytecode=false reached_llvm=false ns={d}\n", .{ source_root, elapsedNs(total_start) });

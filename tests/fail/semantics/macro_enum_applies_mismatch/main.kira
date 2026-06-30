@@ -1,0 +1,18 @@
+comptime macro NeedsStruct {
+    kind { derive }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        return quote { }
+    }
+}
+
+@Derive(NeedsStruct)
+enum Color {
+    Red
+    Green
+}
+
+@Main
+function main() {
+    return
+}

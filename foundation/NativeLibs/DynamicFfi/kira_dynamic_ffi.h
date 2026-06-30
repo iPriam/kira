@@ -66,6 +66,11 @@ KIRA_BRIDGE_EXPORT void kira_dynamic_write_i64_at(void *ptr, uint64_t offset, in
 KIRA_BRIDGE_EXPORT void kira_dynamic_write_ptr_at(void *ptr, uint64_t offset, void *value);
 KIRA_BRIDGE_EXPORT void kira_dynamic_write_f32_at(void *ptr, uint64_t offset, float value);
 KIRA_BRIDGE_EXPORT void kira_dynamic_write_f64_at(void *ptr, uint64_t offset, double value);
+/* Bulk float copy: write `count` contiguous f32s from `src` into `dst` at the
+ * given byte `offset`, in one FFI crossing instead of `count` write_f32_at
+ * calls. Both buffers are caller-owned native memory; `src` and `dst+offset`
+ * must not overlap (a memcpy, not memmove). No-op on NULL or zero count. */
+KIRA_BRIDGE_EXPORT void kira_dynamic_write_f32_span(void *dst, uint64_t offset, const void *src, uint32_t count);
 
 /* C string helpers. */
 KIRA_BRIDGE_EXPORT void *kira_dynamic_cstring_dup(const char *text);

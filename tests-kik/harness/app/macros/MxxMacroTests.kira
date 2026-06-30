@@ -1,0 +1,263 @@
+// MxxMacroTests.kira
+// Declarative macro tests (mx / Mxx prefix). Macros expand in the frontend, so these run
+// identically on vm / llvm / hybrid.
+
+macro mxSquare(value: expr) {
+    expand {
+        value * value
+    }
+}
+
+macro mxAdd3(a: expr, b: expr, c: expr) {
+    expand {
+        a + b + c
+    }
+}
+
+macro mxSwap(a: place, b: place) {
+    expand {
+        let temporary = a
+        a = b
+        b = temporary
+    }
+}
+
+Test MxxSquare {
+    test { return mxSquare!(6) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(36); return e }
+}
+
+Test MxxAdd3 {
+    test { return mxAdd3!(1, 2, 3) }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(6); return e }
+}
+
+Test MxxSwapAndHygiene {
+    test {
+        var x = 10
+        var y = 20
+        mxSwap!(x, y)
+        // Hygiene: the macro's internal `temporary` must not collide with this one.
+        let temporary = 100
+        return x + y + temporary
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(130); return e }
+}
+
+Test MxxNestedExprSingleEval {
+    test {
+        // square used in a larger expression -> hoisted single-eval, then used.
+        let r = mxSquare!(3) + mxSquare!(4)
+        return r
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(25); return e }
+}
+
+// --- Procedural derive macros (comptime macro) ------------------------------
+// These run a compile-time evaluator: target.fields reflection, for-loops, quote/splice,
+// Syntax.join, then re-parse + splice of the generated functions. Validated across backends.
+
+comptime macro MxFieldCount {
+    kind { derive }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        var count: Int = 0
+        for field in target.fields {
+            count = count + 1
+        }
+        return quote {
+            function mxVecFieldCount() -> Int {
+                return #{count}
+            }
+        }
+    }
+}
+
+comptime macro MxSum {
+    kind { derive }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        var parts: [Syntax] = []
+        for field in target.fields {
+            parts.append(quote { p.#{field.name} })
+        }
+        let joined: Syntax = Syntax.join(parts, separator: " + ")
+        return quote {
+            function mxSumVec(p: borrow MxVec3) -> Int {
+                return #{joined}
+            }
+        }
+    }
+}
+
+@Derive(MxFieldCount, MxSum)
+struct MxVec3 {
+    var x: Int
+    var y: Int
+    var z: Int
+}
+
+Test MxxDeriveFieldCount {
+    test { return mxVecFieldCount() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}
+
+Test MxxDeriveSum {
+    test {
+        let v = MxVec3 { x: 4, y: 5, z: 6 }
+        return mxSumVec(v)
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}
+
+// --- Procedural attribute macro (@Name) -------------------------------------
+
+comptime macro MxTagged {
+    kind { attribute }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        var count: Int = 0
+        for field in target.fields {
+            count = count + 1
+        }
+        return quote {
+            function mxTaggedFieldCount() -> Int {
+                return #{count}
+            }
+        }
+    }
+}
+
+@MxTagged
+struct MxTagHolder {
+    var a: Int
+    var b: Int
+}
+
+Test MxxAttributeMacro {
+    test { return mxTaggedFieldCount() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+// --- Procedural function-position macro (name!(args) -> declarations) --------
+
+comptime macro mxBits {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        let names: [Identifier] = input.identifiers()
+        var fns: [Syntax] = []
+        var value: Int = 1
+        for name in names {
+            fns.append(quote {
+                function #{name}() -> Int {
+                    return #{value}
+                }
+            })
+            value = value * 2
+        }
+        return quote {
+            #{fns}
+        }
+    }
+}
+
+mxBits!(MxRead, MxWrite, MxExec)
+
+Test MxxFunctionMacro {
+    test { return MxRead() + MxWrite() + MxExec() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(7); return e }
+}
+
+// --- Function-position procedural macro in EXPRESSION position --------------
+// The macro's expansion must re-parse as a single expression that becomes the value.
+
+comptime macro mxConst {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        return quote { 42 }
+    }
+}
+
+Test MxxFuncMacroExpr {
+    test { return mxConst!() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(42); return e }
+}
+
+// --- Function-position procedural macro in STATEMENT position ---------------
+// Procedural macros generate raw source (no hygiene gensym), so `r` binds the caller's `r`.
+
+comptime macro mxAssignTen {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        return quote {
+            r = 10
+        }
+    }
+}
+
+Test MxxFuncMacroStmt {
+    test {
+        var r = 0
+        mxAssignTen!()
+        return r
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+// --- Mid-identifier splice gluing (`mxp_#{name}` -> `mxp_Foo`) ---------------
+
+comptime macro mxPrefixed {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        let names: [Identifier] = input.identifiers()
+        var fns: [Syntax] = []
+        for name in names {
+            fns.append(quote {
+                function mxp_#{name}() -> Int {
+                    return 1
+                }
+            })
+        }
+        return quote {
+            #{fns}
+        }
+    }
+}
+
+mxPrefixed!(Foo, Bar)
+
+Test MxxSpliceGlue {
+    test { return mxp_Foo() + mxp_Bar() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(2); return e }
+}
+
+// --- Enum annotations: derive macro over an enum ----------------------------
+// Enum variants surface through `target.fields` reflection (name = variant name).
+
+comptime macro mxVariantCount {
+    kind { derive }
+    appliesTo { enum }
+    expand(target: Declaration) -> Syntax {
+        var count: Int = 0
+        for field in target.fields {
+            count = count + 1
+        }
+        return quote {
+            function mxEnumVariantCount() -> Int {
+                return #{count}
+            }
+        }
+    }
+}
+
+@Derive(mxVariantCount)
+enum MxColor {
+    Red
+    Green
+    Blue
+}
+
+Test MxxEnumDerive {
+    test { return mxEnumVariantCount() }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
+}

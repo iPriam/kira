@@ -402,6 +402,23 @@ pub fn lowerCallExpr(
     scope: *model.Scope,
     function_headers: ?*const std.StringHashMapUnmanaged(shared.FunctionHeader),
 ) !void {
+    // A `name!(...)` macro call must have been removed by the macro-expansion pass. Reaching here
+    // means no declarative macro of that name was in scope.
+    if (node.is_macro) {
+        const macro_name = if (node.callee.* == .identifier and node.callee.identifier.name.segments.len == 1)
+            node.callee.identifier.name.segments[0].text
+        else
+            "<expression>";
+        try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
+            .severity = .@"error",
+            .code = "KMAC001",
+            .title = "unknown macro",
+            .message = try std.fmt.allocPrint(ctx.allocator, "no declarative macro named '{s}' is in scope.", .{macro_name}),
+            .labels = &.{diagnostics.primaryLabel(node.span, "this macro is not declared")},
+            .help = "Declare it with `macro <name>(...) { expand { ... } }`, or remove the `!` to call a function.",
+        });
+        return error.DiagnosticsEmitted;
+    }
     if (node.callee.* == .member) {
         const member = node.callee.member;
         if (try lowerParentQualifiedMethodCall(ctx, node, imports, scope, function_headers)) |call_expr| {
@@ -527,11 +544,12 @@ pub fn lowerCallExpr(
         return;
     }
 
-    // `Int(x)` / `Float(x)` numeric casts. Recognized before ordinary function
-    // and constructor resolution: `Int` and `Float` are primitive type names,
-    // not user-callable functions, so a call against them is always a cast.
-    if ((std.mem.eql(u8, callee_name, "Int") or std.mem.eql(u8, callee_name, "Float")) and scope.get(callee_name) == null) {
-        const target_type: model.ResolvedType = if (callee_name[0] == 'I') .{ .kind = .integer } else .{ .kind = .float };
+    // `Int(x)` / `Float(x)` / width-specific (`U64(x)`, `I32(x)`, `F32(x)`, …)
+    // numeric casts. Recognized before ordinary function and constructor
+    // resolution: these are primitive type names, not user-callable functions,
+    // so a call against an un-shadowed one is always a cast.
+    if (scope.get(callee_name) == null) numeric_cast: {
+        const target_type = shared.numericCastTargetType(callee_name) orelse break :numeric_cast;
         if (node.args.len != 1 or node.args[0].label != null) {
             try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
                 .severity = .@"error",
@@ -539,7 +557,7 @@ pub fn lowerCallExpr(
                 .title = "invalid numeric cast",
                 .message = try std.fmt.allocPrint(ctx.allocator, "`{s}(...)` is a numeric cast and takes exactly one positional argument.", .{callee_name}),
                 .labels = &.{diagnostics.primaryLabel(node.span, "cast call has the wrong arguments")},
-                .help = "Write the cast as `Int(value)` or `Float(value)` with a single numeric value.",
+                .help = "Write the cast as `Int(value)`, `Float(value)`, or a width form like `U64(value)` / `F32(value)` with a single numeric value.",
             });
             return error.DiagnosticsEmitted;
         }

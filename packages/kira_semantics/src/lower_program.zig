@@ -124,6 +124,9 @@ fn collectRootTopLevelNames(
             .function_decl => |item| try names.put(allocator, item.name, {}),
             // Extension declarations add no new top-level name; they extend an existing construct.
             .extend_decl => {},
+            // Macro declarations and top-level macro invocations are consumed by the
+            // macro-expansion pass before semantics; no runtime top-level name.
+            .macro_decl, .macro_invocation => {},
         }
     }
 }
@@ -270,7 +273,7 @@ pub fn lowerProgramWithOptions(
     for (program.decls, 0..) |decl, decl_index| {
         const origin = declOrigin(program, decl_index);
         switch (decl) {
-            .annotation_decl, .capability_decl, .extend_decl => {},
+            .annotation_decl, .capability_decl, .extend_decl, .macro_decl, .macro_invocation => {},
             .construct_decl => |construct_decl| {
                 try registerScopedTopLevelName(allocator, out_diagnostics, &top_level_names, origin, construct_decl.name, construct_decl.span);
                 const lowered = try lowerConstructDecl(&ctx, construct_decl);

@@ -32,12 +32,14 @@ pub const Parser = struct {
     const block_impl = @import("parser_blocks.zig");
     const param_impl = @import("parser_params.zig");
     const type_expr_impl = @import("parser_types_exprs.zig");
+    const macro_impl = @import("parser_macros.zig");
 
     pub const parseTopLevelDecl = decl_impl.parseTopLevelDecl;
     pub const parseAnnotationDecl = decl_impl.parseAnnotationDecl;
     pub const parseAnnotationDeclWithAnnotations = decl_impl.parseAnnotationDeclWithAnnotations;
     pub const parseCapabilityDecl = decl_impl.parseCapabilityDecl;
     pub const parseEnumDecl = decl_impl.parseEnumDecl;
+    pub const parseEnumDeclWithAnnotations = decl_impl.parseEnumDeclWithAnnotations;
     pub const parseAnnotationTarget = decl_impl.parseAnnotationTarget;
     pub const parseGeneratedBlock = decl_impl.parseGeneratedBlock;
     pub const parseGeneratedMember = decl_impl.parseGeneratedMember;
@@ -59,6 +61,9 @@ pub const Parser = struct {
     pub const parseDeclPropertiesSection = decl_impl.parseDeclPropertiesSection;
     pub const parseAnnotationSpec = decl_impl.parseAnnotationSpec;
     pub const parseConstructFormDeclWithAnnotations = decl_impl.parseConstructFormDeclWithAnnotations;
+    pub const parseDeclarativeMacroDecl = macro_impl.parseDeclarativeMacroDecl;
+    pub const parseProceduralMacroDecl = macro_impl.parseProceduralMacroDecl;
+    pub const parseQuoteExpr = macro_impl.parseQuoteExpr;
     pub const parseConstructBody = decl_impl.parseConstructBody;
     pub const parseBodyMember = decl_impl.parseBodyMember;
     pub const parseFieldDecl = decl_impl.parseFieldDecl;
@@ -390,6 +395,7 @@ pub fn exprSpan(expr: syntax.ast.Expr) source_pkg.Span {
         .member => |node| node.span,
         .index => |node| node.span,
         .call => |node| node.span,
+        .quote => |node| node.span,
         .try_expr => |node| node.span,
     };
 }
@@ -434,6 +440,8 @@ pub fn tokenDescription(kind: syntax.TokenKind) []const u8 {
         .kw_capability => "'capability'",
         .kw_class => "'class'",
         .kw_comptime => "'comptime'",
+        .kw_macro => "'macro'",
+        .kw_quote => "'quote'",
         .kw_construct => "'construct'",
         .kw_enum => "'enum'",
         .kw_struct => "'struct'",
@@ -469,6 +477,7 @@ pub fn tokenDescription(kind: syntax.TokenKind) []const u8 {
         .kw_false => "'false'",
         .at_sign => "'@'",
         .dollar => "'$'",
+        .hash_brace => "'#{'",
         .l_paren => "'('",
         .r_paren => "')'",
         .l_brace => "'{'",

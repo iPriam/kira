@@ -1550,3 +1550,101 @@ Test CfxGcdArray {
     // gcd(120,168)=24, gcd(24,252)=12
     expect { let e: Result<Int, TestFailure> = Result.Ok(12); return e }
 }
+
+Test CfxRangeForSum {
+    test {
+        var s = 0
+        for i in 0..5 {
+            s = s + i
+        }
+        // i = 0,1,2,3,4 -> 10
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(10); return e }
+}
+
+Test CfxRangeForOffsetStart {
+    test {
+        var s = 0
+        for i in 2..6 {
+            s = s + i
+        }
+        // i = 2,3,4,5 -> 14
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(14); return e }
+}
+
+Test CfxRangeForEmptyHalfOpen {
+    test {
+        var count = 0
+        for i in 5..5 {
+            count = count + 1
+        }
+        // half-open [5,5) is empty -> body never runs
+        return count
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxRangeForComputedBounds {
+    test {
+        let lo = 3
+        let hi = lo + 4
+        var s = 0
+        for i in lo..hi {
+            s = s + i
+        }
+        // i = 3,4,5,6 -> 18
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(18); return e }
+}
+
+Test CfxRangeForNested {
+    test {
+        var s = 0
+        for i in 0..3 {
+            for j in 0..3 {
+                s = s + i * 3 + j
+            }
+        }
+        // sum over i,j in 0..3 of (i*3+j) = sum 0..8 = 36
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(36); return e }
+}
+
+Test CfxRangeForMatchesWhile {
+    test {
+        let n = 7
+        var fromFor = 0
+        for i in 0..n {
+            fromFor = fromFor + i
+        }
+        var fromWhile = 0
+        var k = 0
+        while k < n {
+            fromWhile = fromWhile + k
+            k = k + 1
+        }
+        // range-for must compute the same total as the equivalent counter while
+        return fromFor - fromWhile
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(0); return e }
+}
+
+Test CfxRangeForBreak {
+    test {
+        var s = 0
+        for i in 0..10 {
+            if i == 6 {
+                break
+            }
+            s = s + i
+        }
+        // i=0,1,2,3,4,5,(break at 6) -> 0+1+2+3+4+5 = 15
+        return s
+    }
+    expect { let e: Result<Int, TestFailure> = Result.Ok(15); return e }
+}

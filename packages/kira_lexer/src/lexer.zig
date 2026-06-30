@@ -38,6 +38,24 @@ pub fn tokenize(allocator: std.mem.Allocator, source: *const source_pkg.SourceFi
                 try tokens.append(makeToken(.dollar, source.text[index .. index + 1], index, index + 1));
                 index += 1;
             },
+            '#' => {
+                if (peekByte(source.text, index + 1) == '{') {
+                    try tokens.append(makeToken(.hash_brace, source.text[index .. index + 2], index, index + 2));
+                    index += 2;
+                } else {
+                    try diagnostics.appendOwned(allocator, out_diagnostics, .{
+                        .severity = .@"error",
+                        .code = "KLEX002",
+                        .title = "unexpected '#'",
+                        .message = "Kira only uses '#' as part of the '#{ ... }' splice in a quote block.",
+                        .labels = &.{
+                            diagnostics.primaryLabel(source_pkg.Span.init(index, index + 1), "'#' must be followed by '{'"),
+                        },
+                        .help = "Write '#{ expression }' to splice a value into a quote block.",
+                    });
+                    return error.DiagnosticsEmitted;
+                }
+            },
             '(' => {
                 try tokens.append(makeToken(.l_paren, source.text[index .. index + 1], index, index + 1));
                 index += 1;
@@ -285,6 +303,8 @@ fn keywordKind(lexeme: []const u8) syntax.TokenKind {
     if (std.mem.eql(u8, lexeme, "capability")) return .kw_capability;
     if (std.mem.eql(u8, lexeme, "class")) return .kw_class;
     if (std.mem.eql(u8, lexeme, "comptime")) return .kw_comptime;
+    if (std.mem.eql(u8, lexeme, "macro")) return .kw_macro;
+    if (std.mem.eql(u8, lexeme, "quote")) return .kw_quote;
     if (std.mem.eql(u8, lexeme, "construct")) return .kw_construct;
     if (std.mem.eql(u8, lexeme, "enum")) return .kw_enum;
     if (std.mem.eql(u8, lexeme, "struct")) return .kw_struct;

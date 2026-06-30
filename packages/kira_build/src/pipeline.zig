@@ -13,6 +13,7 @@ const ffi_support = @import("ffi_support.zig");
 const package_manager = @import("kira_package_manager");
 const program_graph = @import("kira_program_graph");
 const synth_test_driver = @import("synth_test_driver.zig");
+const macro_expand = @import("macro_expand.zig");
 const frontend_pipeline = @import("pipeline_frontend.zig");
 const timing = @import("pipeline_timing.zig");
 
@@ -200,10 +201,27 @@ pub fn compileFileToIrForTargetWithOptions(
     // In test mode, synthesize a pure-Kira driver entry that runs every Test and
     // prints PASS/FAIL/SKIP, so the suite executes as ordinary Kira on the chosen
     // backend (the runner invokes the driver instead of comparing in Zig).
-    const program_for_analysis = if (options.synthesize_test_driver)
+    const driver_program = if (options.synthesize_test_driver)
         try synth_test_driver.injectTestDriver(allocator, merged_program, &diags)
     else
         merged_program;
+
+    // Expand declarative macros (AST -> AST) before semantics. Output is ordinary Kira AST, so
+    // every backend sees identical post-expansion code. Package any expansion diagnostics into the
+    // result (failure_stage = .semantics) rather than throwing a bare error.
+    const program_for_analysis = macro_expand.expandAndCheck(allocator, driver_program, &diags) catch |err| switch (err) {
+        error.DiagnosticsEmitted => {
+            timingPrint("[kira:timing] compileFileToIr.total path={s} ns={d}\n", .{ path, elapsedNs(total_start) });
+            return .{
+                .source = parsed.source,
+                .diagnostics = try diagnosticsOwnedOrFallback(allocator, &diags, .semantics),
+                .ir_program = null,
+                .native_libraries = native_libraries,
+                .failure_stage = .semantics,
+            };
+        },
+        else => return err,
+    };
 
     const semantics_start = nowNs();
     const hir = semantics.analyzeWithImportsOptions(allocator, program_for_analysis, .{}, .{
@@ -226,11 +244,13 @@ pub fn compileFileToIrForTargetWithOptions(
     timingPrint("[kira:timing] semantics.analyzeWithImports path={s} ns={d}\n", .{ parsed.source.path, elapsedNs(semantics_start) });
 
     const ir_start = nowNs();
+    var unsupported = ir.UnsupportedFeature{};
     const ir_program = ir.lowerProgramWithDiagnostics(allocator, hir, .{
         .include_tests = options.test_mode,
+        .unsupported_out = &unsupported,
     }, &diags) catch |err| switch (err) {
         error.UnsupportedExecutableFeature, error.UnsupportedType => {
-            try diags.append(diag_messages.BackendMessages.unsupportedExecutableFeature());
+            try diags.append(try diag_messages.BackendMessages.unsupportedExecutableFeature(allocator, unsupported.span, unsupported.construct));
             timingPrint("[kira:timing] ir.lowerProgram path={s} ns={d}\n", .{ parsed.source.path, elapsedNs(ir_start) });
             timingPrint("[kira:timing] compileFileToIr.total path={s} ns={d}\n", .{ path, elapsedNs(total_start) });
             return .{
@@ -557,8 +577,17 @@ pub fn checkFileFrontend(allocator: std.mem.Allocator, path: []const u8) !CheckP
     };
     timingPrint("[kira:timing] validateImports path={s} imports={d} ns={d}\n", .{ parsed.source.path, merged_program.imports.len, elapsedNs(validate_start) });
 
+    const expanded_program = macro_expand.expandAndCheck(allocator, merged_program, &diags) catch |err| switch (err) {
+        error.DiagnosticsEmitted => return .{
+            .source = parsed.source,
+            .diagnostics = try diagnosticsOwnedOrFallback(allocator, &diags, .semantics),
+            .failure_stage = .semantics,
+        },
+        else => return err,
+    };
+
     const semantics_start = nowNs();
-    const hir = semantics.analyzeWithImports(allocator, merged_program, .{}, &diags) catch |err| switch (err) {
+    const hir = semantics.analyzeWithImports(allocator, expanded_program, .{}, &diags) catch |err| switch (err) {
         error.DiagnosticsEmitted => {
             timingPrint("[kira:timing] semantics.analyzeWithImports path={s} ns={d}\n", .{ parsed.source.path, elapsedNs(semantics_start) });
             timingPrint("[kira:timing] checkFileFrontend.total path={s} reached_ir=false reached_bytecode=false reached_llvm=false ns={d}\n", .{ path, elapsedNs(total_start) });
@@ -617,7 +646,7 @@ pub fn backendDiagnostic(allocator: std.mem.Allocator, source_path: []const u8, 
         error.RuntimeEntrypointInNativeBuild => diag_messages.BackendMessages.runtimeEntrypointInNativeBuild(),
         error.RuntimeCallInNativeBuild => diag_messages.BackendMessages.runtimeCallInNativeBuild(),
         error.HybridBuildRequiresExplicitExecution => diag_messages.BackendMessages.hybridBuildRequiresExplicitExecution(),
-        error.UnsupportedExecutableFeature, error.UnsupportedType => diag_messages.BackendMessages.unsupportedExecutableFeature(),
+        error.UnsupportedExecutableFeature, error.UnsupportedType => try diag_messages.BackendMessages.unsupportedExecutableFeature(allocator, null, ""),
         else => try diag_messages.ToolchainMessages.invalidToolchainActivation(allocator, @errorName(err)),
     };
 }

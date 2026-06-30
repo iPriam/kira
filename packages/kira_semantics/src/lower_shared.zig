@@ -240,6 +240,29 @@ pub fn qualifiedNameLeaf(allocator: std.mem.Allocator, name: syntax.ast.Qualifie
     return allocator.dupe(u8, name.segments[name.segments.len - 1].text);
 }
 
+/// Maps a primitive numeric type name used as a cast call target — `Int(x)`,
+/// `Float(x)`, and every width-specific form (`U64(x)`, `I32(x)`, `F32(x)`, …) —
+/// to its resolved target type, or null when `name` is not a numeric cast.
+///
+/// Width is carried in `.name`; the runtime representation of every integer
+/// (and of every float) is identical, so a same-kind cast lowers to the
+/// existing int↔float `convert` instruction as an identity copy — no new
+/// opcode or backend support is required. This is the single source of truth
+/// for which names are numeric casts, so the full set stays consistent with the
+/// width types `typeFromSyntax` accepts below.
+pub fn numericCastTargetType(name: []const u8) ?model.ResolvedType {
+    if (std.mem.eql(u8, name, "Int")) return .{ .kind = .integer };
+    if (std.mem.eql(u8, name, "Float")) return .{ .kind = .float };
+    const integer_names = [_][]const u8{ "I8", "U8", "I16", "U16", "I32", "U32", "I64", "U64" };
+    for (integer_names) |integer_name| {
+        if (std.mem.eql(u8, name, integer_name)) return .{ .kind = .integer, .name = name };
+    }
+    if (std.mem.eql(u8, name, "F32") or std.mem.eql(u8, name, "F64")) {
+        return .{ .kind = .float, .name = name };
+    }
+    return null;
+}
+
 pub fn typeFromSyntax(ctx: *const Context, ty: syntax.ast.TypeExpr) anyerror!model.ResolvedType {
     return switch (ty) {
         .array => |info| .{ .kind = .array, .name = try typeTextFromSyntax(ctx, info.element_type.*) },

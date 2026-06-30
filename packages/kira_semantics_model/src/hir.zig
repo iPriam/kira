@@ -344,7 +344,11 @@ pub const ForStatement = struct {
     binding_name: []const u8,
     binding_local_id: u32,
     binding_ty: ResolvedType,
+    // `iterator` is the iterable for collection iteration, or the START bound of
+    // a numeric range `for i in start..end` when `range_end` is non-null. A range
+    // loop binds `i` to each integer in the half-open range [start, end).
     iterator: *Expr,
+    range_end: ?*Expr = null,
     body: []Statement,
     span: source_pkg.Span,
 };

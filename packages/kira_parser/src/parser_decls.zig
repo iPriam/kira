@@ -29,16 +29,7 @@ pub fn parseTopLevelDecl(self: *Parser, annotations: []const syntax.ast.Annotati
         return .{ .capability_decl = try self.parseCapabilityDecl() };
     }
     if (self.at(.kw_enum)) {
-        if (annotations.len != 0) {
-            try self.emitUnexpectedToken(
-                "enum declarations cannot be annotated",
-                self.peek(),
-                "enum declaration starts here",
-                "Remove the preceding annotation usage.",
-            );
-            return error.DiagnosticsEmitted;
-        }
-        return .{ .enum_decl = try self.parseEnumDecl() };
+        return .{ .enum_decl = try self.parseEnumDeclWithAnnotations(annotations) };
     }
     if (self.at(.kw_comptime)) {
         const comptime_token = self.advance();
@@ -48,14 +39,20 @@ pub fn parseTopLevelDecl(self: *Parser, annotations: []const syntax.ast.Annotati
         if (self.at(.kw_construct)) {
             return .{ .construct_decl = try self.parseConstructDeclWithAnnotations(annotations, true) };
         }
+        if (self.at(.kw_macro)) {
+            return .{ .macro_decl = try self.parseProceduralMacroDecl(annotations) };
+        }
         try self.emitUnexpectedToken(
             "expected comptime declaration",
             self.peek(),
-            "`comptime` applies to function or construct declarations",
-            "Write `comptime function ...` or `comptime construct ...`.",
+            "`comptime` applies to function, construct, or macro declarations",
+            "Write `comptime function ...`, `comptime construct ...`, or `comptime macro ...`.",
         );
         _ = comptime_token;
         return error.DiagnosticsEmitted;
+    }
+    if (self.at(.kw_macro)) {
+        return .{ .macro_decl = try self.parseDeclarativeMacroDecl(annotations) };
     }
     if (self.at(.kw_function)) {
         return .{ .function_decl = try self.parseFunctionDeclWithAnnotations(annotations, false, false) };
@@ -97,6 +94,16 @@ pub fn parseTopLevelDecl(self: *Parser, annotations: []const syntax.ast.Annotati
             "`func` has been replaced by `function`",
             "Write `function` for function declarations.",
         );
+        return error.DiagnosticsEmitted;
+    }
+    // Top-level function-macro invocation: `name!(args)` that expands to declarations.
+    if (self.at(.identifier) and self.peekNext().kind == .bang) {
+        const expr = try self.parseExpression();
+        if (expr.* == .call and expr.call.is_macro) {
+            _ = self.match(.semicolon);
+            return .{ .macro_invocation = expr.call };
+        }
+        try self.emitUnexpectedToken("expected a macro invocation", self.peek(), "a top-level '!' must be a `name!(args)` macro call", "Write `name!(args)` to invoke a function macro.");
         return error.DiagnosticsEmitted;
     }
     if (self.looksLikeConstructFormDecl()) {
@@ -220,6 +227,10 @@ pub fn parseCapabilityDecl(self: *Parser) !syntax.ast.CapabilityDecl {
 }
 
 pub fn parseEnumDecl(self: *Parser) !syntax.ast.EnumDecl {
+    return self.parseEnumDeclWithAnnotations(&.{});
+}
+
+pub fn parseEnumDeclWithAnnotations(self: *Parser, annotations: []const syntax.ast.Annotation) !syntax.ast.EnumDecl {
     const enum_token = try self.expect(.kw_enum, "expected 'enum'", "enum declarations start with 'enum'");
     const name_token = try self.expect(.identifier, "expected enum name", "name the enum here");
     var type_params = std.array_list.Managed([]const u8).init(self.allocator);
@@ -265,11 +276,13 @@ pub fn parseEnumDecl(self: *Parser) !syntax.ast.EnumDecl {
     }
 
     const close = try self.expect(.r_brace, "expected '}' to close enum body", "enum body should end here");
+    const start = if (annotations.len != 0) annotations[0].span.start else enum_token.span.start;
     return .{
+        .annotations = annotations,
         .name = name_token.lexeme,
         .type_params = try type_params.toOwnedSlice(),
         .variants = try variants.toOwnedSlice(),
-        .span = source_pkg.Span.init(enum_token.span.start, close.span.end),
+        .span = source_pkg.Span.init(start, close.span.end),
     };
 }
 

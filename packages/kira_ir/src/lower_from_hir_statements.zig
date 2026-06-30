@@ -213,6 +213,9 @@ fn lowerMatchPattern(
 }
 
 pub fn lowerForStatement(lowerer: anytype, instructions: *std.array_list.Managed(ir.Instruction), node: model.hir.ForStatement) !bool {
+    if (node.range_end) |range_end| {
+        return lowerRangeForStatement(lowerer, instructions, node, range_end);
+    }
     switch (node.iterator.*) {
         .array => |iterator| {
             if (iterator.elements.len == 0) return false;
@@ -288,6 +291,66 @@ pub fn lowerForStatement(lowerer: anytype, instructions: *std.array_list.Managed
             return true;
         },
     }
+}
+
+/// `for i in start..end`: the same counter loop as array iteration, but the
+/// upper bound is the (once-evaluated) `end` expression instead of `array_len`,
+/// the binding is the counter value itself (no `array_get`), and the counter
+/// starts at `start` instead of 0. Half-open: iterates [start, end). No new
+/// opcodes — const_int / compare / branch / add / store_local, identical across
+/// VM and LLVM.
+fn lowerRangeForStatement(
+    lowerer: anytype,
+    instructions: *std.array_list.Managed(ir.Instruction),
+    node: model.hir.ForStatement,
+    range_end: *model.Expr,
+) !bool {
+    const binding_ty = try type_impl.lowerResolvedType(lowerer.program, node.binding_ty);
+    const start_reg = try lowerer.lowerExpr(instructions, node.iterator);
+    const end_reg = try lowerer.lowerExpr(instructions, range_end);
+
+    const index_local = try lowerer.freshHiddenLocal(.{ .kind = .integer, .name = "I64" });
+    try instructions.append(.{ .store_local = .{ .local = index_local, .src = start_reg } });
+
+    const loop_label = lowerer.freshLabel();
+    const body_label = lowerer.freshLabel();
+    const end_label = lowerer.freshLabel();
+
+    try instructions.append(.{ .label = .{ .id = loop_label } });
+    const index_reg = lowerer.freshRegister();
+    try instructions.append(.{ .load_local = .{ .dst = index_reg, .local = index_local } });
+    const cmp_reg = lowerer.freshRegister();
+    try instructions.append(.{ .compare = .{
+        .dst = cmp_reg,
+        .lhs = index_reg,
+        .rhs = end_reg,
+        .op = .less,
+    } });
+    try instructions.append(.{ .branch = .{
+        .condition = cmp_reg,
+        .true_label = body_label,
+        .false_label = end_label,
+    } });
+
+    try instructions.append(.{ .label = .{ .id = body_label } });
+    try lowerer.storeValueToLocal(instructions, node.binding_local_id, binding_ty, index_reg);
+    try instructions.append(.{ .scope_enter = .{} });
+    try lowerer.loop_stack.append(.{ .break_label = end_label, .continue_label = loop_label });
+    const body_terminated = try lowerer.lowerStatements(instructions, node.body);
+    _ = lowerer.loop_stack.pop();
+    if (!body_terminated) {
+        const scope_locals = try buildScopeExitLocals(lowerer, node.body, node.binding_local_id);
+        try instructions.append(.{ .scope_exit = .{ .locals = scope_locals } });
+        const one_reg = lowerer.freshRegister();
+        try instructions.append(.{ .const_int = .{ .dst = one_reg, .value = 1 } });
+        const next_reg = lowerer.freshRegister();
+        try instructions.append(.{ .add = .{ .dst = next_reg, .lhs = index_reg, .rhs = one_reg } });
+        try instructions.append(.{ .store_local = .{ .local = index_local, .src = next_reg } });
+        try instructions.append(.{ .jump = .{ .label = loop_label } });
+        try instructions.append(.{ .label = .{ .id = end_label } });
+        return false;
+    }
+    return true;
 }
 
 pub fn lowerWhileStatement(lowerer: anytype, instructions: *std.array_list.Managed(ir.Instruction), node: model.hir.WhileStatement) !bool {

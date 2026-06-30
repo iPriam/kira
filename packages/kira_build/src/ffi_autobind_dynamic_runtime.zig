@@ -40,6 +40,7 @@ const runtime_bindings = [_]Binding{
     .{ .symbol = "kira_dynamic_write_ptr_at", .suffix = "DynamicWritePtrAt", .signature = "(ptr: RawPtr, offset: U64, value: RawPtr): Void" },
     .{ .symbol = "kira_dynamic_write_f32_at", .suffix = "DynamicWriteF32At", .signature = "(ptr: RawPtr, offset: U64, value: F32): Void" },
     .{ .symbol = "kira_dynamic_write_f64_at", .suffix = "DynamicWriteF64At", .signature = "(ptr: RawPtr, offset: U64, value: F64): Void" },
+    .{ .symbol = "kira_dynamic_write_f32_span", .suffix = "DynamicWriteF32Span", .signature = "(dst: RawPtr, offset: U64, src: RawPtr, count: U32): Void" },
     .{ .symbol = "kira_dynamic_cstring_dup", .suffix = "DynamicCStringDup", .signature = "(text: CString): RawPtr" },
     .{ .symbol = "kira_dynamic_cstring_at", .suffix = "DynamicCStringAt", .signature = "(ptr: RawPtr, offset: U64): CString" },
     .{ .symbol = "kira_dynamic_ffi_call", .suffix = "DynamicFfiCall", .signature = "(functionPtr: RawPtr, resultType: U32, argTypes: RawPtr, argValues: RawPtr, argCount: U32, resultOut: RawPtr): I32" },

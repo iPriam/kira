@@ -330,6 +330,7 @@ fn defaultExprSpan(expr: syntax.ast.Expr) source_pkg.Span {
         .unary => |node| node.span,
         .binary => |node| node.span,
         .conditional => |node| node.span,
+        .quote => |node| node.span,
         .member => |node| node.span,
         .index => |node| node.span,
         .call => |node| node.span,

@@ -24,6 +24,10 @@ pub const Decl = union(enum) {
     construct_decl: ConstructDecl,
     construct_form_decl: ConstructFormDecl,
     extend_decl: ExtendDecl,
+    macro_decl: MacroDecl,
+    // A top-level `name!(args)` invocation of a function-position procedural macro. The
+    // macro-expansion pass replaces it with the declarations the macro generates.
+    macro_invocation: CallExpr,
 };
 
 // `extend Widget { function padding(...) -> Widget { ... } }` adds fluent modifier functions to a
@@ -141,6 +145,57 @@ pub const FunctionSignature = struct {
     span: Span,
 };
 
+// --- Macros -----------------------------------------------------------------
+//
+// `macro Name(p: expr) { expand { ... } }` is a declarative macro: a fixed template with
+// fragment substitution, hygiene, and single-evaluation `expr` semantics. `comptime macro
+// Name { kind { function|attribute|derive } appliesTo { ... } expand(...) -> Syntax { ... } }`
+// is a procedural macro whose `expand` runs at compile time. Both are consumed and removed by
+// the macro-expansion pass (see kira_build/src/macro_expand.zig) before semantic analysis, so
+// `macro_decl` and macro-call nodes never reach HIR lowering.
+
+pub const MacroKind = enum {
+    declarative,
+    proc_function,
+    proc_attribute,
+    proc_derive,
+};
+
+// Fragment kind for a declarative macro parameter.
+//   expr  - a single expression, captured call-by-value (evaluated exactly once).
+//   place - an assignable lvalue path, substituted by reference (for swap-style macros).
+pub const FragmentKind = enum {
+    expr,
+    place,
+};
+
+pub const MacroParam = struct {
+    name: []const u8,
+    kind: FragmentKind,
+    span: Span,
+};
+
+// Declaration kinds an attribute/derive macro may legally apply to.
+pub const MacroTargetKind = enum {
+    struct_target,
+    class_target,
+    enum_target,
+};
+
+pub const MacroDecl = struct {
+    annotations: []const Annotation = &.{},
+    kind: MacroKind,
+    name: []const u8,
+    // Declarative macros: fragment parameters + the `expand { ... }` template block.
+    params: []MacroParam = &.{},
+    expand_block: ?Block = null,
+    // Procedural macros: legal targets (attribute/derive only) + the `expand(...) -> Syntax`
+    // function carrying the compile-time body.
+    applies_to: []MacroTargetKind = &.{},
+    expand_fn: ?FunctionDecl = null,
+    span: Span,
+};
+
 pub const ParamDecl = struct {
     annotations: []const Annotation,
     name: []const u8,
@@ -150,6 +205,7 @@ pub const ParamDecl = struct {
 };
 
 pub const EnumDecl = struct {
+    annotations: []const Annotation = &.{},
     name: []const u8,
     type_params: [][]const u8,
     variants: []EnumVariantDecl,
@@ -428,7 +484,10 @@ pub const IfStatement = struct {
 
 pub const ForStatement = struct {
     binding_name: []const u8,
+    // `iterator` is the iterable for `for x in collection`, or the START bound for
+    // a numeric range `for i in start..end` (when `range_end` is non-null).
     iterator: *Expr,
+    range_end: ?*Expr = null,
     body: Block,
     span: Span,
 };
@@ -544,6 +603,23 @@ pub const Expr = union(enum) {
     index: IndexExpr,
     call: CallExpr,
     try_expr: TryExpr,
+    quote: QuoteExpr,
+};
+
+// `quote { ... }` inside a `comptime macro` body. The body is captured as a sequence of literal
+// token runs interleaved with `#{ expr }` splice holes; the compile-time evaluator renders it to
+// Kira source text (filling splices by value type) and the macro-expansion pass re-parses the
+// result. Only ever appears inside a procedural macro's `expand` and is consumed before semantics.
+pub const QuoteExpr = struct {
+    parts: []QuotePart,
+    span: Span,
+};
+
+pub const QuotePart = union(enum) {
+    /// Literal source text (a run of captured token lexemes joined by spaces).
+    text: []const u8,
+    /// A `#{ expr }` splice; `expr` is evaluated at macro-expansion time.
+    splice: *Expr,
 };
 
 // `try expr` unwraps a `Result<Value, Failure>`. Only valid inside an `attempt { ... }` block.
@@ -663,6 +739,10 @@ pub const CallExpr = struct {
     args: []CallArg,
     trailing_builder: ?BuilderBlock,
     trailing_callback: ?CallbackBlock,
+    // When true this is a macro call written `name!(args)`; `callee` names the macro. The
+    // macro-expansion pass replaces every such node before semantics; a residual `is_macro`
+    // call reaching HIR lowering is an internal error (unknown macro already diagnosed).
+    is_macro: bool = false,
     span: Span,
 };
 

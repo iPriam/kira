@@ -1,0 +1,16 @@
+comptime macro TwoStmts {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        return quote {
+            let a = 1
+            let b = 2
+        }
+    }
+}
+
+@Main
+function main() {
+    let x = TwoStmts!()
+    print(x)
+    return
+}

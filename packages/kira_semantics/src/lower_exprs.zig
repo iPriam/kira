@@ -231,6 +231,56 @@ pub fn lowerStatement(
             } };
         },
         .for_stmt => |node| blk: {
+            if (node.range_end) |range_end_ast| {
+                // Numeric range `for i in start..end`: bind `i` to each integer in
+                // [start, end). Both bounds must be integers; the loop variable is
+                // an immutable `Int`, lowered to the same counter loop as array
+                // iteration (minus the element fetch).
+                const start_expr = try lowerExpr(ctx, node.iterator, imports, scope, function_headers);
+                const end_expr = try lowerExpr(ctx, range_end_ast, imports, scope, function_headers);
+                if (model.hir.exprType(start_expr.*).kind != .integer or model.hir.exprType(end_expr.*).kind != .integer) {
+                    try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
+                        .severity = .@"error",
+                        .code = "KSEM119",
+                        .title = "range bounds must be integers",
+                        .message = "A `for i in start..end` loop requires integer `start` and `end` bounds.",
+                        .labels = &.{diagnostics.primaryLabel(node.span, "range bound is not an integer")},
+                        .help = "Use integer expressions for both bounds, e.g. `for i in 0..count`.",
+                    });
+                    return error.DiagnosticsEmitted;
+                }
+                const binding_ty: model.ResolvedType = .{ .kind = .integer };
+                const local_id = next_local_id.*;
+                next_local_id.* += 1;
+
+                var body_scope = try scope_flow.cloneScope(ctx.allocator, scope.*);
+                defer body_scope.deinit(ctx.allocator);
+                try body_scope.put(ctx.allocator, node.binding_name, .{
+                    .id = local_id,
+                    .ty = binding_ty,
+                    .storage = .immutable,
+                    .initialized = true,
+                    .decl_span = node.span,
+                });
+                try locals.append(.{
+                    .id = local_id,
+                    .name = try ctx.allocator.dupe(u8, node.binding_name),
+                    .ty = binding_ty,
+                    .ownership = .owned,
+                    .span = node.span,
+                });
+                const lowered: model.Statement = .{ .for_stmt = .{
+                    .binding_name = try ctx.allocator.dupe(u8, node.binding_name),
+                    .binding_local_id = local_id,
+                    .binding_ty = binding_ty,
+                    .iterator = start_expr,
+                    .range_end = end_expr,
+                    .body = try lowerBlockStatements(ctx, node.body, imports, &body_scope, locals, next_local_id, function_headers, loop_depth + 1, expected_return_type),
+                    .span = node.span,
+                } };
+                try scope_flow.mergeLoopState(ctx.allocator, scope, body_scope);
+                break :blk lowered;
+            }
             const iterator = try lowerExpr(ctx, node.iterator, imports, scope, function_headers);
             const binding_ty = try resolveArrayElementType(ctx, model.hir.exprType(iterator.*), node.span);
             if (iterator.* == .array and iterator.array.elements.len == 0 and binding_ty.kind == .unknown) {
@@ -921,6 +971,17 @@ pub fn lowerExpr(
                 .message = "`try` may only be used as a `let` initializer or expression statement inside an `attempt { ... }` block.",
                 .labels = &.{diagnostics.primaryLabel(node.span, "`try` is not valid in this position")},
                 .help = "Wrap the failing call in an `attempt { ... } handle { ... }` block, and use `try` as `let x = try call()` or as a statement `try call()`.",
+            });
+            return error.DiagnosticsEmitted;
+        },
+        .quote => |node| {
+            try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
+                .severity = .@"error",
+                .code = "KMAC016",
+                .title = "'quote' is only valid in a comptime macro",
+                .message = "`quote { ... }` may only appear inside a `comptime macro` expand body; it is consumed by macro expansion.",
+                .labels = &.{diagnostics.primaryLabel(node.span, "`quote` is not valid here")},
+                .help = "Move this `quote` into a `comptime macro` declaration's `expand` function.",
             });
             return error.DiagnosticsEmitted;
         },

@@ -39,6 +39,7 @@ pub const CheckedMidProgram = @import("mid_ir.zig").CheckedProgram;
 pub const lowerProgram = @import("lower_from_hir.zig").lowerProgram;
 pub const lowerProgramWithOptions = @import("lower_from_hir.zig").lowerProgramWithOptions;
 pub const LowerProgramOptions = @import("lower_from_hir.zig").LowerProgramOptions;
+pub const UnsupportedFeature = @import("lower_from_hir.zig").UnsupportedFeature;
 pub const nativeStateTypeId = @import("lower_from_hir.zig").nativeStateTypeId;
 pub const prepareProgram = @import("mid_ir_pipeline.zig").prepareProgram;
 pub const lowerCheckedProgram = @import("mid_ir_pipeline.zig").lowerCheckedProgram;

@@ -214,6 +214,9 @@ function kira_dynamic_read_u8_at(ptr: RawPtr, offset: U64): U8;
 @FFI.Extern { library: kira_runtime; symbol: kira_dynamic_write_f32_at; abi: c; }
 function kira_dynamic_write_f32_at(ptr: RawPtr, offset: U64, value: F32): Void;
 
+@FFI.Extern { library: kira_runtime; symbol: kira_dynamic_write_f32_span; abi: c; }
+function kira_dynamic_write_f32_span(dst: RawPtr, offset: U64, src: RawPtr, count: U32): Void;
+
 @FFI.Extern { library: kira_runtime; symbol: kira_dynamic_write_f64_at; abi: c; }
 function kira_dynamic_write_f64_at(ptr: RawPtr, offset: U64, value: F64): Void;
 

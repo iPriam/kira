@@ -352,6 +352,7 @@ pub fn exprSpan(expr: syntax.ast.Expr) source_pkg.Span {
         .member => |node| node.span,
         .index => |node| node.span,
         .call => |node| node.span,
+        .quote => |node| node.span,
         .try_expr => |node| node.span,
     };
 }

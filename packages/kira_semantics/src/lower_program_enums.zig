@@ -107,6 +107,8 @@ pub fn registerGenericEnumInstantiations(ctx: *shared.Context, program: syntax.a
             // Extension declarations contribute fluent modifiers, validated separately; they
             // introduce no enums/types to pre-register here.
             .extend_decl => {},
+            // Macros and macro invocations are expanded and removed before semantics.
+            .macro_decl, .macro_invocation => {},
         }
     }
 }
@@ -423,6 +425,7 @@ fn enumDefaultSpan(expr: syntax.ast.Expr) source_pkg.Span {
         .member => |node| node.span,
         .index => |node| node.span,
         .call => |node| node.span,
+        .quote => |node| node.span,
         .try_expr => |node| node.span,
     };
 }
