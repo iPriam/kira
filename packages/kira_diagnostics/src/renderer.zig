@@ -180,7 +180,10 @@ test "renders labels whose synthetic source path is not a real file" {
         .message = "Kira could not find a local binding named 'x'.",
         .labels = &.{
             diagnostics.primaryLabel(
-                source_pkg.Span.withSource(3, 4, "<macro>/does-not-exist.kira"),
+                // A syntactically valid but absent path (no OS-reserved characters) so
+                // SourceFile.fromPath fails with error.FileNotFound on every platform, exercising
+                // the intended missing-source fallback rather than an invalid-path error.
+                source_pkg.Span.withSource(3, 4, "kira-macro-synthetic/does-not-exist.kira"),
                 "unknown local name",
             ),
         },
