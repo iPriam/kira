@@ -668,6 +668,16 @@ fn existentializeContentType(allocator: std.mem.Allocator, type_expr: *syntax.as
             rewritten.* = .{ .any = .{ .target = target, .span = named.span, .existential = true } };
             return rewritten;
         },
+        .any => |any_type| {
+            // An author who already wrote `any Widget` / `some Widget` on an @Content field still
+            // gets existential storage — force the flag so heterogeneous content never keeps
+            // non-existential `any` (which a later phase would treat as a monomorphized generic).
+            // Keep the inner target as-is; re-wrapping it would produce a nested `some some Widget`.
+            if (any_type.existential) return type_expr;
+            const rewritten = try allocator.create(syntax.ast.TypeExpr);
+            rewritten.* = .{ .any = .{ .target = any_type.target, .span = any_type.span, .existential = true } };
+            return rewritten;
+        },
         else => return type_expr,
     }
 }

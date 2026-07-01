@@ -334,6 +334,9 @@ pub fn typeTextFromSyntax(ctx: *const Context, ty: syntax.ast.TypeExpr) anyerror
             .copy => std.fmt.allocPrint(ctx.allocator, "copy {s}", .{try typeTextFromSyntax(ctx, info.target.*)}),
             .owned => typeTextFromSyntax(ctx, info.target.*),
         },
+        // Keyword-independent by design: `some Target` and `any Target` are the same existential
+        // `construct_any` today, and this text feeds resolved type NAMES used for coercion/dispatch
+        // matching. The surface keyword is surfaced only in display paths (ast_dump, diagnostics).
         .any => |info| std.fmt.allocPrint(ctx.allocator, "any {s}", .{try typeTextFromSyntax(ctx, info.target.*)}),
         .named => |name| ctx.allocator.dupe(u8, name.segments[name.segments.len - 1].text),
         .generic => |info| genericTypeTextFromSyntax(ctx, info),
@@ -468,7 +471,7 @@ pub fn validateAnyConstructType(ctx: *Context, ty: syntax.ast.TypeExpr) !void {
     switch (ty) {
         .ownership => |info| try validateAnyConstructType(ctx, info.target.*),
         .any => |info| {
-            try validateAnyConstructTarget(ctx, info.target.*, info.span);
+            try validateAnyConstructTarget(ctx, info.target.*, info.span, info.existential);
             try validateAnyConstructType(ctx, info.target.*);
         },
         .array => |info| try validateAnyConstructType(ctx, info.element_type.*),
@@ -510,18 +513,18 @@ pub fn paramOwnership(header: FunctionHeader, index: usize) model.OwnershipMode 
     return .owned;
 }
 
-fn validateAnyConstructTarget(ctx: *Context, target: syntax.ast.TypeExpr, span: source_pkg.Span) !void {
+fn validateAnyConstructTarget(ctx: *Context, target: syntax.ast.TypeExpr, span: source_pkg.Span, existential: bool) !void {
     const name = switch (target) {
         .named => |qualified| qualified.segments[qualified.segments.len - 1].text,
         else => {
-            try emitAnyRequiresConstruct(ctx, span, "target is not a construct");
+            try emitAnyRequiresConstruct(ctx, span, "target is not a construct", existential);
             return error.DiagnosticsEmitted;
         },
     };
     if (ctx.construct_headers) |headers| if (headers.contains(name)) return;
     if (ctx.imported_globals.hasConstruct(name)) return;
     if (isBuiltinTypeName(name) or isResolvedNonConstructSymbol(ctx, name)) {
-        try emitAnyRequiresConstruct(ctx, span, "resolved target is not a construct");
+        try emitAnyRequiresConstruct(ctx, span, "resolved target is not a construct", existential);
         return error.DiagnosticsEmitted;
     }
 }
@@ -547,14 +550,15 @@ fn isBuiltinTypeName(name: []const u8) bool {
         std.mem.eql(u8, name, "CString") or std.mem.eql(u8, name, "RawPtr");
 }
 
-fn emitAnyRequiresConstruct(ctx: *Context, span: source_pkg.Span, label: []const u8) !void {
+fn emitAnyRequiresConstruct(ctx: *Context, span: source_pkg.Span, label: []const u8, existential: bool) !void {
+    const keyword = if (existential) "some" else "any";
     try diagnostics.appendOwned(ctx.allocator, ctx.diagnostics, .{
         .severity = .@"error",
         .code = "KSEM097",
-        .title = "any requires a construct",
-        .message = "The `any` qualifier can only be applied to a construct name.",
+        .title = try std.fmt.allocPrint(ctx.allocator, "{s} requires a construct", .{keyword}),
+        .message = try std.fmt.allocPrint(ctx.allocator, "The `{s}` qualifier can only be applied to a construct name.", .{keyword}),
         .labels = &.{diagnostics.primaryLabel(span, label)},
-        .help = "Use `any ConstructName` with a declared construct, or remove `any` from non-construct types.",
+        .help = try std.fmt.allocPrint(ctx.allocator, "Use `{s} ConstructName` with a declared construct, or remove `{s}` from non-construct types.", .{ keyword, keyword }),
     });
 }
 
