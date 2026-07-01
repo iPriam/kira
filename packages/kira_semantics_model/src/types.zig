@@ -39,6 +39,10 @@ pub const ResolvedType = struct {
     kind: Type,
     name: ?[]const u8 = null,
     construct_constraint: ?ConstructConstraint = null,
+    // For a `construct_any` type: `true` when written `some Bound` (existential — dynamic dispatch,
+    // heterogeneous collections), `false` when written `any Bound` (a monomorphized, impl-Trait-style
+    // generic specialized per call site). Both currently lower identically; later phases branch on it.
+    existential: bool = false,
 
     pub fn eql(self: ResolvedType, other: ResolvedType) bool {
         if (self.kind != other.kind) return false;

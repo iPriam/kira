@@ -273,8 +273,9 @@ pub fn typeFromSyntax(ctx: *const Context, ty: syntax.ast.TypeExpr) anyerror!mod
                 .kind = .construct_any,
                 .name = try typeTextFromSyntax(ctx, .{ .any = info }),
                 .construct_constraint = .{ .construct_name = try ctx.allocator.dupe(u8, name.segments[name.segments.len - 1].text) },
+                .existential = info.existential,
             },
-            else => .{ .kind = .construct_any, .name = try typeTextFromSyntax(ctx, .{ .any = info }) },
+            else => .{ .kind = .construct_any, .name = try typeTextFromSyntax(ctx, .{ .any = info }), .existential = info.existential },
         },
         .named => |name| blk: {
             const leaf = name.segments[name.segments.len - 1].text;

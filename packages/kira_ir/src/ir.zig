@@ -4,6 +4,9 @@ pub const ValueType = struct {
     kind: Kind,
     name: ?[]const u8 = null,
     construct_constraint: ?ConstructConstraint = null,
+    // For `construct_any`: `true` = existential `some Bound` (dynamic dispatch), `false` =
+    // monomorphized `any Bound` (impl-Trait-style generic). Both lower identically today.
+    existential: bool = false,
 
     pub const Kind = enum {
         void,

@@ -119,6 +119,9 @@ fn constructAnyResolvedType(ctx: *shared.Context, family: []const u8) !model.Res
         .kind = .construct_any,
         .name = try std.fmt.allocPrint(ctx.allocator, "any {s}", .{family}),
         .construct_constraint = .{ .construct_name = try ctx.allocator.dupe(u8, family) },
+        // The synthesized `self` of an `extend Family` modifier dispatches dynamically over the
+        // whole family — existential, matching `constructExistentialTypeExpr`.
+        .existential = true,
     };
 }
 

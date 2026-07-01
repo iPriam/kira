@@ -15,7 +15,7 @@ pub fn lowerResolvedType(program: model.Program, ty: model.ResolvedType) !ir.Val
         .float => .{ .kind = .float, .name = ty.name },
         .string => .{ .kind = .string },
         .boolean => .{ .kind = .boolean, .name = ty.name },
-        .construct_any => .{ .kind = .construct_any, .name = ty.name, .construct_constraint = if (ty.construct_constraint) |constraint| .{ .construct_name = constraint.construct_name } else null },
+        .construct_any => .{ .kind = .construct_any, .name = ty.name, .construct_constraint = if (ty.construct_constraint) |constraint| .{ .construct_name = constraint.construct_name } else null, .existential = ty.existential },
         .array => .{ .kind = .array, .name = ty.name },
         .raw_ptr, .c_string, .callback, .native_state, .native_state_view => .{ .kind = .raw_ptr, .name = ty.name },
         .enum_instance => .{ .kind = .enum_instance, .name = ty.name },
