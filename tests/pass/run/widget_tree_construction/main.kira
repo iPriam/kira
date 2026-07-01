@@ -1,6 +1,6 @@
 // Caller-provided content executes: a trailing `{ ... }` block at a construction site fills the
 // declaration's `@Content` fields — a `[Widget]` list, a single `Widget`, and named fills for
-// multiple content fields — and the children are stored as `any Widget` values. vm/llvm/hybrid.
+// multiple content fields — and the children are stored as `some Widget` values. vm/llvm/hybrid.
 
 construct Widget {
 }

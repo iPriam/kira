@@ -1,0 +1,31 @@
+comptime macro PropertyWrapper {
+    kind { attribute }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        var hasWrapped: Bool = false
+        for field in target.fields {
+            if field.name.asString() == "wrappedValue" {
+                hasWrapped = true
+            }
+        }
+        if hasWrapped == false {
+            Diagnostics.error("PropertyWrapper requires a wrappedValue field", at: target.syntax)
+            return quote { }
+        }
+        return quote {
+            function ok() -> Bool {
+                return true
+            }
+        }
+    }
+}
+
+@PropertyWrapper
+struct NotAWrapper {
+    var value: Int
+}
+
+@Main
+function main() {
+    return
+}

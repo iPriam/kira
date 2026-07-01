@@ -799,6 +799,10 @@ pub const OwnershipTypeExpr = struct {
 pub const AnyTypeExpr = struct {
     target: *TypeExpr,
     span: Span,
+    // `some Target` (existential / dynamic dispatch) vs `any Target`. Both currently lower to the
+    // same existential `construct_any` semantics; this flag distinguishes the surface keyword so a
+    // later phase can give `any` monomorphized-generic meaning while `some` keeps dynamic dispatch.
+    existential: bool = false,
 };
 
 pub const ArrayTypeExpr = struct {

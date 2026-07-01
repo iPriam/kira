@@ -384,7 +384,7 @@ fn dumpTypeExprInline(writer: anytype, ty: ast.TypeExpr) anyerror!void {
             try dumpTypeExprInline(writer, value.target.*);
         },
         .any => |value| {
-            try writer.writeAll("any ");
+            try writer.writeAll(if (value.existential) "some " else "any ");
             try dumpTypeExprInline(writer, value.target.*);
         },
         .array => |value| {

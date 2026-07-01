@@ -37,9 +37,9 @@ Widget Spacer {
 
 @Main
 function main() {
-    let children: [any Widget] = [Text(text: "one"), Spacer(), Text(text: "two")]
+    let children: [some Widget] = [Text(text: "one"), Spacer(), Text(text: "two")]
     for child in children {
-        let node: any Node = child.node
+        let node: some Node = child.node
         print(node.label)
     }
     return

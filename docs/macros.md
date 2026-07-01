@@ -375,8 +375,8 @@ struct Vec2 {
 ## Case study: property wrappers (where the macro line falls)
 
 `PropertyWrapper` is an ordinary attribute macro. It validates that the annotated struct has a
-`wrappedValue` member, records whether it also has `projectedValue`, and tags the type with a
-conformance:
+`wrappedValue` member, records whether it also has `projectedValue`, and generates conformance
+query functions for the type:
 
 ```kira
 comptime macro PropertyWrapper {
@@ -395,13 +395,27 @@ comptime macro PropertyWrapper {
             return quote { }
         }
         return quote {
-            extend #{target.name}: PropertyWrapperConformance {
-                static let hasProjectedValue: Bool = #{hasProjectedValue}
-            }
+            function is_#{target.name}_propertyWrapper() -> Bool { return true }
+            function has_#{target.name}_projectedValue() -> Bool { return #{hasProjectedValue} }
         }
     }
 }
+
+@PropertyWrapper
+struct State {
+    var wrappedValue: Int
+    var projectedValue: Bool
+}
 ```
+
+The conformance is surfaced as free functions whose names are glued to the annotated type via a
+mid-identifier splice (`is_#{target.name}_propertyWrapper` → `is_State_propertyWrapper`), because
+Kira `extend` applies only to *constructs* — not plain structs — and Kira has no `static` members,
+so the `extend T: Conformance { static let ... }` shape is not expressible here. The behaviour is
+identical in spirit: the macro sees one declaration, validates it, and emits a Bool-returning
+conformance surface derived from its fields. This exact macro is exercised end-to-end across
+vm / llvm / hybrid in `tests/pass/run/macro_property_wrapper` (with the missing-`wrappedValue`
+diagnostic, `KMAC021`, pinned by `tests/fail/semantics/macro_property_wrapper_missing`).
 
 That is *everything* `PropertyWrapper` does: it validates one declaration and tags it. An attribute
 macro only ever sees the single declaration it is attached to, so it has no way to reach into
@@ -409,8 +423,9 @@ macro only ever sees the single declaration it is attached to, so it has no way 
 different declaration, one that does not even exist until `State` has already been validated.
 
 So the lowering of `@State var count: Int = 0` is **not a macro**. It is a single fixed rule, owned
-by the compiler, that runs whenever a property declaration is annotated with a type conforming to
-`PropertyWrapperConformance`. Given `@State var count: Int = 0`, the compiler generates a backing
+by the compiler, that runs whenever a property declaration is annotated with a validated
+property-wrapper type (one whose `@PropertyWrapper` check passed). Given `@State var count: Int = 0`,
+the compiler generates a backing
 field (`_count`), a computed property under the original name proxying `wrappedValue`, and — only if
 `hasProjectedValue` was recorded `true` — a `$`-prefixed computed property proxying
 `projectedValue`:

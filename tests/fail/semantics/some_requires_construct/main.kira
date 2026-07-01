@@ -1,0 +1,5 @@
+// `some` is existential over a construct family, so it requires a construct — the same rule as
+// `any` today, but the diagnostic must name the `some` keyword the author actually wrote.
+function acceptInt(value: some Int) {
+    return;
+}

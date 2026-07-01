@@ -1,5 +1,5 @@
-// A concrete construct-backed declaration value coerces to `any Family`, and a heterogeneous
-// array of different declarations of the same family unifies to `[any Family]` — the basis for
+// A concrete construct-backed declaration value coerces to `some Family`, and a heterogeneous
+// array of different declarations of the same family unifies to `[some Family]` — the basis for
 // caller-provided widget children. Executes identically on vm, llvm, and hybrid.
 
 construct Widget {
@@ -14,8 +14,8 @@ Widget Spacer {
 
 @Main
 function main() {
-    let single: any Widget = Text(text: "one")
-    let items: [any Widget] = [Text(text: "a"), Spacer(), Text(text: "b")]
+    let single: some Widget = Text(text: "one")
+    let items: [some Widget] = [Text(text: "a"), Spacer(), Text(text: "b")]
     print(items.count)
     return
 }

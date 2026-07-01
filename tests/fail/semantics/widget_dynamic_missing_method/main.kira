@@ -18,7 +18,7 @@ Widget Spacer {
 Node TextNode {
 }
 
-function show(widget: any Widget) {
+function show(widget: some Widget) {
     widget.node
 }
 

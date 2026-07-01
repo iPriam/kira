@@ -1,4 +1,4 @@
-// Returning `any Widget` from a helper must preserve dynamic dispatch across
+// Returning `some Widget` from a helper must preserve dynamic dispatch across
 // vm, llvm, and hybrid.
 
 construct Node {
@@ -32,7 +32,7 @@ extend Widget {
     }
 }
 
-function identity(widget: any Widget) -> any Widget {
+function identity(widget: some Widget) -> some Widget {
     return widget
 }
 

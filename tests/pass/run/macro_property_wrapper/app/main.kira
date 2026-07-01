@@ -1,0 +1,66 @@
+// @PropertyWrapper — a procedural attribute macro.
+//
+// It validates the annotated struct exposes a `wrappedValue` field (a hard error via
+// Diagnostics.error otherwise — see tests/fail/semantics/macro_property_wrapper_missing) and
+// records whether the struct also has a `projectedValue` field. It then generates, for the
+// annotated type, free query functions reporting that conformance.
+//
+// Real-syntax note: Kira `extend` applies only to *constructs*, and there is no `static`, so the
+// conformance surface is expressed as generated free functions (name-glued to the type via
+// mid-identifier splice) rather than the `extend T: Conformance { static let ... }` shape sketched
+// in docs/macros.md. Expansion is a frontend AST transform, so VM / LLVM / hybrid are identical by
+// construction.
+
+comptime macro PropertyWrapper {
+    kind { attribute }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        var hasWrapped: Bool = false
+        var hasProjected: Bool = false
+        for field in target.fields {
+            if field.name.asString() == "wrappedValue" {
+                hasWrapped = true
+            }
+            if field.name.asString() == "projectedValue" {
+                hasProjected = true
+            }
+        }
+        if hasWrapped == false {
+            Diagnostics.error("PropertyWrapper requires a wrappedValue field", at: target.syntax)
+            return quote { }
+        }
+        return quote {
+            function is_#{target.name}_propertyWrapper() -> Bool {
+                return true
+            }
+            function has_#{target.name}_projectedValue() -> Bool {
+                return #{hasProjected}
+            }
+        }
+    }
+}
+
+@PropertyWrapper
+struct State {
+    var wrappedValue: Int
+    var projectedValue: Bool
+}
+
+@PropertyWrapper
+struct Clamped {
+    var wrappedValue: Int
+}
+
+@Main
+function main() {
+    if is_State_propertyWrapper() {
+        print("State is a property wrapper")
+    }
+    if has_State_projectedValue() {
+        print("State has a projected value")
+    }
+    if has_Clamped_projectedValue() {
+        print("Clamped has a projected value")
+    }
+    print("done")
+}

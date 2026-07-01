@@ -47,12 +47,12 @@ extend Widget {
     }
 }
 
-function show(widget: any Widget) {
-    let node: any Node = widget.node
+function show(widget: some Widget) {
+    let node: some Node = widget.node
     print(node.label)
 }
 
-function showMethod(widget: any Widget) {
+function showMethod(widget: some Widget) {
     print(widget.describe())
 }
 

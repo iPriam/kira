@@ -1,0 +1,25 @@
+// A procedural macro's generated declarations are really analyzed: a semantic error inside
+// generated code (here, a reference to an undefined name) must surface to the user with its real
+// code (KSEM012) rather than being swallowed. (The CLI text-renderer crash on such synthetic-span
+// diagnostics is guarded separately by a unit test in packages/kira_diagnostics/src/renderer.zig.)
+comptime macro BadRef {
+    kind { attribute }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        return quote {
+            function generatedHelper() -> Int {
+                return undefinedSymbolFromMacro
+            }
+        }
+    }
+}
+
+@BadRef
+struct PlainStruct {
+    var value: Int
+}
+
+@Main
+function main() {
+    return
+}

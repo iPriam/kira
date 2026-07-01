@@ -1,0 +1,13 @@
+backends = ["vm", "llvm", "hybrid"]
+
+[phases.check]
+result = "fail"
+diagnostic_code = "KSEM012"
+diagnostic_title = "unknown local name"
+stage = "semantics"
+
+[phases.build]
+result = "blocked"
+
+[phases.run]
+result = "blocked"

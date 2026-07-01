@@ -261,3 +261,66 @@ Test MxxEnumDerive {
     test { return mxEnumVariantCount() }
     expect { let e: Result<Int, TestFailure> = Result.Ok(3); return e }
 }
+
+// --- Property-wrapper attribute macro (@PropertyWrapper) ---------------------
+// Validates the annotated struct exposes a `wrappedValue` field, records whether it also has
+// `projectedValue`, and generates free query functions (name-glued to the type via mid-identifier
+// splice) reporting that conformance. Kira `extend` applies only to *constructs* and there is no
+// `static`, so conformance is surfaced as generated free functions rather than the
+// `extend T: Conformance { static let ... }` sketch in docs/macros.md. The missing-`wrappedValue`
+// diagnostic path (KMAC021) is covered by tests/fail/semantics/macro_property_wrapper_missing.
+
+comptime macro MxPropertyWrapper {
+    kind { attribute }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        var hasWrapped: Bool = false
+        var hasProjected: Bool = false
+        for field in target.fields {
+            if field.name.asString() == "wrappedValue" {
+                hasWrapped = true
+            }
+            if field.name.asString() == "projectedValue" {
+                hasProjected = true
+            }
+        }
+        if hasWrapped == false {
+            Diagnostics.error("PropertyWrapper requires a wrappedValue field", at: target.syntax)
+            return quote { }
+        }
+        return quote {
+            function is_#{target.name}_propertyWrapper() -> Bool {
+                return true
+            }
+            function has_#{target.name}_projectedValue() -> Bool {
+                return #{hasProjected}
+            }
+        }
+    }
+}
+
+@MxPropertyWrapper
+struct MxStateWrapper {
+    var wrappedValue: Int
+    var projectedValue: Bool
+}
+
+@MxPropertyWrapper
+struct MxPlainWrapper {
+    var wrappedValue: Int
+}
+
+Test MxxPropertyWrapperConformance {
+    test { return is_MxStateWrapper_propertyWrapper() }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+}
+
+Test MxxPropertyWrapperHasProjected {
+    test { return has_MxStateWrapper_projectedValue() }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+}
+
+Test MxxPropertyWrapperNoProjected {
+    test { return has_MxPlainWrapper_projectedValue() }
+    expect { let e: Result<Bool, TestFailure> = Result.Ok(false); return e }
+}

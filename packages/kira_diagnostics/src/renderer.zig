@@ -96,7 +96,14 @@ fn renderSecondaryLabel(writer: anytype, fallback_source: *const SourceFile, lab
 fn loadAlternateSourceForLabel(label: Label, fallback_source: *const SourceFile) !?SourceFile {
     const source_path = label.span.source_path orelse return null;
     if (std.mem.eql(u8, source_path, fallback_source.path)) return null;
-    return try SourceFile.fromPath(fallback_source.allocator, source_path);
+    // A label may point at a span the compiler synthesized (e.g. macro-generated declarations),
+    // whose `source_path` is not a real file on disk. Degrade to the fallback source for a
+    // missing path rather than aborting the whole diagnostic with an internal FileNotFound — but
+    // still surface a genuine read failure (permissions, I/O) instead of silently hiding it.
+    return SourceFile.fromPath(fallback_source.allocator, source_path) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => err,
+    };
 }
 
 fn renderHeader(writer: anytype, diagnostic: Diagnostic) !void {
@@ -152,6 +159,43 @@ test "renders labeled diagnostics with notes and help" {
     try std.testing.expect(std.mem.indexOf(u8, stream.buffered(), "sample.kira:2:11") != null);
     try std.testing.expect(std.mem.indexOf(u8, stream.buffered(), "help: Insert a value after '=' or remove the assignment.") != null);
     try std.testing.expect(std.mem.indexOf(u8, stream.buffered(), "note: Parsing stopped after this statement.") != null);
+}
+
+test "renders labels whose synthetic source path is not a real file" {
+    // A label may carry a span the compiler synthesized (e.g. a macro-generated declaration),
+    // whose source_path names no file on disk. Rendering must degrade to the primary source
+    // instead of aborting the whole diagnostic with an internal FileNotFound.
+    const diagnostics = @import("root.zig");
+    const source_pkg = @import("kira_source");
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    const source = try source_pkg.SourceFile.initOwned(allocator, "sample.kira", "function main() {\n}\n");
+    const diagnostic = diagnostics.Diagnostic{
+        .severity = .@"error",
+        .code = "KSEM012",
+        .title = "unknown local name",
+        .message = "Kira could not find a local binding named 'x'.",
+        .labels = &.{
+            diagnostics.primaryLabel(
+                // A syntactically valid but absent path (no OS-reserved characters) so
+                // SourceFile.fromPath fails with error.FileNotFound on every platform, exercising
+                // the intended missing-source fallback rather than an invalid-path error.
+                source_pkg.Span.withSource(3, 4, "kira-macro-synthetic/does-not-exist.kira"),
+                "unknown local name",
+            ),
+        },
+    };
+
+    var buffer: [1024]u8 = undefined;
+    var stream = std.Io.Writer.fixed(&buffer);
+    // Must not return error.FileNotFound; the diagnostic renders against the fallback source.
+    try render(&stream, &source, diagnostic);
+
+    try std.testing.expect(std.mem.indexOf(u8, stream.buffered(), "error[KSEM012]: unknown local name") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stream.buffered(), "unknown local name") != null);
 }
 
 test "renders zero-length eof labels without overflowing" {

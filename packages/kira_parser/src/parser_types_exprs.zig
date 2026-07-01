@@ -62,13 +62,15 @@ pub fn parseTypeExpr(self: *Parser) anyerror!*syntax.ast.TypeExpr {
         return node;
     }
 
-    if (self.at(.identifier) and std.mem.eql(u8, self.peek().lexeme, "any")) {
+    if (self.at(.identifier) and (std.mem.eql(u8, self.peek().lexeme, "any") or std.mem.eql(u8, self.peek().lexeme, "some"))) {
+        const existential = std.mem.eql(u8, self.peek().lexeme, "some");
         const start = self.advance().span.start;
         const target = try self.parseTypeExpr();
         const node = try self.allocator.create(syntax.ast.TypeExpr);
         node.* = .{ .any = .{
             .target = target,
             .span = source_pkg.Span.init(start, typeSpan(target.*).end),
+            .existential = existential,
         } };
         return node;
     }

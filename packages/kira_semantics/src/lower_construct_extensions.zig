@@ -98,7 +98,7 @@ pub fn lowerExtendFunctions(
         try params.append(.{
             .annotations = &.{},
             .name = "self",
-            .type_expr = try constructAnyTypeExpr(ctx, family, extend_decl.construct_name.span),
+            .type_expr = try constructExistentialTypeExpr(ctx, family, extend_decl.construct_name.span),
             .span = function_decl.span,
         });
         try params.appendSlice(function_decl.params);
@@ -122,14 +122,17 @@ fn constructAnyResolvedType(ctx: *shared.Context, family: []const u8) !model.Res
     };
 }
 
-fn constructAnyTypeExpr(ctx: *shared.Context, family: []const u8, span: source_pkg.Span) !*syntax.ast.TypeExpr {
+fn constructExistentialTypeExpr(ctx: *shared.Context, family: []const u8, span: source_pkg.Span) !*syntax.ast.TypeExpr {
+    // The synthesized `self` of an `extend Family` modifier dispatches dynamically over the whole
+    // construct family, so it is an existential (`some Family`) — mark it so a later phase that
+    // gives `any` monomorphized-generic meaning does not misclassify it.
     const target = try ctx.allocator.create(syntax.ast.TypeExpr);
     const segments = try ctx.allocator.alloc(syntax.ast.NameSegment, 1);
     segments[0] = .{ .text = family, .span = span };
     target.* = .{ .named = .{ .segments = segments, .span = span } };
-    const any_ty = try ctx.allocator.create(syntax.ast.TypeExpr);
-    any_ty.* = .{ .any = .{ .target = target, .span = span } };
-    return any_ty;
+    const existential_ty = try ctx.allocator.create(syntax.ast.TypeExpr);
+    existential_ty.* = .{ .any = .{ .target = target, .span = span, .existential = true } };
+    return existential_ty;
 }
 
 fn familyListContains(families: []const []const u8, family: []const u8) bool {
