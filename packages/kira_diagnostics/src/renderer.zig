@@ -97,9 +97,13 @@ fn loadAlternateSourceForLabel(label: Label, fallback_source: *const SourceFile)
     const source_path = label.span.source_path orelse return null;
     if (std.mem.eql(u8, source_path, fallback_source.path)) return null;
     // A label may point at a span the compiler synthesized (e.g. macro-generated declarations),
-    // whose `source_path` is not a real file on disk. Degrade to the fallback source rather than
-    // aborting the whole diagnostic render with an internal FileNotFound.
-    return SourceFile.fromPath(fallback_source.allocator, source_path) catch return null;
+    // whose `source_path` is not a real file on disk. Degrade to the fallback source for a
+    // missing path rather than aborting the whole diagnostic with an internal FileNotFound — but
+    // still surface a genuine read failure (permissions, I/O) instead of silently hiding it.
+    return SourceFile.fromPath(fallback_source.allocator, source_path) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => err,
+    };
 }
 
 fn renderHeader(writer: anytype, diagnostic: Diagnostic) !void {
