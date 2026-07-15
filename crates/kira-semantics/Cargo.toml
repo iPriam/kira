@@ -1,0 +1,19 @@
+[package]
+name = "kira-semantics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+kira-core.workspace = true
+kira-source.workspace = true
+kira-syntax-model.workspace = true
+kira-diagnostics.workspace = true
+kira-semantics-model.workspace = true
+kira-runtime-abi.workspace = true
+kira-lexer.workspace = true
+kira-parser.workspace = true

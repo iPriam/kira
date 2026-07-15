@@ -1,0 +1,4 @@
+/target
+kira.lock
+.kira-build/
+.DS_Store
