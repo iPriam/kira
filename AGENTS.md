@@ -84,10 +84,20 @@ or contributor is editing.
   types flat (`kira_manifest::ProjectManifest`, not deep module paths), so
   downstream ports target stable names. Renaming a pub item means fixing
   every consumer in the same change.
-- **Query-shaped frontend.** Semantics/frontend passes are pure functions
-  over inputs (salsa-ready): no hidden global state, no interior-mutability
-  caches smuggled into analysis. salsa itself lands when the LSP work
-  starts, not before.
+- **Query-shaped frontend on salsa.** The LSP is a first-class product, so
+  the frontend is built on salsa from the start: parsing/semantics are
+  salsa queries, no hidden global state, no interior-mutability caches
+  smuggled into analysis. The parser is error-resilient — it always
+  produces a tree plus diagnostics, never bails on the first error — and
+  every node carries spans, because the language server consumes the same
+  frontend the compiler does.
+- **The VM is a portable core.** The VM runs on desktop, mobile, and wasm:
+  `kira-vm-runtime` (and every crate below it) contains no filesystem,
+  process, thread, or dynamic-loading calls and must compile for
+  `wasm32-unknown-unknown`. The VM consumes bytes and talks to the world
+  through a host-capabilities trait (print, clock, rng, …) supplied by the
+  embedder; native-only functionality (dynamic FFI, dlopen) is
+  feature-gated and lives outside the portable core.
 
 ## Code guidelines — types and memory
 
@@ -117,13 +127,15 @@ or contributor is editing.
 - **Append-only wire formats.** Opcodes, KBC magics, serialized tags, and
   wire enums are append-only. Kai never renumbers, reorders, or inserts
   mid-enum.
-- **Zig is the spec.** Every ported item keeps its Zig/C counterpart in the
-  doc comment until migration completes. When Zig comments or docs disagree
-  with what the Zig compiler actually does, compiled behavior wins (the
-  stale `instruction.zig` discriminant asserts are the cautionary tale).
-  Kai ports behavior; Kai doesn't invent it. Behavior parity is proven
-  against kira-zig (differential runs, KBC byte-diffs, corpus checksums),
-  not asserted.
+- **Zig is the BEHAVIOR spec, not the code spec.** kira-zig defines what
+  the language does — syntax, semantics, runtime behavior, ABI layouts,
+  wire formats. It does not define how the Rust code is shaped: Kai writes
+  fresh, simple, idiomatic Rust and never transliterates Zig line by line
+  or mirrors Zig file splits. When Zig comments or docs disagree with what
+  the Zig compiler actually does, compiled behavior wins (the stale
+  `instruction.zig` discriminant asserts are the cautionary tale). Parity
+  is proven by differential runs against kira-zig (same program, same
+  output, same diagnostics), not asserted.
 - **No lint escapes.** No `#[allow(...)]` and no loosening of workspace
   lints; the fix is always in the code. `cargo clippy --workspace
   --all-targets -- -D warnings` green is the bar for every change.
