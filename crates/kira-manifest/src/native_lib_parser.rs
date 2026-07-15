@@ -1,3 +1,3 @@
 //! Parser for native library manifests.
 //!
-//! Port target: kira-zig `kira_manifest/src/native_lib_parser.zig`.
+//! Design pending: filled in as native-library support lands.

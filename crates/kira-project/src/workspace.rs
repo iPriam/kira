@@ -1,6 +1,4 @@
 //! Workspace model: a root path plus its loaded project.
-//!
-//! Ported from kira-zig `kira_project/src/workspace.zig`.
 
 use crate::project::Project;
 

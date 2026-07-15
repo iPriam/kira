@@ -1,6 +1,4 @@
 //! The `Tests { backends: [...], phase: ... }` manifest declaration.
-//!
-//! Ported from kira-zig `kira_manifest/src/tests_config.zig`.
 
 use crate::platform_config::Backend;
 

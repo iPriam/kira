@@ -1,7 +1,6 @@
 //! Central catalog of diagnostic codes, domains, compiler phases, and message builders.
 //!
 //! Layer 0 of the Kira package graph.
-//! Ported from kira-zig `packages/kira_diagnostic_messages`.
 
 pub mod backend_messages;
 pub mod cli_messages;

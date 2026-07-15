@@ -1,7 +1,6 @@
 //! Diagnostic model: severities, labels, suggestions, and rendering.
 //!
 //! Layer 0 of the Kira package graph.
-//! Ported from kira-zig `packages/kira_diagnostics`.
 
 pub mod diagnostic;
 pub mod label;

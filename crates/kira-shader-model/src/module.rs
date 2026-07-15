@@ -1,11 +1,9 @@
 //! Shader module declarations: shader kind, resource groups, interfaces,
 //! options, and entry points.
-//!
-//! Ported from kira-zig `packages/kira_shader_model/src/module.zig`.
 
 use crate::types;
 
-/// Graphics vs compute shader. Zig: `ShaderKind`.
+/// Graphics vs compute shader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShaderKind {
     Graphics,
@@ -13,7 +11,6 @@ pub enum ShaderKind {
 }
 
 /// Canonical resource group class, derived from the group name.
-/// Zig: `GroupClass`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GroupClass {
     Frame,
@@ -25,7 +22,7 @@ pub enum GroupClass {
     Custom,
 }
 
-/// Kind of a bound shader resource. Zig: `ResourceKind`.
+/// Kind of a bound shader resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
     Uniform,
@@ -34,14 +31,14 @@ pub enum ResourceKind {
     Sampler,
 }
 
-/// A compile-time shader option declaration. Zig: `OptionDecl`.
+/// A compile-time shader option declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OptionDecl {
     pub name: String,
     pub ty: types::Type,
 }
 
-/// One field of a stage interface block. Zig: `InterfaceField`.
+/// One field of a stage interface block.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InterfaceField {
     pub name: String,
@@ -50,7 +47,7 @@ pub struct InterfaceField {
     pub interpolation: Option<types::Interpolation>,
 }
 
-/// A stage input/output interface block. Zig: `Interface`.
+/// A stage input/output interface block.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Interface {
     pub name: String,
@@ -58,7 +55,7 @@ pub struct Interface {
     pub fields: Vec<InterfaceField>,
 }
 
-/// One bound resource inside a group. Zig: `Resource`.
+/// One bound resource inside a group.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Resource {
     pub name: String,
@@ -67,7 +64,7 @@ pub struct Resource {
     pub access: Option<types::AccessMode>,
 }
 
-/// A named group of resources bound together. Zig: `ResourceGroup`.
+/// A named group of resources bound together.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResourceGroup {
     pub name: String,
@@ -75,7 +72,7 @@ pub struct ResourceGroup {
     pub resources: Vec<Resource>,
 }
 
-/// A stage entry point declaration. Zig: `EntryPoint`.
+/// A stage entry point declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EntryPoint {
     pub stage: types::Stage,
@@ -83,7 +80,7 @@ pub struct EntryPoint {
     pub output_name: Option<String>,
 }
 
-/// A complete shader declaration. Zig: `ShaderDecl`.
+/// A complete shader declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShaderDecl {
     pub name: String,
@@ -94,7 +91,6 @@ pub struct ShaderDecl {
 }
 
 /// Classify a resource group by its canonical name (case-insensitive).
-/// Zig: `classifyGroupName`.
 pub fn classify_group_name(name: &str) -> GroupClass {
     if name.eq_ignore_ascii_case("Frame") {
         GroupClass::Frame

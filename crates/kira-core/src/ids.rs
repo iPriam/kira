@@ -1,7 +1,4 @@
-//! Opaque `u32` id newtypes shared across the compiler.
-//!
-//! Mirrors kira-zig `packages/kira_core/src/ids.zig` (`Id(comptime T)` there,
-//! one newtype per id kind here).
+//! Opaque `u32` id newtypes shared across the compiler, one per id kind.
 
 macro_rules! define_id {
     ($(#[$doc:meta])* $name:ident) => {

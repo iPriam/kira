@@ -7,38 +7,3 @@ repository.workspace = true
 
 [lints]
 workspace = true
-
-[dependencies]
-kira-core.workspace = true
-kira-source.workspace = true
-kira-diagnostics.workspace = true
-kira-diagnostic-messages.workspace = true
-kira-syntax-model.workspace = true
-kira-lexer.workspace = true
-kira-parser.workspace = true
-kira-semantics.workspace = true
-kira-ir.workspace = true
-kira-bytecode.workspace = true
-kira-vm-runtime.workspace = true
-kira-manifest.workspace = true
-kira-project.workspace = true
-kira-package-manager.workspace = true
-kira-program-graph.workspace = true
-kira-build-definition.workspace = true
-kira-backend-api.workspace = true
-kira-native-lib-definition.workspace = true
-kira-hybrid-definition.workspace = true
-kira-runtime-abi.workspace = true
-kira-llvm-backend.workspace = true
-kira-toolchain.workspace = true
-kira-dynamic-ffi.workspace = true
-kira-ksl-syntax-model.workspace = true
-kira-ksl-parser.workspace = true
-kira-ksl-semantics.workspace = true
-kira-shader-ir.workspace = true
-kira-shader-model.workspace = true
-kira-glsl-backend.workspace = true
-kira-wgsl-backend.workspace = true
-kira-hlsl-backend.workspace = true
-kira-msl-backend.workspace = true
-kira-spirv-backend.workspace = true

@@ -1,6 +1,4 @@
 //! Diagnostic domains: which subsystem owns a diagnostic.
-//!
-//! Mirrors kira-zig `packages/kira_diagnostic_messages/src/DiagnosticDomain.zig`.
 
 /// The subsystem a diagnostic belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -20,7 +18,7 @@ pub enum DiagnosticDomain {
 }
 
 impl DiagnosticDomain {
-    /// Returns the domain's tag as rendered in diagnostics (Zig `@tagName`).
+    /// Returns the domain's tag as rendered in diagnostics.
     pub fn tag(self) -> &'static str {
         match self {
             DiagnosticDomain::Cli => "cli",

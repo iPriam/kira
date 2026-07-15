@@ -1,9 +1,7 @@
 //! Core shader type system: stages, scalar/vector/matrix types, resource
 //! type descriptors, and builtin legality rules.
-//!
-//! Ported from kira-zig `packages/kira_shader_model/src/types.zig`.
 
-/// Pipeline stage a shader function runs in. Zig: `Stage`.
+/// Pipeline stage a shader function runs in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Stage {
     Vertex,
@@ -11,14 +9,14 @@ pub enum Stage {
     Compute,
 }
 
-/// Direction of a stage interface block. Zig: `InterfaceDirection`.
+/// Direction of a stage interface block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InterfaceDirection {
     Input,
     Output,
 }
 
-/// Scalar element type. Zig: `ScalarType`.
+/// Scalar element type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScalarType {
     Bool,
@@ -27,21 +25,21 @@ pub enum ScalarType {
     Float,
 }
 
-/// Vector of scalars. Zig: `VectorType` (`scalar`, `width`).
+/// Vector of scalars.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VectorType {
     pub scalar: ScalarType,
     pub width: u8,
 }
 
-/// Column-major float matrix. Zig: `MatrixType` (`columns`, `rows`).
+/// Column-major float matrix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MatrixType {
     pub columns: u8,
     pub rows: u8,
 }
 
-/// Texture resource dimensionality. Zig: `TextureDimension`.
+/// Texture resource dimensionality.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TextureDimension {
     Texture2d,
@@ -52,21 +50,21 @@ pub enum TextureDimension {
     Texture2dUint,
 }
 
-/// Sampler resource flavor. Zig: `SamplerKind`.
+/// Sampler resource flavor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SamplerKind {
     Filtering,
     Comparison,
 }
 
-/// Storage-resource access mode. Zig: `AccessMode`.
+/// Storage-resource access mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccessMode {
     Read,
     ReadWrite,
 }
 
-/// Varying interpolation qualifier. Zig: `Interpolation`.
+/// Varying interpolation qualifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Interpolation {
     Perspective,
@@ -74,7 +72,7 @@ pub enum Interpolation {
     Flat,
 }
 
-/// Stage builtin values. Zig: `Builtin`.
+/// Stage builtin values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Builtin {
     Position,
@@ -88,23 +86,22 @@ pub enum Builtin {
     LocalIndex,
 }
 
-/// A KSL-visible shader type. Zig: `Type` (tagged union).
+/// A KSL-visible shader type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Void,
     Scalar(ScalarType),
     Vector(VectorType),
     Matrix(MatrixType),
-    /// Reference to a user-declared struct by name. Zig: `struct_ref: []const u8`.
+    /// Reference to a user-declared struct by name.
     StructRef(String),
     Texture(TextureDimension),
     Sampler(SamplerKind),
-    /// Unsized array element type. Zig: `runtime_array: *const Type`.
+    /// Unsized array element type.
     RuntimeArray(Box<Type>),
 }
 
 /// Whether `builtin` is legal for `stage`/`direction`.
-/// Zig: `builtinAllowed`.
 pub fn builtin_allowed(builtin: Builtin, stage: Stage, direction: InterfaceDirection) -> bool {
     match builtin {
         Builtin::Position => {

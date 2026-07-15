@@ -1,8 +1,7 @@
 //! The collection of all source files known to one compilation.
 //!
-//! Rust-port addition: kira-zig threads `*const SourceFile` and a thread-local
-//! default source path around; the Rust port instead resolves a [`SourceId`]
-//! through this map.
+//! Files are addressed by [`SourceId`] and resolved through this map, so
+//! spans and diagnostics stay free of borrows into file storage.
 
 use crate::source_file::SourceFile;
 use crate::span::SourceId;

@@ -1,13 +1,11 @@
 //! Reflection metadata emitted alongside lowered shaders: backend targets,
 //! binding assignments, layouts, and stage/resource summaries the graphics
 //! host consumes at pipeline-creation time.
-//!
-//! Ported from kira-zig `packages/kira_shader_model/src/reflection.zig`.
 
 use crate::module;
 use crate::types;
 
-/// Shader-language backend a shader was lowered for. Zig: `BackendTarget`.
+/// Shader-language backend a shader was lowered for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackendTarget {
     Glsl330,
@@ -19,7 +17,6 @@ pub enum BackendTarget {
 
 impl BackendTarget {
     /// Parse a user-facing backend name (accepts common aliases).
-    /// Zig: `BackendTarget.parse`.
     pub fn parse(value: &str) -> Option<BackendTarget> {
         match value {
             "glsl" | "glsl_330" | "glsl330" => Some(BackendTarget::Glsl330),
@@ -31,7 +28,7 @@ impl BackendTarget {
         }
     }
 
-    /// Canonical label. Zig: `BackendTarget.label` (`@tagName`).
+    /// Canonical label.
     pub fn label(self) -> &'static str {
         match self {
             BackendTarget::Glsl330 => "glsl_330",
@@ -43,7 +40,7 @@ impl BackendTarget {
     }
 }
 
-/// Per-backend binding assignment for a resource. Zig: `BackendBinding`.
+/// Per-backend binding assignment for a resource.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackendBinding {
     pub target: BackendTarget,
@@ -52,7 +49,7 @@ pub struct BackendBinding {
     pub glsl_name: Option<String>,
 }
 
-/// Reflected compile-time option. Zig: `ReflectedOption`.
+/// Reflected compile-time option.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReflectedOption {
     pub name: String,
@@ -60,7 +57,7 @@ pub struct ReflectedOption {
     pub default_value: String,
 }
 
-/// Reflected interface field. Zig: `ReflectedField`.
+/// Reflected interface field.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReflectedField {
     pub name: String,
@@ -70,7 +67,7 @@ pub struct ReflectedField {
     pub location: Option<u32>,
 }
 
-/// One field of a reflected uniform/storage layout. Zig: `ReflectedLayoutField`.
+/// One field of a reflected uniform/storage layout.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReflectedLayoutField {
     pub name: String,
@@ -80,7 +77,7 @@ pub struct ReflectedLayoutField {
     pub stride: u32,
 }
 
-/// A reflected memory layout for a struct class. Zig: `ReflectedLayout`.
+/// A reflected memory layout for a struct class.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReflectedLayout {
     pub class: String,
@@ -89,7 +86,7 @@ pub struct ReflectedLayout {
     pub fields: Vec<ReflectedLayoutField>,
 }
 
-/// A reflected user struct with optional layouts. Zig: `ReflectedType`.
+/// A reflected user struct with optional layouts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReflectedType {
     pub name: String,
@@ -98,7 +95,7 @@ pub struct ReflectedType {
     pub storage_layout: Option<ReflectedLayout>,
 }
 
-/// A reflected stage entry. Zig: `ReflectedStage`.
+/// A reflected stage entry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReflectedStage {
     pub stage: types::Stage,
@@ -110,7 +107,7 @@ pub struct ReflectedStage {
     pub outputs: Vec<ReflectedField>,
 }
 
-/// A reflected resource binding. Zig: `ReflectedResource`.
+/// A reflected resource binding.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReflectedResource {
     pub group_name: String,
@@ -124,7 +121,7 @@ pub struct ReflectedResource {
     pub backend_bindings: Vec<BackendBinding>,
 }
 
-/// The complete reflection blob for one lowered shader. Zig: `Reflection`.
+/// The complete reflection blob for one lowered shader.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reflection {
     pub shader_name: String,

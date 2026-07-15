@@ -1,6 +1,4 @@
-//! The devflow verb set and (once ported) their implementations.
-//!
-//! Port target: kira-zig `kira_devflow/src/commands.zig`.
+//! The devflow verb set and their implementations.
 
 /// Every verb devflow accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

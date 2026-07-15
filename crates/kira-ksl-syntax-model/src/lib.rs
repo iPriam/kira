@@ -1,10 +1,7 @@
-//! KSL (Kira Shading Language) tokens and AST.
+//! KSL (Kira Shading Language) token set and syntax tree.
 //!
 //! Layer 1 of the Kira package graph.
-//! Ported from kira-zig `packages/kira_ksl_syntax_model`.
-
-pub mod ast;
-pub mod token;
-
-pub use ast::Module;
-pub use token::{Token, TokenKind};
+//!
+//! Design pending. The KSL frontend defines its own token kinds and syntax
+//! tree from the shader-language corpus, following the same index/arena,
+//! span-carrying conventions as the core syntax model.

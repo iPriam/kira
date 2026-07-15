@@ -1,7 +1,7 @@
 //! Template-driven project generation.
 //!
-//! Ported from kira-zig `kira_app_generation/src/generator.zig`. The copy
-//! machinery lands with the port; `TemplateKind` is the stable surface.
+//! The copy machinery lands as generation grows; `TemplateKind` is the stable
+//! surface.
 
 /// Which template `kira new` instantiates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

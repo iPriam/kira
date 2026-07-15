@@ -1,9 +1,7 @@
-//! Toolchain installation layout and discovery: KIRA_HOME, channels, current-toolchain state; includes the managed LLVM bundle layout module (merged from kira_llvm_toolchain_layout).
+//! Toolchain installation layout and discovery: KIRA_HOME, channels,
+//! current-toolchain state, and the managed LLVM bundle directory layout.
 //!
 //! Layer 0 of the Kira package graph.
-//! Ported from kira-zig `packages/kira_toolchain`.
-
-// #![warn(missing_docs)] // enable once the port lands real code
 
 pub mod llvm_layout;
 
