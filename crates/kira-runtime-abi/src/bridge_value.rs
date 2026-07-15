@@ -88,3 +88,20 @@ impl BridgeValue {
 // TODO(port): `fromValue` / `toValue` conversions between `Value` and
 // `BridgeValue` (kira-zig bridge_value.zig `fromValue`/`toValue`), including
 // the "invalid tag degrades to void" rule.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Mirrors the layout contract with `KiraBridgeValue` in kira-zig
+    /// `packages/kira_native_bridge/src/runtime_helpers.c`: 1-byte tag,
+    /// 7 reserved padding bytes, 16-byte payload union, 8-aligned payload.
+    #[test]
+    fn bridge_value_layout_matches_the_c_abi() {
+        assert_eq!(size_of::<BridgeString>(), 2 * size_of::<usize>());
+        assert_eq!(size_of::<BridgePayload>(), 16);
+        assert_eq!(size_of::<BridgeValue>(), 24);
+        assert_eq!(core::mem::offset_of!(BridgeValue, tag), 0);
+        assert_eq!(core::mem::offset_of!(BridgeValue, payload), 8);
+    }
+}

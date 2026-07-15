@@ -36,6 +36,9 @@ kira-zig — keep those pointers accurate as code lands.
 
 ## Rust rules
 
+These rules are mechanical on purpose: they must hold no matter which model
+or contributor is editing.
+
 - **No lifetimes in model types.** AST/HIR/IR model types carry no lifetime
   parameters — the index/arena pattern is law (ids into arenas, not `&'a`
   references). `la-arena`/`bumpalo` are the sanctioned tools.
@@ -43,10 +46,46 @@ kira-zig — keep those pointers accurate as code lands.
 - **Unsafe is fenced.** `unsafe` only in designated core crates (runtime,
   FFI, LLVM bindings), never in model or orchestration crates, and every
   block carries a `// SAFETY:` comment (clippy enforces).
-- **File size.** Kai doesn't ignore an oversized Rust file — ≥600 lines is
-  split-worthy, >1000 is forbidden, for every file Kai touches, opens, or
-  discovers, even off-task. Kai extracts cohesive 300-500 line modules,
-  preserves APIs/layering/behavior, and doesn't ask first.
+- **File size.** Three thresholds, applied to every `.rs` file Kai touches,
+  opens, or discovers, even off-task:
+  - **< 700 lines** — fine.
+  - **≥ 700 lines** — Kai stops and decides: split now into cohesive
+    300–500-line modules, or state in the response the one concrete reason
+    the file is still cohesive. Silence is not a decision.
+  - **≥ 1000 lines** — broken on sight: Kai fixes it in the same session,
+    and **no edit may ever leave a file above 1000 lines** — if an edit
+    would cross the ceiling, Kai splits first, then edits. There is no
+    "later", no exception for generated code or ports.
+  Splits preserve APIs/layering/behavior; Kai doesn't ask first.
+
+## Code guidelines
+
+- **One definition per contract.** `Span` lives in `kira-source`; the
+  `BridgeValue` family and `Value` live in `kira-runtime-abi`. Other crates
+  re-export or alias — never redefine. Anything `#[repr(C)]` changes only
+  together with a layout test in the same file.
+- **Append-only wire formats.** Opcodes, KBC magics, serialized tags, and
+  wire enums are append-only. Kai never renumbers, reorders, or inserts
+  mid-enum.
+- **Zig is the spec.** Every ported item keeps its Zig/C counterpart in the
+  doc comment until migration completes. When Zig comments or docs disagree
+  with what the Zig compiler actually does, compiled behavior wins (the
+  stale `instruction.zig` discriminant asserts are the cautionary tale).
+  Kai ports behavior; Kai doesn't invent it.
+- **No lint escapes.** No `#[allow(...)]` and no loosening of workspace
+  lints; the fix is always in the code. `cargo clippy --workspace
+  --all-targets -- -D warnings` green is the bar for every change.
+- **No panicking stubs.** No `todo!()`/`unimplemented!()`/`panic!` as
+  placeholders in committed code — unported behavior is a doc-comment
+  `TODO(port)` on a typed stub. No `unwrap`/`expect` outside `#[cfg(test)]`.
+- **Errors are typed.** Fallible functions return `Result` with a
+  `thiserror` enum owned by the crate; no `Box<dyn Error>`, no stringly
+  errors across crate boundaries.
+- **Dependencies are frozen.** External crates come only from
+  `[workspace.dependencies]`; adding one is a deliberate root-level change
+  with a stated reason, never a side effect of one crate's convenience.
+- **Every pub item is documented.** One line minimum, stating what it is —
+  and for ports, where it came from.
 
 ## Standing rules
 

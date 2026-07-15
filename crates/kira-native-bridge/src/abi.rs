@@ -1,49 +1,24 @@
-//! C-ABI bridge types, byte-for-byte mirrors of the structs declared in
-//! kira-zig `packages/kira_native_bridge/src/runtime_helpers.c`.
+//! C-ABI bridge types matching the structs declared in kira-zig
+//! `packages/kira_native_bridge/src/runtime_helpers.c`.
 //!
-//! These are the types LLVM-compiled Kira code and the VM both touch, so the
-//! `#[repr(C)]` layouts here are load-bearing. They intentionally duplicate
-//! the placeholder ABI types in `kira_vm_runtime::abi` for now — TODO(port):
-//! both move to `kira-runtime-abi` (the layer-0 ABI crate) once it scaffolds,
-//! leaving exactly one definition in the workspace.
+//! The value family (`KiraBridgeValue` & co.) is the same layout as the
+//! runtime-ABI types, so those are aliases into `kira-runtime-abi` — exactly
+//! one definition in the workspace (layout tests live there). The C names are
+//! kept as this crate's surface because this crate mirrors the C header side.
+//! `KiraArray` and `KiraNativeState` are native-bridge-specific and stay here.
 
 use core::ffi::c_void;
 
 /// C: `KiraBridgeString` (`{ const unsigned char *ptr; size_t len; }`).
-/// Null `ptr` iff `len == 0`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct KiraBridgeString {
-    pub ptr: *const u8,
-    pub len: usize,
-}
+pub type KiraBridgeString = kira_runtime_abi::BridgeString;
 
-/// C: `KiraBridgePayload` (union).
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub union KiraBridgePayload {
-    /// C: `int64_t integer`.
-    pub integer: i64,
-    /// C: `double float64`.
-    pub float64: f64,
-    /// C: `KiraBridgeString string`.
-    pub string: KiraBridgeString,
-    /// C: `uint8_t boolean`.
-    pub boolean: u8,
-    /// C: `uintptr_t raw_ptr`.
-    pub raw_ptr: usize,
-}
+/// C: `KiraBridgePayload` (union; the C `float64` field is Rust `float`).
+pub type KiraBridgePayload = kira_runtime_abi::BridgePayload;
 
 /// C: `KiraBridgeValue` (`{ uint8_t tag; uint8_t reserved[7]; payload; }`).
 /// Tag values follow `KiraBridgeValueTag`: 0 void, 1 integer, 2 float,
 /// 3 string, 4 boolean, 5 raw_ptr; unknown tags degrade to void.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct KiraBridgeValue {
-    pub tag: u8,
-    pub reserved: [u8; 7],
-    pub payload: KiraBridgePayload,
-}
+pub type KiraBridgeValue = kira_runtime_abi::BridgeValue;
 
 /// C: `KiraArray` (`{ size_t len; KiraBridgeValue *items; size_t cap; }`).
 ///
@@ -84,12 +59,11 @@ pub struct KiraNativeState {
 mod tests {
     use super::*;
 
-    /// Layout contracts with `runtime_helpers.c` (and, for the array header,
-    /// with the VM heap's `ArrayObject`).
+    /// Layout contracts with `runtime_helpers.c` for the native-bridge-owned
+    /// structs (the `KiraBridgeValue` layout test lives in `kira-runtime-abi`
+    /// next to the canonical definition).
     #[test]
     fn bridge_types_keep_the_c_layouts() {
-        assert_eq!(size_of::<KiraBridgeValue>(), 24);
-        assert_eq!(core::mem::offset_of!(KiraBridgeValue, payload), 8);
         assert_eq!(size_of::<KiraArray>(), 3 * size_of::<usize>());
         assert_eq!(core::mem::offset_of!(KiraNativeState, type_id), 0);
         assert_eq!(core::mem::offset_of!(KiraNativeState, payload), 8);
