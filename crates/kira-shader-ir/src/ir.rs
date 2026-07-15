@@ -6,16 +6,9 @@
 
 use kira_shader_model as shader_model;
 
-/// Source span placeholder.
-///
-/// TODO(port): replace with `kira_source::Span` once kira-source scaffolds its
-/// span type; kept local so this crate stays self-contained meanwhile.
-/// Zig: `kira_source.Span`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Span {
-    pub start: u32,
-    pub end: u32,
-}
+/// Source span (Zig: `kira_source.Span`), owned by `kira-source` — exactly
+/// one `Span` definition in the workspace.
+pub use kira_source::Span;
 
 /// A whole analyzed KSL program. Zig: `Program`.
 #[derive(Debug, Clone, PartialEq)]

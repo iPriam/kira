@@ -6,7 +6,7 @@
 //! This is a field-accurate scaffold: types and layouts only, no alloc/drop
 //! logic yet.
 
-use crate::abi::{BridgeValue, Value};
+use crate::abi::{BridgeString, BridgeValue, Value};
 
 /// Heap-allocated array object header.
 ///
@@ -51,9 +51,11 @@ pub struct ClosureObject {
 #[derive(Debug)]
 pub struct StructFieldsObject {
     /// Zig: `type_name: []const u8` — borrowed from the loaded module's
-    /// constant pool (lives as long as the module, including retired modules
-    /// after hot swap). TODO(port): borrow or intern instead of owning.
-    pub type_name: String,
+    /// constant pool, which outlives the object (including retired modules
+    /// after hot swap). Stored as a raw ptr+len view ([`BridgeString`]), not
+    /// owned, mirroring the Zig borrow; the module loader that guarantees the
+    /// lifetime lands with the interpreter port.
+    pub type_name: BridgeString,
     /// Zig: `fields: []runtime_abi.Value` — owned field slots.
     pub fields: Box<[Value]>,
 }
