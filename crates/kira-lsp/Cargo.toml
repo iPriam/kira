@@ -1,0 +1,20 @@
+[package]
+name = "kira-lsp"
+description = "Kira language server (LSP) over the salsa frontend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "kira-language-server"
+path = "src/main.rs"
+
+[dependencies]
+lsp-server.workspace = true
+lsp-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
