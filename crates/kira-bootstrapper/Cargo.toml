@@ -1,0 +1,16 @@
+[package]
+name = "kira-bootstrapper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "kira"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+kira-toolchain.workspace = true

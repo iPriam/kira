@@ -1,0 +1,14 @@
+[package]
+name = "kira-ksl-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+kira-source.workspace = true
+kira-diagnostics.workspace = true
+kira-ksl-syntax-model.workspace = true

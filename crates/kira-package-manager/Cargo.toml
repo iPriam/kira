@@ -1,0 +1,14 @@
+[package]
+name = "kira-package-manager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+kira-manifest.workspace = true
+kira-diagnostics.workspace = true
+kira-toolchain.workspace = true

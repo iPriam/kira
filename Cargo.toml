@@ -1,0 +1,85 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/kira-lang-com/kira"
+
+[workspace.dependencies]
+# Internal crates (path deps).
+kira-core = { path = "crates/kira-core" }
+kira-toolchain = { path = "crates/kira-toolchain" }
+kira-source = { path = "crates/kira-source" }
+kira-diagnostics = { path = "crates/kira-diagnostics" }
+kira-diagnostic-messages = { path = "crates/kira-diagnostic-messages" }
+kira-runtime-abi = { path = "crates/kira-runtime-abi" }
+kira-syntax-model = { path = "crates/kira-syntax-model" }
+kira-lexer = { path = "crates/kira-lexer" }
+kira-parser = { path = "crates/kira-parser" }
+kira-ksl-syntax-model = { path = "crates/kira-ksl-syntax-model" }
+kira-ksl-parser = { path = "crates/kira-ksl-parser" }
+kira-semantics-model = { path = "crates/kira-semantics-model" }
+kira-shader-model = { path = "crates/kira-shader-model" }
+kira-ksl-semantics = { path = "crates/kira-ksl-semantics" }
+kira-semantics = { path = "crates/kira-semantics" }
+kira-ir = { path = "crates/kira-ir" }
+kira-shader-ir = { path = "crates/kira-shader-ir" }
+kira-hybrid-definition = { path = "crates/kira-hybrid-definition" }
+kira-backend-api = { path = "crates/kira-backend-api" }
+kira-native-lib-definition = { path = "crates/kira-native-lib-definition" }
+kira-dynamic-ffi = { path = "crates/kira-dynamic-ffi" }
+kira-glsl-backend = { path = "crates/kira-glsl-backend" }
+kira-wgsl-backend = { path = "crates/kira-wgsl-backend" }
+kira-hlsl-backend = { path = "crates/kira-hlsl-backend" }
+kira-msl-backend = { path = "crates/kira-msl-backend" }
+kira-spirv-backend = { path = "crates/kira-spirv-backend" }
+kira-bytecode = { path = "crates/kira-bytecode" }
+kira-vm-runtime = { path = "crates/kira-vm-runtime" }
+kira-native-bridge = { path = "crates/kira-native-bridge" }
+kira-hybrid-runtime = { path = "crates/kira-hybrid-runtime" }
+kira-debug = { path = "crates/kira-debug" }
+kira-llvm-backend = { path = "crates/kira-llvm-backend" }
+kira-wasm-runtime = { path = "crates/kira-wasm-runtime" }
+kira-manifest = { path = "crates/kira-manifest" }
+kira-project = { path = "crates/kira-project" }
+kira-package-manager = { path = "crates/kira-package-manager" }
+kira-build-definition = { path = "crates/kira-build-definition" }
+kira-program-graph = { path = "crates/kira-program-graph" }
+kira-build = { path = "crates/kira-build" }
+kira-instruments = { path = "crates/kira-instruments" }
+kira-linter = { path = "crates/kira-linter" }
+kira-doc = { path = "crates/kira-doc" }
+kira-app-generation = { path = "crates/kira-app-generation" }
+kira-live = { path = "crates/kira-live" }
+kira-cli = { path = "crates/kira-cli" }
+kira-main = { path = "crates/kira-main" }
+kira-bootstrapper = { path = "crates/kira-bootstrapper" }
+kira-devflow = { path = "crates/kira-devflow" }
+
+# External dependencies.
+thiserror = "2"
+la-arena = "0.3"
+bumpalo = "3"
+libloading = "0.8"
+libc = "0.2"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+
+# Mirrors kira-zig's ReleaseFast-in-Debug rule for interpreter-hot packages:
+# a Debug interpreter is 4-11x slower than an optimized one, and the dev
+# snapshot is what `kira run` uses for interactive UI work — so the VM
+# runtime and bytecode crates are always built optimized, even in dev.
+[profile.dev.package.kira-vm-runtime]
+opt-level = 3
+
+[profile.dev.package.kira-bytecode]
+opt-level = 3

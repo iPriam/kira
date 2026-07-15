@@ -1,0 +1,18 @@
+[package]
+name = "kira-manifest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+kira-core.workspace = true
+kira-native-lib-definition.workspace = true
+kira-source.workspace = true
+kira-diagnostics.workspace = true
+kira-syntax-model.workspace = true
+kira-lexer.workspace = true
+kira-parser.workspace = true
