@@ -58,12 +58,62 @@ or contributor is editing.
     "later", no exception for generated code or ports.
   Splits preserve APIs/layering/behavior; Kai doesn't ask first.
 
-## Code guidelines
+## Code guidelines — architecture
 
+- **Layering is a DAG.** Crate deps mirror the kira-zig package graph: no
+  upward dependencies, ever. Test-only upward references go in
+  `[dev-dependencies]` (cargo's only legal cycle). Backend/platform
+  selection uses structured enums, never string branching.
+- **Root crates stay thin and frozen.** `kira-core`, `kira-source`, and the
+  model crates (`kira-syntax-model`, `kira-semantics-model`,
+  `kira-shader-model`) rebuild the world when touched — changes there need
+  a reason stated in the PR/commit, and churning logic never moves down
+  into them.
+- **Model/logic split.** Shared vocabulary types live in `*-model` crates;
+  logic lives above them. A lower layer that must call upward gets a trait
+  in an interface crate (`kira-backend-api` is the pattern), implemented
+  higher up.
+- **No heavy generics in low crates.** Monomorphization cost lands in every
+  downstream crate. Layer boundaries take concrete types or `dyn Trait`;
+  generic helpers stay crate-private.
 - **One definition per contract.** `Span` lives in `kira-source`; the
   `BridgeValue` family and `Value` live in `kira-runtime-abi`. Other crates
   re-export or alias — never redefine. Anything `#[repr(C)]` changes only
   together with a layout test in the same file.
+- **Flat re-export surfaces.** Each crate's `lib.rs` re-exports its public
+  types flat (`kira_manifest::ProjectManifest`, not deep module paths), so
+  downstream ports target stable names. Renaming a pub item means fixing
+  every consumer in the same change.
+- **Query-shaped frontend.** Semantics/frontend passes are pure functions
+  over inputs (salsa-ready): no hidden global state, no interior-mutability
+  caches smuggled into analysis. salsa itself lands when the LSP work
+  starts, not before.
+
+## Code guidelines — types and memory
+
+- **No lifetimes in model types** (law, see Rust rules): ids into arenas
+  (`la-arena` `Idx`), never `&'a` references, no `Rc`/`RefCell` in
+  AST/HIR/IR. Intra-tree references are typed index newtypes.
+- **Strings are interned.** Names and identifiers are `kira_core::Symbol`;
+  `String` in a model type is reserved for genuinely owned free text (raw
+  literals, messages). Never `&'static str` for user data.
+- **Owned types by default.** Zig's allocator parameters do NOT translate
+  literally: containers own their data (`Vec`, `Box<[T]>`, `String`);
+  `bumpalo` arenas only where profiling shows the win, per phase, not
+  globally.
+- **Newtypes over primitives.** Ids, offsets, and handles are `#[repr(...)]`
+  newtypes (`SourceId(u32)`, `Span{start,len}`), not bare `u32`/`usize`
+  passed around.
+- **Open C enums are not Rust enums.** A byte that foreign code can write is
+  a transparent newtype with associated consts (`BridgeValueTag`), never a
+  Rust `enum` (out-of-range discriminants are UB). Closed, Kira-owned tags
+  may be `enum(u8)`-style Rust enums with explicit discriminants.
+- **Unsafe is fenced** (law, see Rust rules) — and inside the fence,
+  invariants live on the type (`// SAFETY:` on every block, doc comment
+  naming the invariant on every unsafe-bearing field).
+
+## Code guidelines — correctness and hygiene
+
 - **Append-only wire formats.** Opcodes, KBC magics, serialized tags, and
   wire enums are append-only. Kai never renumbers, reorders, or inserts
   mid-enum.
@@ -71,7 +121,9 @@ or contributor is editing.
   doc comment until migration completes. When Zig comments or docs disagree
   with what the Zig compiler actually does, compiled behavior wins (the
   stale `instruction.zig` discriminant asserts are the cautionary tale).
-  Kai ports behavior; Kai doesn't invent it.
+  Kai ports behavior; Kai doesn't invent it. Behavior parity is proven
+  against kira-zig (differential runs, KBC byte-diffs, corpus checksums),
+  not asserted.
 - **No lint escapes.** No `#[allow(...)]` and no loosening of workspace
   lints; the fix is always in the code. `cargo clippy --workspace
   --all-targets -- -D warnings` green is the bar for every change.
@@ -80,12 +132,40 @@ or contributor is editing.
   `TODO(port)` on a typed stub. No `unwrap`/`expect` outside `#[cfg(test)]`.
 - **Errors are typed.** Fallible functions return `Result` with a
   `thiserror` enum owned by the crate; no `Box<dyn Error>`, no stringly
-  errors across crate boundaries.
+  errors across crate boundaries. Diagnostics for users go through
+  `kira-diagnostics`, never `eprintln!`.
 - **Dependencies are frozen.** External crates come only from
-  `[workspace.dependencies]`; adding one is a deliberate root-level change
-  with a stated reason, never a side effect of one crate's convenience.
+  `[workspace.dependencies]` with unified features; adding one is a
+  deliberate root-level change with a stated reason, never a side effect of
+  one crate's convenience. No parser generators, no chumsky — the lexer and
+  parser are hand-written ports.
 - **Every pub item is documented.** One line minimum, stating what it is —
   and for ports, where it came from.
+- **Tests live with the code.** Unit tests in `#[cfg(test)]` next to what
+  they test; layout tests next to `#[repr(C)]` types; ported Zig tests keep
+  a comment naming their Zig origin.
+
+## Code guidelines — performance
+
+- **The interpreter is special.** `kira-vm-runtime`/`kira-bytecode` compile
+  `opt-level = 3` even in dev (workspace profile — don't remove it; a debug
+  interpreter is 4–11× slower). Dispatch is match-in-loop until `become`
+  stabilizes; no NaN-boxing (measured ±5%, not worth it).
+- **Hot paths don't allocate.** In interpreter and drop paths: no per-op
+  heap allocation, no `format!` on success paths, env vars read once at
+  init (the per-drop `getenv` regression is the cautionary tale).
+- **No speculative optimization elsewhere.** Outside designated hot crates,
+  Kai writes the clear version and lets profiling promote it.
+
+## Out of scope
+
+- **Graphics.** kira-rusty does not render: KG (kira-graphics) owns
+  Metal/Sokol/Vulkan/D3D12. This repo's surface ends at shader codegen
+  (MSL/GLSL/HLSL/WGSL/SPIR-V) and the FFI/native-bridge that KG hangs off —
+  which makes dynamic FFI + autobind critical path, not tail work.
+- **Emscripten for the compiler.** Kira *apps* targeting Web keep the emcc
+  subprocess pipeline; the compiler itself, if ever browser-hosted, targets
+  `wasm32-unknown-unknown`. No rustc-emscripten linkage.
 
 ## Standing rules
 
