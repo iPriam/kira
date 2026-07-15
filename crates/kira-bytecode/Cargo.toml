@@ -1,0 +1,16 @@
+[package]
+name = "kira-bytecode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+kira-core.workspace = true
+kira-ir.workspace = true
+kira-runtime-abi.workspace = true
+kira-source.workspace = true
+thiserror.workspace = true

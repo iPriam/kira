@@ -1,0 +1,43 @@
+[package]
+name = "kira-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "kirac"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+kira-core.workspace = true
+kira-source.workspace = true
+kira-diagnostics.workspace = true
+kira-diagnostic-messages.workspace = true
+kira-syntax-model.workspace = true
+kira-lexer.workspace = true
+kira-parser.workspace = true
+kira-semantics.workspace = true
+kira-ir.workspace = true
+kira-bytecode.workspace = true
+kira-vm-runtime.workspace = true
+kira-build.workspace = true
+kira-build-definition.workspace = true
+kira-hybrid-runtime.workspace = true
+kira-runtime-abi.workspace = true
+kira-app-generation.workspace = true
+kira-live.workspace = true
+kira-toolchain.workspace = true
+kira-project.workspace = true
+kira-package-manager.workspace = true
+kira-manifest.workspace = true
+kira-native-lib-definition.workspace = true
+kira-ksl-syntax-model.workspace = true
+kira-shader-model.workspace = true
+kira-instruments.workspace = true
+kira-wasm-runtime.workspace = true
+kira-main.workspace = true
+kira-debug.workspace = true
