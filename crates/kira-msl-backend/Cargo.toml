@@ -7,8 +7,3 @@ repository.workspace = true
 
 [lints]
 workspace = true
-
-[dependencies]
-kira-diagnostics.workspace = true
-kira-shader-model.workspace = true
-kira-shader-ir.workspace = true

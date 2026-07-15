@@ -1,6 +1,4 @@
 //! Dependency specifications: registry, path, and git sources.
-//!
-//! Ported from kira-zig `kira_manifest/src/dependency.zig`.
 
 /// A single dependency entry in a `package.kira` manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]

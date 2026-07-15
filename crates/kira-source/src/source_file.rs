@@ -1,11 +1,10 @@
 //! One loaded source file: path, text, and line map.
-//!
-//! Mirrors kira-zig `packages/kira_source/src/source_file.zig`.
 
 use crate::line_map::LineMap;
 use crate::span::SourceId;
 
-/// Upper bound on a single Kira source file's size (16 MiB, as in kira-zig).
+/// Upper bound on a single Kira source file's size: 16 MiB, large enough for
+/// any hand-written source while keeping `u32` byte offsets comfortably in range.
 pub const MAX_SOURCE_FILE_BYTES: usize = 16 * 1024 * 1024;
 
 /// One source file loaded into memory, owning its text and line map.

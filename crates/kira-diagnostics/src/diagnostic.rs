@@ -1,6 +1,4 @@
 //! The diagnostic record itself: severity, code, labels, notes, help.
-//!
-//! Mirrors kira-zig `packages/kira_diagnostics/src/diagnostic.zig`.
 
 use crate::label::{Label, LabelKind};
 use kira_source::FileSpan;
@@ -49,7 +47,7 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    /// Builds a single-label diagnostic (the Zig `single` helper).
+    /// Builds a single-label diagnostic.
     pub fn single(severity: Severity, message: impl Into<String>, label: Label) -> Self {
         let message = message.into();
         Self {
@@ -80,7 +78,7 @@ impl Diagnostic {
     }
 }
 
-/// True when any diagnostic in `items` is an error (the Zig `hasErrors`).
+/// True when any diagnostic in `items` is an error.
 pub fn has_errors(items: &[Diagnostic]) -> bool {
     items
         .iter()

@@ -1,7 +1,6 @@
 //! Source text model: spans, line maps, and source files.
 //!
 //! Layer 0 of the Kira package graph.
-//! Ported from kira-zig `packages/kira_source`.
 
 pub mod line_map;
 pub mod source_file;

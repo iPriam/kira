@@ -1,6 +1,4 @@
 //! Root project manifest model (the `Package` declaration in `package.kira`).
-//!
-//! Ported from kira-zig `kira_manifest/src/project_manifest.zig`.
 
 use crate::dependency::DependencySpec;
 use crate::platform_config::{ExecutionPolicy, ResolvedConfig, default_resolved_config};
@@ -33,9 +31,8 @@ impl PackageKind {
 /// The root manifest model loaded from a `package.kira` declaration (or a
 /// legacy `kira.toml`).
 ///
-/// Port note: kira-zig also carries `inline_native_libraries`
-/// (`NativeLibrary { ... }` entries typed as `NativeLibrarySpec`); that field
-/// lands here once `kira-native-lib-definition` ports its spec types.
+/// Inline native-library entries (`NativeLibrary { ... }`) land here once the
+/// native-library spec types are designed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectManifest {
     pub name: String,
@@ -66,7 +63,7 @@ pub struct ProjectManifest {
 }
 
 impl ProjectManifest {
-    /// A manifest with the same field defaults as the kira-zig model.
+    /// A manifest with the standard field defaults.
     pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
         Self {
             name: name.into(),

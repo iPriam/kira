@@ -7,8 +7,3 @@ repository.workspace = true
 
 [lints]
 workspace = true
-
-[dependencies]
-kira-manifest.workspace = true
-kira-diagnostics.workspace = true
-kira-toolchain.workspace = true

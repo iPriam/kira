@@ -1,9 +1,6 @@
 //! Project model: resolved projects, package roots, and build targets.
 //!
 //! Layer 5 of the Kira package graph.
-//! Ported from kira-zig `packages/kira_project`.
-
-// #![warn(missing_docs)] // enable once the port lands real code
 
 pub mod package_discovery;
 pub mod project;

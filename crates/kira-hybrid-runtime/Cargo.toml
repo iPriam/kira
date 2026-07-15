@@ -7,11 +7,3 @@ repository.workspace = true
 
 [lints]
 workspace = true
-
-[dependencies]
-kira-core.workspace = true
-kira-runtime-abi.workspace = true
-kira-hybrid-definition.workspace = true
-kira-native-bridge.workspace = true
-kira-vm-runtime.workspace = true
-kira-bytecode.workspace = true

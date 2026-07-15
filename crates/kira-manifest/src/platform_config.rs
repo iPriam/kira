@@ -1,10 +1,9 @@
 //! Platform/backend configuration enums, execution policy, and the resolved
 //! profile/runner matrix.
 //!
-//! Ported from kira-zig `kira_manifest/src/platform_config.zig`, split into
-//! `backends` (backend selection + execution policy), `web` (Web surface
-//! model), and `resolved` (profile/runner matrix). The public surface is
-//! re-exported flat from this module, matching the Zig layout.
+//! Split into `backends` (backend selection + execution policy), `web` (Web
+//! surface model), and `resolved` (profile/runner matrix). The public surface
+//! is re-exported flat from this module.
 
 pub mod backends;
 pub mod resolved;

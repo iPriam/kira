@@ -128,7 +128,7 @@ pub struct LibraryExecutionPolicy {
 }
 
 impl LibraryExecutionPolicy {
-    /// A policy with the same field defaults as the kira-zig model.
+    /// A policy with the standard field defaults.
     pub fn new(package: impl Into<String>) -> Self {
         Self {
             package: package.into(),

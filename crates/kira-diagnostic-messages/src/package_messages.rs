@@ -1,8 +1,7 @@
 //! Cataloged package/project-discovery messages (`KPK*`).
 //!
-//! Mirrors kira-zig `packages/kira_diagnostic_messages/src/PackageMessages.zig`.
 //! Three representative constructors are scaffolded; the remaining `KPK*`
-//! messages port mechanically during migration.
+//! messages are added as package discovery grows.
 
 use crate::compiler_phase::CompilerPhase;
 use crate::diagnostic_code::DiagnosticCode;

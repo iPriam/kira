@@ -1,14 +1,10 @@
 //! Diagnostic collection: the sink every pipeline stage reports into.
-//!
-//! Mirrors kira-zig `packages/kira_diagnostics/src/builder.zig` (`Emitter` /
-//! `ErrorSpec`); the Zig `*std.array_list.Managed(Diagnostic)` out-parameter
-//! becomes an owned [`DiagnosticSink`].
 
 use crate::diagnostic::{Diagnostic, Severity, has_errors};
 use crate::label::Label;
 use kira_source::FileSpan;
 
-/// Everything needed to emit one error diagnostic (the Zig `ErrorSpec`).
+/// Everything needed to emit one error diagnostic.
 #[derive(Debug, Clone, Default)]
 pub struct ErrorSpec {
     /// Stable diagnostic code, when cataloged.
@@ -42,7 +38,7 @@ impl DiagnosticSink {
         self.diagnostics.push(diagnostic);
     }
 
-    /// Builds and appends an error diagnostic from a spec (the Zig `Emitter.err`).
+    /// Builds and appends an error diagnostic from a spec.
     pub fn error(&mut self, spec: ErrorSpec) {
         let labels = match spec.span {
             Some(span) => vec![Label::primary(

@@ -1,21 +1,8 @@
-//! KBC bytecode module format: constructs, lifecycle hooks, and encoding.
+//! Bytecode format and compiler for the Kira VM.
 //!
 //! Layer 4 of the Kira package graph.
-//! Ported from kira-zig `packages/kira_bytecode`.
-
-pub mod instruction;
-pub mod module;
-pub mod opcode;
-pub mod ownership_mode;
-pub mod serialization;
-
-pub use instruction::{
-    ArithKind, BitOp, CompareOp, ConstructConstraint, FunctionConstRepresentation, Instruction,
-    StringFromScalarSource, TypeRef, TypeRefKind, UnaryOp,
-};
-pub use module::{
-    Construct, ConstructImplementation, EnumTypeDecl, EnumVariantDecl, Field, ForeignFunction,
-    Function, LifecycleHook, MethodMember, Module, SourceLoc, TypeDecl, TypeKind,
-};
-pub use opcode::{OpCode, is_fused};
-pub use ownership_mode::OwnershipMode;
+//!
+//! Design pending. The module format, opcode set, and encoding are designed
+//! fresh for the new VM. Wire formats are append-only once fixed. This crate is
+//! part of the portable core: no filesystem, process, thread, or
+//! dynamic-loading calls, and it must compile for `wasm32-unknown-unknown`.

@@ -1,6 +1,4 @@
 //! Compiler phases a diagnostic can originate from.
-//!
-//! Mirrors kira-zig `packages/kira_diagnostic_messages/src/CompilerPhase.zig`.
 
 /// The pipeline stage that produced a diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,7 +28,7 @@ pub enum CompilerPhase {
 }
 
 impl CompilerPhase {
-    /// Returns the phase's tag as rendered in diagnostics (Zig `@tagName`).
+    /// Returns the phase's tag as rendered in diagnostics.
     pub fn tag(self) -> &'static str {
         match self {
             CompilerPhase::CliArgumentParsing => "cli_argument_parsing",
