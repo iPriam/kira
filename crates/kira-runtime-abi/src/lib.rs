@@ -1,27 +1,9 @@
-//! Runtime ABI shared across backends: values, bridge values, and runtime handles.
+//! Runtime value ABI shared across the VM and native backends.
 //!
 //! Layer 0 of the Kira package graph.
-//! Ported from kira-zig `packages/kira_runtime_abi`.
-
-pub mod bridge_value;
-pub mod callable;
-pub mod calling;
-pub mod executor;
-pub mod handles;
-pub mod module_ids;
-pub mod symbols;
-pub mod task;
-pub mod value;
-
-pub use bridge_value::{BridgePayload, BridgeString, BridgeValue, BridgeValueTag};
-pub use callable::{
-    NATIVE_CLOSURE_POINTER_MASK, NATIVE_CLOSURE_TAG_BIT, is_tagged_native_closure_pointer,
-    tag_native_closure_pointer, untag_native_closure_pointer,
-};
-pub use calling::{CallingConvention, ExecutionMode, FunctionExecution};
-pub use executor::Executor;
-pub use handles::{ModuleHandle, RuntimeHandle};
-pub use module_ids::{RuntimeLibraryId, RuntimeModuleId, RuntimeSymbolId};
-pub use symbols::RuntimeSymbol;
-pub use task::{Poll, PollFn, Task, TaskId, TaskState};
-pub use value::{Value, ValueTag};
+//!
+//! Design pending. This crate will own the single definition of the runtime
+//! value representation and the host-interface value types, designed fresh
+//! with the new VM. Bytes foreign code can write are modeled as transparent
+//! newtypes with associated consts (never Rust enums), and every `#[repr(C)]`
+//! type ships with a layout test.

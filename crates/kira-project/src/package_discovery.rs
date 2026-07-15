@@ -1,8 +1,7 @@
 //! Manifest discovery: file names and target resolution from paths.
 //!
-//! Ported from kira-zig `kira_project/src/package_discovery.zig`. The
-//! load/resolve functions land with the port; the manifest naming constants
-//! are the stable surface.
+//! The load/resolve functions land as discovery grows; the manifest naming
+//! constants are the stable surface.
 
 /// The declaration manifest. It takes precedence over `kira.toml` when both
 /// are present in a package directory (it is first in

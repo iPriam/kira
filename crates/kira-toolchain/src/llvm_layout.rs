@@ -1,9 +1,7 @@
 //! Managed LLVM bundle directory layout (toolchains/llvm roots, host bundle keys).
 //!
-//! Merged from the kira-zig `kira_llvm_toolchain_layout` package; former
-//! importers now depend on `kira-toolchain` and use this module. These are
-//! the repo-local (`<repo>/.kira/toolchains/llvm/...`) layout paths; the
-//! user-level (`~/.kira/...`) equivalents live in the crate root.
+//! These are the repo-local (`<repo>/.kira/toolchains/llvm/...`) layout paths;
+//! the user-level (`~/.kira/...`) equivalents live in the crate root.
 
 use std::path::{Path, PathBuf};
 

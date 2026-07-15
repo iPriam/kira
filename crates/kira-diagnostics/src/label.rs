@@ -1,6 +1,4 @@
 //! Span-anchored labels attached to diagnostics.
-//!
-//! Mirrors kira-zig `packages/kira_diagnostics/src/label.zig`.
 
 use kira_source::FileSpan;
 
@@ -25,7 +23,7 @@ pub struct Label {
 }
 
 impl Label {
-    /// Builds a primary label (the Zig `primary` helper).
+    /// Builds a primary label.
     pub fn primary(span: FileSpan, message: impl Into<String>) -> Self {
         Self {
             kind: LabelKind::Primary,
@@ -34,7 +32,7 @@ impl Label {
         }
     }
 
-    /// Builds a secondary label (the Zig `secondary` helper).
+    /// Builds a secondary label.
     pub fn secondary(span: FileSpan, message: impl Into<String>) -> Self {
         Self {
             kind: LabelKind::Secondary,

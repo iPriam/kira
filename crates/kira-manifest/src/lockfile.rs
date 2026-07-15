@@ -1,7 +1,6 @@
 //! `kira.lock` model: the resolved, reproducible dependency graph.
 //!
-//! Ported from kira-zig `kira_manifest/src/lockfile.zig`. Note: `kira.lock`
-//! is never tracked in git.
+//! Note: `kira.lock` is never tracked in git.
 
 use crate::dependency::DependencySource;
 

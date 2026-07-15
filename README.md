@@ -1,18 +1,17 @@
 # kira-rusty
 
-The Kira compiler and runtime in Rust — a port of
-[kira-zig](https://github.com/kira-lang-com/kira). Kira's implementation
-lineage: Rust → Swift → Zig → Rust (this repo brings it home).
+The Kira compiler and runtime in Rust — this is *the* Kira implementation, a
+brand-new codebase. Kira has been rewritten from the ground up several times
+over its life; this Rust repo is where it comes home.
 
-Scaffold only for now: one crate per kira-zig package with the dependency
-graph preserved; logic migration follows.
+Scaffolding phase: one crate per compiler/runtime concern, wired into a
+layered dependency graph. The frontend, IR, VM, and backends are being
+designed fresh from the language corpus, not carried over from any prior
+implementation.
 
 ## Workspace layout
 
-Crates live in `crates/`, one per kira-zig package (`kira_foo` → `kira-foo`).
-Two Zig packages were merged instead of ported as crates: `kira_log` is a
-module in `kira-core`, and `kira_llvm_toolchain_layout` is a module in
-`kira-toolchain`.
+Crates live in `crates/`, organized into layers with no upward dependencies.
 
 | Layer | Crates |
 |---|---|
@@ -29,6 +28,8 @@ module in `kira-core`, and `kira_llvm_toolchain_layout` is a module in
 | 10 | `kira-main` (C ABI facade: staticlib/cdylib/rlib) |
 | tools | `kira-bootstrapper` (binary `kira`), `kira-devflow` (binary `devflow`) |
 
+`kira-lsp` is the language-server surface over the salsa frontend.
+
 ## Building
 
 ```sh
@@ -37,5 +38,5 @@ cargo clippy --workspace
 ```
 
 The VM-hot crates (`kira-vm-runtime`, `kira-bytecode`) are compiled with
-`opt-level = 3` even in dev profile, mirroring kira-zig's
-ReleaseFast-in-Debug interpreter rule.
+`opt-level = 3` even in the dev profile: a debug interpreter is 4–11× slower,
+and the dev snapshot is what `kira run` uses for interactive work.

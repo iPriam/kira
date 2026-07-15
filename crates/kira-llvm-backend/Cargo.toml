@@ -7,21 +7,3 @@ repository.workspace = true
 
 [lints]
 workspace = true
-
-[features]
-# The dynamically-loaded LLVM-C binding (see src/llvm_api.rs) lands behind
-# this feature during migration so the workspace always builds without an
-# installed LLVM. The feature gates the loader only — never a build-time
-# llvm-sys/inkwell dependency.
-llvm-dylib = []
-
-[dependencies]
-kira-core.workspace = true
-kira-ir.workspace = true
-kira-backend-api.workspace = true
-kira-native-lib-definition.workspace = true
-kira-runtime-abi.workspace = true
-kira-toolchain.workspace = true
-kira-dynamic-ffi.workspace = true
-kira-source.workspace = true
-libloading.workspace = true

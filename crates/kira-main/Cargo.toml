@@ -10,21 +10,3 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [lints]
 workspace = true
-
-[dependencies]
-kira-core.workspace = true
-kira-source.workspace = true
-kira-runtime-abi.workspace = true
-kira-hybrid-definition.workspace = true
-kira-bytecode.workspace = true
-kira-vm-runtime.workspace = true
-kira-native-bridge.workspace = true
-kira-hybrid-runtime.workspace = true
-kira-build.workspace = true
-kira-build-definition.workspace = true
-kira-diagnostics.workspace = true
-kira-project.workspace = true
-kira-manifest.workspace = true
-kira-package-manager.workspace = true
-kira-syntax-model.workspace = true
-kira-parser.workspace = true

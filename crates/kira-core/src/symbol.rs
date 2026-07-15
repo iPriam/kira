@@ -1,8 +1,7 @@
 //! String interning: `Symbol` handles plus the `Interner` that owns the text.
 //!
-//! Rust-port addition (no direct kira-zig counterpart): the Zig tree types
-//! store `[]const u8` slices into source/arena memory; the Rust port stores
-//! interned `Symbol` handles instead so no model type carries a lifetime.
+//! Tree and model types store interned `Symbol` handles rather than borrowed
+//! string slices, so no model type carries a lifetime.
 
 use std::collections::HashMap;
 

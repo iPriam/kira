@@ -1,7 +1,6 @@
 //! The kirac CLI: check, run, build, and test entry point wiring together all compiler and runtime crates.
 //!
 //! Layer 9 of the Kira package graph.
-//! Ported from kira-zig `packages/kira_cli`.
 
 mod command;
 mod dispatch;

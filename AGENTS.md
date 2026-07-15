@@ -7,14 +7,15 @@ core promises. Kai owns work end to end: Kai investigates, implements, tests,
 and lands. Kai doesn't stop at a precise blocker report — Kai exhausts the
 goal first.
 
-## Port status
+## Implementation status
 
-This repo is the Rust port of kira-zig, currently in the scaffolding phase.
-kira-zig (`../kira-zig`) is the reference implementation and the differential
-oracle: behavior questions are answered by reading or running the Zig code,
-and ported features are validated against it. The `.kira` corpus lives in
-kira-zig until migration. Crate doc headers name their `Port target` in
-kira-zig — keep those pointers accurate as code lands.
+This repo is the Kira language implementation in Rust, currently in the
+scaffolding phase — a brand-new codebase, designed fresh, not a
+transliteration of any prior implementation. kira-zig (`../kira-zig`) is the
+behavior oracle for the Kira language: it answers "what should this program
+do?" and hosts the `.kira` corpus for now. This codebase never references
+kira-zig internals, layouts, or wire formats — implementation, formats, and
+ABIs are designed fresh here.
 
 ## Non-negotiable
 
@@ -60,8 +61,8 @@ or contributor is editing.
 
 ## Code guidelines — architecture
 
-- **Layering is a DAG.** Crate deps mirror the kira-zig package graph: no
-  upward dependencies, ever. Test-only upward references go in
+- **Layering is a DAG.** Crate deps form a strict DAG: no upward
+  dependencies, ever. Test-only upward references go in
   `[dev-dependencies]` (cargo's only legal cycle). Backend/platform
   selection uses structured enums, never string branching.
 - **Root crates stay thin and frozen.** `kira-core`, `kira-source`, and the
@@ -77,7 +78,7 @@ or contributor is editing.
   downstream crate. Layer boundaries take concrete types or `dyn Trait`;
   generic helpers stay crate-private.
 - **One definition per contract.** `Span` lives in `kira-source`; the
-  `BridgeValue` family and `Value` live in `kira-runtime-abi`. Other crates
+  runtime value ABI lives in `kira-runtime-abi` once designed. Other crates
   re-export or alias — never redefine. Anything `#[repr(C)]` changes only
   together with a layout test in the same file.
 - **Flat re-export surfaces.** Each crate's `lib.rs` re-exports its public
@@ -107,10 +108,9 @@ or contributor is editing.
 - **Strings are interned.** Names and identifiers are `kira_core::Symbol`;
   `String` in a model type is reserved for genuinely owned free text (raw
   literals, messages). Never `&'static str` for user data.
-- **Owned types by default.** Zig's allocator parameters do NOT translate
-  literally: containers own their data (`Vec`, `Box<[T]>`, `String`);
-  `bumpalo` arenas only where profiling shows the win, per phase, not
-  globally.
+- **Owned types by default.** Containers own their data (`Vec`, `Box<[T]>`,
+  `String`); `bumpalo` arenas only where profiling shows the win, per phase,
+  not globally.
 - **Newtypes over primitives.** Ids, offsets, and handles are `#[repr(...)]`
   newtypes (`SourceId(u32)`, `Span{start,len}`), not bare `u32`/`usize`
   passed around.
@@ -127,15 +127,14 @@ or contributor is editing.
 - **Append-only wire formats.** Opcodes, KBC magics, serialized tags, and
   wire enums are append-only. Kai never renumbers, reorders, or inserts
   mid-enum.
-- **Zig is the BEHAVIOR spec, not the code spec.** kira-zig defines what
-  the language does — syntax, semantics, runtime behavior, ABI layouts,
-  wire formats. It does not define how the Rust code is shaped: Kai writes
-  fresh, simple, idiomatic Rust and never transliterates Zig line by line
-  or mirrors Zig file splits. When Zig comments or docs disagree with what
-  the Zig compiler actually does, compiled behavior wins (the stale
-  `instruction.zig` discriminant asserts are the cautionary tale). Parity
-  is proven by differential runs against kira-zig (same program, same
-  output, same diagnostics), not asserted.
+- **Behavior parity.** Kira's observable behavior — syntax, semantics,
+  runtime behavior, diagnostics — is defined by kira-zig until this
+  implementation supersedes it. That is a behavior contract only: it does
+  not define how the Rust code is shaped, and it does not define
+  implementation formats or ABIs, which are designed fresh here. Kai writes
+  fresh, simple, idiomatic Rust. Parity is proven by differential runs
+  against kira-zig (same program, same output, same diagnostics), not
+  asserted.
 - **No lint escapes.** No `#[allow(...)]` and no loosening of workspace
   lints; the fix is always in the code. `cargo clippy --workspace
   --all-targets -- -D warnings` green is the bar for every change.
@@ -150,12 +149,10 @@ or contributor is editing.
   `[workspace.dependencies]` with unified features; adding one is a
   deliberate root-level change with a stated reason, never a side effect of
   one crate's convenience. No parser generators, no chumsky — the lexer and
-  parser are hand-written ports.
-- **Every pub item is documented.** One line minimum, stating what it is —
-  and for ports, where it came from.
+  parser are hand-written.
+- **Every pub item is documented.** One line minimum, stating what it is.
 - **Tests live with the code.** Unit tests in `#[cfg(test)]` next to what
-  they test; layout tests next to `#[repr(C)]` types; ported Zig tests keep
-  a comment naming their Zig origin.
+  they test; layout tests next to `#[repr(C)]` types.
 
 ## Code guidelines — performance
 

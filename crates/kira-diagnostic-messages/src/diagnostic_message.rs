@@ -1,6 +1,4 @@
 //! The one shared builder every cataloged message goes through.
-//!
-//! Mirrors kira-zig `packages/kira_diagnostic_messages/src/DiagnosticMessage.zig`.
 
 use crate::compiler_phase::CompilerPhase;
 use crate::diagnostic_code::DiagnosticCode;
@@ -8,7 +6,7 @@ use crate::diagnostic_domain::DiagnosticDomain;
 use kira_diagnostics::{Diagnostic, Label, Severity};
 use kira_source::FileSpan;
 
-/// Everything a cataloged message provides to [`build`] (the Zig `Args`).
+/// Everything a cataloged message provides to [`build`].
 #[derive(Debug, Clone)]
 pub struct MessageArgs {
     /// Stable diagnostic code.
@@ -33,7 +31,7 @@ pub struct MessageArgs {
     pub help: Option<String>,
 }
 
-/// Assembles a [`Diagnostic`] from catalog message arguments (the Zig `build`).
+/// Assembles a [`Diagnostic`] from catalog message arguments.
 pub fn build(args: MessageArgs) -> Diagnostic {
     let labels = match args.span {
         Some(span) => vec![Label::primary(

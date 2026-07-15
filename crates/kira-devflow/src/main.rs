@@ -1,17 +1,8 @@
 //! Repo-native automation for the fork -> PR -> review -> land -> sync flow.
 //!
 //! Standalone tool crate (outside the layered package graph).
-//! Ported from kira-zig `packages/kira_devflow`.
 
 mod commands;
-mod commit_msg;
-mod context;
-mod gh_ops;
-mod git_ops;
-mod out;
-mod pr_scope;
-mod proc;
-mod release;
 
 use commands::Verb;
 
@@ -27,12 +18,12 @@ fn main() {
         usage();
         std::process::exit(2);
     };
-    eprintln!("devflow {}: not yet ported from kira-zig", verb.label());
+    eprintln!("devflow {}: not yet implemented", verb.label());
     std::process::exit(2);
 }
 
 fn usage() {
-    eprintln!("devflow — fork/upstream PR flow automation (Rust port, scaffolding)");
+    eprintln!("devflow — fork/upstream PR flow automation");
     eprintln!();
     eprintln!("usage: devflow <verb> [args]");
     eprintln!();

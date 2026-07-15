@@ -1,6 +1,4 @@
 //! Non-root package manifest model.
-//!
-//! Ported from kira-zig `kira_manifest/src/package_manifest.zig`.
 
 use crate::dependency::DependencySpec;
 use crate::project_manifest::PackageKind;
@@ -18,7 +16,7 @@ pub struct PackageManifest {
 }
 
 impl PackageManifest {
-    /// A manifest with the same field defaults as the kira-zig model.
+    /// A manifest with the standard field defaults.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),

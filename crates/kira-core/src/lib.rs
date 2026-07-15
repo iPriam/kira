@@ -1,7 +1,6 @@
-//! Foundational shared types, ids, identifiers, and error primitives used by every Kira crate; includes the structured logging module (merged from kira_log).
+//! Foundational shared types, ids, identifiers, and error primitives used by every Kira crate, plus the structured logging module.
 //!
 //! Layer 0 of the Kira package graph.
-//! Ported from kira-zig `packages/kira_core`.
 
 pub mod errors;
 pub mod identifiers;

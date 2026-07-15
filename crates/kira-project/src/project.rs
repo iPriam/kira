@@ -1,6 +1,4 @@
 //! Project model types: projects, resolved roots, and build targets.
-//!
-//! Ported from kira-zig `kira_project/src/project.zig`.
 
 use kira_manifest::{PackageKind, ProjectManifest};
 

@@ -7,11 +7,3 @@ repository.workspace = true
 
 [lints]
 workspace = true
-
-[dependencies]
-kira-source.workspace = true
-kira-diagnostics.workspace = true
-kira-ksl-syntax-model.workspace = true
-kira-ksl-parser.workspace = true
-kira-shader-model.workspace = true
-kira-shader-ir.workspace = true

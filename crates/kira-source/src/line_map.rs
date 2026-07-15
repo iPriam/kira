@@ -1,13 +1,11 @@
 //! Offset-to-line/column translation for one source file.
-//!
-//! Mirrors kira-zig `packages/kira_source/src/line_map.zig`.
 
 /// A 1-based line/column position inside a source file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LineColumn {
     /// 1-based line number.
     pub line: u32,
-    /// 1-based column number (byte-based, like the Zig implementation).
+    /// 1-based column number (byte-based).
     pub column: u32,
 }
 

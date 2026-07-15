@@ -1,62 +1,55 @@
 //! Cross-platform shared-library handle.
 //!
-//! Ported from kira-zig
-//! `packages/kira_dynamic_ffi/src/dynamic_library.zig`. The Zig version
-//! wraps `std.DynLib` (POSIX) / `LoadLibraryExW` (Windows); the Rust port
-//! delegates both to `libloading`, which covers the same platforms with the
-//! same altered-search-path semantics on Windows.
+//! Delegates to `libloading`, which wraps `dlopen` (POSIX) and
+//! `LoadLibraryExW` (Windows) with altered-search-path semantics.
 
 use thiserror::Error;
 
 /// Errors from library loading and symbol resolution.
-/// Zig: the `error.NativeLibraryLoadFailed` / `error.MissingNativeSymbol` /
-/// `error.SymbolNameTooLong` set normalized across platforms.
 #[derive(Debug, Error)]
 pub enum FfiError {
-    /// Zig: `error.NativeLibraryLoadFailed`.
+    /// A native library failed to load.
     #[error("native library failed to load: {0}")]
     NativeLibraryLoadFailed(#[source] libloading::Error),
-    /// Zig: `error.MissingNativeSymbol`.
+    /// A named symbol was not found in the library.
     #[error("missing native symbol `{name}`")]
     MissingNativeSymbol {
+        /// The symbol name that could not be resolved.
         name: String,
         #[source]
         source: libloading::Error,
     },
-    /// Process-image resolution is not scaffolded yet.
-    #[error("process-image symbol resolution not yet ported")]
-    ProcessLookupUnported,
+    /// Process-image symbol resolution is not implemented yet.
+    #[error("process-image symbol resolution not yet implemented")]
+    ProcessLookupUnavailable,
 }
 
 /// A loaded native library, or the current process image.
 ///
-/// Zig: `DynamicLibrary` with `Backend = union(enum) { library, process }`.
 /// The `Process` arm resolves symbols from the current process image so
-/// statically-linked native libraries (e.g. the in-process `kira_main`
-/// developer API) are reachable without a standalone shared object
-/// (`dlsym(RTLD_DEFAULT, ..)` / `GetModuleHandleW(null)`).
+/// statically-linked native code is reachable without a standalone shared
+/// object (`dlsym(RTLD_DEFAULT, ..)` / `GetModuleHandleW(null)`).
 pub struct DynamicLibrary {
     inner: Backend,
 }
 
 enum Backend {
-    /// Zig: `.library: NativeLibrary`.
+    /// A separately loaded shared library.
     Library(libloading::Library),
-    /// Zig: `.process` — resolve from the current process image.
-    /// TODO(port): implement via `libloading::os::unix::Library::this()` /
-    /// `libloading::os::windows::Library::this()` at migration.
+    /// Symbols resolved from the current process image.
+    // TODO: implement via `libloading::os::unix::Library::this()` /
+    // `libloading::os::windows::Library::this()`.
     Process,
 }
 
 impl DynamicLibrary {
-    /// Open a shared library at `path`. Zig: `DynamicLibrary.open`
-    /// (failures normalized to one error across platforms).
+    /// Open a shared library at `path` (failures normalized across platforms).
     pub fn open(path: &std::path::Path) -> Result<DynamicLibrary, FfiError> {
         // SAFETY: loading a library runs its platform initializers
-        // (constructors, DllMain). As in the Zig runtime, Kira only opens
-        // libraries the manifest/user explicitly named; the caller is the
-        // trust boundary. No Rust-side invariants are assumed of the loaded
-        // code beyond what each later `lookup` asserts.
+        // (constructors, DllMain). Kira only opens libraries the manifest or
+        // user explicitly named; the caller is the trust boundary. No
+        // Rust-side invariants are assumed of the loaded code beyond what each
+        // later `lookup` asserts.
         let library =
             unsafe { libloading::Library::new(path) }.map_err(FfiError::NativeLibraryLoadFailed)?;
         Ok(DynamicLibrary {
@@ -65,19 +58,18 @@ impl DynamicLibrary {
     }
 
     /// Open a handle that resolves symbols from the current process image
-    /// instead of a separate shared object. Zig: `DynamicLibrary.openProcess`.
+    /// instead of a separate shared object.
     pub fn open_process() -> DynamicLibrary {
         DynamicLibrary {
             inner: Backend::Process,
         }
     }
 
-    /// Resolve `name` to a symbol of type `T`. Zig: `DynamicLibrary.lookup`.
+    /// Resolve `name` to a symbol of type `T`.
     ///
     /// # Safety
     /// `T` must accurately describe the symbol's real type (for functions:
-    /// exact signature and ABI) — the same unchecked contract as Zig's
-    /// `lookup(comptime T, ..)`.
+    /// exact signature and ABI).
     pub unsafe fn lookup<'lib, T>(
         &'lib self,
         name: &str,
@@ -93,12 +85,11 @@ impl DynamicLibrary {
                     }
                 })
             }
-            Backend::Process => Err(FfiError::ProcessLookupUnported),
+            Backend::Process => Err(FfiError::ProcessLookupUnavailable),
         }
     }
 
     /// Resolve `name`, returning `None` when absent.
-    /// Zig: `DynamicLibrary.lookupOptional`.
     ///
     /// # Safety
     /// Same contract as [`DynamicLibrary::lookup`].

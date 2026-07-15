@@ -1,11 +1,9 @@
 //! Stable diagnostic codes (`KIC*`, `KPK*`, `KCL*`, `KTC*`, `KBE*`, ...).
 //!
-//! Mirrors kira-zig `packages/kira_diagnostic_messages/src/DiagnosticCode.zig`.
-//!
-//! TODO(port): the Zig catalog carries ~70 codes across the KIC / KIR / KBE /
-//! KTC / KPK / KCL families (plus KSEM codes owned by semantics). Only a few
-//! representative entries are scaffolded here; the full catalog ports
-//! mechanically during migration, keeping the `text()` mapping exhaustive.
+//! Codes span the KIC / KIR / KBE / KTC / KPK / KCL families (plus KSEM codes
+//! owned by semantics). A few representative entries are scaffolded here;
+//! codes are added as each phase lands, keeping the `text()` mapping
+//! exhaustive.
 
 /// One stable, user-facing diagnostic code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

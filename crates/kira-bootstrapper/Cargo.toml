@@ -11,6 +11,3 @@ path = "src/main.rs"
 
 [lints]
 workspace = true
-
-[dependencies]
-kira-toolchain.workspace = true

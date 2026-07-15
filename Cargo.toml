@@ -82,10 +82,9 @@ unused_qualifications = "warn"
 all = { level = "warn", priority = -1 }
 undocumented_unsafe_blocks = "warn"
 
-# Mirrors kira-zig's ReleaseFast-in-Debug rule for interpreter-hot packages:
-# a Debug interpreter is 4-11x slower than an optimized one, and the dev
-# snapshot is what `kira run` uses for interactive UI work — so the VM
-# runtime and bytecode crates are always built optimized, even in dev.
+# Interpreter-hot packages are always built optimized, even in dev: a debug
+# interpreter is 4-11x slower than an optimized one, and the dev snapshot is
+# what `kira run` uses for interactive UI work.
 [profile.dev.package.kira-vm-runtime]
 opt-level = 3
 

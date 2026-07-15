@@ -1,9 +1,8 @@
 //! Byte spans and source-file identity.
 //!
-//! Mirrors kira-zig `packages/kira_source/src/span.zig`. The Zig `Span`
-//! carries an optional `source_path` slice (set through a thread-local
-//! default); the Rust port replaces that with the [`SourceId`]/[`FileSpan`]
-//! pair so no model type holds a lifetime.
+//! A [`Span`] is file-relative; pairing it with a [`SourceId`] as a
+//! [`FileSpan`] names which file it points into, so no model type holds a
+//! lifetime.
 
 /// Identifies one source file inside a [`crate::SourceMap`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -36,7 +35,7 @@ impl Span {
         Self { start, len }
     }
 
-    /// Builds a span from half-open `[start, end)` byte offsets (the Zig `Span.init` shape).
+    /// Builds a span from half-open `[start, end)` byte offsets.
     pub fn from_bounds(start: u32, end: u32) -> Self {
         debug_assert!(end >= start);
         Self {
@@ -55,13 +54,13 @@ impl Span {
         self.len == 0
     }
 
-    /// Returns the text this span covers inside `text` (the Zig `Span.slice`).
+    /// Returns the text this span covers inside `text`.
     pub fn slice(self, text: &str) -> &str {
         &text[self.start as usize..self.end() as usize]
     }
 }
 
-/// A [`Span`] paired with the [`SourceId`] it belongs to; replaces Zig's `Span.source_path`.
+/// A [`Span`] paired with the [`SourceId`] it belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileSpan {
     /// The file the span points into.

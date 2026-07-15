@@ -1,6 +1,4 @@
 //! Kira identifier sanitizing helpers used by code generation.
-//!
-//! Mirrors kira-zig `packages/kira_core/src/identifiers.zig`.
 
 /// Kira reserved words an emitted identifier must not collide with.
 const KEYWORDS: &[&str] = &[

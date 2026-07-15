@@ -1,13 +1,10 @@
 //! package.kira manifests, dependency specs, and lock files.
 //!
 //! Layer 5 of the Kira package graph.
-//! Ported from kira-zig `packages/kira_manifest`.
 //!
 //! Scaffolding status: the manifest model types (this crate's public surface)
-//! are ported; the loaders/writers/parsers are module stubs that fill in as
-//! the port lands.
-
-// #![warn(missing_docs)] // enable once the port lands real code
+//! are defined; the loaders/writers/parsers are module stubs that fill in as
+//! the crate grows.
 
 pub mod declaration_loader;
 pub mod declaration_loader_state;

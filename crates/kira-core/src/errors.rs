@@ -1,8 +1,6 @@
 //! Cross-cutting failure categories shared by every compiler stage.
-//!
-//! Mirrors kira-zig `packages/kira_core/src/errors.zig`.
 
-/// Coarse error set every Kira pipeline stage can surface (Zig `CommonError`).
+/// Coarse error set every Kira pipeline stage can surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CommonError {
     /// The project manifest is missing or malformed.
