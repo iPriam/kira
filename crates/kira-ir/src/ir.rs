@@ -7,6 +7,7 @@
 //! [`IrProgram`] is the contract that the program type-checked and has a valid
 //! entrypoint.
 
+use kira_runtime_abi::Execution;
 use kira_semantics_model::Type;
 use la_arena::{Arena, Idx};
 
@@ -116,6 +117,11 @@ pub struct IrFunction {
     pub locals: Vec<Type>,
     /// The function's return type.
     pub return_type: Type,
+    /// The engine this function's body runs on, as written in the source.
+    ///
+    /// A hybrid build splits the program on this; a single-backend build
+    /// resolves it against that backend's default.
+    pub execution: Execution,
     /// The function body.
     pub body: Vec<IrStmt>,
 }

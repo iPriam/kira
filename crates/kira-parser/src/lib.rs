@@ -14,6 +14,7 @@ mod stmt;
 
 use kira_core::{Interner, Symbol};
 use kira_diagnostics::{Diagnostic, Label, Severity};
+use kira_runtime_abi::Execution;
 use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::ast::{Block, Function, Item, Param, TypeRef, UnsupportedItem};
 use kira_syntax_model::{SyntaxTree, Token, TokenKind};
@@ -164,7 +165,7 @@ impl<'a> Parser<'a> {
         match self.current_kind() {
             TokenKind::At => self.parse_annotated_item(),
             TokenKind::Function => {
-                if let Some(function) = self.parse_function(false) {
+                if let Some(function) = self.parse_function(false, Execution::Inherited) {
                     self.tree.items.push(Item::Function(function));
                 }
             }
@@ -189,13 +190,29 @@ impl<'a> Parser<'a> {
     fn parse_annotated_item(&mut self) {
         let start = self.current().span;
         let mut is_main = false;
+        let mut execution = Execution::Inherited;
         // Consume one or more `@Name` annotations.
         while self.at(TokenKind::At) {
             self.bump();
             if self.at(TokenKind::Identifier) {
                 let name_span = self.current().span;
-                if self.text_of(name_span) == "Main" {
-                    is_main = true;
+                match self.text_of(name_span) {
+                    "Main" => is_main = true,
+                    name => {
+                        if let Some(selected) = Execution::from_annotation(name) {
+                            // Two engines on one function is a contradiction,
+                            // not a refinement: the second would silently win.
+                            if execution != Execution::Inherited && execution != selected {
+                                self.error(
+                                    name_span,
+                                    "KPAR005",
+                                    "a function selects one execution engine; \
+                                     `@Runtime` and `@Native` cannot both apply",
+                                );
+                            }
+                            execution = selected;
+                        }
+                    }
                 }
                 self.bump();
                 // Skip an optional `(...)` annotation argument list.
@@ -212,7 +229,7 @@ impl<'a> Parser<'a> {
             }
         }
         if self.at(TokenKind::Function) {
-            if let Some(function) = self.parse_function(is_main) {
+            if let Some(function) = self.parse_function(is_main, execution) {
                 self.tree.items.push(Item::Function(function));
             }
         } else {
@@ -221,7 +238,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_function(&mut self, is_main: bool) -> Option<Function> {
+    fn parse_function(&mut self, is_main: bool, execution: Execution) -> Option<Function> {
         let start = self.current().span;
         self.expect(TokenKind::Function);
         let (name, name_span) = if self.at(TokenKind::Identifier) {
@@ -242,6 +259,7 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             is_main,
+            execution,
             params,
             return_type,
             body,
@@ -447,6 +465,61 @@ mod tests {
 
     fn parse_text(text: &str) -> ParseResult {
         parse(SourceId::new(0), text)
+    }
+
+    /// The one function in `text`, for tests that parse a single declaration.
+    fn only_function(result: &ParseResult) -> &Function {
+        match result.tree.items.as_slice() {
+            [Item::Function(function)] => function,
+            items => panic!("expected exactly one function, got {items:?}"),
+        }
+    }
+
+    #[test]
+    fn execution_annotations_select_an_engine() {
+        let runtime = parse_text("@Runtime function f() { return }");
+        assert_eq!(only_function(&runtime).execution, Execution::Runtime);
+        assert!(runtime.diagnostics.is_empty());
+
+        let native = parse_text("@Native function f() { return }");
+        assert_eq!(only_function(&native).execution, Execution::Native);
+        assert!(native.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn an_unannotated_function_inherits_the_builds_engine() {
+        let plain = parse_text("function f() { return }");
+        assert_eq!(only_function(&plain).execution, Execution::Inherited);
+    }
+
+    #[test]
+    fn execution_annotations_compose_with_main() {
+        let result = parse_text("@Main @Native function main() { return }");
+        let function = only_function(&result);
+        assert!(function.is_main);
+        assert_eq!(function.execution, Execution::Native);
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn two_engines_on_one_function_is_reported() {
+        let result = parse_text("@Runtime @Native function f() { return }");
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == Some("KPAR005")),
+            "a contradictory engine pair must be reported, not silently resolved",
+        );
+        // Parsing still yields a usable function: the parser never bails.
+        assert_eq!(result.tree.items.len(), 1);
+    }
+
+    #[test]
+    fn repeating_one_engine_is_not_a_contradiction() {
+        let result = parse_text("@Native @Native function f() { return }");
+        assert_eq!(only_function(&result).execution, Execution::Native);
+        assert!(result.diagnostics.is_empty());
     }
 
     #[test]

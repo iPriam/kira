@@ -7,6 +7,7 @@
 //! [`Item::Unsupported`] node rather than aborting the parse.
 
 use kira_core::Symbol;
+use kira_runtime_abi::Execution;
 use kira_source::Span;
 use la_arena::{Arena, Idx};
 
@@ -72,6 +73,12 @@ pub struct Function {
     pub name_span: Span,
     /// Whether the declaration carried the `@Main` annotation.
     pub is_main: bool,
+    /// The engine the declaration selected with `@Runtime` / `@Native`.
+    ///
+    /// [`Execution::Inherited`] when neither was written — the syntax tree
+    /// records what the source said, and leaves resolving the default to the
+    /// build.
+    pub execution: Execution,
     /// Declared parameters, in order.
     pub params: Vec<Param>,
     /// Declared return type, if written (absent means `Void`).

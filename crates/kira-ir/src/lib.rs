@@ -46,6 +46,7 @@ mod tests {
             locals: Vec::new(),
             body: vec![print_stmt, return_stmt],
             is_main: true,
+            execution: kira_runtime_abi::Execution::Inherited,
             name_span: Span::new(0, 4),
         });
         program.main = Some(FuncId(0));

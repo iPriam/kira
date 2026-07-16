@@ -215,6 +215,7 @@ name = "kira-bytecode"
 version = "0.1.0"
 dependencies = [
  "kira-ir",
+ "kira-runtime-abi",
  "kira-semantics-model",
  "la-arena",
  "thiserror",
@@ -305,6 +306,7 @@ version = "0.1.0"
 name = "kira-ir"
 version = "0.1.0"
 dependencies = [
+ "kira-runtime-abi",
  "kira-semantics-model",
  "kira-source",
  "la-arena",
@@ -391,6 +393,7 @@ dependencies = [
  "kira-core",
  "kira-diagnostics",
  "kira-lexer",
+ "kira-runtime-abi",
  "kira-source",
  "kira-syntax-model",
 ]
@@ -430,6 +433,7 @@ dependencies = [
 name = "kira-semantics-model"
 version = "0.1.0"
 dependencies = [
+ "kira-runtime-abi",
  "kira-source",
  "la-arena",
 ]
@@ -458,6 +462,7 @@ name = "kira-syntax-model"
 version = "0.1.0"
 dependencies = [
  "kira-core",
+ "kira-runtime-abi",
  "kira-source",
  "la-arena",
 ]

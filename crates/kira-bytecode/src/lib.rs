@@ -37,6 +37,7 @@ mod tests {
                 // dynamically, so the slot types are immaterial here.
                 locals: vec![kira_semantics_model::Type::Int; local_count as usize],
                 return_type: kira_semantics_model::Type::Void,
+                execution: kira_runtime_abi::Execution::Inherited,
                 body,
             }],
             main: 0,

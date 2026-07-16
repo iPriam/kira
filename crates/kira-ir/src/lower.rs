@@ -44,6 +44,7 @@ impl Lowerer<'_> {
             param_count: function.param_count,
             locals: function.locals.iter().map(|local| local.ty).collect(),
             return_type: function.return_type,
+            execution: function.execution,
             body,
         }
     }
