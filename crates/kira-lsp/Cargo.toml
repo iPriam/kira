@@ -11,6 +11,12 @@ name = "kira-language-server"
 path = "src/main.rs"
 
 [dependencies]
+# The server runs the compiler's own frontend rather than a second one: an
+# editor squiggle and a `kirac check` error must be the same computation.
+kira-semantics.workspace = true
+kira-diagnostics.workspace = true
+kira-source.workspace = true
+salsa.workspace = true
 lsp-server.workspace = true
 lsp-types.workspace = true
 serde.workspace = true
