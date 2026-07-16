@@ -1,0 +1,14 @@
+// Recursion and if/else: the classic Fibonacci function.
+@Main
+function main() {
+    print(fib(10))
+    print(fib(20))
+    return
+}
+
+function fib(n: Int) -> Int {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}

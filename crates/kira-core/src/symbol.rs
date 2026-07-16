@@ -22,7 +22,10 @@ impl Symbol {
 }
 
 /// Deduplicating string store handing out stable [`Symbol`] handles.
-#[derive(Debug, Default)]
+/// Derives `Clone`/`PartialEq`/`Eq` so a parsed program can carry its interner
+/// as part of a salsa query result: tracked-function outputs must be `Clone`
+/// and comparable for incremental memoization.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Interner {
     map: HashMap<String, Symbol>,
     strings: Vec<String>,

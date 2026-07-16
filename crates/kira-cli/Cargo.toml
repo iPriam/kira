@@ -13,3 +13,23 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+kira-source.workspace = true
+kira-diagnostics.workspace = true
+kira-semantics.workspace = true
+kira-ir.workspace = true
+kira-bytecode.workspace = true
+kira-vm-runtime.workspace = true
+kira-runtime-abi.workspace = true
+kira-backend-api.workspace = true
+kira-llvm-backend.workspace = true
+# Not called from Rust: depending on the native runtime makes cargo build
+# `libkira_native_bridge.a` into the same profile directory as `kirac`, which is
+# where the native link step looks for it.
+kira-native-bridge.workspace = true
+salsa.workspace = true
+thiserror.workspace = true
+
+[features]
+# Forwards to the LLVM backend so `kirac --backend llvm` works. Off by default
+# so the workspace builds with no LLVM install present; see the backend crate.
+llvm = ["kira-llvm-backend/llvm"]

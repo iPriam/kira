@@ -1,0 +1,150 @@
+//! The native (LLVM) half of `build` and `run`: artifact layout, locating the
+//! runtime archive, and executing a built program.
+
+use std::path::{Path, PathBuf};
+
+use kira_ir::IrProgram;
+use kira_llvm_backend::{LlvmError, NativeArtifacts, NativeBuildOptions};
+
+/// Where a program's build artifacts live: `<source-dir>/.kira-build/`.
+///
+/// Artifacts stay beside the program they came from rather than in a shared
+/// location, so two programs can never race for one output path.
+pub struct Artifacts {
+    /// The `.kira-build` directory itself.
+    directory: PathBuf,
+    /// The source file's stem, which every artifact is named after.
+    stem: String,
+}
+
+impl Artifacts {
+    /// Resolves the artifact layout for `source`, creating the directory.
+    pub fn for_source(source: &Path) -> Result<Self, std::io::Error> {
+        let directory = source
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(".kira-build");
+        std::fs::create_dir_all(&directory)?;
+        let stem = source
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "program".to_owned());
+        Ok(Artifacts { directory, stem })
+    }
+
+    /// The object file path.
+    pub fn object(&self) -> PathBuf {
+        self.directory.join(format!("{}.o", self.stem))
+    }
+
+    /// The native executable path.
+    pub fn executable(&self) -> PathBuf {
+        self.directory.join(&self.stem)
+    }
+
+    /// The textual LLVM IR dump path.
+    pub fn llvm_ir(&self) -> PathBuf {
+        self.directory.join(format!("{}.ll", self.stem))
+    }
+}
+
+/// Builds `program` into a native executable.
+pub fn build(
+    program: &IrProgram,
+    source: &Path,
+    emit_llvm_ir: bool,
+) -> Result<NativeArtifacts, NativeError> {
+    let artifacts =
+        Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
+    let options = NativeBuildOptions {
+        module_name: artifacts.stem.clone(),
+        object_path: artifacts.object(),
+        executable_path: Some(artifacts.executable()),
+        ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
+        runtime_archive: runtime_archive()?,
+    };
+    Ok(kira_llvm_backend::build_native(program, &options)?)
+}
+
+/// Runs a built native executable, returning its exit code.
+///
+/// The child inherits this process's streams, so a native run's output is
+/// indistinguishable from a VM run's.
+pub fn execute(executable: &Path) -> Result<i32, NativeError> {
+    let status = std::process::Command::new(executable)
+        .status()
+        .map_err(|source| NativeError::Spawn {
+            executable: executable.to_path_buf(),
+            source,
+        })?;
+    // A signal-killed child reports no code; surface it as a failure rather
+    // than as success.
+    Ok(status.code().unwrap_or(1))
+}
+
+/// Locates `libkira_native_bridge.a`, the native runtime archive.
+///
+/// It sits beside this executable: cargo writes the staticlib into the same
+/// profile directory as `kirac`, and `kirac` depends on the crate, so a built
+/// `kirac` always has a matching archive next to it.
+fn runtime_archive() -> Result<PathBuf, NativeError> {
+    let executable =
+        std::env::current_exe().map_err(|source| NativeError::RuntimeArchive { source })?;
+    let directory = executable
+        .parent()
+        .ok_or_else(|| NativeError::RuntimeArchive {
+            source: std::io::Error::other("this executable has no parent directory"),
+        })?;
+    Ok(directory.join("libkira_native_bridge.a"))
+}
+
+/// Why a native build or run failed.
+#[derive(Debug, thiserror::Error)]
+pub enum NativeError {
+    /// The artifact directory could not be prepared.
+    #[error("cannot create the `.kira-build` directory: {source}")]
+    Layout {
+        /// The underlying I/O failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The runtime archive could not be located.
+    #[error("cannot locate the native runtime archive: {source}")]
+    RuntimeArchive {
+        /// The underlying I/O failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The backend failed.
+    #[error(transparent)]
+    Backend(#[from] LlvmError),
+    /// The built executable could not be started.
+    #[error("cannot run `{executable}`: {source}")]
+    Spawn {
+        /// The executable that could not be started.
+        executable: PathBuf,
+        /// The underlying I/O failure.
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn artifacts_live_beside_their_source_and_share_its_stem() {
+        let directory = std::env::temp_dir().join("kira-artifacts-test");
+        let source = directory.join("hello.kira");
+        std::fs::create_dir_all(&directory).expect("temp dir");
+
+        let artifacts = Artifacts::for_source(&source).expect("layout");
+        assert!(artifacts.object().ends_with(".kira-build/hello.o"));
+        assert!(artifacts.executable().ends_with(".kira-build/hello"));
+        assert!(artifacts.llvm_ir().ends_with(".kira-build/hello.ll"));
+        assert!(artifacts.object().starts_with(&directory));
+
+        std::fs::remove_dir_all(&directory).ok();
+    }
+}
