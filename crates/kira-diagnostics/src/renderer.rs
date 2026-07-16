@@ -84,10 +84,12 @@ mod tests {
     #[test]
     fn renders_location_and_caret() {
         let mut sources = SourceMap::new();
-        let id = sources.insert(
-            "test.kira".to_owned(),
-            "@Main\nfunction main() { print(x) }".to_owned(),
-        );
+        let id = sources
+            .insert(
+                "test.kira".to_owned(),
+                "@Main\nfunction main() { print(x) }".to_owned(),
+            )
+            .expect("an empty map takes a file");
         // `x` sits inside the second line.
         let offset = "@Main\nfunction main() { print(".len() as u32;
         let span = FileSpan::new(id, Span::new(offset, 1));

@@ -83,6 +83,9 @@ pub enum LlvmDiscoveryError {
         /// The pinned LLVM version.
         version: String,
     },
+    /// The compiled-in LLVM pin could not be read.
+    #[error(transparent)]
+    Metadata(#[from] crate::llvm_metadata::MalformedMetadata),
     /// Nothing was found anywhere in the discovery order.
     #[error(
         "no LLVM {version} install found; checked:\n{}\n\
@@ -103,7 +106,7 @@ pub enum LlvmDiscoveryError {
 /// `repo_root` enables the legacy repo-managed fallback; pass `None` outside a
 /// repo checkout (an installed toolchain).
 pub fn discover(repo_root: Option<&Path>) -> Result<LlvmInstallation, LlvmDiscoveryError> {
-    let version = pinned_version();
+    let version = pinned_version()?;
     let mut checked = Vec::new();
 
     // 1. An explicit override always wins, and never falls through: if the user

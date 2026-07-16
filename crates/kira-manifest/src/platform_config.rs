@@ -65,6 +65,43 @@ impl RunnerId {
             Self::Linux => "linux",
         }
     }
+
+    /// This runner's slot in a resolved matrix, and the count of all runners.
+    ///
+    /// A resolved matrix stores one row per runner *at that runner's own
+    /// index*, so a lookup is an index rather than a search that could fail to
+    /// find its row.
+    pub const COUNT: usize = 9;
+
+    /// This runner's slot in a resolved matrix; always below [`RunnerId::COUNT`].
+    pub fn index(self) -> usize {
+        match self {
+            Self::Desktop => 0,
+            Self::Macos => 1,
+            Self::Ios => 2,
+            Self::Tvos => 3,
+            Self::Visionos => 4,
+            Self::Windows => 5,
+            Self::Android => 6,
+            Self::Web => 7,
+            Self::Linux => 8,
+        }
+    }
+
+    /// Every runner, in index order.
+    pub fn all() -> [RunnerId; RunnerId::COUNT] {
+        [
+            Self::Desktop,
+            Self::Macos,
+            Self::Ios,
+            Self::Tvos,
+            Self::Visionos,
+            Self::Windows,
+            Self::Android,
+            Self::Web,
+            Self::Linux,
+        ]
+    }
 }
 
 /// The external build system a runner is driven through.
@@ -127,6 +164,28 @@ impl BuildProfile {
             Self::Profiler => "profiler",
             Self::Release => "release",
         }
+    }
+
+    /// How many build profiles there are.
+    ///
+    /// A resolved matrix stores one row per profile *at that profile's own
+    /// index*, so a lookup is an index rather than a search that could fail to
+    /// find its row.
+    pub const COUNT: usize = 3;
+
+    /// This profile's slot in a resolved matrix; always below
+    /// [`BuildProfile::COUNT`].
+    pub fn index(self) -> usize {
+        match self {
+            Self::Debug => 0,
+            Self::Profiler => 1,
+            Self::Release => 2,
+        }
+    }
+
+    /// Every build profile, in index order.
+    pub fn all() -> [BuildProfile; BuildProfile::COUNT] {
+        [Self::Debug, Self::Profiler, Self::Release]
     }
 }
 

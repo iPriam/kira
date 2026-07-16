@@ -4,6 +4,7 @@
 //! [`Stmt::Error`] and the cursor resynchronizes at the next `;`, `}`, or
 //! statement-starting keyword, so one bad statement never derails the block.
 
+use kira_core::Symbol;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{Block, Stmt, StmtId};
@@ -39,7 +40,7 @@ impl Parser<'_> {
             (self.intern_span(span), span)
         } else {
             self.error(self.current().span, "KPAR010", "expected a binding name");
-            (self.interner.intern("<error>"), self.current().span)
+            (Symbol::ERROR, self.current().span)
         };
         if self.at(TokenKind::Identifier) {
             self.bump();

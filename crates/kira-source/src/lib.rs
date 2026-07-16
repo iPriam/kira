@@ -9,5 +9,5 @@ pub mod span;
 
 pub use line_map::{LineColumn, LineMap};
 pub use source_file::{MAX_SOURCE_FILE_BYTES, SourceFile};
-pub use source_map::SourceMap;
+pub use source_map::{SourceMap, SourceMapFull};
 pub use span::{FileSpan, SourceId, Span};

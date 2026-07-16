@@ -9,4 +9,5 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+thiserror.workspace = true
 kira-core.workspace = true

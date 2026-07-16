@@ -141,9 +141,21 @@ impl<'a> Parser<'a> {
         span.slice(self.text)
     }
 
+    /// Interns the text a span covers.
+    ///
+    /// An interner with no handles left is reported like any other parse
+    /// problem and the name becomes [`Symbol::ERROR`]: this parser is
+    /// error-resilient, so it carries on and produces a tree plus a
+    /// diagnostic rather than bailing.
     fn intern_span(&mut self, span: Span) -> Symbol {
         let text = span.slice(self.text).to_owned();
-        self.interner.intern(&text)
+        match self.interner.intern(&text) {
+            Ok(symbol) => symbol,
+            Err(full) => {
+                self.error(span, "KPAR030", full.to_string());
+                Symbol::ERROR
+            }
+        }
     }
 
     fn error(&mut self, span: Span, code: &'static str, message: impl Into<String>) {
@@ -246,7 +258,7 @@ impl<'a> Parser<'a> {
             (self.intern_span(span), span)
         } else {
             self.error(self.current().span, "KPAR004", "expected a function name");
-            (self.interner.intern("<error>"), self.current().span)
+            (Symbol::ERROR, self.current().span)
         };
         if self.at(TokenKind::Identifier) {
             self.bump();
@@ -326,7 +338,7 @@ impl<'a> Parser<'a> {
             let span = self.current().span;
             self.error(span, "KPAR006", "expected a type name");
             TypeRef {
-                name: self.interner.intern("<error>"),
+                name: Symbol::ERROR,
                 span,
             }
         }
