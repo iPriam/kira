@@ -8,7 +8,7 @@
 
 use kira_bytecode::module::Module;
 use kira_bytecode::op::Instruction;
-use kira_runtime_abi::HostCapabilities;
+use kira_runtime_abi::{HostCapabilities, NativeArg, NativeResult};
 
 use crate::error::VmError;
 use crate::value::{Heap, HeapStats, Value};
@@ -100,6 +100,7 @@ impl Vm<'_> {
                     let filled = self.fill_params(module, index, callee)?;
                     frames.push(filled);
                 }
+                Instruction::CallNative(id) => self.call_native(module, id)?,
                 other => self.step(module, &mut frames[depth], other)?,
             }
         }
@@ -118,6 +119,63 @@ impl Vm<'_> {
             frame.locals[slot] = self.pop()?;
         }
         Ok(frame)
+    }
+
+    /// Calls into the native half through the embedder.
+    ///
+    /// The VM performs no part of the call itself: it pops the arguments,
+    /// hands the host safe Rust values, and pushes what comes back. That is
+    /// what lets the whole VM subtree stay free of FFI and keep compiling for
+    /// `wasm32-unknown-unknown` while still being one half of a hybrid program.
+    ///
+    /// Arguments are *borrowed* across the call — a string is handed over as a
+    /// `&str` into this heap, never a copy — and the result is *owned*, because
+    /// handing a value out is a move. The VM keeps ownership of every argument
+    /// and drops them here, exactly as a callee frame's locals are dropped.
+    fn call_native(&mut self, module: &Module, id: u32) -> Result<(), VmError> {
+        let proto = module
+            .functions
+            .get(id as usize)
+            .ok_or(VmError::UnknownFunction(id))?;
+        let count = proto.param_count as usize;
+        let first = self
+            .stack
+            .len()
+            .checked_sub(count)
+            .ok_or(VmError::StackUnderflow)?;
+        let arguments = &self.stack[first..];
+
+        // Borrowing the heap for the args while the host is borrowed mutably is
+        // fine: they are disjoint fields of this struct.
+        let mut lowered = Vec::with_capacity(count);
+        for value in arguments {
+            lowered.push(match *value {
+                Value::Int(value) => NativeArg::Int(value),
+                Value::Float(value) => NativeArg::Float(value),
+                Value::Bool(value) => NativeArg::Bool(value),
+                Value::Str(id) => NativeArg::Str(self.heap.get(id)),
+                Value::Void => NativeArg::Void,
+            });
+        }
+        let returned = self
+            .host
+            .call_native(id, &lowered)
+            .map_err(VmError::NativeCall);
+
+        // The arguments were this frame's to own, whatever the call did.
+        for value in self.stack.split_off(first) {
+            self.heap.drop_value(value);
+        }
+
+        let result = match returned? {
+            NativeResult::Void => Value::Void,
+            NativeResult::Int(value) => Value::Int(value),
+            NativeResult::Float(value) => Value::Float(value),
+            NativeResult::Bool(value) => Value::Bool(value),
+            NativeResult::Str(text) => Value::Str(self.heap.alloc(text)),
+        };
+        self.stack.push(result);
+        Ok(())
     }
 
     /// Executes one non-control-flow-frame instruction against `frame`.

@@ -48,18 +48,106 @@ pub const RUNTIME_ABI_VERSION: u32 = 1;
 /// fails if the archive's marker and this name ever drift apart.
 pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_1";
 
+/// An argument the VM hands to a native function.
+///
+/// Args **borrow**: a string is a `&str` into the VM's own heap, not a copy, so
+/// a runtime-to-native call allocates nothing to make the crossing. That is the
+/// Rust model at the seam — and the reason the VM can pass a string it still
+/// owns without either side guessing who frees it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NativeArg<'a> {
+    /// The unit value.
+    Void,
+    /// A 64-bit signed integer.
+    Int(i64),
+    /// A 64-bit float.
+    Float(f64),
+    /// A boolean.
+    Bool(bool),
+    /// A borrowed string, valid for this call only.
+    Str(&'a str),
+}
+
+/// What a native function returned to the VM.
+///
+/// Results **own**: handing a value out is a move, so the VM takes the string
+/// rather than borrowing one whose native storage it does not control.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NativeResult {
+    /// The unit value.
+    Void,
+    /// A 64-bit signed integer.
+    Int(i64),
+    /// A 64-bit float.
+    Float(f64),
+    /// A boolean.
+    Bool(bool),
+    /// An owned string.
+    Str(String),
+}
+
+/// Why a call into native code could not be made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeCallError {
+    /// This host has no native half; the program is running VM-only.
+    NoNativeHalf,
+    /// The host has a native half, but nothing bound for this function.
+    UnboundFunction(u32),
+    /// Native code answered with something this build cannot read.
+    MalformedResult(u32),
+}
+
+impl core::fmt::Display for NativeCallError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            NativeCallError::NoNativeHalf => write!(
+                f,
+                "this program called a native function, but the host has no native half \
+                 loaded (build it with `--backend hybrid`)"
+            ),
+            NativeCallError::UnboundFunction(id) => {
+                write!(f, "no native symbol is bound for function {id}")
+            }
+            NativeCallError::MalformedResult(id) => write!(
+                f,
+                "native function {id} returned a value this runtime cannot read"
+            ),
+        }
+    }
+}
+
 /// The effects an embedder grants a running Kira program.
 ///
 /// The VM owns the runtime value representation and all formatting; the host
 /// only receives already-rendered lines. This keeps the VM compilable for
 /// `wasm32-unknown-unknown`, where the concrete host is supplied by the
 /// browser embedder rather than by the standard library.
+///
+/// The same rule is what makes hybrid possible without breaking the portable
+/// core: the VM never dlopens anything or touches a C ABI. When it reaches a
+/// call into the native half it asks the embedder, in safe Rust, through
+/// [`HostCapabilities::call_native`] — and the embedder, which is native-only
+/// by construction, does the marshalling.
 pub trait HostCapabilities {
     /// Emits one line of program output (the effect behind the `print` builtin).
     ///
     /// The text is already fully formatted and carries no trailing newline;
     /// the host owns line termination for its destination.
     fn write_line(&mut self, text: &str);
+
+    /// Runs the native function `function_id`, returning what it produced.
+    ///
+    /// The default refuses: most hosts (the VM-only CLI, the wasm embedder,
+    /// tests) have no native half, and a program that reaches this on such a
+    /// host is a build error surfacing late, not something to paper over.
+    fn call_native(
+        &mut self,
+        function_id: u32,
+        args: &[NativeArg<'_>],
+    ) -> Result<NativeResult, NativeCallError> {
+        let _ = (function_id, args);
+        Err(NativeCallError::NoNativeHalf)
+    }
 }
 
 /// A [`HostCapabilities`] implementation that records every line in memory.

@@ -25,6 +25,12 @@ pub enum ModuleValidateError {
         /// How many functions the module actually has.
         function_count: u32,
     },
+    /// A native function carried a bytecode body, which nothing would run.
+    #[error("native function `{function}` carries a bytecode body")]
+    NativeWithCode {
+        /// The offending function's name.
+        function: String,
+    },
     /// A function has no instructions at all.
     #[error("function `{function}` has empty code")]
     EmptyCode {
@@ -70,6 +76,18 @@ impl Module {
             });
         }
         for function in &self.functions {
+            // A native function's body lives in the other half of a hybrid
+            // program, so it is the one kind that legitimately carries no code.
+            // It still has to be well-formed: a signature to marshal against,
+            // and nothing pretending to be a body.
+            if function.is_native() {
+                if !function.code.is_empty() {
+                    return Err(ModuleValidateError::NativeWithCode {
+                        function: function.name.clone(),
+                    });
+                }
+                continue;
+            }
             if function.code.is_empty() {
                 return Err(ModuleValidateError::EmptyCode {
                     function: function.name.clone(),
@@ -95,7 +113,18 @@ impl Module {
                     Instruction::LoadLocal(slot) | Instruction::StoreLocal(slot) => {
                         *slot < function.local_count
                     }
-                    Instruction::Call(callee) => *callee < function_count,
+                    // A bytecode `Call` must land on a bytecode body. A native
+                    // callee is reached with `CallNative`, which goes through
+                    // the host; letting `Call` target one would push a frame
+                    // over an empty body.
+                    Instruction::Call(callee) => {
+                        *callee < function_count && !self.functions[*callee as usize].is_native()
+                    }
+                    // A `CallNative` id names a function in the *program*, and
+                    // is resolved by the host against the hybrid manifest — not
+                    // an index into this module's table, so there is nothing
+                    // here to bound it against.
+                    Instruction::CallNative(_) => true,
                     Instruction::Jump(target) | Instruction::JumpIfFalse(target) => {
                         *target < code_len
                     }
@@ -124,6 +153,7 @@ mod tests {
             name: name.to_owned(),
             param_count: params,
             local_count: locals,
+            execution: kira_runtime_abi::Execution::Runtime,
             code,
         }
     }

@@ -92,6 +92,14 @@ pub enum Instruction {
     JumpIfFalse(u32),
     /// Call the function at the given index; arguments are already on the stack.
     Call(u32),
+    /// Call the *native* function with the given program-wide id; arguments are
+    /// already on the stack, and the result is pushed.
+    ///
+    /// Emitted only by a hybrid build, where the callee's body lives in the
+    /// native half rather than in this module's function table. The VM does not
+    /// perform the call itself — it asks the embedder, which keeps the VM free
+    /// of any FFI and still able to compile for wasm.
+    CallNative(u32),
     /// Pop a value, format it, emit one output line, and push unit.
     Print,
     /// Return the stack top from the current function.
@@ -145,6 +153,7 @@ mod opcode {
     pub const PRINT: u8 = 0x29;
     pub const RETURN: u8 = 0x2a;
     pub const RETURN_VOID: u8 = 0x2b;
+    pub const CALL_NATIVE: u8 = 0x2c;
 }
 
 /// An error decoding a byte stream back into instructions.
@@ -205,6 +214,10 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::Call(index) => {
             out.push(o::CALL);
             out.extend_from_slice(&index.to_le_bytes());
+        }
+        Instruction::CallNative(id) => {
+            out.push(o::CALL_NATIVE);
+            out.extend_from_slice(&id.to_le_bytes());
         }
         // Nullary instructions: one exhaustive arm each, so encoding is total
         // by construction (no fallthrough, no panic path).
@@ -299,6 +312,7 @@ impl Cursor<'_> {
             o::JUMP => Instruction::Jump(u32::from_le_bytes(self.take()?)),
             o::JUMP_IF_FALSE => Instruction::JumpIfFalse(u32::from_le_bytes(self.take()?)),
             o::CALL => Instruction::Call(u32::from_le_bytes(self.take()?)),
+            o::CALL_NATIVE => Instruction::CallNative(u32::from_le_bytes(self.take()?)),
             other => nullary_from_opcode(other).ok_or(DecodeError::UnknownOpcode {
                 opcode: other,
                 offset: opcode_offset,

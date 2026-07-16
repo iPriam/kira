@@ -6,6 +6,7 @@
 //! just an in-memory structure. The format is append-only.
 
 use crate::op::{DecodeError, Instruction, decode, encode};
+use kira_runtime_abi::Execution;
 
 /// The magic bytes that open a serialized module: "KBC1".
 pub const MAGIC: [u8; 4] = *b"KBC1";
@@ -35,8 +36,24 @@ pub struct FuncProto {
     pub param_count: u16,
     /// Total number of local slots the function uses.
     pub local_count: u16,
-    /// The function's instructions.
+    /// Which engine owns this function's body.
+    ///
+    /// [`Execution::Runtime`] for everything a VM-only build produces. A hybrid
+    /// build marks the functions whose bodies live in the native half instead:
+    /// they keep their slot here so one id indexes both halves, they carry their
+    /// signature so a caller knows the arity to marshal, and their `code` is
+    /// empty — the body is somewhere else, and saying so is what stops a stray
+    /// `Call` from quietly returning unit.
+    pub execution: Execution,
+    /// The function's instructions; empty for a native function.
     pub code: Vec<Instruction>,
+}
+
+impl FuncProto {
+    /// Whether this function's body lives in the native half.
+    pub fn is_native(&self) -> bool {
+        self.execution == Execution::Native
+    }
 }
 
 /// An error decoding a serialized module.
@@ -54,6 +71,9 @@ pub enum ModuleDecodeError {
     /// An instruction stream inside the module failed to decode.
     #[error("invalid instruction stream: {0}")]
     Code(#[from] DecodeError),
+    /// An execution byte named no engine this build knows.
+    #[error("unknown execution engine `{0}` in module")]
+    UnknownExecution(u8),
 }
 
 impl Module {
@@ -71,6 +91,7 @@ impl Module {
             write_bytes(&mut out, function.name.as_bytes());
             out.extend_from_slice(&function.param_count.to_le_bytes());
             out.extend_from_slice(&function.local_count.to_le_bytes());
+            out.push(function.execution.as_byte());
             let code = encode(&function.code);
             write_bytes(&mut out, &code);
         }
@@ -95,12 +116,16 @@ impl Module {
             let name = reader.read_string()?;
             let param_count = reader.read_u16()?;
             let local_count = reader.read_u16()?;
+            let byte = reader.take(1)?[0];
+            let execution =
+                Execution::from_byte(byte).ok_or(ModuleDecodeError::UnknownExecution(byte))?;
             let code_bytes = reader.read_len_prefixed()?;
             let code = decode(code_bytes)?;
             functions.push(FuncProto {
                 name,
                 param_count,
                 local_count,
+                execution,
                 code,
             });
         }
@@ -174,12 +199,14 @@ mod tests {
                     name: "helper".to_owned(),
                     param_count: 1,
                     local_count: 2,
+                    execution: Execution::Runtime,
                     code: vec![Instruction::LoadLocal(0), Instruction::Return],
                 },
                 FuncProto {
                     name: "main".to_owned(),
                     param_count: 0,
                     local_count: 0,
+                    execution: Execution::Runtime,
                     code: vec![
                         Instruction::ConstStr(0),
                         Instruction::Print,
