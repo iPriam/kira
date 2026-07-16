@@ -293,6 +293,10 @@ version = "0.1.0"
 [[package]]
 name = "kira-hybrid-definition"
 version = "0.1.0"
+dependencies = [
+ "kira-runtime-abi",
+ "thiserror",
+]
 
 [[package]]
 name = "kira-hybrid-runtime"
@@ -377,6 +381,9 @@ version = "0.1.0"
 [[package]]
 name = "kira-native-bridge"
 version = "0.1.0"
+dependencies = [
+ "kira-runtime-abi",
+]
 
 [[package]]
 name = "kira-native-lib-definition"
