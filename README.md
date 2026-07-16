@@ -40,3 +40,48 @@ cargo clippy --workspace
 The VM-hot crates (`kira-vm-runtime`, `kira-bytecode`) are compiled with
 `opt-level = 3` even in the dev profile: a debug interpreter is 4–11× slower,
 and the dev snapshot is what `kira run` uses for interactive work.
+
+## Editor support
+
+`kira-lsp` builds `kira-language-server`, the language-server binary editors
+talk to. Install it from a checkout of this repo:
+
+```sh
+cargo install --path crates/kira-lsp
+```
+
+It lands in `~/.cargo/bin`. The server speaks LSP over stdio, takes no CLI
+arguments, and serves **diagnostics only** — it handles `initialize`,
+`didOpen`, `didChange`, `didClose`, and publishes diagnostics. It advertises
+full-document sync and nothing else, so a client knows not to ask for more;
+anything that asks anyway gets `MethodNotFound` rather than a wrong answer.
+Hover, completion, and goto-definition are not implemented yet.
+
+Analysis is **per-file**: each open document is analyzed alone, because the
+language has no imports or modules yet. There are no project-wide diagnostics,
+and nothing is reported for a file that is not open.
+
+The server runs the same salsa frontend `kirac check` does, so an editor
+squiggle and a command-line error are the same computation rather than two
+implementations that agree until they do not.
+
+### Zed
+
+The [Kira Zed extension](https://github.com/kira-lang-com/kira-zed-extension)
+provides syntax highlighting via Tree-sitter plus diagnostics from the server
+above. Install the server first — the extension does not bundle it and, since
+`kira-lsp` is unpublished, cannot download it. The extension finds the binary
+on the worktree's PATH; to point at a specific build instead, set an explicit
+path in Zed's `settings.json`:
+
+```jsonc
+{
+  "lsp": {
+    "kira-lsp": {
+      "binary": { "path": "/absolute/path/to/kira-language-server" }
+    }
+  }
+}
+```
+
+Restart Zed after installing or replacing the binary.
