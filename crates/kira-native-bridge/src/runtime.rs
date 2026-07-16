@@ -202,6 +202,38 @@ pub unsafe extern "C" fn kira_rt_str_free(value: KStr) {
     unsafe { drop_handle(value) };
 }
 
+/// Borrows a string's bytes; null for the empty string.
+///
+/// Generated code never calls this — a [`KStr`] is opaque to the backend, which
+/// only ever moves the handle around. The *host* of a hybrid program needs it:
+/// a string handed across the boundary is a handle into this runtime's heap, and
+/// a handle is exactly what a reader outside this crate cannot dereference. This
+/// and [`kira_rt_str_len`] are that reader's only way in.
+///
+/// The bytes are borrowed, valid until the handle is freed, and always UTF-8:
+/// every handle this runtime builds comes from Kira `String` data.
+///
+/// # Safety
+/// `value` must be null or a live handle; the returned pointer is valid for
+/// [`kira_rt_str_len`] bytes and only until `value` is freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_str_data(value: KStr) -> *const u8 {
+    // SAFETY: caller passes a live (or null) handle that outlives this read.
+    unsafe { bytes_of(value) }.as_ptr()
+}
+
+/// The length in bytes of a string; 0 for the empty (or null) string.
+///
+/// The companion of [`kira_rt_str_data`]; see it for why both exist.
+///
+/// # Safety
+/// `value` must be null or a live handle from this runtime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_str_len(value: KStr) -> usize {
+    // SAFETY: caller passes a live (or null) handle that outlives this read.
+    unsafe { bytes_of(value) }.len()
+}
+
 /// Reports a division-by-zero trap and exits with a failure code, mirroring the
 /// VM's `DivideByZero` trap: no program output, non-zero exit.
 #[unsafe(no_mangle)]
@@ -270,6 +302,20 @@ mod tests {
         // SAFETY: both handles are live and consumed by the comparison.
         unsafe {
             assert_eq!(kira_rt_str_eq(new("hello"), new("kira")), 0);
+        }
+    }
+
+    /// The host's only way to read a handle: it cannot dereference `KiraString`,
+    /// which is this crate's private type.
+    #[test]
+    fn a_handles_bytes_are_readable_from_outside_this_crate() {
+        // SAFETY: `handle` is live for both reads and freed exactly once.
+        unsafe {
+            let handle = new("hello, world");
+            let data = kira_rt_str_data(handle);
+            let len = kira_rt_str_len(handle);
+            assert_eq!(slice::from_raw_parts(data, len), b"hello, world");
+            kira_rt_str_free(handle);
         }
     }
 

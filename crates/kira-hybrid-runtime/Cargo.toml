@@ -7,3 +7,14 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+kira-hybrid-definition.workspace = true
+kira-bytecode.workspace = true
+kira-vm-runtime.workspace = true
+kira-runtime-abi.workspace = true
+# The host loads the native half at run time. It deliberately does *not* depend
+# on `kira-native-bridge`: every `kira_rt_*` symbol must be resolved out of the
+# loaded library, never out of this process's own copy. See `library.rs`.
+libloading.workspace = true
+thiserror.workspace = true

@@ -1,9 +1,25 @@
-//! Differential tests: the VM and the LLVM/native backend must not disagree.
+//! Differential tests: the VM, the LLVM/native backend, and the hybrid bundle
+//! must not disagree.
 //!
-//! Parity is proven, not asserted. Each case compiles one program through both
-//! backends from the same IR and requires identical program output and exit
+//! Parity is proven, not asserted. Each case compiles one program through every
+//! backend from the same IR and requires identical program output and exit
 //! status — that is the whole contract a Kira user sees, so a divergence here
-//! is a real bug in one of the two.
+//! is a real bug in one of them.
+//!
+//! # What each backend does with an annotation
+//!
+//! `--backend vm` compiles every function to bytecode and `--backend llvm`
+//! makes every function native: an execution boundary needs two engines, and
+//! these builds have one, so both ignore `@Runtime`/`@Native` entirely. Only
+//! `--backend hybrid` splits a program on them. That is what makes these three
+//! comparable on *any* program: the annotations change where code runs without
+//! changing what it does, and a case here that says otherwise is a bug.
+//!
+//! So an unannotated case exercises no crossing on any backend, hybrid
+//! included — it compiles to a single engine like the other two. The annotated
+//! cases are the ones that build a real boundary, and they are still parity
+//! tests: agreeing with `vm` and `llvm`, which ignored the annotations, is the
+//! statement that a boundary changed where the code ran and nothing else.
 //!
 //! These only run when `kirac` was built with its `llvm` feature; without it
 //! there is no native backend to compare against.
@@ -36,29 +52,69 @@ fn run_on(source_path: &std::path::Path, backend: &str) -> Output {
         .expect("run kirac")
 }
 
-/// Asserts the VM and the native backend agree on `source`, returning the
-/// output both produced.
+/// Every backend a program must behave identically on.
+const BACKENDS: [&str; 3] = ["vm", "llvm", "hybrid"];
+
+/// Asserts every backend agrees on `source`, returning the output they produced.
+///
+/// The VM is the reference: it is the simplest of the three and the one whose
+/// semantics the other two are defined to mirror, so a disagreement names the
+/// backend that drifted rather than leaving two answers to choose between.
 fn assert_parity(source: &str) -> String {
     let path = write_source(source);
-    let vm = run_on(&path, "vm");
-    let native = run_on(&path, "llvm");
+    let runs: Vec<(&str, Output)> = BACKENDS
+        .iter()
+        .map(|backend| (*backend, run_on(&path, backend)))
+        .collect();
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
 
-    let vm_stdout = String::from_utf8_lossy(&vm.stdout).into_owned();
-    let native_stdout = String::from_utf8_lossy(&native.stdout).into_owned();
-    assert_eq!(
-        vm_stdout,
-        native_stdout,
-        "VM and native output differ.\nvm stderr: {}\nnative stderr: {}",
-        String::from_utf8_lossy(&vm.stderr),
-        String::from_utf8_lossy(&native.stderr),
-    );
-    assert_eq!(
-        vm.status.code(),
-        native.status.code(),
-        "VM and native exit codes differ for:\n{source}",
-    );
-    vm_stdout
+    let (_, reference) = &runs[0];
+    let expected = String::from_utf8_lossy(&reference.stdout).into_owned();
+
+    for (backend, run) in &runs[1..] {
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        assert_eq!(
+            expected,
+            stdout,
+            "the vm and {backend} backends disagree on output for:\n{source}\n\
+             vm stderr: {}\n{backend} stderr: {}",
+            String::from_utf8_lossy(&reference.stderr),
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            reference.status.code(),
+            run.status.code(),
+            "the vm and {backend} backends disagree on exit code for:\n{source}\n\
+             {backend} stderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+    expected
+}
+
+/// Asserts every backend refuses `source` the same way: no output, non-zero
+/// exit.
+///
+/// A trap is the one case where stdout alone would prove too little — a program
+/// that printed nothing and exited cleanly would pass a stdout comparison.
+fn assert_trap_parity(source: &str, before_the_trap: &str) {
+    let path = write_source(source);
+    for backend in BACKENDS {
+        let run = run_on(&path, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            before_the_trap,
+            "the {backend} backend printed something other than the output \
+             preceding the trap for:\n{source}",
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(1),
+            "the {backend} backend did not trap for:\n{source}\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+    let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
 }
 
 #[test]
@@ -119,11 +175,12 @@ function main() {
     assert_eq!(output, "-9223372036854775808\n9223372036854775807\n");
 }
 
-/// Division by zero is a trap in Kira, not UB: both backends must refuse it the
-/// same way — no program output, non-zero exit.
+/// Division by zero is a trap in Kira, not UB: every backend must refuse it the
+/// same way — the output before the trap is kept, the trap itself reaches no
+/// stdout, and no run succeeds.
 #[test]
-fn division_by_zero_traps_on_both_backends() {
-    let path = write_source(
+fn division_by_zero_traps_on_every_backend() {
+    assert_trap_parity(
         r#"
 @Main
 function main() {
@@ -133,17 +190,8 @@ function main() {
     return
 }
 "#,
+        "1\n",
     );
-    let vm = run_on(&path, "vm");
-    let native = run_on(&path, "llvm");
-    let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
-
-    // The output produced before the trap is kept; the trap itself is not
-    // reported on stdout, and neither run succeeds.
-    assert_eq!(String::from_utf8_lossy(&vm.stdout), "1\n");
-    assert_eq!(String::from_utf8_lossy(&native.stdout), "1\n");
-    assert_eq!(vm.status.code(), native.status.code());
-    assert_ne!(vm.status.code(), Some(0), "a trap must not report success");
 }
 
 /// Float formatting is where a hand-written native runtime would drift from the
@@ -300,9 +348,9 @@ function fib(n: Int) -> Int {
     assert_eq!(output, "6765\n45\ntrue\n");
 }
 
-/// Every example in the repo must behave identically on both backends.
+/// Every example in the repo must behave identically on every backend.
 #[test]
-fn every_example_agrees_on_both_backends() {
+fn every_example_agrees_on_every_backend() {
     let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples")
         .canonicalize()
@@ -320,17 +368,306 @@ fn every_example_agrees_on_both_backends() {
                 continue;
             }
             let vm = run_on(&source, "vm");
-            let native = run_on(&source, "llvm");
-            assert_eq!(
-                String::from_utf8_lossy(&vm.stdout),
-                String::from_utf8_lossy(&native.stdout),
-                "example `{}` differs between backends.\nnative stderr: {}",
-                source.display(),
-                String::from_utf8_lossy(&native.stderr),
-            );
-            assert_eq!(vm.status.code(), native.status.code());
+            for backend in &BACKENDS[1..] {
+                let run = run_on(&source, backend);
+                assert_eq!(
+                    String::from_utf8_lossy(&vm.stdout),
+                    String::from_utf8_lossy(&run.stdout),
+                    "example `{}` differs between the vm and {backend} backends.\n\
+                     {backend} stderr: {}",
+                    source.display(),
+                    String::from_utf8_lossy(&run.stderr),
+                );
+                assert_eq!(
+                    vm.status.code(),
+                    run.status.code(),
+                    "example `{}` exits differently on the vm and {backend} backends",
+                    source.display(),
+                );
+            }
             checked += 1;
         }
     }
     assert!(checked > 0, "no examples were checked");
+}
+
+/// The simplest crossing: the VM half reaches a native callee and gets a value
+/// back.
+#[test]
+fn a_runtime_caller_reaching_a_native_callee_agrees() {
+    let output = assert_parity(
+        r#"
+@Native
+function double(n: Int) -> Int {
+    return n * 2
+}
+
+@Main
+function main() {
+    print(double(21))
+    print(double(-1))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "42\n-2\n");
+}
+
+/// The other direction: native code calls back into the VM through the invoker
+/// the host installs.
+#[test]
+fn a_native_caller_reaching_a_runtime_callee_agrees() {
+    let output = assert_parity(
+        r#"
+@Runtime
+function add_one(n: Int) -> Int {
+    return n + 1
+}
+
+@Native
+function twice_plus_one(n: Int) -> Int {
+    return add_one(n) * 2
+}
+
+@Main
+function main() {
+    print(twice_plus_one(20))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "42\n");
+}
+
+/// A string crossing into native code and back out again. This is the case the
+/// seam's ownership rules govern: the callee frees the argument handle, and the
+/// host frees the result handle. Getting either wrong is a double free or a
+/// leak, and doing it twice in a row is what surfaces a double free.
+///
+/// The empty string is the interesting third case: it crosses as a *null*
+/// handle, which every runtime helper accepts as the empty string — so a `""`
+/// argument must produce `"!"` and not a crash.
+#[test]
+fn a_string_crossing_into_native_code_and_back_agrees() {
+    let output = assert_parity(
+        r#"
+@Native
+function shout(text: String) -> String {
+    return text + "!"
+}
+
+@Main
+function main() {
+    print(shout("hello"))
+    print(shout("world"))
+    print(shout(""))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "hello!\nworld!\n!\n");
+}
+
+/// A string crossing the other way: native code hands one to the VM and takes
+/// the result back. The invoker frees the arguments it is given and allocates
+/// the result out of the library's own allocator — the host's copy of those
+/// symbols would be a cross-allocator free.
+#[test]
+fn a_string_crossing_into_runtime_code_and_back_agrees() {
+    let output = assert_parity(
+        r#"
+@Runtime
+function greet(name: String) -> String {
+    return "hi, " + name
+}
+
+@Native
+function loud(name: String) -> String {
+    return greet(name) + "!"
+}
+
+@Main
+function main() {
+    print(loud("kira"))
+    print(loud("again"))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "hi, kira!\nhi, again!\n");
+}
+
+/// A trap on the native side of the boundary.
+#[test]
+fn a_trap_in_native_code_traps_on_every_backend() {
+    assert_trap_parity(
+        r#"
+@Native
+function divide(n: Int, by: Int) -> Int {
+    return n / by
+}
+
+@Main
+function main() {
+    print(1)
+    print(divide(10, 0))
+    return
+}
+"#,
+        "1\n",
+    );
+}
+
+/// A trap on the runtime side, reached *through* native code. The VM's trap has
+/// nowhere to return to across the C frame, so the invoker reports and exits —
+/// and a user must not be able to tell which side of the boundary it happened
+/// on.
+#[test]
+fn a_trap_in_runtime_code_reached_through_native_code_traps_on_every_backend() {
+    assert_trap_parity(
+        r#"
+@Runtime
+function divide(n: Int, by: Int) -> Int {
+    return n / by
+}
+
+@Native
+function reach(n: Int) -> Int {
+    return divide(n, 0)
+}
+
+@Main
+function main() {
+    print(1)
+    print(reach(10))
+    return
+}
+"#,
+        "1\n",
+    );
+}
+
+/// `@Main` is annotatable like anything else, so the entrypoint itself can be
+/// native — and then the whole program starts in the library and reaches back.
+#[test]
+fn a_native_entrypoint_agrees() {
+    let output = assert_parity(
+        r#"
+@Runtime
+function helper(n: Int) -> Int {
+    return n + 1
+}
+
+@Main @Native
+function main() {
+    print(helper(41))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "42\n");
+}
+
+/// Calls nest across the boundary in both directions at once. Each crossing
+/// runs the VM on its own heap and operand stack, which is what lets a native
+/// function call a runtime function that calls a native one.
+#[test]
+fn calls_nesting_across_the_boundary_agree() {
+    let output = assert_parity(
+        r#"
+@Native
+function inner(n: Int) -> Int {
+    return n * 2
+}
+
+@Runtime
+function middle(n: Int) -> Int {
+    return inner(n) + 1
+}
+
+@Native
+function outer(n: Int) -> Int {
+    return middle(n) * 10
+}
+
+@Main
+function main() {
+    print(outer(5))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "110\n");
+}
+
+/// Recursion through the boundary: every crossing is a fresh nesting level, so
+/// a recursive call that alternates engines must not lose a frame.
+#[test]
+fn recursion_across_the_boundary_agrees() {
+    let output = assert_parity(
+        r#"
+@Runtime
+function count_down(n: Int) -> Int {
+    if n <= 0 {
+        return 0
+    }
+    return step(n)
+}
+
+@Native
+function step(n: Int) -> Int {
+    return count_down(n - 1) + n
+}
+
+@Main
+function main() {
+    print(count_down(10))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "55\n");
+}
+
+/// Every value the seam can carry, across it and back, in one program.
+#[test]
+fn every_bridge_type_crosses_the_boundary_intact() {
+    let output = assert_parity(
+        r#"
+@Native
+function round_trip_int(value: Int) -> Int {
+    return value
+}
+
+@Native
+function round_trip_float(value: Float) -> Float {
+    return value
+}
+
+@Native
+function round_trip_bool(value: Bool) -> Bool {
+    return value
+}
+
+@Native
+function round_trip_string(value: String) -> String {
+    return value
+}
+
+@Main
+function main() {
+    print(round_trip_int(-9223372036854775807))
+    print(round_trip_float(2.0))
+    print(round_trip_float(0.5))
+    print(round_trip_bool(true))
+    print(round_trip_bool(false))
+    print(round_trip_string("intact"))
+    return
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "-9223372036854775807\n2\n0.5\ntrue\nfalse\nintact\n"
+    );
 }
