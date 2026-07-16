@@ -7,6 +7,7 @@
 //! instead of panicking.
 
 use kira_bytecode::ModuleValidateError;
+use kira_runtime_abi::NativeCallError;
 
 /// A trap raised while executing bytecode.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -29,6 +30,12 @@ pub enum VmError {
     /// A `Call` named a function index outside the module.
     #[error("call to unknown function index {0}")]
     UnknownFunction(u32),
+    /// A `CallNative` could not be completed by the host.
+    ///
+    /// The VM never performs a native call itself, so it reports the host's
+    /// reason verbatim rather than inventing one.
+    #[error("native call failed: {0}")]
+    NativeCall(NativeCallError),
     /// A jump target fell outside the current function's code.
     #[error("jump to out-of-range instruction {0}")]
     BadJump(u32),

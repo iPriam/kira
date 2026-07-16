@@ -37,8 +37,113 @@ mod tests {
             name: name.to_owned(),
             param_count: params,
             local_count: locals,
+            execution: kira_runtime_abi::Execution::Runtime,
             code,
         }
+    }
+
+    /// A host with a native half: answers `shout(n, s)` with `s` repeated `n`
+    /// times, and records what it was handed.
+    #[derive(Default)]
+    struct NativeHost {
+        lines: Vec<String>,
+        seen: Vec<String>,
+    }
+
+    impl kira_runtime_abi::HostCapabilities for NativeHost {
+        fn write_line(&mut self, text: &str) {
+            self.lines.push(text.to_owned());
+        }
+
+        fn call_native(
+            &mut self,
+            function_id: u32,
+            args: &[kira_runtime_abi::NativeArg<'_>],
+        ) -> Result<kira_runtime_abi::NativeResult, kira_runtime_abi::NativeCallError> {
+            use kira_runtime_abi::{NativeArg, NativeResult};
+            self.seen.push(format!("{function_id}{args:?}"));
+            match args {
+                [NativeArg::Int(count), NativeArg::Str(text)] => {
+                    Ok(NativeResult::Str(text.repeat(*count as usize)))
+                }
+                _ => Err(kira_runtime_abi::NativeCallError::UnboundFunction(
+                    function_id,
+                )),
+            }
+        }
+    }
+
+    /// The seam a hybrid program runs on: the VM reaches a native callee, hands
+    /// the host safe Rust values, and pushes back what it returns — without the
+    /// VM itself touching any FFI.
+    #[test]
+    fn call_native_marshals_through_the_host_and_back() {
+        // main: print(shout(2, "hi"))  — shout's body lives in the native half.
+        let main = func(
+            "main",
+            0,
+            0,
+            vec![
+                I::ConstInt(2),
+                I::ConstStr(0),
+                I::CallNative(1),
+                I::Print,
+                I::Pop,
+                I::ReturnVoid,
+            ],
+        );
+        let mut shout = func("shout", 2, 2, vec![]);
+        shout.execution = kira_runtime_abi::Execution::Native;
+        let module = Module {
+            functions: vec![main, shout],
+            main: 0,
+            strings: vec!["hi".to_owned()],
+        };
+
+        let mut host = NativeHost::default();
+        let outcome = execute(&module, &mut host).expect("clean run");
+        assert_eq!(host.lines, ["hihi"]);
+        // The string crossed as a borrow of the VM's own heap, not a copy.
+        assert!(host.seen[0].contains("Str(\"hi\")"), "{:?}", host.seen);
+        // Every argument the VM lent out is still reclaimed by exit.
+        assert_eq!(outcome.heap.current, 0);
+    }
+
+    /// A host with no native half must refuse rather than invent a value: a
+    /// program reaching this was built for the wrong backend.
+    #[test]
+    fn a_vm_only_host_refuses_a_native_call() {
+        let main = func("main", 0, 0, vec![I::CallNative(1), I::Pop, I::ReturnVoid]);
+        let mut native = func("gone", 0, 0, vec![]);
+        native.execution = kira_runtime_abi::Execution::Native;
+        let module = Module {
+            functions: vec![main, native],
+            main: 0,
+            strings: vec![],
+        };
+        let mut host = CapturingHost::new();
+        let error = execute(&module, &mut host).unwrap_err();
+        assert_eq!(
+            error,
+            VmError::NativeCall(kira_runtime_abi::NativeCallError::NoNativeHalf)
+        );
+    }
+
+    /// A native function's body lives elsewhere, so a bytecode `Call` must not
+    /// target one — it would push a frame over an empty body.
+    #[test]
+    fn a_bytecode_call_to_a_native_function_is_rejected() {
+        let main = func("main", 0, 0, vec![I::Call(1), I::Pop, I::ReturnVoid]);
+        let mut native = func("hot", 0, 0, vec![]);
+        native.execution = kira_runtime_abi::Execution::Native;
+        let module = Module {
+            functions: vec![main, native],
+            main: 0,
+            strings: vec![],
+        };
+        let mut host = CapturingHost::new();
+        let error = execute(&module, &mut host).unwrap_err();
+        assert!(matches!(error, VmError::Module(_)), "{error:?}");
     }
 
     #[test]
