@@ -1,0 +1,139 @@
+//! End-to-end tests driving the built `kirac` binary over real `.kira` files.
+//!
+//! These exercise the whole pipeline — lexer, parser, salsa analysis, IR,
+//! bytecode, VM — plus diagnostic rendering and process exit codes, the way a
+//! user invokes it.
+
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Writes `source` to a uniquely-named temp `.kira` file and returns its path.
+fn write_source(source: &str) -> PathBuf {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let path = std::env::temp_dir().join(format!("kirac_e2e_{pid}_{unique}.kira"));
+    std::fs::write(&path, source).expect("write temp source");
+    path
+}
+
+fn kirac(args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_kirac"))
+        .args(args)
+        .output()
+        .expect("run kirac")
+}
+
+fn run_source(source: &str) -> std::process::Output {
+    let path = write_source(source);
+    let output = kirac(&["run", path.to_str().unwrap()]);
+    let _ = std::fs::remove_file(&path);
+    output
+}
+
+fn check_source(source: &str) -> std::process::Output {
+    let path = write_source(source);
+    let output = kirac(&["check", path.to_str().unwrap()]);
+    let _ = std::fs::remove_file(&path);
+    output
+}
+
+#[test]
+fn runs_a_program_and_prints_its_output() {
+    let output = run_source(
+        "@Main function main() { print(runtimeCount()) print(doubleValue(21)) return }\n\
+         function runtimeCount() -> Int { return 3 }\n\
+         function doubleValue(value: Int) -> Int { return value + value }",
+    );
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n42\n");
+}
+
+#[test]
+fn recursion_and_control_flow_execute() {
+    let output = run_source(
+        "@Main function main() { var i = 0 var s = 0 while i < 5 { s = s + i i = i + 1 } print(s) print(fib(10)) return }\n\
+         function fib(n: Int) -> Int { if n < 2 { return n } return fib(n - 1) + fib(n - 2) }",
+    );
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "10\n55\n");
+}
+
+#[test]
+fn string_operations_execute() {
+    let output = run_source(
+        "@Main function main() { let a = \"foo\" let b = \"bar\" print(a + b) print(a == b) return }",
+    );
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "foobar\nfalse\n");
+}
+
+#[test]
+fn check_accepts_a_clean_program() {
+    let output = check_source("@Main function main() { print(1) return }");
+    assert!(output.status.success());
+}
+
+#[test]
+fn undefined_name_fails_with_a_rendered_diagnostic() {
+    let output = run_source("@Main function main() { print(missing) return }");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("KSEM060"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains('^'),
+        "diagnostic should show a caret: {stderr}"
+    );
+    // A rejected program produces no stdout.
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn missing_main_is_rejected() {
+    let output = run_source("function f() -> Int { return 1 }");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("KSEM011"));
+}
+
+#[test]
+fn unsupported_construct_is_rejected_cleanly() {
+    // A struct is outside the v0 subset: it must not crash the compiler, and it
+    // must be reported as not-yet-supported rather than silently ignored.
+    let output =
+        run_source("struct Point { let x: Int }\n@Main function main() { print(1) return }");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("KSEM900"), "stderr was: {stderr}");
+    assert!(stderr.contains("not supported yet"));
+}
+
+#[test]
+fn type_error_is_rejected() {
+    let output = run_source("@Main function main() { print(1 + true) return }");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("KSEM071"));
+}
+
+#[test]
+fn missing_return_path_is_rejected_before_execution() {
+    // The C1 soundness hole: without the definite-return check this printed an
+    // empty line and exited 0; it must now be a compile error.
+    let output = run_source(
+        "function f(n: Int) -> Int { if n > 100 { return 1 } }\n\
+         @Main function main() { print(f(5)) return }",
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("KSEM033"));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn newline_continuation_matches_the_reference_at_runtime() {
+    // Parity with the reference: `let a = 5` / `-2` folds into `5 - 2`
+    // (the reference prints 3 for this program; verified by running it).
+    let output =
+        run_source("@Main function main() {\n    let a = 5\n    -2\n    print(a)\n    return\n}");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
+}

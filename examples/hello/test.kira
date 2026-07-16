@@ -1,0 +1,18 @@
+// The v0 end-to-end example: @Main, user functions with typed parameters and
+// return values, the print builtin, and integer arithmetic.
+@Main
+function main() {
+    print("hello from Kira")
+    print("one source pipeline")
+    print(runtimeCount())
+    print(doubleValue(21))
+    return
+}
+
+function runtimeCount() -> Int {
+    return 3
+}
+
+function doubleValue(value: Int) -> Int {
+    return value + value
+}
