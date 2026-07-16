@@ -1,0 +1,46 @@
+//! Runtime trap types.
+//!
+//! These are the failures a running program can raise. Division by zero mirrors
+//! the reference VM (a runtime trap, not undefined behavior). The remaining
+//! variants guard invariants the typed bytecode should already guarantee; they
+//! exist so a malformed module or an interpreter bug fails cleanly and typed
+//! instead of panicking.
+
+use kira_bytecode::ModuleValidateError;
+
+/// A trap raised while executing bytecode.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum VmError {
+    /// The module failed structural validation before execution began.
+    #[error("invalid module: {0}")]
+    Module(#[from] ModuleValidateError),
+    /// Integer division or remainder by zero.
+    #[error("vm divide does not allow division by zero")]
+    DivideByZero,
+    /// The operand stack was empty when a value was expected.
+    #[error("operand stack underflow")]
+    StackUnderflow,
+    /// An operand had a type the instruction did not expect.
+    #[error("type mismatch: expected {expected} on the operand stack")]
+    TypeMismatch {
+        /// The type the instruction required.
+        expected: &'static str,
+    },
+    /// A `Call` named a function index outside the module.
+    #[error("call to unknown function index {0}")]
+    UnknownFunction(u32),
+    /// A jump target fell outside the current function's code.
+    #[error("jump to out-of-range instruction {0}")]
+    BadJump(u32),
+    /// Recursion or looping exceeded the interpreter's call-depth guard.
+    #[error("maximum call depth exceeded")]
+    CallDepthExceeded,
+    /// The call-frame stack emptied unexpectedly (an interpreter bug, not a
+    /// program error).
+    #[error("internal fault: call frame stack empty")]
+    FrameUnderflow,
+    /// Instruction routing reached an impossible combination (an interpreter
+    /// bug, not a program error).
+    #[error("internal fault: instruction dispatch invariant violated")]
+    BadDispatch,
+}

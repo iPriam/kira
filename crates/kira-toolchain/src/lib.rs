@@ -1,9 +1,15 @@
 //! Toolchain installation layout and discovery: KIRA_HOME, channels,
-//! current-toolchain state, and the managed LLVM bundle directory layout.
+//! current-toolchain state, the pinned LLVM metadata, and the managed LLVM
+//! bundle directory layout.
 //!
 //! Layer 0 of the Kira package graph.
 
+pub mod llvm_discovery;
 pub mod llvm_layout;
+pub mod llvm_metadata;
+
+pub use llvm_discovery::{DiscoverySource, LlvmDiscoveryError, LlvmInstallation, discover};
+pub use llvm_metadata::{LlvmMetadata, pinned, pinned_version};
 
 use std::path::{Path, PathBuf};
 

@@ -10,7 +10,10 @@ pub struct SourceId(u32);
 
 impl SourceId {
     /// Wraps a raw source-map index as a typed id.
-    pub fn new(value: u32) -> Self {
+    ///
+    /// `const` so a single-file frontend can name a fixed source id in a
+    /// `const` item.
+    pub const fn new(value: u32) -> Self {
         Self(value)
     }
 

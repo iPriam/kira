@@ -7,3 +7,8 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+kira-bytecode.workspace = true
+kira-runtime-abi.workspace = true
+thiserror.workspace = true

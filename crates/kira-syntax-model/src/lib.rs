@@ -2,7 +2,18 @@
 //!
 //! Layer 1 of the Kira package graph.
 //!
-//! Design pending. The fresh parser defines its own token kinds and an
-//! error-resilient syntax tree derived from the language corpus. Every node
-//! carries spans, so the language server and the compiler consume one
-//! frontend; model types follow the index/arena pattern with no lifetimes.
+//! The lexer and parser share this vocabulary: [`Token`]/[`TokenKind`] for the
+//! token stream and [`SyntaxTree`] for the parsed result. The tree is
+//! error-resilient (it carries [`Expr::Error`] / [`Stmt::Error`] /
+//! [`Item::Unsupported`] nodes) and every node records a span, so the language
+//! server and the compiler consume one frontend. Model types follow the
+//! index/arena pattern and carry no lifetimes.
+
+pub mod ast;
+pub mod token;
+
+pub use ast::{
+    BinaryOp, Block, Expr, ExprId, Function, Item, Param, Stmt, StmtId, SyntaxTree, TypeRef,
+    UnaryOp, UnsupportedItem,
+};
+pub use token::{Token, TokenKind};

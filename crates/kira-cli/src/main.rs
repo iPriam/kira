@@ -4,6 +4,10 @@
 
 mod command;
 mod dispatch;
+mod host;
+mod native;
+mod options;
+mod pipeline;
 
 use command::Command;
 

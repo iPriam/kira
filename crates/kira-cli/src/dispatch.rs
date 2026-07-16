@@ -3,16 +3,20 @@
 //! Every handler is a stub until its command is implemented; stubs exit 2.
 
 use crate::command::{ALL, Command};
+use crate::pipeline;
 
 /// Exit code for unimplemented commands and usage errors.
 pub const EXIT_UNAVAILABLE: i32 = 2;
 
 /// Dispatch a parsed command. Returns the process exit code.
 ///
-/// `_args` are the remaining CLI arguments after the verb; each handler
-/// takes over their parsing as it is implemented.
-pub fn dispatch(command: Command, _args: &[String]) -> i32 {
+/// `args` are the remaining CLI arguments after the verb; each handler takes
+/// over their parsing as it is implemented.
+pub fn dispatch(command: Command, args: &[String]) -> i32 {
     match command {
+        Command::Run => pipeline::run(args),
+        Command::Build => pipeline::build(args),
+        Command::Check => pipeline::check(args),
         Command::Help => {
             print_usage();
             0

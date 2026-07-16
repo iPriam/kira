@@ -1,0 +1,15 @@
+// String literals, concatenation, comparison, and string-returning functions.
+@Main
+function main() {
+    let greeting = "hello"
+    let subject = "kira"
+    print(greeting + " " + subject)
+    print(banner())
+    print(greeting == "hello")
+    print(greeting == subject)
+    return
+}
+
+function banner() -> String {
+    return "one source" + ", many backends"
+}

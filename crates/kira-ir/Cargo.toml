@@ -7,3 +7,13 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+# Deliberately model-only: this crate sits in the VM's dependency cone, so it
+# must never pull the salsa-driven analyzer (portable-core rule). The salsa
+# query wiring analysis to lowering lives in the CLI.
+[dependencies]
+kira-semantics-model.workspace = true
+la-arena.workspace = true
+
+[dev-dependencies]
+kira-source.workspace = true

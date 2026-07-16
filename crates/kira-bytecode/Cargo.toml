@@ -7,3 +7,11 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+kira-semantics-model.workspace = true
+kira-ir.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+la-arena.workspace = true

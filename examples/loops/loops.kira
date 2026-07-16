@@ -1,0 +1,20 @@
+// while loops, var mutation, and boolean/comparison operators with precedence.
+@Main
+function main() {
+    var i = 0
+    var sum = 0
+    while i < 10 {
+        sum = sum + i
+        i = i + 1
+    }
+    print(sum)
+
+    var countdown = 3
+    while countdown > 0 {
+        print(countdown)
+        countdown = countdown - 1
+    }
+
+    print(sum > 40 && sum < 50)
+    return
+}
