@@ -30,6 +30,20 @@ pub enum VmError {
     /// A `Call` named a function index outside the module.
     #[error("call to unknown function index {0}")]
     UnknownFunction(u32),
+    /// A host called a function with the wrong number of arguments.
+    ///
+    /// Only reachable through the embedder's entry point: a call the compiler
+    /// emitted always matches the signature it compiled against. It surfaces a
+    /// host driving the VM from an artifact that disagrees with this module.
+    #[error("function {function} takes {expected} arguments, but the host passed {got}")]
+    ArityMismatch {
+        /// The function that was called.
+        function: u32,
+        /// How many parameters it declares.
+        expected: u16,
+        /// How many arguments the host passed.
+        got: usize,
+    },
     /// A `CallNative` could not be completed by the host.
     ///
     /// The VM never performs a native call itself, so it reports the host's

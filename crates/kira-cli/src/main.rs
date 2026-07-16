@@ -5,6 +5,7 @@
 mod command;
 mod dispatch;
 mod host;
+mod hybrid;
 mod native;
 mod options;
 mod pipeline;

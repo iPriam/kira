@@ -17,11 +17,14 @@ kira-source.workspace = true
 kira-diagnostics.workspace = true
 kira-semantics.workspace = true
 kira-ir.workspace = true
+kira-semantics-model.workspace = true
 kira-bytecode.workspace = true
 kira-vm-runtime.workspace = true
 kira-runtime-abi.workspace = true
 kira-backend-api.workspace = true
 kira-llvm-backend.workspace = true
+kira-hybrid-definition.workspace = true
+kira-hybrid-runtime.workspace = true
 # Not called from Rust: depending on the native runtime makes cargo build
 # `libkira_native_bridge.a` into the same profile directory as `kirac`, which is
 # where the native link step looks for it.

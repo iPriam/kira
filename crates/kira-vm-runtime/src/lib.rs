@@ -16,7 +16,7 @@ pub mod interp;
 pub mod value;
 
 pub use error::VmError;
-pub use interp::{RunOutcome, execute};
+pub use interp::{Program, RunOutcome, execute};
 pub use value::{Heap, HeapStats, StrId, Value};
 
 #[cfg(test)]
@@ -107,6 +107,70 @@ mod tests {
         assert!(host.seen[0].contains("Str(\"hi\")"), "{:?}", host.seen);
         // Every argument the VM lent out is still reclaimed by exit.
         assert_eq!(outcome.heap.current, 0);
+    }
+
+    /// The other direction of the same seam: a host calls one function by id.
+    /// This is what the native half of a hybrid program reaches back through.
+    #[test]
+    fn a_host_calls_one_function_by_id_and_gets_an_owned_result() {
+        use kira_runtime_abi::{NativeArg, NativeResult};
+
+        // greet(name) { return "hi, " + name }
+        let greet = func(
+            "greet",
+            1,
+            1,
+            vec![I::ConstStr(0), I::LoadLocal(0), I::ConcatStr, I::Return],
+        );
+        let module = Module {
+            functions: vec![func("main", 0, 0, vec![I::ReturnVoid]), greet],
+            main: 0,
+            strings: vec!["hi, ".to_owned()],
+        };
+
+        let program = Program::load(module).expect("a valid module");
+        let mut host = CapturingHost::new();
+        // The argument is lent, not given: `name` is still the caller's after.
+        let name = String::from("kira");
+        let result = program
+            .call(&mut host, 1, &[NativeArg::Str(&name)])
+            .expect("clean call");
+        assert_eq!(result, NativeResult::Str("hi, kira".to_owned()));
+        assert_eq!(name, "kira");
+
+        // Calls are independent: nothing from the first survives into the next.
+        let again = program
+            .call(&mut host, 1, &[NativeArg::Str("again")])
+            .expect("clean call");
+        assert_eq!(again, NativeResult::Str("hi, again".to_owned()));
+    }
+
+    /// A host driving the VM from an artifact that disagrees with this module
+    /// is a typed rejection, never a panic or a misread frame.
+    #[test]
+    fn a_host_call_with_the_wrong_arity_is_rejected() {
+        let module = Module {
+            functions: vec![
+                func("main", 0, 0, vec![I::ReturnVoid]),
+                func("takes_one", 1, 1, vec![I::ReturnVoid]),
+            ],
+            main: 0,
+            strings: Vec::new(),
+        };
+        let program = Program::load(module).expect("a valid module");
+        let mut host = CapturingHost::new();
+        assert_eq!(
+            program.call(&mut host, 1, &[]),
+            Err(VmError::ArityMismatch {
+                function: 1,
+                expected: 1,
+                got: 0,
+            })
+        );
+        assert_eq!(
+            program.call(&mut host, 9, &[]),
+            Err(VmError::UnknownFunction(9))
+        );
     }
 
     /// A host with no native half must refuse rather than invent a value: a

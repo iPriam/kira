@@ -72,6 +72,9 @@ pub enum LinkError {
 /// The library is self-contained: it carries the runtime archive, so it has no
 /// undefined symbols and needs no arrangement with whatever process loads it.
 /// The host reaches in through trampolines and hands its invoker back in.
+///
+/// The host also resolves a handful of runtime symbols by name, and those need
+/// forcing in — see [`force_host_symbols`].
 pub fn link_shared_library(
     llvm: &LlvmInstallation,
     object: &Path,
@@ -84,7 +87,9 @@ pub fn link_shared_library(
     } else {
         "-shared"
     };
-    link(llvm, object, runtime_archive, library, &[shared_flag])
+    let mut arguments = vec![shared_flag.to_owned()];
+    arguments.extend(force_host_symbols());
+    link(llvm, object, runtime_archive, library, &arguments)
 }
 
 /// Links `object` against the native runtime archive into `executable`.
@@ -97,13 +102,45 @@ pub fn link_executable(
     link(llvm, object, runtime_archive, executable, &[])
 }
 
+/// Linker flags that pull the host-facing runtime symbols into a shared library.
+///
+/// A linker pulls only *referenced* members out of an archive, and nothing in
+/// generated code references these: the host calls
+/// `kira_hybrid_install_runtime_invoker` itself, and the string helpers are
+/// reached only by a program that happens to use strings. Without this, a
+/// hybrid library built from a program with no strings in its native half
+/// carries no `kira_rt_str_new` — and the host's `dlsym` fails on a library
+/// that is otherwise perfectly good.
+///
+/// Each symbol is requested as an undefined one, which makes the linker pull in
+/// exactly the member defining it. That is deliberately narrower than
+/// force-loading the whole archive (`-force_load` / `--whole-archive`), which
+/// would drag every unreferenced member of a Rust `staticlib` — the entire
+/// standard library — into every hybrid program.
+///
+/// `kira_runtime_abi::HYBRID_HOST_SYMBOLS` is the same list the host resolves
+/// from, so what is forced in and what is looked up cannot drift.
+fn force_host_symbols() -> Vec<String> {
+    kira_runtime_abi::HYBRID_HOST_SYMBOLS
+        .iter()
+        .map(|symbol| {
+            if cfg!(target_os = "macos") {
+                // Mach-O prefixes C symbols with an underscore; ELF does not.
+                format!("-Wl,-u,_{symbol}")
+            } else {
+                format!("-Wl,--undefined={symbol}")
+            }
+        })
+        .collect()
+}
+
 /// Runs the linker driver over `object` plus the runtime archive.
 fn link(
     llvm: &LlvmInstallation,
     object: &Path,
     runtime_archive: &Path,
     output: &Path,
-    extra: &[&str],
+    extra: &[String],
 ) -> Result<(), LinkError> {
     let executable = output;
     let driver = llvm.clang();

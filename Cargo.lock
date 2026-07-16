@@ -228,11 +228,14 @@ dependencies = [
  "kira-backend-api",
  "kira-bytecode",
  "kira-diagnostics",
+ "kira-hybrid-definition",
+ "kira-hybrid-runtime",
  "kira-ir",
  "kira-llvm-backend",
  "kira-native-bridge",
  "kira-runtime-abi",
  "kira-semantics",
+ "kira-semantics-model",
  "kira-source",
  "kira-vm-runtime",
  "salsa",
@@ -301,6 +304,14 @@ dependencies = [
 [[package]]
 name = "kira-hybrid-runtime"
 version = "0.1.0"
+dependencies = [
+ "kira-bytecode",
+ "kira-hybrid-definition",
+ "kira-runtime-abi",
+ "kira-vm-runtime",
+ "libloading",
+ "thiserror",
+]
 
 [[package]]
 name = "kira-instruments"
@@ -361,8 +372,12 @@ dependencies = [
 name = "kira-lsp"
 version = "0.1.0"
 dependencies = [
+ "kira-diagnostics",
+ "kira-semantics",
+ "kira-source",
  "lsp-server",
  "lsp-types",
+ "salsa",
  "serde",
  "serde_json",
 ]
@@ -459,6 +474,7 @@ name = "kira-source"
 version = "0.1.0"
 dependencies = [
  "kira-core",
+ "thiserror",
 ]
 
 [[package]]

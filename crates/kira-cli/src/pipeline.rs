@@ -8,9 +8,12 @@
 //! - `vm` compiles the verified IR to bytecode; `run` executes it on the VM
 //!   with the [`StdHost`](crate::host::StdHost),
 //! - `llvm` compiles the same IR to a native object and links an executable;
-//!   `run` then executes that.
+//!   `run` then executes that,
+//! - `hybrid` splits the same IR on its `@Runtime`/`@Native` annotations and
+//!   emits both halves plus a manifest; `run` loads the bundle and runs it in
+//!   this process, which is the host.
 //!
-//! Both backends consume the same [`IrProgram`], which is what makes their
+//! All three backends consume the same [`IrProgram`], which is what makes their
 //! observable behavior comparable — and what the parity tests check.
 
 use kira_backend_api::BackendMode;
@@ -20,6 +23,7 @@ use kira_semantics::{DiagnosticAccumulator, FILE_SOURCE_ID, SourceProgram};
 use kira_source::SourceMap;
 
 use crate::host::StdHost;
+use crate::hybrid;
 use crate::native;
 use crate::options::CompileOptions;
 
@@ -43,8 +47,6 @@ pub const EXIT_OK: i32 = 0;
 pub const EXIT_FAILURE: i32 = 1;
 /// Process exit code for usage errors (missing arguments, unreadable file).
 pub const EXIT_USAGE: i32 = 2;
-/// Process exit code for a backend that this build cannot run.
-pub const EXIT_UNSUPPORTED: i32 = 2;
 
 /// Runs `kirac check <file>`: report diagnostics, never execute.
 pub fn check(args: &[String]) -> i32 {
@@ -81,10 +83,7 @@ pub fn run(args: &[String]) -> i32 {
     match options.backend {
         BackendMode::VmBytecode => run_on_vm(&ir),
         BackendMode::LlvmNative => run_native(&ir, &options),
-        BackendMode::Hybrid => {
-            eprintln!("kirac run: the hybrid backend is not implemented yet");
-            EXIT_UNSUPPORTED
-        }
+        BackendMode::Hybrid => run_hybrid(&ir, &options),
     }
 }
 
@@ -126,9 +125,38 @@ pub fn build(args: &[String]) -> i32 {
                 EXIT_FAILURE
             }
         },
-        BackendMode::Hybrid => {
-            eprintln!("kirac build: the hybrid backend is not implemented yet");
-            EXIT_UNSUPPORTED
+        BackendMode::Hybrid => match hybrid::build(
+            &ir,
+            std::path::Path::new(&options.path),
+            options.emit_llvm_ir,
+        ) {
+            Ok(_) => {
+                println!("Successfully built");
+                EXIT_OK
+            }
+            Err(error) => {
+                eprintln!("kirac: {error}");
+                println!("Failed to build");
+                EXIT_FAILURE
+            }
+        },
+    }
+}
+
+/// Builds a hybrid bundle and runs it in the hybrid host.
+///
+/// The host runs in this process rather than as a child: the native half is a
+/// library, not an executable, and this process is what loads it.
+fn run_hybrid(ir: &IrProgram, options: &CompileOptions) -> i32 {
+    match hybrid::run(
+        ir,
+        std::path::Path::new(&options.path),
+        options.emit_llvm_ir,
+    ) {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("kirac: {error}");
+            EXIT_FAILURE
         }
     }
 }
@@ -234,7 +262,14 @@ fn compile(path: &str) -> Result<Compiled, i32> {
     // The SourceMap mirrors the salsa input under the same fixed id, so
     // diagnostic spans render against the file text.
     let mut sources = SourceMap::new();
-    let id = sources.insert(path.to_owned(), text.clone());
+    let id = sources
+        .insert(path.to_owned(), text.clone())
+        .map_err(|full| {
+            // One file into an empty map cannot fill it; this is unreachable rather
+            // than merely unlikely, but it is reported, not asserted away.
+            eprintln!("kirac: {full}");
+            EXIT_FAILURE
+        })?;
     debug_assert_eq!(id, FILE_SOURCE_ID);
 
     let db = salsa::DatabaseImpl::new();

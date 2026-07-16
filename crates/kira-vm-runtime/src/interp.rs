@@ -38,15 +38,18 @@ struct Frame {
 /// [`VmError`] trap. The final result value is dropped before accounting, so a
 /// clean run reports `current == 0`.
 pub fn execute(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOutcome, VmError> {
-    // A Module is a public, deserializable artifact: prove every index and
-    // operand in range before trusting it, so interpretation cannot panic.
     module.validate()?;
+    run_entry(module, host)
+}
+
+/// Runs `module`'s entrypoint on a fresh VM, assuming it is already validated.
+fn run_entry(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOutcome, VmError> {
     let mut vm = Vm {
         host,
         heap: Heap::new(),
         stack: Vec::new(),
     };
-    let result = vm.run(module)?;
+    let result = vm.enter(module, module.main, &[])?;
     // The program's result is no longer referenced by anything; drop it so
     // heap accounting reflects a fully reclaimed program.
     vm.heap.drop_value(result);
@@ -56,6 +59,91 @@ pub fn execute(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOu
     })
 }
 
+/// An owned [`Module`] proven safe to interpret.
+///
+/// A `Module` is a public, deserializable artifact, so every index and operand
+/// in it is validated before anything is trusted — that is what lets
+/// interpretation index without the bounds checks it would otherwise need, and
+/// without panicking on a malformed artifact.
+///
+/// Validation is a whole-module pass, so it is done once here rather than per
+/// entry. That matters for a hybrid program, where the native half calls back
+/// into the VM through [`Program::call`] at every crossing: re-proving the
+/// module on each call would make a boundary crossing cost a scan of the
+/// program.
+///
+/// The module is *owned* rather than borrowed: a host loads bytecode from
+/// somewhere (a `.kbc` file, a network, memory), and the thing that runs it is
+/// the natural owner of it.
+pub struct Program {
+    module: Module,
+}
+
+impl Program {
+    /// Validates `module` and takes ownership of it, or reports why it cannot
+    /// be run.
+    pub fn load(module: Module) -> Result<Program, VmError> {
+        module.validate()?;
+        Ok(Program { module })
+    }
+
+    /// The module being run.
+    pub fn module(&self) -> &Module {
+        &self.module
+    }
+
+    /// Runs the entrypoint, sending output to `host`.
+    pub fn run(&self, host: &mut dyn HostCapabilities) -> Result<RunOutcome, VmError> {
+        run_entry(&self.module, host)
+    }
+
+    /// Runs one function by id with `args`, and returns what it produced.
+    ///
+    /// This is the mirror of [`HostCapabilities::call_native`]: that is how a
+    /// running program reaches the native half, and this is how the native half
+    /// reaches back. Both speak the same seam vocabulary, so an embedder hosting
+    /// a hybrid program marshals one way in each direction and nothing else.
+    ///
+    /// Ownership follows the same rule in both directions: **args borrow** (a
+    /// string arrives as a `&str` the caller still owns, and is copied into this
+    /// run's heap) and **the result owns** (a returned string is handed out as
+    /// an owned `String`, because handing a value out is a move).
+    ///
+    /// Each call runs on its own heap and operand stack. Nothing outlives the
+    /// call — the result is copied out before the heap is dropped — so calls
+    /// nest freely, which is exactly what a native function calling a
+    /// `@Runtime` function that calls a `@Native` function needs.
+    pub fn call(
+        &self,
+        host: &mut dyn HostCapabilities,
+        function_id: u32,
+        args: &[NativeArg<'_>],
+    ) -> Result<NativeResult, VmError> {
+        let function = self
+            .module
+            .functions
+            .get(function_id as usize)
+            .ok_or(VmError::UnknownFunction(function_id))?;
+        if args.len() != usize::from(function.param_count) {
+            return Err(VmError::ArityMismatch {
+                function: function_id,
+                expected: function.param_count,
+                got: args.len(),
+            });
+        }
+
+        let mut vm = Vm {
+            host,
+            heap: Heap::new(),
+            stack: Vec::new(),
+        };
+        let result = vm.enter(&self.module, function_id, args)?;
+        let lifted = vm.heap.lift(result);
+        vm.heap.drop_value(result);
+        Ok(lifted)
+    }
+}
+
 struct Vm<'h> {
     host: &'h mut dyn HostCapabilities,
     heap: Heap,
@@ -63,9 +151,25 @@ struct Vm<'h> {
 }
 
 impl Vm<'_> {
-    fn run(&mut self, module: &Module) -> Result<Value, VmError> {
-        let main = module.main;
-        let mut frames = vec![new_frame(module, main)?];
+    /// Runs `function_id` with `args` in its parameter slots, to completion.
+    ///
+    /// Arguments are lowered into this run's own heap, so the caller's storage
+    /// is only read: a `&str` argument is copied in rather than aliased.
+    fn enter(
+        &mut self,
+        module: &Module,
+        function_id: u32,
+        args: &[NativeArg<'_>],
+    ) -> Result<Value, VmError> {
+        let mut frame = new_frame(module, function_id)?;
+        for (slot, argument) in args.iter().enumerate() {
+            frame.locals[slot] = self.heap.lower(*argument);
+        }
+        self.run(module, frame)
+    }
+
+    fn run(&mut self, module: &Module, entry: Frame) -> Result<Value, VmError> {
+        let mut frames = vec![entry];
 
         loop {
             let depth = frames.len() - 1;
@@ -167,13 +271,7 @@ impl Vm<'_> {
             self.heap.drop_value(value);
         }
 
-        let result = match returned? {
-            NativeResult::Void => Value::Void,
-            NativeResult::Int(value) => Value::Int(value),
-            NativeResult::Float(value) => Value::Float(value),
-            NativeResult::Bool(value) => Value::Bool(value),
-            NativeResult::Str(text) => Value::Str(self.heap.alloc(text)),
-        };
+        let result = self.heap.absorb(returned?);
         self.stack.push(result);
         Ok(())
     }

@@ -48,6 +48,32 @@ pub const RUNTIME_ABI_VERSION: u32 = 1;
 /// fails if the archive's marker and this name ever drift apart.
 pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_1";
 
+/// The symbols a hybrid host resolves out of a loaded native half by name.
+///
+/// # Why this list has to exist
+///
+/// A linker pulls only *referenced* members out of an archive. None of these
+/// are referenced by generated code: `kira_hybrid_install_runtime_invoker` is
+/// called by the host, and the string helpers are only reached by a program
+/// that happens to use strings. So a perfectly good shared library can carry no
+/// definition of any of them, and `dlsym` fails on a library that is not broken
+/// in any other way.
+///
+/// The hybrid link step therefore forces each of these in by name, and the host
+/// resolves each by name. Both sides read this list rather than spelling the
+/// names twice, so the set the linker guarantees and the set the host demands
+/// cannot drift apart.
+///
+/// This is a wire contract: append to it when the host needs to resolve
+/// something new, and never remove an entry a released host still resolves.
+pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
+    "kira_rt_str_new",
+    "kira_rt_str_free",
+    "kira_rt_str_data",
+    "kira_rt_str_len",
+    "kira_hybrid_install_runtime_invoker",
+];
+
 /// An argument the VM hands to a native function.
 ///
 /// Args **borrow**: a string is a `&str` into the VM's own heap, not a copy, so

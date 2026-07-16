@@ -46,6 +46,45 @@ impl Artifacts {
     pub fn llvm_ir(&self) -> PathBuf {
         self.directory.join(format!("{}.ll", self.stem))
     }
+
+    /// The source file's stem, which every artifact is named after.
+    pub fn stem(&self) -> &str {
+        &self.stem
+    }
+
+    /// The hybrid manifest path: the artifact a hybrid run loads first.
+    pub fn manifest(&self) -> PathBuf {
+        self.directory.join(format!("{}.khm", self.stem))
+    }
+
+    /// The bytecode payload path, for a hybrid build.
+    pub fn bytecode(&self) -> PathBuf {
+        self.directory.join(format!("{}.kbc", self.stem))
+    }
+
+    /// The shared library path holding a hybrid program's native half.
+    ///
+    /// Named the way the host platform's loader expects, so `dlopen` finds it
+    /// by the name the manifest records.
+    pub fn shared_library(&self) -> PathBuf {
+        self.directory.join(shared_library_name(&self.stem))
+    }
+}
+
+/// The platform's file name for a shared library called `stem`.
+fn shared_library_name(stem: &str) -> String {
+    let extension = if cfg!(target_os = "macos") {
+        "dylib"
+    } else if cfg!(target_os = "windows") {
+        "dll"
+    } else {
+        "so"
+    };
+    if cfg!(target_os = "windows") {
+        format!("{stem}.{extension}")
+    } else {
+        format!("lib{stem}.{extension}")
+    }
 }
 
 /// Builds `program` into a native executable.
@@ -89,7 +128,7 @@ pub fn execute(executable: &Path) -> Result<i32, NativeError> {
 /// It sits beside this executable: cargo writes the staticlib into the same
 /// profile directory as `kirac`, and `kirac` depends on the crate, so a built
 /// `kirac` always has a matching archive next to it.
-fn runtime_archive() -> Result<PathBuf, NativeError> {
+pub fn runtime_archive() -> Result<PathBuf, NativeError> {
     let executable =
         std::env::current_exe().map_err(|source| NativeError::RuntimeArchive { source })?;
     let directory = executable
