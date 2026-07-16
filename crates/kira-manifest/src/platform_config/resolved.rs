@@ -26,25 +26,37 @@ pub struct RunnerConfig {
 }
 
 /// The full resolved profile/runner matrix of a manifest.
+///
+/// Each row sits at *its own id's index* ([`BuildProfile::index`],
+/// [`RunnerId::index`]), which is why a lookup here is a total function: there
+/// is no row to search for and therefore no way to fail to find one. The arrays
+/// are private to keep that true — a row placed out of position would make
+/// every lookup answer with the wrong row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedConfig {
-    pub profiles: [ProfileConfig; 3],
-    pub runners: [RunnerConfig; 9],
+    profiles: [ProfileConfig; BuildProfile::COUNT],
+    runners: [RunnerConfig; RunnerId::COUNT],
 }
 
 impl ResolvedConfig {
+    /// The row for one build profile.
     pub fn profile(&self, id: BuildProfile) -> &ProfileConfig {
-        self.profiles
-            .iter()
-            .find(|item| item.id == id)
-            .expect("resolved config always carries all three profiles")
+        &self.profiles[id.index()]
     }
 
+    /// The row for one runner.
     pub fn runner(&self, id: RunnerId) -> &RunnerConfig {
-        self.runners
-            .iter()
-            .find(|item| item.id == id)
-            .expect("resolved config always carries all nine runners")
+        &self.runners[id.index()]
+    }
+
+    /// Every profile row, in index order.
+    pub fn profiles(&self) -> &[ProfileConfig; BuildProfile::COUNT] {
+        &self.profiles
+    }
+
+    /// Every runner row, in index order.
+    pub fn runners(&self) -> &[RunnerConfig; RunnerId::COUNT] {
+        &self.runners
     }
 }
 
@@ -147,6 +159,23 @@ impl std::error::Error for ProfileSectionError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every lookup indexes by id rather than searching, so the constructor
+    /// placing a row out of position would not fail loudly — it would answer
+    /// every query about that row with a different one. This is what keeps that
+    /// from happening quietly.
+    #[test]
+    fn every_row_sits_at_its_own_ids_index() {
+        let config = default_resolved_config();
+        for id in BuildProfile::all() {
+            assert_eq!(config.profile(id).id, id, "{id:?} is not at its own index");
+        }
+        for id in RunnerId::all() {
+            assert_eq!(config.runner(id).id, id, "{id:?} is not at its own index");
+        }
+        assert_eq!(config.profiles().len(), BuildProfile::COUNT);
+        assert_eq!(config.runners().len(), RunnerId::COUNT);
+    }
 
     #[test]
     fn default_platform_config_synthesizes_profiles_and_runners() {
