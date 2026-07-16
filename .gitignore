@@ -2,3 +2,7 @@
 kira.lock
 .kira-build/
 .DS_Store
+
+# Agent scratch. Nothing here is tracked, which is what lets scratch tooling
+# (including Python) exist without ever reaching a commit.
+.codex/tmp/
