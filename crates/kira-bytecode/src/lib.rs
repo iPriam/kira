@@ -14,7 +14,7 @@ pub mod module;
 pub mod op;
 pub mod validate;
 
-pub use compile::{CompileError, compile};
+pub use compile::{CompileError, compile, compile_hybrid};
 pub use module::{FuncProto, MAGIC, Module, ModuleDecodeError};
 pub use op::{DecodeError, Instruction, decode, encode};
 pub use validate::ModuleValidateError;
@@ -43,6 +43,50 @@ mod tests {
             main: 0,
             exprs,
         }
+    }
+
+    /// The hybrid split: a native callee keeps its slot and signature but no
+    /// body, and its callers reach it through `CallNative` rather than `Call`.
+    #[test]
+    fn a_hybrid_build_splits_the_program_on_its_annotations() {
+        use kira_runtime_abi::Execution;
+        let mut exprs = la_arena::Arena::new();
+        let call = exprs.alloc(IrExpr::Call {
+            callee: IrCallee::User(1),
+            args: vec![],
+            result: kira_semantics_model::Type::Void,
+        });
+        let mut program = single_main(vec![IrStmt::Eval { expr: call }], exprs, 0);
+        program.functions.push(IrFunction {
+            name: "hot".to_owned(),
+            param_count: 0,
+            locals: Vec::new(),
+            return_type: kira_semantics_model::Type::Void,
+            execution: Execution::Native,
+            body: Vec::new(),
+        });
+
+        let hybrid = compile_hybrid(&program).expect("compiles");
+        assert!(
+            hybrid.functions[0]
+                .code
+                .contains(&Instruction::CallNative(1))
+        );
+        assert!(!hybrid.functions[0].code.contains(&Instruction::Call(1)));
+        assert!(hybrid.functions[1].is_native());
+        assert!(
+            hybrid.functions[1].code.is_empty(),
+            "a native body lives in the shared library, not here",
+        );
+        hybrid.validate().expect("a hybrid module is well-formed");
+
+        // The same program built for the VM has no boundary to honour: every
+        // function is bytecode, reached by an ordinary call.
+        let vm = compile(&program).expect("compiles");
+        assert!(vm.functions[0].code.contains(&Instruction::Call(1)));
+        assert!(!vm.functions[1].is_native());
+        assert!(!vm.functions[1].code.is_empty());
+        vm.validate().expect("a vm module is well-formed");
     }
 
     #[test]

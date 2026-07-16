@@ -47,11 +47,42 @@ pub enum CompileError {
     ShortCircuitOpcode,
 }
 
-/// Compiles a lowered program into a runnable module.
+/// Compiles a lowered program into a runnable module for the VM.
+///
+/// Every function is compiled to bytecode, whatever it was annotated with: a
+/// VM-only build has no native half, so `@Native` marks a boundary that does
+/// not exist in this build. That is what keeps `--backend vm` and
+/// `--backend llvm` agreeing on any program, annotated or not.
 pub fn compile(program: &IrProgram) -> Result<Module, CompileError> {
+    let engines = vec![Execution::Runtime; program.functions.len()];
+    compile_with(program, &engines)
+}
+
+/// Compiles the bytecode half of a hybrid program.
+///
+/// `@Native` functions keep their slot — one id has to index both halves — and
+/// keep their signature, so a caller knows the arity to marshal, but carry no
+/// body: theirs lives in the shared library. Calls to them become `CallNative`,
+/// which the VM routes through the embedder.
+///
+/// A function with no annotation runs on the VM. The VM is the default engine
+/// and native is the opt-in, matching what `@Native` means: a boundary you ask
+/// for, not one you get by accident.
+pub fn compile_hybrid(program: &IrProgram) -> Result<Module, CompileError> {
+    let engines: Vec<Execution> = program
+        .functions
+        .iter()
+        .map(|function| function.execution.resolve(Execution::Runtime))
+        .collect();
+    compile_with(program, &engines)
+}
+
+/// Compiles `program` with each function assigned to `engines[index]`.
+fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, CompileError> {
     let mut strings = StringPool::default();
     let mut functions = Vec::with_capacity(program.functions.len());
-    for function in &program.functions {
+    for (index, function) in program.functions.iter().enumerate() {
+        let execution = engines.get(index).copied().unwrap_or(Execution::Runtime);
         let param_count =
             u16::try_from(function.param_count).map_err(|_| CompileError::TooManyLocals {
                 function: function.name.clone(),
@@ -62,27 +93,31 @@ pub fn compile(program: &IrProgram) -> Result<Module, CompileError> {
                 function: function.name.clone(),
                 count: function.local_count(),
             })?;
-        let mut compiler = FnCompiler {
-            program,
-            function_name: &function.name,
-            strings: &mut strings,
-            code: Vec::new(),
+        // A native function's body is not ours to emit; it is compiled into the
+        // shared library instead.
+        let code = if execution == Execution::Native {
+            Vec::new()
+        } else {
+            let mut compiler = FnCompiler {
+                program,
+                function_name: &function.name,
+                strings: &mut strings,
+                engines,
+                code: Vec::new(),
+            };
+            compiler.compile_body(&function.body)?;
+            // Safety net: a function that falls off its end returns unit. (The
+            // analyzer's definite-return check guarantees non-Void functions
+            // never reach this instruction.)
+            compiler.code.push(Instruction::ReturnVoid);
+            compiler.code
         };
-        compiler.compile_body(&function.body)?;
-        // Safety net: a function that falls off its end returns unit. (The
-        // analyzer's definite-return check guarantees non-Void functions never
-        // reach this instruction.)
-        compiler.code.push(Instruction::ReturnVoid);
         functions.push(FuncProto {
             name: function.name.clone(),
             param_count,
             local_count,
-            // A VM-only build runs the whole program on the VM: `@Native` is an
-            // execution *boundary*, and with no native half there is no boundary
-            // to honour. This is what keeps `--backend vm` and `--backend llvm`
-            // agreeing on any program, annotated or not.
-            execution: Execution::Runtime,
-            code: compiler.code,
+            execution,
+            code,
         });
     }
     Ok(Module {
@@ -119,6 +154,9 @@ struct FnCompiler<'a> {
     program: &'a IrProgram,
     function_name: &'a str,
     strings: &'a mut StringPool,
+    /// Which engine owns each function, so a call site knows which of the two
+    /// call instructions it is emitting.
+    engines: &'a [Execution],
     code: Vec<Instruction>,
 }
 
@@ -216,7 +254,20 @@ impl FnCompiler<'_> {
                 }
                 match callee {
                     IrCallee::Print => self.code.push(Instruction::Print),
-                    IrCallee::User(index) => self.code.push(Instruction::Call(index)),
+                    // Which engine owns the callee is known here, at compile
+                    // time, so the boundary costs a different opcode rather
+                    // than a branch on every call.
+                    IrCallee::User(index) => {
+                        let native = self
+                            .engines
+                            .get(index as usize)
+                            .is_some_and(|engine| *engine == Execution::Native);
+                        self.code.push(if native {
+                            Instruction::CallNative(index)
+                        } else {
+                            Instruction::Call(index)
+                        });
+                    }
                 }
             }
         }
