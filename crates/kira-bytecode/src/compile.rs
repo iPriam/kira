@@ -15,6 +15,7 @@ use kira_ir::{IrBinOp, IrCallee, IrExpr, IrExprId, IrProgram, IrStmt, IrUnOp};
 
 use crate::module::{FuncProto, Module};
 use crate::op::Instruction;
+use kira_runtime_abi::Execution;
 
 /// An error raised while lowering IR to bytecode.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -76,6 +77,11 @@ pub fn compile(program: &IrProgram) -> Result<Module, CompileError> {
             name: function.name.clone(),
             param_count,
             local_count,
+            // A VM-only build runs the whole program on the VM: `@Native` is an
+            // execution *boundary*, and with no native half there is no boundary
+            // to honour. This is what keeps `--backend vm` and `--backend llvm`
+            // agreeing on any program, annotated or not.
+            execution: Execution::Runtime,
             code: compiler.code,
         });
     }
