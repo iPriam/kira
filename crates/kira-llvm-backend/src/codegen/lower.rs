@@ -27,7 +27,11 @@ impl<'a> Codegen<'a> {
         index: usize,
         function: &'a IrFunction,
     ) -> Result<(), LlvmError> {
-        let value = self.functions[index].value;
+        let value = self.functions[index]
+            .ok_or(LlvmError::Unsupported(
+                "a body for a function on the other engine",
+            ))?
+            .value;
 
         // SAFETY: `value` is a function in this live module; the builder is
         // positioned on its entry block before any instruction is built.
@@ -662,12 +666,84 @@ impl FunctionLowering<'_, '_> {
                 for &argument in args {
                     values.push(self.lower_expr(argument)?);
                 }
-                let returns_value =
-                    self.codegen.program.functions[index as usize].return_type != Type::Void;
-                let name = if returns_value { c"call" } else { c"" };
-                Ok(self.call(target, &mut values, name))
+                match target {
+                    // The callee is in this half: an ordinary direct call.
+                    Some(target) => {
+                        let returns_value = self.codegen.program.functions[index as usize]
+                            .return_type
+                            != Type::Void;
+                        let name = if returns_value { c"call" } else { c"" };
+                        Ok(self.call(target, &mut values, name))
+                    }
+                    // The callee runs on the VM: marshal and go through the
+                    // bridge, which the host answers.
+                    None => self.lower_runtime_call(index, args, &values),
+                }
             }
         }
+    }
+
+    /// Calls a function that lives in the VM half, from native code.
+    ///
+    /// The mirror of the VM's `CallNative`: arguments are packed into a stack
+    /// array of `BridgeValue`s, `kira_hybrid_call_runtime` hands them to the
+    /// host's invoker, and the result is unpacked. The array is an `alloca`, so
+    /// a crossing costs no heap allocation on this side either.
+    fn lower_runtime_call(
+        &mut self,
+        index: u32,
+        args: &[IrExprId],
+        values: &[LLVMValueRef],
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let builder = self.codegen.builder;
+        let types = self.codegen.types;
+        let result_type = self.codegen.program.functions[index as usize].return_type;
+
+        // SAFETY: every type and value belongs to this live module and the
+        // builder is on a live block; the argument array is sized to hold
+        // exactly the arguments written into it.
+        let out = unsafe {
+            let count = LLVMConstInt(types.i64, values.len() as u64, 0);
+            let argv =
+                LLVMBuildArrayAlloca(builder, types.bridge_value, count, c"bridge.args".as_ptr());
+            for (slot, (&value, &expr)) in values.iter().zip(args).enumerate() {
+                let mut offset = [LLVMConstInt(types.i32, slot as u64, 0)];
+                let element = LLVMBuildInBoundsGEP2(
+                    builder,
+                    types.bridge_value,
+                    argv,
+                    offset.as_mut_ptr(),
+                    1,
+                    c"bridge.arg".as_ptr(),
+                );
+                self.codegen
+                    .write_bridge_value(element, value, self.type_of(expr))?;
+            }
+
+            let out = LLVMBuildAlloca(builder, types.bridge_value, c"bridge.out".as_ptr());
+            let mut call_args = [
+                LLVMConstInt(types.i32, u64::from(index), 0),
+                argv,
+                LLVMConstInt(types.i32, values.len() as u64, 0),
+                out,
+            ];
+            self.codegen
+                .call_runtime(self.codegen.runtime.call_runtime, &mut call_args, c"");
+            out
+        };
+        self.codegen
+            .read_bridge_payload(out, result_type)
+            .or_else(|error| {
+                // A `Void` callee returns nothing to read; anything else is a real
+                // failure.
+                if result_type == Type::Void {
+                    // SAFETY: `i1 false` is a placeholder no caller of a Void call
+                    // ever consumes; `Eval` discards it and nothing else can name it.
+                    Ok(unsafe { LLVMConstInt(types.i1, 0, 0) })
+                } else {
+                    Err(error)
+                }
+            })
     }
 
     /// Frees a string handle through the runtime.

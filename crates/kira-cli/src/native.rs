@@ -60,6 +60,8 @@ pub fn build(
         module_name: artifacts.stem.clone(),
         object_path: artifacts.object(),
         executable_path: Some(artifacts.executable()),
+        // A whole-program native build has no second half to load.
+        shared_library_path: None,
         ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
         runtime_archive: runtime_archive()?,
     };

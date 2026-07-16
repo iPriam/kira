@@ -67,6 +67,26 @@ pub enum LinkError {
     },
 }
 
+/// Links `object` against the native runtime archive into a shared library.
+///
+/// The library is self-contained: it carries the runtime archive, so it has no
+/// undefined symbols and needs no arrangement with whatever process loads it.
+/// The host reaches in through trampolines and hands its invoker back in.
+pub fn link_shared_library(
+    llvm: &LlvmInstallation,
+    object: &Path,
+    runtime_archive: &Path,
+    library: &Path,
+) -> Result<(), LinkError> {
+    // Apple's linker spells "shared library" differently from everyone else's.
+    let shared_flag = if cfg!(target_os = "macos") {
+        "-dynamiclib"
+    } else {
+        "-shared"
+    };
+    link(llvm, object, runtime_archive, library, &[shared_flag])
+}
+
 /// Links `object` against the native runtime archive into `executable`.
 pub fn link_executable(
     llvm: &LlvmInstallation,
@@ -74,6 +94,18 @@ pub fn link_executable(
     runtime_archive: &Path,
     executable: &Path,
 ) -> Result<(), LinkError> {
+    link(llvm, object, runtime_archive, executable, &[])
+}
+
+/// Runs the linker driver over `object` plus the runtime archive.
+fn link(
+    llvm: &LlvmInstallation,
+    object: &Path,
+    runtime_archive: &Path,
+    output: &Path,
+    extra: &[&str],
+) -> Result<(), LinkError> {
+    let executable = output;
     let driver = llvm.clang();
     if !driver.is_file() {
         return Err(LinkError::DriverMissing { path: driver });
@@ -90,6 +122,9 @@ pub fn link_executable(
         .arg(runtime_archive)
         .arg("-o")
         .arg(executable);
+    for argument in extra {
+        command.arg(argument);
+    }
     for argument in platform_link_arguments() {
         command.arg(argument);
     }
