@@ -13,6 +13,8 @@
 //! (trampolines, the installed runtime invoker) is designed fresh alongside the
 //! hybrid runtime and will live beside it here.
 
+pub mod hybrid;
 pub mod runtime;
 
+pub use hybrid::{RuntimeInvoker, kira_hybrid_call_runtime, kira_hybrid_install_runtime_invoker};
 pub use runtime::{KStr, KiraString};

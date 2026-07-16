@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+kira-runtime-abi.workspace = true
+
 # `staticlib` produces `libkira_native_bridge.a`, the native runtime archive the
 # LLVM backend links into every native executable; `rlib` lets Rust consumers
 # (the CLI, tests) depend on it so cargo builds the archive into the profile dir.

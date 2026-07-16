@@ -5,5 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+kira-runtime-abi.workspace = true
+thiserror.workspace = true
+
 [lints]
 workspace = true
