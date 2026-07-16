@@ -6,6 +6,18 @@
 use crate::source_file::SourceFile;
 use crate::span::SourceId;
 
+/// A source map cannot hold another file: every [`SourceId`] is taken.
+///
+/// A [`SourceId`] is a `u32`, so a map holds at most `u32::MAX` files. Reaching
+/// that is a typed refusal rather than a panic — this type is in every
+/// consumer's cone, and a library does not get to end its caller's process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "this compilation already holds {} source files, the most a SourceId can address",
+    u32::MAX
+)]
+pub struct SourceMapFull;
+
 /// Owns every loaded [`SourceFile`] and hands out [`SourceId`]s for them.
 #[derive(Debug, Default)]
 pub struct SourceMap {
@@ -19,10 +31,11 @@ impl SourceMap {
     }
 
     /// Loads `text` under `path`, returning the id of the new file.
-    pub fn insert(&mut self, path: String, text: String) -> SourceId {
-        let id = SourceId::new(u32::try_from(self.files.len()).expect("source map overflow"));
+    pub fn insert(&mut self, path: String, text: String) -> Result<SourceId, SourceMapFull> {
+        let raw = u32::try_from(self.files.len()).map_err(|_| SourceMapFull)?;
+        let id = SourceId::new(raw);
         self.files.push(SourceFile::new(id, path, text));
-        id
+        Ok(id)
     }
 
     /// Returns the file behind an id issued by this map.

@@ -9,7 +9,7 @@ pub mod llvm_layout;
 pub mod llvm_metadata;
 
 pub use llvm_discovery::{DiscoverySource, LlvmDiscoveryError, LlvmInstallation, discover};
-pub use llvm_metadata::{LlvmMetadata, pinned, pinned_version};
+pub use llvm_metadata::{LlvmMetadata, MalformedMetadata, pinned, pinned_version};
 
 use std::path::{Path, PathBuf};
 

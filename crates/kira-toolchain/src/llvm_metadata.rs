@@ -64,49 +64,66 @@ pub struct TargetBundle {
     pub asset: String,
 }
 
-/// The pinned metadata, parsed once.
+/// The compiled-in `llvm-metadata.toml` could not be parsed.
 ///
-/// # Panics
-/// Only if the compiled-in `llvm-metadata.toml` is malformed, which is a build
-/// -time authoring error rather than a runtime condition: the same bytes are
-/// parsed on every run, so a valid file can never fail here in the field. The
-/// `parses_the_pinned_metadata` test covers it.
-pub fn pinned() -> &'static LlvmMetadata {
-    static PINNED: OnceLock<LlvmMetadata> = OnceLock::new();
-    PINNED.get_or_init(|| {
-        toml::from_str(METADATA_TOML).expect("repo-root llvm-metadata.toml is valid and complete")
-    })
+/// An authoring error in this repo, not a condition of the machine running
+/// `kirac`: the same bytes are parsed on every run, so this is either always
+/// hit or never. It is still a typed error rather than a panic, because a
+/// library does not get to decide that its caller's process should end.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("the compiled-in `llvm-metadata.toml` is malformed: {detail}")]
+pub struct MalformedMetadata {
+    /// What the TOML parser objected to.
+    pub detail: String,
+}
+
+/// The pinned metadata, parsed once.
+pub fn pinned() -> Result<&'static LlvmMetadata, MalformedMetadata> {
+    static PINNED: OnceLock<Result<LlvmMetadata, MalformedMetadata>> = OnceLock::new();
+    PINNED
+        .get_or_init(|| {
+            toml::from_str(METADATA_TOML).map_err(|error| MalformedMetadata {
+                detail: error.to_string(),
+            })
+        })
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
 /// The pinned LLVM version (e.g. `22.1.4`).
-pub fn pinned_version() -> &'static str {
-    &pinned().llvm.version
+pub fn pinned_version() -> Result<&'static str, MalformedMetadata> {
+    Ok(&pinned()?.llvm.version)
 }
 
 /// The published bundle for a host bundle key, if that host is supported.
-pub fn bundle_for(host_key: &str) -> Option<&'static TargetBundle> {
-    pinned().target.get(host_key)
+pub fn bundle_for(host_key: &str) -> Result<Option<&'static TargetBundle>, MalformedMetadata> {
+    Ok(pinned()?.target.get(host_key))
 }
 
 /// The `llvm-sys` major that pairs with the pinned LLVM version.
 ///
 /// `llvm-sys` majors track LLVM `major.minor` with the dots removed, so LLVM
-/// `22.1.4` pairs with `llvm-sys` `221.x`. Returns `None` if the pinned version
-/// is not `major.minor.patch`.
-pub fn expected_llvm_sys_major() -> Option<String> {
-    let mut parts = pinned_version().split('.');
-    let major = parts.next()?;
-    let minor = parts.next()?;
-    (!major.is_empty() && !minor.is_empty()).then(|| format!("{major}{minor}"))
+/// `22.1.4` pairs with `llvm-sys` `221.x`. Returns `Ok(None)` if the pinned
+/// version is not `major.minor.patch`.
+pub fn expected_llvm_sys_major() -> Result<Option<String>, MalformedMetadata> {
+    let version = pinned_version()?;
+    let mut parts = version.split('.');
+    let (Some(major), Some(minor)) = (parts.next(), parts.next()) else {
+        return Ok(None);
+    };
+    Ok((!major.is_empty() && !minor.is_empty()).then(|| format!("{major}{minor}")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The compiled-in file is parsed on every run, so this failing means the
+    /// repo's own `llvm-metadata.toml` is broken — which is exactly the
+    /// authoring error the typed result exists to report rather than panic on.
     #[test]
     fn parses_the_pinned_metadata() {
-        let metadata = pinned();
+        let metadata = pinned().expect("the repo's llvm-metadata.toml parses");
         assert_eq!(metadata.schema_version, 1);
         assert!(!metadata.llvm.version.is_empty());
         assert!(metadata.llvm.source_tag.contains(&metadata.llvm.version));
@@ -117,15 +134,22 @@ mod tests {
     fn every_documented_host_has_a_matching_asset_name() {
         // The workflow never invents asset names: each supported host's asset
         // must carry the pinned version and its own bundle key.
+        let version = pinned_version().expect("the pin parses");
         for key in ["x86_64-windows-msvc", "x86_64-linux-gnu", "aarch64-macos"] {
-            let bundle = bundle_for(key).expect("supported host is present in the metadata");
+            let bundle = bundle_for(key)
+                .expect("the pin parses")
+                .expect("supported host is present in the metadata");
             assert!(
-                bundle.asset.contains(pinned_version()) && bundle.asset.contains(key),
+                bundle.asset.contains(version) && bundle.asset.contains(key),
                 "asset `{}` must name the pinned version and host key `{key}`",
                 bundle.asset,
             );
         }
-        assert!(bundle_for("aarch64-linux-gnu").is_none());
+        assert!(
+            bundle_for("aarch64-linux-gnu")
+                .expect("the pin parses")
+                .is_none()
+        );
     }
 
     /// The pinned LLVM and the `llvm-sys` bindings must never drift apart: the
@@ -135,8 +159,10 @@ mod tests {
     #[test]
     fn llvm_sys_dependency_matches_the_pinned_llvm() {
         const WORKSPACE_MANIFEST: &str = include_str!("../../../Cargo.toml");
-        let expected_major =
-            expected_llvm_sys_major().expect("pinned version is major.minor.patch");
+        let version = pinned_version().expect("the pin parses");
+        let expected_major = expected_llvm_sys_major()
+            .expect("the pin parses")
+            .expect("pinned version is major.minor.patch");
         let line = WORKSPACE_MANIFEST
             .lines()
             .map(str::trim)
@@ -145,7 +171,7 @@ mod tests {
         assert!(
             line.contains(&format!("\"{expected_major}.")),
             "llvm-sys pin `{line}` does not match pinned LLVM {} (expected major {expected_major})",
-            pinned_version(),
+            version,
         );
     }
 }
