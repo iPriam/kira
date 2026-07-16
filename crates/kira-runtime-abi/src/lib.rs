@@ -18,9 +18,35 @@
 
 pub mod bridge;
 pub mod execution;
+pub mod ownership;
 
 pub use bridge::{BridgeData, BridgeValue, BridgeValueTag};
 pub use execution::Execution;
+pub use ownership::Ownership;
+
+/// The version of the `kira_rt_*` native runtime contract.
+///
+/// Bump this on **any** change to a `kira_rt_*` signature, to what a helper
+/// owns or frees, or to how a value is represented at the native ABI.
+///
+/// # Why a version exists at all
+///
+/// Generated native code and the runtime archive are built separately and
+/// linked together. If they disagree — an archive built before a signature
+/// changed — the symbols still resolve by name and the mismatch is silent: the
+/// program calls the old code with the new ABI and corrupts memory. That is the
+/// worst failure mode available.
+///
+/// So the version is baked into a symbol name ([`RUNTIME_ABI_MARKER`]) that the
+/// backend emits a reference to. A stale archive does not define this version's
+/// marker, so the link fails by name instead of the program failing at runtime.
+pub const RUNTIME_ABI_VERSION: u32 = 1;
+
+/// The marker symbol the runtime archive defines and generated code references.
+///
+/// Its name carries [`RUNTIME_ABI_VERSION`]; a test in `kira-native-bridge`
+/// fails if the archive's marker and this name ever drift apart.
+pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_1";
 
 /// The effects an embedder grants a running Kira program.
 ///

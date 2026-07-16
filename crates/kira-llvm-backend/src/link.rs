@@ -42,6 +42,21 @@ pub enum LinkError {
         #[source]
         source: std::io::Error,
     },
+    /// The runtime archive was built against a different `kira_rt_*` contract.
+    ///
+    /// Caught by name at link time rather than by corruption at run time: this
+    /// is exactly the failure the ABI marker exists to make loud.
+    #[error(
+        "the native runtime archive `{path}` was built against a different \
+         version of the runtime ABI (it does not define `{marker}`); rebuild it \
+         with `cargo build -p kira-native-bridge`"
+    )]
+    RuntimeArchiveStale {
+        /// The stale archive.
+        path: PathBuf,
+        /// The marker this compiler expected it to define.
+        marker: &'static str,
+    },
     /// The linker ran and rejected the link.
     #[error("linking `{output}` failed:\n{stderr}")]
     Failed {
@@ -92,9 +107,18 @@ pub fn link_executable(
             source,
         })?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        // The ABI marker is the one undefined symbol with a known cause, so say
+        // the cause rather than making the reader decode a linker diagnostic.
+        if stderr.contains(kira_runtime_abi::RUNTIME_ABI_MARKER) {
+            return Err(LinkError::RuntimeArchiveStale {
+                path: runtime_archive.to_path_buf(),
+                marker: kira_runtime_abi::RUNTIME_ABI_MARKER,
+            });
+        }
         return Err(LinkError::Failed {
             output: executable.to_path_buf(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            stderr,
         });
     }
     Ok(())

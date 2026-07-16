@@ -71,6 +71,9 @@ pub(crate) struct Runtime {
     str_eq: Callable,
     str_free: Callable,
     trap_div_zero: Callable,
+    /// The version marker every emitted program references; see
+    /// [`kira_runtime_abi::RUNTIME_ABI_MARKER`].
+    abi_marker: Callable,
 }
 
 /// An LLVM module holding a lowered Kira program.
@@ -369,6 +372,13 @@ impl<'a> Codegen<'a> {
             let block = LLVMAppendBasicBlockInContext(self.context, main, c"entry".as_ptr());
             LLVMPositionBuilderAtEnd(self.builder, block);
 
+            // Reference the runtime's ABI marker before anything else. The call
+            // is empty and free; emitting it is what makes a runtime archive
+            // built against a different `kira_rt_*` contract fail to link by
+            // name, instead of resolving the old code under the new ABI and
+            // corrupting memory at run time.
+            self.call_runtime(self.runtime.abi_marker, &mut [], c"");
+
             let name = if main_function.return_type == Type::Void {
                 c"".as_ptr()
             } else {
@@ -463,8 +473,17 @@ fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             str_eq: declare(c"kira_rt_str_eq", types.i8, &mut [types.ptr, types.ptr]),
             str_free: declare(c"kira_rt_str_free", types.void, &mut [types.ptr]),
             trap_div_zero: declare(c"kira_rt_trap_div_zero", types.void, &mut []),
+            abi_marker: declare(&abi_marker_symbol(), types.void, &mut []),
         }
     }
+}
+
+/// The runtime ABI marker's symbol, as a C string.
+///
+/// Built from the shared constant rather than spelled here, so the backend and
+/// the runtime archive cannot drift apart silently.
+fn abi_marker_symbol() -> CString {
+    c_string(kira_runtime_abi::RUNTIME_ABI_MARKER)
 }
 
 /// The native symbol for Kira function `index`.

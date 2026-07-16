@@ -22,10 +22,34 @@
 //! reorder a field, or insert one mid-record. A manifest is a deserializable
 //! public artifact, so decoding validates rather than trusts.
 
-use kira_runtime_abi::{BridgeValueTag, Execution};
+use kira_runtime_abi::{BridgeValueTag, Execution, Ownership};
 
 /// The magic bytes that open a serialized manifest: "KHM1".
 pub const MAGIC: [u8; 4] = *b"KHM1";
+
+/// One parameter's type and how it takes its argument.
+///
+/// Within one engine the borrow checker settles ownership at compile time and
+/// nothing has to be written down. A call that crosses engines cannot: the two
+/// halves are separately compiled, so the mode travels here and the runtime
+/// reads it to decide whether handing a value over is a transfer or a loan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HybridParam {
+    /// The parameter's type, as the tag its values carry.
+    pub ty: BridgeValueTag,
+    /// How the parameter takes its argument, and so who frees it.
+    pub ownership: Ownership,
+}
+
+impl HybridParam {
+    /// A by-value parameter: the argument is moved in and the callee frees it.
+    pub fn owned(ty: BridgeValueTag) -> HybridParam {
+        HybridParam {
+            ty,
+            ownership: Ownership::Owned,
+        }
+    }
+}
 
 /// A hybrid module: its two payloads, its entrypoint, and its functions.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,9 +81,13 @@ pub struct HybridFunction {
     /// Always resolved: a manifest records the engine a function *runs* on, so
     /// [`Execution::Inherited`] never survives into one.
     pub execution: Execution,
-    /// The parameter types, in order.
-    pub params: Vec<BridgeValueTag>,
+    /// The parameters, in order: each type plus how it takes its argument.
+    pub params: Vec<HybridParam>,
     /// The return type ([`BridgeValueTag::VOID`] when it returns nothing).
+    ///
+    /// A returned value is always owned — it is the callee handing a value out,
+    /// which is a move by definition, so there is no mode to record. Returned
+    /// borrows would need lifetime validation the language does not have yet.
     pub returns: BridgeValueTag,
     /// The symbol to resolve from the shared library, for a native function.
     ///
@@ -82,6 +110,9 @@ pub enum ManifestDecodeError {
     /// An execution byte named no engine this build knows.
     #[error("unknown execution engine `{0}` in hybrid manifest")]
     UnknownExecution(u8),
+    /// An ownership byte named no parameter mode this build knows.
+    #[error("unknown parameter ownership `{0}` in hybrid manifest")]
+    UnknownOwnership(u8),
     /// The entrypoint index does not name a function in the manifest.
     #[error("hybrid manifest entrypoint {entry} names no function (of {count})")]
     EntryOutOfRange {
@@ -118,7 +149,8 @@ impl HybridManifest {
             write_string(&mut out, &function.name);
             write_u32(&mut out, function.params.len() as u32);
             for param in &function.params {
-                out.push(param.0);
+                out.push(param.ty.0);
+                out.push(param.ownership.as_byte());
             }
             out.push(function.returns.0);
             // An absent symbol and an empty symbol are the same thing: a
@@ -150,7 +182,11 @@ impl HybridManifest {
             let param_count = reader.u32()?;
             let mut params = Vec::with_capacity(param_count as usize);
             for _ in 0..param_count {
-                params.push(BridgeValueTag(reader.byte()?));
+                let ty = BridgeValueTag(reader.byte()?);
+                let byte = reader.byte()?;
+                let ownership = Ownership::from_byte(byte)
+                    .ok_or(ManifestDecodeError::UnknownOwnership(byte))?;
+                params.push(HybridParam { ty, ownership });
             }
             let returns = BridgeValueTag(reader.byte()?);
             let exported = reader.string()?;
@@ -252,7 +288,13 @@ mod tests {
                     id: 1,
                     name: "hot".to_owned(),
                     execution: Execution::Native,
-                    params: vec![BridgeValueTag::INT, BridgeValueTag::STRING],
+                    params: vec![
+                        HybridParam::owned(BridgeValueTag::INT),
+                        HybridParam {
+                            ty: BridgeValueTag::STRING,
+                            ownership: Ownership::Borrow,
+                        },
+                    ],
                     returns: BridgeValueTag::INT,
                     exported_name: Some("kira_native_fn_1".to_owned()),
                 },

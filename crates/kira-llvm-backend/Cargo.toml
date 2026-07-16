@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 kira-ir.workspace = true
+kira-runtime-abi.workspace = true
 kira-semantics-model.workspace = true
 kira-toolchain.workspace = true
 thiserror.workspace = true
