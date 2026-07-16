@@ -6,6 +6,8 @@
 //! its string (a fresh allocation) and every instruction that consumes a string
 //! *frees* it, so a well-formed run ends with [`HeapStats::current`] at zero.
 
+use kira_runtime_abi::{NativeArg, NativeResult};
+
 /// A handle to a heap-allocated string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StrId(u32);
@@ -126,6 +128,49 @@ impl Heap {
         };
         self.drop_value(value);
         rendered
+    }
+
+    /// Brings a seam argument into this heap as a runtime value.
+    ///
+    /// The seam's rule is that arguments borrow, so a string is copied in here
+    /// rather than aliased: the caller's storage stays the caller's, and the
+    /// value this returns is this heap's to drop like any other.
+    pub fn lower(&mut self, argument: NativeArg<'_>) -> Value {
+        match argument {
+            NativeArg::Void => Value::Void,
+            NativeArg::Int(value) => Value::Int(value),
+            NativeArg::Float(value) => Value::Float(value),
+            NativeArg::Bool(value) => Value::Bool(value),
+            NativeArg::Str(text) => Value::Str(self.alloc(text.to_owned())),
+        }
+    }
+
+    /// Takes an owned seam result into this heap as a runtime value.
+    ///
+    /// The seam's rule is that results own, so a returned string is *moved* in
+    /// rather than copied: nothing else holds it.
+    pub fn absorb(&mut self, result: NativeResult) -> Value {
+        match result {
+            NativeResult::Void => Value::Void,
+            NativeResult::Int(value) => Value::Int(value),
+            NativeResult::Float(value) => Value::Float(value),
+            NativeResult::Bool(value) => Value::Bool(value),
+            NativeResult::Str(text) => Value::Str(self.alloc(text)),
+        }
+    }
+
+    /// Renders a runtime value as a seam result, leaving `value` untouched.
+    ///
+    /// The seam's rule is that results own, so a string is copied out: the
+    /// result outlives this heap, and the caller drops `value` itself.
+    pub fn lift(&self, value: Value) -> NativeResult {
+        match value {
+            Value::Void => NativeResult::Void,
+            Value::Int(value) => NativeResult::Int(value),
+            Value::Float(value) => NativeResult::Float(value),
+            Value::Bool(value) => NativeResult::Bool(value),
+            Value::Str(id) => NativeResult::Str(self.get(id).to_owned()),
+        }
     }
 }
 

@@ -6,11 +6,18 @@ Orientation for the two non-VM backends. The VM path (`kira-bytecode` →
 ## Status
 
 - **LLVM/native: landed.** `kirac build|run --backend llvm` produces a real
-  native executable. Parity with the VM is proven, not asserted: eleven
-  differential tests plus every example, identical stdout and exit status
-  (`crates/kira-cli/tests/backend_parity.rs`).
-- **Hybrid: half-built.** Both ends of the boundary exist and are tested; the
-  middle does not. See "What is left" below.
+  native executable.
+- **Hybrid: landed.** `kirac build|run --backend hybrid` splits a program on its
+  `@Runtime`/`@Native` annotations, emits both halves plus a manifest, and runs
+  the bundle in `kira-hybrid-runtime` (the host). Both call directions work,
+  including strings, traps, nesting, and a `@Native` entrypoint.
+
+Parity is proven, not asserted: twenty-one differential tests plus every
+example, identical stdout and exit status across **all three** backends
+(`crates/kira-cli/tests/backend_parity.rs`).
+
+`.codex/work/hybrid-handoff.md` carries the seam's ownership rules — the ones
+that are a double free rather than a compile error when read wrong.
 
 ## Building it
 
@@ -28,13 +35,16 @@ be older than the compiler that links it. `cargo build --workspace` covers both.
 
 ## Contracts
 
-Each is append-only and has a test that pins it. Kai changes one only together
-with the code that emits or reads it.
+Each is append-only and has a test that pins it. Change one only together with
+the code that emits or reads it.
 
 | Contract | Defined in | Shape |
 |---|---|---|
 | `kira_rt_*` | `kira-native-bridge/src/runtime.rs` | native runtime: print, strings, div-zero trap |
+| `kira_rt_str_data` / `_len` | `kira-native-bridge/src/runtime.rs` | the host's only way to read a `KStr` — generated code never calls these |
 | ABI marker | `kira-runtime-abi/src/lib.rs` | `RUNTIME_ABI_VERSION` / `RUNTIME_ABI_MARKER` |
+| Host-resolved symbols | `kira-runtime-abi/src/lib.rs` | `HYBRID_HOST_SYMBOLS`: what the link forces in and the host `dlsym`s — one list, both sides |
+| Host→VM entry | `kira-vm-runtime/src/interp.rs` | `Program::call` — the mirror of `HostCapabilities::call_native` |
 | `BridgeValue` | `kira-runtime-abi/src/bridge.rs` | `{ u8 tag, [7]u8 reserved, u64 payload }`, 16 bytes |
 | `Execution` | `kira-runtime-abi/src/execution.rs` | `Inherited` / `Runtime` / `Native` |
 | `Ownership` | `kira-runtime-abi/src/ownership.rs` | `Owned` / `Borrow` / `BorrowMut` |
@@ -76,6 +86,24 @@ with the code that emits or reads it.
 
 ## Pitfalls
 
+- **A hybrid library does not export what the host resolves, by default.** A
+  linker pulls only *referenced* members out of an archive, and generated code
+  references none of the symbols the host `dlsym`s: it never calls
+  `kira_hybrid_install_runtime_invoker` (the host does), and it only references
+  `kira_rt_str_new`/`_free`/`_data`/`_len` when the native half happens to use
+  strings. This was confirmed by building it: a `@Native function double(n: Int)`
+  produced a dylib exporting exactly two symbols, and the host failed on
+  `kira_rt_str_new`. `link_shared_library` now passes `-Wl,-u,_<symbol>` (Mach-O)
+  / `-Wl,--undefined=<symbol>` (ELF) for each of `HYBRID_HOST_SYMBOLS`, which
+  pulls in exactly the defining member — deliberately narrower than
+  `-force_load`/`--whole-archive`, which would drag the whole Rust standard
+  library into every hybrid program.
+- **The host must not link `kira-native-bridge`.** `kirac` already carries its
+  own copy of every `kira_rt_*` symbol, so allocating a handle in one copy and
+  freeing it in the other is a cross-allocator free. `kira-hybrid-runtime`
+  therefore depends on the runtime crate *not at all* and resolves every symbol
+  out of the loaded library; `libloading` opens `RTLD_LOCAL`, which is what keeps
+  the two apart. Do not add that dependency back for convenience.
 - **The runtime archive can be stale**, and a stale archive resolves every
   symbol by name — the mismatch used to be silent memory corruption, surfaced
   only by a Rust debug-only UB check that a release build would not run. The ABI
@@ -91,23 +119,31 @@ with the code that emits or reads it.
   source of truth for the pinned version; a test in `kira-toolchain` fails if the
   `llvm-sys` dependency drifts from it.
 
-## What is left for hybrid
+## How a hybrid program runs
 
-Both ends exist: the frontend carries `@Runtime`/`@Native` to the IR,
-`compile_hybrid` splits the bytecode half, the codegen emits the native half
-with trampolines, and both call directions are built. Missing:
+1. `kirac build|run --backend hybrid` lowers one IR three ways:
+   `compile_hybrid` emits the bytecode half (`<stem>.kbc`),
+   `build_hybrid_library` emits the native half (`lib<stem>.dylib`) with one
+   `kira_native_fn_<id>` trampoline per `@Native` function, and `kira-cli`'s
+   `hybrid.rs` writes the `.khm` manifest describing both.
+2. `kira-hybrid-runtime` loads the manifest, decodes the `.kbc` into a
+   `Program`, proves the two halves agree, `dlopen`s the library, binds each
+   trampoline, and installs its invoker.
+3. It then runs the entrypoint on whichever engine the manifest records, serving
+   as `HostCapabilities` for the VM half and as the invoker target for the
+   native half.
 
-1. **`kira-hybrid-runtime`** — still the stub. It is the host: load the manifest
-   and bytecode, `dlopen` the library (`libloading`), bind each trampoline,
-   install the invoker, and implement `HostCapabilities` so `call_native`
-   marshals `NativeArg`/`NativeResult` to and from `BridgeValue`.
-2. **CLI wiring** — `build|run --backend hybrid` writes `.khm` + `.kbc` +
-   library, then runs the program in the host. `pipeline.rs` reports hybrid as
-   unimplemented today.
-3. **Parity tests** — a hybrid program must match the VM and native builds of the
-   same source.
+The manifest is built in the CLI rather than in `kira-hybrid-definition`:
+building one means reading the IR, and the definition crate sits below
+`kira-ir` and must not learn about it.
 
-The contracts above are fixed, so this is codegen-and-loader work, not design.
+### The engine default has to agree three ways
+
+`compile_hybrid`, the LLVM backend's `build_hybrid`, and the CLI's manifest
+builder each resolve `Execution::Inherited` against `Execution::Runtime`. They
+must agree function for function — the manifest is what every crossing marshals
+against. `kira-hybrid-runtime`'s `validate.rs` is what catches them drifting,
+and it runs at load rather than at the first crossing.
 
 ## When touching this, check
 
@@ -116,5 +152,9 @@ The contracts above are fixed, so this is codegen-and-loader work, not design.
   moves at all.
 - `crates/kira-native-bridge/src/runtime.rs` — the marker test, if any
   `kira_rt_*` signature changes.
+- `crates/kira-hybrid-runtime/src/marshal.rs` — if the codegen changes what it
+  frees at a crossing. The seam's ownership rules are enforced nowhere; that
+  file is where they are acted on, and `.codex/work/hybrid-handoff.md` is where
+  they are written down.
 - Both feature paths: `cargo clippy --workspace --all-targets` with and without
   `--features kira-cli/llvm`. The no-LLVM path is the one CI has.
