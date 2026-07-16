@@ -2,12 +2,25 @@
 //!
 //! Layer 0 of the Kira package graph.
 //!
+//! This crate owns three contracts, each defined here exactly once because
+//! everything from the parser to the hybrid runtime shares them:
+//!
+//! - [`HostCapabilities`], the effects an embedder grants a running program,
+//! - [`Execution`], where a function's body runs (`@Runtime` / `@Native`),
+//! - [`BridgeValue`], how one value crosses the runtime/native boundary.
+//!
 //! For v0 the only effect a Kira program produces is textual output through
 //! `print`. The VM stays a portable core by never touching the outside world
 //! directly: it formats values into text internally and pushes finished lines
 //! to the embedder through [`HostCapabilities`]. Richer capabilities (clock,
 //! rng, native FFI) extend this trait as the language grows; the VM core never
 //! gains a filesystem, process, or thread dependency.
+
+pub mod bridge;
+pub mod execution;
+
+pub use bridge::{BridgeData, BridgeValue, BridgeValueTag};
+pub use execution::Execution;
 
 /// The effects an embedder grants a running Kira program.
 ///

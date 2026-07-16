@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 kira-semantics-model.workspace = true
 kira-ir.workspace = true
+kira-runtime-abi.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

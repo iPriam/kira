@@ -241,6 +241,7 @@ impl<'a> Analyzer<'a> {
             locals: ctx.locals,
             body,
             is_main: function.is_main,
+            execution: function.execution,
             name_span: function.name_span,
         }
     }
