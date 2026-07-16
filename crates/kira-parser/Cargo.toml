@@ -12,5 +12,6 @@ workspace = true
 kira-core.workspace = true
 kira-source.workspace = true
 kira-diagnostics.workspace = true
+kira-runtime-abi.workspace = true
 kira-syntax-model.workspace = true
 kira-lexer.workspace = true

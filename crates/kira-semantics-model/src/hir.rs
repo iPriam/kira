@@ -7,6 +7,7 @@
 //! are scoped to their owning function.
 
 use crate::ty::Type;
+use kira_runtime_abi::Execution;
 use kira_source::Span;
 use la_arena::{Arena, Idx};
 
@@ -71,6 +72,8 @@ pub struct HirFunction {
     pub body: Vec<HirStmtId>,
     /// Whether this is the `@Main` entrypoint.
     pub is_main: bool,
+    /// The engine this function's body runs on, as written in the source.
+    pub execution: Execution,
     /// Span of the function's name, for diagnostics.
     pub name_span: Span,
 }
