@@ -350,6 +350,7 @@ name = "kira-llvm-backend"
 version = "0.1.0"
 dependencies = [
  "kira-ir",
+ "kira-runtime-abi",
  "kira-semantics-model",
  "kira-toolchain",
  "llvm-sys",
