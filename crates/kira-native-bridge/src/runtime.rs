@@ -210,9 +210,38 @@ pub extern "C" fn kira_rt_trap_div_zero() -> ! {
     std::process::exit(1);
 }
 
+/// The ABI marker for this archive's version of the `kira_rt_*` contract.
+///
+/// Does nothing and costs nothing; its *name* is the point. Generated code
+/// references it, so an archive built against a different version of the
+/// contract fails to link — by name, at build time — instead of resolving the
+/// old code under the new ABI and corrupting memory at run time.
+///
+/// The name must always spell [`kira_runtime_abi::RUNTIME_ABI_MARKER`]; the test
+/// below is what keeps the two from drifting.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_abi_version_1() {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The marker this archive defines must be the one generated code
+    /// references, or the guard silently guards nothing: the backend would emit
+    /// a reference to a symbol no archive ever defines (every link fails), or
+    /// this archive would define a marker nobody checks (stale archives link
+    /// again). Bumping `RUNTIME_ABI_VERSION` means renaming the function above.
+    #[test]
+    fn the_abi_marker_matches_the_shared_contract() {
+        assert_eq!(
+            kira_runtime_abi::RUNTIME_ABI_MARKER,
+            "kira_rt_abi_version_1"
+        );
+        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 1);
+        // Referenced so the marker cannot be dead-code-eliminated out of an
+        // rlib build, and so a rename breaks this test rather than the link.
+        kira_rt_abi_version_1();
+    }
 
     /// Builds a handle from a literal, as the backend's lowering would.
     fn new(text: &str) -> KStr {
