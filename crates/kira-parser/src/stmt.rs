@@ -25,11 +25,30 @@ impl Parser<'_> {
                 Some(self.parse_unsupported_stmt())
             }
             TokenKind::Break | TokenKind::Continue => Some(self.parse_unsupported_stmt()),
-            TokenKind::Identifier if self.peek_kind(1) == TokenKind::Equals => {
-                Some(self.parse_assign())
-            }
-            _ => Some(self.parse_expr_stmt()),
+            _ => Some(self.parse_expr_or_assign()),
         }
+    }
+
+    /// Parses an expression statement, turning it into an assignment when an
+    /// `=` follows.
+    ///
+    /// An assignment target is written with expression syntax (`p`, `p.x`,
+    /// `b.size.x`), so it is parsed as one; deciding whether that expression
+    /// actually names a place is semantics' job, not the parser's.
+    fn parse_expr_or_assign(&mut self) -> StmtId {
+        let start = self.current().span;
+        let target = self.parse_expr();
+        if !self.eat(TokenKind::Equals) {
+            let span = Span::from_bounds(start.start, self.previous_end());
+            return self.tree.add_stmt(Stmt::Expr { expr: target, span });
+        }
+        let value = self.parse_expr();
+        let span = Span::from_bounds(start.start, self.previous_end());
+        self.tree.add_stmt(Stmt::Assign {
+            target,
+            value,
+            span,
+        })
     }
 
     fn parse_let(&mut self, mutable: bool) -> StmtId {
@@ -71,21 +90,6 @@ impl Parser<'_> {
         })
     }
 
-    fn parse_assign(&mut self) -> StmtId {
-        let name_span = self.current().span;
-        let name = self.intern_span(name_span);
-        self.bump(); // name
-        self.bump(); // `=`
-        let value = self.parse_expr();
-        let span = Span::from_bounds(name_span.start, self.previous_end());
-        self.tree.add_stmt(Stmt::Assign {
-            name,
-            name_span,
-            value,
-            span,
-        })
-    }
-
     fn parse_return(&mut self) -> StmtId {
         let start = self.current().span;
         self.bump(); // `return`
@@ -101,7 +105,7 @@ impl Parser<'_> {
     fn parse_if(&mut self) -> StmtId {
         let start = self.current().span;
         self.bump(); // `if`
-        let cond = self.parse_expr();
+        let cond = self.without_struct_literals(|parser| parser.parse_expr());
         let then_block = self.parse_block();
         let else_block = if self.eat(TokenKind::Else) {
             if self.at(TokenKind::If) {
@@ -130,17 +134,10 @@ impl Parser<'_> {
     fn parse_while(&mut self) -> StmtId {
         let start = self.current().span;
         self.bump(); // `while`
-        let cond = self.parse_expr();
+        let cond = self.without_struct_literals(|parser| parser.parse_expr());
         let body = self.parse_block();
         let span = Span::from_bounds(start.start, self.previous_end());
         self.tree.add_stmt(Stmt::While { cond, body, span })
-    }
-
-    fn parse_expr_stmt(&mut self) -> StmtId {
-        let start = self.current().span;
-        let expr = self.parse_expr();
-        let span = Span::from_bounds(start.start, self.previous_end());
-        self.tree.add_stmt(Stmt::Expr { expr, span })
     }
 
     /// A statement-level construct outside the v0 subset: diagnose and skip a

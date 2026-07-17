@@ -6,15 +6,18 @@
 //! carries a valid `@Main`; otherwise there is nothing to run and lowering
 //! yields `None`.
 
-use kira_semantics_model::hir::{Callee, HirExpr, HirExprId, HirProgram, HirStmt, HirStmtId};
+use kira_semantics_model::hir::{
+    Callee, HirExpr, HirExprId, HirPlace, HirProgram, HirStmt, HirStmtId,
+};
 
-use crate::ir::{IrCallee, IrExpr, IrExprId, IrFunction, IrProgram, IrStmt};
+use crate::ir::{IrCallee, IrExpr, IrExprId, IrFunction, IrPlace, IrProgram, IrStmt};
 
 /// Lowers an analyzed program to IR, or returns `None` when it has no `@Main`.
 pub fn lower(program: &HirProgram) -> Option<IrProgram> {
     let main = program.main?;
     let mut ir = IrProgram {
         functions: Vec::with_capacity(program.functions.len()),
+        structs: program.structs.clone(),
         main: main.0,
         exprs: la_arena::Arena::new(),
     };
@@ -59,8 +62,8 @@ impl Lowerer<'_> {
                 local: local.0,
                 init: self.lower_expr(init),
             },
-            HirStmt::Assign { local, value } => IrStmt::Assign {
-                local: local.0,
+            HirStmt::Assign { place, value } => IrStmt::Assign {
+                place: lower_place(&place),
                 value: self.lower_expr(value),
             },
             HirStmt::Return { value } => IrStmt::Return {
@@ -109,12 +112,31 @@ impl Lowerer<'_> {
                     result: ty,
                 }
             }
+            HirExpr::StructNew { struct_id, fields } => {
+                let ir_fields = fields.iter().map(|&field| self.lower_expr(field)).collect();
+                IrExpr::StructNew {
+                    struct_id,
+                    fields: ir_fields,
+                }
+            }
+            HirExpr::Field { base, index, ty } => IrExpr::Field {
+                base: self.lower_expr(base),
+                index,
+                ty,
+            },
             // An error node can only be reached when analysis already reported
             // diagnostics and the program is never run; lower it to a harmless
             // constant so lowering stays total.
             HirExpr::Error => IrExpr::Int(0),
         };
         self.ir.exprs.alloc(node)
+    }
+}
+
+fn lower_place(place: &HirPlace) -> IrPlace {
+    IrPlace {
+        local: place.local.0,
+        path: place.path.clone(),
     }
 }
 

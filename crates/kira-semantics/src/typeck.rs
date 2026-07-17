@@ -7,7 +7,7 @@
 
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{Builtin, Callee, HirBinaryOp, HirExpr, HirExprId, HirUnaryOp};
-use kira_syntax_model::ast::{BinaryOp, Expr, ExprId, UnaryOp};
+use kira_syntax_model::ast::{BinaryOp, Expr, ExprId, FieldInit, UnaryOp};
 
 use crate::analyze::{Analyzer, FnCtx};
 
@@ -52,7 +52,7 @@ impl Analyzer<'_> {
                             format!(
                                 "operator `{}` cannot apply to `{}`",
                                 unary_spelling(op),
-                                operand_ty.name()
+                                self.type_name(operand_ty)
                             ),
                         );
                         self.program.exprs.alloc(HirExpr::Error)
@@ -81,8 +81,8 @@ impl Analyzer<'_> {
                             format!(
                                 "operator `{}` cannot combine `{}` and `{}`",
                                 op.spelling(),
-                                lt.name(),
-                                rt.name()
+                                self.type_name(lt),
+                                self.type_name(rt)
                             ),
                         );
                         self.program.exprs.alloc(HirExpr::Error)
@@ -106,8 +106,156 @@ impl Analyzer<'_> {
                     self.analyze_user_call(&name, &arg_hirs, callee_span)
                 }
             }
+            Expr::StructLit {
+                name,
+                name_span,
+                fields,
+                ..
+            } => self.analyze_struct_literal(ctx, name, name_span, &fields),
+            Expr::Field {
+                base,
+                field,
+                field_span,
+                ..
+            } => {
+                let base_hir = self.analyze_expr(ctx, base);
+                let base_ty = self.program.expr(base_hir).type_of();
+                let name = self.interner.resolve(field).to_owned();
+                match self.resolve_field(base_ty, &name, field_span) {
+                    Some((index, ty)) => self.program.exprs.alloc(HirExpr::Field {
+                        base: base_hir,
+                        index,
+                        ty,
+                    }),
+                    None => self.program.exprs.alloc(HirExpr::Error),
+                }
+            }
             Expr::Error { .. } => self.program.exprs.alloc(HirExpr::Error),
         }
+    }
+
+    /// Type-checks a struct literal into a [`HirExpr::StructNew`] holding one
+    /// initializer per declared field, in declaration order.
+    ///
+    /// A field the literal omits is filled from its declared default, so
+    /// nothing downstream of analysis has to know that defaults exist. A field
+    /// with neither an initializer nor a default is the one case that cannot be
+    /// filled, and it is reported here.
+    fn analyze_struct_literal(
+        &mut self,
+        ctx: &mut FnCtx,
+        name: kira_core::Symbol,
+        name_span: kira_source::Span,
+        inits: &[FieldInit],
+    ) -> HirExprId {
+        let struct_name = self.interner.resolve(name).to_owned();
+        let Some(id) = self.program.structs.lookup(&struct_name) else {
+            // A function of this name is the likely mistake, so say which.
+            let message = if self.lookup_function(&struct_name).is_some() {
+                format!("`{struct_name}` is a function, not a struct")
+            } else {
+                format!("unknown struct `{struct_name}`")
+            };
+            self.emit(name_span, "KSEM092", message);
+            for init in inits {
+                self.analyze_expr(ctx, init.value);
+            }
+            return self.program.exprs.alloc(HirExpr::Error);
+        };
+        let field_count = self
+            .program
+            .structs
+            .get(id)
+            .map_or(0, |def| def.fields.len());
+
+        // Analyze each written initializer against the field it names, keeping
+        // source order so diagnostics read in the order they were written.
+        let mut slots: Vec<Option<HirExprId>> = vec![None; field_count];
+        for init in inits {
+            let field_name = self.interner.resolve(init.name).to_owned();
+            let value = self.analyze_expr(ctx, init.value);
+            let value_ty = self.program.expr(value).type_of();
+            let Some((index, field_ty)) =
+                self.resolve_field(Type::Struct(id), &field_name, init.name_span)
+            else {
+                continue;
+            };
+            if slots[index as usize].is_some() {
+                self.emit(
+                    init.name_span,
+                    "KSEM093",
+                    format!("field `{field_name}` is initialized twice"),
+                );
+                continue;
+            }
+            if !value_ty.assignable_to(field_ty) {
+                self.emit(
+                    init.span,
+                    "KSEM094",
+                    format!(
+                        "field `{field_name}` of `{struct_name}` expects `{}`, found `{}`",
+                        self.type_name(field_ty),
+                        self.type_name(value_ty)
+                    ),
+                );
+            }
+            slots[index as usize] = Some(value);
+        }
+
+        // Fill what the literal left out.
+        let mut fields = Vec::with_capacity(field_count);
+        let mut missing: Vec<String> = Vec::new();
+        for index in 0..field_count as u32 {
+            if let Some(value) = slots[index as usize] {
+                fields.push(value);
+                continue;
+            }
+            match self.field_default(id, index) {
+                Some(default) => {
+                    let value = self.analyze_default(default);
+                    fields.push(value);
+                }
+                None => {
+                    let field_name = self
+                        .program
+                        .structs
+                        .get(id)
+                        .and_then(|def| def.field(index))
+                        .map_or_else(String::new, |field| field.name.clone());
+                    missing.push(field_name);
+                    fields.push(self.program.exprs.alloc(HirExpr::Error));
+                }
+            }
+        }
+        if !missing.is_empty() {
+            self.emit(
+                name_span,
+                "KSEM095",
+                format!(
+                    "`{struct_name}` is missing {}: {} (no default is declared)",
+                    if missing.len() == 1 {
+                        "field"
+                    } else {
+                        "fields"
+                    },
+                    missing.join(", ")
+                ),
+            );
+        }
+        self.program.exprs.alloc(HirExpr::StructNew {
+            struct_id: id,
+            fields,
+        })
+    }
+
+    /// Analyzes a field's default initializer at a construction site.
+    ///
+    /// Deliberately analyzed in an empty scope rather than the construction
+    /// site's: a default belongs to the declaration, so it must not be able to
+    /// see whatever locals happen to be in scope wherever the struct is built.
+    fn analyze_default(&mut self, default: ExprId) -> HirExprId {
+        let mut empty = FnCtx::new(Type::Void);
+        self.analyze_expr(&mut empty, default)
     }
 
     fn analyze_print(&mut self, args: &[HirExprId], span: kira_source::Span) -> HirExprId {
@@ -123,7 +271,10 @@ impl Analyzer<'_> {
                 self.emit(
                     span,
                     "KSEM081",
-                    format!("`print` cannot format a value of type `{}`", arg_ty.name()),
+                    format!(
+                        "`print` cannot format a value of type `{}`",
+                        self.type_name(arg_ty)
+                    ),
                 );
             }
         }
@@ -171,8 +322,8 @@ impl Analyzer<'_> {
                         format!(
                             "argument {} of `{name}` expects `{}`, found `{}`",
                             index + 1,
-                            expected.name(),
-                            actual.name()
+                            self.type_name(expected),
+                            self.type_name(actual)
                         ),
                     );
                 }

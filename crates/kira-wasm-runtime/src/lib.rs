@@ -267,6 +267,7 @@ mod tests {
                 execution: Execution::Inherited,
                 body: vec![IrStmt::Eval { expr: call }, IrStmt::Return { value: None }],
             }],
+            structs: Default::default(),
             main: 0,
             exprs,
         }

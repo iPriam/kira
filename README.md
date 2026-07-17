@@ -42,6 +42,48 @@ The VM-hot crates (`kira-vm-runtime`, `kira-bytecode`) are compiled with
 `opt-level = 3` even in the dev profile: a debug interpreter is 4–11× slower,
 and the dev snapshot is what `kira run` uses for interactive work.
 
+## Structs
+
+A `struct` is a non-inheriting value shape. Members are written with `let` or
+`var` and may carry a default, which fills the member wherever a literal leaves
+it out:
+
+```kira
+struct Vec3 {
+    var x: Int
+    var y: Int
+    var z: Int
+}
+
+struct Box {
+    var origin: Vec3
+    var label: String = "unnamed"
+}
+
+let v = Vec3 { x = 1, y = 2, z = 3 }
+var b = Box { origin = v }   // `label` takes its default
+b.origin.x = 100             // a nested write lands in place
+```
+
+`=` is the canonical field binder; `:` is still accepted, and the two may be
+mixed in one literal. A struct is a **value**: `var copy = b` copies it deeply,
+strings included, so writing to the copy never disturbs the original.
+
+Two edges are deliberate rather than pending:
+
+- **`print(someStruct)` is rejected.** What `print` renders for a struct is not
+  pinned anywhere in the language corpus, and inventing a format here would be
+  inventing language surface. Print a struct's fields until it is settled.
+- **A struct cannot cross the `@Native`/`@Runtime` boundary.** It does not fit
+  a `BridgeValue`, and passing one needs an ABI decision — by value or by
+  pointer, and who frees the strings inside — that has not been made. Structs
+  work on both engines; only the crossing is unbuilt, and a build that would
+  need one says so. See [docs/structs.md](docs/structs.md).
+
+Struct **methods** parse but are reported as unsupported: they are real
+language surface this compiler does not model yet, and silently dropping one
+would run a program that means something else.
+
 ## Live sessions
 
 `kirac live` builds a program into a `.klbundle`, serves it over a loopback

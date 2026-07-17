@@ -18,6 +18,9 @@ pub enum WasmError {
     /// A binary operator reached the wrong lowering path.
     #[error("an operator reached the wrong lowering path (this is a compiler bug)")]
     UnsupportedOperator,
+    /// The program uses a struct, which this backend does not lower yet.
+    #[error("the wasm backend cannot lower structs yet")]
+    StructUnsupported,
     /// `print` was called with other than one argument.
     #[error("`print` takes one argument, but the IR carried {0} (this is a compiler bug)")]
     PrintArity(usize),

@@ -177,6 +177,14 @@ fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridError> {
         Type::Bool => BridgeValueTag::BOOL,
         Type::String => BridgeValueTag::STRING,
         Type::Void => BridgeValueTag::VOID,
+        // Described, not carried. A manifest has a row for every function in
+        // the program, and most of them never cross: rejecting a struct here
+        // would reject a `@Runtime` function that merely *has* one in its
+        // signature and is only ever called from other `@Runtime` code. What a
+        // struct cannot do is travel, and that is enforced where a crossing is
+        // actually emitted — the backend refuses to build one whose signature
+        // mentions a struct.
+        Type::Struct(_) => BridgeValueTag::STRUCT,
         // A verified IR carries no `Error` type — reaching one means the
         // frontend let a broken program through, which is a compiler bug, not
         // something to encode into an artifact.

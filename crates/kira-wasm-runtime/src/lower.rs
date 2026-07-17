@@ -58,6 +58,7 @@ impl<'a> Lowering<'a> {
             Type::Bool => Some(ValType::I32),
             Type::String => Some(ValType::I32),
             Type::Void => None,
+            Type::Struct(_) => return Err(WasmError::StructUnsupported),
             Type::Error => return Err(WasmError::ErrorType),
         })
     }
@@ -123,9 +124,12 @@ impl<'a> Lowering<'a> {
                 self.expr(func, function, *init)?;
                 func.local_set(crate::func::LocalIdx(*local));
             }
-            IrStmt::Assign { local, value } => {
+            IrStmt::Assign { place, value } => {
+                if !place.path.is_empty() {
+                    return Err(WasmError::StructUnsupported);
+                }
                 self.expr(func, function, *value)?;
-                func.local_set(crate::func::LocalIdx(*local));
+                func.local_set(crate::func::LocalIdx(place.local));
             }
             IrStmt::Return { value } => {
                 if let Some(value) = value {
@@ -195,6 +199,9 @@ impl<'a> Lowering<'a> {
             }
             IrExpr::Local(slot) => {
                 func.local_get(crate::func::LocalIdx(*slot));
+            }
+            IrExpr::StructNew { .. } | IrExpr::Field { .. } => {
+                return Err(WasmError::StructUnsupported);
             }
             IrExpr::Unary { op, operand } => {
                 match op {
@@ -378,6 +385,9 @@ impl<'a> Lowering<'a> {
                         let empty = self.literals.intern("");
                         func.addr_const(empty)
                     }
+                    // Analysis rejects printing a struct, so a program that
+                    // type-checked never reaches this.
+                    Type::Struct(_) => return Err(WasmError::StructUnsupported),
                     Type::Error => return Err(WasmError::ErrorType),
                 };
                 func.call(self.runtime.print_str);

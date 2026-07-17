@@ -8,7 +8,7 @@
 //! entrypoint.
 
 use kira_runtime_abi::Execution;
-use kira_semantics_model::Type;
+use kira_semantics_model::{StructId, StructTable, Type};
 use la_arena::{Arena, Idx};
 
 /// The typed binary operators, reused from the analyzer's instruction
@@ -25,6 +25,8 @@ pub type IrExprId = Idx<IrExpr>;
 pub struct IrProgram {
     /// Every function, in a stable order; [`IrProgram::main`] indexes into it.
     pub functions: Vec<IrFunction>,
+    /// Every struct the program declares: the one source of field layout.
+    pub structs: StructTable,
     /// Index of the `@Main` entrypoint within [`IrProgram::functions`].
     pub main: u32,
     /// Arena backing every [`IrExprId`] across all functions.
@@ -67,7 +69,32 @@ impl IrProgram {
             },
             IrExpr::Binary { op, .. } => binop_result(*op),
             IrExpr::Call { result, .. } => *result,
+            IrExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
+            IrExpr::Field { ty, .. } => *ty,
         }
+    }
+
+    /// The type stored at `place`, evaluated in `function`'s scope.
+    ///
+    /// Walks the place's field path through the struct table, so a backend
+    /// choosing storage for an assignment does not re-resolve it.
+    pub fn place_type(&self, function: &IrFunction, place: &IrPlace) -> Type {
+        let mut ty = function
+            .locals
+            .get(place.local as usize)
+            .copied()
+            .unwrap_or(Type::Error);
+        for &index in &place.path {
+            ty = match ty {
+                Type::Struct(id) => self
+                    .structs
+                    .get(id)
+                    .and_then(|def| def.field(index))
+                    .map_or(Type::Error, |field| field.ty),
+                _ => Type::Error,
+            };
+        }
+        ty
     }
 }
 
@@ -150,10 +177,10 @@ pub enum IrStmt {
         /// Value to store.
         init: IrExprId,
     },
-    /// Reassign an existing local slot.
+    /// Write to an existing place: a local slot, or a field path within one.
     Assign {
-        /// Destination slot.
-        local: u32,
+        /// Destination place.
+        place: IrPlace,
         /// Value to store.
         value: IrExprId,
     },
@@ -183,6 +210,18 @@ pub enum IrStmt {
         /// The loop body.
         body: Vec<IrStmt>,
     },
+}
+
+/// A writable location: a local slot, optionally walked into by field indices.
+///
+/// The path is resolved at analysis time, so a backend writes through it
+/// directly — it never rebuilds the enclosing struct to change one field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IrPlace {
+    /// The local slot the place is rooted at.
+    pub local: u32,
+    /// Field indices to walk, outermost first; empty writes the slot itself.
+    pub path: Vec<u32>,
 }
 
 /// An expression in the IR.
@@ -222,6 +261,23 @@ pub enum IrExpr {
         args: Vec<IrExprId>,
         /// The result type (`Void` for `print`).
         result: Type,
+    },
+    /// Construction of a struct value: one initializer per field, in
+    /// declaration order, with defaults already filled in by analysis.
+    StructNew {
+        /// The struct being built.
+        struct_id: StructId,
+        /// One initializer per field, in declaration order.
+        fields: Vec<IrExprId>,
+    },
+    /// A read of one field of a struct value.
+    Field {
+        /// The struct-typed expression being read.
+        base: IrExprId,
+        /// The field's index in declaration order.
+        index: u32,
+        /// The field's type.
+        ty: Type,
     },
 }
 

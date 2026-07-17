@@ -106,6 +106,72 @@ pub enum Instruction {
     Return,
     /// Return unit from the current function.
     ReturnVoid,
+    /// Pop `n` values and push a struct holding them, first field deepest.
+    ///
+    /// The VM is structurally typed: a struct is a tuple of values and this
+    /// carries its own arity, so the module needs no struct table and field
+    /// names never reach the runtime. The compiler resolves names to indices
+    /// and fills every field — defaults included — before emitting this.
+    NewStruct(u16),
+    /// Pop a struct, push a copy of field `n`, and drop the struct.
+    GetField(u16),
+    /// Pop a value and store it into local `slot`, walking `path` field by
+    /// field from the slot's struct. The overwritten value is dropped.
+    ///
+    /// The path is carried in the instruction rather than rebuilt from loads
+    /// and stores so a nested write mutates in place: `b.size.x = 1` costs one
+    /// instruction and no copy of `b`.
+    StoreField {
+        /// The local slot the place is rooted at.
+        slot: u16,
+        /// Field indices to walk, outermost first; never empty.
+        path: FieldPath,
+    },
+}
+
+/// A field path inside a [`Instruction::StoreField`], short enough to encode.
+///
+/// The length is a `u16` on the wire, so a path is capped at `u16::MAX` steps.
+/// The cap lives in the one constructor and the steps are private, which is
+/// what makes [`encode_one`] total: an unencodable path cannot be built, so
+/// encoding never has to truncate one and never has to fail.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FieldPath {
+    steps: Vec<u16>,
+}
+
+/// A field path with more steps than the bytecode format can encode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("a field path of {count} steps exceeds the bytecode format's 65535")]
+pub struct FieldPathTooDeep {
+    /// How many steps were requested.
+    pub count: usize,
+}
+
+impl FieldPath {
+    /// Builds a path, or fails when it is too deep to encode.
+    pub fn new(steps: Vec<u16>) -> Result<Self, FieldPathTooDeep> {
+        if u16::try_from(steps.len()).is_err() {
+            return Err(FieldPathTooDeep { count: steps.len() });
+        }
+        Ok(Self { steps })
+    }
+
+    /// The steps to walk, outermost first.
+    pub fn steps(&self) -> &[u16] {
+        &self.steps
+    }
+
+    /// How many steps the path walks. Always fits in a `u16`.
+    pub fn len(&self) -> u16 {
+        // Guaranteed by the only constructor.
+        self.steps.len() as u16
+    }
+
+    /// Whether the path walks no steps.
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
 }
 
 /// The opcode byte for each instruction. Append-only: never reorder or reuse.
@@ -154,6 +220,9 @@ mod opcode {
     pub const RETURN: u8 = 0x2a;
     pub const RETURN_VOID: u8 = 0x2b;
     pub const CALL_NATIVE: u8 = 0x2c;
+    pub const NEW_STRUCT: u8 = 0x2d;
+    pub const GET_FIELD: u8 = 0x2e;
+    pub const STORE_FIELD: u8 = 0x2f;
 }
 
 /// An error decoding a byte stream back into instructions.
@@ -218,6 +287,22 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::CallNative(id) => {
             out.push(o::CALL_NATIVE);
             out.extend_from_slice(&id.to_le_bytes());
+        }
+        Instruction::NewStruct(fields) => {
+            out.push(o::NEW_STRUCT);
+            out.extend_from_slice(&fields.to_le_bytes());
+        }
+        Instruction::GetField(index) => {
+            out.push(o::GET_FIELD);
+            out.extend_from_slice(&index.to_le_bytes());
+        }
+        Instruction::StoreField { slot, path } => {
+            out.push(o::STORE_FIELD);
+            out.extend_from_slice(&slot.to_le_bytes());
+            out.extend_from_slice(&path.len().to_le_bytes());
+            for step in path.steps() {
+                out.extend_from_slice(&step.to_le_bytes());
+            }
         }
         // Nullary instructions: one exhaustive arm each, so encoding is total
         // by construction (no fallthrough, no panic path).
@@ -313,6 +398,24 @@ impl Cursor<'_> {
             o::JUMP_IF_FALSE => Instruction::JumpIfFalse(u32::from_le_bytes(self.take()?)),
             o::CALL => Instruction::Call(u32::from_le_bytes(self.take()?)),
             o::CALL_NATIVE => Instruction::CallNative(u32::from_le_bytes(self.take()?)),
+            o::NEW_STRUCT => Instruction::NewStruct(u16::from_le_bytes(self.take()?)),
+            o::GET_FIELD => Instruction::GetField(u16::from_le_bytes(self.take()?)),
+            o::STORE_FIELD => {
+                let slot = u16::from_le_bytes(self.take()?);
+                let count = u16::from_le_bytes(self.take()?);
+                let mut steps = Vec::with_capacity(count as usize);
+                for _ in 0..count {
+                    steps.push(u16::from_le_bytes(self.take()?));
+                }
+                // `count` is a `u16`, so the path just read is encodable by
+                // construction and this never takes the error arm — but it is
+                // written as a `Result` rather than an unwrap, because a
+                // decoder never gets to end its caller's process.
+                let path = FieldPath::new(steps).map_err(|_| DecodeError::UnexpectedEnd {
+                    offset: opcode_offset,
+                })?;
+                Instruction::StoreField { slot, path }
+            }
             other => nullary_from_opcode(other).ok_or(DecodeError::UnknownOpcode {
                 opcode: other,
                 offset: opcode_offset,
