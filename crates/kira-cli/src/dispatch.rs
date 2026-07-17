@@ -17,6 +17,7 @@ pub fn dispatch(command: Command, args: &[String]) -> i32 {
         Command::Run => pipeline::run(args),
         Command::Build => pipeline::build(args),
         Command::Check => pipeline::check(args),
+        Command::Live => pipeline::live(args),
         Command::Help => {
             print_usage();
             0

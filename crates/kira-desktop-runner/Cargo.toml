@@ -1,0 +1,26 @@
+[package]
+name = "kira-desktop-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "kira_desktop_runner"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kira-desktop-runner"
+path = "src/main.rs"
+
+[dependencies]
+kira-live.workspace = true
+kira-manifest.workspace = true
+kira-bytecode.workspace = true
+kira-vm-runtime.workspace = true
+kira-runtime-abi.workspace = true
+kira-hybrid-runtime.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
