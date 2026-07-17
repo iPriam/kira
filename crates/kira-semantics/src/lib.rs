@@ -11,6 +11,7 @@
 //! graph, so a caller collects every diagnostic from one `accumulated` call.
 
 mod analyze;
+mod decl;
 mod typeck;
 
 pub use analyze::{Analysis, analyze};
