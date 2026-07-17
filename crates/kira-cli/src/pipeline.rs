@@ -119,11 +119,22 @@ pub fn live(args: &[String]) -> i32 {
             return EXIT_USAGE;
         }
     };
-    let ir = match verified_ir("live", &options.path) {
-        Ok(ir) => ir,
-        Err(code) => return code,
+    let source = std::path::Path::new(&options.path);
+
+    // Compiling is a closure rather than a value, because a watched session
+    // rebuilds: the frontend runs again for every save, and a save that does not
+    // compile yields `None` rather than an error, so the session keeps the app
+    // that is already running.
+    let rebuild = || -> Result<Option<kira_live::Bundle>, crate::live::LiveError> {
+        match verified_ir("live", &options.path) {
+            Ok(ir) => {
+                crate::live::build_bundle(&ir, source, options.runner, options.backend).map(Some)
+            }
+            Err(_) => Ok(None),
+        }
     };
-    match crate::live::session(&ir, std::path::Path::new(&options.path), &options) {
+
+    match crate::supervisor::run(&options, source, &rebuild) {
         Ok(()) => EXIT_OK,
         Err(error) => {
             eprintln!("kirac live: {error}");

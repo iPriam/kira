@@ -19,7 +19,7 @@ use std::time::Duration;
 use kira_manifest::RunnerId;
 
 use crate::bundle::BundleManifest;
-use crate::event::SessionPhase;
+use crate::event::{ReloadMode, SessionPhase};
 use crate::protocol::{
     ClientMessage, PROTOCOL_VERSION, ProtocolError, ServerMessage, read_message, write_message,
 };
@@ -62,6 +62,28 @@ pub trait RunnerHost {
     /// Returns when the entrypoint has started — which for a windowed runner is
     /// not when it has finished.
     fn start(&mut self) -> Result<(), Self::Error>;
+
+    /// Swaps `bundle` into the running process, in place.
+    ///
+    /// The supervisor has already established that the swap is possible — the
+    /// native half is byte-identical, so the process's loaded code is still
+    /// current — and this is the host committing to it. The process, its loaded
+    /// libraries, and anything they hold survive; the bytecode does not.
+    ///
+    /// A host that cannot take a particular swap returns an error, and the
+    /// session relaunches instead. That is the honest answer and it is always
+    /// available: only the host knows what its own live values depend on.
+    fn swap(&mut self, bundle: &Bundle) -> Result<(), Self::Error>;
+
+    /// Whether this host refuses hot patching outright.
+    ///
+    /// A host with the kill switch set answers `true` and every reload
+    /// relaunches, which is what makes it possible to tell whether a bug belongs
+    /// to the hot-patch path or was always there. Defaults to `false`: a host
+    /// that does not care need not say so.
+    fn hotpatch_disabled(&self) -> bool {
+        false
+    }
 }
 
 /// An error running a live session from the runner's side.
@@ -176,40 +198,7 @@ impl RunnerClient {
                 });
             }
         };
-
-        let mut payloads = Vec::with_capacity(manifest.payloads.len());
-        for entry in &manifest.payloads {
-            write_message(
-                &mut self.writer,
-                &ClientMessage::RequestPayload {
-                    name: entry.name.clone(),
-                },
-            )?;
-            match read_message(&mut self.reader)? {
-                ServerMessage::Payload { name, bytes } if name == entry.name => {
-                    payloads.push(Some(bytes));
-                }
-                // A payload arriving under a name that was not asked for would
-                // desync the manifest from the bytes, so it is refused rather
-                // than stored at whatever index happens to be next.
-                ServerMessage::Payload { .. } => {
-                    return Err(ClientError::Unexpected {
-                        while_doing: "downloading payloads",
-                    });
-                }
-                ServerMessage::NoSuchPayload { name } => {
-                    return Err(ClientError::MissingPayload { name });
-                }
-                ServerMessage::Shutdown => return Err(ClientError::ShutDown),
-                _ => {
-                    return Err(ClientError::Unexpected {
-                        while_doing: "downloading payloads",
-                    });
-                }
-            }
-        }
-
-        Ok(Bundle::assemble(manifest, payloads)?)
+        self.download(manifest)
     }
 
     /// Reports that a milestone actually happened.
@@ -255,6 +244,144 @@ impl RunnerClient {
         self.report(SessionPhase::EntrypointStarted)?;
 
         Ok(bundle)
+    }
+
+    /// Stays connected, taking reloads until the server ends the session.
+    ///
+    /// This is what makes a runner a runner rather than a one-shot: the app is
+    /// up, and the process waits to be told that a rebuilt bundle exists.
+    ///
+    /// Each reload is downloaded, staged, swapped, and run — and each of those
+    /// four is reported only after it actually happened. `ReloadApplied` goes out
+    /// after the swap returns; `ReloadCompleted` only after the new code has run
+    /// once without incident, which is why the two are separate. A swap that
+    /// commits and then traps on its first call is not a reload that worked, and
+    /// the session must be able to tell the difference.
+    pub fn serve_reloads<H: RunnerHost>(&mut self, host: &mut H) -> Result<(), ClientError> {
+        loop {
+            let message: ServerMessage = match read_message(&mut self.reader) {
+                Ok(message) => message,
+                // The server went away without saying goodbye. The session is
+                // over either way; a runner outliving its server is an orphan.
+                Err(ProtocolError::Disconnected) => return Ok(()),
+                Err(error) => return Err(error.into()),
+            };
+
+            match message {
+                ServerMessage::Shutdown => return Ok(()),
+                ServerMessage::Reload { mode, manifest } => {
+                    self.apply_reload(host, mode, &manifest)?;
+                }
+                _ => {
+                    return Err(ClientError::Unexpected {
+                        while_doing: "waiting for a reload",
+                    });
+                }
+            }
+        }
+    }
+
+    /// Takes one reload, reporting each step as it actually happens.
+    fn apply_reload<H: RunnerHost>(
+        &mut self,
+        host: &mut H,
+        mode: ReloadMode,
+        manifest: &[u8],
+    ) -> Result<(), ClientError> {
+        // A relaunch is not something a runner does to itself: the supervisor
+        // replaces the process. Being asked to relaunch in place is a server that
+        // has confused the two tiers, and doing nothing quietly would leave it
+        // waiting forever.
+        if mode == ReloadMode::Relaunch {
+            self.restart_required("a runner cannot relaunch itself in place")?;
+            return Ok(());
+        }
+        if host.hotpatch_disabled() {
+            self.restart_required(&format!(
+                "hot patching is disabled for this runner ({}=1)",
+                crate::reload::NO_HOTPATCH_VAR
+            ))?;
+            return Ok(());
+        }
+
+        let manifest = BundleManifest::from_bytes(manifest)?;
+        let bundle = match self.download(manifest) {
+            Ok(bundle) => bundle,
+            // A bundle that will not download is not a bundle to swap to, and
+            // the running app is still fine — so this is a restart requirement,
+            // not a session failure.
+            Err(error) => {
+                self.restart_required(&format!("the rebuilt bundle did not arrive: {error}"))?;
+                return Ok(());
+            }
+        };
+
+        write_message(&mut self.writer, &ClientMessage::ReloadStaged)?;
+
+        if let Err(error) = host.swap(&bundle) {
+            let reason = error.to_string();
+            write_message(&mut self.writer, &ClientMessage::ReloadRejected { reason })?;
+            return Ok(());
+        }
+        write_message(&mut self.writer, &ClientMessage::ReloadApplied)?;
+
+        // The swap is committed; now prove it runs. A trap here is a rejection
+        // of the reload rather than a failure of the session: the supervisor
+        // relaunches, and the developer sees the trap.
+        if let Err(error) = host.start() {
+            let reason = format!("the swapped-in code did not run: {error}");
+            write_message(&mut self.writer, &ClientMessage::ReloadRejected { reason })?;
+            return Ok(());
+        }
+        write_message(&mut self.writer, &ClientMessage::ReloadCompleted)?;
+        Ok(())
+    }
+
+    /// Tells the server this runner must be replaced, and why.
+    fn restart_required(&mut self, reason: &str) -> Result<(), ClientError> {
+        write_message(
+            &mut self.writer,
+            &ClientMessage::RestartRequired {
+                reason: reason.to_owned(),
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Downloads every payload `manifest` names and verifies them against it.
+    fn download(&mut self, manifest: BundleManifest) -> Result<Bundle, ClientError> {
+        let mut payloads = Vec::with_capacity(manifest.payloads.len());
+        for entry in &manifest.payloads {
+            write_message(
+                &mut self.writer,
+                &ClientMessage::RequestPayload {
+                    name: entry.name.clone(),
+                },
+            )?;
+            match read_message(&mut self.reader)? {
+                ServerMessage::Payload { name, bytes } if name == entry.name => {
+                    payloads.push(Some(bytes));
+                }
+                // A payload arriving under a name that was not asked for would
+                // desync the manifest from the bytes, so it is refused rather
+                // than stored at whatever index happens to be next.
+                ServerMessage::Payload { .. } => {
+                    return Err(ClientError::Unexpected {
+                        while_doing: "downloading payloads",
+                    });
+                }
+                ServerMessage::NoSuchPayload { name } => {
+                    return Err(ClientError::MissingPayload { name });
+                }
+                ServerMessage::Shutdown => return Err(ClientError::ShutDown),
+                _ => {
+                    return Err(ClientError::Unexpected {
+                        while_doing: "downloading payloads",
+                    });
+                }
+            }
+        }
+        Ok(Bundle::assemble(manifest, payloads)?)
     }
 
     /// Maps a host step's result, telling the server about a failure first.

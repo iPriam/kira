@@ -200,6 +200,7 @@ impl HostCapabilities for StdoutHost {
 pub struct DesktopHost {
     cache: PathBuf,
     staged: Staged,
+    hotpatch_disabled: bool,
 }
 
 impl DesktopHost {
@@ -208,10 +209,24 @@ impl DesktopHost {
     /// The bundle is written to disk rather than kept in memory because a hybrid
     /// bundle's native half is a dynamic library, and `dlopen` takes a path: the
     /// OS loader is the one consumer here that cannot be handed bytes.
+    ///
+    /// The hot-patch kill switch is read here, once, rather than per reload: an
+    /// environment variable that can change under a running session is a session
+    /// that behaves two ways for one invocation.
     pub fn new(cache: PathBuf) -> DesktopHost {
         DesktopHost {
             cache,
             staged: Staged::Empty,
+            hotpatch_disabled: kira_live::hotpatch_disabled_by_env(),
+        }
+    }
+
+    /// A host with hot patching explicitly on or off, ignoring the environment.
+    pub fn with_hotpatch_disabled(cache: PathBuf, disabled: bool) -> DesktopHost {
+        DesktopHost {
+            cache,
+            staged: Staged::Empty,
+            hotpatch_disabled: disabled,
         }
     }
 
@@ -278,6 +293,32 @@ impl RunnerHost for DesktopHost {
             }
         };
         Ok(())
+    }
+
+    fn swap(&mut self, bundle: &Bundle) -> Result<(), DesktopRunnerError> {
+        // Nothing running means nothing to swap. A hot patch is an edit to a
+        // live process, and there isn't one.
+        if matches!(self.staged, Staged::Empty) {
+            return Err(DesktopRunnerError::OutOfOrder {
+                step: "swap",
+                required: "loaded a bundle",
+            });
+        }
+        // Load and link the new bundle exactly as the first one was. The process
+        // is what survives — this is the same host, with its cache, its loaded
+        // library, and everything native code is holding, taking new code.
+        //
+        // For a hybrid bundle that means a new `Session` over the staged
+        // payloads. The native library's bytes are identical (the supervisor
+        // established that before asking, and refuses the swap otherwise), so
+        // the loader hands back the code that is already mapped rather than
+        // mapping a second copy.
+        self.load(bundle)?;
+        self.link()
+    }
+
+    fn hotpatch_disabled(&self) -> bool {
+        self.hotpatch_disabled
     }
 
     fn start(&mut self) -> Result<(), DesktopRunnerError> {

@@ -1,28 +1,24 @@
-//! `kirac live`: build a bundle, serve it, and run it on a runner.
-//!
-//! A live session is a server and a client, not a rebuild loop. This builds the
-//! program into a `.klbundle`, binds a live server on the loopback, starts the
-//! runner client as a real child process, and reports what the runner actually
-//! reports back. The session is only ready when the runner says it got there.
+//! `kirac live`: what the verb was asked for, and how a bundle gets built.
 //!
 //! ```text
-//! kirac live [runner] <file> [--backend vm|hybrid]
+//! kirac live [runner] <file> [--backend vm|hybrid] [--watch] [--quit-after 5s]
 //! ```
+//!
+//! The session itself — the server, the runner process, the watching, the
+//! reloading — is [`supervisor`](crate::supervisor). This is the parsing and the
+//! building: what the user asked for, and how a program becomes the `.klbundle`
+//! a runner consumes.
 //!
 //! Every runner id parses, because a command that fails to parse cannot explain
 //! itself. A runner this build cannot yet drive gets a precise diagnostic saying
 //! so — never silence, and never a session that claims to have run somewhere it
 //! did not.
 
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use kira_ir::IrProgram;
-use kira_live::{
-    Bundle, BundleError, LiveEvent, LiveServer, NamedPayload, PayloadKind, ServerError,
-};
+use kira_live::{Bundle, BundleError, NamedPayload, PayloadKind, ServerError};
 use kira_manifest::{BuildProfile, RunnerId};
 
 use crate::hybrid;
@@ -69,6 +65,13 @@ pub struct LiveOptions {
     pub path: String,
     /// Which backend builds the bundle.
     pub backend: LiveBackend,
+    /// Whether to watch the program and reload it when it changes.
+    pub watch: bool,
+    /// How long to keep the session up before shutting it down cleanly.
+    ///
+    /// `None` means until the session ends on its own — which, when watching, is
+    /// never: that is the point of watching.
+    pub quit_after: Option<Duration>,
 }
 
 /// A usage error in a `kirac live` invocation.
@@ -83,6 +86,9 @@ pub enum LiveOptionsError {
     /// A `--backend` value named no live backend.
     #[error("unknown backend `{0}`; live sessions run `vm` or `hybrid`")]
     UnknownBackend(String),
+    /// A `--quit-after` value was not a duration.
+    #[error("`{0}` is not a duration; try `5s`, `500ms`, or `2m`")]
+    BadDuration(String),
     /// More than one program was named.
     #[error("expected one path to run, but got both `{first}` and `{second}`")]
     TooManyPaths {
@@ -105,6 +111,8 @@ impl LiveOptions {
         let mut runner = None;
         let mut path: Option<String> = None;
         let mut backend = LiveBackend::Vm;
+        let mut watch = false;
+        let mut quit_after = None;
 
         let mut index = 0;
         while index < args.len() {
@@ -116,6 +124,17 @@ impl LiveOptions {
                         .ok_or_else(|| LiveOptionsError::MissingValue("--backend".to_owned()))?;
                     backend = LiveBackend::parse(value)
                         .ok_or_else(|| LiveOptionsError::UnknownBackend(value.clone()))?;
+                    index += 2;
+                }
+                "--watch" => {
+                    watch = true;
+                    index += 1;
+                }
+                "--quit-after" => {
+                    let value = args
+                        .get(index + 1)
+                        .ok_or_else(|| LiveOptionsError::MissingValue("--quit-after".to_owned()))?;
+                    quit_after = Some(parse_duration(value)?);
                     index += 2;
                 }
                 positional => {
@@ -146,8 +165,32 @@ impl LiveOptions {
             runner: runner.unwrap_or(RunnerId::Desktop),
             path: path.ok_or(LiveOptionsError::NoPath)?,
             backend,
+            watch,
+            quit_after,
         })
     }
+}
+
+/// Parses `5s`, `500ms`, or `2m` into a duration.
+///
+/// Hand-written rather than pulled in: the workspace treats dependencies as
+/// frozen, and three suffixes do not justify one.
+fn parse_duration(value: &str) -> Result<Duration, LiveOptionsError> {
+    let bad = || LiveOptionsError::BadDuration(value.to_owned());
+    // Longest suffix first: `ms` ends in `s`, so checking `s` first would read
+    // `500ms` as 500-something-seconds and silently mean something else.
+    let (number, scale) = if let Some(number) = value.strip_suffix("ms") {
+        (number, 1u64)
+    } else if let Some(number) = value.strip_suffix('s') {
+        (number, 1_000)
+    } else if let Some(number) = value.strip_suffix('m') {
+        (number, 60_000)
+    } else {
+        return Err(bad());
+    };
+    let amount: u64 = number.parse().map_err(|_| bad())?;
+    let millis = amount.checked_mul(scale).ok_or_else(bad)?;
+    Ok(Duration::from_millis(millis))
 }
 
 /// Whether `value` is shaped like a path rather than a bare runner id.
@@ -219,6 +262,14 @@ pub enum LiveError {
         #[source]
         source: std::io::Error,
     },
+    /// The program did not compile, so there was never a session to start.
+    ///
+    /// Only for the *first* build. Once a session is up, a program that stops
+    /// compiling leaves the running app alone: its diagnostics print and the last
+    /// bundle that built keeps running, because killing a working app over a
+    /// half-typed line would make watching worse than not watching.
+    #[error("the program does not compile, so there is nothing to run")]
+    NothingToRun,
     /// An i/o failure reading a built artifact.
     #[error("could not read the built artifact `{path}`: {source}")]
     Io {
@@ -240,55 +291,6 @@ impl LiveError {
     }
 }
 
-/// A runner child process that is killed if the session unwinds.
-///
-/// A live session that fails must not leave an orphan runner holding the app's
-/// window and the bundle's files. Killing on drop makes that structural.
-struct RunnerProcess {
-    child: Child,
-}
-
-impl RunnerProcess {
-    /// Waits for the runner to exit, killing it if it overstays `grace`.
-    ///
-    /// This is what `live.shutdown.finished` means: the runner is gone. Without
-    /// it that event would be a `println!` next to another `println!`, printed
-    /// while the runner was still running — a completion marker for work nobody
-    /// did.
-    ///
-    /// The wait is bounded and ends in a kill, because a runner that will not
-    /// exit must not keep the session's shutdown open forever.
-    fn shutdown(&mut self, grace: Duration) -> std::io::Result<()> {
-        /// How often to re-check whether the runner has exited.
-        const POLL: Duration = Duration::from_millis(5);
-
-        let deadline = Instant::now() + grace;
-        loop {
-            match self.child.try_wait()? {
-                Some(_) => return Ok(()),
-                None if Instant::now() >= deadline => {
-                    self.child.kill()?;
-                    self.child.wait()?;
-                    return Ok(());
-                }
-                None => std::thread::sleep(POLL),
-            }
-        }
-    }
-}
-
-impl Drop for RunnerProcess {
-    fn drop(&mut self) {
-        // Best effort: the process has usually exited through `shutdown` by now,
-        // and a session that unwound before that is already reporting why.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-/// Builds `program` into a live bundle for `runner`.
-///
-/// The bundle is what the runner gets, so this is where a backend choice stops
 /// mattering: a VM bundle and a hybrid bundle are both just payloads by the time
 /// they reach the wire.
 pub fn build_bundle(
@@ -364,81 +366,15 @@ fn named_payload(path: &Path, kind: PayloadKind) -> Result<NamedPayload, LiveErr
     Ok(NamedPayload { name, kind, bytes })
 }
 
-/// Runs a whole live session and returns the process exit code.
-pub fn session(program: &IrProgram, source: &Path, options: &LiveOptions) -> Result<(), LiveError> {
-    if options.runner != RunnerId::Desktop {
-        return Err(LiveError::NoRunnerClient {
-            runner: options.runner.label(),
-        });
-    }
-
-    let bundle = build_bundle(program, source, options.runner, options.backend)?;
-    println!(
-        "{}",
-        LiveEvent::BundleBuilt {
-            payloads: bundle.manifest().payloads.len(),
-        }
-    );
-
-    // Port 0: the OS picks. A fixed port would collide with a previous session
-    // that has not finished dying.
-    let address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
-    let server = LiveServer::bind(address, bundle)?;
-    let bound = server.local_addr()?;
-    println!(
-        "{}",
-        LiveEvent::ServerStarted {
-            address: bound.to_string(),
-        }
-    );
-
-    let mut runner = spawn_runner(options.runner, bound)?;
-
-    // Headless: this runner has no window to present to, so the session's bar is
-    // the entrypoint. That is a real bar, not a lowered one — see the runner's
-    // own docs for why a frame cannot be claimed from this repo.
-    let progress = server.serve_once(true, &mut |event| println!("{event}"))?;
-    debug_assert!(
-        progress.ready(true).is_ok(),
-        "serve_once returns only on a ready session"
-    );
-
-    println!("{}", LiveEvent::ShutdownStarted);
-    // The event below says the runner is gone, so this is where it goes.
-    runner
-        .shutdown(SHUTDOWN_GRACE)
-        .map_err(|source| LiveError::Shutdown { source })?;
-    println!("{}", LiveEvent::ShutdownFinished);
-    Ok(())
-}
-
-/// How long a runner gets to exit on its own before the session kills it.
-///
-/// A headless runner exits as soon as its entrypoint returns, so this is slack
-/// for a process on its way out rather than a wait anyone should notice.
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
-
-/// Starts the runner client for `runner`, pointed at `server`.
-fn spawn_runner(runner: RunnerId, server: SocketAddr) -> Result<RunnerProcess, LiveError> {
-    let path = runner_client_path(runner)?;
-    let child = Command::new(&path)
-        .arg("--server")
-        .arg(server.to_string())
-        .spawn()
-        .map_err(|source| LiveError::Spawn {
-            runner: runner.label(),
-            path,
-            source,
-        })?;
-    Ok(RunnerProcess { child })
-}
-
 /// Where the runner client for `runner` lives.
+///
+/// Crate-visible because the supervisor is what starts it; the path resolution
+/// stays here with the rest of what a live session knows about runners.
 ///
 /// Beside this executable: the runner client ships with the toolchain that built
 /// it, and a session must never pick up a runner from the PATH that came from a
 /// different build than the bundle it is about to serve.
-fn runner_client_path(runner: RunnerId) -> Result<PathBuf, LiveError> {
+pub(crate) fn runner_client_path(runner: RunnerId) -> Result<PathBuf, LiveError> {
     let current = std::env::current_exe().map_err(LiveError::Locate)?;
     let directory = current.parent().unwrap_or(Path::new("."));
     let name = match runner {

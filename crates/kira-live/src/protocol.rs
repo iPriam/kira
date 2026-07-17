@@ -22,12 +22,19 @@
 //!
 //! The runner reports its own milestones because only the runner knows them. The
 //! server never infers `BundleLoaded` from having sent the bytes.
+//!
+//! [`frame`] is how a message gets on and off the socket; this module is what
+//! the messages *are*.
 
-use std::io::{Read, Write};
+pub mod frame;
 
 use kira_manifest::RunnerId;
 
-use crate::event::SessionPhase;
+use crate::event::{ReloadMode, SessionPhase};
+
+pub use frame::{MAX_FRAME_LEN, read_message, write_message};
+
+use frame::{Reader, write_bytes};
 
 /// The magic that opens a `Hello`, identifying the protocol on the wire.
 pub const MAGIC: [u8; 4] = *b"KLP1";
@@ -38,13 +45,6 @@ pub const MAGIC: [u8; 4] = *b"KLP1";
 /// not bump it: an older peer rejects an unknown tag cleanly, which is the
 /// behavior the tag space is append-only for.
 pub const PROTOCOL_VERSION: u16 = 1;
-
-/// The largest frame body this build will read, in bytes.
-///
-/// A frame carries one payload, and a native library is genuinely large, so this
-/// is generous. It exists because the length prefix is attacker-controlled: it
-/// bounds what a peer can make this process try to allocate.
-pub const MAX_FRAME_LEN: u32 = 512 * 1024 * 1024;
 
 /// A message from a runner to the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +75,26 @@ pub enum ClientMessage {
     },
     /// The runner is done and closing down cleanly.
     Goodbye,
+    /// The runner loaded a rebuilt bundle but has not swapped to it yet.
+    ReloadStaged,
+    /// The runner swapped to the staged bundle.
+    ReloadApplied,
+    /// The swapped-in code ran without incident.
+    ReloadCompleted,
+    /// The runner will not take this hot patch, and why.
+    ///
+    /// Distinct from [`ClientMessage::RestartRequired`] by whose fault it is: a
+    /// rejection is the runner declining an edit its live values cannot survive,
+    /// where a restart requirement is the bundle itself being unswappable.
+    ReloadRejected {
+        /// Why, in the runner's words.
+        reason: String,
+    },
+    /// The runner cannot take this bundle in place at all; it must be relaunched.
+    RestartRequired {
+        /// Why, in the runner's words.
+        reason: String,
+    },
 }
 
 /// A message from the server to a runner.
@@ -104,6 +124,19 @@ pub enum ServerMessage {
     },
     /// The server is ending the session; the runner should shut down cleanly.
     Shutdown,
+    /// A rebuilt bundle exists, and the server is asking the runner to take it
+    /// in place.
+    ///
+    /// Carries the new manifest, not the payloads: the runner asks for the
+    /// payloads it needs by name, the same way it did for the first bundle. The
+    /// mode is always [`ReloadMode::HotPatch`] — a relaunch is not something a
+    /// runner does, it is something done to it.
+    Reload {
+        /// The tier the server is attempting.
+        mode: ReloadMode,
+        /// The rebuilt bundle's encoded `KLB1` manifest.
+        manifest: Vec<u8>,
+    },
 }
 
 /// An error reading or writing a protocol message.
@@ -139,6 +172,9 @@ pub enum ProtocolError {
     /// A phase byte named no milestone this build knows.
     #[error("unknown session phase `{0}` in live protocol message")]
     UnknownPhase(u8),
+    /// A reload-mode byte named no tier this build knows.
+    #[error("unknown reload mode `{0}` in live protocol message")]
+    UnknownReloadMode(u8),
     /// The peer speaks a version this build does not.
     #[error("live protocol version mismatch: peer speaks {theirs}, this build speaks {ours}")]
     VersionMismatch {
@@ -158,6 +194,11 @@ mod client_tag {
     pub const PROGRESS: u8 = 3;
     pub const FAILED: u8 = 4;
     pub const GOODBYE: u8 = 5;
+    pub const RELOAD_STAGED: u8 = 6;
+    pub const RELOAD_APPLIED: u8 = 7;
+    pub const RELOAD_COMPLETED: u8 = 8;
+    pub const RELOAD_REJECTED: u8 = 9;
+    pub const RESTART_REQUIRED: u8 = 10;
 }
 
 /// The wire tags for server messages; append-only for the same reason.
@@ -167,6 +208,7 @@ mod server_tag {
     pub const PAYLOAD: u8 = 2;
     pub const NO_SUCH_PAYLOAD: u8 = 3;
     pub const SHUTDOWN: u8 = 4;
+    pub const RELOAD: u8 = 5;
 }
 
 /// A message that can go on the wire.
@@ -199,22 +241,30 @@ impl Message for ClientMessage {
             }
             Self::Progress { phase } => {
                 out.push(client_tag::PROGRESS);
-                out.push(phase_byte(*phase));
+                out.push(phase.as_byte());
             }
             Self::Failed { reason } => {
                 out.push(client_tag::FAILED);
                 write_bytes(&mut out, reason.as_bytes());
             }
             Self::Goodbye => out.push(client_tag::GOODBYE),
+            Self::ReloadStaged => out.push(client_tag::RELOAD_STAGED),
+            Self::ReloadApplied => out.push(client_tag::RELOAD_APPLIED),
+            Self::ReloadCompleted => out.push(client_tag::RELOAD_COMPLETED),
+            Self::ReloadRejected { reason } => {
+                out.push(client_tag::RELOAD_REJECTED);
+                write_bytes(&mut out, reason.as_bytes());
+            }
+            Self::RestartRequired { reason } => {
+                out.push(client_tag::RESTART_REQUIRED);
+                write_bytes(&mut out, reason.as_bytes());
+            }
         }
         out
     }
 
     fn decode(body: &[u8]) -> Result<Self, ProtocolError> {
-        let mut reader = Reader {
-            bytes: body,
-            offset: 0,
-        };
+        let mut reader = Reader::new(body);
         let tag = reader.take(1)?[0];
         match tag {
             client_tag::HELLO => {
@@ -236,13 +286,22 @@ impl Message for ClientMessage {
             client_tag::PROGRESS => {
                 let raw = reader.take(1)?[0];
                 Ok(Self::Progress {
-                    phase: phase_from_byte(raw).ok_or(ProtocolError::UnknownPhase(raw))?,
+                    phase: SessionPhase::from_byte(raw).ok_or(ProtocolError::UnknownPhase(raw))?,
                 })
             }
             client_tag::FAILED => Ok(Self::Failed {
                 reason: reader.read_string()?,
             }),
             client_tag::GOODBYE => Ok(Self::Goodbye),
+            client_tag::RELOAD_STAGED => Ok(Self::ReloadStaged),
+            client_tag::RELOAD_APPLIED => Ok(Self::ReloadApplied),
+            client_tag::RELOAD_COMPLETED => Ok(Self::ReloadCompleted),
+            client_tag::RELOAD_REJECTED => Ok(Self::ReloadRejected {
+                reason: reader.read_string()?,
+            }),
+            client_tag::RESTART_REQUIRED => Ok(Self::RestartRequired {
+                reason: reader.read_string()?,
+            }),
             other => Err(ProtocolError::UnknownTag(other)),
         }
     }
@@ -270,15 +329,17 @@ impl Message for ServerMessage {
                 write_bytes(&mut out, name.as_bytes());
             }
             Self::Shutdown => out.push(server_tag::SHUTDOWN),
+            Self::Reload { mode, manifest } => {
+                out.push(server_tag::RELOAD);
+                out.push(mode.as_byte());
+                write_bytes(&mut out, manifest);
+            }
         }
         out
     }
 
     fn decode(body: &[u8]) -> Result<Self, ProtocolError> {
-        let mut reader = Reader {
-            bytes: body,
-            offset: 0,
-        };
+        let mut reader = Reader::new(body);
         let tag = reader.take(1)?[0];
         match tag {
             server_tag::WELCOME => Ok(Self::Welcome {
@@ -296,130 +357,17 @@ impl Message for ServerMessage {
                 name: reader.read_string()?,
             }),
             server_tag::SHUTDOWN => Ok(Self::Shutdown),
+            server_tag::RELOAD => {
+                let raw = reader.take(1)?[0];
+                let mode =
+                    ReloadMode::from_byte(raw).ok_or(ProtocolError::UnknownReloadMode(raw))?;
+                Ok(Self::Reload {
+                    mode,
+                    manifest: reader.read_len_prefixed()?.to_vec(),
+                })
+            }
             other => Err(ProtocolError::UnknownTag(other)),
         }
-    }
-}
-
-/// Writes one message as a length-prefixed frame and flushes it.
-///
-/// Flushed here rather than left to the caller: every message in this protocol
-/// is something the peer is already blocked waiting for, so a buffered write is
-/// a deadlock.
-pub fn write_message<W: Write, M: Message>(
-    writer: &mut W,
-    message: &M,
-) -> Result<(), ProtocolError> {
-    let body = message.encode();
-    let len =
-        u32::try_from(body.len()).map_err(|_| ProtocolError::FrameTooLarge { len: u32::MAX })?;
-    if len > MAX_FRAME_LEN {
-        return Err(ProtocolError::FrameTooLarge { len });
-    }
-    writer.write_all(&len.to_le_bytes())?;
-    writer.write_all(&body)?;
-    writer.flush()?;
-    Ok(())
-}
-
-/// Reads one length-prefixed frame and decodes the message in it.
-pub fn read_message<R: Read, M: Message>(reader: &mut R) -> Result<M, ProtocolError> {
-    let mut len_bytes = [0u8; 4];
-    match reader.read_exact(&mut len_bytes) {
-        Ok(()) => {}
-        // A clean close between frames is the peer leaving, not a broken stream.
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Err(ProtocolError::Disconnected);
-        }
-        Err(error) => return Err(ProtocolError::Io(error)),
-    }
-    let len = u32::from_le_bytes(len_bytes);
-    if len > MAX_FRAME_LEN {
-        // Refused before allocating: the length is the peer's claim, not a fact.
-        return Err(ProtocolError::FrameTooLarge { len });
-    }
-    let mut body = vec![0u8; len as usize];
-    reader
-        .read_exact(&mut body)
-        .map_err(|error| match error.kind() {
-            std::io::ErrorKind::UnexpectedEof => ProtocolError::Truncated,
-            _ => ProtocolError::Io(error),
-        })?;
-    M::decode(&body)
-}
-
-/// The wire byte for a session phase.
-///
-/// Append-only, and pinned by a test: a runner built from an older checkout
-/// reports milestones with these bytes.
-fn phase_byte(phase: SessionPhase) -> u8 {
-    match phase {
-        SessionPhase::Connected => 0,
-        SessionPhase::BundleSent => 1,
-        SessionPhase::BundleReceived => 2,
-        SessionPhase::BundleLoaded => 3,
-        SessionPhase::BundleLinked => 4,
-        SessionPhase::EntrypointStarted => 5,
-        SessionPhase::FramePresented => 6,
-    }
-}
-
-/// The phase a wire byte names, or `None` if this build knows no such phase.
-fn phase_from_byte(byte: u8) -> Option<SessionPhase> {
-    match byte {
-        0 => Some(SessionPhase::Connected),
-        1 => Some(SessionPhase::BundleSent),
-        2 => Some(SessionPhase::BundleReceived),
-        3 => Some(SessionPhase::BundleLoaded),
-        4 => Some(SessionPhase::BundleLinked),
-        5 => Some(SessionPhase::EntrypointStarted),
-        6 => Some(SessionPhase::FramePresented),
-        _ => None,
-    }
-}
-
-fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-    out.extend_from_slice(bytes);
-}
-
-/// A bounds-checked cursor over a frame body.
-struct Reader<'a> {
-    bytes: &'a [u8],
-    offset: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8], ProtocolError> {
-        let end = self.offset.checked_add(n).ok_or(ProtocolError::Truncated)?;
-        let slice = self
-            .bytes
-            .get(self.offset..end)
-            .ok_or(ProtocolError::Truncated)?;
-        self.offset = end;
-        Ok(slice)
-    }
-
-    fn read_u16(&mut self) -> Result<u16, ProtocolError> {
-        let bytes = self.take(2)?;
-        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
-    }
-
-    fn read_u32(&mut self) -> Result<u32, ProtocolError> {
-        let bytes = self.take(4)?;
-        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-    }
-
-    fn read_len_prefixed(&mut self) -> Result<&'a [u8], ProtocolError> {
-        let len = self.read_u32()? as usize;
-        self.take(len)
-    }
-
-    fn read_string(&mut self) -> Result<String, ProtocolError> {
-        let bytes = self.read_len_prefixed()?;
-        core::str::from_utf8(bytes)
-            .map(str::to_owned)
-            .map_err(|_| ProtocolError::InvalidString)
     }
 }
 
@@ -437,6 +385,15 @@ mod tests {
                 reason: "dlopen failed".to_owned(),
             },
             ClientMessage::Goodbye,
+            ClientMessage::ReloadStaged,
+            ClientMessage::ReloadApplied,
+            ClientMessage::ReloadCompleted,
+            ClientMessage::ReloadRejected {
+                reason: "a live closure lost its function".to_owned(),
+            },
+            ClientMessage::RestartRequired {
+                reason: "the native library changed".to_owned(),
+            },
         ];
         for runner in RunnerId::all() {
             messages.push(ClientMessage::Hello {
@@ -474,6 +431,14 @@ mod tests {
                 name: "absent".to_owned(),
             },
             ServerMessage::Shutdown,
+            ServerMessage::Reload {
+                mode: ReloadMode::HotPatch,
+                manifest: b"KLB1 rebuilt".to_vec(),
+            },
+            ServerMessage::Reload {
+                mode: ReloadMode::Relaunch,
+                manifest: b"KLB1 rebuilt".to_vec(),
+            },
         ]
     }
 
@@ -645,25 +610,6 @@ mod tests {
         ));
     }
 
-    /// The phase bytes are the wire contract with runners built from other
-    /// checkouts, so they are pinned literally rather than left to the match arm.
-    #[test]
-    fn phase_wire_bytes_are_pinned() {
-        let expected = [
-            (SessionPhase::Connected, 0u8),
-            (SessionPhase::BundleSent, 1),
-            (SessionPhase::BundleReceived, 2),
-            (SessionPhase::BundleLoaded, 3),
-            (SessionPhase::BundleLinked, 4),
-            (SessionPhase::EntrypointStarted, 5),
-            (SessionPhase::FramePresented, 6),
-        ];
-        for (phase, byte) in expected {
-            assert_eq!(phase_byte(phase), byte, "wire byte for {phase:?}");
-            assert_eq!(phase_from_byte(byte), Some(phase));
-        }
-    }
-
     /// The message tags are equally a contract; a renumber breaks every runner.
     #[test]
     fn message_tags_are_pinned() {
@@ -673,10 +619,37 @@ mod tests {
         assert_eq!(client_tag::PROGRESS, 3);
         assert_eq!(client_tag::FAILED, 4);
         assert_eq!(client_tag::GOODBYE, 5);
+        assert_eq!(client_tag::RELOAD_STAGED, 6);
+        assert_eq!(client_tag::RELOAD_APPLIED, 7);
+        assert_eq!(client_tag::RELOAD_COMPLETED, 8);
+        assert_eq!(client_tag::RELOAD_REJECTED, 9);
+        assert_eq!(client_tag::RESTART_REQUIRED, 10);
         assert_eq!(server_tag::WELCOME, 0);
         assert_eq!(server_tag::MANIFEST, 1);
         assert_eq!(server_tag::PAYLOAD, 2);
         assert_eq!(server_tag::NO_SUCH_PAYLOAD, 3);
         assert_eq!(server_tag::SHUTDOWN, 4);
+        assert_eq!(server_tag::RELOAD, 5);
+    }
+
+    /// The reload tiers are a wire contract too: a runner from another checkout
+    /// reads these bytes to know which tier it is being asked for, and reading
+    /// the wrong one means swapping code into a process that cannot take it.
+    #[test]
+    fn reload_mode_wire_bytes_are_pinned() {
+        assert_eq!(ReloadMode::HotPatch.as_byte(), 0);
+        assert_eq!(ReloadMode::Relaunch.as_byte(), 1);
+        assert_eq!(ReloadMode::from_byte(0), Some(ReloadMode::HotPatch));
+        assert_eq!(ReloadMode::from_byte(1), Some(ReloadMode::Relaunch));
+        assert_eq!(ReloadMode::from_byte(2), None);
+    }
+
+    #[test]
+    fn an_unknown_reload_mode_is_rejected() {
+        let body = [server_tag::RELOAD, 99, 0, 0, 0, 0];
+        assert!(matches!(
+            ServerMessage::decode(&body),
+            Err(ProtocolError::UnknownReloadMode(99))
+        ));
     }
 }
