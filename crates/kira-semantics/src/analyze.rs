@@ -9,10 +9,10 @@ use std::collections::HashMap;
 
 use kira_core::Interner;
 use kira_diagnostics::{Diagnostic, Label, Severity};
-use kira_semantics_model::Type;
 use kira_semantics_model::hir::{
     FuncId, HirFunction, HirLocal, HirPlace, HirProgram, HirStmt, HirStmtId, LocalId,
 };
+use kira_semantics_model::{StructId, Type};
 use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::{Block, Expr, ExprId, Function, Item, Stmt};
@@ -24,6 +24,15 @@ pub struct Analysis {
     pub program: HirProgram,
     /// Diagnostics discovered during analysis.
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// One declared function plus the struct it is a method of, if any.
+#[derive(Clone, Copy)]
+pub(crate) struct Callable<'a> {
+    /// The struct whose method this is; `None` for a free function.
+    pub(crate) receiver: Option<StructId>,
+    /// The declaration as written.
+    pub(crate) function: &'a Function,
 }
 
 /// The signature of a user function, resolved before bodies are checked so
@@ -65,6 +74,12 @@ pub(crate) struct FnCtx {
     pub(crate) locals: Vec<HirLocal>,
     pub(crate) scopes: Vec<HashMap<String, LocalId>>,
     pub(crate) return_type: Type,
+    /// The struct this body is a method of, when it is one.
+    ///
+    /// A method's body may name a field bare — `return value + step` rather
+    /// than `self.step` — so a name that resolves to no local is tried against
+    /// this struct's fields before it is called undefined.
+    pub(crate) receiver: Option<StructId>,
 }
 
 impl FnCtx {
@@ -73,6 +88,7 @@ impl FnCtx {
             locals: Vec::new(),
             scopes: vec![HashMap::new()],
             return_type,
+            receiver: None,
         }
     }
 
@@ -127,20 +143,13 @@ impl<'a> Analyzer<'a> {
 
     fn run(mut self) -> Analysis {
         self.collect_structs();
-        self.collect_signatures();
+        let callables = self.callables();
+        self.collect_signatures(&callables);
         self.check_main();
-        let functions: Vec<&Function> = self
-            .tree
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                Item::Function(function) => Some(function),
-                Item::Struct(_) | Item::Unsupported(_) => None,
-            })
-            .collect();
-        // Analyze bodies in declaration order.
-        for (index, function) in functions.iter().enumerate() {
-            let hir_function = self.analyze_function(FuncId(index as u32), function);
+        // Bodies are analyzed in the same order the signatures were collected,
+        // which is what makes a `FuncId` index both.
+        for (index, callable) in callables.iter().enumerate() {
+            let hir_function = self.analyze_function(FuncId(index as u32), callable);
             self.program.functions.push(hir_function);
         }
         Analysis {
@@ -149,18 +158,54 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn collect_signatures(&mut self) {
-        let mut main_seen = false;
+    /// Every function the program declares, in one stable order: a free
+    /// function where it was written, and a struct's methods where the struct
+    /// was.
+    ///
+    /// A method is an ordinary function that happens to have a receiver, so it
+    /// takes a slot in the same table. Everything downstream of analysis — the
+    /// IR, both compilers, the hybrid manifest — sees a flat list of functions
+    /// and never learns that some of them were written inside a struct.
+    fn callables(&self) -> Vec<Callable<'a>> {
+        let mut callables = Vec::new();
         for item in &self.tree.items {
-            let Item::Function(function) = item else {
-                continue;
-            };
-            let name = self.interner.resolve(function.name).to_owned();
-            let params = function
-                .params
-                .iter()
-                .map(|param| self.resolve_type(param.ty.name, param.ty.span))
-                .collect();
+            match item {
+                Item::Function(function) => callables.push(Callable {
+                    receiver: None,
+                    function,
+                }),
+                Item::Struct(declaration) => {
+                    let owner = self
+                        .program
+                        .structs
+                        .lookup(self.interner.resolve(declaration.name));
+                    for method in &declaration.methods {
+                        callables.push(Callable {
+                            receiver: owner,
+                            function: method,
+                        });
+                    }
+                }
+                Item::Unsupported(_) => {}
+            }
+        }
+        callables
+    }
+
+    fn collect_signatures(&mut self, callables: &[Callable<'a>]) {
+        let mut main_seen = false;
+        for callable in callables {
+            let function = callable.function;
+            let name = self.callable_name(*callable);
+            // A method's receiver is parameter 0, so its signature carries the
+            // struct type ahead of what was written.
+            let mut params: Vec<Type> = callable.receiver.map(Type::Struct).into_iter().collect();
+            params.extend(
+                function
+                    .params
+                    .iter()
+                    .map(|param| self.resolve_type(param.ty.name, param.ty.span)),
+            );
             let return_type = match &function.return_type {
                 Some(type_ref) => self.resolve_type(type_ref.name, type_ref.span),
                 None => Type::Void,
@@ -170,7 +215,10 @@ impl<'a> Analyzer<'a> {
                 self.emit(
                     function.name_span,
                     "KSEM003",
-                    format!("function `{name}` is already defined"),
+                    match callable.receiver {
+                        Some(_) => format!("`{name}` is already defined"),
+                        None => format!("function `{name}` is already defined"),
+                    },
                 );
             } else {
                 self.sig_index.insert(name.clone(), id);
@@ -191,6 +239,23 @@ impl<'a> Analyzer<'a> {
                 name_span: function.name_span,
                 is_main,
             });
+        }
+    }
+
+    /// The name a callable is known by.
+    ///
+    /// A method is qualified with its struct (`Point.sum`), which is what keeps
+    /// two structs' methods of the same name apart and keeps a method from
+    /// colliding with a free function — `.` cannot appear in an identifier, so
+    /// no user name can collide with a qualified one.
+    pub(crate) fn callable_name(&self, callable: Callable<'_>) -> String {
+        let written = self.interner.resolve(callable.function.name);
+        match callable.receiver {
+            Some(id) => format!(
+                "{}.{written}",
+                self.program.structs.type_name(Type::Struct(id))
+            ),
+            None => written.to_owned(),
         }
     }
 
@@ -219,16 +284,25 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn analyze_function(&mut self, id: FuncId, function: &Function) -> HirFunction {
+    fn analyze_function(&mut self, id: FuncId, callable: &Callable<'a>) -> HirFunction {
+        let function = callable.function;
         let sig_return = self.sigs[id.0 as usize].return_type;
         let mut ctx = FnCtx::new(sig_return);
-        // Parameters become the first locals.
+        // A method's receiver is local 0, named `self`. It is immutable: a
+        // method receives a copy like any other by-value parameter, so writing
+        // to it would change nothing the caller could see, and letting it look
+        // like it might would be worse than refusing.
+        if let Some(owner) = callable.receiver {
+            ctx.declare("self", Type::Struct(owner), false);
+            ctx.receiver = Some(owner);
+        }
+        // Parameters become the next locals.
         for param in &function.params {
             let ty = self.resolve_type(param.ty.name, param.ty.span);
             let name = self.interner.resolve(param.name).to_owned();
             ctx.declare(&name, ty, false);
         }
-        let param_count = function.params.len() as u32;
+        let param_count = function.params.len() as u32 + u32::from(callable.receiver.is_some());
         let body = self.analyze_block(&mut ctx, &function.body);
         // Definite-return check: a non-Void function must return on every
         // control path (the reference rejects this too). `Error` returns are
@@ -237,15 +311,15 @@ impl<'a> Analyzer<'a> {
             && sig_return != Type::Error
             && !self.body_definitely_returns(&body)
         {
-            let name = self.interner.resolve(function.name).to_owned();
+            let name = self.callable_name(*callable);
             self.emit(
                 function.name_span,
                 "KSEM033",
-                format!("function `{name}` may finish without returning a value"),
+                format!("`{name}` may finish without returning a value"),
             );
         }
         HirFunction {
-            name: self.interner.resolve(function.name).to_owned(),
+            name: self.callable_name(*callable),
             param_count,
             return_type: sig_return,
             locals: ctx.locals,
@@ -478,6 +552,18 @@ impl<'a> Analyzer<'a> {
                 None
             }
         }
+    }
+
+    /// Whether `base_ty` has a field named `name`, reporting nothing.
+    ///
+    /// For a diagnostic that needs to know, not for resolving one.
+    pub(crate) fn resolve_field_quietly(&self, base_ty: Type, name: &str) -> bool {
+        matches!(base_ty, Type::Struct(id)
+            if self
+                .program
+                .structs
+                .get(id)
+                .is_some_and(|def| def.field_index(name).is_some()))
     }
 
     /// Resolves `name` as a field of `base_ty`, returning its index and type.

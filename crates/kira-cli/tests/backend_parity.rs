@@ -936,3 +936,73 @@ function main() {
     );
     assert_eq!(output, "14\n");
 }
+
+#[test]
+fn struct_methods_agree() {
+    // A method is an ordinary call with the receiver as argument 0 — that is
+    // the whole implementation, and it is why no backend needed changing. This
+    // is what says the claim is true rather than plausible.
+    let output = assert_parity(
+        r#"
+struct Point {
+    var x: Int
+    var y: Int
+
+    function sum() -> Int { return self.x + self.y }
+    function scale(k: Int) -> Point { return Point { x = self.x * k, y = self.y * k } }
+    function larger() -> Int { if self.x > self.y { return self.x } return self.y }
+}
+
+struct Counter {
+    let step: Int = 1
+
+    // A method may name a field bare, without `self.`.
+    function next(value: Int) -> Int { return value + step }
+}
+
+@Main
+function main() {
+    let p = Point { x = 3, y = 4 }
+    print(p.sum())
+    // Chained: the result of a method is a value like any other.
+    print(p.scale(10).sum())
+    print(p.larger())
+    let c = Counter {}
+    print(c.next(41))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "7\n70\n4\n42\n");
+}
+
+#[test]
+fn a_method_receives_its_receiver_by_value() {
+    // The receiver is a copy, so writing to it inside the method is invisible
+    // outside — the same rule an ordinary by-value parameter follows.
+    let output = assert_parity(
+        r#"
+struct Tally {
+    var n: Int
+    var name: String
+
+    function bumped() -> Int {
+        var local = self
+        local.n = 999
+        local.name = "changed"
+        return local.n
+    }
+}
+
+@Main
+function main() {
+    let t = Tally { n = 1, name = "kept" }
+    print(t.bumped())
+    print(t.n)
+    print(t.name)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "999\n1\nkept\n");
+}

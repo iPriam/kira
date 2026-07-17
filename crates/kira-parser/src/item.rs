@@ -147,12 +147,14 @@ impl Parser<'_> {
             self.bump();
         }
         let mut fields = Vec::new();
+        let mut methods = Vec::new();
         if !self.expect(TokenKind::LBrace) {
             let span = Span::from_bounds(start.start, self.previous_end());
             return Some(StructDecl {
                 name,
                 name_span,
                 fields,
+                methods,
                 span,
             });
         }
@@ -174,25 +176,8 @@ impl Parser<'_> {
                     }
                 }
                 TokenKind::Function => {
-                    // Methods are language surface this compiler does not model
-                    // yet. Skip the whole member so the struct's fields still
-                    // parse, and say so once, on the method itself.
-                    let span = self.current().span;
-                    self.error(
-                        span,
-                        "KPAR008",
-                        "struct methods are not supported yet; this struct's stored \
-                         members still parse",
-                    );
-                    self.bump();
-                    while !self.at_eof()
-                        && !self.at(TokenKind::LBrace)
-                        && !self.at(TokenKind::RBrace)
-                    {
-                        self.bump();
-                    }
-                    if self.at(TokenKind::LBrace) {
-                        self.skip_balanced(TokenKind::LBrace, TokenKind::RBrace);
+                    if let Some(method) = self.parse_function(false, Execution::Inherited) {
+                        methods.push(method);
                     }
                 }
                 kind => {
@@ -201,7 +186,8 @@ impl Parser<'_> {
                         span,
                         "KPAR009",
                         format!(
-                            "expected `let` or `var` to start a struct member, found {}",
+                            "expected `let`, `var`, or `function` to start a struct member, \
+                             found {}",
                             kind.describe()
                         ),
                     );
@@ -219,6 +205,7 @@ impl Parser<'_> {
             name,
             name_span,
             fields,
+            methods,
             span,
         })
     }

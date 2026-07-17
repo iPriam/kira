@@ -80,6 +80,11 @@ pub struct StructDecl {
     pub name_span: Span,
     /// The stored members, in declaration order.
     pub fields: Vec<FieldDecl>,
+    /// The methods declared in the body, in declaration order.
+    ///
+    /// A method is an ordinary [`Function`] here; what makes it a method is
+    /// where it was written. Analysis is what gives it its receiver.
+    pub methods: Vec<Function>,
     /// Span covering the whole declaration.
     pub span: Span,
 }
@@ -332,6 +337,19 @@ pub enum Expr {
         /// Span covering the whole literal.
         span: Span,
     },
+    /// A method call (`p.sum()`).
+    MethodCall {
+        /// The expression the method is called on.
+        receiver: ExprId,
+        /// The method's name.
+        method: Symbol,
+        /// Span of the method name.
+        method_span: Span,
+        /// The argument expressions, in order, not counting the receiver.
+        args: Vec<ExprId>,
+        /// Span covering the whole call.
+        span: Span,
+    },
     /// A field read (`p.x`).
     Field {
         /// The expression the field is read from.
@@ -380,6 +398,7 @@ impl Expr {
             | Expr::Binary { span, .. }
             | Expr::Call { span, .. }
             | Expr::StructLit { span, .. }
+            | Expr::MethodCall { span, .. }
             | Expr::Field { span, .. }
             | Expr::Error { span } => *span,
         }

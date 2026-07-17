@@ -817,3 +817,34 @@ function main() {
 "#,
     );
 }
+
+#[test]
+fn struct_methods_agree() {
+    assert_parity(
+        r#"
+struct Point {
+    var x: Int
+    var y: Int
+
+    function sum() -> Int { return self.x + self.y }
+    function scale(k: Int) -> Point { return Point { x = self.x * k, y = self.y * k } }
+}
+
+struct Counter {
+    let step: Int = 1
+
+    function next(value: Int) -> Int { return value + step }
+}
+
+@Main
+function main() {
+    let p = Point { x = 3, y = 4 }
+    print(p.sum())
+    print(p.scale(10).sum())
+    let c = Counter {}
+    print(c.next(41))
+    return
+}
+"#,
+    );
+}

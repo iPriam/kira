@@ -72,6 +72,20 @@ impl Parser<'_> {
             let field = self.intern_span(field_span);
             self.bump();
             let base_span = self.tree.expr(base).span();
+            // `p.sum()` is a method call; `p.x` is a field read. The `(` is the
+            // whole difference, so it is what decides.
+            if self.at(TokenKind::LParen) {
+                let args = self.parse_call_args();
+                let span = Span::from_bounds(base_span.start, self.previous_end());
+                base = self.tree.add_expr(Expr::MethodCall {
+                    receiver: base,
+                    method: field,
+                    method_span: field_span,
+                    args,
+                    span,
+                });
+                continue;
+            }
             let span = Span::from_bounds(base_span.start, field_span.end());
             base = self.tree.add_expr(Expr::Field {
                 base,
