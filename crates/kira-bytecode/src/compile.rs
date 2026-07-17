@@ -418,6 +418,28 @@ impl FnCompiler<'_> {
                 // one value: the statement that discards it pops this.
                 self.code.push(Instruction::ConstVoid);
             }
+            IrExpr::EnumNew { tag, payload, .. } => {
+                let (tag, payload) = (*tag, *payload);
+                let tag = u16::try_from(tag).map_err(|_| CompileError::TooManyFields {
+                    function: self.function_name.to_owned(),
+                    count: tag as usize,
+                })?;
+                // The payload, when present, is pushed first so it is on top of
+                // the stack for `NewEnum` to take, exactly as a struct's fields
+                // are pushed before `NewStruct`.
+                if let Some(payload) = payload {
+                    self.compile_expr(payload)?;
+                }
+                self.code.push(Instruction::NewEnum {
+                    tag,
+                    has_payload: payload.is_some(),
+                });
+            }
+            IrExpr::EnumTag { value } => {
+                let value = *value;
+                self.compile_expr(value)?;
+                self.code.push(Instruction::EnumTag);
+            }
             IrExpr::Call { callee, args, .. } => {
                 let callee = *callee;
                 let args = args.clone();

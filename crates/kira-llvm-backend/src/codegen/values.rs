@@ -74,6 +74,10 @@ impl Codegen<'_> {
                     c"array.copy",
                 ))
             }
+            // An enum box clones through one generic helper: the box carries a
+            // flag saying whether its payload is an owned string, so the backend
+            // needs no per-variant leaf.
+            Type::Enum(_) => Ok(self.call(self.runtime.enum_clone, &mut [value], c"enum.copy")),
             // `owns_heap` is only true for the cases above.
             _ => Err(crate::LlvmError::Unsupported("a copy of an unowned value")),
         }
@@ -112,8 +116,32 @@ impl Codegen<'_> {
                 self.call(self.runtime.array_free, &mut [value, esize, free], c"");
                 Ok(())
             }
+            Type::Enum(_) => {
+                self.call(self.runtime.enum_free, &mut [value], c"");
+                Ok(())
+            }
             _ => Err(crate::LlvmError::Unsupported("a drop of an unowned value")),
         }
+    }
+
+    /// The payload type of one enum variant, or an error when it has none.
+    ///
+    /// Only called for an [`kira_ir::IrExpr::EnumNew`] that carries a payload,
+    /// so a payload-less variant here is a broken IR contract, not user input.
+    pub(super) fn enum_payload_type(
+        &self,
+        id: kira_semantics_model::EnumId,
+        tag: u32,
+    ) -> Result<Type, crate::LlvmError> {
+        self.program
+            .types
+            .enums()
+            .get(id)
+            .and_then(|def| def.variant(tag))
+            .and_then(|variant| variant.payload)
+            .ok_or(crate::LlvmError::Unsupported(
+                "an enum payload the program never declared",
+            ))
     }
 
     /// The field types of a declared struct.

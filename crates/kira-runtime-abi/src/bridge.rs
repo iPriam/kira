@@ -75,6 +75,16 @@ impl BridgeValueTag {
     /// rejects it, and the backend refuses to emit a crossing whose signature
     /// mentions one.
     pub const ARRAY: BridgeValueTag = BridgeValueTag(6);
+
+    /// An enum: a type a manifest can *describe* but this seam cannot carry.
+    ///
+    /// Exists for the same reason [`BridgeValueTag::STRUCT`] does — a manifest
+    /// has a row for every function, and a `@Runtime` one may merely mention an
+    /// enum in its signature — and it does not travel on the same grounds: an
+    /// enum is a tagged value plus a payload, which does not fit one tag and one
+    /// word, and how it would is a language decision nobody has made. Every
+    /// marshalling path rejects it; this tag only names the type in a manifest.
+    pub const ENUM: BridgeValueTag = BridgeValueTag(7);
 }
 
 /// One Kira value crossing the runtime/native boundary.

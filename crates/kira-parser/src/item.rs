@@ -11,7 +11,8 @@ use kira_runtime_abi::Execution;
 use kira_source::{FileSpan, Span};
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
-    Block, FieldDecl, Function, Item, Param, StructDecl, TypeRef, TypeRefId, UnsupportedItem,
+    Block, EnumDecl, FieldDecl, Function, Item, Param, StructDecl, TypeRef, TypeRefId,
+    UnsupportedItem, VariantDecl,
 };
 use kira_syntax_model::ownership::OwnershipMode;
 
@@ -31,7 +32,12 @@ impl Parser<'_> {
                     self.tree.items.push(Item::Struct(declaration));
                 }
             }
-            TokenKind::Enum | TokenKind::Class | TokenKind::Import | TokenKind::Identifier => {
+            TokenKind::Enum => {
+                if let Some(declaration) = self.parse_enum() {
+                    self.tree.items.push(Item::Enum(declaration));
+                }
+            }
+            TokenKind::Class | TokenKind::Import | TokenKind::Identifier => {
                 self.parse_unsupported_item()
             }
             _ => {
@@ -233,6 +239,105 @@ impl Parser<'_> {
             name_span,
             mutable,
             ty,
+            default,
+            span,
+        })
+    }
+
+    // ----- enums ---------------------------------------------------------
+
+    /// Parses `enum Name { <variant>* }`.
+    ///
+    /// Variants are separated by newlines, spaces, or `;` — never commas, which
+    /// the enum grammar does not use — so the variant name is what starts each
+    /// one and a non-name where a variant is expected is reported rather than
+    /// silently skipped.
+    fn parse_enum(&mut self) -> Option<EnumDecl> {
+        let start = self.current().span;
+        self.expect(TokenKind::Enum);
+        let (name, name_span) = if self.at(TokenKind::Identifier) {
+            let span = self.current().span;
+            (self.intern_span(span), span)
+        } else {
+            self.error(self.current().span, "KPAR030", "expected an enum name");
+            (Symbol::ERROR, self.current().span)
+        };
+        if self.at(TokenKind::Identifier) {
+            self.bump();
+        }
+        let mut variants = Vec::new();
+        if !self.expect(TokenKind::LBrace) {
+            let span = Span::from_bounds(start.start, self.previous_end());
+            return Some(EnumDecl {
+                name,
+                name_span,
+                variants,
+                span,
+            });
+        }
+        while !self.at(TokenKind::RBrace) && !self.at_eof() {
+            let before = self.pos;
+            while self.eat(TokenKind::Semicolon) {}
+            if self.at(TokenKind::RBrace) || self.at_eof() {
+                break;
+            }
+            if self.at(TokenKind::Identifier) {
+                if let Some(variant) = self.parse_variant() {
+                    variants.push(variant);
+                }
+            } else {
+                let span = self.current().span;
+                self.error(
+                    span,
+                    "KPAR031",
+                    format!(
+                        "expected an enum variant name, found {}",
+                        self.current_kind().describe()
+                    ),
+                );
+                self.bump();
+            }
+            while self.eat(TokenKind::Semicolon) {}
+            if self.pos == before {
+                self.bump();
+            }
+        }
+        self.expect(TokenKind::RBrace);
+        let span = Span::from_bounds(start.start, self.previous_end());
+        Some(EnumDecl {
+            name,
+            name_span,
+            variants,
+            span,
+        })
+    }
+
+    /// Parses one enum variant, with the name at the cursor.
+    ///
+    /// Three shapes: `Name` (payload-less), `Name(Type)` (a payload), and
+    /// `Name: Type = default` (a payload with a default supplied when the
+    /// variant is built with none). The `= default` only follows the `:` form.
+    fn parse_variant(&mut self) -> Option<VariantDecl> {
+        let name_span = self.current().span;
+        let name = self.intern_span(name_span);
+        self.bump();
+        let (payload, default) = if self.at(TokenKind::LParen) {
+            self.bump(); // `(`
+            let ty = self.parse_type_ref();
+            self.expect(TokenKind::RParen);
+            (Some(ty), None)
+        } else if self.eat(TokenKind::Colon) {
+            let ty = self.parse_type_ref();
+            let default = self.eat(TokenKind::Equals).then(|| self.parse_expr());
+            (Some(ty), default)
+        } else {
+            (None, None)
+        };
+        let span = Span::from_bounds(name_span.start, self.previous_end());
+        Some(VariantDecl {
+            name,
+            name_span,
+            payload,
             default,
             span,
         })

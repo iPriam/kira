@@ -1,0 +1,273 @@
+//! Tests for the runtime value model and the object heap with affine drop
+//! accounting, split out of `value.rs` on the file-size ladder. They stay a
+//! `#[cfg(test)]` submodule beside the code they test.
+
+use super::*;
+
+#[test]
+fn alloc_free_balances_and_reuses_slots() {
+    let mut heap = Heap::new();
+    let a = heap.alloc("one".to_owned());
+    let b = heap.alloc("two".to_owned());
+    assert_eq!(heap.stats().current, 2);
+    heap.free(a);
+    assert_eq!(heap.stats().current, 1);
+    // Freed slot is reused, so the id index recycles.
+    let c = heap.alloc("three".to_owned());
+    assert_eq!(heap.get(c), "three");
+    assert_eq!(heap.get(b), "two");
+    assert_eq!(heap.stats().allocated, 3);
+    assert_eq!(heap.stats().freed, 1);
+}
+
+#[test]
+fn copy_of_a_string_is_independent() {
+    let mut heap = Heap::new();
+    let a = heap.alloc("x".to_owned());
+    let copy = heap.copy_value(Value::Str(a));
+    assert_eq!(heap.stats().current, 2);
+    heap.drop_value(Value::Str(a));
+    // The copy survives the original's drop.
+    assert_eq!(heap.stats().current, 1);
+    assert!(matches!(copy, Value::Str(_)));
+}
+
+#[test]
+fn float_formatting_drops_trailing_zero() {
+    let mut heap = Heap::new();
+    assert_eq!(
+        heap.format_and_consume(Value::Float(2.0)).as_deref(),
+        Some("2")
+    );
+    assert_eq!(
+        heap.format_and_consume(Value::Float(3.5)).as_deref(),
+        Some("3.5")
+    );
+    assert_eq!(
+        heap.format_and_consume(Value::Int(-7)).as_deref(),
+        Some("-7")
+    );
+    assert_eq!(
+        heap.format_and_consume(Value::Bool(true)).as_deref(),
+        Some("true")
+    );
+}
+
+#[test]
+fn a_struct_has_no_invented_rendering_or_seam_shape() {
+    let mut heap = Heap::new();
+    let value = Value::Struct(heap.alloc_struct(vec![Value::Int(1)]));
+    assert_eq!(heap.lift(value), None);
+    // Formatting still consumes what it was handed, so refusing to render
+    // a struct does not leak it.
+    assert_eq!(heap.format_and_consume(value), None);
+    assert_eq!(heap.stats().current, 0);
+}
+
+#[test]
+fn freeing_a_struct_frees_its_fields() {
+    let mut heap = Heap::new();
+    let text = heap.alloc("label".to_owned());
+    let inner = heap.alloc_struct(vec![Value::Str(text)]);
+    let outer = heap.alloc_struct(vec![Value::Struct(inner), Value::Int(7)]);
+    assert_eq!(heap.stats().current, 3);
+    heap.drop_value(Value::Struct(outer));
+    // The string, the inner struct, and the outer struct all go.
+    assert_eq!(heap.stats().current, 0);
+}
+
+#[test]
+fn copying_a_struct_is_deep_so_writes_do_not_alias() {
+    let mut heap = Heap::new();
+    let text = heap.alloc("a".to_owned());
+    let original = heap.alloc_struct(vec![Value::Str(text)]);
+    let Value::Struct(copy) = heap.copy_value(Value::Struct(original)) else {
+        panic!("a struct copies to a struct");
+    };
+    assert_ne!(original, copy, "a copy is its own object");
+
+    // Overwrite the copy's string; the original must not see it.
+    let replacement = heap.alloc("b".to_owned());
+    assert!(heap.set_field(copy, 0, Value::Str(replacement)));
+    let Some(Value::Str(original_text)) = heap.field(original, 0) else {
+        panic!("the original still holds its string");
+    };
+    assert_eq!(heap.get(original_text), "a");
+
+    heap.drop_value(Value::Struct(original));
+    heap.drop_value(Value::Struct(copy));
+    assert_eq!(heap.stats().current, 0, "no field is freed twice or leaked");
+}
+
+#[test]
+fn overwriting_a_field_drops_what_was_there() {
+    let mut heap = Heap::new();
+    let text = heap.alloc("gone".to_owned());
+    let id = heap.alloc_struct(vec![Value::Str(text)]);
+    assert_eq!(heap.stats().current, 2);
+    assert!(heap.set_field(id, 0, Value::Int(1)));
+    // The replaced string is freed, not leaked: only the struct is live.
+    assert_eq!(heap.stats().current, 1);
+    heap.drop_value(Value::Struct(id));
+    assert_eq!(heap.stats().current, 0);
+}
+
+#[test]
+fn freeing_an_array_frees_its_elements() {
+    let mut heap = Heap::new();
+    let text = heap.alloc("label".to_owned());
+    let inner = heap.alloc_array(vec![Value::Str(text)]);
+    let outer = heap.alloc_array(vec![Value::Array(inner), Value::Int(7)]);
+    assert_eq!(heap.stats().current, 3);
+    heap.drop_value(Value::Array(outer));
+    assert_eq!(heap.stats().current, 0);
+}
+
+#[test]
+fn copying_an_array_is_deep_so_writes_do_not_alias() {
+    let mut heap = Heap::new();
+    let text = heap.alloc("a".to_owned());
+    let original = heap.alloc_array(vec![Value::Str(text)]);
+    let Value::Array(copy) = heap.copy_value(Value::Array(original)) else {
+        panic!("an array copies to an array");
+    };
+    assert_ne!(original, copy, "a copy is its own object");
+
+    let replacement = heap.alloc("b".to_owned());
+    assert!(heap.set_element(copy, 0, Value::Str(replacement)));
+    let Some(Value::Str(original_text)) = heap.element(original, 0) else {
+        panic!("the original still holds its string");
+    };
+    assert_eq!(heap.get(original_text), "a");
+
+    heap.drop_value(Value::Array(original));
+    heap.drop_value(Value::Array(copy));
+    assert_eq!(
+        heap.stats().current,
+        0,
+        "no element is freed twice or leaked"
+    );
+}
+
+/// The question the array design turned on: copying a struct that holds an
+/// array must copy the array, not share the handle. It falls out of the
+/// recursion — the struct arm copies each field — but it is the behaviour
+/// the whole ownership story rests on, so it is pinned directly rather than
+/// inferred from the code.
+#[test]
+fn copying_a_struct_deep_copies_an_array_field() {
+    let mut heap = Heap::new();
+    let values = heap.alloc_array(vec![Value::Int(1), Value::Int(2)]);
+    let original = heap.alloc_struct(vec![Value::Array(values)]);
+
+    let Value::Struct(copy) = heap.copy_value(Value::Struct(original)) else {
+        panic!("a struct copies to a struct");
+    };
+    let Some(Value::Array(copied_values)) = heap.field(copy, 0) else {
+        panic!("the copy holds an array");
+    };
+    assert_ne!(
+        values, copied_values,
+        "the copy's array is its own object, not a shared handle"
+    );
+
+    // Mutating the copy's array must leave the original's alone.
+    assert!(heap.set_element(copied_values, 0, Value::Int(99)));
+    assert_eq!(heap.element(values, 0), Some(Value::Int(1)));
+    assert_eq!(heap.element(copied_values, 0), Some(Value::Int(99)));
+
+    // …and growing it must not grow the original's either.
+    assert!(heap.push_element(copied_values, Value::Int(3)));
+    assert_eq!(heap.array_len(values), Some(2));
+    assert_eq!(heap.array_len(copied_values), Some(3));
+
+    heap.drop_value(Value::Struct(original));
+    heap.drop_value(Value::Struct(copy));
+    assert_eq!(heap.stats().current, 0);
+}
+
+#[test]
+fn overwriting_an_element_drops_what_was_there() {
+    let mut heap = Heap::new();
+    let text = heap.alloc("gone".to_owned());
+    let id = heap.alloc_array(vec![Value::Str(text)]);
+    assert_eq!(heap.stats().current, 2);
+    assert!(heap.set_element(id, 0, Value::Int(1)));
+    // The replaced string is freed, not leaked: only the array is live.
+    assert_eq!(heap.stats().current, 1);
+    heap.drop_value(Value::Array(id));
+    assert_eq!(heap.stats().current, 0);
+}
+
+#[test]
+fn appending_grows_the_array_in_place() {
+    let mut heap = Heap::new();
+    let id = heap.alloc_array(Vec::new());
+    assert_eq!(heap.array_len(id), Some(0));
+    assert!(heap.push_element(id, Value::Int(1)));
+    assert!(heap.push_element(id, Value::Int(2)));
+    assert_eq!(heap.array_len(id), Some(2));
+    assert_eq!(heap.element(id, 1), Some(Value::Int(2)));
+    heap.drop_value(Value::Array(id));
+    assert_eq!(heap.stats().current, 0);
+}
+
+#[test]
+fn an_array_has_no_invented_rendering_or_seam_shape() {
+    let mut heap = Heap::new();
+    let value = Value::Array(heap.alloc_array(vec![Value::Int(1)]));
+    assert_eq!(heap.lift(value), None);
+    // Refusing to render one still consumes it, so it does not leak.
+    assert_eq!(heap.format_and_consume(value), None);
+    assert_eq!(heap.stats().current, 0);
+}
+
+#[test]
+fn copying_an_enum_is_deep_and_both_drops_balance() {
+    // An enum with a string payload: the copy must own its own string, so
+    // dropping the original leaves the copy valid, and dropping both leaks
+    // nothing — the affine guarantee that keeps `current == 0` provable.
+    let mut heap = Heap::new();
+    let text = heap.alloc("payload".to_owned());
+    let original = heap.alloc_enum(3, Some(Value::Str(text)));
+    assert_eq!(heap.stats().current, 2, "the enum box and its string");
+
+    let Value::Enum(copy) = heap.copy_value(Value::Enum(original)) else {
+        panic!("an enum copies to an enum");
+    };
+    assert_ne!(original, copy, "a copy is its own object");
+    assert_eq!(heap.enum_tag(copy), Some(3), "the tag is carried");
+    assert_eq!(heap.stats().current, 4, "two boxes and two strings");
+
+    heap.drop_value(Value::Enum(original));
+    assert_eq!(heap.stats().current, 2, "the copy and its string survive");
+    heap.drop_value(Value::Enum(copy));
+    assert_eq!(
+        heap.stats().current,
+        0,
+        "nothing leaked, nothing double-freed"
+    );
+}
+
+#[test]
+fn a_payload_less_enum_balances_and_carries_its_tag() {
+    let mut heap = Heap::new();
+    let value = Value::Enum(heap.alloc_enum(1, None));
+    assert_eq!(heap.stats().current, 1);
+    // An enum has no pinned rendering or seam shape, like a struct.
+    assert_eq!(heap.lift(value), None);
+    assert_eq!(heap.format_and_consume(value), None);
+    assert_eq!(heap.stats().current, 0);
+}
+
+#[test]
+fn a_handle_of_the_wrong_kind_reads_empty_rather_than_panicking() {
+    let mut heap = Heap::new();
+    let text = heap.alloc("x".to_owned());
+    // A struct handle over a string slot: the VM must not panic on it.
+    assert_eq!(heap.fields(StructId(text.0)), &[]);
+    assert_eq!(heap.field(StructId(text.0), 0), None);
+    assert!(!heap.set_field(StructId(text.0), 0, Value::Int(1)));
+    // …and the string is untouched by any of it.
+    assert_eq!(heap.get(text), "x");
+}

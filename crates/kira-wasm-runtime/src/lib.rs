@@ -217,9 +217,11 @@ fn signature(
 /// The wasm value type a Kira type occupies on `device`, or `None` for `Void`.
 fn value_type(ty: Type, device: WasmDevice) -> Result<Option<ValType>, WasmError> {
     Ok(match ty {
-        // A `String` and a struct are both addresses, so both are as wide as
-        // the memory is.
-        Type::String | Type::Struct(_) => Some(device.addr().val()),
+        // A `String`, a struct, an array, and an enum are all addresses, so each
+        // is as wide as the memory is.
+        Type::String | Type::Struct(_) | Type::Array(_) | Type::Enum(_) => {
+            Some(device.addr().val())
+        }
         other => Lowering::val_type(other)?,
     })
 }

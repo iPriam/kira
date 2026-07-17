@@ -138,4 +138,19 @@ pub enum VmError {
     /// typed rather than with an unwrap.
     #[error("array is too long to count in an Int")]
     ArrayTooLong,
+    /// A tag instruction found something other than an enum.
+    #[error("read a tag from a value that is not an enum")]
+    NotAnEnum,
+    /// An enum reached the native seam, which has no layout for one.
+    ///
+    /// Like a struct, an enum has no representation in the hybrid ABI, and the
+    /// split is checked when the program is built — so reaching this is a module
+    /// and a manifest that disagree, never a program that merely type-checked.
+    #[error(
+        "function {function} passes an enum across the native seam, which has no layout for one"
+    )]
+    EnumAtSeam {
+        /// The function at the boundary.
+        function: u32,
+    },
 }

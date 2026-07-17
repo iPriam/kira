@@ -96,6 +96,14 @@ pub enum LlvmError {
          keep both sides on one engine, or pass its elements individually"
     )]
     ArrayAtSeam,
+    /// An enum reached the `@Native`/`@Runtime` seam, which has no layout for
+    /// one — like a struct, it is a tagged value that does not fit one tag and
+    /// one word, and how it would cross is a language decision nobody has made.
+    #[error(
+        "an enum cannot cross the `@Native`/`@Runtime` boundary; \
+         keep both sides on one engine"
+    )]
+    EnumAtSeam,
     /// Lowering produced a module LLVM rejected — always a backend bug.
     #[error("LLVM rejected the generated module (this is a compiler bug): {0}")]
     InvalidModule(String),
