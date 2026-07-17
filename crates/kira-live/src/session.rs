@@ -93,11 +93,6 @@ impl LiveSession {
         &self.bundle
     }
 
-    /// The runner's address.
-    pub fn peer(&self) -> SocketAddr {
-        self.peer
-    }
-
     /// Serves the bundle and collects milestones until the session is ready.
     fn run_to_ready(&mut self, on_event: &mut dyn FnMut(LiveEvent)) -> Result<(), ServerError> {
         loop {

@@ -197,6 +197,11 @@ fn relaunch(
     runner: &mut RunnerProcess,
 ) -> Result<(), LiveError> {
     let bundle = session.bundle().clone();
+    // Ask before killing. The runner is parked waiting for the next reload and
+    // has no reason to exit on its own, so without this it sits out the whole
+    // grace period and gets killed — turning every relaunch into a five-second
+    // stall followed by a runner that never got to shut down cleanly.
+    let _ = session.shutdown();
     runner
         .shutdown(SHUTDOWN_GRACE)
         .map_err(|source| LiveError::Shutdown { source })?;

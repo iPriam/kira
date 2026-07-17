@@ -7,11 +7,11 @@
 //! client connects, downloads it, loads it, links it, and starts its
 //! entrypoint, reporting each milestone back as a [`LiveEvent`].
 //!
-//! Reload is not built yet: a source change today means running the session
-//! again. Some of what it will need is already here — payloads named by content
-//! hash, and a [`PayloadKind::is_hot_swappable`] that says which of them a
-//! running process could take in place — but nothing watches, rebuilds, or
-//! swaps, and the `live.reload.*` events are modeled rather than emitted.
+//! A later source change rebuilds the bundle, and [`reload`] decides how it
+//! reaches the app: swapped into the running process when the rebuilt native
+//! library is byte-for-byte the loaded one, and by replacing the runner when it
+//! is not. The decision is never silent — a bundle that cannot be swapped says
+//! why.
 //!
 //! The pieces, bottom up:
 //!
@@ -20,7 +20,10 @@
 //! - [`store`] — a `.klbundle` directory on disk, verified on read,
 //! - [`protocol`] — the `KLP1` framing and messages the two ends speak,
 //! - [`event`] — the session's observable vocabulary,
-//! - [`server`] — the live server: serves bundles, tracks a client,
+//! - [`watch`] — a program's inputs, and what is deliberately not watched,
+//! - [`reload`] — which tier a rebuilt bundle deserves, and why,
+//! - [`server`] — the live server: binds the port, accepts runners,
+//! - [`session`] — one runner's session, over its life, reloads included,
 //! - [`client`] — the runner client's half of the protocol.
 //!
 //! **The bundle is the boundary.** A runner reads a bundle and nothing else —

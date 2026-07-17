@@ -15,14 +15,14 @@
 //! A step that fails returns an error naming what failed; it never falls through
 //! to the next step. A session that reports `bundle linked` here linked.
 
-use std::fmt;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use kira_bytecode::{Module, ModuleDecodeError};
 use kira_live::{Bundle, BundleError, PayloadKind, RunnerHost};
 use kira_runtime_abi::HostCapabilities;
 use kira_vm_runtime::{Program, VmError};
+
+use crate::staged::Staged;
 
 /// Why the desktop runner could not load, link, or start a bundle.
 #[derive(Debug, thiserror::Error)]
@@ -89,100 +89,6 @@ pub enum DesktopRunnerError {
     },
 }
 
-/// What the runner has staged, and how far it has got with it.
-///
-/// Modeled as a state machine rather than a pile of `Option`s so that "linked"
-/// is a state the type system knows about: `start` cannot be called on a bundle
-/// that only loaded, because there is no variant for it to match.
-enum Staged {
-    /// Nothing loaded yet.
-    Empty,
-    /// A VM bytecode entry, decoded but not yet validated.
-    VmLoaded {
-        /// The decoded entry module.
-        module: Module,
-    },
-    /// A VM bytecode entry, validated and ready to run.
-    VmLinked {
-        /// The validated program.
-        program: Box<Program>,
-    },
-    /// A hybrid entry, staged on disk but not yet loaded.
-    HybridLoaded {
-        /// The staged manifest's path.
-        manifest: PathBuf,
-    },
-    /// A hybrid entry whose native half is loaded and bound.
-    HybridLinked {
-        /// The live hybrid session.
-        session: Box<kira_hybrid_runtime::Session>,
-    },
-}
-
-impl Staged {
-    /// The state's name, for diagnostics.
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Empty => "empty",
-            Self::VmLoaded { .. } => "vm-loaded",
-            Self::VmLinked { .. } => "vm-linked",
-            Self::HybridLoaded { .. } => "hybrid-loaded",
-            Self::HybridLinked { .. } => "hybrid-linked",
-        }
-    }
-}
-
-/// Written by hand because neither a validated `Program` nor a live `Session` is
-/// `Debug`, and neither would be legible dumped anyway: the state's name is the
-/// part worth printing.
-impl fmt::Debug for Staged {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.label())
-    }
-}
-
-/// Empties the runner's cache, refusing to delete anything that is not one.
-///
-/// Staging recursively deletes the cache directory, and the cache is whatever
-/// `--cache` named — so `--cache ~/Documents` would erase it. A recursive delete
-/// pointed at user-supplied input needs a reason to believe the target is the
-/// runner's own scratch, and "the flag said so" is not one.
-///
-/// So the directory is cleared only when it is empty, or when it holds a bundle
-/// manifest — the marker that says a previous `load` made this directory and it
-/// is this runner's to reuse. Anything else is refused, and the session fails
-/// instead of taking somebody's files with it.
-fn clear_cache(cache: &Path) -> Result<(), DesktopRunnerError> {
-    if !cache.exists() {
-        return Ok(());
-    }
-    if !cache.is_dir() {
-        return Err(DesktopRunnerError::CacheNotOurs {
-            path: cache.to_owned(),
-            reason: "it is not a directory",
-        });
-    }
-
-    let is_empty = fs::read_dir(cache)
-        .map_err(|source| DesktopRunnerError::Stage {
-            path: cache.to_owned(),
-            source,
-        })?
-        .next()
-        .is_none();
-    if !is_empty && !cache.join(kira_live::MANIFEST_FILE).is_file() {
-        return Err(DesktopRunnerError::CacheNotOurs {
-            path: cache.to_owned(),
-            reason: "it is not empty and holds no bundle manifest, so it was not staged by a runner",
-        });
-    }
-
-    fs::remove_dir_all(cache).map_err(|source| DesktopRunnerError::Stage {
-        path: cache.to_owned(),
-        source,
-    })
-}
-
 /// A host that prints what the app prints.
 ///
 /// The app's output is the session's output: a live session's user is watching
@@ -242,8 +148,7 @@ impl RunnerHost for DesktopHost {
     fn load(&mut self, bundle: &Bundle) -> Result<(), DesktopRunnerError> {
         // Staged fresh each time: a leftover payload from a previous bundle must
         // never be what a later `dlopen` resolves against.
-        clear_cache(&self.cache)?;
-        bundle.write(&self.cache)?;
+        crate::stage::stage_fresh(&self.cache, bundle)?;
 
         // Total in practice: a `Bundle` only exists with an in-range entry,
         // checked by both of its constructors. Handled rather than unwrapped —
@@ -296,25 +201,64 @@ impl RunnerHost for DesktopHost {
     }
 
     fn swap(&mut self, bundle: &Bundle) -> Result<(), DesktopRunnerError> {
-        // Nothing running means nothing to swap. A hot patch is an edit to a
-        // live process, and there isn't one.
-        if matches!(self.staged, Staged::Empty) {
+        // A hot patch is an edit to something live. There has to be something
+        // live: `swap` replaces a linked bundle, and a merely-loaded one has
+        // nothing mapped that could survive.
+        if !self.staged.is_linked() {
             return Err(DesktopRunnerError::OutOfOrder {
                 step: "swap",
-                required: "loaded a bundle",
+                required: "linked a bundle",
             });
         }
-        // Load and link the new bundle exactly as the first one was. The process
-        // is what survives — this is the same host, with its cache, its loaded
-        // library, and everything native code is holding, taking new code.
+
+        // Everything below exists to keep one promise: the loaded native library
+        // is still the loaded native library when this returns.
         //
-        // For a hybrid bundle that means a new `Session` over the staged
-        // payloads. The native library's bytes are identical (the supervisor
-        // established that before asking, and refuses the swap otherwise), so
-        // the loader hands back the code that is already mapped rather than
-        // mapping a second copy.
-        self.load(bundle)?;
-        self.link()
+        // Which means the file it was mapped from must not be touched. `load`
+        // cannot be reused here — it clears the cache, and unlinking a mapped
+        // dylib and writing a new one in its place gives the next `dlopen` a
+        // different inode, so the loader maps a second copy and the old one is
+        // whatever `dlclose` decided. Instead only the payloads whose hash
+        // actually changed are rewritten. The supervisor only asks for a swap
+        // when the library is byte-identical, so the library is exactly what
+        // does not get rewritten, and `dlopen` on an unchanged path returns the
+        // image that is already mapped.
+        crate::stage::restage_changed(&self.cache, bundle)?;
+
+        let entry = bundle
+            .manifest()
+            .entry_payload()
+            .ok_or(DesktopRunnerError::NoEntrypoint)?;
+
+        // The replacement is built *before* the old one is dropped, and this is
+        // load-bearing rather than tidy. Dropping the old hybrid session first
+        // would `dlclose` the library, and with its refcount at zero the loader
+        // is free to unmap it — so the "same library" the next `dlopen` returns
+        // could be a fresh mapping at a new address, with every pointer native
+        // state held into the old image dangling. Opening the new handle while
+        // the old is still open keeps the refcount above zero throughout, so
+        // the image is never unmapped and the addresses stay put.
+        let replacement = match entry.kind {
+            PayloadKind::VmBytecode => Staged::VmLinked {
+                program: Box::new(Program::load(Module::from_bytes(bundle.entry_bytes())?)?),
+            },
+            PayloadKind::HybridManifest => {
+                let manifest = self.cache.join(kira_live::PAYLOAD_DIR).join(&entry.name);
+                Staged::HybridLinked {
+                    session: Box::new(kira_hybrid_runtime::Session::load(&manifest)?),
+                }
+            }
+            kind @ (PayloadKind::NativeLibrary | PayloadKind::Asset) => {
+                return Err(DesktopRunnerError::UnsupportedEntry { kind: kind.label() });
+            }
+        };
+
+        // Only now: the old session drops here, after the new one holds the
+        // library open. A failure above returned early with the old bundle still
+        // linked and still running, which is what lets the runner report a
+        // rejection and mean it.
+        self.staged = replacement;
+        Ok(())
     }
 
     fn hotpatch_disabled(&self) -> bool {
@@ -353,6 +297,7 @@ mod tests {
     use kira_live::{NamedPayload, PayloadKind};
     use kira_manifest::{BuildProfile, RunnerId};
     use kira_runtime_abi::Execution;
+    use std::fs;
 
     /// A scratch directory that removes itself.
     struct TempDir(PathBuf);
@@ -472,26 +417,154 @@ mod tests {
         );
     }
 
-    /// An empty directory is fine to stage into: there is nothing to lose.
+    /// A swap replaces the running code and the process keeps going.
     #[test]
-    fn staging_into_an_empty_directory_is_allowed() {
-        let dir = TempDir::new("empty");
-        fs::create_dir_all(&dir.0).expect("create");
+    fn swapping_replaces_the_linked_program() {
+        let dir = TempDir::new("swap");
         let mut host = DesktopHost::new(dir.0.clone());
-        host.load(&vm_bundle(&printing_module()))
-            .expect("an empty directory is stageable");
+        host.load(&vm_bundle(&printing_module())).expect("load");
+        host.link().expect("link");
+        host.start().expect("start");
+
+        host.swap(&vm_bundle(&printing_module()))
+            .expect("a linked host takes a swap");
+        host.start().expect("the swapped-in code runs");
     }
 
-    /// A previous stage is recognized by its manifest and reused, which is what
-    /// makes the guard compatible with a runner that loads more than once.
+    /// A swap needs something live to replace. A merely-loaded bundle has
+    /// nothing mapped, so there is nothing a swap could preserve — and calling it
+    /// one would make the tier distinction meaningless.
     #[test]
-    fn staging_over_a_previous_stage_is_allowed() {
-        let dir = TempDir::new("ours");
+    fn swapping_before_linking_is_an_error() {
+        let dir = TempDir::new("swap-order");
         let mut host = DesktopHost::new(dir.0.clone());
-        host.load(&vm_bundle(&printing_module()))
-            .expect("first load");
-        host.load(&vm_bundle(&printing_module()))
-            .expect("a runner's own cache is reusable");
+        host.load(&vm_bundle(&printing_module())).expect("load");
+
+        let error = host
+            .swap(&vm_bundle(&printing_module()))
+            .expect_err("a swap before link must fail");
+        assert!(
+            matches!(
+                error,
+                DesktopRunnerError::OutOfOrder {
+                    step: "swap",
+                    required: "linked a bundle"
+                }
+            ),
+            "got {error:?}"
+        );
+    }
+
+    #[test]
+    fn swapping_with_nothing_loaded_is_an_error() {
+        let dir = TempDir::new("swap-empty");
+        let mut host = DesktopHost::new(dir.0.clone());
+        let error = host
+            .swap(&vm_bundle(&printing_module()))
+            .expect_err("a swap with nothing running must fail");
+        assert!(
+            matches!(error, DesktopRunnerError::OutOfOrder { step: "swap", .. }),
+            "got {error:?}"
+        );
+    }
+
+    /// The heart of the hot patch: a payload that did not change is not
+    /// rewritten. A rewritten file is a new inode, and the loader would map a
+    /// second copy of a dylib rather than hand back the image already mapped —
+    /// which is the difference between a hot patch and a slow relaunch.
+    #[test]
+    fn swapping_does_not_rewrite_an_unchanged_payload() {
+        let dir = TempDir::new("swap-untouched");
+        let mut host = DesktopHost::new(dir.0.clone());
+
+        let before = Bundle::build(
+            RunnerId::Desktop,
+            BuildProfile::Debug,
+            vec![
+                NamedPayload {
+                    name: "app.kbc".to_owned(),
+                    kind: PayloadKind::VmBytecode,
+                    bytes: printing_module().to_bytes(),
+                },
+                NamedPayload {
+                    name: "libapp.dylib".to_owned(),
+                    kind: PayloadKind::NativeLibrary,
+                    bytes: b"native code that does not change".to_vec(),
+                },
+            ],
+            0,
+        )
+        .expect("a valid bundle");
+        host.load(&before).expect("load");
+        host.link().expect("link");
+
+        let library = dir.0.join(kira_live::PAYLOAD_DIR).join("libapp.dylib");
+        let untouched_since = fs::metadata(&library)
+            .expect("the library is staged")
+            .modified()
+            .expect("a modification time");
+
+        // A different bytecode half, the same native half.
+        let mut changed = printing_module();
+        changed.strings = vec!["different".to_owned()];
+        let after = Bundle::build(
+            RunnerId::Desktop,
+            BuildProfile::Debug,
+            vec![
+                NamedPayload {
+                    name: "app.kbc".to_owned(),
+                    kind: PayloadKind::VmBytecode,
+                    bytes: changed.to_bytes(),
+                },
+                NamedPayload {
+                    name: "libapp.dylib".to_owned(),
+                    kind: PayloadKind::NativeLibrary,
+                    bytes: b"native code that does not change".to_vec(),
+                },
+            ],
+            0,
+        )
+        .expect("a valid bundle");
+        host.swap(&after).expect("swap");
+
+        assert!(library.is_file(), "the library was deleted by a swap");
+        assert_eq!(
+            fs::metadata(&library)
+                .expect("the library survives")
+                .modified()
+                .expect("a modification time"),
+            untouched_since,
+            "an unchanged payload was rewritten, so its inode changed and a \
+             loaded library would have been re-mapped"
+        );
+    }
+
+    /// A swap that fails leaves the old bundle linked and running. The runner
+    /// reports a rejection and the app it names is still there.
+    #[test]
+    fn a_failed_swap_leaves_the_old_program_running() {
+        let dir = TempDir::new("swap-fail");
+        let mut host = DesktopHost::new(dir.0.clone());
+        host.load(&vm_bundle(&printing_module())).expect("load");
+        host.link().expect("link");
+
+        let broken = Bundle::build(
+            RunnerId::Desktop,
+            BuildProfile::Debug,
+            vec![NamedPayload {
+                name: "app.kbc".to_owned(),
+                kind: PayloadKind::VmBytecode,
+                bytes: b"not bytecode at all".to_vec(),
+            }],
+            0,
+        )
+        .expect("a valid bundle");
+
+        host.swap(&broken).expect_err("garbage must not swap in");
+        // The old program is still linked, so the app the session thinks is
+        // running actually is.
+        host.start()
+            .expect("the previous program still runs after a failed swap");
     }
 
     #[test]

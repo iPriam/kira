@@ -138,21 +138,32 @@ impl WatchSet {
 /// tick is a directory with no watchable files this tick, and a live session must
 /// not die because an editor replaced a directory while it was being walked.
 fn collect(path: &Path, found: &mut Vec<PathBuf>) {
-    if path.is_file() {
-        if is_watchable_file(path) {
-            found.push(path.to_owned());
+    // Depth is what stops a symlink cycle. `is_dir` follows links, so a single
+    // `a -> .` inside a watched tree makes the walk descend forever — and two of
+    // them make it branch, so the work doubles per level until the path outgrows
+    // the platform's limit. That is not a hang anyone diagnoses quickly: the
+    // session simply never starts. A tree deeper than this is not a source tree.
+    const MAX_DEPTH: usize = 32;
+
+    fn walk(path: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+        if path.is_file() {
+            if is_watchable_file(path) {
+                found.push(path.to_owned());
+            }
+            return;
         }
-        return;
+        if depth >= MAX_DEPTH || !path.is_dir() || !is_watchable_directory(path) {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            walk(&entry.path(), depth + 1, found);
+        }
     }
-    if !path.is_dir() || !is_watchable_directory(path) {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        collect(&entry.path(), found);
-    }
+
+    walk(path, 0, found);
 }
 
 /// Whether a directory's contents are watched.
