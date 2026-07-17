@@ -85,6 +85,17 @@ pub enum BundleError {
         /// The payload's name.
         name: String,
     },
+    /// The bundle being built would not have been a valid bundle.
+    ///
+    /// Built and decoded bundles are held to one standard: whatever the decoder
+    /// rejects, the builder rejects, so a `Bundle` in hand is in range however it
+    /// arrived.
+    #[error("bundle is not valid: {source}")]
+    Invalid {
+        /// What was wrong with it.
+        #[source]
+        source: crate::bundle::BundleDecodeError,
+    },
 }
 
 impl Bundle {
@@ -94,12 +105,50 @@ impl Bundle {
     /// them, so a manifest that disagrees with its payloads is unrepresentable
     /// here — the only way to get a mismatch is to corrupt the bytes afterward,
     /// which is exactly what [`Bundle::read`] checks for.
+    ///
+    /// The same validation the decoder applies runs here, so that a `Bundle`
+    /// holds a manifest that is in range however it was made. Without it
+    /// [`Bundle::entry_bytes`] would be a panic waiting for the first caller who
+    /// computed an entry index instead of writing `0`.
     pub fn build(
         runner: kira_manifest::RunnerId,
         profile: kira_manifest::BuildProfile,
         payloads: Vec<NamedPayload>,
         entry: u32,
-    ) -> Bundle {
+    ) -> Result<Bundle, BundleError> {
+        if payloads.is_empty() {
+            return Err(BundleError::Invalid {
+                source: crate::bundle::BundleDecodeError::NoPayloads,
+            });
+        }
+        if entry as usize >= payloads.len() {
+            return Err(BundleError::Invalid {
+                source: crate::bundle::BundleDecodeError::EntryOutOfRange {
+                    entry,
+                    count: payloads.len(),
+                },
+            });
+        }
+        for payload in &payloads {
+            if !crate::bundle::is_plain_file_name(&payload.name) {
+                return Err(BundleError::Invalid {
+                    source: crate::bundle::BundleDecodeError::UnsafePayloadName(
+                        payload.name.clone(),
+                    ),
+                });
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        for payload in &payloads {
+            if !seen.insert(payload.name.as_str()) {
+                return Err(BundleError::Invalid {
+                    source: crate::bundle::BundleDecodeError::DuplicatePayloadName(
+                        payload.name.clone(),
+                    ),
+                });
+            }
+        }
+
         let entries = payloads
             .iter()
             .map(|payload| PayloadEntry {
@@ -109,7 +158,7 @@ impl Bundle {
                 size: payload.bytes.len() as u64,
             })
             .collect();
-        Bundle {
+        Ok(Bundle {
             manifest: BundleManifest {
                 runner,
                 profile,
@@ -117,7 +166,7 @@ impl Bundle {
                 entry,
             },
             payloads: payloads.into_iter().map(|payload| payload.bytes).collect(),
-        }
+        })
     }
 
     /// Reassembles a bundle from a manifest and the payload bytes received for
@@ -129,6 +178,17 @@ impl Bundle {
         manifest: BundleManifest,
         mut payloads: Vec<Option<Vec<u8>>>,
     ) -> Result<Bundle, BundleError> {
+        // The manifest usually comes from the decoder, which checked this. But
+        // it is a plain struct with public fields, so "usually" is not a
+        // guarantee, and `entry_bytes` is total only because this holds.
+        if manifest.entry as usize >= manifest.payloads.len() {
+            return Err(BundleError::Invalid {
+                source: crate::bundle::BundleDecodeError::EntryOutOfRange {
+                    entry: manifest.entry,
+                    count: manifest.payloads.len(),
+                },
+            });
+        }
         payloads.resize_with(manifest.payloads.len(), || None);
         let mut bytes = Vec::with_capacity(manifest.payloads.len());
         for (entry, received) in manifest.payloads.iter().zip(payloads) {
@@ -301,6 +361,7 @@ mod tests {
             ],
             0,
         )
+        .expect("a valid bundle")
     }
 
     #[test]
@@ -312,6 +373,130 @@ mod tests {
         );
         assert_eq!(bundle.manifest().payloads[0].size, 13);
         assert_eq!(bundle.entry_bytes(), b"KBC1 bytecode");
+    }
+
+    /// `Bundle::entry_bytes` indexes without checking, so the constructors are
+    /// what make that safe. An entry naming nothing is refused here rather than
+    /// panicking at the first caller who computed an index.
+    #[test]
+    fn building_with_an_entry_naming_nothing_is_refused() {
+        let error = Bundle::build(
+            RunnerId::Desktop,
+            BuildProfile::Debug,
+            vec![NamedPayload {
+                name: "app.kbc".to_owned(),
+                kind: PayloadKind::VmBytecode,
+                bytes: b"x".to_vec(),
+            }],
+            7,
+        )
+        .expect_err("an out-of-range entry must not build");
+        assert!(
+            matches!(
+                error,
+                BundleError::Invalid {
+                    source: crate::bundle::BundleDecodeError::EntryOutOfRange {
+                        entry: 7,
+                        count: 1
+                    }
+                }
+            ),
+            "got {error:?}"
+        );
+    }
+
+    #[test]
+    fn building_with_no_payloads_is_refused() {
+        let error = Bundle::build(RunnerId::Desktop, BuildProfile::Debug, Vec::new(), 0)
+            .expect_err("an empty bundle must not build");
+        assert!(
+            matches!(
+                error,
+                BundleError::Invalid {
+                    source: crate::bundle::BundleDecodeError::NoPayloads
+                }
+            ),
+            "got {error:?}"
+        );
+    }
+
+    /// The builder holds names to the decoder's standard: a bundle built with a
+    /// traversing name would write outside its directory, and nothing downstream
+    /// re-checks a name that came from `build`.
+    #[test]
+    fn building_with_an_unsafe_name_is_refused() {
+        for name in ["../escape", "sub/dir", "C:evil.dll", "CON"] {
+            let error = Bundle::build(
+                RunnerId::Desktop,
+                BuildProfile::Debug,
+                vec![NamedPayload {
+                    name: name.to_owned(),
+                    kind: PayloadKind::Asset,
+                    bytes: b"x".to_vec(),
+                }],
+                0,
+            )
+            .expect_err("an unsafe name must not build");
+            assert!(
+                matches!(
+                    error,
+                    BundleError::Invalid {
+                        source: crate::bundle::BundleDecodeError::UnsafePayloadName(_)
+                    }
+                ),
+                "`{name}` gave {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn building_with_duplicate_names_is_refused() {
+        let error = Bundle::build(
+            RunnerId::Desktop,
+            BuildProfile::Debug,
+            vec![
+                NamedPayload {
+                    name: "same".to_owned(),
+                    kind: PayloadKind::VmBytecode,
+                    bytes: b"a".to_vec(),
+                },
+                NamedPayload {
+                    name: "same".to_owned(),
+                    kind: PayloadKind::Asset,
+                    bytes: b"b".to_vec(),
+                },
+            ],
+            0,
+        )
+        .expect_err("duplicate names must not build");
+        assert!(
+            matches!(
+                error,
+                BundleError::Invalid {
+                    source: crate::bundle::BundleDecodeError::DuplicatePayloadName(_)
+                }
+            ),
+            "got {error:?}"
+        );
+    }
+
+    /// `assemble` takes a manifest a caller can hand-build, so it checks the
+    /// entry too rather than trusting that it came from the decoder.
+    #[test]
+    fn assembling_with_an_entry_naming_nothing_is_refused() {
+        let mut manifest = bundle().manifest().clone();
+        manifest.entry = 42;
+        let error = Bundle::assemble(manifest, vec![None, None])
+            .expect_err("an out-of-range entry must not assemble");
+        assert!(
+            matches!(
+                error,
+                BundleError::Invalid {
+                    source: crate::bundle::BundleDecodeError::EntryOutOfRange { entry: 42, .. }
+                }
+            ),
+            "got {error:?}"
+        );
     }
 
     #[test]

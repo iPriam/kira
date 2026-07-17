@@ -17,6 +17,7 @@
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+use std::time::{Duration, Instant};
 
 use kira_ir::IrProgram;
 use kira_live::{
@@ -189,7 +190,16 @@ pub enum LiveError {
     #[error("live server failed: {0}")]
     Server(#[from] ServerError),
     /// The runner client binary could not be found or started.
-    #[error("could not start the `{runner}` runner client at `{path}`: {source}")]
+    ///
+    /// The most likely cause by far is a `cargo build -p kira-cli`, which builds
+    /// this binary and no other: cargo builds a dependency's lib target, never
+    /// its `[[bin]]`, so the runner is only beside `kirac` after a workspace
+    /// build. Saying so beats leaving someone to discover it.
+    #[error(
+        "could not start the `{runner}` runner client at `{path}`: {source}\n\
+         note: the runner client is built by `cargo build --workspace`, \
+         not by `cargo build -p kira-cli`"
+    )]
     Spawn {
         /// The runner it was for.
         runner: &'static str,
@@ -202,6 +212,13 @@ pub enum LiveError {
     /// This process could not work out where it is, so it cannot find its runner.
     #[error("could not locate the runner client beside this executable: {0}")]
     Locate(#[source] std::io::Error),
+    /// The runner could not be waited on or killed during shutdown.
+    #[error("could not shut the runner down: {source}")]
+    Shutdown {
+        /// The underlying failure.
+        #[source]
+        source: std::io::Error,
+    },
     /// An i/o failure reading a built artifact.
     #[error("could not read the built artifact `{path}`: {source}")]
     Io {
@@ -231,10 +248,39 @@ struct RunnerProcess {
     child: Child,
 }
 
+impl RunnerProcess {
+    /// Waits for the runner to exit, killing it if it overstays `grace`.
+    ///
+    /// This is what `live.shutdown.finished` means: the runner is gone. Without
+    /// it that event would be a `println!` next to another `println!`, printed
+    /// while the runner was still running — a completion marker for work nobody
+    /// did.
+    ///
+    /// The wait is bounded and ends in a kill, because a runner that will not
+    /// exit must not keep the session's shutdown open forever.
+    fn shutdown(&mut self, grace: Duration) -> std::io::Result<()> {
+        /// How often to re-check whether the runner has exited.
+        const POLL: Duration = Duration::from_millis(5);
+
+        let deadline = Instant::now() + grace;
+        loop {
+            match self.child.try_wait()? {
+                Some(_) => return Ok(()),
+                None if Instant::now() >= deadline => {
+                    self.child.kill()?;
+                    self.child.wait()?;
+                    return Ok(());
+                }
+                None => std::thread::sleep(POLL),
+            }
+        }
+    }
+}
+
 impl Drop for RunnerProcess {
     fn drop(&mut self) {
-        // Best effort: the process may already have exited, which is the normal
-        // case and not worth reporting.
+        // Best effort: the process has usually exited through `shutdown` by now,
+        // and a session that unwound before that is already reporting why.
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -264,7 +310,7 @@ pub fn build_bundle(
                     bytes: module.to_bytes(),
                 }],
                 0,
-            ))
+            )?)
         }
         LiveBackend::Hybrid => build_hybrid_bundle(program, source, runner),
     }
@@ -299,7 +345,7 @@ fn build_hybrid_bundle(
     ];
     // The manifest is payload 0, and it is the entrypoint: it is the only payload
     // that knows how the other two fit together.
-    Ok(Bundle::build(runner, BuildProfile::Debug, payloads, 0))
+    Ok(Bundle::build(runner, BuildProfile::Debug, payloads, 0)?)
 }
 
 /// Reads `path` into a payload named by its file name.
@@ -346,7 +392,7 @@ pub fn session(program: &IrProgram, source: &Path, options: &LiveOptions) -> Res
         }
     );
 
-    let _runner = spawn_runner(options.runner, bound)?;
+    let mut runner = spawn_runner(options.runner, bound)?;
 
     // Headless: this runner has no window to present to, so the session's bar is
     // the entrypoint. That is a real bar, not a lowered one — see the runner's
@@ -358,9 +404,19 @@ pub fn session(program: &IrProgram, source: &Path, options: &LiveOptions) -> Res
     );
 
     println!("{}", LiveEvent::ShutdownStarted);
+    // The event below says the runner is gone, so this is where it goes.
+    runner
+        .shutdown(SHUTDOWN_GRACE)
+        .map_err(|source| LiveError::Shutdown { source })?;
     println!("{}", LiveEvent::ShutdownFinished);
     Ok(())
 }
+
+/// How long a runner gets to exit on its own before the session kills it.
+///
+/// A headless runner exits as soon as its entrypoint returns, so this is slack
+/// for a process on its way out rather than a wait anyone should notice.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 /// Starts the runner client for `runner`, pointed at `server`.
 fn spawn_runner(runner: RunnerId, server: SocketAddr) -> Result<RunnerProcess, LiveError> {

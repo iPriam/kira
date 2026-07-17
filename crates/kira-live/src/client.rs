@@ -28,6 +28,14 @@ use crate::store::{Bundle, BundleError};
 /// How long a runner waits on a server that has gone quiet.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long a runner waits for the server to accept bytes.
+///
+/// Bounded for the same reason as the read: a server that stops reading would
+/// otherwise block this runner in `write_all` forever once the send buffer
+/// fills, and a runner that cannot be killed by its own timeout is a runner that
+/// outlives the session that started it.
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// What a platform actually does with a bundle.
 ///
 /// Implemented once per runner. The three steps are separate because they fail
@@ -122,6 +130,7 @@ impl RunnerClient {
     pub fn connect(address: SocketAddr, runner: RunnerId) -> Result<RunnerClient, ClientError> {
         let stream = TcpStream::connect(address)?;
         stream.set_read_timeout(Some(READ_TIMEOUT))?;
+        stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
         stream.set_nodelay(true)?;
         let mut client = RunnerClient {
             reader: BufReader::new(stream.try_clone()?),

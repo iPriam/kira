@@ -13,6 +13,8 @@
 //! a bundle arrives over a socket, so every truncation, every unknown tag, and
 //! every out-of-range index is a typed error and none of them panic.
 
+use std::collections::HashSet;
+
 use kira_manifest::{BuildProfile, RunnerId};
 
 use crate::hash::{ContentHash, HASH_LEN};
@@ -201,12 +203,18 @@ impl BundleManifest {
 
         let payload_count = reader.read_u32()?;
         let mut payloads: Vec<PayloadEntry> = Vec::new();
+        // Names seen so far, for the duplicate check. A linear scan per payload
+        // would make decoding quadratic in a count the peer chooses: the frame
+        // limit bounds a manifest's *bytes*, but a few megabytes of one-character
+        // names is millions of entries, and n² of those is hours of CPU inside a
+        // decoder that is supposed to reject hostile input, not chew on it.
+        let mut seen: HashSet<String> = HashSet::new();
         for _ in 0..payload_count {
             let name = reader.read_string()?;
             if !is_plain_file_name(&name) {
                 return Err(BundleDecodeError::UnsafePayloadName(name));
             }
-            if payloads.iter().any(|existing| existing.name == name) {
+            if !seen.insert(name.clone()) {
                 return Err(BundleDecodeError::DuplicatePayloadName(name));
             }
             let kind_raw = reader.take(1)?[0];
@@ -241,12 +249,17 @@ impl BundleManifest {
         })
     }
 
-    /// The entrypoint payload.
+    /// The entrypoint payload, or `None` if `entry` names no payload.
     ///
-    /// Total: the decoder rejects an out-of-range entry, and every constructed
-    /// manifest goes through it, so this indexes rather than searching.
-    pub fn entry_payload(&self) -> &PayloadEntry {
-        &self.payloads[self.entry as usize]
+    /// This returns an `Option` rather than indexing, because a `BundleManifest`
+    /// is a plain struct with public fields: anyone can build one with an entry
+    /// that names nothing, and a library does not get to end its caller's process
+    /// over it. [`Bundle`](crate::Bundle) is the type that guarantees the entry
+    /// is in range — both its constructors check — which is why
+    /// [`Bundle::entry_bytes`](crate::Bundle::entry_bytes) can be total and this
+    /// cannot.
+    pub fn entry_payload(&self) -> Option<&PayloadEntry> {
+        self.payloads.get(self.entry as usize)
     }
 
     /// The payload called `name`, if the bundle has one.
@@ -257,16 +270,47 @@ impl BundleManifest {
 
 /// Whether `name` is a plain file name — no separators, no traversal, not empty.
 ///
-/// Checked against both separators regardless of host: a bundle built on one
-/// platform is decoded on another, and a Windows-shaped name must not become a
-/// traversal on a Unix runner.
-fn is_plain_file_name(name: &str) -> bool {
+/// Every rule here is checked on every host, never `cfg`'d to the one it
+/// protects. A bundle is built on one platform and decoded on another, so a name
+/// that is harmless on the builder and an escape on the runner must be rejected
+/// by both — and the only way to guarantee that is for the check not to depend
+/// on where it runs.
+///
+/// The colon is the subtle one. `"C:evil.dll"` holds no separator, so a
+/// separator check alone passes it; but it is a drive-relative path, and
+/// `Path::join` replaces the base entirely when what it is given carries a
+/// prefix — so `payloads/`.join(`"C:evil.dll"`) is `C:evil.dll`, written
+/// wherever drive C happens to be pointed. It also spells an NTFS alternate data
+/// stream (`name:stream`). Both are rejected here, once, rather than at each
+/// place that later builds a path.
+pub(crate) fn is_plain_file_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
         && name != ".."
         && !name.contains('/')
         && !name.contains('\\')
         && !name.contains('\0')
+        && !name.contains(':')
+        && !is_reserved_device_name(name)
+}
+
+/// Whether `name` is a Windows reserved device name.
+///
+/// Opening one of these on Windows talks to a device rather than creating a
+/// file, whatever directory the path names — so a `CON` or `LPT1` payload is not
+/// a file the runner can stage, and the extension does not save it (`CON.txt` is
+/// still the console). Rejected on every host, for the same reason as the rest:
+/// the decoder cannot know where the bundle will be staged.
+fn is_reserved_device_name(name: &str) -> bool {
+    /// The device names Windows reserves, before any extension.
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let stem = name.split('.').next().unwrap_or(name);
+    RESERVED
+        .iter()
+        .any(|reserved| stem.eq_ignore_ascii_case(reserved))
 }
 
 /// The wire byte for a runner.
@@ -572,7 +616,22 @@ mod tests {
             "",
             "sub/dir",
             "windows\\path",
-            "nul\0byte",
+            "bad\0byte",
+            // Drive-relative: no separator, but `Path::join` would drop the
+            // bundle directory and write it wherever drive C points.
+            "C:evil.dll",
+            "c:evil.dll",
+            // An NTFS alternate data stream hanging off a legitimate name.
+            "app.kbc:hidden",
+            // Windows device names: opening these talks to a device, not a file,
+            // and an extension does not make them ordinary.
+            "CON",
+            "con",
+            "NUL",
+            "LPT1",
+            "COM9",
+            "aux.txt",
+            "PRN.kbc",
         ] {
             let manifest = BundleManifest {
                 payloads: vec![payload(name, PayloadKind::Asset, b"x")],
@@ -584,6 +643,37 @@ mod tests {
                 BundleDecodeError::UnsafePayloadName(name.to_owned()),
                 "name `{name}` must be rejected"
             );
+        }
+    }
+
+    /// The name rules must not swallow ordinary names. A device-name check that
+    /// rejected `console.kbc` because it starts with `con` would break real
+    /// bundles, which is how an over-eager check gets reverted wholesale.
+    #[test]
+    fn ordinary_payload_names_are_accepted() {
+        for name in [
+            "app.kbc",
+            "libapp.dylib",
+            "app.dll",
+            "console.kbc",
+            "auxiliary.png",
+            "communication.kbc",
+            "printer.asset",
+            "nulled.kbc",
+            "a",
+            "..leading-dots.kbc",
+            "UPPER.KBC",
+            "with spaces.kbc",
+            "unicode-ünïcode.kbc",
+        ] {
+            let manifest = BundleManifest {
+                payloads: vec![payload(name, PayloadKind::Asset, b"x")],
+                entry: 0,
+                ..manifest()
+            };
+            let decoded = BundleManifest::from_bytes(&manifest.to_bytes())
+                .unwrap_or_else(|error| panic!("`{name}` must decode, got {error:?}"));
+            assert_eq!(decoded.payloads[0].name, name);
         }
     }
 
@@ -608,7 +698,22 @@ mod tests {
             entry: 1,
             ..manifest()
         };
-        assert_eq!(manifest.entry_payload().name, "libapp.dylib");
+        assert_eq!(
+            manifest.entry_payload().expect("entry is in range").name,
+            "libapp.dylib"
+        );
+    }
+
+    /// A hand-built manifest can name an entry that is not there, and asking for
+    /// it says so rather than panicking. `Bundle` is what makes the entry total;
+    /// a bare manifest does not.
+    #[test]
+    fn an_entry_naming_nothing_is_none_not_a_panic() {
+        let manifest = BundleManifest {
+            entry: 99,
+            ..manifest()
+        };
+        assert!(manifest.entry_payload().is_none());
     }
 
     #[test]

@@ -74,6 +74,13 @@ impl RunnerId {
     pub const COUNT: usize = 9;
 
     /// This runner's slot in a resolved matrix; always below [`RunnerId::COUNT`].
+    ///
+    /// **This ordering is a wire format.** `kira-live` writes a runner into a
+    /// `KLB1` bundle as this index, so renumbering here changes what every
+    /// bundle already on disk decodes to — it is append-only, like any other
+    /// serialized tag. A new runner goes on the end. `kira-live`'s
+    /// `runner_wire_bytes_are_pinned` test spells the bytes out and fails if
+    /// this moves.
     pub fn index(self) -> usize {
         match self {
             Self::Desktop => 0,
@@ -175,6 +182,10 @@ impl BuildProfile {
 
     /// This profile's slot in a resolved matrix; always below
     /// [`BuildProfile::COUNT`].
+    ///
+    /// **This ordering is a wire format**, for the same reason as
+    /// [`RunnerId::index`]: a `KLB1` bundle records its profile as this index.
+    /// Append-only; `kira-live`'s `profile_wire_bytes_are_pinned` guards it.
     pub fn index(self) -> usize {
         match self {
             Self::Debug => 0,

@@ -16,10 +16,21 @@ at the end safely; everything else breaks artifacts that already exist.
 | `KBC1` module | `kira-bytecode/src/module.rs` | bytecode module: functions, main, string pool |
 | Opcodes | `kira-bytecode/src/op.rs` | append-only; a new op goes on the end |
 | `KHM1` manifest | `kira-hybrid-definition/src/manifest.rs` | payload paths, entry, per-function engine + signature + symbol |
+| `KLB1` bundle | `kira-live/src/bundle.rs` | the runner artifact boundary: runner + profile + entry, one row per payload (name, kind, SHA-256, size) |
+| `KLP1` protocol | `kira-live/src/protocol.rs` | live server/runner messages: length-prefixed frames, one tag byte per message |
 | `BridgeValue` | `kira-runtime-abi/src/bridge.rs` | `{ u8 tag, [7]u8 reserved, u64 payload }`, 16 bytes |
 | `Execution` / `Ownership` | `kira-runtime-abi/` | wire bytes, append-only |
 | `kira_rt_*` | `kira-native-bridge/src/runtime.rs` | native runtime: print, strings, div-zero trap |
 | ABI marker | `kira-runtime-abi/src/lib.rs` | `RUNTIME_ABI_VERSION` / `RUNTIME_ABI_MARKER` |
+
+`RunnerId`, `BuildProfile`, and `SessionPhase` have wire bytes too. The first two
+take theirs from `RunnerId::index`/`BuildProfile::index` in `kira-manifest`, so
+**reordering that matrix is a wire-format change** even though nothing in
+`kira-manifest` says so — bundles already written decode by those numbers.
+`kira-live`'s pinning tests (`runner_wire_bytes_are_pinned`,
+`profile_wire_bytes_are_pinned`, `phase_wire_bytes_are_pinned`) spell the bytes
+out literally and are what turns a reorder into a failing test rather than a
+silent redirection.
 
 ## Adding versus changing
 
