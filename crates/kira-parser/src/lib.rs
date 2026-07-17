@@ -388,16 +388,38 @@ mod tests {
     }
 
     #[test]
-    fn a_struct_method_is_reported_but_members_still_parse() {
+    fn methods_and_fields_interleave_in_a_struct_body() {
         let result = parse_text(
             "struct P {\n let x: Int\n function sum() -> Int { return x }\n let y: Int\n}",
         );
-        assert!(
-            result.diagnostics.iter().any(|d| d.code == Some("KPAR008")),
-            "a method must be reported, not silently dropped",
-        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         let declaration = only_struct(&result);
         assert_eq!(declaration.fields.len(), 2, "{:?}", declaration.fields);
+        assert_eq!(declaration.methods.len(), 1);
+        assert_eq!(result.interner.resolve(declaration.methods[0].name), "sum");
+    }
+
+    #[test]
+    fn a_method_call_and_a_field_read_are_told_apart_by_the_parens() {
+        let result = parse_text("function f() -> Int { return p.sum() + p.x }");
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let kira_syntax_model::ast::Stmt::Return {
+            value: Some(id), ..
+        } = first_stmt(&result)
+        else {
+            panic!("expected return");
+        };
+        let kira_syntax_model::ast::Expr::Binary { lhs, rhs, .. } = result.tree.expr(*id) else {
+            panic!("expected a binary expression");
+        };
+        assert!(matches!(
+            result.tree.expr(*lhs),
+            kira_syntax_model::ast::Expr::MethodCall { .. }
+        ));
+        assert!(matches!(
+            result.tree.expr(*rhs),
+            kira_syntax_model::ast::Expr::Field { .. }
+        ));
     }
 
     // ----- struct literals and field access ------------------------------

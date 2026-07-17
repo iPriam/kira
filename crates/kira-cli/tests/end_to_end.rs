@@ -124,16 +124,17 @@ fn a_struct_declaration_compiles_and_runs() {
 }
 
 #[test]
-fn a_struct_method_is_reported_rather_than_ignored() {
-    // Methods are real language surface this compiler does not model yet.
-    // Silently dropping one would run a program that means something else.
+fn a_struct_method_compiles_and_runs() {
     let output = run_source(
-        "struct P { var x: Int\n function sum() -> Int { return x } }\n\
-         @Main function main() { print(1) return }",
+        "struct P { var x: Int\n function doubled() -> Int { return x * 2 } }\n\
+         @Main function main() { let p = P { x = 21 } print(p.doubled()) return }",
     );
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("KPAR008"), "stderr was: {stderr}");
+    assert!(
+        output.status.success(),
+        "stderr was: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n");
 }
 
 #[test]
