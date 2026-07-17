@@ -498,6 +498,15 @@ fn comparison(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
     Some((hir, Type::Bool))
 }
 
+/// The `==` operator for comparing `subject` against `label`, or `None` when
+/// the two cannot be compared.
+///
+/// A `switch` arm is `subject == label`, so what a `case` may match is decided
+/// here rather than by a second rule that could drift from this one.
+pub(crate) fn equality_op(subject: Type, label: Type) -> Option<HirBinaryOp> {
+    equality(BinaryOp::Eq, subject, label).map(|(op, _)| op)
+}
+
 fn equality(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
     use BinaryOp as B;
     use HirBinaryOp as H;

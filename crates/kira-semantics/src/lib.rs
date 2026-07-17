@@ -149,6 +149,100 @@ mod tests {
     }
 
     #[test]
+    fn a_switch_type_checks_each_label_against_its_subject() {
+        assert!(
+            diagnostics(
+                r#"@Main function main() { var s = "" switch 1 { case 0 { s = "z" } default { s = "d" } } print(s) return }"#
+            )
+            .is_empty()
+        );
+        // A label the subject cannot be compared to is reported per arm.
+        assert_eq!(
+            codes(r#"@Main function main() { switch 1 { case "x" { print(1) } } return }"#),
+            vec!["KSEM044"]
+        );
+    }
+
+    /// Strings and bools are legal subjects: what a `case` may match is
+    /// whatever `==` accepts against the subject's type.
+    #[test]
+    fn a_switch_accepts_every_type_equality_does() {
+        for source in [
+            r#"@Main function main() { switch "a" { case "a" { print(1) } } return }"#,
+            r#"@Main function main() { switch true { case false { print(1) } } return }"#,
+            r#"@Main function main() { switch 1.5 { case 1.5 { print(1) } } return }"#,
+        ] {
+            assert!(diagnostics(source).is_empty(), "{source}");
+        }
+    }
+
+    /// A `break` in a switch arm acts on the enclosing loop; outside one it has
+    /// nothing to break, because a switch is not a loop.
+    #[test]
+    fn break_in_a_switch_arm_belongs_to_the_enclosing_loop() {
+        assert!(
+            diagnostics(
+                "@Main function main() { for i in 0..3 { switch i { case 1 { break } } } return }"
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            codes("@Main function main() { switch 1 { case 1 { break } } return }"),
+            vec!["KSEM041"],
+            "a switch is not a loop, so `break` in one outside a loop is an error"
+        );
+    }
+
+    /// A switch is not exhaustive-checked and duplicate labels are legal: the
+    /// language has no such rule, and inventing one would reject a program the
+    /// corpus accepts.
+    #[test]
+    fn a_switch_needs_no_default_and_may_repeat_a_label() {
+        assert!(
+            diagnostics("@Main function main() { switch 9 { case 1 { print(1) } } return }")
+                .is_empty()
+        );
+        assert!(
+            diagnostics("@Main function main() { switch 1 { case 1 { print(1) } case 1 { print(2) } } return }")
+                .is_empty()
+        );
+    }
+
+    /// A switch satisfies the definite-return check exactly when it has a
+    /// `default` *and* every arm returns — with no `default` the chain can fall
+    /// out of the bottom, so it proves nothing.
+    ///
+    /// The desugar gets this rule rather than implementing it: a `default`
+    /// becomes the final `else`, and an `if` counts only when both arms do.
+    #[test]
+    fn a_switch_returns_definitely_only_when_a_default_covers_it() {
+        assert!(
+            diagnostics(
+                "@Main function main() { return } \
+                 function f() -> Int { switch 1 { case 1 { return 1 } default { return 0 } } }"
+            )
+            .is_empty(),
+            "a default plus returning arms covers every path"
+        );
+        assert_eq!(
+            codes(
+                "@Main function main() { return } \
+                 function f() -> Int { switch 1 { case 1 { return 1 } } }"
+            ),
+            vec!["KSEM033"],
+            "without a default the switch can fall through"
+        );
+        assert_eq!(
+            codes(
+                "@Main function main() { return } \
+                 function f() -> Int { switch 1 { case 1 { print(1) } default { return 0 } } }"
+            ),
+            vec!["KSEM033"],
+            "an arm that does not return leaves a path open"
+        );
+    }
+
+    #[test]
     fn break_and_continue_outside_a_loop_are_reported() {
         assert_eq!(
             codes("@Main function main() { break return }"),
