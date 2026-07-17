@@ -10,10 +10,12 @@
 //! index/arena pattern and carry no lifetimes.
 
 pub mod ast;
+pub mod ownership;
 pub mod token;
 
 pub use ast::{
     BinaryOp, Block, Expr, ExprId, Function, Item, Param, Stmt, StmtId, SyntaxTree, TypeRef,
     UnaryOp, UnsupportedItem,
 };
+pub use ownership::{OwnershipMode, OwnershipOp};
 pub use token::{Token, TokenKind};

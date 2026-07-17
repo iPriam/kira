@@ -13,6 +13,7 @@ use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
     Block, FieldDecl, Function, Item, Param, StructDecl, TypeRef, UnsupportedItem,
 };
+use kira_syntax_model::ownership::OwnershipMode;
 
 use crate::Parser;
 
@@ -269,14 +270,54 @@ impl Parser<'_> {
         let name = self.intern_span(name_span);
         self.bump();
         self.expect(TokenKind::Colon);
+        let (ownership, ownership_span) = self.parse_param_ownership();
         let ty = self.parse_type_ref();
         let span = Span::from_bounds(name_span.start, self.previous_end());
         Some(Param {
             name,
             name_span,
+            ownership,
+            ownership_span,
             ty,
             span,
         })
+    }
+
+    /// Parses the ownership prefix of a parameter type, if one is written.
+    ///
+    /// Accepts `borrow`, `borrow mut`, `move`, and `copy`. All four are
+    /// contextual identifiers, so each is committed to only when a type name
+    /// follows it — that is what keeps `f(borrow: Int)` (a parameter *named*
+    /// `borrow`) and `f(x: move)` (a type named `move`, were one declared)
+    /// parsing as they always did. A bare type yields
+    /// [`OwnershipMode::Owned`], which is the default rather than a fallback.
+    fn parse_param_ownership(&mut self) -> (OwnershipMode, Option<Span>) {
+        if self.at_word("borrow")
+            && self.peek_is_word(1, "mut")
+            && self.peek(2).kind == TokenKind::Identifier
+        {
+            let start = self.current().span;
+            self.bump(); // `borrow`
+            let end = self.current().span;
+            self.bump(); // `mut`
+            return (
+                OwnershipMode::BorrowMut,
+                Some(Span::from_bounds(start.start, end.end())),
+            );
+        }
+        if self.at_word("borrow") && self.peek(1).kind == TokenKind::Identifier {
+            let span = self.current().span;
+            self.bump();
+            return (OwnershipMode::BorrowRead, Some(span));
+        }
+        for (word, mode) in [("move", OwnershipMode::Move), ("copy", OwnershipMode::Copy)] {
+            if self.at_word(word) && self.peek(1).kind == TokenKind::Identifier {
+                let span = self.current().span;
+                self.bump();
+                return (mode, Some(span));
+            }
+        }
+        (OwnershipMode::Owned, None)
     }
 
     fn parse_return_type(&mut self) -> Option<TypeRef> {

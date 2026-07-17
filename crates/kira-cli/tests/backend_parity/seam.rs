@@ -88,7 +88,7 @@ fn a_string_crossing_into_runtime_code_and_back_agrees() {
     let output = assert_parity(
         r#"
 @Runtime
-function greet(name: String) -> String {
+function greet(name: borrow String) -> String {
     return "hi, " + name
 }
 

@@ -12,6 +12,8 @@
 mod expr;
 mod item;
 mod stmt;
+#[cfg(test)]
+mod tests;
 
 use kira_core::{Interner, Symbol};
 use kira_diagnostics::{Diagnostic, Label, Severity};
@@ -100,6 +102,29 @@ impl<'a> Parser<'a> {
 
     fn at_eof(&self) -> bool {
         self.at(TokenKind::Eof)
+    }
+
+    /// The token `offset` places ahead of the cursor, clamped to the `Eof`
+    /// token so lookahead past the end is always a real token rather than a
+    /// panic.
+    fn peek(&self, offset: usize) -> Token {
+        self.tokens[(self.pos + offset).min(self.tokens.len() - 1)]
+    }
+
+    /// Whether the token `offset` ahead is the identifier `word`.
+    ///
+    /// This is how every *contextual* identifier is recognized: `borrow`,
+    /// `mut`, `move`, and `copy` are ordinary identifiers to the lexer, so
+    /// they are matched by text at the position that gives them meaning and
+    /// stay usable as names everywhere else.
+    fn peek_is_word(&self, offset: usize, word: &str) -> bool {
+        let token = self.peek(offset);
+        token.kind == TokenKind::Identifier && self.text_of(token.span) == word
+    }
+
+    /// Whether the cursor is on the contextual identifier `word`.
+    fn at_word(&self, word: &str) -> bool {
+        self.peek_is_word(0, word)
     }
 
     fn bump(&mut self) -> Token {
@@ -223,393 +248,5 @@ impl<'a> Parser<'a> {
         } else {
             self.tokens[self.pos - 1].span.end()
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use kira_runtime_abi::Execution;
-    use kira_syntax_model::ast::{Function, Item};
-
-    fn parse_text(text: &str) -> ParseResult {
-        parse(SourceId::new(0), text)
-    }
-
-    /// The one function in `text`, for tests that parse a single declaration.
-    fn only_function(result: &ParseResult) -> &Function {
-        match result.tree.items.as_slice() {
-            [Item::Function(function)] => function,
-            items => panic!("expected exactly one function, got {items:?}"),
-        }
-    }
-
-    #[test]
-    fn execution_annotations_select_an_engine() {
-        let runtime = parse_text("@Runtime function f() { return }");
-        assert_eq!(only_function(&runtime).execution, Execution::Runtime);
-        assert!(runtime.diagnostics.is_empty());
-
-        let native = parse_text("@Native function f() { return }");
-        assert_eq!(only_function(&native).execution, Execution::Native);
-        assert!(native.diagnostics.is_empty());
-    }
-
-    #[test]
-    fn an_unannotated_function_inherits_the_builds_engine() {
-        let plain = parse_text("function f() { return }");
-        assert_eq!(only_function(&plain).execution, Execution::Inherited);
-    }
-
-    #[test]
-    fn execution_annotations_compose_with_main() {
-        let result = parse_text("@Main @Native function main() { return }");
-        let function = only_function(&result);
-        assert!(function.is_main);
-        assert_eq!(function.execution, Execution::Native);
-        assert!(result.diagnostics.is_empty());
-    }
-
-    #[test]
-    fn two_engines_on_one_function_is_reported() {
-        let result = parse_text("@Runtime @Native function f() { return }");
-        assert!(
-            result
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == Some("KPAR005")),
-            "a contradictory engine pair must be reported, not silently resolved",
-        );
-        // Parsing still yields a usable function: the parser never bails.
-        assert_eq!(result.tree.items.len(), 1);
-    }
-
-    #[test]
-    fn repeating_one_engine_is_not_a_contradiction() {
-        let result = parse_text("@Native @Native function f() { return }");
-        assert_eq!(only_function(&result).execution, Execution::Native);
-        assert!(result.diagnostics.is_empty());
-    }
-
-    #[test]
-    fn parses_a_main_function() {
-        let result = parse_text("@Main\nfunction main() { print(1) return }");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        assert_eq!(result.tree.items.len(), 1);
-        match &result.tree.items[0] {
-            Item::Function(f) => {
-                assert!(f.is_main);
-                assert_eq!(result.interner.resolve(f.name), "main");
-            }
-            other => panic!("expected function, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parses_params_and_return_type() {
-        let result = parse_text("function add(a: Int, b: Int) -> Int { return a + b }");
-        match &result.tree.items[0] {
-            Item::Function(f) => {
-                assert_eq!(f.params.len(), 2);
-                assert!(f.return_type.is_some());
-            }
-            other => panic!("expected function, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn colon_return_type_is_accepted() {
-        let result = parse_text("function f(): Int { return 1 }");
-        match &result.tree.items[0] {
-            Item::Function(f) => assert!(f.return_type.is_some()),
-            other => panic!("expected function, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn unsupported_constructs_do_not_crash() {
-        let result = parse_text("enum E { A }\n@Main function main() { return }");
-        assert_eq!(result.tree.items.len(), 2);
-        assert!(matches!(result.tree.items[0], Item::Unsupported(_)));
-        assert!(matches!(result.tree.items[1], Item::Function(_)));
-        assert!(result.diagnostics.iter().any(|d| d.code == Some("KSEM900")));
-    }
-
-    // ----- structs -------------------------------------------------------
-
-    /// The one struct in `text`, for tests that parse a single declaration.
-    fn only_struct(result: &ParseResult) -> &kira_syntax_model::ast::StructDecl {
-        match result.tree.items.as_slice() {
-            [Item::Struct(declaration)] => declaration,
-            items => panic!("expected exactly one struct, got {items:?}"),
-        }
-    }
-
-    #[test]
-    fn parses_a_struct_with_let_and_var_members() {
-        let result = parse_text("struct Point {\n    let x: Int\n    var y: Float\n}");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let declaration = only_struct(&result);
-        assert_eq!(result.interner.resolve(declaration.name), "Point");
-        assert_eq!(declaration.fields.len(), 2);
-        assert!(!declaration.fields[0].mutable);
-        assert!(declaration.fields[1].mutable);
-        assert!(declaration.fields[0].default.is_none());
-    }
-
-    #[test]
-    fn semicolons_separate_members_on_one_line() {
-        let result = parse_text("struct Pair { var w: Int = 0; var h: Int = 0 }");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let declaration = only_struct(&result);
-        assert_eq!(declaration.fields.len(), 2);
-        assert!(declaration.fields.iter().all(|f| f.default.is_some()));
-    }
-
-    #[test]
-    fn an_empty_struct_parses() {
-        let result = parse_text("struct Blank {}");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        assert!(only_struct(&result).fields.is_empty());
-    }
-
-    #[test]
-    fn a_member_without_let_or_var_is_reported_and_recovers() {
-        let result = parse_text("struct P { x: Int\n let y: Int }");
-        assert!(result.diagnostics.iter().any(|d| d.code == Some("KPAR009")));
-        // Recovery keeps the well-formed member: the parser never bails.
-        let declaration = only_struct(&result);
-        assert!(
-            declaration
-                .fields
-                .iter()
-                .any(|f| result.interner.resolve(f.name) == "y"),
-        );
-    }
-
-    #[test]
-    fn methods_and_fields_interleave_in_a_struct_body() {
-        let result = parse_text(
-            "struct P {\n let x: Int\n function sum() -> Int { return x }\n let y: Int\n}",
-        );
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let declaration = only_struct(&result);
-        assert_eq!(declaration.fields.len(), 2, "{:?}", declaration.fields);
-        assert_eq!(declaration.methods.len(), 1);
-        assert_eq!(result.interner.resolve(declaration.methods[0].name), "sum");
-    }
-
-    #[test]
-    fn a_method_call_and_a_field_read_are_told_apart_by_the_parens() {
-        let result = parse_text("function f() -> Int { return p.sum() + p.x }");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let kira_syntax_model::ast::Stmt::Return {
-            value: Some(id), ..
-        } = first_stmt(&result)
-        else {
-            panic!("expected return");
-        };
-        let kira_syntax_model::ast::Expr::Binary { lhs, rhs, .. } = result.tree.expr(*id) else {
-            panic!("expected a binary expression");
-        };
-        assert!(matches!(
-            result.tree.expr(*lhs),
-            kira_syntax_model::ast::Expr::MethodCall { .. }
-        ));
-        assert!(matches!(
-            result.tree.expr(*rhs),
-            kira_syntax_model::ast::Expr::Field { .. }
-        ));
-    }
-
-    // ----- struct literals and field access ------------------------------
-
-    /// The first statement of the first function in `text`.
-    fn first_stmt(result: &ParseResult) -> &kira_syntax_model::ast::Stmt {
-        let function = match &result.tree.items[0] {
-            Item::Function(function) => function,
-            other => panic!("expected function, got {other:?}"),
-        };
-        result.tree.stmt(function.body.stmts[0])
-    }
-
-    #[test]
-    fn parses_a_struct_literal_with_both_binders() {
-        let result = parse_text("function f() { let p = Point { x = 1, y: 2 } }");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let kira_syntax_model::ast::Stmt::Let { init, .. } = first_stmt(&result) else {
-            panic!("expected let");
-        };
-        let kira_syntax_model::ast::Expr::StructLit { fields, .. } = result.tree.expr(*init) else {
-            panic!("expected a struct literal");
-        };
-        assert_eq!(fields.len(), 2, "both binders normalize to one node");
-    }
-
-    #[test]
-    fn struct_literal_fields_need_no_separator() {
-        // Newlines are insignificant, so a comma cannot be required.
-        let result = parse_text("function f() { let p = Point {\n    x = 1\n    y = 2\n} }");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let kira_syntax_model::ast::Stmt::Let { init, .. } = first_stmt(&result) else {
-            panic!("expected let");
-        };
-        let kira_syntax_model::ast::Expr::StructLit { fields, .. } = result.tree.expr(*init) else {
-            panic!("expected a struct literal");
-        };
-        assert_eq!(fields.len(), 2);
-    }
-
-    #[test]
-    fn a_brace_after_a_condition_opens_a_block_not_a_literal() {
-        // The ambiguity newline-insignificance creates: `if flag { … }` must
-        // read as a condition plus a block, never as a literal `flag { … }`.
-        let result = parse_text("function f() { if flag { return } }");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let kira_syntax_model::ast::Stmt::If {
-            cond, then_block, ..
-        } = first_stmt(&result)
-        else {
-            panic!("expected if");
-        };
-        assert!(matches!(
-            result.tree.expr(*cond),
-            kira_syntax_model::ast::Expr::Name { .. }
-        ));
-        assert_eq!(then_block.stmts.len(), 1);
-    }
-
-    #[test]
-    fn a_parenthesized_literal_is_still_allowed_in_a_condition() {
-        let result = parse_text("function f() { if (Point { x = 1 }).x > 0 { return } }");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        assert!(matches!(
-            first_stmt(&result),
-            kira_syntax_model::ast::Stmt::If { .. }
-        ));
-    }
-
-    #[test]
-    fn a_literal_inside_a_condition_call_is_allowed() {
-        // The suppression must not leak past a delimiter.
-        let result = parse_text("function f() { while check(Point { x = 1 }) { return } }");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        assert!(matches!(
-            first_stmt(&result),
-            kira_syntax_model::ast::Stmt::While { .. }
-        ));
-    }
-
-    #[test]
-    fn parses_a_chained_field_read() {
-        let result = parse_text("function f() -> Int { return b.size.x }");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let kira_syntax_model::ast::Stmt::Return {
-            value: Some(id), ..
-        } = first_stmt(&result)
-        else {
-            panic!("expected return");
-        };
-        let kira_syntax_model::ast::Expr::Field { base, .. } = result.tree.expr(*id) else {
-            panic!("expected a field read");
-        };
-        // Left-associative: `(b.size).x`.
-        assert!(matches!(
-            result.tree.expr(*base),
-            kira_syntax_model::ast::Expr::Field { .. }
-        ));
-    }
-
-    #[test]
-    fn parses_assignment_to_a_local_and_to_a_field_path() {
-        let result = parse_text("function f() { x = 1\n b.size.x = 2 }");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let function = match &result.tree.items[0] {
-            Item::Function(function) => function,
-            other => panic!("expected function, got {other:?}"),
-        };
-        assert_eq!(function.body.stmts.len(), 2);
-        for stmt in &function.body.stmts {
-            assert!(matches!(
-                result.tree.stmt(*stmt),
-                kira_syntax_model::ast::Stmt::Assign { .. }
-            ));
-        }
-    }
-
-    #[test]
-    fn import_then_function_recovers() {
-        let result = parse_text("import Foundation\n@Main function main() { return }");
-        assert_eq!(result.tree.items.len(), 2);
-        assert!(matches!(result.tree.items[1], Item::Function(_)));
-    }
-
-    #[test]
-    fn missing_brace_still_terminates() {
-        let result = parse_text("function f() { return 1");
-        assert!(!result.diagnostics.is_empty());
-        assert_eq!(result.tree.items.len(), 1);
-    }
-
-    // ----- newline-boundary parity (verified against the reference) -------
-    //
-    // The reference implementation treats newlines as insignificant inside a
-    // function body: expressions continue across lines and `return` attaches a
-    // next-line value. Verified by running the reference on scratch packages:
-    //   `let a = 5` / `-2` / `print(a)`  -> prints 3   (continuation)
-    //   `return` / `42` in an Int fn     -> returns 42 (value attaches)
-    //   `return` / `print(..)` in a Void fn -> rejected (value attaches, Void
-    //    functions cannot return one)
-    // These tests lock that parity so a future "newline ends the statement"
-    // change cannot land silently.
-
-    fn function_body(result: &ParseResult) -> &Function {
-        match &result.tree.items[0] {
-            Item::Function(function) => function,
-            other => panic!("expected function, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn binary_expression_continues_across_a_newline() {
-        let result = parse_text("function f() -> Int {\n    let a = 5\n    -2\n    return a\n}");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let function = function_body(&result);
-        // `5` and `-2` fold into one initializer: exactly two statements.
-        assert_eq!(function.body.stmts.len(), 2);
-        let kira_syntax_model::ast::Stmt::Let { init, .. } =
-            result.tree.stmt(function.body.stmts[0])
-        else {
-            panic!("expected let");
-        };
-        assert!(matches!(
-            result.tree.expr(*init),
-            kira_syntax_model::ast::Expr::Binary {
-                op: kira_syntax_model::ast::BinaryOp::Sub,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn return_attaches_a_next_line_value() {
-        let result = parse_text("function f() -> Int {\n    return\n    42\n}");
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let function = function_body(&result);
-        assert_eq!(function.body.stmts.len(), 1);
-        assert!(matches!(
-            result.tree.stmt(function.body.stmts[0]),
-            kira_syntax_model::ast::Stmt::Return { value: Some(_), .. }
-        ));
-    }
-
-    #[test]
-    fn parenthesized_expression_spans_lines() {
-        let result = parse_text(
-            "function f() -> Int {\n    let a = (1 +\n        2 +\n        3)\n    return a\n}",
-        );
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let function = function_body(&result);
-        assert_eq!(function.body.stmts.len(), 2);
     }
 }

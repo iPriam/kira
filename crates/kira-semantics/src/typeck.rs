@@ -20,10 +20,20 @@ impl Analyzer<'_> {
             Expr::Float { value, .. } => self.program.exprs.alloc(HirExpr::Float(value)),
             Expr::Bool { value, .. } => self.program.exprs.alloc(HirExpr::Bool(value)),
             Expr::Str { value, .. } => self.program.exprs.alloc(HirExpr::Str(value)),
+            Expr::Ownership { op, operand, span } => {
+                self.analyze_ownership_expr(ctx, op, operand, span)
+            }
             Expr::Name { symbol, span } => {
                 let name = self.interner.resolve(symbol).to_owned();
                 match ctx.resolve(&name) {
                     Some(local) => {
+                        // Reading a moved-out local is the first of KSEM107's
+                        // three messages, and it is checked here — at the one
+                        // place every read of a local passes through — rather
+                        // than at each construct that might contain one.
+                        if !self.check_local_live(ctx, local, span) {
+                            return self.program.exprs.alloc(HirExpr::Error);
+                        }
                         let ty = ctx.local_type(local);
                         self.program.exprs.alloc(HirExpr::Local { local, ty })
                     }
@@ -102,14 +112,16 @@ impl Analyzer<'_> {
                 ..
             } => {
                 let name = self.interner.resolve(callee).to_owned();
-                let arg_hirs: Vec<HirExprId> = args
-                    .iter()
-                    .map(|&arg| self.analyze_expr(ctx, arg))
-                    .collect();
                 if name == "print" {
+                    // `print` borrows: it renders its argument and consumes
+                    // nothing the caller could miss.
+                    let arg_hirs: Vec<HirExprId> = args
+                        .iter()
+                        .map(|&arg| self.analyze_expr(ctx, arg))
+                        .collect();
                     self.analyze_print(&arg_hirs, callee_span)
                 } else {
-                    self.analyze_user_call(&name, &arg_hirs, callee_span)
+                    self.analyze_user_call_from_syntax(ctx, &name, &[], &args, callee_span)
                 }
             }
             Expr::StructLit {
@@ -180,8 +192,6 @@ impl Analyzer<'_> {
     ) -> HirExprId {
         let receiver_hir = self.analyze_expr(ctx, receiver);
         let receiver_ty = self.program.expr(receiver_hir).type_of();
-        let mut all_args = vec![receiver_hir];
-        all_args.extend(args.iter().map(|&arg| self.analyze_expr(ctx, arg)));
 
         // An error receiver already spoke; do not pile on.
         if receiver_ty == Type::Error {
@@ -216,7 +226,7 @@ impl Analyzer<'_> {
             self.emit(method_span, "KSEM097", message);
             return self.program.exprs.alloc(HirExpr::Error);
         }
-        self.analyze_user_call(&qualified, &all_args, method_span)
+        self.analyze_user_call_from_syntax(ctx, &qualified, &[receiver_hir], args, method_span)
     }
 
     /// Type-checks a struct literal into a [`HirExpr::StructNew`] holding one
@@ -368,6 +378,54 @@ impl Analyzer<'_> {
             args: args.to_vec(),
             ty: Type::Void,
         })
+    }
+
+    /// Type-checks a call whose arguments are still syntax.
+    ///
+    /// Ownership is the reason this exists. A parameter's [`OwnershipMode`]
+    /// decides whether its argument must say `move`, may not say `move`, or
+    /// must say `copy` — and answering that needs the *written* argument, not
+    /// the analyzed one: `f(mesh)` and `f(move mesh)` produce the same HIR and
+    /// differ only in what the source said. So each argument is analyzed
+    /// against the mode its parameter declared, and only then handed to
+    /// [`Analyzer::analyze_user_call`] for the type check.
+    ///
+    /// `leading` carries arguments already analyzed — a method's receiver —
+    /// which occupy the first parameter slots.
+    pub(crate) fn analyze_user_call_from_syntax(
+        &mut self,
+        ctx: &mut FnCtx,
+        name: &str,
+        leading: &[HirExprId],
+        args: &[ExprId],
+        span: kira_source::Span,
+    ) -> HirExprId {
+        let sig = self
+            .lookup_function(name)
+            .map(|(id, params, _)| (id, params.to_vec()));
+        let Some((id, params)) = sig else {
+            // No signature to check against: still analyze every argument so
+            // the mistakes inside them are reported alongside the bad call.
+            let mut all = leading.to_vec();
+            all.extend(args.iter().map(|&arg| self.analyze_expr(ctx, arg)));
+            return self.analyze_user_call(name, &all, span);
+        };
+        let ownership = self.param_ownership(id);
+        let mut all = leading.to_vec();
+        for (index, &arg) in args.iter().enumerate() {
+            let slot = index + leading.len();
+            // An arity mismatch leaves some argument with no parameter to
+            // check against. `analyze_user_call` reports the count; here the
+            // argument just analyzes plainly rather than being checked against
+            // a mode that does not exist.
+            match (params.get(slot), ownership.get(slot)) {
+                (Some(&expected), Some(&mode)) => {
+                    all.push(self.analyze_call_argument(ctx, arg, expected, mode, name));
+                }
+                _ => all.push(self.analyze_expr(ctx, arg)),
+            }
+        }
+        self.analyze_user_call(name, &all, span)
     }
 
     fn analyze_user_call(

@@ -121,6 +121,7 @@ mod arithmetic;
 mod control_flow;
 mod examples;
 mod logic;
+mod ownership;
 mod seam;
 mod strings;
 mod structs;

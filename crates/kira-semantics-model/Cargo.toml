@@ -11,4 +11,8 @@ workspace = true
 [dependencies]
 kira-runtime-abi.workspace = true
 kira-source.workspace = true
+# The five ownership modes are a syntax fact (they are what the source wrote),
+# so they are anchored in the syntax model and re-exported here rather than
+# defined a second time. Layer 2 depending on layer 1 keeps the DAG intact.
+kira-syntax-model.workspace = true
 la-arena.workspace = true

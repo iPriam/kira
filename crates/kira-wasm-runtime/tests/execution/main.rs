@@ -234,5 +234,6 @@ mod calls;
 mod control_flow;
 mod floats;
 mod memory;
+mod ownership;
 mod scalars;
 mod structs;
