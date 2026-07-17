@@ -78,6 +78,41 @@ impl SessionPhase {
         }
     }
 
+    /// This phase's wire byte.
+    ///
+    /// Append-only, and pinned by a test: a runner built from an older checkout
+    /// reports its milestones with these bytes, and a renumber would have it
+    /// silently reporting a different one.
+    ///
+    /// The byte lives here with the phase rather than in the protocol, for the
+    /// same reason [`ReloadMode::as_byte`] does: a tag and the thing it names go
+    /// together, so there is one place to look and one place to get it wrong.
+    pub fn as_byte(self) -> u8 {
+        match self {
+            Self::Connected => 0,
+            Self::BundleSent => 1,
+            Self::BundleReceived => 2,
+            Self::BundleLoaded => 3,
+            Self::BundleLinked => 4,
+            Self::EntrypointStarted => 5,
+            Self::FramePresented => 6,
+        }
+    }
+
+    /// The phase a wire byte names, or `None` if this build knows no such phase.
+    pub fn from_byte(byte: u8) -> Option<SessionPhase> {
+        match byte {
+            0 => Some(Self::Connected),
+            1 => Some(Self::BundleSent),
+            2 => Some(Self::BundleReceived),
+            3 => Some(Self::BundleLoaded),
+            4 => Some(Self::BundleLinked),
+            5 => Some(Self::EntrypointStarted),
+            6 => Some(Self::FramePresented),
+            _ => None,
+        }
+    }
+
     /// Whether this milestone is the runner's to report, rather than the
     /// server's to observe.
     ///
@@ -246,13 +281,33 @@ pub enum LiveEvent {
     },
     /// A bundle was rebuilt after a change.
     BundleRebuilt,
-    /// The reload was staged for the runner to apply.
-    ReloadStaged {
-        /// How the reload will be applied.
+    /// The supervisor told the runner a rebuilt bundle exists, and which tier it
+    /// is attempting.
+    ///
+    /// A request, not an outcome: this is emitted before the runner has done
+    /// anything, and a session that stopped here would have changed nothing.
+    ReloadNotified {
+        /// The tier being attempted.
         mode: ReloadMode,
+        /// Why, when the tier is a fallback rather than the first attempt.
+        reason: Option<String>,
     },
-    /// The reload was applied.
-    ReloadApplied {
+    /// The runner loaded the rebuilt bundle, but has not swapped to it.
+    ///
+    /// Loaded, not live: the new code is in the process and the old code is
+    /// still what runs.
+    ReloadStaged,
+    /// The runner swapped to the staged bundle.
+    ///
+    /// Committed, not proven: the new code is what runs now, but has not run
+    /// yet.
+    ReloadApplied,
+    /// The swapped-in code ran without incident.
+    ///
+    /// This is the success signal, and it is deliberately later than
+    /// [`LiveEvent::ReloadApplied`]: a swap that commits and then traps on its
+    /// first call is not a reload that worked.
+    ReloadCompleted {
         /// How the reload was applied.
         mode: ReloadMode,
     },
@@ -291,6 +346,23 @@ impl ReloadMode {
             Self::Relaunch => "relaunch",
         }
     }
+
+    /// This mode's wire byte. Append-only, like every tag here.
+    pub fn as_byte(self) -> u8 {
+        match self {
+            Self::HotPatch => 0,
+            Self::Relaunch => 1,
+        }
+    }
+
+    /// The mode a wire byte names, or `None` if this build knows no such mode.
+    pub fn from_byte(byte: u8) -> Option<ReloadMode> {
+        match byte {
+            0 => Some(Self::HotPatch),
+            1 => Some(Self::Relaunch),
+            _ => None,
+        }
+    }
 }
 
 impl LiveEvent {
@@ -310,8 +382,10 @@ impl LiveEvent {
             Self::SessionReady => "live.session.ready",
             Self::SourceChanged { .. } => "live.source.changed",
             Self::BundleRebuilt => "live.bundle.rebuilt",
-            Self::ReloadStaged { .. } => "live.reload.staged",
-            Self::ReloadApplied { .. } => "live.reload.applied",
+            Self::ReloadNotified { .. } => "live.reload.notified",
+            Self::ReloadStaged => "live.reload.staged",
+            Self::ReloadApplied => "live.reload.applied",
+            Self::ReloadCompleted { .. } => "live.reload.completed",
             Self::ReloadRejected { .. } => "live.reload.rejected",
             Self::RestartRequired { .. } => "live.reload.restart_required",
             Self::RunnerRelaunched => "live.runner.relaunched",
@@ -350,9 +424,14 @@ impl fmt::Display for LiveEvent {
             Self::BundleSent { bytes } => write!(f, " bytes={bytes}"),
             Self::BundleReceived { payloads } => write!(f, " payloads={payloads}"),
             Self::SourceChanged { path } => write!(f, " path={path}"),
-            Self::ReloadStaged { mode } | Self::ReloadApplied { mode } => {
-                write!(f, " mode={}", mode.label())
+            Self::ReloadNotified { mode, reason } => {
+                write!(f, " mode={}", mode.label())?;
+                match reason {
+                    Some(reason) => write!(f, " reason={reason}"),
+                    None => Ok(()),
+                }
             }
+            Self::ReloadCompleted { mode } => write!(f, " mode={}", mode.label()),
             Self::ReloadRejected { reason } | Self::RestartRequired { reason } => {
                 write!(f, " reason={reason}")
             }
@@ -467,6 +546,26 @@ mod tests {
         assert_eq!(progress.ready(false), Ok(()));
     }
 
+    /// The phase bytes are the wire contract with runners built from other
+    /// checkouts, so they are pinned literally rather than left to the match arm.
+    #[test]
+    fn phase_wire_bytes_are_pinned() {
+        let expected = [
+            (SessionPhase::Connected, 0u8),
+            (SessionPhase::BundleSent, 1),
+            (SessionPhase::BundleReceived, 2),
+            (SessionPhase::BundleLoaded, 3),
+            (SessionPhase::BundleLinked, 4),
+            (SessionPhase::EntrypointStarted, 5),
+            (SessionPhase::FramePresented, 6),
+        ];
+        for (phase, byte) in expected {
+            assert_eq!(phase.as_byte(), byte, "wire byte for {phase:?}");
+            assert_eq!(SessionPhase::from_byte(byte), Some(phase));
+        }
+        assert_eq!(SessionPhase::from_byte(7), None);
+    }
+
     /// The server owns the milestones it can actually observe; the runner owns
     /// the rest. A runner that could report the server's would be able to claim
     /// a bundle was served that never was.
@@ -546,12 +645,38 @@ mod tests {
             "live.server.started address=127.0.0.1:4000"
         );
         assert_eq!(
-            LiveEvent::ReloadApplied {
+            LiveEvent::ReloadCompleted {
                 mode: ReloadMode::HotPatch
             }
             .to_string(),
-            "live.reload.applied mode=hotpatch"
+            "live.reload.completed mode=hotpatch"
         );
         assert_eq!(LiveEvent::BundleLoaded.to_string(), "live.bundle.loaded");
+        // `applied` carries no mode: it is the runner's, and a runner only ever
+        // applies a hot patch — a relaunch is done to it, not by it.
+        assert_eq!(LiveEvent::ReloadApplied.to_string(), "live.reload.applied");
+    }
+
+    /// The first `notified` announces the tier being attempted; the second, on a
+    /// fallback, must say why. A relaunch with no reason is how someone loses
+    /// their state and never learns what did it.
+    #[test]
+    fn a_fallback_notification_carries_its_reason() {
+        assert_eq!(
+            LiveEvent::ReloadNotified {
+                mode: ReloadMode::HotPatch,
+                reason: None,
+            }
+            .to_string(),
+            "live.reload.notified mode=hotpatch"
+        );
+        assert_eq!(
+            LiveEvent::ReloadNotified {
+                mode: ReloadMode::Relaunch,
+                reason: Some("the native library changed".to_owned()),
+            }
+            .to_string(),
+            "live.reload.notified mode=relaunch reason=the native library changed"
+        );
     }
 }

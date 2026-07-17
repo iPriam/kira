@@ -40,8 +40,11 @@ pub mod client;
 pub mod event;
 pub mod hash;
 pub mod protocol;
+pub mod reload;
 pub mod server;
+pub mod session;
 pub mod store;
+pub mod watch;
 
 pub use bundle::{
     BundleDecodeError, BundleManifest, MANIFEST_FILE, PAYLOAD_DIR, PayloadEntry, PayloadKind,
@@ -53,5 +56,8 @@ pub use protocol::{
     ClientMessage, Message, PROTOCOL_VERSION, ProtocolError, ServerMessage, read_message,
     write_message,
 };
+pub use reload::{RelaunchReason, ReloadDecision, decide, hotpatch_disabled_by_env};
 pub use server::{LiveServer, ServerError};
+pub use session::{LiveSession, ReloadOutcome};
 pub use store::{Bundle, BundleError, NamedPayload};
+pub use watch::{Change, ChangeKind, SourceWatcher, WatchSet};

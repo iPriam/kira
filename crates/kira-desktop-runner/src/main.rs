@@ -46,13 +46,22 @@ fn main() -> ExitCode {
     }
 }
 
-/// Connects, runs the session, and says goodbye.
+/// Connects, runs the session, takes reloads, and says goodbye.
 fn run(options: &Options) -> Result<(), kira_live::ClientError> {
     let mut client = RunnerClient::connect(options.server, RunnerId::Desktop)?;
     let mut host = DesktopHost::new(options.cache.clone());
     client.run_session(&mut host)?;
-    // The entrypoint returned, so this runner has done everything a headless
-    // desktop runner can. A windowed runner would keep going and report frames.
+
+    // The entrypoint returned, and the runner stays up. This is what makes a
+    // reload possible at all: the process, its cache, and its loaded native
+    // library are still here, waiting to be handed new code.
+    //
+    // It is also where this runner's swap point is. The specification applies a
+    // swap "at a frame boundary when the VM is idle" — a headless runner has no
+    // frames, but it has the other half, and the other half is the one that
+    // matters: the VM is not executing, so nothing holds a pointer into the
+    // module about to be replaced.
+    client.serve_reloads(&mut host)?;
     client.goodbye()?;
     Ok(())
 }

@@ -1,23 +1,21 @@
-//! The live server: it holds the bundle and serves it to a runner.
+//! The live server: it binds the port and accepts runners.
 //!
-//! The server is deliberately incurious about what the runner does with the
-//! bundle. It hands over the manifest, hands over each payload the runner asks
-//! for by name, and records the milestones the runner reports. It never decides
-//! that the app loaded — only the runner can know that, so only the runner says
-//! it. The [`SessionProgress`] the server returns is a record of what the runner
-//! actually reported, which is what makes it evidence rather than optimism.
+//! Accepting is all it does. What happens next belongs to
+//! [`LiveSession`](crate::LiveSession), because a session outlives the accept
+//! that made it: a runner connects once and then takes reload after reload, and
+//! a server that ended at ready would make every source change a fresh process.
 //!
-//! Every read is bounded by a timeout. A runner that connects and then says
-//! nothing must fail the session, not hang the build.
+//! Every wait here is bounded. A runner that connects and says nothing, one that
+//! stops reading, and one that never arrives at all are three different ways for
+//! a session to stop making progress, and each has its own timeout — because
+//! none of them is allowed to hang the build.
 
-use std::io::{BufReader, BufWriter};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
-use crate::event::{LiveEvent, ProgressError, SessionPhase, SessionProgress};
-use crate::protocol::{
-    ClientMessage, PROTOCOL_VERSION, ProtocolError, ServerMessage, read_message, write_message,
-};
+use crate::event::{LiveEvent, ProgressError, SessionProgress};
+use crate::protocol::ProtocolError;
+use crate::session::LiveSession;
 use crate::store::Bundle;
 
 /// How long the server waits on a runner that has gone quiet.
@@ -83,6 +81,12 @@ pub enum ServerError {
     /// could drive a session to ready without a bundle ever leaving the server.
     #[error("live runner reported `{0}`, which is the server's milestone to observe")]
     NotRunnerMilestone(&'static str),
+    /// The runner reported reload work that nobody asked it to do.
+    ///
+    /// Refused rather than ignored: a runner whose reports can arrive unprompted
+    /// is a runner whose reports mean nothing.
+    #[error("live runner reported `{0}` with no reload in flight")]
+    UnexpectedReloadReport(&'static str),
     /// The runner reported that it could not continue.
     #[error("live runner failed: {0}")]
     RunnerFailed(String),
@@ -120,18 +124,16 @@ impl LiveServer {
         Ok(self.listener.local_addr()?)
     }
 
-    /// The bundle this server serves.
+    /// The bundle this server was bound with.
     pub fn bundle(&self) -> &Bundle {
         &self.bundle
     }
 
     /// Accepts one runner and runs its session to completion.
     ///
-    /// Returns what the runner actually reported reaching. The caller decides
-    /// whether that is ready — the server does not round up.
-    ///
-    /// `on_event` sees each milestone as it happens, so a caller can print a
-    /// live session as it runs rather than after it ends.
+    /// Returns what the runner actually reported reaching, then ends the
+    /// session. For a session that stays open — which is what reload needs — use
+    /// [`LiveServer::accept_session`].
     pub fn serve_once(
         &self,
         headless: bool,
@@ -140,26 +142,51 @@ impl LiveServer {
         self.serve_once_within(headless, ACCEPT_TIMEOUT, on_event)
     }
 
-    /// Accepts one runner and runs its session, waiting at most `accept_timeout`
-    /// for it to connect.
+    /// [`LiveServer::serve_once`], waiting at most `accept_timeout` to be
+    /// connected to.
     ///
-    /// [`LiveServer::serve_once`] is this with [`ACCEPT_TIMEOUT`]. The bound is a
-    /// parameter so a test can prove the give-up path fires without spending the
-    /// production timeout doing it — a 30-second test gets deleted, and then the
-    /// bound it was guarding stops being checked at all.
+    /// The bound is a parameter so a test can prove the give-up path fires
+    /// without spending the production timeout doing it — a 30-second test gets
+    /// deleted, and then the bound it was guarding stops being checked.
     pub fn serve_once_within(
         &self,
         headless: bool,
         accept_timeout: Duration,
         on_event: &mut dyn FnMut(LiveEvent),
     ) -> Result<SessionProgress, ServerError> {
+        let session =
+            self.accept_session_within(self.bundle.clone(), headless, accept_timeout, on_event)?;
+        Ok(session.progress())
+    }
+
+    /// Accepts one runner, serves it `bundle`, and hands back the open session.
+    ///
+    /// The session is still connected when this returns, which is what makes
+    /// reload possible: the runner is up, running, and listening.
+    pub fn accept_session(
+        &self,
+        bundle: Bundle,
+        headless: bool,
+        on_event: &mut dyn FnMut(LiveEvent),
+    ) -> Result<LiveSession, ServerError> {
+        self.accept_session_within(bundle, headless, ACCEPT_TIMEOUT, on_event)
+    }
+
+    /// [`LiveServer::accept_session`], waiting at most `accept_timeout`.
+    pub fn accept_session_within(
+        &self,
+        bundle: Bundle,
+        headless: bool,
+        accept_timeout: Duration,
+        on_event: &mut dyn FnMut(LiveEvent),
+    ) -> Result<LiveSession, ServerError> {
         let (stream, peer) = self.accept_before(accept_timeout)?;
         stream.set_read_timeout(Some(READ_TIMEOUT))?;
         stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
         // Nagle would sit on the small control messages this protocol is mostly
         // made of, waiting for more data that the peer is blocked from sending.
         stream.set_nodelay(true)?;
-        self.run_session(stream, peer, headless, on_event)
+        LiveSession::start(stream, peer, bundle, headless, on_event)
     }
 
     /// Accepts one connection, giving up after `timeout`.
@@ -194,165 +221,5 @@ impl LiveServer {
         // would turn every read in the session into a WouldBlock error.
         stream.set_nonblocking(false)?;
         Ok((stream, peer))
-    }
-
-    /// Runs one connected session.
-    fn run_session(
-        &self,
-        stream: TcpStream,
-        peer: SocketAddr,
-        headless: bool,
-        on_event: &mut dyn FnMut(LiveEvent),
-    ) -> Result<SessionProgress, ServerError> {
-        let mut reader = BufReader::new(stream.try_clone()?);
-        let mut writer = BufWriter::new(stream);
-        let mut progress = SessionProgress::new();
-
-        self.handshake(&mut reader, &mut writer)?;
-        on_event(LiveEvent::ClientConnected {
-            peer: peer.to_string(),
-        });
-        progress.reach(SessionPhase::Connected)?;
-
-        loop {
-            let message: ClientMessage = match read_message(&mut reader) {
-                Ok(message) => message,
-                // The runner went away. Whether that is fine depends entirely on
-                // whether it got the session up first, which the caller decides.
-                Err(ProtocolError::Disconnected) => {
-                    return match progress.ready(headless) {
-                        Ok(()) => Ok(progress),
-                        Err(error) => Err(ServerError::Incomplete(error)),
-                    };
-                }
-                Err(error) => return Err(error.into()),
-            };
-
-            match message {
-                ClientMessage::Hello { .. } => return Err(ServerError::NoHello),
-                ClientMessage::RequestBundle => {
-                    on_event(LiveEvent::BundleRequested);
-                    write_message(
-                        &mut writer,
-                        &ServerMessage::Manifest {
-                            bytes: self.bundle.manifest().to_bytes(),
-                        },
-                    )?;
-                }
-                ClientMessage::RequestPayload { name } => {
-                    self.send_payload(&mut writer, &name, &mut progress, on_event)?;
-                }
-                ClientMessage::Progress { phase } => {
-                    if !phase.reported_by_runner() {
-                        return Err(ServerError::NotRunnerMilestone(phase.label()));
-                    }
-                    progress.reach(phase)?;
-                    if let Some(event) = milestone_event(phase, &self.bundle) {
-                        on_event(event);
-                    }
-                    if progress.ready(headless).is_ok() {
-                        on_event(LiveEvent::SessionReady);
-                        return Ok(progress);
-                    }
-                }
-                ClientMessage::Failed { reason } => return Err(ServerError::RunnerFailed(reason)),
-                ClientMessage::Goodbye => {
-                    return match progress.ready(headless) {
-                        Ok(()) => Ok(progress),
-                        Err(error) => Err(ServerError::Incomplete(error)),
-                    };
-                }
-            }
-        }
-    }
-
-    /// Exchanges `Hello`/`Welcome`, rejecting a peer this server cannot serve.
-    fn handshake(
-        &self,
-        reader: &mut BufReader<TcpStream>,
-        writer: &mut BufWriter<TcpStream>,
-    ) -> Result<(), ServerError> {
-        let hello: ClientMessage = read_message(reader)?;
-        let ClientMessage::Hello { protocol, runner } = hello else {
-            return Err(ServerError::NoHello);
-        };
-        if protocol != PROTOCOL_VERSION {
-            return Err(ServerError::VersionMismatch {
-                theirs: protocol,
-                ours: PROTOCOL_VERSION,
-            });
-        }
-        let expected = self.bundle.manifest().runner;
-        if runner != expected {
-            return Err(ServerError::RunnerMismatch {
-                expected: expected.label(),
-                actual: runner.label(),
-            });
-        }
-        write_message(
-            writer,
-            &ServerMessage::Welcome {
-                protocol: PROTOCOL_VERSION,
-            },
-        )?;
-        Ok(())
-    }
-
-    /// Sends the payload called `name`, or says the bundle has no such payload.
-    ///
-    /// Sending a payload is what `bundle sent` means, and it is the server's own
-    /// milestone: this is the one place that records it, right where the bytes
-    /// actually go out.
-    fn send_payload(
-        &self,
-        writer: &mut BufWriter<TcpStream>,
-        name: &str,
-        progress: &mut SessionProgress,
-        on_event: &mut dyn FnMut(LiveEvent),
-    ) -> Result<(), ServerError> {
-        match self.bundle.payload_by_name(name) {
-            Some(bytes) => {
-                let message = ServerMessage::Payload {
-                    name: name.to_owned(),
-                    bytes: bytes.to_vec(),
-                };
-                write_message(writer, &message)?;
-                progress.reach(SessionPhase::BundleSent)?;
-                on_event(LiveEvent::BundleSent { bytes: bytes.len() });
-                Ok(())
-            }
-            // Not an error for the server: a runner asking for something absent
-            // is the runner's problem, and it is told so it can report precisely.
-            None => {
-                write_message(
-                    writer,
-                    &ServerMessage::NoSuchPayload {
-                        name: name.to_owned(),
-                    },
-                )?;
-                Ok(())
-            }
-        }
-    }
-}
-
-/// The event reporting a milestone the runner told us about, or `None` for a
-/// phase that is not the runner's to report.
-///
-/// Returning `None` rather than inventing an event for the impossible case: the
-/// caller already rejects a server-owned phase, and the alternative was an arm
-/// that emitted some unrelated event to satisfy the match. The event vocabulary
-/// is the session's public contract — a wrong event on it is worse than the
-/// panic it was avoiding, because a panic at least does not lie.
-fn milestone_event(phase: SessionPhase, bundle: &Bundle) -> Option<LiveEvent> {
-    match phase {
-        SessionPhase::BundleReceived => Some(LiveEvent::BundleReceived {
-            payloads: bundle.manifest().payloads.len(),
-        }),
-        SessionPhase::BundleLoaded => Some(LiveEvent::BundleLoaded),
-        SessionPhase::BundleLinked => Some(LiveEvent::BundleLinked),
-        SessionPhase::EntrypointStarted => Some(LiveEvent::EntrypointStarted),
-        SessionPhase::FramePresented => Some(LiveEvent::FramePresented),
-        SessionPhase::Connected | SessionPhase::BundleSent => None,
     }
 }
