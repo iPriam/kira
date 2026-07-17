@@ -47,6 +47,7 @@ pub mod literals;
 pub mod lower;
 pub mod module;
 pub mod rt;
+pub mod structs;
 pub mod web;
 
 pub use error::WasmError;
@@ -57,6 +58,7 @@ use literals::Literals;
 use lower::Lowering;
 use module::Module;
 use rt::Runtime;
+use structs::Structs;
 
 /// Which wasm memory a build targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -129,6 +131,7 @@ pub fn compile(program: &IrProgram, device: WasmDevice) -> Result<Vec<u8>, WasmE
     let mut literals = Literals::new();
 
     let runtime = Runtime::declare(&mut module).ok_or(WasmError::Wiring)?;
+    let structs = Structs::declare(&mut module, &program.structs)?;
 
     // Every Kira function gets an index before any body is emitted, so a call
     // can name a function that has not been lowered yet — which is what direct
@@ -142,12 +145,14 @@ pub fn compile(program: &IrProgram, device: WasmDevice) -> Result<Vec<u8>, WasmE
     if !runtime.define(&mut module, &mut literals) {
         return Err(WasmError::Wiring);
     }
+    structs.define(&mut module, &runtime, &program.structs)?;
 
     for (index, function) in program.functions.iter().enumerate() {
         let handle = *handles.get(index).ok_or(WasmError::Wiring)?;
         let (params, results) = signature(function, device)?;
         let mut func = func::Func::new(device.addr(), params, results);
-        Lowering::new(program, &runtime, &mut literals, &handles).function(&mut func, function)?;
+        Lowering::new(program, &runtime, &mut literals, &handles, &structs)
+            .function(&mut func, function)?;
         if !module.define(handle, func) {
             return Err(WasmError::Wiring);
         }
@@ -198,8 +203,9 @@ fn signature(
 /// The wasm value type a Kira type occupies on `device`, or `None` for `Void`.
 fn value_type(ty: Type, device: WasmDevice) -> Result<Option<ValType>, WasmError> {
     Ok(match ty {
-        // A `String` is an address, so it is as wide as the memory is.
-        Type::String => Some(device.addr().val()),
+        // A `String` and a struct are both addresses, so both are as wide as
+        // the memory is.
+        Type::String | Type::Struct(_) => Some(device.addr().val()),
         other => Lowering::val_type(other)?,
     })
 }
