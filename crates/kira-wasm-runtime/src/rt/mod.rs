@@ -13,12 +13,14 @@ use crate::func::{FuncIdx, GlobalIdx};
 use crate::literals::Literals;
 use crate::module::Module;
 
+pub mod array;
 pub mod bignum;
 pub mod float;
 pub mod float_text;
 pub mod memory;
 pub mod string;
 
+use array::Arrays;
 use bignum::Bignum;
 
 /// The module and field names the two imports are looked up under.
@@ -70,6 +72,8 @@ pub struct Runtime {
     pub float_digits: FuncIdx,
     /// The big-integer helpers behind the float formatter.
     pub bignum: Bignum,
+    /// The array helpers: allocation, bounds checking, and growth.
+    pub arrays: Arrays,
 }
 
 /// The VM's trap text, so a trapping program reads the same on every engine.
@@ -130,6 +134,7 @@ impl Runtime {
             trap_bignum: module.declare(Vec::new(), Vec::new()),
             float_digits: module.declare(vec![ValType::F64], vec![ValType::I32]),
             bignum: Bignum::declare(module),
+            arrays: array::declare(module),
         })
     }
 
@@ -144,6 +149,8 @@ impl Runtime {
         let divide_by_zero = literals.intern(DIVIDE_BY_ZERO);
         let out_of_memory = literals.intern(OUT_OF_MEMORY);
         let bignum_overflow = literals.intern(BIGNUM_OVERFLOW);
+        let index_out_of_bounds = literals.intern(array::INDEX_OUT_OF_BOUNDS);
+        let index_negative = literals.intern(array::INDEX_NEGATIVE);
 
         memory::define_alloc(module, self.alloc, self.heap, self.trap_oom)
             && memory::define_memcpy(module, self.memcpy)
@@ -159,5 +166,12 @@ impl Runtime {
             && self.bignum.define(module, self.trap_bignum)
             && float::define(module, self.float_digits, &self.bignum, self.digit_count)
             && float_text::define(module, self, literals)
+            && array::define_new(module, self.arrays.new, self.alloc)
+            && array::define_len(module, self.arrays.len)
+            && array::define_items(module, self.arrays.items)
+            && array::define_slot(module, self.arrays.slot, &self.arrays)
+            && array::define_push_slot(module, self.arrays.push_slot, self.alloc, self.memcpy)
+            && string::define_trap(module, self, self.arrays.trap_bounds, index_out_of_bounds)
+            && string::define_trap(module, self, self.arrays.trap_negative, index_negative)
     }
 }

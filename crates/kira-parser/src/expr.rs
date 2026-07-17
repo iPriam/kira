@@ -64,6 +64,7 @@ impl Parser<'_> {
                 | TokenKind::False
                 | TokenKind::Minus
                 | TokenKind::Bang
+                | TokenKind::LBracket
         );
         starts_operand.then_some(op)
     }
@@ -94,45 +95,119 @@ impl Parser<'_> {
         self.parse_postfix(primary)
     }
 
-    /// Applies postfix `.field` accesses to an already-parsed expression.
+    /// Applies postfix `.field` accesses and `[index]` reads to an
+    /// already-parsed expression.
     ///
     /// Chains left-associatively, so `b.size.x` reads the `size` field of `b`
-    /// and then the `x` field of that.
+    /// and then the `x` field of that, and `grid[0].cells[2]` walks the same
+    /// way — which is what lets one loop handle a path of any shape rather than
+    /// fields and indices needing their own grammars.
     fn parse_postfix(&mut self, mut base: ExprId) -> ExprId {
-        while self.at(TokenKind::Dot) {
-            self.bump(); // `.`
-            if !self.at(TokenKind::Identifier) {
-                let span = self.current().span;
-                self.error(span, "KPAR022", "expected a field name after `.`");
-                return self.error_expr(span);
-            }
-            let field_span = self.current().span;
-            let field = self.intern_span(field_span);
-            self.bump();
-            let base_span = self.tree.expr(base).span();
-            // `p.sum()` is a method call; `p.x` is a field read. The `(` is the
-            // whole difference, so it is what decides.
-            if self.at(TokenKind::LParen) {
-                let args = self.parse_call_args();
-                let span = Span::from_bounds(base_span.start, self.previous_end());
-                base = self.tree.add_expr(Expr::MethodCall {
-                    receiver: base,
-                    method: field,
-                    method_span: field_span,
-                    args,
-                    span,
-                });
+        loop {
+            if self.at(TokenKind::Dot) {
+                match self.parse_dot_postfix(base) {
+                    Ok(next) => base = next,
+                    Err(error) => return error,
+                }
                 continue;
             }
-            let span = Span::from_bounds(base_span.start, field_span.end());
-            base = self.tree.add_expr(Expr::Field {
-                base,
-                field,
-                field_span,
-                span,
-            });
+            if self.at(TokenKind::LBracket) {
+                let base_span = self.tree.expr(base).span();
+                self.bump(); // `[`
+                // An index is a value, not a condition: a struct literal is
+                // legal here even when this sits in one of the positions where
+                // a bare `{` would end the expression.
+                let index = self.with_struct_literals(|parser| parser.parse_expr());
+                self.expect(TokenKind::RBracket);
+                let span = Span::from_bounds(base_span.start, self.previous_end());
+                base = self.tree.add_expr(Expr::Index { base, index, span });
+                continue;
+            }
+            break;
         }
         base
+    }
+
+    /// Parses one `.field` or `.method(...)` step, with the cursor on `.`.
+    ///
+    /// `Err` carries the error node a malformed step recovers to, which ends
+    /// the postfix chain rather than continuing it.
+    fn parse_dot_postfix(&mut self, base: ExprId) -> Result<ExprId, ExprId> {
+        self.bump(); // `.`
+        if !self.at(TokenKind::Identifier) {
+            let span = self.current().span;
+            self.error(span, "KPAR022", "expected a field name after `.`");
+            return Err(self.error_expr(span));
+        }
+        let field_span = self.current().span;
+        let field = self.intern_span(field_span);
+        self.bump();
+        let base_span = self.tree.expr(base).span();
+        // `p.sum()` is a method call; `p.x` is a field read. The `(` is the
+        // whole difference, so it is what decides. `xs.count` is a *property*
+        // and takes this same field-read path — analysis is what knows an
+        // array has no fields but does have a count.
+        if self.at(TokenKind::LParen) {
+            let args = self.parse_call_args();
+            let span = Span::from_bounds(base_span.start, self.previous_end());
+            return Ok(self.tree.add_expr(Expr::MethodCall {
+                receiver: base,
+                method: field,
+                method_span: field_span,
+                args,
+                span,
+            }));
+        }
+        let span = Span::from_bounds(base_span.start, field_span.end());
+        Ok(self.tree.add_expr(Expr::Field {
+            base,
+            field,
+            field_span,
+            span,
+        }))
+    }
+
+    /// Whether an array literal's element loop has run out of elements.
+    ///
+    /// `]` and EOF are the honest ends. `}` is a **recovery** end: a brace can
+    /// never appear at an array literal's top level — one inside an element,
+    /// as in `[P { x = 1 }]`, is consumed by that element's own parse — so
+    /// reaching one means the `[` was never closed. Stopping here bounds an
+    /// unclosed literal to its enclosing block instead of letting it swallow
+    /// the rest of the file.
+    fn at_array_end(&self) -> bool {
+        self.at(TokenKind::RBracket) || self.at(TokenKind::RBrace) || self.at_eof()
+    }
+
+    /// Parses `[a, b, c]`, with the cursor on `[`.
+    ///
+    /// Commas are **optional** separators, not required ones: newlines are
+    /// insignificant in Kira, so `[1 2 3]` and one element per line are as
+    /// legal as `[1, 2, 3]`, and a trailing comma is fine. The loop therefore
+    /// ends an element where the element ends and treats a comma as noise —
+    /// the same shape a struct literal's fields already use.
+    fn parse_array_literal(&mut self) -> ExprId {
+        let start = self.current().span;
+        self.bump(); // `[`
+        let mut elements = Vec::new();
+        self.with_struct_literals(|parser| {
+            while !parser.at_array_end() {
+                let before = parser.pos;
+                while parser.eat(TokenKind::Semicolon) {}
+                if parser.at_array_end() {
+                    break;
+                }
+                elements.push(parser.parse_expr());
+                parser.eat(TokenKind::Comma);
+                // An element that consumed nothing would spin; force progress.
+                if parser.pos == before {
+                    parser.bump();
+                }
+            }
+        });
+        self.expect(TokenKind::RBracket);
+        let span = Span::from_bounds(start.start, self.previous_end());
+        self.tree.add_expr(Expr::ArrayLit { elements, span })
     }
 
     fn parse_primary(&mut self) -> ExprId {
@@ -164,6 +239,7 @@ impl Parser<'_> {
             }
             TokenKind::Identifier => self.parse_name_or_call(token.span),
             TokenKind::LParen => self.parse_paren(),
+            TokenKind::LBracket => self.parse_array_literal(),
             _ => {
                 self.error(
                     token.span,

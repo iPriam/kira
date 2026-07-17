@@ -471,6 +471,53 @@ impl Func {
             AddrType::I64 => self.i32_wrap_i64(),
         }
     }
+
+    /// Emits a load of an address-wide value at `offset`.
+    ///
+    /// For a field that *is* a pointer or a count that has to index memory —
+    /// an array's `len`, `cap`, and `items` are all three — so the width is the
+    /// memory's rather than a fixed 32 bits.
+    pub fn addr_load(&mut self, offset: u64) -> &mut Self {
+        match self.addr {
+            AddrType::I32 => self.i32_load(offset),
+            AddrType::I64 => self.i64_load(offset),
+        }
+    }
+
+    /// Emits a store of an address-wide value at `offset`, with the base
+    /// address and then the value on the stack.
+    pub fn addr_store(&mut self, offset: u64) -> &mut Self {
+        match self.addr {
+            AddrType::I32 => self.i32_store(offset),
+            AddrType::I64 => self.i64_store(offset),
+        }
+    }
+
+    /// Converts an `i64` on the stack to an address, truncating under Memory32.
+    ///
+    /// The seam an array index crosses: a Kira `Int` is 64 bits on both
+    /// memories, and scaling it into an offset needs the address width. The
+    /// truncation is safe **only after a bounds check**, which is what proves
+    /// the value is a real index into an object that fits in memory — so this
+    /// is never emitted before one.
+    pub fn i64_to_addr(&mut self) -> &mut Self {
+        match self.addr {
+            AddrType::I32 => self.i32_wrap_i64(),
+            AddrType::I64 => self,
+        }
+    }
+
+    /// Converts an address on the stack to an `i64`, zero-extending under
+    /// Memory32.
+    ///
+    /// The other half of the index seam: an array's stored length is
+    /// address-wide, and `.count` is a Kira `Int`.
+    pub fn addr_to_i64(&mut self) -> &mut Self {
+        match self.addr {
+            AddrType::I32 => self.i64_extend_i32_u(),
+            AddrType::I64 => self,
+        }
+    }
 }
 
 #[cfg(test)]

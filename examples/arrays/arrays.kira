@@ -1,0 +1,68 @@
+// Arrays: a shared, growable, heap-backed sequence — and the ownership that
+// comes with it.
+//
+// An array is written `[T]`. Its whole surface is two members: `.append(v)`,
+// which grows it in place, and `.count`, a property (no parens). Elements are
+// read and written with `xs[i]`; an out-of-range or negative index is a runtime
+// trap, not a compile error, because an index is rarely a constant.
+//
+// The value semantics are the opposite of a struct's. A struct copies on
+// binding, so a copy is independent. An array is a handle: reading one *out* of
+// a place copies it (so a returned element cannot be perturbed later), but the
+// array itself aliases, which is why the ownership checker moves it on binding.
+
+struct Point {
+    var x: Int
+    var y: Int
+}
+
+// A `borrow` reads the array without consuming it, so the caller keeps it.
+function total(xs: borrow [Int]) -> Int {
+    var sum = 0
+    for x in xs {
+        sum = sum + x
+    }
+    return sum
+}
+
+@Main
+function main() {
+    // A literal is full the moment it exists; commas are optional separators.
+    let xs = [1, 2, 3]
+    print(xs[0])
+    print(xs.count)
+    print(total(xs))
+
+    // The universal idiom: an empty literal, typed, grown by `append`.
+    var ys: [Int] = []
+    for i in 0..5 {
+        ys.append(i * i)
+    }
+    print(ys.count)
+    print(ys[4])
+
+    // An index write lands in place; a read yields an independent copy.
+    var zs = [10, 20, 30]
+    zs[1] = 99
+    print(zs[1])
+
+    // Arrays nest, and a write walks as deep as the path goes.
+    var grid: [[Int]] = [[1, 2], [3, 4]]
+    grid[1][1] = 77
+    print(grid[1][1])
+    print(grid[0].count)
+
+    // An array of structs: `append` resolves a place, so a write through a
+    // field of an element lands in the array rather than in a discarded copy.
+    var ps: [Point] = []
+    ps.append(Point { x = 1, y = 2 })
+    ps.append(Point { x = 3, y = 4 })
+    ps[0].x = 100
+    var sum = 0
+    for p in ps {
+        sum = sum + p.x + p.y
+    }
+    print(sum)
+
+    return
+}

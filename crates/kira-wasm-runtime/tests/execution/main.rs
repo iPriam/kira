@@ -230,6 +230,7 @@ fn assert_parity(source: &str) {
     }
 }
 
+mod arrays;
 mod calls;
 mod control_flow;
 mod floats;

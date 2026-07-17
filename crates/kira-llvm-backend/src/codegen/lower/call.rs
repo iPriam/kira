@@ -24,6 +24,12 @@ impl FunctionLowering<'_, '_> {
                 let ty = self.type_of(argument);
                 let mut value = self.lower_expr(argument)?;
                 let helper = match ty {
+                    // Analysis rejects printing a struct or an array — neither
+                    // has a rendering the language pins — so a program that
+                    // type-checked never reaches either arm.
+                    Type::Array(_) => {
+                        return Err(LlvmError::Unsupported("a print of an array"));
+                    }
                     Type::Int => self.codegen.runtime.print_int,
                     Type::Float => self.codegen.runtime.print_float,
                     Type::Bool => {

@@ -14,15 +14,42 @@ use crate::analyze::{Analyzer, FnCtx};
 impl Analyzer<'_> {
     /// Type-checks an AST expression, returning its HIR handle.
     pub(crate) fn analyze_expr(&mut self, ctx: &mut FnCtx, id: ExprId) -> HirExprId {
+        self.analyze_expr_expecting(ctx, id, None)
+    }
+
+    /// Type-checks an expression that sits where `expected` is wanted.
+    ///
+    /// The hint exists for exactly one construct: an **empty array literal**
+    /// has no element to infer a type from, so `var xs: [Int] = []` can only
+    /// work if the position's type reaches the literal. Every other expression
+    /// ignores it and is typed bottom-up as before — this is a hint, not
+    /// bidirectional type checking, and widening it into one would be a much
+    /// larger change than the one construct that needs it.
+    ///
+    /// `None` means "nothing is expected here", which is different from
+    /// expecting `Error`: the callers that have a type pass it, and the rest
+    /// keep calling [`Analyzer::analyze_expr`].
+    pub(crate) fn analyze_expr_expecting(
+        &mut self,
+        ctx: &mut FnCtx,
+        id: ExprId,
+        expected: Option<Type>,
+    ) -> HirExprId {
         let node = self.tree.expr(id).clone();
         match node {
             Expr::Int { value, .. } => self.program.exprs.alloc(HirExpr::Int(value)),
             Expr::Float { value, .. } => self.program.exprs.alloc(HirExpr::Float(value)),
             Expr::Bool { value, .. } => self.program.exprs.alloc(HirExpr::Bool(value)),
             Expr::Str { value, .. } => self.program.exprs.alloc(HirExpr::Str(value)),
+            // `move xs` / `copy xs` sits where its operand sits, so whatever
+            // was expected of the transfer is expected of what it transfers.
             Expr::Ownership { op, operand, span } => {
-                self.analyze_ownership_expr(ctx, op, operand, span)
+                self.analyze_ownership_expr(ctx, op, operand, span, expected)
             }
+            Expr::ArrayLit { elements, span } => {
+                self.analyze_array_literal(ctx, &elements, span, expected)
+            }
+            Expr::Index { base, index, span } => self.analyze_index(ctx, base, index, span),
             Expr::Name { symbol, span } => {
                 let name = self.interner.resolve(symbol).to_owned();
                 match ctx.resolve(&name) {
@@ -139,6 +166,11 @@ impl Analyzer<'_> {
                 let base_hir = self.analyze_expr(ctx, base);
                 let base_ty = self.program.expr(base_hir).type_of();
                 let name = self.interner.resolve(field).to_owned();
+                // An array has no fields, but it does have `.count` — a
+                // property, written with the same syntax a field read uses.
+                if base_ty.is_array() {
+                    return self.analyze_array_property(base_hir, &name, field_span);
+                }
                 match self.resolve_field(base_ty, &name, field_span) {
                     Some((index, ty)) => self.program.exprs.alloc(HirExpr::Field {
                         base: base_hir,
@@ -167,7 +199,7 @@ impl Analyzer<'_> {
     fn implicit_field(&mut self, ctx: &FnCtx, name: &str) -> Option<HirExprId> {
         let owner = ctx.receiver?;
         let receiver = ctx.resolve("self")?;
-        let def = self.program.structs.get(owner)?;
+        let def = self.program.types.structs().get(owner)?;
         let index = def.field_index(name)?;
         let ty = def.field(index)?.ty;
         let base = self.program.exprs.alloc(HirExpr::Local {
@@ -190,8 +222,33 @@ impl Analyzer<'_> {
         method_span: kira_source::Span,
         args: &[ExprId],
     ) -> HirExprId {
+        // Analyzing the receiver is how its type is known, and its type is what
+        // decides which surface the call belongs to. For an array that is all
+        // this pass is for: `append` needs the receiver as a *place*, which is
+        // resolved from the syntax, not from the analyzed value.
+        //
+        // So the diagnostics are marked first and rolled back on the array
+        // path, and the place resolution reports on its own. That keeps
+        // `resolve_place` the single source of truth for what a bad receiver
+        // says, instead of this pass and that one each having an opinion —
+        // `grid[nope].append(1)` reports the undefined name exactly once.
+        //
+        // The probe is *effectful*, so its ownership effects are rolled back
+        // too: analyzing `(move xs).append(1)`'s receiver marks `xs` moved, and
+        // leaving that in place would report a phantom use-after-move on a later
+        // `xs`. The array path re-resolves the receiver from syntax anyway, so
+        // the probe's move is undone before it runs.
+        let mark = self.diagnostics.len();
+        let ownership = ctx.ownership_snapshot();
         let receiver_hir = self.analyze_expr(ctx, receiver);
         let receiver_ty = self.program.expr(receiver_hir).type_of();
+
+        if receiver_ty.is_array() {
+            self.diagnostics.truncate(mark);
+            ctx.restore_ownership(ownership);
+            let name = self.interner.resolve(method).to_owned();
+            return self.analyze_array_method(ctx, receiver, &name, method_span, args);
+        }
 
         // An error receiver already spoke; do not pile on.
         if receiver_ty == Type::Error {
@@ -244,7 +301,7 @@ impl Analyzer<'_> {
         inits: &[FieldInit],
     ) -> HirExprId {
         let struct_name = self.interner.resolve(name).to_owned();
-        let Some(id) = self.program.structs.lookup(&struct_name) else {
+        let Some(id) = self.program.types.structs().lookup(&struct_name) else {
             // A function of this name is the likely mistake, so say which.
             let message = if self.lookup_function(&struct_name).is_some() {
                 format!("`{struct_name}` is a function, not a struct")
@@ -259,7 +316,8 @@ impl Analyzer<'_> {
         };
         let field_count = self
             .program
-            .structs
+            .types
+            .structs()
             .get(id)
             .map_or(0, |def| def.fields.len());
 
@@ -268,11 +326,12 @@ impl Analyzer<'_> {
         let mut slots: Vec<Option<HirExprId>> = vec![None; field_count];
         for init in inits {
             let field_name = self.interner.resolve(init.name).to_owned();
-            let value = self.analyze_expr(ctx, init.value);
+            // The field is resolved before its value, so the field's type is
+            // the value's expected type: `H { values = [] }` needs it.
+            let resolved = self.resolve_field(Type::Struct(id), &field_name, init.name_span);
+            let value = self.analyze_expr_expecting(ctx, init.value, resolved.map(|(_, ty)| ty));
             let value_ty = self.program.expr(value).type_of();
-            let Some((index, field_ty)) =
-                self.resolve_field(Type::Struct(id), &field_name, init.name_span)
-            else {
+            let Some((index, field_ty)) = resolved else {
                 continue;
             };
             if slots[index as usize].is_some() {
@@ -307,13 +366,21 @@ impl Analyzer<'_> {
             }
             match self.field_default(id, index) {
                 Some(default) => {
-                    let value = self.analyze_default(default);
+                    let declared = self
+                        .program
+                        .types
+                        .structs()
+                        .get(id)
+                        .and_then(|def| def.field(index))
+                        .map(|field| field.ty);
+                    let value = self.analyze_default(default, declared);
                     fields.push(value);
                 }
                 None => {
                     let field_name = self
                         .program
-                        .structs
+                        .types
+                        .structs()
                         .get(id)
                         .and_then(|def| def.field(index))
                         .map_or_else(String::new, |field| field.name.clone());
@@ -348,9 +415,11 @@ impl Analyzer<'_> {
     /// Deliberately analyzed in an empty scope rather than the construction
     /// site's: a default belongs to the declaration, so it must not be able to
     /// see whatever locals happen to be in scope wherever the struct is built.
-    fn analyze_default(&mut self, default: ExprId) -> HirExprId {
+    fn analyze_default(&mut self, default: ExprId, declared: Option<Type>) -> HirExprId {
         let mut empty = FnCtx::new(Type::Void);
-        self.analyze_expr(&mut empty, default)
+        // The member's declared type is the default's expected type, so
+        // `struct H { var values: [Int] = [] }` knows what `[]` holds.
+        self.analyze_expr_expecting(&mut empty, default, declared)
     }
 
     fn analyze_print(&mut self, args: &[HirExprId], span: kira_source::Span) -> HirExprId {

@@ -109,6 +109,32 @@ mod tests {
         assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
     }
 
+    /// Arrays reach the editor the same way `for` and ownership did: the server
+    /// serves the compiler's own `analyzed` query, so an array literal, an index,
+    /// `.append`, `.count`, and `for`-in all analyze without the LSP learning any
+    /// of them exist — and an unsupported array method still squiggles.
+    #[test]
+    fn array_syntax_analyzes_the_way_the_compiler_does() {
+        let clean = analyze(
+            "t.kira",
+            "@Main function main() { var xs: [Int] = [] xs.append(1) xs[0] = 2 \
+             for x in xs { print(x) } print(xs.count) return }",
+        );
+        assert!(clean.diagnostics.is_empty(), "{:?}", clean.diagnostics);
+
+        let bad = analyze(
+            "t.kira",
+            "@Main function main() { let xs = [1, 2] print(xs.reverse()) return }",
+        );
+        let diagnostic = bad
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == Some("KSEM101"))
+            .expect("an unsupported array method is reported");
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
+    }
+
     #[test]
     fn a_clean_program_has_no_diagnostics() {
         let analysis = analyze("t.kira", "@Main function main() { print(1) return }");

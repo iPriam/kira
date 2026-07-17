@@ -81,6 +81,21 @@ pub enum LlvmError {
          pass its fields individually, or keep both sides on one engine"
     )]
     StructAtSeam,
+    /// An array reached the `@Native`/`@Runtime` seam, which cannot carry one
+    /// yet.
+    ///
+    /// A gap rather than a decision, and that is the difference from
+    /// [`LlvmError::StructAtSeam`]: the language *does* let an array cross. It
+    /// does not here because the ownership question at the boundary is
+    /// unanswered — who frees the elements, and what it means for the VM's heap
+    /// accounting if a native callee grows the array it was handed. A wrong
+    /// answer is a double free or a leak at the boundary, so the crossing is
+    /// refused until the answer is designed.
+    #[error(
+        "an array cannot cross the `@Native`/`@Runtime` boundary yet; \
+         keep both sides on one engine, or pass its elements individually"
+    )]
+    ArrayAtSeam,
     /// Lowering produced a module LLVM rejected — always a backend bug.
     #[error("LLVM rejected the generated module (this is a compiler bug): {0}")]
     InvalidModule(String),

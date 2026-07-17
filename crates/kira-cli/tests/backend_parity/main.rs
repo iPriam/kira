@@ -118,6 +118,7 @@ fn assert_trap_parity(source: &str, before_the_trap: &str) {
 }
 
 mod arithmetic;
+mod arrays;
 mod control_flow;
 mod examples;
 mod logic;

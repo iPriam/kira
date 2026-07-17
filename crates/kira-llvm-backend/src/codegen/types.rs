@@ -76,6 +76,12 @@ pub(crate) struct Runtime {
     pub(super) str_concat: Callable,
     pub(super) str_eq: Callable,
     pub(super) str_free: Callable,
+    pub(super) array_new: Callable,
+    pub(super) array_len: Callable,
+    pub(super) array_slot: Callable,
+    pub(super) array_push_slot: Callable,
+    pub(super) array_clone: Callable,
+    pub(super) array_free: Callable,
     pub(super) trap_div_zero: Callable,
     /// The version marker every emitted program references; see
     /// [`kira_runtime_abi::RUNTIME_ABI_MARKER`].
@@ -129,6 +135,32 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             ),
             str_eq: declare(c"kira_rt_str_eq", types.i8, &mut [types.ptr, types.ptr]),
             str_free: declare(c"kira_rt_str_free", types.void, &mut [types.ptr]),
+            // The array helpers are generic over the element type: a size and
+            // a clone/free callback are all they need, so one declaration each
+            // serves every array type. Appended after the string helpers,
+            // which is what makes them not an ABI change.
+            array_new: declare(c"kira_rt_array_new", types.ptr, &mut [types.i64, types.i64]),
+            array_len: declare(c"kira_rt_array_len", types.i64, &mut [types.ptr]),
+            array_slot: declare(
+                c"kira_rt_array_slot",
+                types.ptr,
+                &mut [types.ptr, types.i64, types.i64],
+            ),
+            array_push_slot: declare(
+                c"kira_rt_array_push_slot",
+                types.ptr,
+                &mut [types.ptr, types.i64],
+            ),
+            array_clone: declare(
+                c"kira_rt_array_clone",
+                types.ptr,
+                &mut [types.ptr, types.i64, types.ptr],
+            ),
+            array_free: declare(
+                c"kira_rt_array_free",
+                types.void,
+                &mut [types.ptr, types.i64, types.ptr],
+            ),
             trap_div_zero: declare(c"kira_rt_trap_div_zero", types.void, &mut []),
             abi_marker: declare(&abi_marker_symbol(), types.void, &mut []),
             call_runtime: declare(

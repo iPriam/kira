@@ -127,6 +127,109 @@ pub enum Instruction {
         /// Field indices to walk, outermost first; never empty.
         path: FieldPath,
     },
+    /// Pop `n` values and push an array holding them, first element deepest.
+    ///
+    /// The count is a `u32` rather than the `u16` [`Instruction::NewStruct`]
+    /// uses: a struct's field count is written by hand, but an array literal's
+    /// element count is as long as someone cares to make it.
+    NewArray(u32),
+    /// Pop an index, pop an array, push a copy of that element, and drop the
+    /// array.
+    ///
+    /// Traps on a negative index and, separately, on one past the end — two
+    /// distinct traps, because they are two distinct mistakes.
+    ArrayGet,
+    /// Pop an array, push its element count as an `Int`, and drop the array.
+    ArrayLen,
+    /// Pop a value and store it through a place that may index arrays.
+    ///
+    /// The general form of [`Instruction::StoreField`], which stays for the
+    /// all-fields case it already encodes. A field index is an immediate; an
+    /// array index is not knowable until the program runs, so it arrives on the
+    /// stack: **every `Index` step's value is pushed first, outermost to
+    /// innermost, then the value to store.** The runtime pops the value, then
+    /// the indices, which come off innermost-first.
+    StorePlace {
+        /// The local slot the place is rooted at.
+        slot: u16,
+        /// Steps to walk, outermost first; never empty.
+        path: PlacePath,
+    },
+    /// Pop a value and append it to the array a place names.
+    ///
+    /// Same stack protocol as [`Instruction::StorePlace`]: indices first, then
+    /// the value. An empty path appends to the slot's own array, which is what
+    /// `xs.append(v)` compiles to.
+    ArrayAppend {
+        /// The local slot the place is rooted at.
+        slot: u16,
+        /// Steps to walk, outermost first; may be empty.
+        path: PlacePath,
+    },
+}
+
+/// One step of a [`PlacePath`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathStep {
+    /// Walk into the field at this index.
+    Field(u16),
+    /// Walk into an array element, whose index is on the operand stack.
+    Index,
+}
+
+/// The wire tag for each [`PathStep`]. Append-only, like every other tag.
+mod step_tag {
+    pub const FIELD: u8 = 0x00;
+    pub const INDEX: u8 = 0x01;
+}
+
+/// A place path inside a [`Instruction::StorePlace`] or
+/// [`Instruction::ArrayAppend`].
+///
+/// The generalization of [`FieldPath`]: a step is a constant field index or a
+/// stack-supplied array index. As with `FieldPath`, the length is a `u16` on
+/// the wire and the cap lives in the one constructor, so an unencodable path
+/// cannot be built and [`encode_one`] never has to truncate one or fail.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlacePath {
+    steps: Vec<PathStep>,
+}
+
+impl PlacePath {
+    /// Builds a path, or fails when it is too deep to encode.
+    pub fn new(steps: Vec<PathStep>) -> Result<Self, FieldPathTooDeep> {
+        if u16::try_from(steps.len()).is_err() {
+            return Err(FieldPathTooDeep { count: steps.len() });
+        }
+        Ok(Self { steps })
+    }
+
+    /// The steps to walk, outermost first.
+    pub fn steps(&self) -> &[PathStep] {
+        &self.steps
+    }
+
+    /// How many steps the path walks. Always fits in a `u16`.
+    pub fn len(&self) -> u16 {
+        // Guaranteed by the only constructor.
+        self.steps.len() as u16
+    }
+
+    /// Whether the path walks no steps.
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+
+    /// How many of the steps take their index from the stack.
+    ///
+    /// This is exactly how many values the runtime pops after the stored one,
+    /// which is what makes the stack protocol checkable rather than assumed.
+    pub fn index_count(&self) -> usize {
+        self.steps
+            .iter()
+            .filter(|step| matches!(step, PathStep::Index))
+            .count()
+    }
 }
 
 /// A field path inside a [`Instruction::StoreField`], short enough to encode.
@@ -223,6 +326,13 @@ mod opcode {
     pub const NEW_STRUCT: u8 = 0x2d;
     pub const GET_FIELD: u8 = 0x2e;
     pub const STORE_FIELD: u8 = 0x2f;
+    // Arrays. Appended after `STORE_FIELD`, which is where the set ended
+    // before them; adding an opcode is not an ABI change.
+    pub const NEW_ARRAY: u8 = 0x30;
+    pub const ARRAY_GET: u8 = 0x31;
+    pub const ARRAY_LEN: u8 = 0x32;
+    pub const STORE_PLACE: u8 = 0x33;
+    pub const ARRAY_APPEND: u8 = 0x34;
 }
 
 /// An error decoding a byte stream back into instructions.
@@ -304,8 +414,22 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
                 out.extend_from_slice(&step.to_le_bytes());
             }
         }
+        Instruction::NewArray(count) => {
+            out.push(o::NEW_ARRAY);
+            out.extend_from_slice(&count.to_le_bytes());
+        }
+        Instruction::StorePlace { slot, path } => {
+            out.push(o::STORE_PLACE);
+            encode_place(*slot, path, out);
+        }
+        Instruction::ArrayAppend { slot, path } => {
+            out.push(o::ARRAY_APPEND);
+            encode_place(*slot, path, out);
+        }
         // Nullary instructions: one exhaustive arm each, so encoding is total
         // by construction (no fallthrough, no panic path).
+        Instruction::ArrayGet => out.push(o::ARRAY_GET),
+        Instruction::ArrayLen => out.push(o::ARRAY_LEN),
         Instruction::ConstVoid => out.push(o::CONST_VOID),
         Instruction::Pop => out.push(o::POP),
         Instruction::NegInt => out.push(o::NEG_INT),
@@ -340,6 +464,22 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::Print => out.push(o::PRINT),
         Instruction::Return => out.push(o::RETURN),
         Instruction::ReturnVoid => out.push(o::RETURN_VOID),
+    }
+}
+
+/// Appends a place operand — slot, step count, then one tagged step each.
+fn encode_place(slot: u16, path: &PlacePath, out: &mut Vec<u8>) {
+    out.extend_from_slice(&slot.to_le_bytes());
+    out.extend_from_slice(&path.len().to_le_bytes());
+    for step in path.steps() {
+        match step {
+            PathStep::Field(index) => {
+                out.push(step_tag::FIELD);
+                out.extend_from_slice(&index.to_le_bytes());
+            }
+            // An index carries no immediate: its value is on the stack.
+            PathStep::Index => out.push(step_tag::INDEX),
+        }
     }
 }
 
@@ -416,12 +556,53 @@ impl Cursor<'_> {
                 })?;
                 Instruction::StoreField { slot, path }
             }
+            o::NEW_ARRAY => Instruction::NewArray(u32::from_le_bytes(self.take()?)),
+            o::STORE_PLACE => {
+                let (slot, path) = self.next_place(opcode_offset)?;
+                Instruction::StorePlace { slot, path }
+            }
+            o::ARRAY_APPEND => {
+                let (slot, path) = self.next_place(opcode_offset)?;
+                Instruction::ArrayAppend { slot, path }
+            }
             other => nullary_from_opcode(other).ok_or(DecodeError::UnknownOpcode {
                 opcode: other,
                 offset: opcode_offset,
             })?,
         };
         Ok(instruction)
+    }
+
+    /// Decodes a place operand: slot, step count, then one tagged step each.
+    ///
+    /// An unknown step tag is rejected rather than guessed — a decoder never
+    /// trusts its input, and a step it cannot name is a step it cannot walk.
+    fn next_place(&mut self, opcode_offset: usize) -> Result<(u16, PlacePath), DecodeError> {
+        let slot = u16::from_le_bytes(self.take()?);
+        let count = u16::from_le_bytes(self.take()?);
+        let mut steps = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let tag_offset = self.offset;
+            let [tag] = self.take::<1>()?;
+            steps.push(match tag {
+                step_tag::FIELD => PathStep::Field(u16::from_le_bytes(self.take()?)),
+                step_tag::INDEX => PathStep::Index,
+                other => {
+                    return Err(DecodeError::UnknownOpcode {
+                        opcode: other,
+                        offset: tag_offset,
+                    });
+                }
+            });
+        }
+        // `count` is a `u16`, so the path just read is encodable by
+        // construction and this never takes the error arm — but it is written
+        // as a `Result` rather than an unwrap, because a decoder never gets to
+        // end its caller's process.
+        let path = PlacePath::new(steps).map_err(|_| DecodeError::UnexpectedEnd {
+            offset: opcode_offset,
+        })?;
+        Ok((slot, path))
     }
 }
 
@@ -461,6 +642,8 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::NE_BOOL => Instruction::NeBool,
         o::EQ_STR => Instruction::EqStr,
         o::NE_STR => Instruction::NeStr,
+        o::ARRAY_GET => Instruction::ArrayGet,
+        o::ARRAY_LEN => Instruction::ArrayLen,
         o::PRINT => Instruction::Print,
         o::RETURN => Instruction::Return,
         o::RETURN_VOID => Instruction::ReturnVoid,

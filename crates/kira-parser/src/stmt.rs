@@ -7,7 +7,7 @@
 use kira_core::Symbol;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
-use kira_syntax_model::ast::{Block, Stmt, StmtId, SwitchCase};
+use kira_syntax_model::ast::{Block, ForIterable, Stmt, StmtId, SwitchCase};
 
 use crate::Parser;
 
@@ -141,11 +141,16 @@ impl Parser<'_> {
         self.tree.add_stmt(Stmt::While { cond, body, span })
     }
 
-    /// Parses `for <name> in <start>..<end> { … }`.
+    /// Parses `for <name> in <start>..<end> { … }` or `for <name> in <xs> { … }`.
     ///
-    /// The bounds sit between `in` and the body brace, so they are parsed with
+    /// The `..` is what tells the two apart, and it can only be decided after
+    /// the first expression is parsed — so the iterable is parsed first and
+    /// classified second. There is no lookahead problem: an array iterable is
+    /// an ordinary expression, and a range is one expression followed by `..`.
+    ///
+    /// The iterable sits between `in` and the body brace, so it is parsed with
     /// struct literals suppressed for the same reason a `while` condition is:
-    /// otherwise `for i in 0..n {` reads the body as a struct literal.
+    /// otherwise `for x in xs {` reads the body as a struct literal.
     fn parse_for(&mut self) -> StmtId {
         let start = self.current().span;
         self.bump(); // `for`
@@ -160,23 +165,27 @@ impl Parser<'_> {
             self.bump();
         }
         self.expect(TokenKind::In);
-        let (range_start, range_end) = self.without_struct_literals(|parser| {
-            let range_start = parser.parse_expr();
-            if !parser.expect(TokenKind::DotDot) {
-                // Without `..` there is no upper bound to parse; the lower one
-                // stands alone and the range is poisoned rather than guessed.
-                let span = parser.current().span;
-                return (range_start, parser.error_expr(span));
+        let iterable = self.without_struct_literals(|parser| {
+            let first = parser.parse_expr();
+            // `..` makes it a range; anything else makes the expression the
+            // whole iterable. A bad iterable (`for i in 0 { }`) is not a parse
+            // error any more — it parses as `Each { 0 }` and analysis reports
+            // that an `Int` is not iterable, which is where the type is known.
+            if parser.eat(TokenKind::DotDot) {
+                ForIterable::Range {
+                    start: first,
+                    end: parser.parse_expr(),
+                }
+            } else {
+                ForIterable::Each { array: first }
             }
-            (range_start, parser.parse_expr())
         });
         let body = self.parse_block();
         let span = Span::from_bounds(start.start, self.previous_end());
         self.tree.add_stmt(Stmt::For {
             name,
             name_span,
-            start: range_start,
-            end: range_end,
+            iterable,
             body,
             span,
         })
@@ -301,6 +310,9 @@ impl Parser<'_> {
                 | TokenKind::LParen
                 | TokenKind::Minus
                 | TokenKind::Bang
+                // `return [1, 2, 3]` — an array literal is a value like any
+                // other, so `[` starts an expression.
+                | TokenKind::LBracket
         )
     }
 }
@@ -336,7 +348,27 @@ mod tests {
     fn a_for_loop_parses_its_variable_and_both_bounds() {
         let (_, stmts) = body("function f() { for i in 0..5 { } }");
         match &stmts[0] {
-            Stmt::For { body, .. } => assert!(body.stmts.is_empty()),
+            Stmt::For { body, iterable, .. } => {
+                assert!(body.stmts.is_empty());
+                assert!(matches!(
+                    iterable,
+                    kira_syntax_model::ast::ForIterable::Range { .. }
+                ));
+            }
+            other => panic!("expected a `for`, got {other:?}"),
+        }
+    }
+
+    /// The `..` is the only thing separating the two `for` forms, and it is
+    /// decided after the first expression rather than by lookahead.
+    #[test]
+    fn a_for_without_a_range_iterates_the_expression() {
+        let (_, stmts) = body("function f() { for x in xs { } }");
+        match &stmts[0] {
+            Stmt::For { iterable, .. } => assert!(matches!(
+                iterable,
+                kira_syntax_model::ast::ForIterable::Each { .. }
+            )),
             other => panic!("expected a `for`, got {other:?}"),
         }
     }
@@ -347,11 +379,34 @@ mod tests {
     fn a_for_bound_does_not_swallow_the_body_brace() {
         let (tree, stmts) = body("function f() { for i in 0..n { let x = 1 } }");
         match &stmts[0] {
-            Stmt::For { end, body, .. } => {
+            Stmt::For { iterable, body, .. } => {
                 assert_eq!(body.stmts.len(), 1, "the brace is the loop body");
+                let kira_syntax_model::ast::ForIterable::Range { end, .. } = iterable else {
+                    panic!("expected a range, got {iterable:?}");
+                };
                 assert!(
                     matches!(tree.expr(*end), kira_syntax_model::ast::Expr::Name { .. }),
                     "the upper bound is the bare name, not a literal"
+                );
+            }
+            other => panic!("expected a `for`, got {other:?}"),
+        }
+    }
+
+    /// The same ambiguity, on the array form: `for x in xs {` must read the
+    /// brace as the body, not as an `xs` struct literal.
+    #[test]
+    fn a_for_array_iterable_does_not_swallow_the_body_brace() {
+        let (tree, stmts) = body("function f() { for x in xs { let y = 1 } }");
+        match &stmts[0] {
+            Stmt::For { iterable, body, .. } => {
+                assert_eq!(body.stmts.len(), 1, "the brace is the loop body");
+                let kira_syntax_model::ast::ForIterable::Each { array } = iterable else {
+                    panic!("expected an array iterable, got {iterable:?}");
+                };
+                assert!(
+                    matches!(tree.expr(*array), kira_syntax_model::ast::Expr::Name { .. }),
+                    "the iterable is the bare name, not a literal"
                 );
             }
             other => panic!("expected a `for`, got {other:?}"),
@@ -476,12 +531,14 @@ mod tests {
         }
     }
 
-    /// A `for` missing its `..` is reported rather than silently reading the
-    /// lower bound as the whole range.
+    /// `for i in 0 { }` used to be a parse error, because `..` was mandatory.
+    /// Now that `for x in xs` exists, the parser cannot demand `..` — so this
+    /// parses cleanly as an `Each` over `0`, and reporting that an `Int` is not
+    /// iterable belongs to analysis, which is where the type is known.
     #[test]
-    fn a_for_without_a_range_is_reported() {
+    fn a_non_iterable_for_is_left_for_analysis_to_report() {
         let result = parse(SourceId::new(0), "function f() { for i in 0 { } }");
-        assert!(!result.diagnostics.is_empty());
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     }
 
     /// Recovery: a broken `for` header still leaves a parseable program.
