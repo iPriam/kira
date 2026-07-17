@@ -32,7 +32,20 @@ upward reference in `[dev-dependencies]` (cargo's only legal cycle).
   (6), `kira-build` (7), `kira-app-generation`, `kira-doc`,
   `kira-instruments`, `kira-linter`, `kira-live` (8)
 - **top — binaries:** `kira-cli` (`kirac`), `kira-bootstrapper` (`kira`),
-  `kira-devflow` (`devflow`), `kira-lsp`. Leaves — keep logic lower.
+  `kira-devflow` (`devflow`), `kira-lsp`, `kira-desktop-runner`. Leaves — keep
+  logic lower.
+
+## Runners consume bundles, never compiler internals
+
+Put the live session model — bundle format, protocol, server, client — in
+`kira-live` (8), and a runner client in its own binary crate above it
+(`kira-desktop-runner` is the pattern). The `.klbundle` is the boundary: a
+runner reads a manifest plus payloads and nothing else, so give it no dependency
+on `kira-ir`, `kira-semantics`, or any backend. A runner needing a compiler type
+means the bundle is missing a field — add the field.
+
+Building a bundle needs LLVM; running one never does. Keep it that way: a runner
+that linked the LLVM backend could not ship to a machine without it.
 
 ## Rules that decide the crate
 

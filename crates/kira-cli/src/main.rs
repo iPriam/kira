@@ -6,9 +6,12 @@ mod command;
 mod dispatch;
 mod host;
 mod hybrid;
+mod live;
 mod native;
 mod options;
 mod pipeline;
+mod serve;
+mod wasm;
 
 use command::Command;
 
