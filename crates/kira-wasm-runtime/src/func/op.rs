@@ -38,10 +38,18 @@ pub const GLOBAL_GET: u8 = 0x23;
 pub const GLOBAL_SET: u8 = 0x24;
 /// `i32.load`
 pub const I32_LOAD: u8 = 0x28;
+/// `i64.load`
+pub const I64_LOAD: u8 = 0x29;
+/// `f64.load`
+pub const F64_LOAD: u8 = 0x2b;
 /// `i32.load8_u`
 pub const I32_LOAD8_U: u8 = 0x2d;
 /// `i32.store`
 pub const I32_STORE: u8 = 0x36;
+/// `i64.store`
+pub const I64_STORE: u8 = 0x37;
+/// `f64.store`
+pub const F64_STORE: u8 = 0x39;
 /// `i32.store8`
 pub const I32_STORE8: u8 = 0x3a;
 /// `memory.size`

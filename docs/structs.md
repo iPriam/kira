@@ -103,10 +103,19 @@ order and nothing downstream knows defaults exist. A default is analyzed in an
 empty scope, not the construction site's: it belongs to the declaration and must
 not see whatever locals happen to be in scope where the struct is built.
 
-## Not implemented here
+The wasm backend gives a struct an address in linear memory, with fields laid
+out consecutively at natural alignment. Its heap never frees, so aliasing is
+invisible for anything a program cannot mutate — which is why a `String` is
+shared and costs nothing to "copy". A struct is not: `p.x = 1` writes through
+the address, so it is deep-copied wherever the VM copies one, through a helper
+generated per struct. Only the mutable spine is duplicated; the strings inside
+are still shared. Both address widths run the same lowering, and
+`crates/kira-wasm-runtime/tests/execution.rs` compares each case against the VM
+on `wasm32` and `wasm64` — a struct's field offsets differ between them, so a
+layout mistake shows up as a wrong value rather than hiding.
 
-The wasm backend does not lower structs yet (`WasmError::StructUnsupported`); a
-program using one is refused rather than mislowered. Its strings live in linear
-memory behind a bump allocator that never frees, so structs there need layout
-and a generated deep-copy per type — the copy is what a program can observe,
-since a struct is mutable and a shared one would alias.
+## Still open
+
+Struct **methods** and `@FFI.Struct { layout: c; }` are not implemented. The
+native representation was chosen with the second in mind, but the annotation,
+its zero-fill construction rule, and the C layout it promises are not built.

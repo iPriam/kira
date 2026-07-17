@@ -18,9 +18,21 @@ pub enum WasmError {
     /// A binary operator reached the wrong lowering path.
     #[error("an operator reached the wrong lowering path (this is a compiler bug)")]
     UnsupportedOperator,
-    /// The program uses a struct, which this backend does not lower yet.
-    #[error("the wasm backend cannot lower structs yet")]
-    StructUnsupported,
+    /// A struct id named no declared struct.
+    #[error("the wasm backend was handed an unknown struct (this is a compiler bug)")]
+    UnknownStruct,
+    /// A struct field had type `Void`, which has no storage.
+    #[error("a struct field has no value type (this is a compiler bug)")]
+    VoidField,
+    /// A place walked into something that is not a struct.
+    #[error("an assignment walks a field of a value that is not a struct (this is a compiler bug)")]
+    NotAStruct,
+    /// `print` was handed a struct, which has no pinned rendering.
+    ///
+    /// Analysis rejects this before a program is lowered; it is reported rather
+    /// than rendered as invented text.
+    #[error("print cannot format a struct")]
+    UnprintableStruct,
     /// `print` was called with other than one argument.
     #[error("`print` takes one argument, but the IR carried {0} (this is a compiler bug)")]
     PrintArity(usize),

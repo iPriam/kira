@@ -299,6 +299,16 @@ impl Func {
         self.mem(op::I32_LOAD, 2, offset)
     }
 
+    /// Emits `i64.load` at `offset`.
+    pub fn i64_load(&mut self, offset: u64) -> &mut Self {
+        self.mem(op::I64_LOAD, 3, offset)
+    }
+
+    /// Emits `f64.load` at `offset`.
+    pub fn f64_load(&mut self, offset: u64) -> &mut Self {
+        self.mem(op::F64_LOAD, 3, offset)
+    }
+
     /// Emits `i32.load8_u` at `offset`.
     pub fn i32_load8_u(&mut self, offset: u64) -> &mut Self {
         self.mem(op::I32_LOAD8_U, 0, offset)
@@ -307,6 +317,16 @@ impl Func {
     /// Emits `i32.store` at `offset`.
     pub fn i32_store(&mut self, offset: u64) -> &mut Self {
         self.mem(op::I32_STORE, 2, offset)
+    }
+
+    /// Emits `i64.store` at `offset`.
+    pub fn i64_store(&mut self, offset: u64) -> &mut Self {
+        self.mem(op::I64_STORE, 3, offset)
+    }
+
+    /// Emits `f64.store` at `offset`.
+    pub fn f64_store(&mut self, offset: u64) -> &mut Self {
+        self.mem(op::F64_STORE, 3, offset)
     }
 
     /// Emits `i32.store8` at `offset`.

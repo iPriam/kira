@@ -12,14 +12,17 @@
 //! - `&&` and `||` evaluate their right operand only when the left decides
 //!   nothing, matching the bytecode compiler's jumps.
 
-use kira_ir::{IrBinOp, IrCallee, IrExpr, IrExprId, IrFunction, IrProgram, IrStmt, IrUnOp};
+use kira_ir::{
+    IrBinOp, IrCallee, IrExpr, IrExprId, IrFunction, IrPlace, IrProgram, IrStmt, IrUnOp,
+};
 use kira_semantics_model::Type;
 
 use crate::encode::ValType;
 use crate::error::WasmError;
-use crate::func::{BlockType, BlockType::Empty, Func, FuncIdx};
+use crate::func::{BlockType, BlockType::Empty, Func, FuncIdx, LocalIdx};
 use crate::literals::Literals;
 use crate::rt::Runtime;
+use crate::structs::{Structs, load_field, store_field};
 
 /// Lowers one function at a time against a fixed set of handles.
 pub struct Lowering<'a> {
@@ -27,6 +30,21 @@ pub struct Lowering<'a> {
     runtime: &'a Runtime,
     literals: &'a mut Literals,
     functions: &'a [FuncIdx],
+    structs: &'a Structs,
+    /// Scratch locals holding the object being built, one per level of nested
+    /// struct construction.
+    ///
+    /// A store needs its destination address underneath the value, so building
+    /// an object means keeping its address somewhere while the fields are
+    /// evaluated — and a field's expression may itself build an object. One
+    /// local per depth is what keeps an inner construction from clobbering the
+    /// outer one's address. They are declared up front, from the depth the body
+    /// actually reaches, because wasm declares all of a function's locals
+    /// before its first instruction.
+    scratch: Vec<LocalIdx>,
+    /// How many struct constructions are open right now, which is the scratch
+    /// local the next one takes.
+    depth: usize,
 }
 
 impl<'a> Lowering<'a> {
@@ -37,12 +55,16 @@ impl<'a> Lowering<'a> {
         runtime: &'a Runtime,
         literals: &'a mut Literals,
         functions: &'a [FuncIdx],
+        structs: &'a Structs,
     ) -> Self {
         Self {
             program,
             runtime,
             literals,
             functions,
+            structs,
+            scratch: Vec::new(),
+            depth: 0,
         }
     }
 
@@ -56,9 +78,9 @@ impl<'a> Lowering<'a> {
             Type::Int => Some(ValType::I64),
             Type::Float => Some(ValType::F64),
             Type::Bool => Some(ValType::I32),
-            Type::String => Some(ValType::I32),
+            // Both are addresses; `value_of` widens them to the memory's width.
+            Type::String | Type::Struct(_) => Some(ValType::I32),
             Type::Void => None,
-            Type::Struct(_) => return Err(WasmError::StructUnsupported),
             Type::Error => return Err(WasmError::ErrorType),
         })
     }
@@ -67,8 +89,9 @@ impl<'a> Lowering<'a> {
     /// module's address width.
     fn value_of(&self, ty: Type, addr: ValType) -> Result<Option<ValType>, WasmError> {
         Ok(match Self::val_type(ty)? {
-            // A `String` is an address, so it is as wide as the memory is.
-            Some(ValType::I32) if ty == Type::String => Some(addr),
+            // A `String` and a struct are addresses, so both are as wide as the
+            // memory is.
+            Some(ValType::I32) if matches!(ty, Type::String | Type::Struct(_)) => Some(addr),
             other => other,
         })
     }
@@ -87,6 +110,11 @@ impl<'a> Lowering<'a> {
             func.local(value);
         }
 
+        // Scratch locals come after the declared ones, so a slot index still
+        // means the same local it does in the IR.
+        let depth = self.construction_depth(&function.body);
+        self.scratch = (0..depth).map(|_| func.local(addr)).collect();
+
         self.body(func, function, &function.body)?;
 
         // A Kira function always returns, so an implicit trailing return only
@@ -97,6 +125,160 @@ impl<'a> Lowering<'a> {
             func.unreachable();
         }
         Ok(())
+    }
+
+    /// Builds a struct object and leaves its address on the stack.
+    ///
+    /// Allocate, then fill: a store wants its destination underneath its value,
+    /// so the address is parked in a scratch local while each field is
+    /// evaluated. The scratch is indexed by construction depth, so a field that
+    /// builds its own object takes the next one down and cannot clobber this.
+    fn struct_new(
+        &mut self,
+        func: &mut Func,
+        function: &IrFunction,
+        struct_id: kira_semantics_model::StructId,
+        fields: &[IrExprId],
+    ) -> Result<(), WasmError> {
+        let layout = self.structs.layout(struct_id)?.clone();
+        let depth = self.depth;
+        let object = *self.scratch.get(depth).ok_or(WasmError::Wiring)?;
+        self.depth += 1;
+
+        func.i32_const(layout.size as i32).i32_to_addr();
+        func.call(self.runtime.alloc);
+        func.local_set(object);
+
+        let addr = func.addr();
+        for (index, &field) in fields.iter().enumerate() {
+            let offset = u64::from(*layout.offsets.get(index).ok_or(WasmError::UnknownStruct)?);
+            let ty = self.program.expr_type(function, field);
+            func.local_get(object);
+            self.expr(func, function, field)?;
+            store_field(func, ty, addr, offset)?;
+        }
+
+        func.local_get(object);
+        self.depth -= 1;
+        Ok(())
+    }
+
+    /// Stores into an assignment target, walking its field path.
+    ///
+    /// The walk loads each intermediate struct's address, so the write lands in
+    /// the object the local already points at rather than rebuilding it — the
+    /// VM's `StoreField` and the native backend's GEP chain do the same.
+    fn store_place(
+        &mut self,
+        func: &mut Func,
+        function: &IrFunction,
+        place: &IrPlace,
+        value: IrExprId,
+    ) -> Result<(), WasmError> {
+        if place.path.is_empty() {
+            self.expr(func, function, value)?;
+            func.local_set(LocalIdx(place.local));
+            return Ok(());
+        }
+
+        let addr = func.addr();
+        let mut ty = function
+            .locals
+            .get(place.local as usize)
+            .copied()
+            .ok_or_else(|| WasmError::VoidLocal(function.name.clone()))?;
+        func.local_get(LocalIdx(place.local));
+
+        // Every step but the last loads the next object's address; the last one
+        // names the field to write.
+        let Some((&last, walk)) = place.path.split_last() else {
+            return Err(WasmError::Wiring);
+        };
+        for &index in walk {
+            let Type::Struct(id) = ty else {
+                return Err(WasmError::NotAStruct);
+            };
+            let offset = u64::from(self.structs.offset(id, index)?);
+            let field_ty = self.field_type(id, index)?;
+            load_field(func, field_ty, addr, offset)?;
+            ty = field_ty;
+        }
+
+        let Type::Struct(id) = ty else {
+            return Err(WasmError::NotAStruct);
+        };
+        let offset = u64::from(self.structs.offset(id, last)?);
+        let field_ty = self.field_type(id, last)?;
+        self.expr(func, function, value)?;
+        store_field(func, field_ty, addr, offset)?;
+        Ok(())
+    }
+
+    /// The declared type of one field.
+    fn field_type(
+        &self,
+        id: kira_semantics_model::StructId,
+        index: u32,
+    ) -> Result<Type, WasmError> {
+        self.program
+            .structs
+            .get(id)
+            .and_then(|def| def.field(index))
+            .map(|field| field.ty)
+            .ok_or(WasmError::UnknownStruct)
+    }
+
+    /// How many levels of nested struct construction `body` reaches.
+    ///
+    /// One scratch local per level is enough because construction is the only
+    /// thing that needs one, and a body can only be inside as many at once as
+    /// this counts.
+    fn construction_depth(&self, body: &[IrStmt]) -> usize {
+        body.iter()
+            .map(|stmt| self.stmt_depth(stmt))
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn stmt_depth(&self, stmt: &IrStmt) -> usize {
+        match stmt {
+            IrStmt::Let { init, .. } => self.expr_depth(*init),
+            IrStmt::Assign { value, .. } => self.expr_depth(*value),
+            IrStmt::Return { value } => value.map_or(0, |expr| self.expr_depth(expr)),
+            IrStmt::Eval { expr } => self.expr_depth(*expr),
+            IrStmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => self
+                .expr_depth(*cond)
+                .max(self.construction_depth(then_body))
+                .max(self.construction_depth(else_body)),
+            IrStmt::While { cond, body } => {
+                self.expr_depth(*cond).max(self.construction_depth(body))
+            }
+        }
+    }
+
+    fn expr_depth(&self, id: IrExprId) -> usize {
+        match self.program.expr(id) {
+            IrExpr::StructNew { fields, .. } => {
+                1 + fields
+                    .iter()
+                    .map(|&field| self.expr_depth(field))
+                    .max()
+                    .unwrap_or(0)
+            }
+            IrExpr::Field { base, .. } => self.expr_depth(*base),
+            IrExpr::Unary { operand, .. } => self.expr_depth(*operand),
+            IrExpr::Binary { lhs, rhs, .. } => self.expr_depth(*lhs).max(self.expr_depth(*rhs)),
+            IrExpr::Call { args, .. } => args
+                .iter()
+                .map(|&arg| self.expr_depth(arg))
+                .max()
+                .unwrap_or(0),
+            _ => 0,
+        }
     }
 
     /// Lowers a statement list.
@@ -122,15 +304,9 @@ impl<'a> Lowering<'a> {
         match statement {
             IrStmt::Let { local, init } => {
                 self.expr(func, function, *init)?;
-                func.local_set(crate::func::LocalIdx(*local));
+                func.local_set(LocalIdx(*local));
             }
-            IrStmt::Assign { place, value } => {
-                if !place.path.is_empty() {
-                    return Err(WasmError::StructUnsupported);
-                }
-                self.expr(func, function, *value)?;
-                func.local_set(crate::func::LocalIdx(place.local));
-            }
+            IrStmt::Assign { place, value } => self.store_place(func, function, place, *value)?,
             IrStmt::Return { value } => {
                 if let Some(value) = value {
                     self.expr(func, function, *value)?;
@@ -198,10 +374,41 @@ impl<'a> Lowering<'a> {
                 func.addr_const(address);
             }
             IrExpr::Local(slot) => {
-                func.local_get(crate::func::LocalIdx(*slot));
+                let slot = *slot;
+                func.local_get(LocalIdx(slot));
+                // Reading a local copies it, as the VM's `LoadLocal` does. Only
+                // a struct needs the copy — see `crate::structs` for why a
+                // string does not.
+                let ty = function
+                    .locals
+                    .get(slot as usize)
+                    .copied()
+                    .ok_or_else(|| WasmError::VoidLocal(function.name.clone()))?;
+                if let Type::Struct(id) = ty {
+                    func.call(self.structs.copy(id)?);
+                }
             }
-            IrExpr::StructNew { .. } | IrExpr::Field { .. } => {
-                return Err(WasmError::StructUnsupported);
+            IrExpr::StructNew { struct_id, fields } => {
+                let struct_id = *struct_id;
+                let fields = fields.clone();
+                self.struct_new(func, function, struct_id, &fields)?;
+            }
+            IrExpr::Field { base, index, ty } => {
+                let (base, index, ty) = (*base, *index, *ty);
+                let base_ty = self.program.expr_type(function, base);
+                let Type::Struct(id) = base_ty else {
+                    return Err(WasmError::NotAStruct);
+                };
+                let offset = u64::from(self.structs.offset(id, index)?);
+                let addr = func.addr();
+                self.expr(func, function, base)?;
+                load_field(func, ty, addr, offset)?;
+                // The field is copied out for the same reason a local read is:
+                // the base owns it, and handing it out shared would let a write
+                // through one be seen through the other.
+                if let Type::Struct(inner) = ty {
+                    func.call(self.structs.copy(inner)?);
+                }
             }
             IrExpr::Unary { op, operand } => {
                 match op {
@@ -385,9 +592,10 @@ impl<'a> Lowering<'a> {
                         let empty = self.literals.intern("");
                         func.addr_const(empty)
                     }
-                    // Analysis rejects printing a struct, so a program that
+                    // Analysis rejects printing a struct — what it renders is
+                    // not pinned by the language — so a program that
                     // type-checked never reaches this.
-                    Type::Struct(_) => return Err(WasmError::StructUnsupported),
+                    Type::Struct(_) => return Err(WasmError::UnprintableStruct),
                     Type::Error => return Err(WasmError::ErrorType),
                 };
                 func.call(self.runtime.print_str);
