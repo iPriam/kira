@@ -82,4 +82,4 @@ the annotation, not after it.
    externs as imports.
 
 Prove each step the way the rest of this workspace is proven — differentially,
-in `crates/kira-cli/tests/backend_parity.rs`, not by assertion.
+in `crates/kira-cli/tests/backend_parity/`, not by assertion.

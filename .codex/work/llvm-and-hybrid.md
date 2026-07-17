@@ -14,7 +14,7 @@ Orientation for the two non-VM backends. The VM path (`kira-bytecode` →
 
 Parity is proven, not asserted: twenty-one differential tests plus every
 example, identical stdout and exit status across **all three** backends
-(`crates/kira-cli/tests/backend_parity.rs`).
+(`crates/kira-cli/tests/backend_parity/`).
 
 `.codex/work/hybrid-handoff.md` carries the seam's ownership rules — the ones
 that are a double free rather than a compile error when read wrong.
@@ -147,7 +147,7 @@ and it runs at load rather than at the first crossing.
 
 ## When touching this, check
 
-- `crates/kira-cli/tests/backend_parity.rs` — any lowering change runs here.
+- `crates/kira-cli/tests/backend_parity/` — any lowering change runs here.
 - `crates/kira-runtime-abi/src/bridge.rs` — the layout test, if `BridgeValue`
   moves at all.
 - `crates/kira-native-bridge/src/runtime.rs` — the marker test, if any

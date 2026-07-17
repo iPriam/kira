@@ -59,6 +59,27 @@ mod tests {
     use super::*;
     use kira_diagnostics::Severity;
 
+    /// New syntax reaches the editor for free, and this is what proves it: the
+    /// server runs the compiler's own `analyzed` query, so a `for` loop it has
+    /// never heard of squiggles exactly when `kirac check` says it should.
+    #[test]
+    fn loop_syntax_analyzes_the_way_the_compiler_does() {
+        let clean = analyze(
+            "t.kira",
+            "@Main function main() { for i in 0..3 { if i > 1 { break } continue } return }",
+        );
+        assert!(clean.diagnostics.is_empty(), "{:?}", clean.diagnostics);
+
+        let stray = analyze("t.kira", "@Main function main() { break return }");
+        let diagnostic = stray
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == Some("KSEM041"))
+            .expect("a `break` outside a loop is reported");
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
+    }
+
     #[test]
     fn a_clean_program_has_no_diagnostics() {
         let analysis = analyze("t.kira", "@Main function main() { print(1) return }");

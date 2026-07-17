@@ -21,10 +21,10 @@ impl Parser<'_> {
             TokenKind::Return => Some(self.parse_return()),
             TokenKind::If => Some(self.parse_if()),
             TokenKind::While => Some(self.parse_while()),
-            TokenKind::For | TokenKind::Switch | TokenKind::Match => {
-                Some(self.parse_unsupported_stmt())
-            }
-            TokenKind::Break | TokenKind::Continue => Some(self.parse_unsupported_stmt()),
+            TokenKind::For => Some(self.parse_for()),
+            TokenKind::Break => Some(self.parse_break()),
+            TokenKind::Continue => Some(self.parse_continue()),
+            TokenKind::Switch | TokenKind::Match => Some(self.parse_unsupported_stmt()),
             _ => Some(self.parse_expr_or_assign()),
         }
     }
@@ -140,6 +140,59 @@ impl Parser<'_> {
         self.tree.add_stmt(Stmt::While { cond, body, span })
     }
 
+    /// Parses `for <name> in <start>..<end> { … }`.
+    ///
+    /// The bounds sit between `in` and the body brace, so they are parsed with
+    /// struct literals suppressed for the same reason a `while` condition is:
+    /// otherwise `for i in 0..n {` reads the body as a struct literal.
+    fn parse_for(&mut self) -> StmtId {
+        let start = self.current().span;
+        self.bump(); // `for`
+        let (name, name_span) = if self.at(TokenKind::Identifier) {
+            let span = self.current().span;
+            (self.intern_span(span), span)
+        } else {
+            self.error(self.current().span, "KPAR012", "expected a loop variable");
+            (Symbol::ERROR, self.current().span)
+        };
+        if self.at(TokenKind::Identifier) {
+            self.bump();
+        }
+        self.expect(TokenKind::In);
+        let (range_start, range_end) = self.without_struct_literals(|parser| {
+            let range_start = parser.parse_expr();
+            if !parser.expect(TokenKind::DotDot) {
+                // Without `..` there is no upper bound to parse; the lower one
+                // stands alone and the range is poisoned rather than guessed.
+                let span = parser.current().span;
+                return (range_start, parser.error_expr(span));
+            }
+            (range_start, parser.parse_expr())
+        });
+        let body = self.parse_block();
+        let span = Span::from_bounds(start.start, self.previous_end());
+        self.tree.add_stmt(Stmt::For {
+            name,
+            name_span,
+            start: range_start,
+            end: range_end,
+            body,
+            span,
+        })
+    }
+
+    fn parse_break(&mut self) -> StmtId {
+        let span = self.current().span;
+        self.bump(); // `break`
+        self.tree.add_stmt(Stmt::Break { span })
+    }
+
+    fn parse_continue(&mut self) -> StmtId {
+        let span = self.current().span;
+        self.bump(); // `continue`
+        self.tree.add_stmt(Stmt::Continue { span })
+    }
+
     /// A statement-level construct outside the v0 subset: diagnose and skip a
     /// following balanced block if present, leaving a `Stmt::Error`.
     fn parse_unsupported_stmt(&mut self) -> StmtId {
@@ -181,5 +234,89 @@ impl Parser<'_> {
                 | TokenKind::Minus
                 | TokenKind::Bang
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parse;
+    use kira_source::SourceId;
+    use kira_syntax_model::ast::{Item, Stmt};
+
+    /// The statements of the one function in `text`.
+    fn body(text: &str) -> (kira_syntax_model::SyntaxTree, Vec<Stmt>) {
+        let result = parse(SourceId::new(0), text);
+        assert!(
+            result.diagnostics.is_empty(),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        let function = match &result.tree.items[0] {
+            Item::Function(function) => function,
+            other => panic!("expected a function, got {other:?}"),
+        };
+        let stmts = function
+            .body
+            .stmts
+            .iter()
+            .map(|&id| result.tree.stmt(id).clone())
+            .collect();
+        (result.tree.clone(), stmts)
+    }
+
+    #[test]
+    fn a_for_loop_parses_its_variable_and_both_bounds() {
+        let (_, stmts) = body("function f() { for i in 0..5 { } }");
+        match &stmts[0] {
+            Stmt::For { body, .. } => assert!(body.stmts.is_empty()),
+            other => panic!("expected a `for`, got {other:?}"),
+        }
+    }
+
+    /// The body brace must read as a block, not as a struct literal on the
+    /// upper bound — the same ambiguity a `while` condition has.
+    #[test]
+    fn a_for_bound_does_not_swallow_the_body_brace() {
+        let (tree, stmts) = body("function f() { for i in 0..n { let x = 1 } }");
+        match &stmts[0] {
+            Stmt::For { end, body, .. } => {
+                assert_eq!(body.stmts.len(), 1, "the brace is the loop body");
+                assert!(
+                    matches!(tree.expr(*end), kira_syntax_model::ast::Expr::Name { .. }),
+                    "the upper bound is the bare name, not a literal"
+                );
+            }
+            other => panic!("expected a `for`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn break_and_continue_parse_as_statements() {
+        let (_, stmts) = body("function f() { while true { break } }");
+        match &stmts[0] {
+            Stmt::While { body, .. } => assert_eq!(body.stmts.len(), 1),
+            other => panic!("expected a `while`, got {other:?}"),
+        }
+        let (_, stmts) = body("function f() { while true { continue } }");
+        match &stmts[0] {
+            Stmt::While { body, .. } => assert_eq!(body.stmts.len(), 1),
+            other => panic!("expected a `while`, got {other:?}"),
+        }
+    }
+
+    /// A `for` missing its `..` is reported rather than silently reading the
+    /// lower bound as the whole range.
+    #[test]
+    fn a_for_without_a_range_is_reported() {
+        let result = parse(SourceId::new(0), "function f() { for i in 0 { } }");
+        assert!(!result.diagnostics.is_empty());
+    }
+
+    /// Recovery: a broken `for` header still leaves a parseable program.
+    #[test]
+    fn a_for_without_a_loop_variable_still_parses_the_program() {
+        let result = parse(SourceId::new(0), "function f() { for in 0..5 { } }");
+        assert!(!result.diagnostics.is_empty());
+        assert_eq!(result.tree.items.len(), 1, "the function is still there");
     }
 }

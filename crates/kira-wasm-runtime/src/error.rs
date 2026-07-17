@@ -18,6 +18,12 @@ pub enum WasmError {
     /// A binary operator reached the wrong lowering path.
     #[error("an operator reached the wrong lowering path (this is a compiler bug)")]
     UnsupportedOperator,
+    /// A `break`/`continue` reached lowering with no enclosing loop, which
+    /// analysis is supposed to have rejected.
+    #[error(
+        "a `break`/`continue` reached the wasm backend outside a loop (this is a compiler bug)"
+    )]
+    JumpOutsideLoop,
     /// A struct id named no declared struct.
     #[error("the wasm backend was handed an unknown struct (this is a compiler bug)")]
     UnknownStruct,

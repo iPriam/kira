@@ -80,9 +80,42 @@ Two edges are deliberate rather than pending:
   work on both engines; only the crossing is unbuilt, and a build that would
   need one says so. See [docs/structs.md](docs/structs.md).
 
-Struct **methods** parse but are reported as unsupported: they are real
-language surface this compiler does not model yet, and silently dropping one
-would run a program that means something else.
+A struct may declare **methods** alongside its members. A method is an ordinary
+function that happens to have a receiver, so it takes a slot in the same
+function table every free function does — nothing below analysis learns it was
+written inside a struct. The receiver arrives by value, like any other
+parameter, so writing to `self` inside a method leaves the caller's value
+alone. A method's body may name a member bare (`self.x` and `x` are the same
+read).
+
+## Loops
+
+`while` tests before each iteration. `for` walks a **half-open** integer range:
+the lower bound is included and the upper one is not, so `for i in 0..5` sees
+`0 1 2 3 4` and `for i in 5..5` never runs at all. `..` already means "up to
+but excluding", which is why there is no separate `..<`.
+
+```kira
+for i in 0..5 { print(i) }
+
+let lo = 2
+let hi = 6
+for i in lo..hi { print(i) }    // bounds are expressions, evaluated once
+```
+
+A range is written only in a `for` header — `..` is not a value operator, so
+`let r = 0..4` is rejected rather than producing a range object.
+
+The loop variable is a fresh **immutable** binding on each iteration, scoped to
+the body: assigning to it is the same error assigning to any `let` is, and it
+does not outlive the loop.
+
+`break` leaves the innermost enclosing loop and `continue` skips to its next
+iteration; both work in `while` and `for`, and one written outside a loop is
+reported rather than ignored. A `for` is rewritten into a `while` during
+analysis, so every backend compiles one loop shape rather than two — and
+`continue` still advances the loop, because the rewrite steps the cursor before
+the body rather than after it.
 
 ## Live sessions
 

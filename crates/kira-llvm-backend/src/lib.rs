@@ -56,6 +56,12 @@ pub enum LlvmError {
          `--features llvm` and a managed LLVM present to use `--backend llvm`"
     )]
     NotCompiledIn,
+    /// A `break`/`continue` reached codegen with no enclosing loop, which
+    /// analysis is supposed to have rejected.
+    #[error(
+        "a `break`/`continue` reached the LLVM backend outside a loop (this is a compiler bug)"
+    )]
+    JumpOutsideLoop,
     /// No usable LLVM installation was found.
     #[error(transparent)]
     Discovery(#[from] LlvmDiscoveryError),

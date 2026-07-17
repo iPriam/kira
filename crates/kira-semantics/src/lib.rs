@@ -12,6 +12,7 @@
 
 mod analyze;
 mod decl;
+mod stmt;
 mod typeck;
 
 pub use analyze::{Analysis, analyze};
@@ -100,6 +101,91 @@ mod tests {
             .into_iter()
             .filter_map(|diagnostic| diagnostic.code)
             .collect()
+    }
+
+    #[test]
+    fn a_for_loop_binds_its_variable_and_type_checks_its_bounds() {
+        assert!(
+            diagnostics("@Main function main() { for i in 0..5 { print(i) } return }").is_empty()
+        );
+        // The loop variable is an `Int`, and visible only inside the body.
+        assert_eq!(
+            codes("@Main function main() { for i in 0..5 { } print(i) return }"),
+            vec!["KSEM060"],
+            "the loop variable does not outlive its loop"
+        );
+    }
+
+    /// A range bound is an `Int`. A `String` bound is reported once, against
+    /// the bound itself rather than the loop.
+    #[test]
+    fn a_non_integer_for_bound_is_reported() {
+        assert_eq!(
+            codes(r#"@Main function main() { for i in 0.."five" { } return }"#),
+            vec!["KSEM043"]
+        );
+    }
+
+    /// The loop variable is a fresh immutable binding each iteration, so
+    /// writing to it is the same error writing to any `let` is.
+    #[test]
+    fn a_for_loop_variable_cannot_be_assigned() {
+        assert_eq!(
+            codes("@Main function main() { for i in 0..5 { i = 9 } return }"),
+            vec!["KSEM021"]
+        );
+    }
+
+    /// The cursor and limit the desugar introduces are bound to no name, so a
+    /// body is free to declare its own variables without colliding with them.
+    #[test]
+    fn a_for_body_may_declare_any_name_it_likes() {
+        assert!(
+            diagnostics(
+                "@Main function main() { for i in 0..3 { let cursor = 1 let limit = 2 print(cursor + limit) } return }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn break_and_continue_outside_a_loop_are_reported() {
+        assert_eq!(
+            codes("@Main function main() { break return }"),
+            vec!["KSEM041"]
+        );
+        assert_eq!(
+            codes("@Main function main() { continue return }"),
+            vec!["KSEM042"]
+        );
+        // Inside an `if` that is itself outside a loop: still no loop.
+        assert_eq!(
+            codes("@Main function main() { if true { break } return }"),
+            vec!["KSEM041"]
+        );
+    }
+
+    #[test]
+    fn break_and_continue_inside_a_loop_are_accepted() {
+        assert!(
+            diagnostics(
+                "@Main function main() { for i in 0..3 { if i > 1 { break } continue } return }"
+            )
+            .is_empty()
+        );
+        assert!(diagnostics("@Main function main() { while true { break } return }").is_empty());
+    }
+
+    /// A loop does not make a function definitely return: its body may run
+    /// zero times, so a `return` inside one cannot be the only one.
+    #[test]
+    fn a_return_only_inside_a_for_loop_does_not_satisfy_the_return_check() {
+        assert_eq!(
+            codes(
+                "@Main function main() { return } function f() -> Int { for i in 0..3 { return i } }"
+            ),
+            vec!["KSEM033"]
+        );
     }
 
     #[test]

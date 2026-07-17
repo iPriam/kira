@@ -6,7 +6,7 @@ use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 
 use super::super::ffi::c_string;
-use super::FunctionLowering;
+use super::{FunctionLowering, LoopBlocks};
 use crate::LlvmError;
 
 impl FunctionLowering<'_, '_> {
@@ -49,7 +49,38 @@ impl FunctionLowering<'_, '_> {
                 else_body,
             } => self.lower_if(*cond, then_body, else_body),
             IrStmt::While { cond, body } => self.lower_while(*cond, body),
+            IrStmt::Break => {
+                let exit = self.innermost_loop()?.exit;
+                self.branch_to(exit);
+                Ok(())
+            }
+            IrStmt::Continue => {
+                let test = self.innermost_loop()?.test;
+                self.branch_to(test);
+                Ok(())
+            }
         }
+    }
+
+    /// The innermost enclosing loop's blocks.
+    ///
+    /// Analysis rejects a `break`/`continue` outside a loop, so an empty stack
+    /// means the frontend let one through — a typed error rather than a panic,
+    /// because a backend never gets to end its caller's process.
+    fn innermost_loop(&self) -> Result<&LoopBlocks, LlvmError> {
+        self.loops.last().ok_or(LlvmError::JumpOutsideLoop)
+    }
+
+    /// Branches unconditionally to `target`, terminating the current block.
+    ///
+    /// Terminating is what makes statements after a `break` vanish:
+    /// `lower_block` stops at a terminated block, so the unreachable tail is
+    /// never emitted into invalid IR.
+    fn branch_to(&mut self, target: LLVMBasicBlockRef) {
+        // SAFETY: the builder sits on an unterminated block of the function
+        // being built, and `target` is a block of that same function — it came
+        // from the loop stack, which only ever holds blocks appended to it.
+        unsafe { LLVMBuildBr(self.codegen.builder, target) };
     }
 
     /// Stores into a local slot, freeing the value it held.
@@ -209,7 +240,13 @@ impl FunctionLowering<'_, '_> {
         unsafe { LLVMBuildCondBr(self.codegen.builder, condition, body_block, exit_block) };
 
         self.position_at(body_block);
-        self.lower_block(body)?;
+        self.loops.push(LoopBlocks {
+            test: test_block,
+            exit: exit_block,
+        });
+        let lowered = self.lower_block(body);
+        self.loops.pop();
+        lowered?;
         if !self.block_is_terminated() {
             // SAFETY: the body fell through; loop back to the test.
             unsafe { LLVMBuildBr(self.codegen.builder, test_block) };

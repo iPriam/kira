@@ -129,12 +129,24 @@ pub enum HirStmt {
         else_body: Vec<HirStmtId>,
     },
     /// A pre-tested loop.
+    ///
+    /// The only loop shape in the HIR: a `for` in the source is desugared to
+    /// one during analysis, so nothing below this layer learns `for` exists.
     While {
         /// The (boolean) loop condition.
         cond: HirExprId,
         /// The loop body.
         body: Vec<HirStmtId>,
     },
+    /// Leave the innermost enclosing loop.
+    ///
+    /// Analysis rejects one outside a loop, so a backend may assume an
+    /// enclosing [`HirStmt::While`] exists.
+    Break,
+    /// Skip to the innermost enclosing loop's next iteration.
+    ///
+    /// As with [`HirStmt::Break`], analysis guarantees an enclosing loop.
+    Continue,
 }
 
 /// A writable location: a local, optionally walked into by field indices.

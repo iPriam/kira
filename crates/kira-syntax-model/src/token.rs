@@ -105,6 +105,8 @@ pub enum TokenKind {
     Colon,
     /// `.`
     Dot,
+    /// `..`
+    DotDot,
     /// `@`
     At,
     /// `?`
@@ -216,6 +218,7 @@ impl TokenKind {
             TokenKind::Semicolon => "`;`",
             TokenKind::Colon => "`:`",
             TokenKind::Dot => "`.`",
+            TokenKind::DotDot => "`..`",
             TokenKind::At => "`@`",
             TokenKind::Question => "`?`",
             TokenKind::Arrow => "`->`",

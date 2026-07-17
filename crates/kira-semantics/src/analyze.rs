@@ -9,13 +9,11 @@ use std::collections::HashMap;
 
 use kira_core::Interner;
 use kira_diagnostics::{Diagnostic, Label, Severity};
-use kira_semantics_model::hir::{
-    FuncId, HirFunction, HirLocal, HirPlace, HirProgram, HirStmt, HirStmtId, LocalId,
-};
+use kira_semantics_model::hir::{FuncId, HirFunction, HirLocal, HirProgram, LocalId};
 use kira_semantics_model::{StructId, Type};
 use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::SyntaxTree;
-use kira_syntax_model::ast::{Block, Expr, ExprId, Function, Item, Stmt};
+use kira_syntax_model::ast::{ExprId, Function, Item};
 
 /// The result of analyzing one program.
 #[derive(Debug, Clone)]
@@ -80,6 +78,11 @@ pub(crate) struct FnCtx {
     /// than `self.step` — so a name that resolves to no local is tried against
     /// this struct's fields before it is called undefined.
     pub(crate) receiver: Option<StructId>,
+    /// How many loops enclose the statement being analyzed.
+    ///
+    /// A `break`/`continue` at depth zero has no loop to act on and is
+    /// reported; every one that survives analysis therefore has a target.
+    pub(crate) loop_depth: u32,
 }
 
 impl FnCtx {
@@ -89,6 +92,7 @@ impl FnCtx {
             scopes: vec![HashMap::new()],
             return_type,
             receiver: None,
+            loop_depth: 0,
         }
     }
 
@@ -112,6 +116,28 @@ impl FnCtx {
             scope.insert(name.to_owned(), id);
         }
         id
+    }
+
+    /// Declares a local slot bound to no name, returning it.
+    ///
+    /// A desugaring needs storage the source never named — a `for` loop's
+    /// cursor and limit. Binding it into no scope is what makes it
+    /// unreachable: user code cannot read it, write it, or shadow it, whatever
+    /// it spells its own variables, because name resolution only ever consults
+    /// the scope stack.
+    pub(crate) fn declare_hidden(&mut self, ty: Type, mutable: bool) -> LocalId {
+        let id = LocalId(self.locals.len() as u32);
+        self.locals.push(HirLocal {
+            name: String::new(),
+            ty,
+            mutable,
+        });
+        id
+    }
+
+    /// Whether `local` may be reassigned.
+    pub(crate) fn is_mutable(&self, local: LocalId) -> bool {
+        self.locals[local.0 as usize].mutable
     }
 
     /// Resolves a name to a local slot, searching innermost scope outward.
@@ -330,230 +356,6 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// Whether a statement list is guaranteed to execute a `return`.
-    ///
-    /// A list definitely returns when any of its statements does (everything
-    /// after that statement is unreachable). An `if` definitely returns only
-    /// when *both* arms do; a `while` never counts because its body may run
-    /// zero times.
-    fn body_definitely_returns(&self, stmts: &[HirStmtId]) -> bool {
-        stmts.iter().any(|&id| self.stmt_definitely_returns(id))
-    }
-
-    fn stmt_definitely_returns(&self, id: HirStmtId) -> bool {
-        match self.program.stmt(id) {
-            HirStmt::Return { .. } => true,
-            HirStmt::If {
-                then_body,
-                else_body,
-                ..
-            } => {
-                // An empty else (no `else` written) can fall through, and
-                // `body_definitely_returns` is false for an empty list.
-                self.body_definitely_returns(then_body) && self.body_definitely_returns(else_body)
-            }
-            _ => false,
-        }
-    }
-
-    pub(crate) fn analyze_block(&mut self, ctx: &mut FnCtx, block: &Block) -> Vec<HirStmtId> {
-        ctx.push_scope();
-        let mut stmts = Vec::with_capacity(block.stmts.len());
-        for &stmt_id in &block.stmts {
-            if let Some(hir) = self.analyze_stmt(ctx, stmt_id) {
-                stmts.push(hir);
-            }
-        }
-        ctx.pop_scope();
-        stmts
-    }
-
-    fn analyze_stmt(
-        &mut self,
-        ctx: &mut FnCtx,
-        stmt_id: kira_syntax_model::ast::StmtId,
-    ) -> Option<HirStmtId> {
-        match self.tree.stmt(stmt_id).clone() {
-            Stmt::Let {
-                name,
-                name_span,
-                mutable,
-                ty,
-                init,
-                ..
-            } => {
-                let value = self.analyze_expr(ctx, init);
-                let value_ty = self.program.expr(value).type_of();
-                let declared = ty.map(|type_ref| self.resolve_type(type_ref.name, type_ref.span));
-                let local_ty = match declared {
-                    Some(annotation) => {
-                        if !value_ty.assignable_to(annotation) {
-                            self.emit(
-                                name_span,
-                                "KSEM020",
-                                format!(
-                                    "binding annotated `{}` cannot hold a value of type `{}`",
-                                    self.type_name(annotation),
-                                    self.type_name(value_ty)
-                                ),
-                            );
-                        }
-                        annotation
-                    }
-                    None => value_ty,
-                };
-                let name = self.interner.resolve(name).to_owned();
-                let local = ctx.declare(&name, local_ty, mutable);
-                Some(
-                    self.program
-                        .stmts
-                        .alloc(HirStmt::Let { local, init: value }),
-                )
-            }
-            Stmt::Assign { target, value, .. } => {
-                let value_expr = self.analyze_expr(ctx, value);
-                let value_ty = self.program.expr(value_expr).type_of();
-                let target_span = self.tree.expr(target).span();
-                let (place, place_ty) = self.resolve_place(ctx, target)?;
-                if !value_ty.assignable_to(place_ty) {
-                    self.emit(
-                        target_span,
-                        "KSEM022",
-                        format!(
-                            "cannot assign a value of type `{}` to a place of type `{}`",
-                            self.type_name(value_ty),
-                            self.type_name(place_ty)
-                        ),
-                    );
-                }
-                Some(self.program.stmts.alloc(HirStmt::Assign {
-                    place,
-                    value: value_expr,
-                }))
-            }
-            Stmt::Return { value, span } => {
-                let hir_value = value.map(|expr| self.analyze_expr(ctx, expr));
-                self.check_return(ctx, hir_value, span);
-                Some(
-                    self.program
-                        .stmts
-                        .alloc(HirStmt::Return { value: hir_value }),
-                )
-            }
-            Stmt::Expr { expr, .. } => {
-                let hir = self.analyze_expr(ctx, expr);
-                Some(self.program.stmts.alloc(HirStmt::Expr { expr: hir }))
-            }
-            Stmt::If {
-                cond,
-                then_block,
-                else_block,
-                ..
-            } => {
-                let cond_expr = self.analyze_condition(ctx, cond);
-                let then_body = self.analyze_block(ctx, &then_block);
-                let else_body = match &else_block {
-                    Some(block) => self.analyze_block(ctx, block),
-                    None => Vec::new(),
-                };
-                Some(self.program.stmts.alloc(HirStmt::If {
-                    cond: cond_expr,
-                    then_body,
-                    else_body,
-                }))
-            }
-            Stmt::While { cond, body, .. } => {
-                let cond_expr = self.analyze_condition(ctx, cond);
-                let loop_body = self.analyze_block(ctx, &body);
-                Some(self.program.stmts.alloc(HirStmt::While {
-                    cond: cond_expr,
-                    body: loop_body,
-                }))
-            }
-            Stmt::Error { .. } => None,
-        }
-    }
-
-    /// Resolves an assignment target into a [`HirPlace`] plus the type stored
-    /// there, or `None` when the target does not name a writable place.
-    ///
-    /// Every step must be writable, not just the last: a struct is a value, so
-    /// writing `b.size.x` rewrites the `size` field's contents in place. A
-    /// `let` anywhere along the path is what makes that illegal.
-    fn resolve_place(&mut self, ctx: &mut FnCtx, target: ExprId) -> Option<(HirPlace, Type)> {
-        match self.tree.expr(target).clone() {
-            Expr::Name { symbol, span } => {
-                let name = self.interner.resolve(symbol).to_owned();
-                let Some(local) = ctx.resolve(&name) else {
-                    self.emit(
-                        span,
-                        "KSEM023",
-                        format!("cannot assign to undefined name `{name}`"),
-                    );
-                    return None;
-                };
-                if !ctx.locals[local.0 as usize].mutable {
-                    self.emit(
-                        span,
-                        "KSEM021",
-                        format!(
-                            "cannot assign to immutable binding `{name}` (declare it with `var`)"
-                        ),
-                    );
-                    return None;
-                }
-                Some((
-                    HirPlace {
-                        local,
-                        path: Vec::new(),
-                    },
-                    ctx.local_type(local),
-                ))
-            }
-            Expr::Field {
-                base,
-                field,
-                field_span,
-                ..
-            } => {
-                let (mut place, base_ty) = self.resolve_place(ctx, base)?;
-                let field_name = self.interner.resolve(field).to_owned();
-                let (index, field_ty) = self.resolve_field(base_ty, &field_name, field_span)?;
-                let mutable = match base_ty {
-                    Type::Struct(id) => self
-                        .program
-                        .structs
-                        .get(id)
-                        .and_then(|def| def.field(index))
-                        .is_some_and(|def| def.mutable),
-                    _ => false,
-                };
-                if !mutable {
-                    self.emit(
-                        field_span,
-                        "KSEM024",
-                        format!(
-                            "cannot assign to immutable field `{field_name}` of `{}` \
-                             (declare it with `var`)",
-                            self.type_name(base_ty)
-                        ),
-                    );
-                    return None;
-                }
-                place.path.push(index);
-                Some((place, field_ty))
-            }
-            other => {
-                self.emit(
-                    other.span(),
-                    "KSEM025",
-                    "the left side of an assignment must be a variable or a field of one",
-                );
-                None
-            }
-        }
-    }
-
     /// Whether `base_ty` has a field named `name`, reporting nothing.
     ///
     /// For a diagnostic that needs to know, not for resolving one.
@@ -603,63 +405,6 @@ impl<'a> Analyzer<'a> {
             );
         }
         resolved
-    }
-
-    fn check_return(
-        &mut self,
-        ctx: &FnCtx,
-        value: Option<kira_semantics_model::hir::HirExprId>,
-        span: Span,
-    ) {
-        let expected = ctx.return_type;
-        match value {
-            None => {
-                if expected != Type::Void {
-                    self.emit(
-                        span,
-                        "KSEM030",
-                        format!(
-                            "function must return a value of type `{}`",
-                            self.type_name(expected)
-                        ),
-                    );
-                }
-            }
-            Some(expr) => {
-                let actual = self.program.expr(expr).type_of();
-                if expected == Type::Void {
-                    self.emit(span, "KSEM031", "a `Void` function cannot return a value");
-                } else if !actual.assignable_to(expected) {
-                    self.emit(
-                        span,
-                        "KSEM032",
-                        format!(
-                            "returning `{}` from a function declared to return `{}`",
-                            self.type_name(actual),
-                            self.type_name(expected)
-                        ),
-                    );
-                }
-            }
-        }
-    }
-
-    fn analyze_condition(
-        &mut self,
-        ctx: &mut FnCtx,
-        expr: ExprId,
-    ) -> kira_semantics_model::hir::HirExprId {
-        let cond_span = self.tree.expr(expr).span();
-        let hir = self.analyze_expr(ctx, expr);
-        let ty = self.program.expr(hir).type_of();
-        if ty != Type::Bool && ty != Type::Error {
-            self.emit(
-                cond_span,
-                "KSEM040",
-                format!("condition must be `Bool`, found `{}`", self.type_name(ty)),
-            );
-        }
-        hir
     }
 
     /// Looks up a signature by name (for call resolution).

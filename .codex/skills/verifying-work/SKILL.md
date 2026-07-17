@@ -43,7 +43,7 @@ without it pre-installed.
   compiles for wasm:
   `cargo check -p kira-vm-runtime --target wasm32-unknown-unknown`.
 - **Parity.** Prove it rather than asserting it: run
-  `crates/kira-cli/tests/backend_parity.rs` for any lowering or semantics
+  `crates/kira-cli/tests/backend_parity/` for any lowering or semantics
   change — same program, same stdout, same exit status on VM and native. Reject
   VM-only passing for backend-sensitive work, and prefer many small cases over
   one broad one.
