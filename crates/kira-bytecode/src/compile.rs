@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use kira_ir::{IrBinOp, IrCallee, IrExpr, IrExprId, IrProgram, IrStmt, IrUnOp};
 
 use crate::module::{FuncProto, Module};
-use crate::op::Instruction;
+use crate::op::{FieldPath, Instruction};
 use kira_runtime_abi::Execution;
 
 /// An error raised while lowering IR to bytecode.
@@ -45,6 +45,22 @@ pub enum CompileError {
     /// Internal invariant: a short-circuit operator reached opcode selection.
     #[error("bytecode compiler invariant violated: short-circuit operator has no opcode")]
     ShortCircuitOpcode,
+    /// A struct has more fields than the format's `u16` operand can count.
+    #[error("function `{function}` builds a struct of {count} fields; the format allows 65535")]
+    TooManyFields {
+        /// The offending function's name.
+        function: String,
+        /// The requested number of fields.
+        count: usize,
+    },
+    /// A nested field assignment walks deeper than the format can encode.
+    #[error("function `{function}` assigns through {count} nested fields; the format allows 65535")]
+    FieldPathTooDeep {
+        /// The offending function's name.
+        function: String,
+        /// The requested path depth.
+        count: usize,
+    },
 }
 
 /// Compiles a lowered program into a runnable module for the VM.
@@ -175,10 +191,24 @@ impl FnCompiler<'_> {
                 let slot = self.local_slot(*local)?;
                 self.code.push(Instruction::StoreLocal(slot));
             }
-            IrStmt::Assign { local, value } => {
+            IrStmt::Assign { place, value } => {
                 self.compile_expr(*value)?;
-                let slot = self.local_slot(*local)?;
-                self.code.push(Instruction::StoreLocal(slot));
+                let slot = self.local_slot(place.local)?;
+                if place.path.is_empty() {
+                    self.code.push(Instruction::StoreLocal(slot));
+                } else {
+                    let steps: Vec<u16> = place
+                        .path
+                        .iter()
+                        .map(|&index| self.field_index(index))
+                        .collect::<Result<_, _>>()?;
+                    let path =
+                        FieldPath::new(steps).map_err(|error| CompileError::FieldPathTooDeep {
+                            function: self.function_name.to_owned(),
+                            count: error.count,
+                        })?;
+                    self.code.push(Instruction::StoreField { slot, path });
+                }
             }
             IrStmt::Return { value } => match value {
                 Some(expr) => {
@@ -246,6 +276,26 @@ impl FnCompiler<'_> {
                 self.code.push(unary_instruction(op));
             }
             IrExpr::Binary { op, lhs, rhs } => self.compile_binary(*op, *lhs, *rhs)?,
+            IrExpr::StructNew { fields, .. } => {
+                let fields = fields.clone();
+                let count =
+                    u16::try_from(fields.len()).map_err(|_| CompileError::TooManyFields {
+                        function: self.function_name.to_owned(),
+                        count: fields.len(),
+                    })?;
+                // Fields are pushed in declaration order, so the struct the VM
+                // builds has them in layout order with no reordering.
+                for field in fields {
+                    self.compile_expr(field)?;
+                }
+                self.code.push(Instruction::NewStruct(count));
+            }
+            IrExpr::Field { base, index, .. } => {
+                let base = *base;
+                let index = self.field_index(*index)?;
+                self.compile_expr(base)?;
+                self.code.push(Instruction::GetField(index));
+            }
             IrExpr::Call { callee, args, .. } => {
                 let callee = *callee;
                 let args = args.clone();
@@ -319,6 +369,14 @@ impl FnCompiler<'_> {
         u16::try_from(slot).map_err(|_| CompileError::LocalSlotOutOfRange {
             function: self.function_name.to_owned(),
             slot,
+        })
+    }
+
+    /// Converts an IR field index to a `u16` operand, or fails typed.
+    fn field_index(&self, index: u32) -> Result<u16, CompileError> {
+        u16::try_from(index).map_err(|_| CompileError::TooManyFields {
+            function: self.function_name.to_owned(),
+            count: index as usize,
         })
     }
 

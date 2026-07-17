@@ -62,6 +62,19 @@ pub enum LlvmError {
     /// The program uses something the native backend cannot lower yet.
     #[error("the LLVM backend cannot lower {0} yet")]
     Unsupported(&'static str),
+    /// A struct reached the `@Native`/`@Runtime` boundary, which has no layout
+    /// for one.
+    ///
+    /// `BridgeValue` is a tag plus a one-word payload: a struct neither fits it
+    /// nor has a tag, and passing one would need an ABI decision — by value or
+    /// by pointer, and who frees the strings inside — that has not been made.
+    /// Native code and VM code each handle structs perfectly well; only the
+    /// crossing between them is unbuilt.
+    #[error(
+        "a struct cannot cross the `@Native`/`@Runtime` boundary yet; \
+         pass its fields individually, or keep both sides on one engine"
+    )]
+    StructAtSeam,
     /// Lowering produced a module LLVM rejected — always a backend bug.
     #[error("LLVM rejected the generated module (this is a compiler bug): {0}")]
     InvalidModule(String),

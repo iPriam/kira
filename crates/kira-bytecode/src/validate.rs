@@ -128,6 +128,16 @@ impl Module {
                     Instruction::Jump(target) | Instruction::JumpIfFalse(target) => {
                         *target < code_len
                     }
+                    // The slot a nested write is rooted at is an index into this
+                    // frame, so it is bounded here like any other. The field
+                    // steps are not: a struct's shape is not in the module (the
+                    // VM is structurally typed), so the runtime checks each step
+                    // against the value it actually finds and traps on a
+                    // mismatch.
+                    Instruction::StoreField { slot, .. } => *slot < function.local_count,
+                    // `NewStruct` and `GetField` carry only counts and indices
+                    // that the runtime checks against the stack and the value in
+                    // hand; there is nothing static to bound them against.
                     _ => true,
                 };
                 if !in_range {

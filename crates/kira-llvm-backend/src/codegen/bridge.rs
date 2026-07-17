@@ -34,6 +34,11 @@ fn bridge_tag_of(ty: Type) -> Result<(u8, Option<PayloadForm>), LlvmError> {
         Type::Float => (BridgeValueTag::FLOAT.0, Some(PayloadForm::FloatBits)),
         Type::Bool => (BridgeValueTag::BOOL.0, Some(PayloadForm::Widen)),
         Type::String => (BridgeValueTag::STRING.0, Some(PayloadForm::PointerBits)),
+        // A `BridgeValue` is 16 bytes with a one-word payload; a struct does
+        // not fit and has no tag. Crossing the seam with one needs an ABI
+        // decision (by value? by pointer? who frees the strings inside?) that
+        // has not been made, so the boundary says no rather than guessing.
+        Type::Struct(_) => return Err(LlvmError::StructAtSeam),
         Type::Error => return Err(LlvmError::Unsupported("a value with no type")),
     })
 }
@@ -75,6 +80,7 @@ impl Codegen<'_> {
                 Type::String => {
                     LLVMBuildIntToPtr(self.builder, payload, types.ptr, c"arg.str".as_ptr())
                 }
+                Type::Struct(_) => return Err(LlvmError::StructAtSeam),
                 Type::Void | Type::Error => {
                     return Err(LlvmError::Unsupported("a parameter with no runtime value"));
                 }

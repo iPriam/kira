@@ -64,4 +64,34 @@ pub enum VmError {
     /// bug, not a program error).
     #[error("internal fault: instruction dispatch invariant violated")]
     BadDispatch,
+    /// A struct reached the native seam, which has no layout for one.
+    ///
+    /// The hybrid split rejects a struct in a `@Native` signature when the
+    /// program is built, so reaching this means a module and a manifest that
+    /// disagree — never a program that merely type-checked.
+    #[error(
+        "function {function} passes a struct across the native seam, which has no layout for one"
+    )]
+    StructAtSeam {
+        /// The function at the boundary.
+        function: u32,
+    },
+    /// `print` was handed a value with no pinned rendering (a struct).
+    ///
+    /// Analysis rejects this before a program runs; it is a trap rather than
+    /// invented output.
+    #[error("print cannot format this value")]
+    UnprintableValue,
+    /// A field instruction found something other than a struct.
+    #[error("field access on a value that is not a struct")]
+    NotAStruct,
+    /// A field index named no field of the struct in hand.
+    #[error("no field at index {index}")]
+    NoSuchField {
+        /// The index the instruction asked for.
+        index: u16,
+    },
+    /// A `StoreField` carried no path, so it named no field to write.
+    #[error("a field store must name at least one field")]
+    EmptyFieldPath,
 }

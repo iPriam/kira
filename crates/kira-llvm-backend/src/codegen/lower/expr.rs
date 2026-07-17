@@ -33,13 +33,15 @@ impl FunctionLowering<'_, '_> {
             }
             IrExpr::Binary { op, lhs, rhs } => self.lower_binary(op, lhs, rhs),
             IrExpr::Call { callee, args, .. } => self.lower_call(callee, &args),
+            IrExpr::StructNew { struct_id, fields } => self.lower_struct_new(struct_id, &fields),
+            IrExpr::Field { base, index, ty } => self.lower_field(base, index, ty),
         }
     }
 
-    /// Reads a local slot, cloning the string it holds.
+    /// Reads a local slot, copying what it holds.
     ///
     /// The VM's `LoadLocal` copies the value, so the slot keeps ownership of
-    /// its own string and the reader owns an independent one.
+    /// its own storage and the reader owns an independent copy.
     fn load_local(&mut self, slot: u32) -> Result<LLVMValueRef, LlvmError> {
         let ty = self.local_type(slot)?;
         let llvm_type = self.codegen.llvm_type(ty)?;
@@ -48,10 +50,48 @@ impl FunctionLowering<'_, '_> {
         // SAFETY: `pointer` is this slot's alloca of `llvm_type`.
         let value =
             unsafe { LLVMBuildLoad2(self.codegen.builder, llvm_type, pointer, name.as_ptr()) };
-        if ty == Type::String {
-            return Ok(self.call(self.codegen.runtime.str_clone, &mut [value], c"str.copy"));
+        self.copy_value(value, ty)
+    }
+
+    /// Builds a struct value from its fields.
+    ///
+    /// The fields arrive in declaration order with every one present — analysis
+    /// filled the defaults — so this is a straight `insertvalue` chain onto a
+    /// zeroed value, with no reordering and no gaps.
+    fn lower_struct_new(
+        &mut self,
+        struct_id: kira_semantics_model::StructId,
+        fields: &[IrExprId],
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let ty = Type::Struct(struct_id);
+        let llvm_type = self.codegen.llvm_type(ty)?;
+        // SAFETY: `llvm_type` is this struct's type in this live context.
+        let mut value = unsafe { LLVMGetUndef(llvm_type) };
+        for (index, &field) in fields.iter().enumerate() {
+            let lowered = self.lower_expr(field)?;
+            value = self.insert_field(value, lowered, index as u32)?;
         }
         Ok(value)
+    }
+
+    /// Reads one field out of a struct expression.
+    ///
+    /// The field is copied out *before* the base is dropped, because the base
+    /// owns the storage the field names — handing it out without copying would
+    /// hand out exactly what the drop is about to free. This is the VM's
+    /// `GetField` instruction, in the same order.
+    fn lower_field(
+        &mut self,
+        base: IrExprId,
+        index: u32,
+        ty: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let base_ty = self.type_of(base);
+        let base_value = self.lower_expr(base)?;
+        let field = self.extract_field(base_value, index)?;
+        let copy = self.copy_value(field, ty)?;
+        self.drop_value(base_value, base_ty)?;
+        Ok(copy)
     }
 
     /// Lowers a unary operator.
