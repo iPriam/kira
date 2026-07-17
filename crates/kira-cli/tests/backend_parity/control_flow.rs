@@ -1,4 +1,4 @@
-//! Parity for recursion, `if`/`while`, `for`, `break`, and `continue`.
+//! Parity for recursion, `if`/`while`, `for`, `break`, `continue`, and `switch`.
 
 use crate::assert_parity;
 
@@ -224,4 +224,120 @@ function name(n: Int) -> String {
 "#,
     );
     assert_eq!(output, "row three\n");
+}
+
+/// A `switch` is desugared to an `if`/`else` chain in the analyzer, so what
+/// this proves is the desugar: every backend below it compiles branches it
+/// already had.
+#[test]
+fn a_switch_dispatches_identically_on_every_backend() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    for i in 0..4 {
+        var name = "?"
+        switch i % 3 {
+            case 0 { name = "zero" }
+            case 1 { name = "one" }
+            case 2 { name = "two" }
+            default { name = "other" }
+        }
+        print(name)
+    }
+
+    // A String subject, and the optional `:` binder after a label.
+    var kind = 0
+    switch "beta" {
+        case "alpha": { kind = 1 }
+        case "beta": { kind = 2 }
+        default: { kind = 9 }
+    }
+    print(kind)
+
+    // A Bool subject.
+    var flag = "no"
+    switch 2 > 1 {
+        case true { flag = "yes" }
+        default { flag = "no" }
+    }
+    print(flag)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "zero\none\ntwo\nzero\n2\nyes\n");
+}
+
+/// The three rules a `switch` keeps that an `if` chain would not obviously
+/// give it: no fallthrough, a missing `default` is a no-op rather than an
+/// error, and the first matching arm wins even when a label repeats.
+#[test]
+fn a_switch_has_no_fallthrough_and_needs_no_default() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    // No default and no match: nothing happens.
+    var untouched = 7
+    switch 99 {
+        case 1 { untouched = 1 }
+        case 2 { untouched = 2 }
+    }
+    print(untouched)
+
+    // The default fires when nothing matches.
+    var fell = 0
+    switch 99 {
+        case 1 { fell = 1 }
+        default { fell = 0 - 1 }
+    }
+    print(fell)
+
+    // No fallthrough, and a repeated label is legal: the first wins.
+    var hits = 0
+    switch 1 {
+        case 1 { hits = hits + 1 }
+        case 1 { hits = hits + 100 }
+        default { hits = hits + 1000 }
+    }
+    print(hits)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "7\n-1\n1\n");
+}
+
+/// `break` inside a switch arm acts on the enclosing loop, not the switch —
+/// the rule that makes a switch not a loop.
+#[test]
+fn break_in_a_switch_arm_leaves_the_enclosing_loop() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    var seen = 0
+    for i in 0..10 {
+        switch i {
+            case 3 { break }
+            default { seen = seen + 1 }
+        }
+    }
+    print(seen)
+
+    // `continue` likewise belongs to the loop.
+    var odds = 0
+    for i in 0..10 {
+        switch i % 2 {
+            case 0 { continue }
+            default { odds = odds + i }
+        }
+    }
+    print(odds)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "3\n25\n");
 }

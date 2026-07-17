@@ -1,4 +1,4 @@
-//! Parity for `for`, `break`, and `continue`.
+//! Parity for `for`, `break`, `continue`, and `switch`.
 
 use crate::assert_parity;
 
@@ -120,6 +120,67 @@ function main() {
         hits = hits + 1
     }
     print(hits)
+    return
+}
+"#,
+    );
+}
+
+/// A `switch` reaches wasm already desugared to an `if`/`else` chain, so this
+/// proves the desugar agrees with the VM on every arm shape.
+#[test]
+fn switch_dispatch_agrees() {
+    assert_parity(
+        r#"
+@Main
+function main() {
+    for i in 0..4 {
+        var name = "?"
+        switch i % 3 {
+            case 0 { name = "zero" }
+            case 1 { name = "one" }
+            case 2 { name = "two" }
+            default { name = "other" }
+        }
+        print(name)
+    }
+
+    var untouched = 7
+    switch 99 {
+        case 1 { untouched = 1 }
+    }
+    print(untouched)
+
+    var kind = 0
+    switch "beta" {
+        case "alpha" { kind = 1 }
+        case "beta" { kind = 2 }
+        default { kind = 9 }
+    }
+    print(kind)
+    return
+}
+"#,
+    );
+}
+
+/// A `break` inside a switch arm inside a loop: the jump target is the loop,
+/// and wasm names it by label depth, so the arm's nesting is what would get
+/// the immediate wrong.
+#[test]
+fn break_in_a_switch_arm_finds_the_enclosing_loop() {
+    assert_parity(
+        r#"
+@Main
+function main() {
+    var seen = 0
+    for i in 0..10 {
+        switch i {
+            case 3 { break }
+            default { seen = seen + 1 }
+        }
+    }
+    print(seen)
     return
 }
 "#,
