@@ -8,16 +8,18 @@ use kira_wasm_runtime::WasmDevice;
 
 /// What a program is being compiled to run on.
 ///
-/// The device is a separate axis from the backend: `--backend` chooses which
-/// engine compiles a program for *this* machine, and `--device` chooses whether
-/// this machine is the target at all. They are not independent — a wasm device
-/// is served by the wasm backend and nothing else — which is why naming both is
-/// refused rather than silently resolved.
+/// The device is a separate axis from the backend, and they are independent:
+/// `--backend` chooses which engine compiles a program, `--device` chooses what
+/// machine it runs on, and every pair means something. A device never overrides
+/// a backend; it only decides which backend a command that named none gets.
+///
+/// Not every pair is built yet. An unbuilt one is refused by name, so a
+/// `--backend` a user wrote is never quietly replaced by another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Device {
-    /// This machine, compiled by the backend `--backend` selects.
+    /// This machine.
     Host,
-    /// The Web, compiled to a WebAssembly module.
+    /// The Web: a WebAssembly module, and the page that runs it.
     Web(WasmDevice),
 }
 
@@ -26,7 +28,7 @@ pub enum Device {
 pub struct CompileOptions {
     /// The `.kira` file to compile.
     pub path: String,
-    /// Which backend to compile for, when the device is the host.
+    /// Which backend compiles the program, on whatever device it targets.
     pub backend: BackendMode,
     /// What the program is being compiled to run on.
     pub device: Device,
@@ -52,16 +54,6 @@ pub enum OptionsError {
     /// `--device` was given an unknown value.
     #[error("unknown device `{0}`; expected one of: host, wasm32, wasm64")]
     UnknownDevice(String),
-    /// Both a wasm device and a backend were named.
-    #[error(
-        "`--device {device}` compiles to WebAssembly, so `--backend` cannot \
-         also be given; drop `--backend` to build for the Web, or drop \
-         `--device` to build for this machine"
-    )]
-    BackendWithWebDevice {
-        /// The device that was asked for.
-        device: &'static str,
-    },
     /// An unrecognized flag.
     #[error("unknown option `{0}`")]
     UnknownFlag(String),
@@ -79,8 +71,10 @@ impl CompileOptions {
     /// Parses `args` (everything after the verb).
     pub fn parse(args: &[String]) -> Result<Self, OptionsError> {
         let mut path: Option<String> = None;
-        // Tracked as an option so that naming a backend *and* a wasm device is
-        // a reported conflict rather than one of them quietly winning.
+        // Tracked as an option so that "the user named no backend" stays
+        // distinguishable from "the user named the one that is also the
+        // default" — which is what lets the device pick a default without ever
+        // overriding a choice.
         let mut backend: Option<BackendMode> = None;
         let mut device = Device::Host;
         let mut emit_llvm_ir = false;
@@ -122,15 +116,18 @@ impl CompileOptions {
             index += 1;
         }
 
-        if let (Device::Web(web), Some(_)) = (device, backend) {
-            return Err(OptionsError::BackendWithWebDevice {
-                device: web.label(),
-            });
-        }
-
         Ok(CompileOptions {
             path: path.ok_or(OptionsError::MissingPath)?,
-            backend: backend.unwrap_or(BackendMode::VmBytecode),
+            // `--backend` is honored on every device. What a device changes is
+            // only the *default*, for a command that named no backend: on this
+            // machine the VM, and on the Web the device's own code generator.
+            // A default is not an override — an explicit `--backend` always
+            // survives to the pipeline, which either serves it or says it is
+            // not built yet.
+            backend: backend.unwrap_or(match device {
+                Device::Host => BackendMode::VmBytecode,
+                Device::Web(_) => BackendMode::LlvmNative,
+            }),
             device,
             emit_llvm_ir,
         })
@@ -189,24 +186,43 @@ mod tests {
     }
 
     #[test]
-    fn a_backend_and_a_web_device_together_are_refused() {
-        // Resolving this silently would compile for one target while the user
-        // read the other off their own command line.
-        assert_eq!(
-            CompileOptions::parse(&args(&[
-                "--device",
-                "wasm32",
-                "--backend",
-                "llvm",
-                "m.kira"
-            ])),
-            Err(OptionsError::BackendWithWebDevice { device: "wasm32" })
-        );
-        // The host device is what `--backend` is for, so it is no conflict.
-        assert!(
-            CompileOptions::parse(&args(&["--device", "host", "--backend", "llvm", "m.kira"]))
-                .is_ok()
-        );
+    fn a_backend_survives_every_device() {
+        // `--backend` is never overridden. A device that served a backend other
+        // than the one on the command line would compile one thing while the
+        // user read another off their own shell history.
+        for device in ["host", "wasm32", "wasm64"] {
+            for (flag, expected) in [
+                ("vm", BackendMode::VmBytecode),
+                ("llvm", BackendMode::LlvmNative),
+                ("hybrid", BackendMode::Hybrid),
+            ] {
+                let parsed = CompileOptions::parse(&args(&[
+                    "--device",
+                    device,
+                    "--backend",
+                    flag,
+                    "m.kira",
+                ]))
+                .expect("a backend and a device are independent axes");
+                assert_eq!(
+                    parsed.backend, expected,
+                    "`--backend {flag}` did not survive `--device {device}`",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_device_only_decides_the_backend_nobody_named() {
+        // A default is not an override: it applies when `--backend` is absent,
+        // and never otherwise.
+        let host = CompileOptions::parse(&args(&["m.kira"])).expect("parses");
+        assert_eq!(host.backend, BackendMode::VmBytecode);
+
+        // On the Web the default is the device's own code generator, which is
+        // what makes `kirac build --device wasm32` mean what it always did.
+        let web = CompileOptions::parse(&args(&["--device", "wasm32", "m.kira"])).expect("parses");
+        assert_eq!(web.backend, BackendMode::LlvmNative);
     }
 
     #[test]

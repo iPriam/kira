@@ -16,6 +16,20 @@ pub enum BackendMode {
     Hybrid,
 }
 
+impl BackendMode {
+    /// This mode's spelling on the command line.
+    ///
+    /// The one place a mode becomes text, so a diagnostic naming a backend and
+    /// the flag a user typed cannot drift apart.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::VmBytecode => "vm",
+            Self::LlvmNative => "llvm",
+            Self::Hybrid => "hybrid",
+        }
+    }
+}
+
 /// Output paths for native/LLVM emission.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct NativeEmitOptions {

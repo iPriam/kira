@@ -43,11 +43,19 @@ true at once. It is required on a wasm device and available elsewhere.
 
 ## What this needs that does not exist
 
-**A hybrid split on the wasm device.** Today `--device wasm32|wasm64` *overrides*
-`--backend` (see `kira-cli/src/pipeline.rs`): a wasm build compiles the whole IR
-to one module and never splits on annotations. "Only hybrid, on wasm" therefore
-needs the split to reach a device that currently has no notion of one. This is
-the largest structural piece and should be designed before the extern surface.
+**A hybrid split on the wasm device.** `--backend` and `--device` are now
+independent axes and a device never overrides a backend — it only picks the
+default for a command that named none, and an unbuilt pair is refused by name.
+So `--backend hybrid --device wasm32` already parses and reaches the pipeline;
+what it does not yet do is *work*, and it says so rather than quietly building
+something else.
+
+Making it work is the largest structural piece, and should be designed before
+the extern surface. On the Web, `llvm` is the backend that serves the device —
+the wasm backend is that device's code generator — so a hybrid split there means
+a native half of wasm functions beside a VM half of bytecode, with the
+interpreter compiled into the module. `kira-vm-runtime` already builds for
+`wasm32-unknown-unknown`, so the VM half is wiring rather than a new engine.
 
 **Promotion is a program transform, not a parse rule.** Forcing FFI into
 `@Native` means resolving which functions transitively reach an extern and
