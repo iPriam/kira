@@ -54,6 +54,7 @@ kira-linter = { path = "crates/kira-linter" }
 kira-doc = { path = "crates/kira-doc" }
 kira-app-generation = { path = "crates/kira-app-generation" }
 kira-live = { path = "crates/kira-live" }
+kira-desktop-runner = { path = "crates/kira-desktop-runner" }
 kira-cli = { path = "crates/kira-cli" }
 kira-main = { path = "crates/kira-main" }
 kira-bootstrapper = { path = "crates/kira-bootstrapper" }
@@ -73,6 +74,10 @@ libc = "0.2"
 llvm-sys = "221.0.1"
 # LSP-first frontend: salsa incremental queries; lsp-server/lsp-types for
 # the language server (rust-analyzer's stack).
+# The wasm test engine: a pure-Rust interpreter with Memory64 support, so the
+# generated modules are executed by the test suite itself rather than by an
+# external binary that may or may not be on the machine.
+wasmi = "1.1"
 salsa = "0.28"
 lsp-server = "0.7"
 lsp-types = "0.97"
@@ -99,3 +104,11 @@ opt-level = 3
 
 [profile.dev.package.kira-bytecode]
 opt-level = 3
+
+# The same rule for the wasm engine the tests run generated modules on: it is an
+# interpreter, and a debug interpreter running a generated Dragon4 over
+# thousands of floats is the difference between a test suite that is waited on
+# and one that is skipped.
+[profile.dev.package.wasmi]
+opt-level = 3
+

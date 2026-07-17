@@ -5,5 +5,21 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+kira-ir.workspace = true
+kira-semantics-model.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+kira-runtime-abi.workspace = true
+la-arena.workspace = true
+# Test-only: the differential tests drive the same frontend the CLI does and
+# compare this backend against the VM, which is the reference for all of them.
+kira-semantics.workspace = true
+kira-bytecode.workspace = true
+kira-vm-runtime.workspace = true
+salsa.workspace = true
+wasmi.workspace = true
+
 [lints]
 workspace = true

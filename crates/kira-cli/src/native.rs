@@ -1,5 +1,8 @@
 //! The native (LLVM) half of `build` and `run`: artifact layout, locating the
 //! runtime archive, and executing a built program.
+//!
+//! [`Artifacts`] is where every backend's output paths are decided, Web
+//! included — one program has one build directory, whatever it was built for.
 
 use std::path::{Path, PathBuf};
 
@@ -45,6 +48,14 @@ impl Artifacts {
     /// The textual LLVM IR dump path.
     pub fn llvm_ir(&self) -> PathBuf {
         self.directory.join(format!("{}.ll", self.stem))
+    }
+
+    /// The directory holding the Web artifacts, which is what `run` serves.
+    ///
+    /// Separate from the rest because it is exposed over HTTP: only what a
+    /// browser needs belongs under a served root.
+    pub fn web_directory(&self) -> PathBuf {
+        self.directory.join("web")
     }
 
     /// The source file's stem, which every artifact is named after.

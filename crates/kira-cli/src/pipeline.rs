@@ -3,7 +3,9 @@
 //! All three read a single `.kira` file, drive the salsa frontend to collect
 //! diagnostics, and render any errors readably against the source. `check`
 //! stops there. `run` and `build` continue into a backend, selected by
-//! `--backend`:
+//! `--backend` — unless `--device` names a wasm target, which compiles to
+//! WebAssembly instead and is the one case where this machine is not what the
+//! program runs on:
 //!
 //! - `vm` compiles the verified IR to bytecode; `run` executes it on the VM
 //!   with the [`StdHost`](crate::host::StdHost),
@@ -13,7 +15,10 @@
 //!   emits both halves plus a manifest; `run` loads the bundle and runs it in
 //!   this process, which is the host.
 //!
-//! All three backends consume the same [`IrProgram`], which is what makes their
+//! - a `wasm32`/`wasm64` device compiles the same IR to a WebAssembly module
+//!   plus the page that runs it; `run` serves them and opens a browser.
+//!
+//! Every backend consumes the same [`IrProgram`], which is what makes their
 //! observable behavior comparable — and what the parity tests check.
 
 use kira_backend_api::BackendMode;
@@ -22,10 +27,13 @@ use kira_ir::IrProgram;
 use kira_semantics::{DiagnosticAccumulator, FILE_SOURCE_ID, SourceProgram};
 use kira_source::SourceMap;
 
+use kira_wasm_runtime::WasmDevice;
+
 use crate::host::StdHost;
 use crate::hybrid;
 use crate::native;
-use crate::options::CompileOptions;
+use crate::options::{CompileOptions, Device};
+use crate::wasm;
 
 /// Analyzes and lowers the source program to IR, or `None` when it does not
 /// type-check to a runnable program (no valid `@Main`).
@@ -68,8 +76,11 @@ pub fn check(args: &[String]) -> i32 {
     }
 }
 
-/// Runs `kirac run [--backend vm|llvm] <file>`: report diagnostics, then
-/// execute a clean program on the selected backend.
+/// Runs `kirac run [--backend vm|llvm|hybrid] [--device host|wasm32|wasm64]
+/// <file>`: report diagnostics, then execute a clean program.
+///
+/// A wasm device does not run on this machine: it builds a module and serves it
+/// to a browser, which is what running a Kira program on the Web means.
 pub fn run(args: &[String]) -> i32 {
     let options = match parse_options("run", args) {
         Ok(options) => options,
@@ -80,6 +91,12 @@ pub fn run(args: &[String]) -> i32 {
         Err(code) => return code,
     };
 
+    // The device decides first: a Web build does not run on this machine at
+    // all, so which host backend would have compiled it never comes up.
+    if let Device::Web(device) = options.device {
+        return run_web(&ir, &options, device);
+    }
+
     match options.backend {
         BackendMode::VmBytecode => run_on_vm(&ir),
         BackendMode::LlvmNative => run_native(&ir, &options),
@@ -87,8 +104,48 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
-/// Runs `kirac build [--backend vm|llvm] <file>`: compile to artifacts under
-/// `.kira-build/`, without executing anything.
+/// Runs `kirac live [runner] <file> [--backend vm|hybrid]`: build a bundle,
+/// serve it, and run it on a runner client.
+///
+/// Unlike `run`, this does not execute the program in this process: it builds a
+/// `.klbundle`, serves it over a socket, and a runner client runs it. That is
+/// what makes a live session a live session rather than a run — the app is
+/// hosted somewhere that can outlive the compiler and take a new bundle later.
+pub fn live(args: &[String]) -> i32 {
+    let options = match crate::live::LiveOptions::parse(args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("kirac live: {error}");
+            return EXIT_USAGE;
+        }
+    };
+    let ir = match verified_ir("live", &options.path) {
+        Ok(ir) => ir,
+        Err(code) => return code,
+    };
+    match crate::live::session(&ir, std::path::Path::new(&options.path), &options) {
+        Ok(()) => EXIT_OK,
+        Err(error) => {
+            eprintln!("kirac live: {error}");
+            EXIT_FAILURE
+        }
+    }
+}
+
+/// Builds a program for the Web and serves it, opening a browser at it.
+fn run_web(ir: &IrProgram, options: &CompileOptions, device: WasmDevice) -> i32 {
+    match wasm::run(ir, std::path::Path::new(&options.path), device) {
+        Ok(()) => EXIT_OK,
+        Err(error) => {
+            eprintln!("kirac: {error}");
+            EXIT_FAILURE
+        }
+    }
+}
+
+/// Runs `kirac build [--backend vm|llvm|hybrid] [--device host|wasm32|wasm64]
+/// <file>`: compile to artifacts under `.kira-build/`, without executing
+/// anything.
 pub fn build(args: &[String]) -> i32 {
     let options = match parse_options("build", args) {
         Ok(options) => options,
@@ -98,6 +155,20 @@ pub fn build(args: &[String]) -> i32 {
         Ok(ir) => ir,
         Err(code) => return code,
     };
+
+    if let Device::Web(device) = options.device {
+        return match wasm::build(&ir, std::path::Path::new(&options.path), device) {
+            Ok(artifacts) => {
+                println!("Successfully built {}", artifacts.wasm.display());
+                EXIT_OK
+            }
+            Err(error) => {
+                eprintln!("kirac: {error}");
+                println!("Failed to build");
+                EXIT_FAILURE
+            }
+        };
+    }
 
     match options.backend {
         BackendMode::VmBytecode => {

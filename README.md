@@ -26,6 +26,7 @@ Crates live in `crates/`, organized into layers with no upward dependencies.
 | 8 | `kira-instruments`, `kira-linter`, `kira-doc`, `kira-app-generation`, `kira-live` |
 | 9 | `kira-cli` (binary `kirac`) |
 | 10 | `kira-main` (C ABI facade: staticlib/cdylib/rlib) |
+| runners | `kira-desktop-runner` (binary `kira-desktop-runner`) |
 | tools | `kira-bootstrapper` (binary `kira`), `kira-devflow` (binary `devflow`) |
 
 `kira-lsp` is the language-server surface over the salsa frontend.
@@ -40,6 +41,42 @@ cargo clippy --workspace
 The VM-hot crates (`kira-vm-runtime`, `kira-bytecode`) are compiled with
 `opt-level = 3` even in the dev profile: a debug interpreter is 4–11× slower,
 and the dev snapshot is what `kira run` uses for interactive work.
+
+## Live sessions
+
+`kirac live <file>` builds the program into a `.klbundle`, serves it over a
+loopback socket, and starts a runner client that downloads it, loads it, links
+it, and starts it:
+
+```sh
+kirac live examples/strings/strings.kira                 # the VM half
+kirac live --backend hybrid path/to/app.kira             # both halves
+```
+
+The bundle is the runner's whole world. A `.klbundle` is a manifest (`KLB1`)
+beside a flat payload directory, each payload named by its SHA-256 content hash;
+a runner consumes that and never reaches into a compiler data structure, which
+is what lets the compiler's internals change without breaking every runner.
+Payloads are verified against the manifest on arrival, so a runner holds the
+bytes the build produced or it holds an error.
+
+Sessions report the `live.*` vocabulary as milestones actually occur, and each
+milestone belongs to the end that can know it. The server observes that a runner
+connected and that bytes went out; only the runner can report that they loaded,
+and the server rejects a runner that claims otherwise. A session is ready only
+once every required milestone has arrived in order — a runner cannot assert its
+way past a bundle it never loaded.
+
+`kira-desktop-runner` is the runner client that ships today. It hosts both a VM
+bytecode entrypoint and a hybrid one, `dlopen`ing the native half for the
+latter: running a bundle needs no LLVM, only building one does. It is headless,
+which is why sessions stop at `live.entrypoint.started` rather than claiming
+`live.frame.presented` — presenting a frame needs a window and a swapchain, and
+kira-graphics owns those, not this repo.
+
+Every runner id parses. One this build has no client for — `ios`, `android`, and
+the rest — reports precisely that rather than failing as an unknown command.
+Reload is not wired up yet: a source change today means rerunning the session.
 
 ## Editor support
 

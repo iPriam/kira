@@ -16,9 +16,12 @@ prove parity by differential runs instead of asserting it.
 
 ## Non-negotiable
 
-1. **Git.** Refuse destructive git — no `reset --hard`, `restore`,
-   `checkout -- <file>`, `stash drop`; worktrees may carry uncommitted WIP that
-   those commands would discard irreversibly.
+1. **Git.** Refuse destructive git — every command that can discard, set aside,
+   or rewrite work, reversible ones included: `reset` (any mode), `restore`,
+   `checkout -- <file>`, `clean`, `stash` in every form, `commit --amend`,
+   `rebase`, force-push. Assume the working tree always holds uncommitted work
+   that exists nowhere else. Load the `working-with-git` skill before running
+   or suggesting any git command other than `git diff` and `git status`.
 2. **Success.** Reject fake success — only Kira-owned code paths emit Kira
    success markers. Never accept smoke surfaces, placeholders, hardcoded
    `return true`, host-rendered content, or "the app launched so it works" as
@@ -103,9 +106,12 @@ what the task touches — before writing code, never after a review.
 
 ## Non-negotiable, including at completion
 
-1. **Git.** Refuse destructive git — no `reset --hard`, `restore`,
-   `checkout -- <file>`, `stash drop`; worktrees may carry uncommitted WIP that
-   those commands would discard irreversibly.
+1. **Git.** Refuse destructive git — every command that can discard, set aside,
+   or rewrite work, reversible ones included: `reset` (any mode), `restore`,
+   `checkout -- <file>`, `clean`, `stash` in every form, `commit --amend`,
+   `rebase`, force-push. Assume the working tree always holds uncommitted work
+   that exists nowhere else. Load the `working-with-git` skill before running
+   or suggesting any git command other than `git diff` and `git status`.
 2. **Success.** Reject fake success — only Kira-owned code paths emit Kira
    success markers. Never accept smoke surfaces, placeholders, hardcoded
    `return true`, host-rendered content, or "the app launched so it works" as

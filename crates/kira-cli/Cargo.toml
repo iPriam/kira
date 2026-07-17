@@ -23,12 +23,19 @@ kira-vm-runtime.workspace = true
 kira-runtime-abi.workspace = true
 kira-backend-api.workspace = true
 kira-llvm-backend.workspace = true
+kira-wasm-runtime.workspace = true
 kira-hybrid-definition.workspace = true
 kira-hybrid-runtime.workspace = true
+kira-live.workspace = true
+kira-manifest.workspace = true
 # Not called from Rust: depending on the native runtime makes cargo build
 # `libkira_native_bridge.a` into the same profile directory as `kirac`, which is
 # where the native link step looks for it.
 kira-native-bridge.workspace = true
+# Not called from Rust either: `kirac live` starts the desktop runner as a child
+# process, and depending on it makes cargo build the binary into the same profile
+# directory as `kirac`, which is where a live session looks for it.
+kira-desktop-runner.workspace = true
 salsa.workspace = true
 thiserror.workspace = true
 
