@@ -13,11 +13,15 @@
 //! a bundle arrives over a socket, so every truncation, every unknown tag, and
 //! every out-of-range index is a typed error and none of them panic.
 
+pub mod names;
+
 use std::collections::HashSet;
 
 use kira_manifest::{BuildProfile, RunnerId};
 
 use crate::hash::{ContentHash, HASH_LEN};
+
+pub(crate) use names::is_plain_file_name;
 
 /// The magic bytes that open a serialized bundle manifest: "KLB1".
 pub const MAGIC: [u8; 4] = *b"KLB1";
@@ -266,51 +270,6 @@ impl BundleManifest {
     pub fn payload(&self, name: &str) -> Option<&PayloadEntry> {
         self.payloads.iter().find(|payload| payload.name == name)
     }
-}
-
-/// Whether `name` is a plain file name — no separators, no traversal, not empty.
-///
-/// Every rule here is checked on every host, never `cfg`'d to the one it
-/// protects. A bundle is built on one platform and decoded on another, so a name
-/// that is harmless on the builder and an escape on the runner must be rejected
-/// by both — and the only way to guarantee that is for the check not to depend
-/// on where it runs.
-///
-/// The colon is the subtle one. `"C:evil.dll"` holds no separator, so a
-/// separator check alone passes it; but it is a drive-relative path, and
-/// `Path::join` replaces the base entirely when what it is given carries a
-/// prefix — so `payloads/`.join(`"C:evil.dll"`) is `C:evil.dll`, written
-/// wherever drive C happens to be pointed. It also spells an NTFS alternate data
-/// stream (`name:stream`). Both are rejected here, once, rather than at each
-/// place that later builds a path.
-pub(crate) fn is_plain_file_name(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.contains('\0')
-        && !name.contains(':')
-        && !is_reserved_device_name(name)
-}
-
-/// Whether `name` is a Windows reserved device name.
-///
-/// Opening one of these on Windows talks to a device rather than creating a
-/// file, whatever directory the path names — so a `CON` or `LPT1` payload is not
-/// a file the runner can stage, and the extension does not save it (`CON.txt` is
-/// still the console). Rejected on every host, for the same reason as the rest:
-/// the decoder cannot know where the bundle will be staged.
-fn is_reserved_device_name(name: &str) -> bool {
-    /// The device names Windows reserves, before any extension.
-    const RESERVED: [&str; 22] = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-    ];
-    let stem = name.split('.').next().unwrap_or(name);
-    RESERVED
-        .iter()
-        .any(|reserved| stem.eq_ignore_ascii_case(reserved))
 }
 
 /// The wire byte for a runner.
@@ -609,30 +568,10 @@ mod tests {
     /// arrives over a socket.
     #[test]
     fn traversing_payload_names_are_rejected() {
-        for name in [
-            "../escape",
-            "..",
-            ".",
-            "",
-            "sub/dir",
-            "windows\\path",
-            "bad\0byte",
-            // Drive-relative: no separator, but `Path::join` would drop the
-            // bundle directory and write it wherever drive C points.
-            "C:evil.dll",
-            "c:evil.dll",
-            // An NTFS alternate data stream hanging off a legitimate name.
-            "app.kbc:hidden",
-            // Windows device names: opening these talks to a device, not a file,
-            // and an extension does not make them ordinary.
-            "CON",
-            "con",
-            "NUL",
-            "LPT1",
-            "COM9",
-            "aux.txt",
-            "PRN.kbc",
-        ] {
+        // Which names are unsafe is `names`' business and is tested there. This
+        // is the decoder's half of the contract: that it actually applies the
+        // rule, and reports it as an unsafe name rather than some other error.
+        for name in ["../escape", "sub/dir", "C:evil.dll", "CON", ""] {
             let manifest = BundleManifest {
                 payloads: vec![payload(name, PayloadKind::Asset, b"x")],
                 entry: 0,
@@ -643,37 +582,6 @@ mod tests {
                 BundleDecodeError::UnsafePayloadName(name.to_owned()),
                 "name `{name}` must be rejected"
             );
-        }
-    }
-
-    /// The name rules must not swallow ordinary names. A device-name check that
-    /// rejected `console.kbc` because it starts with `con` would break real
-    /// bundles, which is how an over-eager check gets reverted wholesale.
-    #[test]
-    fn ordinary_payload_names_are_accepted() {
-        for name in [
-            "app.kbc",
-            "libapp.dylib",
-            "app.dll",
-            "console.kbc",
-            "auxiliary.png",
-            "communication.kbc",
-            "printer.asset",
-            "nulled.kbc",
-            "a",
-            "..leading-dots.kbc",
-            "UPPER.KBC",
-            "with spaces.kbc",
-            "unicode-ünïcode.kbc",
-        ] {
-            let manifest = BundleManifest {
-                payloads: vec![payload(name, PayloadKind::Asset, b"x")],
-                entry: 0,
-                ..manifest()
-            };
-            let decoded = BundleManifest::from_bytes(&manifest.to_bytes())
-                .unwrap_or_else(|error| panic!("`{name}` must decode, got {error:?}"));
-            assert_eq!(decoded.payloads[0].name, name);
         }
     }
 
