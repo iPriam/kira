@@ -55,6 +55,7 @@ impl<'a> Codegen<'a> {
             codegen: self,
             function,
             locals,
+            loops: Vec::new(),
         };
         body.lower_block(&function.body)?;
         body.finish()
@@ -173,6 +174,20 @@ struct FunctionLowering<'a, 'p> {
     function: &'p IrFunction,
     /// One `alloca` per local slot, in slot order.
     locals: Vec<LLVMValueRef>,
+    /// The loops enclosing the statement being lowered, innermost last.
+    ///
+    /// A `break`/`continue` branches to a block of the innermost, so it reads
+    /// the top of this stack.
+    loops: Vec<LoopBlocks>,
+}
+
+/// The blocks a `break`/`continue` inside one loop branches to.
+struct LoopBlocks {
+    /// The condition test — the target of a `continue`, which re-tests before
+    /// iterating, exactly as falling off the body's end does.
+    test: LLVMBasicBlockRef,
+    /// The block after the loop — the target of a `break`.
+    exit: LLVMBasicBlockRef,
 }
 
 impl FunctionLowering<'_, '_> {

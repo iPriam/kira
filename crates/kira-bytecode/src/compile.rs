@@ -45,6 +45,15 @@ pub enum CompileError {
     /// Internal invariant: a short-circuit operator reached opcode selection.
     #[error("bytecode compiler invariant violated: short-circuit operator has no opcode")]
     ShortCircuitOpcode,
+    /// Internal invariant: a `break`/`continue` reached codegen with no
+    /// enclosing loop, which analysis is supposed to have rejected.
+    #[error(
+        "bytecode compiler invariant violated: `break`/`continue` outside a loop in `{function}`"
+    )]
+    JumpOutsideLoop {
+        /// The offending function's name.
+        function: String,
+    },
     /// A struct has more fields than the format's `u16` operand can count.
     #[error("function `{function}` builds a struct of {count} fields; the format allows 65535")]
     TooManyFields {
@@ -120,6 +129,7 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
                 strings: &mut strings,
                 engines,
                 code: Vec::new(),
+                loops: Vec::new(),
             };
             compiler.compile_body(&function.body)?;
             // Safety net: a function that falls off its end returns unit. (The
@@ -174,6 +184,23 @@ struct FnCompiler<'a> {
     /// call instructions it is emitting.
     engines: &'a [Execution],
     code: Vec<Instruction>,
+    /// The loops enclosing the statement being compiled, innermost last.
+    ///
+    /// A `break`/`continue` acts on the innermost, so it reads the top of this
+    /// stack. Analysis rejects one outside a loop, which is what makes an empty
+    /// stack a compiler bug rather than a user error.
+    loops: Vec<LoopFrame>,
+}
+
+/// Where a `break`/`continue` inside one loop jumps to.
+struct LoopFrame {
+    /// The address of the loop's condition test — a `continue` jumps here.
+    ///
+    /// Known when the frame is pushed, so a `continue` needs no patching.
+    continue_target: u32,
+    /// Placeholder `Jump`s emitted by `break`, patched to the loop's exit once
+    /// the body is compiled and that address is known.
+    break_jumps: Vec<usize>,
 }
 
 impl FnCompiler<'_> {
@@ -228,8 +255,30 @@ impl FnCompiler<'_> {
                 else_body,
             } => self.compile_if(*cond, then_body, else_body)?,
             IrStmt::While { cond, body } => self.compile_while(*cond, body)?,
+            IrStmt::Break => {
+                let placeholder = self.emit_placeholder_jump();
+                self.innermost_loop()?.break_jumps.push(placeholder);
+            }
+            IrStmt::Continue => {
+                let target = self.innermost_loop()?.continue_target;
+                self.code.push(Instruction::Jump(target));
+            }
         }
         Ok(())
+    }
+
+    /// The innermost enclosing loop's frame.
+    ///
+    /// Analysis rejects a `break`/`continue` outside a loop, so reaching this
+    /// with an empty stack means the frontend let one through — a typed error
+    /// rather than a panic, because a compiler never gets to end its caller.
+    fn innermost_loop(&mut self) -> Result<&mut LoopFrame, CompileError> {
+        let function = self.function_name;
+        self.loops
+            .last_mut()
+            .ok_or_else(|| CompileError::JumpOutsideLoop {
+                function: function.to_owned(),
+            })
     }
 
     fn compile_if(
@@ -247,13 +296,30 @@ impl FnCompiler<'_> {
         self.patch_to_here(to_end)
     }
 
+    /// Compiles a loop, resolving any `break`/`continue` inside it.
+    ///
+    /// `continue` targets the condition test rather than the body, so a
+    /// `continue` re-tests before iterating — the same thing falling off the
+    /// end of the body does.
     fn compile_while(&mut self, cond: IrExprId, body: &[IrStmt]) -> Result<(), CompileError> {
         let loop_start = self.here();
         self.compile_expr(cond)?;
         let to_end = self.emit_placeholder_jump_if_false();
-        self.compile_body(body)?;
+        self.loops.push(LoopFrame {
+            continue_target: loop_start,
+            break_jumps: Vec::new(),
+        });
+        let body_result = self.compile_body(body);
+        let frame = self.loops.pop();
+        body_result?;
         self.code.push(Instruction::Jump(loop_start));
-        self.patch_to_here(to_end)
+        self.patch_to_here(to_end)?;
+        // Every `break` lands after the loop's backward jump, which is exactly
+        // where the failed condition test lands too.
+        for placeholder in frame.map(|frame| frame.break_jumps).unwrap_or_default() {
+            self.patch_to_here(placeholder)?;
+        }
+        Ok(())
     }
 
     fn compile_expr(&mut self, id: IrExprId) -> Result<(), CompileError> {

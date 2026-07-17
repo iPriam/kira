@@ -85,6 +85,8 @@ impl Lowerer<'_> {
                 cond: self.lower_expr(cond),
                 body: self.lower_stmts(&body),
             },
+            HirStmt::Break => IrStmt::Break,
+            HirStmt::Continue => IrStmt::Continue,
         }
     }
 

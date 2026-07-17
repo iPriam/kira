@@ -1,4 +1,5 @@
-// while loops, var mutation, and boolean/comparison operators with precedence.
+// Loops: `while`, `for` over a half-open range, `break`, `continue`, var
+// mutation, and boolean/comparison operators with precedence.
 @Main
 function main() {
     var i = 0
@@ -16,5 +17,61 @@ function main() {
     }
 
     print(sum > 40 && sum < 50)
+
+    // `for` walks a half-open range: the lower bound is included and the upper
+    // one is not, so this sees 0, 1, 2, 3, 4.
+    var counted = 0
+    for step in 0..5 {
+        counted = counted + step
+    }
+    print(counted)
+
+    // The bounds are ordinary expressions, evaluated once before the loop.
+    let lo = 2
+    let hi = 6
+    var span = 0
+    for step in lo..hi {
+        span = span + 1
+    }
+    print(span)
+
+    // A range that starts where it ends never runs.
+    var never = 0
+    for step in 5..5 {
+        never = never + 1
+    }
+    print(never)
+
+    // `continue` skips the rest of one iteration; the loop still advances.
+    var odds = 0
+    for step in 0..10 {
+        if step % 2 == 0 {
+            continue
+        }
+        odds = odds + step
+    }
+    print(odds)
+
+    // `break` leaves the loop early: the first value whose square passes 50.
+    var found = 0
+    for step in 0..100 {
+        if step * step > 50 {
+            found = step
+            break
+        }
+    }
+    print(found)
+
+    // A `break` acts on the innermost loop only, so the outer one runs on.
+    var pairs = 0
+    for row in 0..3 {
+        for column in 0..3 {
+            if column > row {
+                break
+            }
+            pairs = pairs + 1
+        }
+    }
+    print(pairs)
     return
 }

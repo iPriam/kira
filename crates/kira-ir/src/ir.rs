@@ -204,12 +204,25 @@ pub enum IrStmt {
         else_body: Vec<IrStmt>,
     },
     /// A pre-tested loop.
+    ///
+    /// The only loop shape the IR has: a source `for` is desugared into one
+    /// during analysis, so no backend implements looping twice.
     While {
         /// The boolean loop condition.
         cond: IrExprId,
         /// The loop body.
         body: Vec<IrStmt>,
     },
+    /// Leave the innermost enclosing [`IrStmt::While`].
+    ///
+    /// Analysis rejects one written outside a loop, so a backend may assume
+    /// the enclosing loop exists rather than checking for it.
+    Break,
+    /// Skip to the innermost enclosing [`IrStmt::While`]'s next iteration.
+    ///
+    /// Jumps to the condition test. As with [`IrStmt::Break`], an enclosing
+    /// loop is guaranteed by analysis.
+    Continue,
 }
 
 /// A writable location: a local slot, optionally walked into by field indices.

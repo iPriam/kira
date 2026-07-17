@@ -45,6 +45,33 @@ pub struct Lowering<'a> {
     /// How many struct constructions are open right now, which is the scratch
     /// local the next one takes.
     depth: usize,
+    /// How many wasm labels enclose the instruction being emitted.
+    ///
+    /// wasm names a branch target by how many labels to pop, not by identity,
+    /// so the same jump is a different immediate depending on where it sits.
+    /// Tracking the count is what lets a `break` nested inside an `if` still
+    /// find its loop.
+    ///
+    /// Only statement-level labels are counted. An expression's labels
+    /// (short-circuit, checked division) open and close within that
+    /// expression, and no statement — so no `break`/`continue` — can appear
+    /// inside one.
+    labels: u32,
+    /// The loops enclosing the statement being lowered, innermost last.
+    loops: Vec<WasmLoop>,
+}
+
+/// The two label positions a `break`/`continue` inside one loop branches to.
+///
+/// Each field is a label *index* counted from the function's outermost label,
+/// which is stable no matter how deeply the jump itself is nested; the branch
+/// immediate is derived from it at the jump site.
+struct WasmLoop {
+    /// The `block` wrapping the loop — the target of a `break`.
+    block: u32,
+    /// The `loop` itself — the target of a `continue`, which re-tests the
+    /// condition.
+    loop_: u32,
 }
 
 impl<'a> Lowering<'a> {
@@ -65,7 +92,22 @@ impl<'a> Lowering<'a> {
             structs,
             scratch: Vec::new(),
             depth: 0,
+            labels: 0,
+            loops: Vec::new(),
         }
+    }
+
+    /// The `br` immediate that reaches the label at index `target`.
+    ///
+    /// `br` counts outward from the innermost enclosing label, so the
+    /// immediate for a fixed target shrinks as the jump site gets shallower and
+    /// grows as it nests. With `labels` enclosing labels, the innermost sits at
+    /// index `labels - 1`, which is the subtraction below.
+    fn branch_to(&self, target: u32) -> Result<u32, WasmError> {
+        self.labels
+            .checked_sub(1)
+            .and_then(|innermost| innermost.checked_sub(target))
+            .ok_or(WasmError::JumpOutsideLoop)
     }
 
     /// The wasm value type a Kira type occupies, or `None` for `Void`.
@@ -257,6 +299,8 @@ impl<'a> Lowering<'a> {
             IrStmt::While { cond, body } => {
                 self.expr_depth(*cond).max(self.construction_depth(body))
             }
+            // A jump evaluates nothing, so it constructs nothing.
+            IrStmt::Break | IrStmt::Continue => 0,
         }
     }
 
@@ -329,27 +373,61 @@ impl<'a> Lowering<'a> {
             } => {
                 self.expr(func, function, *cond)?;
                 func.if_(Empty);
+                self.labels += 1;
                 self.body(func, function, then_body)?;
                 if !else_body.is_empty() {
                     func.else_();
                     self.body(func, function, else_body)?;
                 }
+                self.labels -= 1;
                 func.end();
             }
             IrStmt::While { cond, body } => {
                 // block { loop { br_if 1 (!cond); body; br 0 } }: the condition
                 // is tested before each iteration, including the first.
+                let block = self.labels;
                 func.block(Empty);
+                self.labels += 1;
+                let loop_ = self.labels;
                 func.loop_(Empty);
+                self.labels += 1;
+
                 self.expr(func, function, *cond)?;
-                func.i32_eqz().br_if(1);
-                self.body(func, function, body)?;
-                func.br(0);
+                let to_end = self.branch_to(block)?;
+                func.i32_eqz().br_if(to_end);
+
+                self.loops.push(WasmLoop { block, loop_ });
+                let lowered = self.body(func, function, body);
+                self.loops.pop();
+                lowered?;
+
+                let to_start = self.branch_to(loop_)?;
+                func.br(to_start);
+                self.labels -= 2;
                 func.end();
                 func.end();
             }
+            IrStmt::Break => {
+                let block = self.innermost_loop()?.block;
+                let target = self.branch_to(block)?;
+                func.br(target);
+            }
+            IrStmt::Continue => {
+                let loop_ = self.innermost_loop()?.loop_;
+                let target = self.branch_to(loop_)?;
+                func.br(target);
+            }
         }
         Ok(())
+    }
+
+    /// The innermost enclosing loop's label positions.
+    ///
+    /// Analysis rejects a `break`/`continue` outside a loop, so an empty stack
+    /// here means the frontend let one through — reported as a typed error
+    /// rather than panicking.
+    fn innermost_loop(&self) -> Result<&WasmLoop, WasmError> {
+        self.loops.last().ok_or(WasmError::JumpOutsideLoop)
     }
 
     /// Lowers one expression, leaving its value on the stack.
