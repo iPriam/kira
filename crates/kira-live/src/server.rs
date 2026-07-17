@@ -12,7 +12,7 @@
 
 use std::io::{BufReader, BufWriter};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::event::{LiveEvent, ProgressError, SessionPhase, SessionProgress};
 use crate::protocol::{
@@ -25,6 +25,23 @@ use crate::store::Bundle;
 /// This bounds every read, so a wedged or absent runner ends the session with a
 /// timeout instead of hanging whatever is driving the build.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long the server waits for a runner to accept bytes.
+///
+/// A read timeout alone does not bound a session. A runner that connects, asks
+/// for a payload, and then never reads leaves the server blocked in `write_all`
+/// once the socket's send buffer fills — quiet in a way no read timeout
+/// notices. Bounding writes too is what makes the session's promise ("a runner
+/// that says nothing fails the session, not hangs the build") actually hold.
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long the server waits for a runner to connect at all.
+///
+/// The runner is a child process the session just started. If it dies before
+/// connecting — a bad binary, a missing library, a kill — nothing else will ever
+/// arrive on this listener, and an unbounded `accept` would hang the build
+/// forever rather than report that the runner never showed up.
+pub const ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// An error running a live session from the server's side.
 #[derive(Debug, thiserror::Error)]
@@ -72,6 +89,12 @@ pub enum ServerError {
     /// The runner disconnected before the session was ready.
     #[error("live runner disconnected before the session was ready: {0}")]
     Incomplete(#[source] ProgressError),
+    /// No runner connected before the session gave up waiting.
+    ///
+    /// Reported rather than waited on forever: the runner is a process the
+    /// session started, and one that never arrives means it died on the way.
+    #[error("no live runner connected within {}s", ACCEPT_TIMEOUT.as_secs())]
+    RunnerNeverConnected,
 }
 
 /// A live server bound to a port, holding the bundle it serves.
@@ -114,12 +137,63 @@ impl LiveServer {
         headless: bool,
         on_event: &mut dyn FnMut(LiveEvent),
     ) -> Result<SessionProgress, ServerError> {
-        let (stream, peer) = self.listener.accept()?;
+        self.serve_once_within(headless, ACCEPT_TIMEOUT, on_event)
+    }
+
+    /// Accepts one runner and runs its session, waiting at most `accept_timeout`
+    /// for it to connect.
+    ///
+    /// [`LiveServer::serve_once`] is this with [`ACCEPT_TIMEOUT`]. The bound is a
+    /// parameter so a test can prove the give-up path fires without spending the
+    /// production timeout doing it — a 30-second test gets deleted, and then the
+    /// bound it was guarding stops being checked at all.
+    pub fn serve_once_within(
+        &self,
+        headless: bool,
+        accept_timeout: Duration,
+        on_event: &mut dyn FnMut(LiveEvent),
+    ) -> Result<SessionProgress, ServerError> {
+        let (stream, peer) = self.accept_before(accept_timeout)?;
         stream.set_read_timeout(Some(READ_TIMEOUT))?;
+        stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
         // Nagle would sit on the small control messages this protocol is mostly
         // made of, waiting for more data that the peer is blocked from sending.
         stream.set_nodelay(true)?;
         self.run_session(stream, peer, headless, on_event)
+    }
+
+    /// Accepts one connection, giving up after `timeout`.
+    ///
+    /// `TcpListener` has no accept timeout, so this polls a non-blocking
+    /// listener. The poll interval is a compromise a live session can afford:
+    /// it costs a wakeup every few milliseconds while a runner starts up, and it
+    /// buys a bounded failure instead of a hung build.
+    fn accept_before(&self, timeout: Duration) -> Result<(TcpStream, SocketAddr), ServerError> {
+        /// How often to re-check for a connection while waiting.
+        const POLL: Duration = Duration::from_millis(5);
+
+        self.listener.set_nonblocking(true)?;
+        let deadline = Instant::now() + timeout;
+        let outcome = loop {
+            match self.listener.accept() {
+                Ok(accepted) => break Ok(accepted),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        break Err(ServerError::RunnerNeverConnected);
+                    }
+                    std::thread::sleep(POLL);
+                }
+                Err(error) => break Err(ServerError::Io(error)),
+            }
+        };
+        // Restored whatever happened: the listener outlives this call, and a
+        // non-blocking listener left behind would make a later accept spin.
+        self.listener.set_nonblocking(false)?;
+        let (stream, peer) = outcome?;
+        // An accepted socket can inherit the listener's non-blocking mode, which
+        // would turn every read in the session into a WouldBlock error.
+        stream.set_nonblocking(false)?;
+        Ok((stream, peer))
     }
 
     /// Runs one connected session.
@@ -173,7 +247,9 @@ impl LiveServer {
                         return Err(ServerError::NotRunnerMilestone(phase.label()));
                     }
                     progress.reach(phase)?;
-                    on_event(milestone_event(phase, &self.bundle));
+                    if let Some(event) = milestone_event(phase, &self.bundle) {
+                        on_event(event);
+                    }
                     if progress.ready(headless).is_ok() {
                         on_event(LiveEvent::SessionReady);
                         return Ok(progress);
@@ -260,24 +336,23 @@ impl LiveServer {
     }
 }
 
-/// The event reporting a milestone the runner told us about.
+/// The event reporting a milestone the runner told us about, or `None` for a
+/// phase that is not the runner's to report.
 ///
-/// Only the runner-reported phases appear: the server's own milestones are
-/// emitted where they happen, not routed through here, and a runner cannot
-/// report them at all.
-fn milestone_event(phase: SessionPhase, bundle: &Bundle) -> LiveEvent {
+/// Returning `None` rather than inventing an event for the impossible case: the
+/// caller already rejects a server-owned phase, and the alternative was an arm
+/// that emitted some unrelated event to satisfy the match. The event vocabulary
+/// is the session's public contract — a wrong event on it is worse than the
+/// panic it was avoiding, because a panic at least does not lie.
+fn milestone_event(phase: SessionPhase, bundle: &Bundle) -> Option<LiveEvent> {
     match phase {
-        SessionPhase::BundleReceived => LiveEvent::BundleReceived {
+        SessionPhase::BundleReceived => Some(LiveEvent::BundleReceived {
             payloads: bundle.manifest().payloads.len(),
-        },
-        SessionPhase::BundleLoaded => LiveEvent::BundleLoaded,
-        SessionPhase::BundleLinked => LiveEvent::BundleLinked,
-        SessionPhase::EntrypointStarted => LiveEvent::EntrypointStarted,
-        SessionPhase::FramePresented => LiveEvent::FramePresented,
-        // Unreachable: the caller rejects a server-owned phase before getting
-        // here. Reported rather than asserted away — a library never panics.
-        SessionPhase::Connected | SessionPhase::BundleSent => LiveEvent::ReloadRejected {
-            reason: format!("runner reported the server's `{}` milestone", phase.label()),
-        },
+        }),
+        SessionPhase::BundleLoaded => Some(LiveEvent::BundleLoaded),
+        SessionPhase::BundleLinked => Some(LiveEvent::BundleLinked),
+        SessionPhase::EntrypointStarted => Some(LiveEvent::EntrypointStarted),
+        SessionPhase::FramePresented => Some(LiveEvent::FramePresented),
+        SessionPhase::Connected | SessionPhase::BundleSent => None,
     }
 }

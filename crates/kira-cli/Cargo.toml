@@ -32,9 +32,12 @@ kira-manifest.workspace = true
 # `libkira_native_bridge.a` into the same profile directory as `kirac`, which is
 # where the native link step looks for it.
 kira-native-bridge.workspace = true
-# Not called from Rust either: `kirac live` starts the desktop runner as a child
-# process, and depending on it makes cargo build the binary into the same profile
-# directory as `kirac`, which is where a live session looks for it.
+# Not called from Rust: `kirac live` starts the desktop runner as a child
+# process. This dep only orders the build and ties the versions together — cargo
+# builds a dependency's lib target, never its `[[bin]]`, so unlike the staticlib
+# above this does NOT put `kira-desktop-runner` beside `kirac`. Only a workspace
+# build does that, which is why a live session that cannot find its runner says
+# so and names the build that would fix it.
 kira-desktop-runner.workspace = true
 salsa.workspace = true
 thiserror.workspace = true

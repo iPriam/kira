@@ -5,8 +5,13 @@
 //! Kira Live is a server/client system, not a rebuild-and-restart loop. A live
 //! server builds an app into a [`Bundle`] and serves it over a socket; a runner
 //! client connects, downloads it, loads it, links it, and starts its
-//! entrypoint, reporting each milestone back as a [`LiveEvent`]. A later source
-//! change rebuilds the bundle and the session decides how to apply it.
+//! entrypoint, reporting each milestone back as a [`LiveEvent`].
+//!
+//! Reload is not built yet: a source change today means running the session
+//! again. Some of what it will need is already here — payloads named by content
+//! hash, and a [`PayloadKind::is_hot_swappable`] that says which of them a
+//! running process could take in place — but nothing watches, rebuilds, or
+//! swaps, and the `live.reload.*` events are modeled rather than emitted.
 //!
 //! The pieces, bottom up:
 //!

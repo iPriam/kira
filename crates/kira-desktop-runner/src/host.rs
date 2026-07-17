@@ -36,6 +36,17 @@ pub enum DesktopRunnerError {
         #[source]
         source: std::io::Error,
     },
+    /// The cache directory holds something this runner did not put there.
+    ///
+    /// Staging clears the cache, so it refuses a directory it cannot recognize
+    /// as a previous stage rather than deleting whatever is in it.
+    #[error("refusing to clear `{path}` to stage a bundle: {reason}")]
+    CacheNotOurs {
+        /// The directory that was going to be cleared.
+        path: PathBuf,
+        /// Why it was not recognized as a runner's cache.
+        reason: &'static str,
+    },
     /// The bundle itself was not usable.
     #[error("bundle is not usable: {0}")]
     Bundle(#[from] BundleError),
@@ -61,6 +72,9 @@ pub enum DesktopRunnerError {
         /// The entry payload's kind.
         kind: &'static str,
     },
+    /// The bundle's manifest named no entrypoint payload.
+    #[error("the bundle's manifest names no entrypoint payload")]
+    NoEntrypoint,
     /// A step was asked for before the one it depends on.
     ///
     /// A typed error rather than an `unwrap` on the staged state: this crate is
@@ -127,6 +141,48 @@ impl fmt::Debug for Staged {
     }
 }
 
+/// Empties the runner's cache, refusing to delete anything that is not one.
+///
+/// Staging recursively deletes the cache directory, and the cache is whatever
+/// `--cache` named — so `--cache ~/Documents` would erase it. A recursive delete
+/// pointed at user-supplied input needs a reason to believe the target is the
+/// runner's own scratch, and "the flag said so" is not one.
+///
+/// So the directory is cleared only when it is empty, or when it holds a bundle
+/// manifest — the marker that says a previous `load` made this directory and it
+/// is this runner's to reuse. Anything else is refused, and the session fails
+/// instead of taking somebody's files with it.
+fn clear_cache(cache: &Path) -> Result<(), DesktopRunnerError> {
+    if !cache.exists() {
+        return Ok(());
+    }
+    if !cache.is_dir() {
+        return Err(DesktopRunnerError::CacheNotOurs {
+            path: cache.to_owned(),
+            reason: "it is not a directory",
+        });
+    }
+
+    let is_empty = fs::read_dir(cache)
+        .map_err(|source| DesktopRunnerError::Stage {
+            path: cache.to_owned(),
+            source,
+        })?
+        .next()
+        .is_none();
+    if !is_empty && !cache.join(kira_live::MANIFEST_FILE).is_file() {
+        return Err(DesktopRunnerError::CacheNotOurs {
+            path: cache.to_owned(),
+            reason: "it is not empty and holds no bundle manifest, so it was not staged by a runner",
+        });
+    }
+
+    fs::remove_dir_all(cache).map_err(|source| DesktopRunnerError::Stage {
+        path: cache.to_owned(),
+        source,
+    })
+}
+
 /// A host that prints what the app prints.
 ///
 /// The app's output is the session's output: a live session's user is watching
@@ -171,15 +227,16 @@ impl RunnerHost for DesktopHost {
     fn load(&mut self, bundle: &Bundle) -> Result<(), DesktopRunnerError> {
         // Staged fresh each time: a leftover payload from a previous bundle must
         // never be what a later `dlopen` resolves against.
-        if self.cache.exists() {
-            fs::remove_dir_all(&self.cache).map_err(|source| DesktopRunnerError::Stage {
-                path: self.cache.clone(),
-                source,
-            })?;
-        }
+        clear_cache(&self.cache)?;
         bundle.write(&self.cache)?;
 
-        let entry = bundle.manifest().entry_payload();
+        // Total in practice: a `Bundle` only exists with an in-range entry,
+        // checked by both of its constructors. Handled rather than unwrapped —
+        // this is a runner driven by a socket, and it does not get to panic.
+        let entry = bundle
+            .manifest()
+            .entry_payload()
+            .ok_or(DesktopRunnerError::NoEntrypoint)?;
         self.staged = match entry.kind {
             PayloadKind::VmBytecode => Staged::VmLoaded {
                 module: Module::from_bytes(bundle.entry_bytes())?,
@@ -304,6 +361,7 @@ mod tests {
             }],
             0,
         )
+        .expect("a valid bundle")
     }
 
     #[test]
@@ -342,6 +400,57 @@ mod tests {
         host.load(&vm_bundle(&printing_module())).expect("reload");
 
         assert!(!stale.exists(), "a stale payload survived a reload");
+    }
+
+    /// The runner must never delete a directory it did not stage. `--cache` is
+    /// user input, and staging clears the cache: without this, pointing it at a
+    /// real directory erases it.
+    #[test]
+    fn staging_refuses_to_clear_a_directory_it_did_not_stage() {
+        let dir = TempDir::new("not-ours");
+        fs::create_dir_all(&dir.0).expect("create");
+        let precious = dir.0.join("precious.txt");
+        fs::write(&precious, b"work that exists nowhere else").expect("write");
+
+        let mut host = DesktopHost::new(dir.0.clone());
+        let error = host
+            .load(&vm_bundle(&printing_module()))
+            .expect_err("staging into somebody's directory must be refused");
+
+        assert!(
+            matches!(error, DesktopRunnerError::CacheNotOurs { .. }),
+            "got {error:?}"
+        );
+        assert!(
+            precious.is_file(),
+            "the runner deleted a file it did not own"
+        );
+        assert_eq!(
+            fs::read(&precious).expect("read back"),
+            b"work that exists nowhere else"
+        );
+    }
+
+    /// An empty directory is fine to stage into: there is nothing to lose.
+    #[test]
+    fn staging_into_an_empty_directory_is_allowed() {
+        let dir = TempDir::new("empty");
+        fs::create_dir_all(&dir.0).expect("create");
+        let mut host = DesktopHost::new(dir.0.clone());
+        host.load(&vm_bundle(&printing_module()))
+            .expect("an empty directory is stageable");
+    }
+
+    /// A previous stage is recognized by its manifest and reused, which is what
+    /// makes the guard compatible with a runner that loads more than once.
+    #[test]
+    fn staging_over_a_previous_stage_is_allowed() {
+        let dir = TempDir::new("ours");
+        let mut host = DesktopHost::new(dir.0.clone());
+        host.load(&vm_bundle(&printing_module()))
+            .expect("first load");
+        host.load(&vm_bundle(&printing_module()))
+            .expect("a runner's own cache is reusable");
     }
 
     #[test]
@@ -395,7 +504,8 @@ mod tests {
                 bytes: b"\x89PNG".to_vec(),
             }],
             0,
-        );
+        )
+        .expect("a valid bundle");
 
         let error = host
             .load(&bundle)
@@ -424,7 +534,8 @@ mod tests {
                 bytes: b"not bytecode".to_vec(),
             }],
             0,
-        );
+        )
+        .expect("a valid bundle");
 
         let error = host.load(&bundle).expect_err("garbage must not load");
         assert!(
