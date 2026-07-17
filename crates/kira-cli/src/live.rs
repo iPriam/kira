@@ -291,6 +291,9 @@ impl LiveError {
     }
 }
 
+/// Builds `program` into a live bundle for `runner`.
+///
+/// The bundle is what the runner gets, so this is where a backend choice stops
 /// mattering: a VM bundle and a hybrid bundle are both just payloads by the time
 /// they reach the wire.
 pub fn build_bundle(

@@ -203,7 +203,16 @@ fn swap_blocker(loaded: &BundleManifest, rebuilt: &BundleManifest) -> Option<Rel
         });
     }
 
-    let entry = rebuilt.entry_payload()?;
+    // A manifest whose entry names no payload blocks the swap rather than
+    // waving it through. `?` here would have returned `None` — "no blocker
+    // found" — which on a function that decides whether to swap code into a
+    // live process means approving the swap for exactly the malformed input the
+    // check exists for. A safety boundary fails closed.
+    let Some(entry) = rebuilt.entry_payload() else {
+        return Some(RelaunchReason::PayloadSetChanged {
+            detail: "the rebuilt bundle's entry names no payload".to_owned(),
+        });
+    };
     if !entry.kind.is_hot_swappable() && !entry_is_swappable_hybrid(entry) {
         return Some(RelaunchReason::EntryNotSwappable {
             kind: entry.kind.label(),
@@ -465,6 +474,25 @@ mod tests {
                 reason: RelaunchReason::PayloadSetChanged { .. }
             }
         ));
+    }
+
+    /// A safety boundary fails closed. A hand-built manifest whose entry names
+    /// nothing must block the swap, not fall through the checks into an
+    /// approval.
+    #[test]
+    fn a_manifest_whose_entry_names_nothing_relaunches() {
+        let loaded = vm(b"KBC1 before");
+        let rebuilt = BundleManifest {
+            entry: 99,
+            ..vm(b"KBC1 after!")
+        };
+        assert!(
+            matches!(
+                decide(&loaded, &rebuilt, false),
+                ReloadDecision::Relaunch { .. }
+            ),
+            "a bundle with no reachable entry must never be hot-patched"
+        );
     }
 
     #[test]

@@ -23,14 +23,17 @@ at the end safely; everything else breaks artifacts that already exist.
 | `kira_rt_*` | `kira-native-bridge/src/runtime.rs` | native runtime: print, strings, div-zero trap |
 | ABI marker | `kira-runtime-abi/src/lib.rs` | `RUNTIME_ABI_VERSION` / `RUNTIME_ABI_MARKER` |
 
-`RunnerId`, `BuildProfile`, and `SessionPhase` have wire bytes too. The first two
-take theirs from `RunnerId::index`/`BuildProfile::index` in `kira-manifest`, so
+`RunnerId`, `BuildProfile`, `SessionPhase`, and `ReloadMode` have wire bytes too.
+The first two take theirs from `RunnerId::index`/`BuildProfile::index` in
+`kira-manifest`, so
 **reordering that matrix is a wire-format change** even though nothing in
 `kira-manifest` says so — bundles already written decode by those numbers.
-`kira-live`'s pinning tests (`runner_wire_bytes_are_pinned`,
-`profile_wire_bytes_are_pinned`, `phase_wire_bytes_are_pinned`) spell the bytes
-out literally and are what turns a reorder into a failing test rather than a
-silent redirection.
+`SessionPhase::as_byte` and `ReloadMode::as_byte` own theirs directly, in
+`kira-live/src/event.rs` — a tag lives with the thing it names. The pinning tests
+(`runner_wire_bytes_are_pinned`, `profile_wire_bytes_are_pinned`,
+`phase_wire_bytes_are_pinned`, `reload_mode_wire_bytes_are_pinned`) spell the
+bytes out literally and are what turns a reorder into a failing test rather than
+a silent redirection.
 
 ## Adding versus changing
 

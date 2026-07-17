@@ -45,10 +45,16 @@ impl Drop for Scratch {
 
 /// Runs `kirac live` on `path` with `backend` and returns (stdout, stderr, ok).
 fn live(path: &Path, backend: &str) -> (String, String, bool) {
+    live_with(path, backend, &[])
+}
+
+/// Runs `kirac live` with extra arguments.
+fn live_with(path: &Path, backend: &str, extra: &[&str]) -> (String, String, bool) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_kirac"))
         .arg("live")
         .arg("--backend")
         .arg(backend)
+        .args(extra)
         .arg(path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -178,5 +184,101 @@ fn both_backends_agree_over_a_live_session() {
     assert_eq!(
         app_output(&vm_stdout),
         vec!["84".to_owned(), "21".to_owned()]
+    );
+}
+
+/// A `@Runtime`-only edit to a hybrid app hot-patches, keeping the loaded
+/// native library.
+///
+/// This is the case the whole tier decision exists for, and it is the one that
+/// was shipped on a manual run: every other reload test builds VM bundles, where
+/// there is no library and "the library survives" is vacuously true. Here there
+/// is a real `dlopen`ed dylib, and the edit must not disturb it.
+///
+/// The proof is `mode=hotpatch` plus the absence of `live.runner.relaunched`:
+/// one process, one connection, and the native half never reloaded.
+#[test]
+fn a_runtime_only_edit_to_a_hybrid_app_hot_patches() {
+    let scratch = Scratch::new("hybrid-reload");
+    let program = scratch.program(HYBRID_PROGRAM);
+
+    // Edit only the @Runtime half, mid-session. The native half is untouched, so
+    // it must rebuild byte-identical and the swap must be allowed.
+    let edited = program.clone();
+    let editor = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(6));
+        std::fs::write(
+            &edited,
+            HYBRID_PROGRAM.replace("return double(n) + 1", "return double(n) + 5000"),
+        )
+        .expect("edit the program");
+    });
+
+    let (stdout, stderr, ok) = live_with(&program, "hybrid", &["--watch", "--quit-after", "20s"]);
+    editor.join().expect("the editor thread does not panic");
+
+    assert!(ok, "the watched hybrid session failed.\nstderr: {stderr}");
+    assert!(
+        stdout.contains("live.reload.completed mode=hotpatch"),
+        "a @Runtime-only edit beside an unchanged native library must hot patch.\n\
+         stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("live.runner.relaunched"),
+        "the runner was relaunched, so the native library did not survive.\n\
+         stdout: {stdout}"
+    );
+    // 5020 = double(10) + 5000, where `double` is the @Native half: the
+    // swapped-in bytecode calling into the library that was already loaded. It
+    // proves both that the new code ran and that the library it calls still
+    // worked across the swap — a re-mapped or unloaded library would not have
+    // answered.
+    assert!(
+        stdout.contains("\n5020\n"),
+        "the swapped-in code must call into the surviving native library.\n\
+         stdout: {stdout}"
+    );
+}
+
+/// A `@Native` edit to a hybrid app relaunches, and says why.
+///
+/// The other half of the tier decision, over a real dylib: the library's bytes
+/// moved, so the running process has stale code mapped and cannot be patched.
+#[test]
+fn a_native_edit_to_a_hybrid_app_relaunches() {
+    let scratch = Scratch::new("hybrid-relaunch");
+    let program = scratch.program(HYBRID_PROGRAM);
+
+    let edited = program.clone();
+    let editor = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(6));
+        std::fs::write(
+            &edited,
+            HYBRID_PROGRAM.replace("return n * 2", "return n * 3"),
+        )
+        .expect("edit the program");
+    });
+
+    let (stdout, stderr, ok) = live_with(&program, "hybrid", &["--watch", "--quit-after", "25s"]);
+    editor.join().expect("the editor thread does not panic");
+
+    assert!(ok, "the watched hybrid session failed.\nstderr: {stderr}");
+    assert!(
+        stdout.contains("mode=relaunch"),
+        "a native edit must relaunch.\nstdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("live.runner.relaunched"),
+        "the runner must actually be replaced.\nstdout: {stdout}"
+    );
+    // The reason reaches the user rather than a bare restart.
+    assert!(
+        stdout.contains("the native library") && stdout.contains("changed"),
+        "the relaunch must say what changed.\nstdout: {stdout}"
+    );
+    // 126 = 42 * 3: the relaunched runner really did load the new native code.
+    assert!(
+        stdout.contains("\n126\n"),
+        "the relaunched app must run the new native code.\nstdout: {stdout}"
     );
 }
