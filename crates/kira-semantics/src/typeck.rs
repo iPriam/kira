@@ -6,10 +6,11 @@
 //! `Error` short-circuits to another `Error`, suppressing cascades.
 
 use kira_semantics_model::Type;
-use kira_semantics_model::hir::{Builtin, Callee, HirBinaryOp, HirExpr, HirExprId, HirUnaryOp};
-use kira_syntax_model::ast::{BinaryOp, Expr, ExprId, FieldInit, UnaryOp};
+use kira_semantics_model::hir::{Builtin, Callee, HirExpr, HirExprId};
+use kira_syntax_model::ast::{BinaryOp, Expr, ExprId, FieldInit};
 
 use crate::analyze::{Analyzer, FnCtx};
+use crate::operators::{resolve_binary, resolve_unary, unary_spelling};
 
 impl Analyzer<'_> {
     /// Type-checks an AST expression, returning its HIR handle.
@@ -50,6 +51,12 @@ impl Analyzer<'_> {
                 self.analyze_array_literal(ctx, &elements, span, expected)
             }
             Expr::Index { base, index, span } => self.analyze_index(ctx, base, index, span),
+            Expr::DotMember {
+                name,
+                name_span,
+                args,
+                span,
+            } => self.analyze_dot_member(ctx, name, name_span, &args, span, expected),
             Expr::Name { symbol, span } => {
                 let name = self.interner.resolve(symbol).to_owned();
                 match ctx.resolve(&name) {
@@ -102,36 +109,7 @@ impl Analyzer<'_> {
                     }
                 }
             }
-            Expr::Binary { op, lhs, rhs, span } => {
-                let lhs_hir = self.analyze_expr(ctx, lhs);
-                let rhs_hir = self.analyze_expr(ctx, rhs);
-                let lt = self.program.expr(lhs_hir).type_of();
-                let rt = self.program.expr(rhs_hir).type_of();
-                if lt == Type::Error || rt == Type::Error {
-                    return self.program.exprs.alloc(HirExpr::Error);
-                }
-                match resolve_binary(op, lt, rt) {
-                    Some((hir_op, ty)) => self.program.exprs.alloc(HirExpr::Binary {
-                        op: hir_op,
-                        lhs: lhs_hir,
-                        rhs: rhs_hir,
-                        ty,
-                    }),
-                    None => {
-                        self.emit(
-                            span,
-                            "KSEM071",
-                            format!(
-                                "operator `{}` cannot combine `{}` and `{}`",
-                                op.spelling(),
-                                self.type_name(lt),
-                                self.type_name(rt)
-                            ),
-                        );
-                        self.program.exprs.alloc(HirExpr::Error)
-                    }
-                }
-            }
+            Expr::Binary { op, lhs, rhs, span } => self.analyze_binary(ctx, op, lhs, rhs, span),
             Expr::Call {
                 callee,
                 callee_span,
@@ -188,6 +166,78 @@ impl Analyzer<'_> {
                 ..
             } => self.analyze_method_call(ctx, receiver, method, method_span, &args),
             Expr::Error { .. } => self.program.exprs.alloc(HirExpr::Error),
+        }
+    }
+
+    /// Type-checks a binary operation, threading expected types so a
+    /// leading-dot operand resolves and desugaring enum equality to a tag
+    /// comparison.
+    ///
+    /// A leading-dot member (`.Red`) has no bottom-up type: it resolves only
+    /// against an expected one. So when exactly one operand is a leading dot,
+    /// the *other* is analyzed first and its type becomes the dot's expectation
+    /// — which is what makes `c == .Red` and `red != .Green` type-check without
+    /// bidirectional inference in the general case.
+    fn analyze_binary(
+        &mut self,
+        ctx: &mut FnCtx,
+        op: BinaryOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: kira_source::Span,
+    ) -> HirExprId {
+        let lhs_is_dot = matches!(self.tree.expr(lhs), Expr::DotMember { .. });
+        let rhs_is_dot = matches!(self.tree.expr(rhs), Expr::DotMember { .. });
+        // Analyze the concrete side first when the other is a leading dot, so
+        // the dot inherits its type.
+        let (lhs_hir, rhs_hir) = if lhs_is_dot && !rhs_is_dot {
+            let rhs_hir = self.analyze_expr(ctx, rhs);
+            let rt = self.program.expr(rhs_hir).type_of();
+            let lhs_hir = self.analyze_expr_expecting(ctx, lhs, Some(rt));
+            (lhs_hir, rhs_hir)
+        } else {
+            let lhs_hir = self.analyze_expr(ctx, lhs);
+            let lt = self.program.expr(lhs_hir).type_of();
+            let rhs_hir = if rhs_is_dot {
+                self.analyze_expr_expecting(ctx, rhs, Some(lt))
+            } else {
+                self.analyze_expr(ctx, rhs)
+            };
+            (lhs_hir, rhs_hir)
+        };
+
+        let lt = self.program.expr(lhs_hir).type_of();
+        let rt = self.program.expr(rhs_hir).type_of();
+        if lt == Type::Error || rt == Type::Error {
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+
+        // Enum equality is tag equality: `e == .V` becomes an `Int` comparison
+        // of two discriminants, so no backend learns enums can be compared.
+        if matches!(op, BinaryOp::Eq | BinaryOp::Ne) && matches!(lt, Type::Enum(_)) && lt == rt {
+            return self.enum_equality(op == BinaryOp::Eq, lhs_hir, rhs_hir);
+        }
+
+        match resolve_binary(op, lt, rt) {
+            Some((hir_op, ty)) => self.program.exprs.alloc(HirExpr::Binary {
+                op: hir_op,
+                lhs: lhs_hir,
+                rhs: rhs_hir,
+                ty,
+            }),
+            None => {
+                self.emit(
+                    span,
+                    "KSEM071",
+                    format!(
+                        "operator `{}` cannot combine `{}` and `{}`",
+                        op.spelling(),
+                        self.type_name(lt),
+                        self.type_name(rt)
+                    ),
+                );
+                self.program.exprs.alloc(HirExpr::Error)
+            }
         }
     }
 
@@ -415,7 +465,7 @@ impl Analyzer<'_> {
     /// Deliberately analyzed in an empty scope rather than the construction
     /// site's: a default belongs to the declaration, so it must not be able to
     /// see whatever locals happen to be in scope wherever the struct is built.
-    fn analyze_default(&mut self, default: ExprId, declared: Option<Type>) -> HirExprId {
+    pub(crate) fn analyze_default(&mut self, default: ExprId, declared: Option<Type>) -> HirExprId {
         let mut empty = FnCtx::new(Type::Void);
         // The member's declared type is the default's expected type, so
         // `struct H { var values: [Int] = [] }` knows what `[]` holds.
@@ -547,110 +597,4 @@ impl Analyzer<'_> {
             ty: ret,
         })
     }
-}
-
-fn resolve_unary(op: UnaryOp, operand: Type) -> Option<(HirUnaryOp, Type)> {
-    match (op, operand) {
-        (UnaryOp::Neg, Type::Int) => Some((HirUnaryOp::NegInt, Type::Int)),
-        (UnaryOp::Neg, Type::Float) => Some((HirUnaryOp::NegFloat, Type::Float)),
-        (UnaryOp::Not, Type::Bool) => Some((HirUnaryOp::Not, Type::Bool)),
-        _ => None,
-    }
-}
-
-fn unary_spelling(op: UnaryOp) -> &'static str {
-    match op {
-        UnaryOp::Neg => "-",
-        UnaryOp::Not => "!",
-    }
-}
-
-/// Resolves a binary operator against its operand types to a typed HIR op and
-/// result type. Returns `None` for an unsupported combination.
-fn resolve_binary(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
-    use BinaryOp as B;
-    use HirBinaryOp as H;
-    match op {
-        B::Add | B::Sub | B::Mul | B::Div | B::Rem => arithmetic(op, lt, rt),
-        B::Lt | B::Le | B::Gt | B::Ge => comparison(op, lt, rt),
-        B::Eq | B::Ne => equality(op, lt, rt),
-        B::And if lt == Type::Bool && rt == Type::Bool => Some((H::And, Type::Bool)),
-        B::Or if lt == Type::Bool && rt == Type::Bool => Some((H::Or, Type::Bool)),
-        _ => None,
-    }
-}
-
-fn arithmetic(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
-    use BinaryOp as B;
-    use HirBinaryOp as H;
-    // String concatenation is the one non-numeric arithmetic case.
-    if op == B::Add && lt == Type::String && rt == Type::String {
-        return Some((H::ConcatStr, Type::String));
-    }
-    if lt != rt || !lt.is_numeric() {
-        return None;
-    }
-    let hir = match (op, lt) {
-        (B::Add, Type::Int) => H::AddInt,
-        (B::Sub, Type::Int) => H::SubInt,
-        (B::Mul, Type::Int) => H::MulInt,
-        (B::Div, Type::Int) => H::DivInt,
-        (B::Rem, Type::Int) => H::RemInt,
-        (B::Add, Type::Float) => H::AddFloat,
-        (B::Sub, Type::Float) => H::SubFloat,
-        (B::Mul, Type::Float) => H::MulFloat,
-        (B::Div, Type::Float) => H::DivFloat,
-        _ => return None,
-    };
-    Some((hir, lt))
-}
-
-fn comparison(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
-    use BinaryOp as B;
-    use HirBinaryOp as H;
-    if lt != rt || !lt.is_numeric() {
-        return None;
-    }
-    let hir = match (op, lt) {
-        (B::Lt, Type::Int) => H::LtInt,
-        (B::Le, Type::Int) => H::LeInt,
-        (B::Gt, Type::Int) => H::GtInt,
-        (B::Ge, Type::Int) => H::GeInt,
-        (B::Lt, Type::Float) => H::LtFloat,
-        (B::Le, Type::Float) => H::LeFloat,
-        (B::Gt, Type::Float) => H::GtFloat,
-        (B::Ge, Type::Float) => H::GeFloat,
-        _ => return None,
-    };
-    Some((hir, Type::Bool))
-}
-
-/// The `==` operator for comparing `subject` against `label`, or `None` when
-/// the two cannot be compared.
-///
-/// A `switch` arm is `subject == label`, so what a `case` may match is decided
-/// here rather than by a second rule that could drift from this one.
-pub(crate) fn equality_op(subject: Type, label: Type) -> Option<HirBinaryOp> {
-    equality(BinaryOp::Eq, subject, label).map(|(op, _)| op)
-}
-
-fn equality(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
-    use BinaryOp as B;
-    use HirBinaryOp as H;
-    if lt != rt {
-        return None;
-    }
-    let is_eq = op == B::Eq;
-    let hir = match lt {
-        Type::Int if is_eq => H::EqInt,
-        Type::Int => H::NeInt,
-        Type::Float if is_eq => H::EqFloat,
-        Type::Float => H::NeFloat,
-        Type::Bool if is_eq => H::EqBool,
-        Type::Bool => H::NeBool,
-        Type::String if is_eq => H::EqStr,
-        Type::String => H::NeStr,
-        _ => return None,
-    };
-    Some((hir, Type::Bool))
 }

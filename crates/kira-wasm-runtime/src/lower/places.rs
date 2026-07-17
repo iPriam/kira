@@ -321,6 +321,11 @@ impl Lowering<'_> {
             IrExpr::ArrayAppend { place, value } => {
                 self.place_depth(place).max(self.expr_depth(*value))
             }
+            // An enum build parks its box address in a scratch local while the
+            // payload is evaluated, exactly as a struct build does, so it is a
+            // level like one.
+            IrExpr::EnumNew { payload, .. } => 1 + payload.map_or(0, |p| self.expr_depth(p)),
+            IrExpr::EnumTag { value } => self.expr_depth(*value),
             IrExpr::Unary { operand, .. } => self.expr_depth(*operand),
             IrExpr::Binary { lhs, rhs, .. } => self.expr_depth(*lhs).max(self.expr_depth(*rhs)),
             IrExpr::Call { args, .. } => args

@@ -347,7 +347,7 @@ impl Analyzer<'_> {
             local: slot,
             ty: subject_ty,
         });
-        match crate::typeck::equality_op(subject_ty, label_ty) {
+        match crate::operators::equality_op(subject_ty, label_ty) {
             Some(op) => self.program.exprs.alloc(HirExpr::Binary {
                 op,
                 lhs: read,

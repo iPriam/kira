@@ -136,6 +136,33 @@ mod tests {
     }
 
     #[test]
+    fn enum_syntax_analyzes_the_way_the_compiler_does() {
+        // New syntax reaches the editor by construction: the LSP serves the same
+        // `analyzed` query the compiler does, so an enum program checks clean and
+        // an unknown variant is squiggled — no LSP-specific wiring required.
+        let clean = analyze(
+            "t.kira",
+            "enum Color { Red Green Blue }\n\
+             function rank(c: Color) -> Int { if c == .Red { return 1 } return 2 }\n\
+             @Main function main() { print(rank(.Green)) return }",
+        );
+        assert!(clean.diagnostics.is_empty(), "{:?}", clean.diagnostics);
+
+        let bad = analyze(
+            "t.kira",
+            "enum Color { Red Green }\n\
+             @Main function main() { let c: Color = .Purple return }",
+        );
+        let diagnostic = bad
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == Some("KSEM120"))
+            .expect("an unknown variant is reported");
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
+    }
+
+    #[test]
     fn a_clean_program_has_no_diagnostics() {
         let analysis = analyze("t.kira", "@Main function main() { print(1) return }");
         assert!(

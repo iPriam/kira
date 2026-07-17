@@ -76,9 +76,46 @@ pub enum Item {
     Function(Function),
     /// A `struct` declaration: a non-inheriting value shape.
     Struct(StructDecl),
-    /// A construct the v0 subset parses but does not yet analyze (enum, class,
+    /// An `enum` declaration: a tagged union of named variants.
+    Enum(EnumDecl),
+    /// A construct the v0 subset parses but does not yet analyze (class,
     /// import, …); recorded so semantics can report it cleanly.
     Unsupported(UnsupportedItem),
+}
+
+/// An `enum` declaration: a named set of variants, each optionally carrying a
+/// single payload value.
+///
+/// Variants are separated by newlines or spaces — never commas — so the variant
+/// name is what starts each one. A variant may carry a payload written either
+/// `Name(Type)` or `Name: Type = default`; the second form supplies a default
+/// used when the variant is constructed with no explicit payload.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDecl {
+    /// The enum's name.
+    pub name: Symbol,
+    /// Span of the name token, for diagnostics.
+    pub name_span: Span,
+    /// The variants, in declaration order.
+    pub variants: Vec<VariantDecl>,
+    /// Span covering the whole declaration.
+    pub span: Span,
+}
+
+/// One variant of an [`EnumDecl`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct VariantDecl {
+    /// The variant's name.
+    pub name: Symbol,
+    /// Span of the name token.
+    pub name_span: Span,
+    /// The written payload type, when the variant carries one.
+    pub payload: Option<TypeRefId>,
+    /// The default payload initializer, when one was written (the `= expr`
+    /// form). Only meaningful when `payload` is present.
+    pub default: Option<ExprId>,
+    /// Span covering the whole variant.
+    pub span: Span,
 }
 
 /// A `struct` declaration: a named, non-inheriting value shape.
@@ -522,6 +559,24 @@ pub enum Expr {
         /// Span covering base and brackets.
         span: Span,
     },
+    /// A leading-dot member (`.Green`, `.Ok(12)`).
+    ///
+    /// The base is left implicit: what it resolves against is the *expected
+    /// type* at this position, which only analysis knows. In the v0 subset the
+    /// expected type must be an enum, so this is how a variant is written —
+    /// `.Red` for a payload-less one, `.Ok(12)` for one with a payload.
+    DotMember {
+        /// The member name, as written after the `.`.
+        name: Symbol,
+        /// Span of the member name.
+        name_span: Span,
+        /// The parenthesized arguments, or `None` when no `(` followed the
+        /// name. `Some(vec)` distinguishes `.Red()` from `.Red`; analysis
+        /// checks the count against the variant's payload.
+        args: Option<Vec<ExprId>>,
+        /// Span covering the whole member expression.
+        span: Span,
+    },
     /// An ownership transfer written on an expression (`move mesh`,
     /// `copy count`).
     ///
@@ -578,6 +633,7 @@ impl Expr {
             | Expr::Field { span, .. }
             | Expr::ArrayLit { span, .. }
             | Expr::Index { span, .. }
+            | Expr::DotMember { span, .. }
             | Expr::Ownership { span, .. }
             | Expr::Error { span } => *span,
         }

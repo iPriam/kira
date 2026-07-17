@@ -13,6 +13,8 @@
 mod analyze;
 mod arrays;
 mod decl;
+mod enums;
+mod operators;
 mod ownership;
 mod place;
 mod stmt;

@@ -34,6 +34,12 @@ impl FunctionLowering<'_, '_> {
             IrExpr::Binary { op, lhs, rhs } => self.lower_binary(op, lhs, rhs),
             IrExpr::Call { callee, args, .. } => self.lower_call(callee, &args),
             IrExpr::StructNew { struct_id, fields } => self.lower_struct_new(struct_id, &fields),
+            IrExpr::EnumNew {
+                enum_id,
+                tag,
+                payload,
+            } => self.lower_enum_new(enum_id, tag, payload),
+            IrExpr::EnumTag { value } => self.lower_enum_tag(value),
             IrExpr::Field { base, index, ty } => self.lower_field(base, index, ty),
             IrExpr::ArrayNew { ty, elements } => self.lower_array_new(ty, &elements),
             IrExpr::Index { base, index, ty } => self.lower_index(base, index, ty),
@@ -222,6 +228,85 @@ impl FunctionLowering<'_, '_> {
         let copy = self.copy_value(field, ty)?;
         self.drop_value(base_value, base_ty)?;
         Ok(copy)
+    }
+
+    /// Builds an enum value: a boxed tag plus its optional payload, encoded into
+    /// the one type-erased word the runtime box carries.
+    ///
+    /// A scalar payload's bits go in directly; a `String` payload is an owned
+    /// handle, so `owns_str` is set and the box takes ownership of it — exactly
+    /// what makes the box's clone/free reclaim it. A payload-less variant passes
+    /// a zero word and `owns_str` unset.
+    fn lower_enum_new(
+        &mut self,
+        enum_id: kira_semantics_model::EnumId,
+        tag: u32,
+        payload: Option<IrExprId>,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let tag_value = self.codegen.const_int(i64::from(tag));
+        let (owns_str, payload_word) = match payload {
+            None => (self.codegen.const_int(0), self.codegen.const_int(0)),
+            Some(payload) => {
+                let payload_ty = self.codegen.enum_payload_type(enum_id, tag)?;
+                let value = self.lower_expr(payload)?;
+                self.encode_enum_payload(payload_ty, value)?
+            }
+        };
+        Ok(self.call(
+            self.codegen.runtime.enum_new,
+            &mut [tag_value, owns_str, payload_word],
+            c"enum",
+        ))
+    }
+
+    /// Encodes a payload value into `(owns_str, payload_word)` for the enum box.
+    fn encode_enum_payload(
+        &mut self,
+        ty: Type,
+        value: LLVMValueRef,
+    ) -> Result<(LLVMValueRef, LLVMValueRef), LlvmError> {
+        let builder = self.codegen.builder;
+        let types = self.codegen.types;
+        // SAFETY: `value` has `ty`'s LLVM type and the builder is on a live
+        // block; each conversion below targets `i64`, the box's payload word.
+        let word = unsafe {
+            match ty {
+                Type::Int => value,
+                Type::Float => {
+                    LLVMBuildBitCast(builder, value, types.i64, c"enum.float.bits".as_ptr())
+                }
+                Type::Bool => LLVMBuildZExt(builder, value, types.i64, c"enum.bool.bits".as_ptr()),
+                Type::String => {
+                    LLVMBuildPtrToInt(builder, value, types.i64, c"enum.str.bits".as_ptr())
+                }
+                _ => {
+                    return Err(LlvmError::Unsupported(
+                        "an enum payload of an unsupported type",
+                    ));
+                }
+            }
+        };
+        let owns_str = self
+            .codegen
+            .const_int(i64::from(matches!(ty, Type::String)));
+        Ok((owns_str, word))
+    }
+
+    /// Reads an enum value's discriminant tag as an `Int`.
+    ///
+    /// The VM's `EnumTag`, in the same order: the value is evaluated (a local
+    /// read clones the enum), the tag is read out, and then the clone is freed —
+    /// exactly as `.count` reads and frees an array.
+    fn lower_enum_tag(&mut self, value: IrExprId) -> Result<LLVMValueRef, LlvmError> {
+        let value_ty = self.type_of(value);
+        let enum_value = self.lower_expr(value)?;
+        let tag = self.call(
+            self.codegen.runtime.enum_tag,
+            &mut [enum_value],
+            c"enum.tag",
+        );
+        self.drop_value(enum_value, value_ty)?;
+        Ok(tag)
     }
 
     /// Lowers a unary operator.

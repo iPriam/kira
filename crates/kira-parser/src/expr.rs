@@ -238,6 +238,13 @@ impl Parser<'_> {
                 })
             }
             TokenKind::Identifier => self.parse_name_or_call(token.span),
+            // A leading dot is a member of the expected type (`.Green`,
+            // `.Ok(12)`) — an enum variant, in the v0 subset. It only starts a
+            // primary when a name follows; a bare `.` is a malformed field
+            // access, reported as one.
+            TokenKind::Dot if self.peek(1).kind == TokenKind::Identifier => {
+                self.parse_dot_member(token.span)
+            }
             TokenKind::LParen => self.parse_paren(),
             TokenKind::LBracket => self.parse_array_literal(),
             _ => {
@@ -274,6 +281,32 @@ impl Parser<'_> {
         let text = self.text_of(span);
         let value = text.parse::<f64>().unwrap_or(0.0);
         self.tree.add_expr(Expr::Float { value, span })
+    }
+
+    /// Parses a leading-dot member (`.Green`, `.Ok(12)`), cursor on the `.`.
+    ///
+    /// The `(` after the name is the whole difference between a payload-less
+    /// variant and one carrying a payload, so it is what decides which is
+    /// parsed. What the member resolves against is the expected type, which only
+    /// analysis knows — the parser records the name and its arguments and stops
+    /// there.
+    fn parse_dot_member(&mut self, dot_span: Span) -> ExprId {
+        self.bump(); // `.`
+        let name_span = self.current().span;
+        let name = self.intern_span(name_span);
+        self.bump(); // member name
+        let args = if self.at(TokenKind::LParen) {
+            Some(self.parse_call_args())
+        } else {
+            None
+        };
+        let span = Span::from_bounds(dot_span.start, self.previous_end());
+        self.tree.add_expr(Expr::DotMember {
+            name,
+            name_span,
+            args,
+            span,
+        })
     }
 
     fn parse_name_or_call(&mut self, name_span: Span) -> ExprId {

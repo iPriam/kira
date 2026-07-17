@@ -17,4 +17,7 @@ pub use hir::{
 /// The five ownership modes, anchored in the syntax model and re-exported here
 /// so the analyzer and everything above it name them from one place.
 pub use kira_syntax_model::ownership::{OwnershipMode, OwnershipOp};
-pub use ty::{ArrayId, ArrayTable, FieldDef, StructDef, StructId, StructTable, Type, TypeTable};
+pub use ty::{
+    ArrayId, ArrayTable, EnumDef, EnumId, EnumTable, FieldDef, StructDef, StructId, StructTable,
+    Type, TypeTable, VariantDef,
+};

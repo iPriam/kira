@@ -2,6 +2,7 @@
 
 use super::Type;
 use super::arrays::ArrayTable;
+use super::enums::EnumTable;
 use super::structs::StructTable;
 
 /// Every shape a program's types can name: its structs and its array types.
@@ -15,6 +16,7 @@ use super::structs::StructTable;
 pub struct TypeTable {
     structs: StructTable,
     arrays: ArrayTable,
+    enums: EnumTable,
 }
 
 impl TypeTable {
@@ -36,6 +38,16 @@ impl TypeTable {
     /// The interned array types.
     pub fn arrays(&self) -> &ArrayTable {
         &self.arrays
+    }
+
+    /// The declared enums.
+    pub fn enums(&self) -> &EnumTable {
+        &self.enums
+    }
+
+    /// The declared enums, mutably, for the analyzer that fills them.
+    pub fn enums_mut(&mut self) -> &mut EnumTable {
+        &mut self.enums
     }
 
     /// The array type `[element]`, interning it if this is its first mention,
@@ -79,6 +91,10 @@ impl TypeTable {
                 Some(element) => format!("[{}]", self.type_name(element)),
                 None => "<unknown array>".to_owned(),
             },
+            Type::Enum(id) => match self.enums.get(id) {
+                Some(def) => def.name.clone(),
+                None => "<unknown enum>".to_owned(),
+            },
         }
     }
 
@@ -94,7 +110,10 @@ impl TypeTable {
     /// interned before it.
     pub fn owns_heap(&self, ty: Type) -> bool {
         match ty {
-            Type::String | Type::Array(_) => true,
+            // An enum, like an array, always *is* a heap object — a boxed tag
+            // plus its optional payload — so a copy allocates a fresh box and a
+            // drop frees it, whatever the variant carries.
+            Type::String | Type::Array(_) | Type::Enum(_) => true,
             Type::Struct(id) => match self.structs.get(id) {
                 Some(def) => def.fields.iter().any(|field| self.owns_heap(field.ty)),
                 None => false,

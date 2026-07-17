@@ -98,13 +98,31 @@ fn missing_main_is_rejected() {
 
 #[test]
 fn unsupported_construct_is_rejected_cleanly() {
-    // An `enum` is outside the v0 subset: it must not crash the compiler, and
+    // A `class` is outside the v0 subset: it must not crash the compiler, and
     // it must be reported as not-yet-supported rather than silently ignored.
-    let output = run_source("enum Mode { Fast }\n@Main function main() { print(1) return }");
+    let output = run_source("class Mode { }\n@Main function main() { print(1) return }");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("KSEM900"), "stderr was: {stderr}");
     assert!(stderr.contains("not supported yet"));
+}
+
+#[test]
+fn an_enum_declaration_compiles_and_runs() {
+    // The counterpart to the case above: an enum used to be reported as
+    // unsupported, and is now ordinary language surface. A leading-dot member
+    // resolves against the expected type, and `==` compares discriminants.
+    let output = run_source(
+        "enum Color { Red Green Blue }\n\
+         function rank(c: Color) -> Int { if c == .Green { return 2 } return 1 }\n\
+         @Main function main() { print(rank(.Green)) return }",
+    );
+    assert!(
+        output.status.success(),
+        "stderr was: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "2\n");
 }
 
 #[test]

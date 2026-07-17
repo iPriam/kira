@@ -45,6 +45,10 @@ fn bridge_tag_of(ty: Type) -> Result<(u8, Option<PayloadForm>), LlvmError> {
         // callee growing the array means for the other half. See
         // `BridgeValueTag::ARRAY`.
         Type::Array(_) => return Err(LlvmError::ArrayAtSeam),
+        // An enum does not fit either, and on the same grounds as a struct: it
+        // is a tagged value with no one-word form, and how it would cross is
+        // undecided. See `BridgeValueTag::ENUM`.
+        Type::Enum(_) => return Err(LlvmError::EnumAtSeam),
         Type::Error => return Err(LlvmError::Unsupported("a value with no type")),
     })
 }
@@ -88,6 +92,7 @@ impl Codegen<'_> {
                 }
                 Type::Struct(_) => return Err(LlvmError::StructAtSeam),
                 Type::Array(_) => return Err(LlvmError::ArrayAtSeam),
+                Type::Enum(_) => return Err(LlvmError::EnumAtSeam),
                 Type::Void | Type::Error => {
                     return Err(LlvmError::Unsupported("a parameter with no runtime value"));
                 }

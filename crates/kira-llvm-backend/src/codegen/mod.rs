@@ -378,10 +378,11 @@ impl<'a> Codegen<'a> {
             Type::Float => self.types.f64,
             Type::Bool => self.types.i1,
             // A `String` is an opaque owned handle: one pointer the backend
-            // never inspects, matching the runtime's ABI. An array is the same
-            // shape and for the same reason — the runtime owns its layout, and
-            // this only ever passes the handle around.
-            Type::String | Type::Array(_) => self.types.ptr,
+            // never inspects, matching the runtime's ABI. An array and an enum
+            // are the same shape and for the same reason — the runtime owns
+            // their layout (an enum is a boxed tag plus its payload), and this
+            // only ever passes the handle around.
+            Type::String | Type::Array(_) | Type::Enum(_) => self.types.ptr,
             Type::Void => self.types.void,
             Type::Struct(id) => *self
                 .struct_types

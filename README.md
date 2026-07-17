@@ -133,6 +133,57 @@ Two edges match the struct ones, one for the same reason and one not:
 See [.codex/work/arrays.md](.codex/work/arrays.md) for the design, and
 [examples/arrays/arrays.kira](examples/arrays/arrays.kira) for a tour.
 
+## Enums
+
+An `enum` is a value that is one of a fixed set of named variants, each
+optionally carrying a single payload. Variants are separated by newlines or
+spaces — never commas.
+
+```kira
+enum Color { Red Green Blue }
+
+enum Message {
+    Empty
+    Text(String)                              // a payload
+    InvalidFormat: String = "not that format" // a payload with a default
+}
+```
+
+A variant is written with a **leading dot** — `.Red`, `.Text("hi")` — and what
+it resolves against is the type *expected* at that position: a `let` annotation,
+a parameter, a return type, a struct field, or the other side of a comparison.
+So `.Red` alone is not a value; `let c: Color = .Red` is. A dot against a
+non-enum type, or in a position with no expected type, is refused (`KSEM119`).
+
+The one operation on an enum is comparison: `==` and `!=` compare
+**discriminants**, so `c == .Red` asks which variant `c` is. Reading a payload
+back out is `match`, a separate feature — so a payload is built, moved, and
+dropped, but not yet inspected.
+
+```kira
+function rank(c: Color) -> Int {
+    if c == .Red { return 1 }
+    if c == .Green { return 2 }
+    return 3
+}
+```
+
+Like an array, an enum is a heap value that **moves on binding** (`let b = a`
+consumes `a`) and is **not** trivially copyable (a named enum needs `move` into
+an owned parameter; a fresh `.Variant` needs nothing). Three edges match the
+struct/array ones:
+
+- **`print(someEnum)` is rejected (`KSEM081`).** No corpus site pins a
+  rendering, so a format here would be invented surface.
+- **An enum cannot cross the `@Native`/`@Runtime` boundary.** Like a struct, it
+  is a tagged value with no one-word form, and how it would cross is undecided.
+- **A payload may be `Int`, `Float`, `Bool`, or `String` only.** A
+  struct/enum/array payload is refused (`KSEM118`): the runtime box carries one
+  type-erased word, which an aggregate has no form in yet.
+
+See [.codex/work/enums.md](.codex/work/enums.md) for the design, and
+[examples/enums/enums.kira](examples/enums/enums.kira) for a tour.
+
 ## Ownership
 
 Kira owns by default, and says so at the call site. A plain parameter
@@ -162,9 +213,9 @@ there is nothing to lose track of.
 
 A struct nonetheless **copies when bound**: `var w = v` deep-copies, and `v`
 stays live. Needing `move` and moving on bind are different questions, and a
-struct answers them differently. An **array** is the type that answers the
-second one `yes`: an array binding aliases where a struct copies, so binding one
-moves it (see [Arrays](#arrays)).
+struct answers them differently. An **array** and an **enum** are the types that
+answer the second one `yes`: their bindings alias where a struct copies, so
+binding one moves it (see [Arrays](#arrays), [Enums](#enums)).
 
 `copy` is reserved but has no clone semantics: `copy` on anything non-trivial
 is `KSEM116` rather than a deep copy invented here. Borrow a value, move it, or

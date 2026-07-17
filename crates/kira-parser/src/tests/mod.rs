@@ -7,6 +7,7 @@
 //! beside the code they test.
 
 mod arrays;
+mod enums;
 
 use crate::*;
 use kira_runtime_abi::Execution;
@@ -119,7 +120,8 @@ fn colon_return_type_is_accepted() {
 
 #[test]
 fn unsupported_constructs_do_not_crash() {
-    let result = parse_text("enum E { A }\n@Main function main() { return }");
+    // `class` is still outside the subset (enums now parse; see `tests::enums`).
+    let result = parse_text("class C { }\n@Main function main() { return }");
     assert_eq!(result.tree.items.len(), 2);
     assert!(matches!(result.tree.items[0], Item::Unsupported(_)));
     assert!(matches!(result.tree.items[1], Item::Function(_)));

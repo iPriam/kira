@@ -25,6 +25,10 @@ pub struct StructId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArrayId(u32);
 
+/// A handle to a heap-allocated enum value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumId(u32);
+
 /// A runtime value on the operand stack or in a local slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value {
@@ -40,6 +44,8 @@ pub enum Value {
     Struct(StructId),
     /// A handle to a heap array.
     Array(ArrayId),
+    /// A handle to a heap enum value.
+    Enum(EnumId),
     /// The unit value.
     Void,
 }
@@ -53,6 +59,13 @@ enum Object {
     Struct(Vec<Value>),
     /// An array's elements, in order.
     Array(Vec<Value>),
+    /// An enum value: a discriminant tag and its optional single payload.
+    Enum {
+        /// The variant's declaration index.
+        tag: u32,
+        /// The payload value, absent for a payload-less variant.
+        payload: Option<Value>,
+    },
 }
 
 /// A snapshot of heap allocation counters.
@@ -191,6 +204,44 @@ impl Heap {
         }
     }
 
+    /// Allocates an enum value on the heap, returning its handle.
+    ///
+    /// The payload, when present, is taken rather than copied: whatever
+    /// produced it (the operand stack) hands over ownership, exactly as a
+    /// struct's fields are handed over.
+    pub fn alloc_enum(&mut self, tag: u32, payload: Option<Value>) -> EnumId {
+        EnumId(self.alloc_object(Object::Enum { tag, payload }))
+    }
+
+    /// The discriminant tag of the enum behind a handle, or `None` when the
+    /// handle does not name one.
+    pub fn enum_tag(&self, id: EnumId) -> Option<u32> {
+        match self.slots.get(id.0 as usize) {
+            Some(Some(Object::Enum { tag, .. })) => Some(*tag),
+            _ => None,
+        }
+    }
+
+    /// Frees the enum behind a handle, dropping its payload.
+    ///
+    /// Bounded by the program's nesting depth: a payload is a value analysis
+    /// resolved against types that already resolve, so a cycle is
+    /// unrepresentable — the same reason [`Heap::free_struct`] terminates.
+    pub fn free_enum(&mut self, id: EnumId) {
+        let taken = match self.slots.get_mut(id.0 as usize) {
+            Some(slot @ Some(Object::Enum { .. })) => slot.take(),
+            _ => None,
+        };
+        let Some(Object::Enum { payload, .. }) = taken else {
+            return;
+        };
+        self.freed += 1;
+        self.free_list.push(id.0);
+        if let Some(payload) = payload {
+            self.drop_value(payload);
+        }
+    }
+
     fn alloc_object(&mut self, object: Object) -> u32 {
         self.allocated += 1;
         if let Some(index) = self.free_list.pop() {
@@ -300,6 +351,7 @@ impl Heap {
             Value::Str(id) => self.free(id),
             Value::Struct(id) => self.free_struct(id),
             Value::Array(id) => self.free_array(id),
+            Value::Enum(id) => self.free_enum(id),
             _ => {}
         }
     }
@@ -344,6 +396,17 @@ impl Heap {
                     .collect();
                 Value::Array(self.alloc_array(copies))
             }
+            Value::Enum(id) => {
+                // Deep, like a struct or an array: the copy owns a fresh box
+                // and a fresh copy of the payload, so no two live enums share a
+                // handle and neither drop frees the other's.
+                let (tag, payload) = match self.slots.get(id.0 as usize) {
+                    Some(Some(Object::Enum { tag, payload })) => (*tag, *payload),
+                    _ => (0, None),
+                };
+                let payload = payload.map(|value| self.copy_value(value));
+                Value::Enum(self.alloc_enum(tag, payload))
+            }
             scalar => scalar,
         }
     }
@@ -371,7 +434,7 @@ impl Heap {
             // text invented here would be inventing language surface. Analysis
             // rejects both before a program runs; this is the runtime saying
             // the same thing rather than printing something made up.
-            Value::Struct(_) | Value::Array(_) => {
+            Value::Struct(_) | Value::Array(_) | Value::Enum(_) => {
                 self.drop_value(value);
                 return None;
             }
@@ -428,242 +491,11 @@ impl Heap {
             Value::Float(value) => NativeResult::Float(value),
             Value::Bool(value) => NativeResult::Bool(value),
             Value::Str(id) => NativeResult::Str(self.get(id).to_owned()),
-            Value::Struct(_) | Value::Array(_) => return None,
+            Value::Struct(_) | Value::Array(_) | Value::Enum(_) => return None,
         })
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn alloc_free_balances_and_reuses_slots() {
-        let mut heap = Heap::new();
-        let a = heap.alloc("one".to_owned());
-        let b = heap.alloc("two".to_owned());
-        assert_eq!(heap.stats().current, 2);
-        heap.free(a);
-        assert_eq!(heap.stats().current, 1);
-        // Freed slot is reused, so the id index recycles.
-        let c = heap.alloc("three".to_owned());
-        assert_eq!(heap.get(c), "three");
-        assert_eq!(heap.get(b), "two");
-        assert_eq!(heap.stats().allocated, 3);
-        assert_eq!(heap.stats().freed, 1);
-    }
-
-    #[test]
-    fn copy_of_a_string_is_independent() {
-        let mut heap = Heap::new();
-        let a = heap.alloc("x".to_owned());
-        let copy = heap.copy_value(Value::Str(a));
-        assert_eq!(heap.stats().current, 2);
-        heap.drop_value(Value::Str(a));
-        // The copy survives the original's drop.
-        assert_eq!(heap.stats().current, 1);
-        assert!(matches!(copy, Value::Str(_)));
-    }
-
-    #[test]
-    fn float_formatting_drops_trailing_zero() {
-        let mut heap = Heap::new();
-        assert_eq!(
-            heap.format_and_consume(Value::Float(2.0)).as_deref(),
-            Some("2")
-        );
-        assert_eq!(
-            heap.format_and_consume(Value::Float(3.5)).as_deref(),
-            Some("3.5")
-        );
-        assert_eq!(
-            heap.format_and_consume(Value::Int(-7)).as_deref(),
-            Some("-7")
-        );
-        assert_eq!(
-            heap.format_and_consume(Value::Bool(true)).as_deref(),
-            Some("true")
-        );
-    }
-
-    #[test]
-    fn a_struct_has_no_invented_rendering_or_seam_shape() {
-        let mut heap = Heap::new();
-        let value = Value::Struct(heap.alloc_struct(vec![Value::Int(1)]));
-        assert_eq!(heap.lift(value), None);
-        // Formatting still consumes what it was handed, so refusing to render
-        // a struct does not leak it.
-        assert_eq!(heap.format_and_consume(value), None);
-        assert_eq!(heap.stats().current, 0);
-    }
-
-    #[test]
-    fn freeing_a_struct_frees_its_fields() {
-        let mut heap = Heap::new();
-        let text = heap.alloc("label".to_owned());
-        let inner = heap.alloc_struct(vec![Value::Str(text)]);
-        let outer = heap.alloc_struct(vec![Value::Struct(inner), Value::Int(7)]);
-        assert_eq!(heap.stats().current, 3);
-        heap.drop_value(Value::Struct(outer));
-        // The string, the inner struct, and the outer struct all go.
-        assert_eq!(heap.stats().current, 0);
-    }
-
-    #[test]
-    fn copying_a_struct_is_deep_so_writes_do_not_alias() {
-        let mut heap = Heap::new();
-        let text = heap.alloc("a".to_owned());
-        let original = heap.alloc_struct(vec![Value::Str(text)]);
-        let Value::Struct(copy) = heap.copy_value(Value::Struct(original)) else {
-            panic!("a struct copies to a struct");
-        };
-        assert_ne!(original, copy, "a copy is its own object");
-
-        // Overwrite the copy's string; the original must not see it.
-        let replacement = heap.alloc("b".to_owned());
-        assert!(heap.set_field(copy, 0, Value::Str(replacement)));
-        let Some(Value::Str(original_text)) = heap.field(original, 0) else {
-            panic!("the original still holds its string");
-        };
-        assert_eq!(heap.get(original_text), "a");
-
-        heap.drop_value(Value::Struct(original));
-        heap.drop_value(Value::Struct(copy));
-        assert_eq!(heap.stats().current, 0, "no field is freed twice or leaked");
-    }
-
-    #[test]
-    fn overwriting_a_field_drops_what_was_there() {
-        let mut heap = Heap::new();
-        let text = heap.alloc("gone".to_owned());
-        let id = heap.alloc_struct(vec![Value::Str(text)]);
-        assert_eq!(heap.stats().current, 2);
-        assert!(heap.set_field(id, 0, Value::Int(1)));
-        // The replaced string is freed, not leaked: only the struct is live.
-        assert_eq!(heap.stats().current, 1);
-        heap.drop_value(Value::Struct(id));
-        assert_eq!(heap.stats().current, 0);
-    }
-
-    #[test]
-    fn freeing_an_array_frees_its_elements() {
-        let mut heap = Heap::new();
-        let text = heap.alloc("label".to_owned());
-        let inner = heap.alloc_array(vec![Value::Str(text)]);
-        let outer = heap.alloc_array(vec![Value::Array(inner), Value::Int(7)]);
-        assert_eq!(heap.stats().current, 3);
-        heap.drop_value(Value::Array(outer));
-        assert_eq!(heap.stats().current, 0);
-    }
-
-    #[test]
-    fn copying_an_array_is_deep_so_writes_do_not_alias() {
-        let mut heap = Heap::new();
-        let text = heap.alloc("a".to_owned());
-        let original = heap.alloc_array(vec![Value::Str(text)]);
-        let Value::Array(copy) = heap.copy_value(Value::Array(original)) else {
-            panic!("an array copies to an array");
-        };
-        assert_ne!(original, copy, "a copy is its own object");
-
-        let replacement = heap.alloc("b".to_owned());
-        assert!(heap.set_element(copy, 0, Value::Str(replacement)));
-        let Some(Value::Str(original_text)) = heap.element(original, 0) else {
-            panic!("the original still holds its string");
-        };
-        assert_eq!(heap.get(original_text), "a");
-
-        heap.drop_value(Value::Array(original));
-        heap.drop_value(Value::Array(copy));
-        assert_eq!(
-            heap.stats().current,
-            0,
-            "no element is freed twice or leaked"
-        );
-    }
-
-    /// The question the array design turned on: copying a struct that holds an
-    /// array must copy the array, not share the handle. It falls out of the
-    /// recursion — the struct arm copies each field — but it is the behaviour
-    /// the whole ownership story rests on, so it is pinned directly rather than
-    /// inferred from the code.
-    #[test]
-    fn copying_a_struct_deep_copies_an_array_field() {
-        let mut heap = Heap::new();
-        let values = heap.alloc_array(vec![Value::Int(1), Value::Int(2)]);
-        let original = heap.alloc_struct(vec![Value::Array(values)]);
-
-        let Value::Struct(copy) = heap.copy_value(Value::Struct(original)) else {
-            panic!("a struct copies to a struct");
-        };
-        let Some(Value::Array(copied_values)) = heap.field(copy, 0) else {
-            panic!("the copy holds an array");
-        };
-        assert_ne!(
-            values, copied_values,
-            "the copy's array is its own object, not a shared handle"
-        );
-
-        // Mutating the copy's array must leave the original's alone.
-        assert!(heap.set_element(copied_values, 0, Value::Int(99)));
-        assert_eq!(heap.element(values, 0), Some(Value::Int(1)));
-        assert_eq!(heap.element(copied_values, 0), Some(Value::Int(99)));
-
-        // …and growing it must not grow the original's either.
-        assert!(heap.push_element(copied_values, Value::Int(3)));
-        assert_eq!(heap.array_len(values), Some(2));
-        assert_eq!(heap.array_len(copied_values), Some(3));
-
-        heap.drop_value(Value::Struct(original));
-        heap.drop_value(Value::Struct(copy));
-        assert_eq!(heap.stats().current, 0);
-    }
-
-    #[test]
-    fn overwriting_an_element_drops_what_was_there() {
-        let mut heap = Heap::new();
-        let text = heap.alloc("gone".to_owned());
-        let id = heap.alloc_array(vec![Value::Str(text)]);
-        assert_eq!(heap.stats().current, 2);
-        assert!(heap.set_element(id, 0, Value::Int(1)));
-        // The replaced string is freed, not leaked: only the array is live.
-        assert_eq!(heap.stats().current, 1);
-        heap.drop_value(Value::Array(id));
-        assert_eq!(heap.stats().current, 0);
-    }
-
-    #[test]
-    fn appending_grows_the_array_in_place() {
-        let mut heap = Heap::new();
-        let id = heap.alloc_array(Vec::new());
-        assert_eq!(heap.array_len(id), Some(0));
-        assert!(heap.push_element(id, Value::Int(1)));
-        assert!(heap.push_element(id, Value::Int(2)));
-        assert_eq!(heap.array_len(id), Some(2));
-        assert_eq!(heap.element(id, 1), Some(Value::Int(2)));
-        heap.drop_value(Value::Array(id));
-        assert_eq!(heap.stats().current, 0);
-    }
-
-    #[test]
-    fn an_array_has_no_invented_rendering_or_seam_shape() {
-        let mut heap = Heap::new();
-        let value = Value::Array(heap.alloc_array(vec![Value::Int(1)]));
-        assert_eq!(heap.lift(value), None);
-        // Refusing to render one still consumes it, so it does not leak.
-        assert_eq!(heap.format_and_consume(value), None);
-        assert_eq!(heap.stats().current, 0);
-    }
-
-    #[test]
-    fn a_handle_of_the_wrong_kind_reads_empty_rather_than_panicking() {
-        let mut heap = Heap::new();
-        let text = heap.alloc("x".to_owned());
-        // A struct handle over a string slot: the VM must not panic on it.
-        assert_eq!(heap.fields(StructId(text.0)), &[]);
-        assert_eq!(heap.field(StructId(text.0), 0), None);
-        assert!(!heap.set_field(StructId(text.0), 0, Value::Int(1)));
-        // …and the string is untouched by any of it.
-        assert_eq!(heap.get(text), "x");
-    }
-}
+#[path = "value_tests.rs"]
+mod tests;
