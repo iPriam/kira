@@ -22,5 +22,8 @@
 //! frame it never drew.
 
 pub mod host;
+pub mod stage;
+pub mod staged;
 
 pub use host::{DesktopHost, DesktopRunnerError};
+pub use staged::Staged;

@@ -142,6 +142,9 @@ pub enum ClientError {
 pub struct RunnerClient {
     reader: BufReader<TcpStream>,
     writer: BufWriter<TcpStream>,
+    /// The bundle the runner currently holds, kept so a reload can reuse the
+    /// payloads that did not change rather than re-downloading them.
+    loaded: Option<Bundle>,
 }
 
 impl RunnerClient {
@@ -157,6 +160,7 @@ impl RunnerClient {
         let mut client = RunnerClient {
             reader: BufReader::new(stream.try_clone()?),
             writer: BufWriter::new(stream),
+            loaded: None,
         };
         client.handshake(runner)?;
         Ok(client)
@@ -198,7 +202,10 @@ impl RunnerClient {
                 });
             }
         };
-        self.download(manifest)
+        let bundle = self.download(manifest)?;
+        // Remembered so a later reload can reuse what did not change.
+        self.loaded = Some(bundle.clone());
+        Ok(bundle)
     }
 
     /// Reports that a milestone actually happened.
@@ -259,6 +266,14 @@ impl RunnerClient {
     /// the session must be able to tell the difference.
     pub fn serve_reloads<H: RunnerHost>(&mut self, host: &mut H) -> Result<(), ClientError> {
         loop {
+            // Waiting for a save is unbounded, and must be. A read timeout here
+            // would make the runner kill itself for the crime of the developer
+            // thinking for half a minute — the app would be gone by the time they
+            // saved, and every reload after an idle gap would silently degrade to
+            // a relaunch. Nothing is lost by waiting forever: a server that dies
+            // closes the socket, and a closed socket is a read of zero bytes, not
+            // a hang. That is the `Disconnected` arm below.
+            self.set_read_timeout(None)?;
             let message: ServerMessage = match read_message(&mut self.reader) {
                 Ok(message) => message,
                 // The server went away without saying goodbye. The session is
@@ -266,6 +281,11 @@ impl RunnerClient {
                 Err(ProtocolError::Disconnected) => return Ok(()),
                 Err(error) => return Err(error.into()),
             };
+
+            // Bounded again for everything that follows: once the server has
+            // spoken, the rest of the exchange is a conversation it is driving,
+            // and a peer that stops mid-download must not wedge this process.
+            self.set_read_timeout(Some(READ_TIMEOUT))?;
 
             match message {
                 ServerMessage::Shutdown => return Ok(()),
@@ -279,6 +299,12 @@ impl RunnerClient {
                 }
             }
         }
+    }
+
+    /// Sets how long a read waits, or `None` to wait indefinitely.
+    fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<(), ClientError> {
+        self.reader.get_ref().set_read_timeout(timeout)?;
+        Ok(())
     }
 
     /// Takes one reload, reporting each step as it actually happens.
@@ -305,7 +331,11 @@ impl RunnerClient {
         }
 
         let manifest = BundleManifest::from_bytes(manifest)?;
-        let bundle = match self.download(manifest) {
+        // Only what actually changed comes over the wire. A hot patch's whole
+        // premise is that the native library is byte-identical, so re-sending it
+        // would mean shipping megabytes to prove they are the same megabytes —
+        // the payload hashes exist exactly so that nobody has to.
+        let bundle = match self.download_reusing(manifest) {
             Ok(bundle) => bundle,
             // A bundle that will not download is not a bundle to swap to, and
             // the running app is still fine — so this is a restart requirement,
@@ -346,6 +376,58 @@ impl RunnerClient {
             },
         )?;
         Ok(())
+    }
+
+    /// Downloads `manifest`'s payloads, reusing any the runner already holds.
+    ///
+    /// A payload is reused only when its hash matches, and the reused bytes go
+    /// through the same verification as downloaded ones — so a reused payload is
+    /// exactly the payload the manifest names, or the bundle is refused.
+    fn download_reusing(&mut self, manifest: BundleManifest) -> Result<Bundle, ClientError> {
+        let held = self.loaded.take();
+        let mut payloads = Vec::with_capacity(manifest.payloads.len());
+        for entry in &manifest.payloads {
+            let reused = held.as_ref().and_then(|bundle| {
+                let previous = bundle.manifest().payload(&entry.name)?;
+                (previous.hash == entry.hash)
+                    .then(|| bundle.payload_by_name(&entry.name))
+                    .flatten()
+                    .map(<[u8]>::to_vec)
+            });
+            if let Some(bytes) = reused {
+                payloads.push(Some(bytes));
+                continue;
+            }
+
+            write_message(
+                &mut self.writer,
+                &ClientMessage::RequestPayload {
+                    name: entry.name.clone(),
+                },
+            )?;
+            payloads.push(Some(self.receive_payload(&entry.name)?));
+        }
+        let bundle = Bundle::assemble(manifest, payloads)?;
+        self.loaded = Some(bundle.clone());
+        Ok(bundle)
+    }
+
+    /// Reads one payload the server was asked for by `name`.
+    fn receive_payload(&mut self, name: &str) -> Result<Vec<u8>, ClientError> {
+        match read_message(&mut self.reader)? {
+            ServerMessage::Payload { name: got, bytes } if got == name => Ok(bytes),
+            // A payload arriving under a name that was not asked for would
+            // desync the manifest from the bytes, so it is refused rather than
+            // stored at whatever index happens to be next.
+            ServerMessage::Payload { .. } => Err(ClientError::Unexpected {
+                while_doing: "downloading payloads",
+            }),
+            ServerMessage::NoSuchPayload { name } => Err(ClientError::MissingPayload { name }),
+            ServerMessage::Shutdown => Err(ClientError::ShutDown),
+            _ => Err(ClientError::Unexpected {
+                while_doing: "downloading payloads",
+            }),
+        }
     }
 
     /// Downloads every payload `manifest` names and verifies them against it.
