@@ -11,10 +11,12 @@
 
 use std::collections::HashMap;
 
-use kira_ir::{IrBinOp, IrCallee, IrExpr, IrExprId, IrProgram, IrStmt, IrUnOp};
+use kira_ir::{
+    IrBinOp, IrCallee, IrExpr, IrExprId, IrPlace, IrPlaceStep, IrProgram, IrStmt, IrUnOp,
+};
 
 use crate::module::{FuncProto, Module};
-use crate::op::{FieldPath, Instruction};
+use crate::op::{FieldPath, Instruction, PathStep, PlacePath};
 use kira_runtime_abi::Execution;
 
 /// An error raised while lowering IR to bytecode.
@@ -69,6 +71,23 @@ pub enum CompileError {
         function: String,
         /// The requested path depth.
         count: usize,
+    },
+    /// An array literal has more elements than the format's `u32` can count.
+    #[error("function `{function}` builds an array of {count} elements; the format allows 2^32-1")]
+    TooManyElements {
+        /// The offending function's name.
+        function: String,
+        /// The requested number of elements.
+        count: usize,
+    },
+    /// Internal invariant: a place with an array index reached the static
+    /// field-path encoder, which cannot express one.
+    #[error(
+        "bytecode compiler invariant violated: dynamic index in a static field path in `{function}`"
+    )]
+    DynamicFieldPath {
+        /// The offending function's name.
+        function: String,
     },
 }
 
@@ -219,22 +238,24 @@ impl FnCompiler<'_> {
                 self.code.push(Instruction::StoreLocal(slot));
             }
             IrStmt::Assign { place, value } => {
-                self.compile_expr(*value)?;
                 let slot = self.local_slot(place.local)?;
                 if place.path.is_empty() {
+                    self.compile_expr(*value)?;
                     self.code.push(Instruction::StoreLocal(slot));
-                } else {
-                    let steps: Vec<u16> = place
-                        .path
-                        .iter()
-                        .map(|&index| self.field_index(index))
-                        .collect::<Result<_, _>>()?;
-                    let path =
-                        FieldPath::new(steps).map_err(|error| CompileError::FieldPathTooDeep {
-                            function: self.function_name.to_owned(),
-                            count: error.count,
-                        })?;
+                } else if place.is_all_fields() {
+                    // The shape that predates arrays keeps the encoding it
+                    // already had: a static field path needs nothing on the
+                    // stack but the value.
+                    self.compile_expr(*value)?;
+                    let path = self.field_path(place)?;
                     self.code.push(Instruction::StoreField { slot, path });
+                } else {
+                    // Indices first, outermost to innermost, then the value.
+                    // That order is the IR's contract — see `IrPlace` — and
+                    // every backend follows it.
+                    let path = self.compile_place_indices(place)?;
+                    self.compile_expr(*value)?;
+                    self.code.push(Instruction::StorePlace { slot, path });
                 }
             }
             IrStmt::Return { value } => match value {
@@ -362,6 +383,41 @@ impl FnCompiler<'_> {
                 self.compile_expr(base)?;
                 self.code.push(Instruction::GetField(index));
             }
+            IrExpr::ArrayNew { elements, .. } => {
+                let elements = elements.clone();
+                let count =
+                    u32::try_from(elements.len()).map_err(|_| CompileError::TooManyElements {
+                        function: self.function_name.to_owned(),
+                        count: elements.len(),
+                    })?;
+                // Elements are pushed in written order, so the array the VM
+                // builds is in that order with no reordering.
+                for element in elements {
+                    self.compile_expr(element)?;
+                }
+                self.code.push(Instruction::NewArray(count));
+            }
+            IrExpr::Index { base, index, .. } => {
+                let (base, index) = (*base, *index);
+                self.compile_expr(base)?;
+                self.compile_expr(index)?;
+                self.code.push(Instruction::ArrayGet);
+            }
+            IrExpr::ArrayLen { array } => {
+                let array = *array;
+                self.compile_expr(array)?;
+                self.code.push(Instruction::ArrayLen);
+            }
+            IrExpr::ArrayAppend { place, value } => {
+                let (place, value) = (place.clone(), *value);
+                let slot = self.local_slot(place.local)?;
+                let path = self.compile_place_indices(&place)?;
+                self.compile_expr(value)?;
+                self.code.push(Instruction::ArrayAppend { slot, path });
+                // `append` yields `Void`, and every expression leaves exactly
+                // one value: the statement that discards it pops this.
+                self.code.push(Instruction::ConstVoid);
+            }
             IrExpr::Call { callee, args, .. } => {
                 let callee = *callee;
                 let args = args.clone();
@@ -428,6 +484,50 @@ impl FnCompiler<'_> {
         self.patch_to_here(to_rhs)?;
         self.compile_expr(rhs)?;
         self.patch_to_here(to_end)
+    }
+
+    /// Builds the static field path of an all-fields place.
+    fn field_path(&self, place: &IrPlace) -> Result<FieldPath, CompileError> {
+        let mut steps = Vec::with_capacity(place.path.len());
+        for step in &place.path {
+            match step {
+                IrPlaceStep::Field(index) => steps.push(self.field_index(*index)?),
+                // `is_all_fields` is what makes this unreachable; it is a typed
+                // error rather than an unwrap because a compiler never gets to
+                // end its caller's process.
+                IrPlaceStep::Index(_) => {
+                    return Err(CompileError::DynamicFieldPath {
+                        function: self.function_name.to_owned(),
+                    });
+                }
+            }
+        }
+        FieldPath::new(steps).map_err(|error| CompileError::FieldPathTooDeep {
+            function: self.function_name.to_owned(),
+            count: error.count,
+        })
+    }
+
+    /// Emits a place's index expressions, outermost first, and returns the
+    /// path describing the walk.
+    ///
+    /// The emission order *is* the runtime contract: the values land on the
+    /// stack in path order, and the runtime pops them back off in reverse.
+    fn compile_place_indices(&mut self, place: &IrPlace) -> Result<PlacePath, CompileError> {
+        let mut steps = Vec::with_capacity(place.path.len());
+        for step in &place.path {
+            match step {
+                IrPlaceStep::Field(index) => steps.push(PathStep::Field(self.field_index(*index)?)),
+                IrPlaceStep::Index(expr) => {
+                    self.compile_expr(*expr)?;
+                    steps.push(PathStep::Index);
+                }
+            }
+        }
+        PlacePath::new(steps).map_err(|error| CompileError::FieldPathTooDeep {
+            function: self.function_name.to_owned(),
+            count: error.count,
+        })
     }
 
     /// Converts an IR local index to a `u16` slot, or fails typed.

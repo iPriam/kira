@@ -39,6 +39,7 @@ use std::path::{Path, PathBuf};
 use kira_ir::{IrFunction, IrProgram};
 use kira_semantics_model::Type;
 
+pub mod arrays;
 pub mod encode;
 pub mod error;
 pub mod func;
@@ -53,6 +54,7 @@ pub mod web;
 pub use error::WasmError;
 pub use func::AddrType;
 
+use arrays::ArrayCopies;
 use encode::ValType;
 use literals::Literals;
 use lower::Lowering;
@@ -131,7 +133,11 @@ pub fn compile(program: &IrProgram, device: WasmDevice) -> Result<Vec<u8>, WasmE
     let mut literals = Literals::new();
 
     let runtime = Runtime::declare(&mut module).ok_or(WasmError::Wiring)?;
-    let structs = Structs::declare(&mut module, &program.structs)?;
+    let structs = Structs::declare(&mut module, program.types.structs())?;
+    // Declared before either defines: a struct copy calls the copy of an array
+    // field, and an array copy calls the copy of a struct element, so neither
+    // set of bodies can be emitted until both sets of indices exist.
+    let arrays = ArrayCopies::declare(&mut module, program.types.arrays());
 
     // Every Kira function gets an index before any body is emitted, so a call
     // can name a function that has not been lowered yet — which is what direct
@@ -145,14 +151,22 @@ pub fn compile(program: &IrProgram, device: WasmDevice) -> Result<Vec<u8>, WasmE
     if !runtime.define(&mut module, &mut literals) {
         return Err(WasmError::Wiring);
     }
-    structs.define(&mut module, &runtime, &program.structs)?;
+    structs.define(&mut module, &runtime, program.types.structs(), &arrays)?;
+    arrays.define(&mut module, &runtime, program.types.arrays(), &structs)?;
 
     for (index, function) in program.functions.iter().enumerate() {
         let handle = *handles.get(index).ok_or(WasmError::Wiring)?;
         let (params, results) = signature(function, device)?;
         let mut func = func::Func::new(device.addr(), params, results);
-        Lowering::new(program, &runtime, &mut literals, &handles, &structs)
-            .function(&mut func, function)?;
+        Lowering::new(
+            program,
+            &runtime,
+            &mut literals,
+            &handles,
+            &structs,
+            &arrays,
+        )
+        .function(&mut func, function)?;
         if !module.define(handle, func) {
             return Err(WasmError::Wiring);
         }
@@ -273,7 +287,7 @@ mod tests {
                 execution: Execution::Inherited,
                 body: vec![IrStmt::Eval { expr: call }, IrStmt::Return { value: None }],
             }],
-            structs: Default::default(),
+            types: Default::default(),
             main: 0,
             exprs,
         }

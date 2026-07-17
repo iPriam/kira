@@ -94,4 +94,48 @@ pub enum VmError {
     /// A `StoreField` carried no path, so it named no field to write.
     #[error("a field store must name at least one field")]
     EmptyFieldPath,
+    /// An array instruction found something other than an array.
+    #[error("indexed a value that is not an array")]
+    NotAnArray,
+    /// An array index was at or past the end.
+    ///
+    /// A real program error, not an invariant guard: an index is generally not
+    /// a constant, so this is checked when the program runs rather than when it
+    /// is compiled. Kept **distinct** from [`VmError::NegativeIndex`] because
+    /// they are distinct mistakes — a length misjudged versus a computation
+    /// that went wrong — and one message for both would say less.
+    #[error("array index is out of bounds")]
+    IndexOutOfBounds,
+    /// An array index was negative.
+    ///
+    /// The message does not name the offending index, and deliberately: a wasm
+    /// trap path cannot format one without allocating a string mid-trap, and a
+    /// trap that reads differently on one backend is not the same trap. The
+    /// oracle does not name it either, so naming it here would have been
+    /// invented detail bought at the price of parity.
+    #[error("array index is negative")]
+    NegativeIndex,
+    /// An array reached the native seam, which has no layout for one *yet*.
+    ///
+    /// Unlike [`VmError::StructAtSeam`], this one is a gap rather than a
+    /// decision: the language does let an array cross. Carrying one needs an
+    /// ownership answer at the boundary — who frees the elements, and what a
+    /// native function growing the array means for the VM's heap — that this
+    /// port has not made. Refusing it is what keeps the alternative (a double
+    /// free or a leak at the boundary) from shipping. See
+    /// `.codex/work/arrays.md`.
+    #[error(
+        "function {function} passes an array across the native seam, which cannot carry one yet"
+    )]
+    ArrayAtSeam {
+        /// The function at the boundary.
+        function: u32,
+    },
+    /// An array holds more elements than `Int` can count.
+    ///
+    /// Only reachable on a 64-bit host by an array of more than `i64::MAX`
+    /// elements, which cannot be allocated — it exists so `.count` converts
+    /// typed rather than with an unwrap.
+    #[error("array is too long to count in an Int")]
+    ArrayTooLong,
 }

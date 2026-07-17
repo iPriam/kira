@@ -47,7 +47,7 @@ fn program_printing(values: &[f64]) -> kira_ir::IrProgram {
             execution: kira_runtime_abi::Execution::Inherited,
             body,
         }],
-        structs: Default::default(),
+        types: Default::default(),
         main: 0,
         exprs,
     }

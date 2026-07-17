@@ -16,13 +16,15 @@
 //! That is the first thing to try when adding syntax: a construct the HIR can
 //! already express costs a rewrite here instead of a node in every layer.
 
-use kira_core::Symbol;
-use kira_semantics_model::hir::{HirExprId, HirPlace, HirStmt, HirStmtId, LocalId};
-use kira_semantics_model::{HirBinaryOp, HirExpr, Type};
+use kira_semantics_model::hir::{HirExprId, HirStmt, HirStmtId, LocalId};
+use kira_semantics_model::{HirExpr, Type};
 use kira_source::Span;
-use kira_syntax_model::ast::{Block, Expr, ExprId, Stmt, StmtId, SwitchCase};
+use kira_syntax_model::ast::{Block, ExprId, ForIterable, Stmt, StmtId, SwitchCase};
 
 use crate::analyze::{Analyzer, FnCtx};
+use crate::place::PlacePurpose;
+
+mod fors;
 
 impl Analyzer<'_> {
     /// Whether a statement list is guaranteed to execute a `return`.
@@ -81,15 +83,17 @@ impl Analyzer<'_> {
                 init,
                 ..
             } => {
-                let value = self.analyze_expr(ctx, init);
-                // Rust-style implicit move on bind: a binding whose value
-                // would otherwise alias its source consumes that source. No
-                // type in today's lattice does (structs deep-copy, strings
-                // clone), so this is a no-op until arrays land — see
-                // `Type::moves_on_bind`.
+                // The annotation is resolved *first* so it can be the
+                // initializer's expected type: `var xs: [Int] = []` is the
+                // universal empty-array idiom, and `[]` has no element to infer
+                // one from — the annotation is the only thing that knows.
+                let declared = ty.map(|type_ref| self.resolve_type_ref(type_ref));
+                let value = self.analyze_expr_expecting(ctx, init, declared);
+                // Rust-style implicit move on bind: a binding whose value would
+                // otherwise alias its source consumes that source. An array is
+                // the type this fires for.
                 self.apply_binding_move(ctx, init, value);
                 let value_ty = self.program.expr(value).type_of();
-                let declared = ty.map(|type_ref| self.resolve_type(type_ref.name, type_ref.span));
                 let local_ty = match declared {
                     Some(annotation) => {
                         if !value_ty.assignable_to(annotation) {
@@ -116,12 +120,18 @@ impl Analyzer<'_> {
                 out.push(hir);
             }
             Stmt::Assign { target, value, .. } => {
-                let value_expr = self.analyze_expr(ctx, value);
-                let value_ty = self.program.expr(value_expr).type_of();
                 let target_span = self.tree.expr(target).span();
-                let Some((place, place_ty)) = self.resolve_place(ctx, target) else {
+                // The place is resolved before the value for the same reason
+                // the annotation is: it is what supplies `xs = []` an element
+                // type. It also fixes evaluation order — a place's index
+                // expressions are evaluated before the value, on every backend.
+                let Some((place, place_ty)) = self.resolve_place(ctx, target, PlacePurpose::Assign)
+                else {
+                    self.analyze_expr(ctx, value);
                     return;
                 };
+                let value_expr = self.analyze_expr_expecting(ctx, value, Some(place_ty));
+                let value_ty = self.program.expr(value_expr).type_of();
                 if !value_ty.assignable_to(place_ty) {
                     self.emit(
                         target_span,
@@ -140,7 +150,11 @@ impl Analyzer<'_> {
                 out.push(hir);
             }
             Stmt::Return { value, span } => {
-                let hir_value = value.map(|expr| self.analyze_expr(ctx, expr));
+                // The declared return type is the expected type, so
+                // `function f() -> [Int] { return [] }` knows what `[]` holds.
+                let expected = ctx.return_type;
+                let hir_value =
+                    value.map(|expr| self.analyze_expr_expecting(ctx, expr, Some(expected)));
                 self.check_return(ctx, hir_value, span);
                 let hir = self
                     .program
@@ -185,11 +199,18 @@ impl Analyzer<'_> {
             }
             Stmt::For {
                 name,
-                start,
-                end,
+                iterable,
                 body,
+                span,
                 ..
-            } => self.analyze_for(ctx, name, (start, end), &body, out),
+            } => match iterable {
+                ForIterable::Range { start, end } => {
+                    self.analyze_for_range(ctx, name, (start, end), &body, out)
+                }
+                ForIterable::Each { array } => {
+                    self.analyze_for_each(ctx, name, array, &body, span, out)
+                }
+            },
             Stmt::Switch {
                 subject,
                 cases,
@@ -232,111 +253,6 @@ impl Analyzer<'_> {
             return false;
         }
         true
-    }
-
-    /// Desugars `for <name> in <start>..<end> { … }` into a `while`.
-    ///
-    /// The rewrite, given `for i in a..b { body }`:
-    ///
-    /// ```text
-    /// var  <cursor> = a          // hidden, mutable: the iteration state
-    /// let  <limit>  = b          // hidden: evaluated once, not per iteration
-    /// while <cursor> < <limit> {
-    ///     let i = <cursor>       // the user's variable: a fresh immutable copy
-    ///     <cursor> = <cursor> + 1
-    ///     body
-    /// }
-    /// ```
-    ///
-    /// Two details carry the whole correctness argument:
-    ///
-    /// * **The increment precedes the body.** Putting it last would let
-    ///   `continue` jump over it and spin forever. Stepping the cursor before
-    ///   the body runs means every exit from the body — falling off the end,
-    ///   `continue`, or `break` — leaves the cursor already advanced.
-    /// * **`i` is a fresh immutable copy, not the cursor.** Writing to `i` is
-    ///   rejected (it is a `let`), so a body cannot perturb the iteration.
-    ///
-    /// The bounds are `Int`; a non-`Int` bound is reported and the loop is
-    /// still built, so one bad bound does not cascade.
-    fn analyze_for(
-        &mut self,
-        ctx: &mut FnCtx,
-        name: Symbol,
-        range: (ExprId, ExprId),
-        body: &Block,
-        out: &mut Vec<HirStmtId>,
-    ) {
-        let (start, end) = range;
-        let start_expr = self.analyze_bound(ctx, start);
-        let end_expr = self.analyze_bound(ctx, end);
-
-        // The cursor and limit are hidden: they occupy local slots but are
-        // bound to no name, so a body cannot read, write, or shadow them — not
-        // even one that declares a variable spelled the same way.
-        let cursor = ctx.declare_hidden(Type::Int, true);
-        let limit = ctx.declare_hidden(Type::Int, false);
-        let cursor_init = self.program.stmts.alloc(HirStmt::Let {
-            local: cursor,
-            init: start_expr,
-        });
-        let limit_init = self.program.stmts.alloc(HirStmt::Let {
-            local: limit,
-            init: end_expr,
-        });
-        out.push(cursor_init);
-        out.push(limit_init);
-
-        // `<cursor> < <limit>` — half-open, so `for i in 5..5` never runs.
-        let cursor_read = self.read_int_local(cursor);
-        let limit_read = self.read_int_local(limit);
-        let cond = self.program.exprs.alloc(HirExpr::Binary {
-            op: HirBinaryOp::LtInt,
-            lhs: cursor_read,
-            rhs: limit_read,
-            ty: Type::Bool,
-        });
-
-        // The user's variable lives in its own scope: it is visible to the
-        // body and gone afterwards.
-        ctx.push_scope();
-        let user_name = self.interner.resolve(name).to_owned();
-        let variable = ctx.declare(&user_name, Type::Int, false);
-        let cursor_copy = self.read_int_local(cursor);
-        let bind = self.program.stmts.alloc(HirStmt::Let {
-            local: variable,
-            init: cursor_copy,
-        });
-
-        let step_read = self.read_int_local(cursor);
-        let one = self.program.exprs.alloc(HirExpr::Int(1));
-        let stepped = self.program.exprs.alloc(HirExpr::Binary {
-            op: HirBinaryOp::AddInt,
-            lhs: step_read,
-            rhs: one,
-            ty: Type::Int,
-        });
-        let step = self.program.stmts.alloc(HirStmt::Assign {
-            place: HirPlace {
-                local: cursor,
-                path: Vec::new(),
-            },
-            value: stepped,
-        });
-
-        let mut loop_body = vec![bind, step];
-        ctx.loop_depth += 1;
-        ctx.push_scope();
-        self.analyze_stmts(ctx, &body.stmts, &mut loop_body);
-        ctx.pop_scope();
-        ctx.loop_depth -= 1;
-        ctx.pop_scope();
-
-        let hir = self.program.stmts.alloc(HirStmt::While {
-            cond,
-            body: loop_body,
-        });
-        out.push(hir);
     }
 
     /// Desugars a `switch` into the `if`/`else` chain it already means.
@@ -480,86 +396,6 @@ impl Analyzer<'_> {
             );
         }
         hir
-    }
-
-    /// Resolves an assignment target into a [`HirPlace`] plus the type stored
-    /// there, or `None` when the target does not name a writable place.
-    ///
-    /// Every step must be writable, not just the last: a struct is a value, so
-    /// writing `b.size.x` rewrites the `size` field's contents in place. A
-    /// `let` anywhere along the path is what makes that illegal.
-    fn resolve_place(&mut self, ctx: &mut FnCtx, target: ExprId) -> Option<(HirPlace, Type)> {
-        match self.tree.expr(target).clone() {
-            Expr::Name { symbol, span } => {
-                let name = self.interner.resolve(symbol).to_owned();
-                let Some(local) = ctx.resolve(&name) else {
-                    self.emit(
-                        span,
-                        "KSEM023",
-                        format!("cannot assign to undefined name `{name}`"),
-                    );
-                    return None;
-                };
-                if !ctx.is_mutable(local) {
-                    self.emit(
-                        span,
-                        "KSEM021",
-                        format!(
-                            "cannot assign to immutable binding `{name}` (declare it with `var`)"
-                        ),
-                    );
-                    return None;
-                }
-                Some((
-                    HirPlace {
-                        local,
-                        path: Vec::new(),
-                    },
-                    ctx.local_type(local),
-                ))
-            }
-            Expr::Field {
-                base,
-                field,
-                field_span,
-                ..
-            } => {
-                let (mut place, base_ty) = self.resolve_place(ctx, base)?;
-                let field_name = self.interner.resolve(field).to_owned();
-                let (index, field_ty) = self.resolve_field(base_ty, &field_name, field_span)?;
-                let mutable = match base_ty {
-                    Type::Struct(id) => self
-                        .program
-                        .structs
-                        .get(id)
-                        .and_then(|def| def.field(index))
-                        .is_some_and(|def| def.mutable),
-                    _ => false,
-                };
-                if !mutable {
-                    self.emit(
-                        field_span,
-                        "KSEM024",
-                        format!(
-                            "cannot assign to immutable field `{field_name}` of `{}` \
-                             (declare it with `var`)",
-                            self.type_name(base_ty)
-                        ),
-                    );
-                    return None;
-                }
-                place.path.push(index);
-                Some((place, field_ty))
-            }
-            other => {
-                self.emit(
-                    other.span(),
-                    "KSEM025",
-                    "the left side of an assignment must be a variable or a field of one",
-                );
-                None
-            }
-        }
     }
 
     fn check_return(&mut self, ctx: &FnCtx, value: Option<HirExprId>, span: Span) {

@@ -39,6 +39,12 @@ fn bridge_tag_of(ty: Type) -> Result<(u8, Option<PayloadForm>), LlvmError> {
         // decision (by value? by pointer? who frees the strings inside?) that
         // has not been made, so the boundary says no rather than guessing.
         Type::Struct(_) => return Err(LlvmError::StructAtSeam),
+        // An array does not fit either, but the reason is different: the
+        // language does let one cross, and what is missing is the ownership
+        // answer at the boundary — who frees the elements, and what a native
+        // callee growing the array means for the other half. See
+        // `BridgeValueTag::ARRAY`.
+        Type::Array(_) => return Err(LlvmError::ArrayAtSeam),
         Type::Error => return Err(LlvmError::Unsupported("a value with no type")),
     })
 }
@@ -81,6 +87,7 @@ impl Codegen<'_> {
                     LLVMBuildIntToPtr(self.builder, payload, types.ptr, c"arg.str".as_ptr())
                 }
                 Type::Struct(_) => return Err(LlvmError::StructAtSeam),
+                Type::Array(_) => return Err(LlvmError::ArrayAtSeam),
                 Type::Void | Type::Error => {
                     return Err(LlvmError::Unsupported("a parameter with no runtime value"));
                 }
