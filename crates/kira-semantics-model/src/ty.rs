@@ -86,6 +86,61 @@ impl Type {
     pub fn is_scalar(self) -> bool {
         matches!(self, Type::Int | Type::Float | Type::Bool | Type::Void)
     }
+
+    /// Whether a value of this type reaches an owned parameter without an
+    /// explicit `move`.
+    ///
+    /// This is the predicate that decides whether passing a *named* local to a
+    /// consuming parameter needs `move` written at the call site. It is a
+    /// property of the type alone and deliberately narrow: `Void` and the
+    /// three scalars, plus (once they exist) the C-seam types `CString` and
+    /// `RawPtr`.
+    ///
+    /// `String` is **not** trivially copyable — it owns its bytes — so
+    /// `f(name)` on a `String` local is `KSEM108` and `f(move name)` is how it
+    /// is written. A **struct is not trivially copyable either**, which is the
+    /// rule most worth stating out loud, because a struct nonetheless does
+    /// *not* implicitly move when bound ([`Type::moves_on_bind`]). The two
+    /// predicates answer different questions and a struct answers them
+    /// differently: it needs `move` into an owned parameter, and it still
+    /// copies on `let w = v`.
+    pub fn is_trivially_copyable(self) -> bool {
+        match self {
+            Type::Int | Type::Float | Type::Bool | Type::Void => true,
+            // An expression that already failed to analyze must not also
+            // collect an ownership diagnostic on top of its type error.
+            Type::Error => true,
+            Type::String | Type::Struct(_) => false,
+        }
+    }
+
+    /// Whether binding a value of this type *consumes* the binding it was read
+    /// from (Rust-style implicit move on bind).
+    ///
+    /// True for exactly the types that a binding would otherwise **alias**:
+    /// arrays, enum instances, and construct existentials all lower to a
+    /// shared heap handle, so `let alias = values` would leave two owners
+    /// pointing at one object. Marking the source moved turns that aliasing
+    /// into `KSEM107` instead of a use-after-free.
+    ///
+    /// **Every type in today's lattice answers `false`**, and that is the
+    /// correct answer rather than a stub: a struct deep-copies when bound and
+    /// a `String` clones its bytes, so neither can alias and neither has
+    /// anything to enforce. The predicate exists — and is spelled as the type
+    /// question rather than inlined as `false` — because arrays are the next
+    /// feature and are the first type to answer `true`. When `Type::Array`
+    /// lands, this arm is the whole ownership change it needs.
+    pub fn moves_on_bind(self) -> bool {
+        match self {
+            Type::Int
+            | Type::Float
+            | Type::Bool
+            | Type::Void
+            | Type::Error
+            | Type::String
+            | Type::Struct(_) => false,
+        }
+    }
 }
 
 /// One declared struct: its name and its stored fields, in declaration order.
@@ -270,6 +325,49 @@ mod tests {
         assert_eq!(def.field_index("z"), None);
         assert!(def.field(0).expect("x").mutable);
         assert!(!def.field(1).expect("y").mutable);
+    }
+
+    #[test]
+    fn a_struct_needs_move_but_does_not_move_on_bind() {
+        let (_, id) = table_with_point();
+        // The two predicates answer differently for a struct, and that split
+        // is the whole point: `f(p)` into an owned param is KSEM108, while
+        // `let q = p` still copies.
+        assert!(!Type::Struct(id).is_trivially_copyable());
+        assert!(!Type::Struct(id).moves_on_bind());
+    }
+
+    #[test]
+    fn a_string_needs_move_and_a_scalar_does_not() {
+        assert!(!Type::String.is_trivially_copyable());
+        assert!(Type::Int.is_trivially_copyable());
+        assert!(Type::Float.is_trivially_copyable());
+        assert!(Type::Bool.is_trivially_copyable());
+        assert!(Type::Void.is_trivially_copyable());
+    }
+
+    #[test]
+    fn nothing_in_todays_lattice_moves_on_bind() {
+        // Arrays are the first type that will answer `true`. Until then this
+        // pins that no current type silently acquired implicit-move.
+        let (_, id) = table_with_point();
+        for ty in [
+            Type::Int,
+            Type::Float,
+            Type::Bool,
+            Type::Void,
+            Type::Error,
+            Type::String,
+            Type::Struct(id),
+        ] {
+            assert!(!ty.moves_on_bind(), "{ty:?} must not move on bind");
+        }
+    }
+
+    #[test]
+    fn an_error_type_never_collects_an_ownership_diagnostic() {
+        // A type error already reported must not also produce KSEM108.
+        assert!(Type::Error.is_trivially_copyable());
     }
 
     #[test]

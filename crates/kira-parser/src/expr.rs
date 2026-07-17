@@ -8,6 +8,7 @@ use kira_lexer::decode_string_literal;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{BinaryOp, Expr, ExprId, FieldInit, UnaryOp};
+use kira_syntax_model::ownership::OwnershipOp;
 
 use crate::Parser;
 
@@ -38,7 +39,44 @@ impl Parser<'_> {
         lhs
     }
 
+    /// Whether the cursor sits on a `move`/`copy` that is acting as an
+    /// ownership operator rather than as a plain name.
+    ///
+    /// The whole contextual-identifier discipline is this lookahead: the token
+    /// is an operator only when what follows it starts an operand. `move x` is
+    /// a transfer; `move` alone, `move + 1`, and `move.field` are reads of a
+    /// local named `move`.
+    fn ownership_op_here(&self) -> Option<OwnershipOp> {
+        let op = if self.at_word("move") {
+            OwnershipOp::Move
+        } else if self.at_word("copy") {
+            OwnershipOp::Copy
+        } else {
+            return None;
+        };
+        let starts_operand = matches!(
+            self.peek(1).kind,
+            TokenKind::Identifier
+                | TokenKind::IntLiteral
+                | TokenKind::FloatLiteral
+                | TokenKind::StringLiteral
+                | TokenKind::True
+                | TokenKind::False
+                | TokenKind::Minus
+                | TokenKind::Bang
+        );
+        starts_operand.then_some(op)
+    }
+
     fn parse_unary(&mut self) -> ExprId {
+        if let Some(op) = self.ownership_op_here() {
+            let start = self.current().span;
+            self.bump(); // `move` / `copy`
+            let operand = self.parse_unary();
+            let operand_span = self.tree.expr(operand).span();
+            let span = Span::from_bounds(start.start, operand_span.end());
+            return self.tree.add_expr(Expr::Ownership { op, operand, span });
+        }
         let op = match self.current_kind() {
             TokenKind::Minus => Some(UnaryOp::Neg),
             TokenKind::Bang => Some(UnaryOp::Not),

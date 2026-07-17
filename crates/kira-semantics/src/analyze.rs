@@ -10,10 +10,12 @@ use std::collections::HashMap;
 use kira_core::Interner;
 use kira_diagnostics::{Diagnostic, Label, Severity};
 use kira_semantics_model::hir::{FuncId, HirFunction, HirLocal, HirProgram, LocalId};
-use kira_semantics_model::{StructId, Type};
+use kira_semantics_model::{OwnershipMode, StructId, Type};
 use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::{ExprId, Function, Item};
+
+use crate::ownership::LocalOwnership;
 
 /// The result of analyzing one program.
 #[derive(Debug, Clone)]
@@ -38,6 +40,12 @@ pub(crate) struct Callable<'a> {
 struct FuncSig {
     name: String,
     params: Vec<Type>,
+    /// How each parameter takes its argument, positionally aligned with
+    /// `params`.
+    ///
+    /// A method's receiver occupies slot 0 of both, and takes
+    /// [`OwnershipMode::BorrowRead`]: calling `p.sum()` does not consume `p`.
+    param_ownership: Vec<OwnershipMode>,
     return_type: Type,
     name_span: Span,
     is_main: bool,
@@ -70,6 +78,12 @@ pub(crate) struct Analyzer<'a> {
 /// stack mapping names to slots.
 pub(crate) struct FnCtx {
     pub(crate) locals: Vec<HirLocal>,
+    /// Ownership state per local, positionally aligned with `locals`.
+    ///
+    /// The two vectors are kept in step by construction: `declare` and
+    /// `declare_hidden` are the only ways to add a local and both push to
+    /// both, so `ownership[i]` always describes `locals[i]`.
+    ownership: Vec<LocalOwnership>,
     pub(crate) scopes: Vec<HashMap<String, LocalId>>,
     pub(crate) return_type: Type,
     /// The struct this body is a method of, when it is one.
@@ -89,6 +103,7 @@ impl FnCtx {
     pub(crate) fn new(return_type: Type) -> Self {
         Self {
             locals: Vec::new(),
+            ownership: Vec::new(),
             scopes: vec![HashMap::new()],
             return_type,
             receiver: None,
@@ -104,18 +119,52 @@ impl FnCtx {
         self.scopes.pop();
     }
 
-    /// Declares a new local in the innermost scope, returning its slot.
+    /// Declares a new owned local in the innermost scope, returning its slot.
+    ///
+    /// Every `let`/`var` binding is owned; only a parameter can be anything
+    /// else, and it uses [`FnCtx::declare_param`].
     pub(crate) fn declare(&mut self, name: &str, ty: Type, mutable: bool) -> LocalId {
+        self.declare_param(name, ty, mutable, OwnershipMode::Owned)
+    }
+
+    /// Declares a local with an explicit ownership mode, returning its slot.
+    pub(crate) fn declare_param(
+        &mut self,
+        name: &str,
+        ty: Type,
+        mutable: bool,
+        ownership: OwnershipMode,
+    ) -> LocalId {
         let id = LocalId(self.locals.len() as u32);
         self.locals.push(HirLocal {
             name: name.to_owned(),
             ty,
             mutable,
+            ownership,
+        });
+        self.ownership.push(LocalOwnership {
+            mode: ownership,
+            moved: None,
         });
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.to_owned(), id);
         }
         id
+    }
+
+    /// The ownership state of a local slot.
+    pub(crate) fn ownership_of(&self, local: LocalId) -> &LocalOwnership {
+        &self.ownership[local.0 as usize]
+    }
+
+    /// Records that `local`'s value was moved out at `span`.
+    pub(crate) fn mark_moved(&mut self, local: LocalId, span: Span) {
+        self.ownership[local.0 as usize].moved = Some(span);
+    }
+
+    /// The name a local was declared with.
+    pub(crate) fn local_name(&self, local: LocalId) -> String {
+        self.locals[local.0 as usize].name.clone()
     }
 
     /// Declares a local slot bound to no name, returning it.
@@ -131,7 +180,9 @@ impl FnCtx {
             name: String::new(),
             ty,
             mutable,
+            ownership: OwnershipMode::Owned,
         });
+        self.ownership.push(LocalOwnership::owned());
         id
     }
 
@@ -232,6 +283,17 @@ impl<'a> Analyzer<'a> {
                     .iter()
                     .map(|param| self.resolve_type(param.ty.name, param.ty.span)),
             );
+            // A method's receiver borrows: `p.sum()` reads `p` and leaves it
+            // usable. The oracle says the same — an unannotated receiver is
+            // `borrow_read` — so a method call never demands `move`.
+            let mut param_ownership: Vec<OwnershipMode> = callable
+                .receiver
+                .map(|_| OwnershipMode::BorrowRead)
+                .into_iter()
+                .collect();
+            for param in &function.params {
+                param_ownership.push(self.check_param_ownership(param));
+            }
             let return_type = match &function.return_type {
                 Some(type_ref) => self.resolve_type(type_ref.name, type_ref.span),
                 None => Type::Void,
@@ -261,11 +323,47 @@ impl<'a> Analyzer<'a> {
             self.sigs.push(FuncSig {
                 name,
                 params,
+                param_ownership,
                 return_type,
                 name_span: function.name_span,
                 is_main,
             });
         }
+    }
+
+    /// The mode a parameter declares, reporting the one mode this port does
+    /// not implement.
+    ///
+    /// `borrow mut` is the single ownership mode that is **observable at run
+    /// time**: a callee writing through it must change the caller's binding.
+    /// Every other mode reduces to the deep copy the runtime already does, so
+    /// it lands as a pure static check. Accepting `borrow mut` without the
+    /// by-reference calling convention would not be an incomplete feature —
+    /// it would silently compute wrong answers, because the callee would
+    /// mutate a copy and the caller would never see the write.
+    ///
+    /// So it is refused with a typed error until the backends carry it,
+    /// following the oracle's own precedent for a reserved-but-unimplemented
+    /// mode (`copy` of a non-trivial value is `KSEM116` there for exactly this
+    /// reason). `KSEM112` is the free code in the ownership band.
+    fn check_param_ownership(&mut self, param: &kira_syntax_model::ast::Param) -> OwnershipMode {
+        if param.ownership == OwnershipMode::BorrowMut {
+            let span = param.ownership_span.unwrap_or(param.span);
+            self.emit(
+                span,
+                "KSEM112",
+                "Kira parsed `borrow mut`, but a mutable borrow is not implemented yet: \
+                 the callee would write to a copy the caller never sees. Take the value \
+                 with `move` and return the updated one, or use `borrow` to read it.",
+            );
+        }
+        // The mode is returned unchanged even when refused. Rewriting it to
+        // something implementable would make the body and the call sites check
+        // against a signature nobody wrote — a `borrow mut` body writing to
+        // its parameter would collect a spurious "cannot assign" on top of the
+        // real problem. The program is already rejected; every other
+        // diagnostic it collects should still be about what it said.
+        param.ownership
     }
 
     /// The name a callable is known by.
@@ -319,14 +417,31 @@ impl<'a> Analyzer<'a> {
         // to it would change nothing the caller could see, and letting it look
         // like it might would be worse than refusing.
         if let Some(owner) = callable.receiver {
-            ctx.declare("self", Type::Struct(owner), false);
+            ctx.declare_param(
+                "self",
+                Type::Struct(owner),
+                false,
+                OwnershipMode::BorrowRead,
+            );
             ctx.receiver = Some(owner);
         }
-        // Parameters become the next locals.
-        for param in &function.params {
+        // Parameters become the next locals, each carrying the mode its
+        // declaration asked for. Reading the mode off the signature rather
+        // than off the syntax again keeps the `borrow mut` refusal from being
+        // reported a second time here.
+        let param_modes = self.sigs[id.0 as usize].param_ownership.clone();
+        let receiver_slots = usize::from(callable.receiver.is_some());
+        for (index, param) in function.params.iter().enumerate() {
             let ty = self.resolve_type(param.ty.name, param.ty.span);
             let name = self.interner.resolve(param.name).to_owned();
-            ctx.declare(&name, ty, false);
+            let mode = param_modes
+                .get(index + receiver_slots)
+                .copied()
+                .unwrap_or(OwnershipMode::Owned);
+            // A `borrow mut` parameter is the only kind a body may write
+            // through; every other parameter is an immutable binding.
+            let mutable = mode == OwnershipMode::BorrowMut;
+            ctx.declare_param(&name, ty, mutable, mode);
         }
         let param_count = function.params.len() as u32 + u32::from(callable.receiver.is_some());
         let body = self.analyze_block(&mut ctx, &function.body);
@@ -412,6 +527,11 @@ impl<'a> Analyzer<'a> {
         let id = *self.sig_index.get(name)?;
         let sig = &self.sigs[id.0 as usize];
         Some((id, &sig.params, sig.return_type))
+    }
+
+    /// The ownership mode each parameter of `id` declares, receiver included.
+    pub(crate) fn param_ownership(&self, id: FuncId) -> Vec<OwnershipMode> {
+        self.sigs[id.0 as usize].param_ownership.clone()
     }
 
     /// Resolves a written type name to a builtin or a declared struct.
