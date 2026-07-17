@@ -70,6 +70,13 @@ pub(crate) struct Analyzer<'a> {
     /// site analyzes the default it needs, so a default that is never needed is
     /// never analyzed, and each use gets its own diagnostics.
     pub(crate) struct_defaults: Vec<Vec<Option<ExprId>>>,
+    /// Each declared enum's per-variant payload defaults, as written, indexed
+    /// by [`kira_semantics_model::EnumId`] and then by variant index.
+    ///
+    /// Kept beside the table for the same reason `struct_defaults` is: a default
+    /// is unanalyzed syntax, and the table is a model type that carries none. A
+    /// construction site analyzes only the default it needs.
+    pub(crate) enum_defaults: Vec<Vec<Option<ExprId>>>,
     pub(crate) program: HirProgram,
     pub(crate) diagnostics: Vec<Diagnostic>,
 }
@@ -231,12 +238,16 @@ impl<'a> Analyzer<'a> {
             sigs: Vec::new(),
             sig_index: HashMap::new(),
             struct_defaults: Vec::new(),
+            enum_defaults: Vec::new(),
             program: HirProgram::default(),
             diagnostics: Vec::new(),
         }
     }
 
     fn run(mut self) -> Analysis {
+        // Enums are declared before structs, so a struct field may name one; a
+        // struct is declared before signatures, so a parameter may name either.
+        self.collect_enums();
         self.collect_structs();
         let callables = self.callables();
         self.collect_signatures(&callables);
@@ -282,7 +293,7 @@ impl<'a> Analyzer<'a> {
                         });
                     }
                 }
-                Item::Unsupported(_) => {}
+                Item::Enum(_) | Item::Unsupported(_) => {}
             }
         }
         callables

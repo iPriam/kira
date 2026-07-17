@@ -233,6 +233,7 @@ fn assert_parity(source: &str) {
 mod arrays;
 mod calls;
 mod control_flow;
+mod enums;
 mod floats;
 mod memory;
 mod ownership;

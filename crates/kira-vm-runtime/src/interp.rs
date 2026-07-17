@@ -282,6 +282,7 @@ impl Vm<'_> {
                 // restating a rule rather than the first place it is enforced.
                 Value::Struct(_) => return Err(VmError::StructAtSeam { function: id }),
                 Value::Array(_) => return Err(VmError::ArrayAtSeam { function: id }),
+                Value::Enum(_) => return Err(VmError::EnumAtSeam { function: id }),
             });
         }
         let returned = self
@@ -454,6 +455,24 @@ impl Vm<'_> {
                 let count = i64::try_from(len).map_err(|_| VmError::ArrayTooLong)?;
                 self.heap.drop_value(base);
                 self.stack.push(Value::Int(count));
+            }
+            Instruction::NewEnum { tag, has_payload } => {
+                // The payload, when present, was pushed last, so it comes off
+                // first and the box takes ownership of it — nothing is copied
+                // and nothing is left on the stack to double-free.
+                let payload = if has_payload { Some(self.pop()?) } else { None };
+                let id = self.heap.alloc_enum(u32::from(tag), payload);
+                self.stack.push(Value::Enum(id));
+            }
+            Instruction::EnumTag => {
+                let base = self.pop()?;
+                let Value::Enum(id) = base else {
+                    self.heap.drop_value(base);
+                    return Err(VmError::NotAnEnum);
+                };
+                let tag = self.heap.enum_tag(id).ok_or(VmError::NotAnEnum)?;
+                self.heap.drop_value(base);
+                self.stack.push(Value::Int(i64::from(tag)));
             }
             Instruction::Jump(target) => self.jump(module, frame, target)?,
             Instruction::JumpIfFalse(target) => {

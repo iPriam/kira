@@ -8,7 +8,7 @@
 //! entrypoint.
 
 use kira_runtime_abi::Execution;
-use kira_semantics_model::{StructId, Type, TypeTable};
+use kira_semantics_model::{EnumId, StructId, Type, TypeTable};
 use la_arena::{Arena, Idx};
 
 /// The typed binary operators, reused from the analyzer's instruction
@@ -71,10 +71,11 @@ impl IrProgram {
             IrExpr::Binary { op, .. } => binop_result(*op),
             IrExpr::Call { result, .. } => *result,
             IrExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
+            IrExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),
             IrExpr::Field { ty, .. } | IrExpr::ArrayNew { ty, .. } | IrExpr::Index { ty, .. } => {
                 *ty
             }
-            IrExpr::ArrayLen { .. } => Type::Int,
+            IrExpr::ArrayLen { .. } | IrExpr::EnumTag { .. } => Type::Int,
             IrExpr::ArrayAppend { .. } => Type::Void,
         }
     }
@@ -330,6 +331,21 @@ pub enum IrExpr {
         struct_id: StructId,
         /// One initializer per field, in declaration order.
         fields: Vec<IrExprId>,
+    },
+    /// Construction of an enum value: a variant (by `tag`) plus its optional
+    /// single payload, defaults already filled in by analysis.
+    EnumNew {
+        /// The enum being built.
+        enum_id: EnumId,
+        /// The variant's declaration index — its discriminant.
+        tag: u32,
+        /// The payload value, or `None` for a payload-less variant.
+        payload: Option<IrExprId>,
+    },
+    /// An enum value's discriminant tag, as an `Int` (`e`'s variant index).
+    EnumTag {
+        /// The enum-typed expression whose tag is read.
+        value: IrExprId,
     },
     /// A read of one field of a struct value.
     Field {

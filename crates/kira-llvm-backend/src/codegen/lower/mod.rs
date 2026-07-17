@@ -126,8 +126,10 @@ impl<'a> Codegen<'a> {
                 // A fresh array slot holds the null handle, which the runtime's
                 // `array_len` reads as `0` and `array_free` treats as nothing to
                 // free — so a slot is reclaimable through the same path before
-                // its first store, exactly as a `String`'s null handle is.
-                Type::String | Type::Array(_) => LLVMConstPointerNull(llvm_type),
+                // its first store, exactly as a `String`'s null handle is. An
+                // enum handle is the same: `kira_rt_enum_free` treats null as
+                // nothing to free.
+                Type::String | Type::Array(_) | Type::Enum(_) => LLVMConstPointerNull(llvm_type),
                 // Every field zeroed, which for a `String` field is the null
                 // handle the runtime already reads as `""` — so a fresh struct
                 // slot is free-able through the same path as any other, with no

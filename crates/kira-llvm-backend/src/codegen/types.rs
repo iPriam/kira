@@ -82,6 +82,10 @@ pub(crate) struct Runtime {
     pub(super) array_push_slot: Callable,
     pub(super) array_clone: Callable,
     pub(super) array_free: Callable,
+    pub(super) enum_new: Callable,
+    pub(super) enum_tag: Callable,
+    pub(super) enum_clone: Callable,
+    pub(super) enum_free: Callable,
     pub(super) trap_div_zero: Callable,
     /// The version marker every emitted program references; see
     /// [`kira_runtime_abi::RUNTIME_ABI_MARKER`].
@@ -161,6 +165,20 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 types.void,
                 &mut [types.ptr, types.i64, types.ptr],
             ),
+            // The enum helpers box a tag plus a type-erased one-word payload,
+            // with a flag saying whether that word is an owned string handle to
+            // clone/free. One declaration each serves every enum type. Appended
+            // after the array helpers, which is what makes them not an ABI
+            // change.
+            enum_new: declare(
+                c"kira_rt_enum_new",
+                types.ptr,
+                // (tag, owns_str, payload)
+                &mut [types.i64, types.i64, types.i64],
+            ),
+            enum_tag: declare(c"kira_rt_enum_tag", types.i64, &mut [types.ptr]),
+            enum_clone: declare(c"kira_rt_enum_clone", types.ptr, &mut [types.ptr]),
+            enum_free: declare(c"kira_rt_enum_free", types.void, &mut [types.ptr]),
             trap_div_zero: declare(c"kira_rt_trap_div_zero", types.void, &mut []),
             abi_marker: declare(&abi_marker_symbol(), types.void, &mut []),
             call_runtime: declare(

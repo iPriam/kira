@@ -166,6 +166,22 @@ pub enum Instruction {
         /// Steps to walk, outermost first; may be empty.
         path: PlacePath,
     },
+    /// Push an enum value: a variant `tag`, taking a payload off the stack when
+    /// `has_payload` is set.
+    ///
+    /// The VM is structurally typed, so this carries only what the runtime
+    /// needs to build the box — the discriminant, and whether one value on the
+    /// stack belongs to it. The payload is an ordinary [`crate::op`] value, so a
+    /// string payload is a heap handle the enum takes ownership of, exactly as a
+    /// struct field does.
+    NewEnum {
+        /// The variant's declaration index — its discriminant.
+        tag: u16,
+        /// Whether a payload value sits on top of the stack for this variant.
+        has_payload: bool,
+    },
+    /// Pop an enum, push its discriminant `tag` as an `Int`, and drop the enum.
+    EnumTag,
 }
 
 /// One step of a [`PlacePath`].
@@ -333,6 +349,10 @@ mod opcode {
     pub const ARRAY_LEN: u8 = 0x32;
     pub const STORE_PLACE: u8 = 0x33;
     pub const ARRAY_APPEND: u8 = 0x34;
+    // Enums. Appended after the array opcodes, which is where the set ended
+    // before them; adding an opcode is not an ABI change.
+    pub const NEW_ENUM: u8 = 0x35;
+    pub const ENUM_TAG: u8 = 0x36;
 }
 
 /// An error decoding a byte stream back into instructions.
@@ -426,10 +446,16 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.push(o::ARRAY_APPEND);
             encode_place(*slot, path, out);
         }
+        Instruction::NewEnum { tag, has_payload } => {
+            out.push(o::NEW_ENUM);
+            out.extend_from_slice(&tag.to_le_bytes());
+            out.push(u8::from(*has_payload));
+        }
         // Nullary instructions: one exhaustive arm each, so encoding is total
         // by construction (no fallthrough, no panic path).
         Instruction::ArrayGet => out.push(o::ARRAY_GET),
         Instruction::ArrayLen => out.push(o::ARRAY_LEN),
+        Instruction::EnumTag => out.push(o::ENUM_TAG),
         Instruction::ConstVoid => out.push(o::CONST_VOID),
         Instruction::Pop => out.push(o::POP),
         Instruction::NegInt => out.push(o::NEG_INT),
@@ -565,6 +591,11 @@ impl Cursor<'_> {
                 let (slot, path) = self.next_place(opcode_offset)?;
                 Instruction::ArrayAppend { slot, path }
             }
+            o::NEW_ENUM => {
+                let tag = u16::from_le_bytes(self.take()?);
+                let has_payload = self.take::<1>()?[0] != 0;
+                Instruction::NewEnum { tag, has_payload }
+            }
             other => nullary_from_opcode(other).ok_or(DecodeError::UnknownOpcode {
                 opcode: other,
                 offset: opcode_offset,
@@ -644,6 +675,7 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::NE_STR => Instruction::NeStr,
         o::ARRAY_GET => Instruction::ArrayGet,
         o::ARRAY_LEN => Instruction::ArrayLen,
+        o::ENUM_TAG => Instruction::EnumTag,
         o::PRINT => Instruction::Print,
         o::RETURN => Instruction::Return,
         o::RETURN_VOID => Instruction::ReturnVoid,
@@ -652,44 +684,5 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn round_trips_a_mixed_instruction_stream() {
-        let code = vec![
-            Instruction::ConstInt(-42),
-            Instruction::ConstFloat(3.5),
-            Instruction::ConstBool(true),
-            Instruction::ConstStr(7),
-            Instruction::LoadLocal(3),
-            Instruction::StoreLocal(9),
-            Instruction::AddInt,
-            Instruction::ConcatStr,
-            Instruction::JumpIfFalse(12),
-            Instruction::Jump(0),
-            Instruction::Call(2),
-            Instruction::Print,
-            Instruction::ReturnVoid,
-            Instruction::Return,
-        ];
-        let bytes = encode(&code);
-        assert_eq!(decode(&bytes).unwrap(), code);
-    }
-
-    #[test]
-    fn unknown_opcode_is_reported() {
-        let err = decode(&[0xff]).unwrap_err();
-        assert!(matches!(
-            err,
-            DecodeError::UnknownOpcode { opcode: 0xff, .. }
-        ));
-    }
-
-    #[test]
-    fn truncated_operand_is_reported() {
-        // CONST_INT opcode with no following 8-byte payload.
-        let err = decode(&[0x01, 0x00]).unwrap_err();
-        assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
-    }
-}
+#[path = "op_tests.rs"]
+mod tests;

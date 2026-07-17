@@ -125,9 +125,10 @@ impl<'a> Lowering<'a> {
             Type::Int => Some(ValType::I64),
             Type::Float => Some(ValType::F64),
             Type::Bool => Some(ValType::I32),
-            // All three are addresses; `value_of` widens them to the memory's
-            // width. An array's value is its header's address.
-            Type::String | Type::Struct(_) | Type::Array(_) => Some(ValType::I32),
+            // All four are addresses; `value_of` widens them to the memory's
+            // width. An array's value is its header's address, and an enum's is
+            // its box's.
+            Type::String | Type::Struct(_) | Type::Array(_) | Type::Enum(_) => Some(ValType::I32),
             Type::Void => None,
             Type::Error => return Err(WasmError::ErrorType),
         })
@@ -137,9 +138,14 @@ impl<'a> Lowering<'a> {
     /// module's address width.
     fn value_of(&self, ty: Type, addr: ValType) -> Result<Option<ValType>, WasmError> {
         Ok(match Self::val_type(ty)? {
-            // A `String`, a struct, and an array are addresses, so all three
+            // A `String`, a struct, an array, and an enum are addresses, so all
             // are as wide as the memory is.
-            Some(ValType::I32) if matches!(ty, Type::String | Type::Struct(_) | Type::Array(_)) => {
+            Some(ValType::I32)
+                if matches!(
+                    ty,
+                    Type::String | Type::Struct(_) | Type::Array(_) | Type::Enum(_)
+                ) =>
+            {
                 Some(addr)
             }
             other => other,
@@ -206,6 +212,55 @@ impl<'a> Lowering<'a> {
             func.local_get(object);
             self.expr(func, function, field)?;
             store_field(func, ty, addr, offset)?;
+        }
+
+        func.local_get(object);
+        self.depth -= 1;
+        Ok(())
+    }
+
+    /// Builds an enum box and leaves its address on the stack.
+    ///
+    /// The box is a fixed 16 bytes: the discriminant as an `i64` at offset 0 —
+    /// wide on both memories so a tag read is one `i64.load` — and the optional
+    /// payload at offset 8. Allocate, then fill, the same shape a struct build
+    /// uses: the address is parked in a scratch local while the payload is
+    /// evaluated. The heap never frees, so nothing here has to.
+    fn enum_new(
+        &mut self,
+        func: &mut Func,
+        function: &IrFunction,
+        enum_id: kira_semantics_model::EnumId,
+        tag: u32,
+        payload: Option<IrExprId>,
+    ) -> Result<(), WasmError> {
+        let box_size: i32 = 16;
+        let depth = self.depth;
+        let object = *self.scratch.get(depth).ok_or(WasmError::Wiring)?;
+        self.depth += 1;
+
+        func.i32_const(box_size).i32_to_addr();
+        func.call(self.runtime.alloc);
+        func.local_set(object);
+
+        // The discriminant, as an `i64` at offset 0.
+        func.local_get(object);
+        func.i64_const(i64::from(tag));
+        func.i64_store(0);
+
+        if let Some(payload) = payload {
+            let payload_ty = self
+                .program
+                .types
+                .enums()
+                .get(enum_id)
+                .and_then(|def| def.variant(tag))
+                .and_then(|variant| variant.payload)
+                .ok_or(WasmError::Wiring)?;
+            let addr = func.addr();
+            func.local_get(object);
+            self.expr(func, function, payload)?;
+            store_field(func, payload_ty, addr, 8)?;
         }
 
         func.local_get(object);
@@ -385,6 +440,22 @@ impl<'a> Lowering<'a> {
                 // Copied out for the same reason a field read is: the array
                 // owns its elements.
                 self.copy_if_mutable(func, ty)?;
+            }
+            IrExpr::EnumNew {
+                enum_id,
+                tag,
+                payload,
+            } => {
+                let (enum_id, tag, payload) = (*enum_id, *tag, *payload);
+                self.enum_new(func, function, enum_id, tag, payload)?;
+            }
+            IrExpr::EnumTag { value } => {
+                let value = *value;
+                // The enum's box address is on the stack; its tag is the i64 at
+                // offset 0. Reading it shares nothing and frees nothing — an
+                // enum is immutable and the wasm heap never frees.
+                self.expr(func, function, value)?;
+                func.i64_load(0);
             }
             IrExpr::ArrayLen { array } => {
                 let array = *array;
@@ -577,10 +648,10 @@ impl<'a> Lowering<'a> {
                         let empty = self.literals.intern("");
                         func.addr_const(empty)
                     }
-                    // Analysis rejects printing a struct or an array — neither
-                    // has a rendering the language pins — so a program that
+                    // Analysis rejects printing a struct, an array, or an enum —
+                    // none has a rendering the language pins — so a program that
                     // type-checked never reaches this.
-                    Type::Struct(_) | Type::Array(_) => {
+                    Type::Struct(_) | Type::Array(_) | Type::Enum(_) => {
                         return Err(WasmError::UnprintableStruct);
                     }
                     Type::Error => return Err(WasmError::ErrorType),

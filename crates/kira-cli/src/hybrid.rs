@@ -190,6 +190,11 @@ fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridError> {
         // an array cross, and what is missing is the ownership answer at the
         // boundary, not a place to put it.
         Type::Array(_) => BridgeValueTag::ARRAY,
+        // Described, not carried, for the same reason a struct is: an enum is a
+        // tagged value that does not fit one tag and one word, and how it would
+        // cross is a language decision nobody has made. A `@Runtime` function
+        // may merely mention one in its signature.
+        Type::Enum(_) => BridgeValueTag::ENUM,
         // A verified IR carries no `Error` type — reaching one means the
         // frontend let a broken program through, which is a compiler bug, not
         // something to encode into an artifact.

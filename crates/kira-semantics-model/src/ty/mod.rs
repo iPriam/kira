@@ -7,10 +7,12 @@
 //! table rather than an inline shape.
 
 pub mod arrays;
+pub mod enums;
 pub mod structs;
 pub mod table;
 
 pub use arrays::{ArrayId, ArrayTable};
+pub use enums::{EnumDef, EnumId, EnumTable, VariantDef};
 pub use structs::{FieldDef, StructDef, StructId, StructTable};
 pub use table::TypeTable;
 
@@ -37,6 +39,11 @@ pub enum Type {
     /// The indirection is what keeps `Type` `Copy`: `[Int]` is a `u32`, not a
     /// boxed element type. The table interns, so `[Int] == [Int]`.
     Array(ArrayId),
+    /// A declared enum, named by its row in the program's [`EnumTable`].
+    ///
+    /// Like a struct, an enum is a nominal type: two enums with the same
+    /// variants are still distinct, so this compares by [`EnumId`].
+    Enum(EnumId),
 }
 
 impl Type {
@@ -89,6 +96,9 @@ impl Type {
     /// naming a separator, a bracket, or how a nested array renders. Every one
     /// of those is a decision the language has not made, so this refuses rather
     /// than making them. An array prints through `for x in xs { print(x) }`.
+    /// An enum is not printable for the same reason as a struct and an array:
+    /// the corpus pins no rendering for one, so any text invented here would be
+    /// inventing language surface.
     pub fn is_printable(self) -> bool {
         matches!(self, Type::Int | Type::Float | Type::Bool | Type::String)
     }
@@ -131,7 +141,10 @@ impl Type {
             // An expression that already failed to analyze must not also
             // collect an ownership diagnostic on top of its type error.
             Type::Error => true,
-            Type::String | Type::Struct(_) | Type::Array(_) => false,
+            // An enum answers exactly as an array does: not trivially copyable
+            // (a named enum local needs `move` into an owned parameter) and yet
+            // it moves on bind.
+            Type::String | Type::Struct(_) | Type::Array(_) | Type::Enum(_) => false,
         }
     }
 
@@ -144,13 +157,14 @@ impl Type {
     /// pointing at one object. Marking the source moved turns that aliasing
     /// into `KSEM107` instead of a use-after-free.
     ///
-    /// **`Type::Array` is the first and so far only `true`.** A struct
-    /// deep-copies when bound and a `String` clones its bytes, so neither can
-    /// alias and neither has anything to enforce. An array is the type the
-    /// predicate was written for.
+    /// **An array and an enum are the two `true` cases.** Both lower to a
+    /// shared heap handle, so `let alias = value` would leave two owners
+    /// pointing at one object; marking the source moved turns that aliasing
+    /// into `KSEM107`. A struct deep-copies when bound and a `String` clones
+    /// its bytes, so neither can alias and neither has anything to enforce.
     pub fn moves_on_bind(self) -> bool {
         match self {
-            Type::Array(_) => true,
+            Type::Array(_) | Type::Enum(_) => true,
             Type::Int
             | Type::Float
             | Type::Bool

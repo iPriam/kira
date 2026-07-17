@@ -1,0 +1,166 @@
+//! Semantic-analysis tests for enums: declaration, leading-dot resolution, tag
+//! equality, payloads and defaults, and the ownership rules an enum shares with
+//! an array.
+
+use super::codes;
+
+#[test]
+fn a_payload_less_enum_and_its_equality_type_check() {
+    assert!(
+        codes(
+            "enum Color { Red Green Blue }\n\
+             function rank(c: Color) -> Int { if c == .Red { return 1 } return 2 }\n\
+             @Main function main() { print(rank(.Green)) return }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_leading_dot_needs_an_enum_type_to_resolve_against() {
+    // No expected type at all: a bare `.Red` in a `print` argument.
+    assert_eq!(
+        codes("enum Color { Red }\n@Main function main() { print(.Red) return }"),
+        // The unresolved dot, then the unprintable-value error on the Error node
+        // does not fire because the argument already errored — one diagnostic.
+        vec!["KSEM119"]
+    );
+}
+
+#[test]
+fn a_leading_dot_against_a_non_enum_type_is_refused() {
+    assert_eq!(
+        codes("@Main function main() { let x: Int = .Red return }"),
+        vec!["KSEM119"]
+    );
+}
+
+#[test]
+fn an_unknown_variant_is_reported() {
+    assert_eq!(
+        codes(
+            "enum Color { Red Green }\n\
+             @Main function main() { let c: Color = .Purple return }"
+        ),
+        vec!["KSEM120"]
+    );
+}
+
+#[test]
+fn a_duplicate_enum_and_a_duplicate_variant_are_reported() {
+    assert_eq!(
+        codes("enum C { A }\nenum C { B }\n@Main function main() { return }"),
+        vec!["KSEM006"]
+    );
+    assert_eq!(
+        codes("enum C { A A }\n@Main function main() { return }"),
+        vec!["KSEM007"]
+    );
+}
+
+#[test]
+fn a_payload_less_variant_takes_no_argument() {
+    assert_eq!(
+        codes(
+            "enum C { A B }\n\
+             @Main function main() { let c: C = .A(1) return }"
+        ),
+        vec!["KSEM121"]
+    );
+}
+
+#[test]
+fn a_payload_variant_uses_its_default_when_none_is_written() {
+    assert!(
+        codes(
+            "enum E { Bad: String = \"oops\" Ok }\n\
+             function code(e: E) -> Int { if e == .Ok { return 0 } return 1 }\n\
+             @Main function main() { print(code(.Bad)) return }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_payload_variant_without_an_argument_or_default_is_reported() {
+    assert_eq!(
+        codes(
+            "enum E { Wrap(Int) }\n\
+             @Main function main() { let e: E = .Wrap return }"
+        ),
+        vec!["KSEM124"]
+    );
+}
+
+#[test]
+fn a_payload_of_the_wrong_type_is_reported() {
+    assert_eq!(
+        codes(
+            "enum E { Wrap(Int) }\n\
+             @Main function main() { let e: E = .Wrap(\"no\") return }"
+        ),
+        vec!["KSEM123"]
+    );
+}
+
+#[test]
+fn a_non_scalar_payload_is_refused_at_the_declaration() {
+    // A nested-enum payload resolves to an enum type and is then refused: the
+    // box carries one type-erased word, and an aggregate has no form there yet.
+    // (A struct payload cannot even resolve — structs are declared after enums,
+    // so it is an unknown type, KSEM050 — which is refusal enough.)
+    assert_eq!(
+        codes(
+            "enum Inner { A }\n\
+             enum E { Wrap(Inner) }\n\
+             @Main function main() { return }"
+        ),
+        vec!["KSEM118"]
+    );
+}
+
+#[test]
+fn an_enum_moves_on_binding_like_an_array() {
+    // `let alias = e` consumes `e`; touching it after is use-after-move — the
+    // same rule an array follows, driven by the shared `moves_on_bind`.
+    assert_eq!(
+        codes(
+            "enum C { A B }\n\
+             @Main function main() { let e: C = .A\n let alias = e\n let again: C = e return }"
+        ),
+        vec!["KSEM107"]
+    );
+}
+
+#[test]
+fn passing_a_named_enum_to_an_owned_parameter_needs_move() {
+    // An enum is not trivially copyable, so a *named* enum local reaches an
+    // owned parameter only with `move` — a fresh `.Variant` needs nothing.
+    assert_eq!(
+        codes(
+            "enum C { A }\n\
+             function take(c: C) -> Int { return 0 }\n\
+             @Main function main() { let e: C = .A\n print(take(e)) return }"
+        ),
+        vec!["KSEM108"]
+    );
+    assert!(
+        codes(
+            "enum C { A }\n\
+             function take(c: C) -> Int { return 0 }\n\
+             @Main function main() { let e: C = .A\n print(take(move e)) return }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn an_enum_cannot_be_printed() {
+    assert_eq!(
+        codes(
+            "enum C { A }\n\
+             @Main function main() { let e: C = .A\n print(e) return }"
+        ),
+        vec!["KSEM081"]
+    );
+}

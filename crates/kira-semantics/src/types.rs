@@ -73,6 +73,9 @@ impl Analyzer<'_> {
         if let Some(id) = self.program.types.structs().lookup(&text) {
             return Type::Struct(id);
         }
+        if let Some(id) = self.program.types.enums().lookup(&text) {
+            return Type::Enum(id);
+        }
         match context {
             NameContext::Field { owner } => self.report_unknown_field_type(owner, &text, span),
             NameContext::Ordinary => self.emit(
@@ -80,7 +83,7 @@ impl Analyzer<'_> {
                 "KSEM050",
                 format!(
                     "unknown type `{text}` (v0 supports Int, Float, Bool, String, Void, \
-                     declared structs, and arrays of those)"
+                     declared structs and enums, and arrays of those)"
                 ),
             ),
         }

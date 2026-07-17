@@ -1,0 +1,97 @@
+// Enums: a value that is one of a fixed set of named variants, each optionally
+// carrying a single payload.
+//
+// A variant is written with a leading dot — `.Red`, `.Text("hi")` — and what it
+// resolves against is the type expected at that position: a `let` annotation, a
+// parameter, a return type, a struct field, or the other side of a comparison.
+// So `.Red` alone is not a value; `let c: Color = .Red` is.
+//
+// The one thing you can *do* with an enum here is compare it: `==` and `!=`
+// compare discriminants, so `c == .Red` asks which variant `c` is. (Reading a
+// payload back out is `match`, a separate feature.)
+//
+// Like an array, an enum is a heap value that moves on binding: `let b = a`
+// consumes `a`. Unlike a struct, it is not copied — so passing a named enum to
+// an owned parameter needs `move`, while a fresh `.Variant` needs nothing.
+
+enum Color { Red Green Blue }
+
+// A payload carries one value. The `: Type = default` form supplies a value
+// used when the variant is built with none (`.InvalidFormat`); the `(Type)`
+// form has no default (`.Text("hi")`).
+enum Message {
+    Empty
+    Text(String)
+    InvalidFormat: String = "not the expected format"
+}
+
+struct Tagged {
+    let color: Color
+    let weight: Int
+}
+
+// An owned enum parameter; a fresh `.Variant` argument needs no `move`.
+function rank(c: Color) -> Int {
+    if c == .Red {
+        return 1
+    }
+    if c == .Green {
+        return 2
+    }
+    return 3
+}
+
+// A `borrow` reads the enum without consuming it, so the caller keeps it.
+function score(t: borrow Tagged) -> Int {
+    return rank(t.color) * 10 + t.weight
+}
+
+function message_code(m: Message) -> Int {
+    if m == .Empty {
+        return 0
+    }
+    if m == .Text("") {
+        return 1
+    }
+    return 2
+}
+
+@Main
+function main() {
+    // Every variant, ranked by `==`.
+    print(rank(.Red))
+    print(rank(.Green))
+    print(rank(.Blue))
+
+    // Inequality, and an enum stored in a struct field.
+    let a: Color = .Red
+    let b: Color = .Blue
+    if a != b {
+        print(1)
+    }
+    let tagged = Tagged { color: .Green, weight: 5 }
+    print(score(tagged))
+
+    // A `var` reassigned to fresh variants, its type fixed by the annotation.
+    var here: Color = .Red
+    here = .Blue
+    print(rank(here))
+
+    // A payload variant: built, moved, and dropped. The default fills the
+    // omitted payload of `.InvalidFormat`.
+    let text: Message = .Text("hello")
+    print(message_code(move text))
+    print(message_code(.InvalidFormat))
+
+    // An array of enums: each element resolves against the element type, and a
+    // read is an independent enum whose tag compares.
+    let palette: [Color] = [.Blue, .Green, .Red]
+    var sum = 0
+    var i = 0
+    while i < palette.count {
+        sum = sum + rank(palette[i])
+        i = i + 1
+    }
+    print(sum)
+    return
+}

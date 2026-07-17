@@ -180,7 +180,7 @@ pub fn field_size(ty: Type, addr: AddrType) -> Result<u32, WasmError> {
         Type::Bool => 4,
         // A pointer, as wide as the memory is. An array is one too: its
         // value is its header's address.
-        Type::String | Type::Struct(_) | Type::Array(_) => match addr.val() {
+        Type::String | Type::Struct(_) | Type::Array(_) | Type::Enum(_) => match addr.val() {
             ValType::I64 => 8,
             _ => 4,
         },
@@ -206,7 +206,7 @@ pub fn load_field(
         Type::Bool => {
             func.i32_load(offset);
         }
-        Type::String | Type::Struct(_) | Type::Array(_) => match addr.val() {
+        Type::String | Type::Struct(_) | Type::Array(_) | Type::Enum(_) => match addr.val() {
             ValType::I64 => {
                 func.i64_load(offset);
             }
@@ -238,7 +238,7 @@ pub fn store_field(
         Type::Bool => {
             func.i32_store(offset);
         }
-        Type::String | Type::Struct(_) | Type::Array(_) => match addr.val() {
+        Type::String | Type::Struct(_) | Type::Array(_) | Type::Enum(_) => match addr.val() {
             ValType::I64 => {
                 func.i64_store(offset);
             }

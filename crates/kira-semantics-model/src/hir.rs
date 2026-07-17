@@ -6,7 +6,7 @@
 //! to each other by index, so no HIR type carries a lifetime. Local indices
 //! are scoped to their owning function.
 
-use crate::ty::{StructId, Type, TypeTable};
+use crate::ty::{EnumId, StructId, Type, TypeTable};
 use kira_runtime_abi::Execution;
 use kira_source::Span;
 use kira_syntax_model::ownership::OwnershipMode;
@@ -297,6 +297,31 @@ pub enum HirExpr {
         /// The element to push.
         value: HirExprId,
     },
+    /// Construction of an enum value: a variant of an enum, with its optional
+    /// single payload.
+    ///
+    /// The `tag` is the variant's declaration index — the discriminant `==`
+    /// compares and the runtime value stores. A payload-less variant carries
+    /// `None`; a payload variant carries the value to box, which analysis has
+    /// already filled from the variant's default when the site wrote none.
+    EnumNew {
+        /// The enum being built.
+        enum_id: EnumId,
+        /// The variant's declaration index.
+        tag: u32,
+        /// The payload value, or `None` for a payload-less variant.
+        payload: Option<HirExprId>,
+    },
+    /// An enum value's discriminant tag, as an `Int`.
+    ///
+    /// Enum equality is tag equality, so the analyzer lowers `e == .V` to an
+    /// `Int` comparison of two tags — this is how it reads one off an enum
+    /// whose variant is only known at run time. A backend extracts the tag and
+    /// releases the enum, exactly as `.count` does for an array.
+    EnumTag {
+        /// The enum-typed expression whose tag is read.
+        value: HirExprId,
+    },
     /// A placeholder for an expression that failed to analyze.
     Error,
 }
@@ -317,9 +342,10 @@ impl HirExpr {
             | HirExpr::ArrayNew { ty, .. }
             | HirExpr::Index { ty, .. } => *ty,
             HirExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
-            // `.count` is an `Int` and `.append` yields nothing; neither has a
-            // type to carry, because neither has one that can vary.
-            HirExpr::ArrayLen { .. } => Type::Int,
+            HirExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),
+            // `.count` and a tag read are both `Int`; `.append` yields nothing.
+            // None has a type that can vary, so none carries one.
+            HirExpr::ArrayLen { .. } | HirExpr::EnumTag { .. } => Type::Int,
             HirExpr::ArrayAppend { .. } => Type::Void,
             HirExpr::Error => Type::Error,
         }

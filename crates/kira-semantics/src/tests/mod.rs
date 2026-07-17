@@ -2,6 +2,7 @@
 //! through the same salsa `analyzed` query the CLI and the LSP use.
 
 mod arrays;
+mod enums;
 
 use super::*;
 use kira_semantics_model::Type;
