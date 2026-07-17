@@ -56,6 +56,7 @@ fn vm_bundle() -> Bundle {
         }],
         0,
     )
+    .expect("a valid bundle")
 }
 
 /// A loopback address on an OS-assigned port.
@@ -83,9 +84,14 @@ impl Drop for TempDir {
 /// A child process that is killed when it goes out of scope.
 ///
 /// A test that spawns a process and leaves it running turns a failure into a
-/// hang, and this host has no `timeout` to bound one with. Killing on drop makes
-/// the hang impossible instead of merely unlikely: a panicking test still
-/// unwinds through here.
+/// hang, and this host has no `timeout` to bound one with. Killing on drop
+/// covers a test that *panics*, since the unwind runs this.
+///
+/// It does not cover a test that blocks, because a thread stuck in a syscall
+/// never unwinds and never drops anything. That gap is closed on the other side,
+/// by the server's own accept and read timeouts: the session fails on its own
+/// rather than waiting for a runner that will never speak. A guard here and a
+/// timeout there are not redundant — neither one covers the other's case.
 struct ChildGuard(Option<Child>);
 
 impl ChildGuard {
@@ -222,7 +228,8 @@ fn a_runner_the_bundle_is_not_for_is_refused() {
             bytes: printing_module().to_bytes(),
         }],
         0,
-    );
+    )
+    .expect("a valid bundle");
     let server = LiveServer::bind(loopback(), bundle).expect("bind");
     let address = server.local_addr().expect("addr");
 
@@ -277,7 +284,8 @@ fn a_session_whose_app_never_starts_is_not_ready() {
             bytes: module.to_bytes(),
         }],
         0,
-    );
+    )
+    .expect("a valid bundle");
     let dir = TempDir::new("never-starts");
     let server = LiveServer::bind(loopback(), bundle).expect("bind");
     let address = server.local_addr().expect("addr");
@@ -388,11 +396,46 @@ fn a_silent_runner_does_not_hang_the_server() {
     );
 }
 
-/// The server's read timeout is a real bound, not decoration.
+/// The session's timeouts are real bounds, not decoration.
+///
+/// Reads, writes, and the accept are each bounded, and each covers a distinct
+/// way a session can stop making progress: a runner that says nothing, one that
+/// stops reading, and one that never arrives.
 #[test]
-fn the_server_read_timeout_is_bounded() {
+fn every_wait_in_a_session_is_bounded() {
+    let ceiling = Duration::from_secs(60);
+    assert!(kira_live::server::READ_TIMEOUT <= ceiling);
+    assert!(kira_live::server::WRITE_TIMEOUT <= ceiling);
+    assert!(kira_live::server::ACCEPT_TIMEOUT <= ceiling);
+    assert!(kira_live::client::READ_TIMEOUT <= ceiling);
+    assert!(kira_live::client::WRITE_TIMEOUT <= ceiling);
+}
+
+/// A runner that never connects must fail the session rather than hang it.
+///
+/// This is the case that has no other backstop: nothing panics, so no guard
+/// drops, and a test process blocked in `accept` would sit there forever on a
+/// host with no `timeout` to kill it. The server's own accept bound is what
+/// makes a dead runner a failure instead of a wedged build.
+#[test]
+fn a_runner_that_never_connects_fails_the_session() {
+    let server = LiveServer::bind(loopback(), vm_bundle()).expect("bind");
+
+    // Deliberately no runner spawned: this is the runner-died-on-startup case.
+    // A short bound rather than the production one, so the give-up path is
+    // proven in milliseconds instead of half a minute.
+    let bound = Duration::from_millis(200);
+    let started = std::time::Instant::now();
+    let error = server
+        .serve_once_within(true, bound, &mut |_| {})
+        .expect_err("a session with no runner must not succeed");
+
     assert!(
-        kira_live::server::READ_TIMEOUT <= Duration::from_secs(60),
-        "a live session must not be able to wedge a build for a minute"
+        matches!(error, kira_live::ServerError::RunnerNeverConnected),
+        "got {error:?}"
+    );
+    assert!(
+        started.elapsed() >= bound,
+        "the session gave up before its own bound"
     );
 }

@@ -14,6 +14,17 @@
 //! milestones a session has actually observed and refuses to call a session
 //! ready until each required one has arrived, in order. A session that skips a
 //! milestone fails rather than rounding up.
+//!
+//! Be precise about what that buys, because it is easy to overclaim. The server
+//! enforces *ordering and ownership*: a runner cannot report a milestone before
+//! its predecessor, and cannot report one of the server's own. It does not
+//! enforce *honesty* — a runner that downloads a bundle, throws it away, and
+//! reports each milestone in order will be believed, because the server has no
+//! way to see inside it. That is not a hole to be plugged; it is where the trust
+//! boundary sits. The runner is the thing being trusted to run the app, so the
+//! evidence a session is real comes from the app's own observable behavior, not
+//! from the protocol. This is why the end-to-end tests assert on the app's
+//! stdout rather than on the milestones.
 
 use core::fmt;
 
