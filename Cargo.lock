@@ -500,6 +500,7 @@ version = "0.1.0"
 dependencies = [
  "kira-runtime-abi",
  "kira-source",
+ "kira-syntax-model",
  "la-arena",
 ]
 

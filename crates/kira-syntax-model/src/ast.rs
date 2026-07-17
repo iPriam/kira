@@ -6,6 +6,7 @@
 //! unparseable positions become [`Expr::Error`] / [`Stmt::Error`] / an
 //! [`Item::Unsupported`] node rather than aborting the parse.
 
+use crate::ownership::{OwnershipMode, OwnershipOp};
 use kira_core::Symbol;
 use kira_runtime_abi::Execution;
 use kira_source::Span;
@@ -138,7 +139,15 @@ pub struct Param {
     pub name: Symbol,
     /// Span of the name token.
     pub name_span: Span,
-    /// The declared parameter type.
+    /// How the parameter takes its argument.
+    ///
+    /// [`OwnershipMode::Owned`] when the type was written bare — an owned
+    /// parameter is the default, not a special case.
+    pub ownership: OwnershipMode,
+    /// Span of the written ownership prefix (`borrow mut`), absent when the
+    /// type was bare. Diagnostics point here to say where a mode came from.
+    pub ownership_span: Option<Span>,
+    /// The declared parameter type, with any ownership prefix stripped.
     pub ty: TypeRef,
     /// Span covering the whole parameter.
     pub span: Span,
@@ -424,6 +433,21 @@ pub enum Expr {
         /// Span covering base and field.
         span: Span,
     },
+    /// An ownership transfer written on an expression (`move mesh`,
+    /// `copy count`).
+    ///
+    /// `move` and `copy` are *contextual* identifiers, not reserved keywords:
+    /// this node exists only where the token is followed by something that
+    /// starts an operand, so `let move = 1` still declares a local named
+    /// `move`.
+    Ownership {
+        /// Which operator was written.
+        op: OwnershipOp,
+        /// The operand the transfer applies to.
+        operand: ExprId,
+        /// Span covering operator and operand.
+        span: Span,
+    },
     /// An expression the parser could not parse; recovery inserts this.
     Error {
         /// Span of the malformed expression.
@@ -463,6 +487,7 @@ impl Expr {
             | Expr::StructLit { span, .. }
             | Expr::MethodCall { span, .. }
             | Expr::Field { span, .. }
+            | Expr::Ownership { span, .. }
             | Expr::Error { span } => *span,
         }
     }

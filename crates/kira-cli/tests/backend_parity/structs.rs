@@ -130,15 +130,15 @@ struct Vec3 {
     var z: Int
 }
 
-function sum(v: Vec3) -> Int {
+function sum(v: borrow Vec3) -> Int {
     return v.x + v.y + v.z
 }
 
-function scaled(v: Vec3, k: Int) -> Vec3 {
+function scaled(v: borrow Vec3, k: Int) -> Vec3 {
     return Vec3 { x = v.x * k, y = v.y * k, z = v.z * k }
 }
 
-function bump(v: Vec3) -> Int {
+function bump(v: borrow Vec3) -> Int {
     // Mutating a parameter must not reach the caller's value.
     var local = v
     local.x = 1000
@@ -239,7 +239,7 @@ struct Point {
     var y: Int
 }
 
-function local_only(p: Point) -> Int {
+function local_only(p: borrow Point) -> Int {
     return p.x + p.y
 }
 

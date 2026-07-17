@@ -82,6 +82,12 @@ impl Analyzer<'_> {
                 ..
             } => {
                 let value = self.analyze_expr(ctx, init);
+                // Rust-style implicit move on bind: a binding whose value
+                // would otherwise alias its source consumes that source. No
+                // type in today's lattice does (structs deep-copy, strings
+                // clone), so this is a no-op until arrays land — see
+                // `Type::moves_on_bind`.
+                self.apply_binding_move(ctx, init, value);
                 let value_ty = self.program.expr(value).type_of();
                 let declared = ty.map(|type_ref| self.resolve_type(type_ref.name, type_ref.span));
                 let local_ty = match declared {

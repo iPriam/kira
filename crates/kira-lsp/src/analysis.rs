@@ -80,6 +80,35 @@ mod tests {
         assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
     }
 
+    /// Ownership reaches the editor for the same reason `for` did: the server
+    /// serves the compiler's own `analyzed` query, so a use-after-move
+    /// squiggles in an editor without the LSP learning that `move` exists.
+    #[test]
+    fn ownership_diagnostics_reach_the_editor() {
+        let clean = analyze(
+            "t.kira",
+            "struct Mesh { let id: Int }\n\
+             function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+             @Main function main() { let mesh = Mesh { id: 1 } print(consume(move mesh)) return }",
+        );
+        assert!(clean.diagnostics.is_empty(), "{:?}", clean.diagnostics);
+
+        let after_move = analyze(
+            "t.kira",
+            "struct Mesh { let id: Int }\n\
+             function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+             @Main function main() { let mesh = Mesh { id: 1 } \
+             print(consume(move mesh)) print(mesh.id) return }",
+        );
+        let diagnostic = after_move
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == Some("KSEM107"))
+            .expect("using a moved value is reported");
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
+    }
+
     #[test]
     fn a_clean_program_has_no_diagnostics() {
         let analysis = analyze("t.kira", "@Main function main() { print(1) return }");

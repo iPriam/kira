@@ -12,6 +12,7 @@
 
 mod analyze;
 mod decl;
+mod ownership;
 mod stmt;
 mod typeck;
 
@@ -373,6 +374,189 @@ mod tests {
     fn void_functions_are_exempt_from_definite_return() {
         let text = "function f() { print(1) }\n@Main function main() { f() return }";
         assert!(!codes(text).contains(&"KSEM033"));
+    }
+
+    // ----- ownership ----------------------------------------------------
+    //
+    // Each case below is a program the oracle's own fail-corpus or harness
+    // pins, ported to this subset. They are grouped here rather than in
+    // `ownership.rs` so one `codes()` harness serves them all.
+
+    /// A struct is not trivially copyable, so handing a named one to a
+    /// consuming parameter must say `move`.
+    ///
+    /// The oracle's `FsbOwnershipMissingMoveNamedNontrivial`.
+    #[test]
+    fn passing_a_named_struct_to_an_owned_parameter_requires_move() {
+        let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) { return }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } consume(mesh) return }";
+        assert_eq!(codes(text), vec!["KSEM108"]);
+        // …and writing `move` is what makes it legal.
+        let moved = "struct Mesh { let id: Int }\n\
+                     function consume(mesh: Mesh) { return }\n\
+                     @Main function main() { var mesh = Mesh { id: 1 } consume(move mesh) return }";
+        assert!(diagnostics(moved).is_empty());
+    }
+
+    /// A `String` owns its bytes, so it is not trivially copyable either.
+    #[test]
+    fn passing_a_named_string_to_an_owned_parameter_requires_move() {
+        let text = "function consume(s: String) { return }\n\
+                    @Main function main() { let s = \"hi\" consume(s) return }";
+        assert_eq!(codes(text), vec!["KSEM108"]);
+    }
+
+    /// A temporary has no binding to consume, so it needs no `move` — this is
+    /// why the rule is stated over *named* values.
+    #[test]
+    fn a_temporary_argument_never_needs_move() {
+        let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) { return }\n\
+                    @Main function main() { consume(Mesh { id: 1 }) return }";
+        assert!(diagnostics(text).is_empty());
+    }
+
+    /// A scalar is trivially copyable, so it passes bare.
+    #[test]
+    fn a_scalar_argument_never_needs_move() {
+        let text = "function consume(n: Int) { return }\n\
+                    @Main function main() { let n = 1 consume(n) return }";
+        assert!(diagnostics(text).is_empty());
+    }
+
+    /// The oracle's `FscOwnershipUseAfterMove`: reading a moved local is
+    /// KSEM107, the first of its three messages.
+    #[test]
+    fn using_a_moved_local_is_rejected() {
+        let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+                    function inspect(mesh: borrow Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { var mesh = Mesh { id: 3 } \
+                    print(consume(move mesh)) print(inspect(mesh)) return }";
+        assert_eq!(codes(text), vec!["KSEM107"]);
+    }
+
+    /// The oracle's `FsbOwnershipMoveTwice`.
+    #[test]
+    fn moving_the_same_local_twice_is_rejected() {
+        let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) { return }\n\
+                    @Main function main() { var mesh = Mesh { id: 5 } \
+                    consume(move mesh) consume(move mesh) return }";
+        assert_eq!(codes(text), vec!["KSEM110"]);
+    }
+
+    /// The oracle's `FsbOwnershipMoveBorrowedParam`: a borrow is not the
+    /// callee's to give away.
+    #[test]
+    fn a_borrowed_parameter_cannot_be_moved_onward() {
+        let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) { return }\n\
+                    function bad(mesh: borrow Mesh) { consume(move mesh) return }\n\
+                    @Main function main() { let mesh = Mesh { id: 9 } bad(mesh) return }";
+        assert_eq!(codes(text), vec!["KSEM111"]);
+    }
+
+    /// A `borrow` parameter does not take ownership, so `move` at the call
+    /// site is a contradiction rather than a redundancy.
+    #[test]
+    fn moving_into_a_borrow_parameter_is_rejected() {
+        let text = "struct Mesh { let id: Int }\n\
+                    function inspect(mesh: borrow Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { let mesh = Mesh { id: 1 } print(inspect(move mesh)) return }";
+        assert_eq!(codes(text), vec!["KSEM114"]);
+    }
+
+    /// A `copy` parameter does not consume its source, so `move` is likewise
+    /// a contradiction.
+    #[test]
+    fn moving_into_a_copy_parameter_is_rejected() {
+        let text = "function twice(n: copy Int) -> Int { return n + n }\n\
+                    @Main function main() { let n = 2 print(twice(move n)) return }";
+        assert_eq!(codes(text), vec!["KSEM115"]);
+    }
+
+    /// Passing a named non-trivial value to a `copy` parameter must say
+    /// `copy` — which then hits KSEM116, because there is no clone.
+    #[test]
+    fn a_copy_parameter_wants_an_explicit_copy_of_a_non_trivial_value() {
+        let text = "struct Mesh { let id: Int }\n\
+                    function duplicate(mesh: copy Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { let mesh = Mesh { id: 4 } print(duplicate(mesh)) return }";
+        assert_eq!(codes(text), vec!["KSEM113"]);
+    }
+
+    /// The oracle's `FsbOwnershipCopyNontrivialNotImplemented`. Kira reserves
+    /// `copy` but has no clone semantics, so writing it on a struct is an
+    /// error rather than a deep copy invented here.
+    #[test]
+    fn copying_a_non_trivial_value_is_not_implemented() {
+        let text = "struct Mesh { let id: Int }\n\
+                    function duplicate(mesh: copy Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { let mesh = Mesh { id: 4 } print(duplicate(copy mesh)) return }";
+        assert_eq!(codes(text), vec!["KSEM116"]);
+        // A `String` is non-trivial for exactly the same reason.
+        let string = "function echo(s: copy String) -> String { return s }\n\
+                      @Main function main() { let s = \"x\" print(echo(copy s)) return }";
+        assert_eq!(codes(string), vec!["KSEM116"]);
+    }
+
+    /// `copy` on a trivially-copyable value is legal and is a no-op.
+    #[test]
+    fn copying_a_scalar_is_allowed() {
+        let text = "function twice(n: copy Int) -> Int { return n + n }\n\
+                    @Main function main() { let n = 2 print(twice(copy n)) return }";
+        assert!(diagnostics(text).is_empty());
+    }
+
+    /// A `borrow` parameter leaves the caller's binding usable — the whole
+    /// point of borrowing. The oracle's `StxoBorrowTwice` shape.
+    #[test]
+    fn a_borrow_does_not_consume_its_argument() {
+        let text = "struct Mesh { let id: Int }\n\
+                    function inspect(mesh: borrow Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { let mesh = Mesh { id: 2 } \
+                    print(inspect(mesh)) print(inspect(mesh)) print(mesh.id) return }";
+        assert!(diagnostics(text).is_empty());
+    }
+
+    /// A struct still copies when bound, so `let w = v` leaves `v` usable.
+    /// This is the rule arrays will break, and it is pinned here so that when
+    /// they do, it is a deliberate change rather than a silent one.
+    #[test]
+    fn binding_a_struct_does_not_move_it() {
+        let text = "struct Mesh { var id: Int }\n\
+                    @Main function main() { let v = Mesh { id: 5 } var w = v w.id = 100 print(v.id) return }";
+        assert!(diagnostics(text).is_empty());
+    }
+
+    /// `borrow mut` is the one mode that would be observable at run time, and
+    /// no backend carries it yet. It is refused rather than silently
+    /// miscompiled into a write the caller never sees.
+    #[test]
+    fn a_mutable_borrow_is_refused_rather_than_miscompiled() {
+        let text = "struct Mesh { var id: Int }\n\
+                    function bump(mesh: borrow mut Mesh) { mesh.id = mesh.id + 1 return }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } bump(mesh) return }";
+        assert_eq!(codes(text), vec!["KSEM112"]);
+    }
+
+    /// `move` and `copy` are contextual identifiers, not reserved keywords:
+    /// a program may still name a variable `move` or `copy`.
+    #[test]
+    fn move_and_copy_remain_usable_as_names() {
+        let text = "@Main function main() { let move = 1 let copy = 2 print(move + copy) return }";
+        assert!(diagnostics(text).is_empty());
+    }
+
+    /// A method receiver borrows, so calling a method never demands `move`
+    /// and never consumes the receiver.
+    #[test]
+    fn a_method_call_does_not_consume_its_receiver() {
+        let text = "struct Mesh { let id: Int\n function twice() -> Int { return id * 2 } }\n\
+                    @Main function main() { let m = Mesh { id: 3 } print(m.twice()) print(m.twice()) return }";
+        assert!(diagnostics(text).is_empty());
     }
 
     #[test]

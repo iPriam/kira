@@ -88,6 +88,56 @@ parameter, so writing to `self` inside a method leaves the caller's value
 alone. A method's body may name a member bare (`self.x` and `x` are the same
 read).
 
+## Ownership
+
+Kira owns by default, and says so at the call site. A plain parameter
+**consumes** the value it is given, so passing a *named* non-trivial value to
+one must write `move`:
+
+```kira
+function consume(v: Vec3) -> Int { return v.x + v.y + v.z }
+function sum(v: borrow Vec3) -> Int { return v.x + v.y + v.z }
+
+let v = Vec3 { x = 1, y = 2, z = 3 }
+print(sum(v))            // a borrow reads and gives back; `v` survives
+print(consume(move v))   // this takes `v` away
+print(v.x)               // KSEM107: `v` was moved and is no longer available
+```
+
+There are five modes and no others: `owned` (the default), `borrow`,
+`borrow mut`, `move`, and `copy`. All four written spellings are **contextual
+identifiers**, not reserved keywords — a variable named `move` still parses,
+because a `move` is only an operator when an operand follows it.
+
+Which values need `move` is one predicate: **trivially copyable** covers
+`Void`, `Int`, `Float`, and `Bool`. A `String` is not trivially copyable (it
+owns its bytes) and neither is a struct — so both need `move` into an owned
+parameter. A temporary never does: `consume(Vec3 { … })` binds nothing, so
+there is nothing to lose track of.
+
+A struct nonetheless **copies when bound**: `var w = v` deep-copies, and `v`
+stays live. Needing `move` and moving on bind are different questions, and a
+struct answers them differently. Arrays will be the first type to answer the
+second one `yes`, because an array binding aliases where a struct copies.
+
+`copy` is reserved but has no clone semantics: `copy` on anything non-trivial
+is `KSEM116` rather than a deep copy invented here. Borrow a value, move it, or
+build a new one.
+
+Two edges are deliberate:
+
+- **`borrow mut` is refused (`KSEM112`).** It is the one mode that is
+  observable at run time — a callee writing through the caller's binding — and
+  no backend carries the by-reference calling convention yet. Accepting it
+  would not be an incomplete feature; it would silently compute wrong answers,
+  because the callee would write to a copy the caller never sees. Take the
+  value with `move` and return the updated one.
+- **Ownership costs no backend anything.** For today's types a `move` and a
+  `borrow` are both indistinguishable from the deep copy the runtime already
+  performs — a caller that moved a value can never look at it again, which is
+  exactly what the checker guarantees — so the whole subsystem is a static
+  check. See [.codex/work/ownership.md](.codex/work/ownership.md).
+
 ## Loops
 
 `while` tests before each iteration. `for` walks a **half-open** integer range:

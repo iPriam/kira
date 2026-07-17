@@ -9,6 +9,7 @@
 use crate::ty::{StructId, StructTable, Type};
 use kira_runtime_abi::Execution;
 use kira_source::Span;
+use kira_syntax_model::ownership::OwnershipMode;
 use la_arena::{Arena, Idx};
 
 /// Handle to a HIR expression.
@@ -90,6 +91,17 @@ pub struct HirLocal {
     pub ty: Type,
     /// Whether the binding may be reassigned (`var`) or not (`let`/param).
     pub mutable: bool,
+    /// How this local holds its value.
+    ///
+    /// [`OwnershipMode::Owned`] for every body binding and every bare
+    /// parameter; a borrow mode only for a parameter declared `borrow` /
+    /// `borrow mut`. The analyzer needs it to reject `move` of a borrowed
+    /// parameter ([`KSEM111`-class]); nothing below the HIR reads it, because
+    /// for the current type lattice a borrow and a deep copy are
+    /// indistinguishable at run time.
+    ///
+    /// [`KSEM111`-class]: https://docs.kira-lang.com/diagnostics
+    pub ownership: OwnershipMode,
 }
 
 /// A statement in a function body.

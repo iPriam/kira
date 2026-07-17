@@ -1,0 +1,82 @@
+// Ownership: who owns a value, who may look at it, and who takes it away.
+//
+// Kira owns by default. A plain parameter *consumes* the value it is given, so
+// handing it a named non-trivial value must say `move` — the transfer is
+// visible at the call site rather than hidden in the signature. A `borrow`
+// parameter reads without consuming, so the caller keeps using the value
+// afterwards. Scalars are trivially copyable and pass bare.
+
+struct Vec3 {
+    var x: Int
+    var y: Int
+    var z: Int
+}
+
+// `borrow`: reads the value and gives it back. The caller keeps ownership.
+function sum(v: borrow Vec3) -> Int {
+    return v.x + v.y + v.z
+}
+
+// Owned (the default): this consumes its argument. A caller passing a named
+// `Vec3` must write `move`.
+function consume(v: Vec3) -> Int {
+    return v.x + v.y + v.z
+}
+
+// Owned, and hands back a new value — the shape that replaces a mutable borrow.
+function scaled(v: Vec3, k: Int) -> Vec3 {
+    return Vec3 { x = v.x * k, y = v.y * k, z = v.z * k }
+}
+
+// A trivially-copyable parameter may say `copy`; on an `Int` it costs nothing.
+function twice(n: copy Int) -> Int {
+    return n + n
+}
+
+// A `String` owns its bytes, so it is *not* trivially copyable: a named one
+// needs `move` to reach an owned parameter, exactly as a struct does.
+function shout(text: String) -> String {
+    return text + "!"
+}
+
+@Main
+function main() {
+    let v = Vec3 { x = 1, y = 2, z = 3 }
+
+    // A borrow consumes nothing, so `v` survives both calls and the field read.
+    print(sum(v))
+    print(sum(v))
+    print(v.x)
+
+    // Binding a struct copies it: writing the copy leaves the source alone.
+    // (An array will not behave this way — it aliases, so binding one moves it.)
+    var w = v
+    w.x = 100
+    print(v.x)
+    print(w.x)
+
+    // `move` transfers ownership. After this, `w` is gone: using it again is a
+    // compile error, which is the whole point — the checker, not the runtime,
+    // is what stops a second use.
+    print(consume(move w))
+
+    // A pipeline of moves: each step consumes its input and yields a new value.
+    let a = scaled(move v, 10)
+    let b = scaled(move a, 2)
+    print(consume(move b))
+
+    // A temporary has no binding to consume, so it needs no `move`.
+    print(consume(Vec3 { x = 7, y = 8, z = 9 }))
+
+    // Scalars pass bare, and `copy` on one is accepted and changes nothing.
+    let n = 21
+    print(twice(copy n))
+    print(twice(n))
+    print(n)
+
+    // A string moves like any other value that owns storage.
+    let name = "kira"
+    print(shout(move name))
+
+    return
+}
