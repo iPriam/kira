@@ -27,10 +27,16 @@ impl Analyzer<'_> {
                         let ty = ctx.local_type(local);
                         self.program.exprs.alloc(HirExpr::Local { local, ty })
                     }
-                    None => {
-                        self.emit(span, "KSEM060", format!("undefined name `{name}`"));
-                        self.program.exprs.alloc(HirExpr::Error)
-                    }
+                    // A local wins over a field of the same name: the nearer
+                    // binding is what a reader expects, and it is what lets a
+                    // method take a parameter named like a field.
+                    None => match self.implicit_field(ctx, &name) {
+                        Some(expr) => expr,
+                        None => {
+                            self.emit(span, "KSEM060", format!("undefined name `{name}`"));
+                            self.program.exprs.alloc(HirExpr::Error)
+                        }
+                    },
                 }
             }
             Expr::Unary { op, operand, span } => {
@@ -130,8 +136,87 @@ impl Analyzer<'_> {
                     None => self.program.exprs.alloc(HirExpr::Error),
                 }
             }
+            Expr::MethodCall {
+                receiver,
+                method,
+                method_span,
+                args,
+                ..
+            } => self.analyze_method_call(ctx, receiver, method, method_span, &args),
             Expr::Error { .. } => self.program.exprs.alloc(HirExpr::Error),
         }
+    }
+
+    /// Resolves a bare name against the receiver's fields, for a method body
+    /// that writes `step` rather than `self.step`.
+    ///
+    /// Returns `None` outside a method, or when the struct has no such field,
+    /// so the caller still reports an undefined name.
+    fn implicit_field(&mut self, ctx: &FnCtx, name: &str) -> Option<HirExprId> {
+        let owner = ctx.receiver?;
+        let receiver = ctx.resolve("self")?;
+        let def = self.program.structs.get(owner)?;
+        let index = def.field_index(name)?;
+        let ty = def.field(index)?.ty;
+        let base = self.program.exprs.alloc(HirExpr::Local {
+            local: receiver,
+            ty: Type::Struct(owner),
+        });
+        Some(self.program.exprs.alloc(HirExpr::Field { base, index, ty }))
+    }
+
+    /// Type-checks `receiver.method(args)`.
+    ///
+    /// A method call is an ordinary call whose first argument is the receiver.
+    /// Resolving it to that here is what keeps methods out of the IR and out of
+    /// every backend: nothing downstream of analysis knows they exist.
+    fn analyze_method_call(
+        &mut self,
+        ctx: &mut FnCtx,
+        receiver: ExprId,
+        method: kira_core::Symbol,
+        method_span: kira_source::Span,
+        args: &[ExprId],
+    ) -> HirExprId {
+        let receiver_hir = self.analyze_expr(ctx, receiver);
+        let receiver_ty = self.program.expr(receiver_hir).type_of();
+        let mut all_args = vec![receiver_hir];
+        all_args.extend(args.iter().map(|&arg| self.analyze_expr(ctx, arg)));
+
+        // An error receiver already spoke; do not pile on.
+        if receiver_ty == Type::Error {
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        let name = self.interner.resolve(method).to_owned();
+        let Type::Struct(_) = receiver_ty else {
+            self.emit(
+                method_span,
+                "KSEM096",
+                format!(
+                    "type `{}` has no methods, so it has no method `{name}`",
+                    self.type_name(receiver_ty)
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        };
+        let qualified = format!("{}.{name}", self.type_name(receiver_ty));
+        if self.lookup_function(&qualified).is_none() {
+            // A field holding a value is not callable, and saying so names the
+            // likelier mistake than "no such method".
+            let message = match self.resolve_field_quietly(receiver_ty, &name) {
+                true => format!(
+                    "`{name}` is a field of `{}`, not a method",
+                    self.type_name(receiver_ty)
+                ),
+                false => format!(
+                    "struct `{}` has no method `{name}`",
+                    self.type_name(receiver_ty)
+                ),
+            };
+            self.emit(method_span, "KSEM097", message);
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        self.analyze_user_call(&qualified, &all_args, method_span)
     }
 
     /// Type-checks a struct literal into a [`HirExpr::StructNew`] holding one
