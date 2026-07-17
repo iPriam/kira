@@ -6,17 +6,21 @@
 //!
 //! # Desugaring happens here
 //!
-//! The HIR has one loop shape ([`HirStmt::While`]). A `for` in the source is
-//! rewritten into it during analysis, so the IR, the bytecode compiler, the VM,
-//! the LLVM backend, and the WASM backend never learn that `for` exists — and a
-//! `for` loop cannot disagree with a `while` loop on any backend, because by
-//! the time a backend sees one, it *is* one.
+//! Two of the language's statements do not exist below this module. A `for`
+//! becomes the one loop shape the HIR has ([`HirStmt::While`]), and a `switch`
+//! becomes a chain of [`HirStmt::If`]. So the IR, the bytecode compiler, the
+//! VM, the LLVM backend, and the WASM backend never learn either one exists —
+//! and neither can disagree with the construct it desugars to on any backend,
+//! because by the time a backend sees one, it *is* that construct.
+//!
+//! That is the first thing to try when adding syntax: a construct the HIR can
+//! already express costs a rewrite here instead of a node in every layer.
 
 use kira_core::Symbol;
-use kira_semantics_model::hir::{HirExprId, HirPlace, HirStmt, HirStmtId};
+use kira_semantics_model::hir::{HirExprId, HirPlace, HirStmt, HirStmtId, LocalId};
 use kira_semantics_model::{HirBinaryOp, HirExpr, Type};
 use kira_source::Span;
-use kira_syntax_model::ast::{Block, Expr, ExprId, Stmt, StmtId};
+use kira_syntax_model::ast::{Block, Expr, ExprId, Stmt, StmtId, SwitchCase};
 
 use crate::analyze::{Analyzer, FnCtx};
 
@@ -180,6 +184,12 @@ impl Analyzer<'_> {
                 body,
                 ..
             } => self.analyze_for(ctx, name, (start, end), &body, out),
+            Stmt::Switch {
+                subject,
+                cases,
+                default_block,
+                ..
+            } => self.analyze_switch(ctx, subject, &cases, default_block.as_ref(), out),
             Stmt::Break { span } => {
                 if self.check_in_loop(ctx, span, "break", "KSEM041") {
                     let hir = self.program.stmts.alloc(HirStmt::Break);
@@ -323,8 +333,125 @@ impl Analyzer<'_> {
         out.push(hir);
     }
 
+    /// Desugars a `switch` into the `if`/`else` chain it already means.
+    ///
+    /// Given `switch s { case a { A } case b { B } default { D } }`:
+    ///
+    /// ```text
+    /// let <subject> = s              // hidden: evaluated once
+    /// if <subject> == a { A }
+    /// else if <subject> == b { B }
+    /// else { D }
+    /// ```
+    ///
+    /// Every rule the language states falls out of that shape rather than
+    /// needing to be enforced:
+    ///
+    /// * **The subject is evaluated once** — it is bound to a hidden local
+    ///   before any comparison.
+    /// * **Labels are evaluated lazily, in source order** — each label sits in
+    ///   the previous arm's `else`, so a label after the matching one is never
+    ///   reached.
+    /// * **There is no fallthrough** — the arms are alternatives by
+    ///   construction.
+    /// * **A `switch` with no `default` and no match does nothing** — the chain
+    ///   simply ends with no `else`.
+    /// * **`break` inside an arm breaks the enclosing loop, not the switch** —
+    ///   an `if` does not push loop depth, so a `break` here means what it would
+    ///   mean written anywhere else in the same block.
+    ///
+    /// A label whose type does not match the subject's is reported: `==` is
+    /// what compares them, so a label the subject cannot be compared to is the
+    /// same error `s == label` would be.
+    fn analyze_switch(
+        &mut self,
+        ctx: &mut FnCtx,
+        subject: ExprId,
+        cases: &[SwitchCase],
+        default_block: Option<&Block>,
+        out: &mut Vec<HirStmtId>,
+    ) {
+        let subject_expr = self.analyze_expr(ctx, subject);
+        let subject_ty = self.program.expr(subject_expr).type_of();
+
+        // Hidden, so no arm can name or shadow the subject's storage.
+        let slot = ctx.declare_hidden(subject_ty, false);
+        let bind = self.program.stmts.alloc(HirStmt::Let {
+            local: slot,
+            init: subject_expr,
+        });
+        out.push(bind);
+
+        // Each arm is analyzed in source order so its diagnostics come out in
+        // that order, then the chain is assembled from the back — an `else`
+        // has to exist before the `if` that points at it.
+        let mut arms = Vec::with_capacity(cases.len());
+        for case in cases {
+            let cond = self.switch_condition(ctx, slot, subject_ty, case.label);
+            let body = self.analyze_block(ctx, &case.body);
+            arms.push((cond, body));
+        }
+        let mut chain = match default_block {
+            Some(block) => self.analyze_block(ctx, block),
+            None => Vec::new(),
+        };
+        for (cond, body) in arms.into_iter().rev() {
+            let hir = self.program.stmts.alloc(HirStmt::If {
+                cond,
+                then_body: body,
+                else_body: chain,
+            });
+            chain = vec![hir];
+        }
+        out.extend(chain);
+    }
+
+    /// Builds one arm's `<subject> == <label>` test.
+    ///
+    /// Reports a label the subject cannot be compared to, and yields a `false`
+    /// condition in that case so the arm is dead rather than ill-typed — one
+    /// bad label costs its own arm and nothing else.
+    fn switch_condition(
+        &mut self,
+        ctx: &mut FnCtx,
+        slot: LocalId,
+        subject_ty: Type,
+        label: ExprId,
+    ) -> HirExprId {
+        let label_span = self.tree.expr(label).span();
+        let label_expr = self.analyze_expr(ctx, label);
+        let label_ty = self.program.expr(label_expr).type_of();
+        let read = self.program.exprs.alloc(HirExpr::Local {
+            local: slot,
+            ty: subject_ty,
+        });
+        match crate::typeck::equality_op(subject_ty, label_ty) {
+            Some(op) => self.program.exprs.alloc(HirExpr::Binary {
+                op,
+                lhs: read,
+                rhs: label_expr,
+                ty: Type::Bool,
+            }),
+            None => {
+                if subject_ty != Type::Error && label_ty != Type::Error {
+                    self.emit(
+                        label_span,
+                        "KSEM044",
+                        format!(
+                            "a `case` label of type `{}` cannot be compared to a subject \
+                             of type `{}`",
+                            self.type_name(label_ty),
+                            self.type_name(subject_ty)
+                        ),
+                    );
+                }
+                self.program.exprs.alloc(HirExpr::Bool(false))
+            }
+        }
+    }
+
     /// Allocates a read of an `Int`-typed local, for a desugaring building one.
-    fn read_int_local(&mut self, local: kira_semantics_model::LocalId) -> HirExprId {
+    fn read_int_local(&mut self, local: LocalId) -> HirExprId {
         self.program.exprs.alloc(HirExpr::Local {
             local,
             ty: Type::Int,

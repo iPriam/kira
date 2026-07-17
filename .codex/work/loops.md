@@ -1,4 +1,49 @@
-# Loops: one shape below analysis
+# Control flow: one shape below analysis
+
+Two constructs land entirely in the analyzer. `for` becomes a `while`, and
+`switch` becomes an `if`/`else` chain. Neither exists below the HIR, so no
+backend implements either, and neither can disagree with the construct it
+desugars to — by the time a backend sees one, it *is* that construct.
+
+That is the pattern to reach for first when adding syntax here: check whether
+the construct is expressible in what the HIR already has before paying the
+fourteen-file cost of a new IR node.
+
+## `switch`
+
+`switch s { case a { A } case b { B } default { D } }` becomes:
+
+```text
+let <subject> = s              // hidden: evaluated once
+if <subject> == a { A }
+else if <subject> == b { B }
+else { D }
+```
+
+Every rule the language states falls out of that shape rather than being
+enforced by a check:
+
+| Rule | Why the desugar has it |
+|---|---|
+| Subject evaluated once | bound to a hidden local before any comparison |
+| Labels evaluated lazily, in source order | each label sits in the previous arm's `else` |
+| No fallthrough | the arms are alternatives by construction |
+| No `default` + no match = no-op | the chain just ends with no `else` |
+| `break` in an arm belongs to the enclosing **loop** | an `if` does not push `loop_depth` |
+| Definite-return iff `default` present and all arms return | an `if` counts only when both arms do |
+
+The last row is worth keeping: a test originally asserted a switch could never
+be a definite return, and it was the test that was wrong. The oracle counts a
+switch as terminating exactly when it has a `default` and every arm terminates,
+and the desugar reproduces that without a line of code spent on it.
+
+What a `case` may match is decided by `typeck::equality_op` — the same rule
+`==` uses — rather than a second list that could drift from it. The language has
+**no** exhaustiveness check and **no** duplicate-label check (that is `match`,
+which is still unbuilt); inventing either would reject programs the corpus
+accepts.
+
+# Loops
 
 `for` exists only in the syntax tree. The analyzer rewrites it into a `while`,
 so the HIR, the IR, the bytecode compiler, the VM, the LLVM backend, and the

@@ -162,6 +162,21 @@ pub struct UnsupportedItem {
     pub span: Span,
 }
 
+/// One `case` arm of a [`Stmt::Switch`].
+///
+/// The label is an expression rather than a pattern: Kira compares it to the
+/// subject with `==`, so what may be written here is whatever `==` accepts
+/// against the subject's type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchCase {
+    /// The label compared against the subject.
+    pub label: ExprId,
+    /// The statements run when the label matches.
+    pub body: Block,
+    /// Span covering the whole arm.
+    pub span: Span,
+}
+
 /// A brace-delimited sequence of statements.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Block {
@@ -253,6 +268,22 @@ pub enum Stmt {
         /// Span covering the statement.
         span: Span,
     },
+    /// A `switch`: the first `case` whose label equals the subject runs.
+    ///
+    /// There is no fallthrough, and a `switch` is a statement rather than an
+    /// expression — an arm that wants to produce a value assigns or returns.
+    Switch {
+        /// The value being matched, evaluated once.
+        subject: ExprId,
+        /// The `case` arms, in source order.
+        cases: Vec<SwitchCase>,
+        /// The `default` arm, when one was written.
+        ///
+        /// A `switch` with no `default` and no matching case does nothing.
+        default_block: Option<Block>,
+        /// Span covering the whole statement.
+        span: Span,
+    },
     /// A `break`: leave the innermost enclosing loop.
     Break {
         /// Span covering the statement.
@@ -281,6 +312,7 @@ impl Stmt {
             | Stmt::If { span, .. }
             | Stmt::While { span, .. }
             | Stmt::For { span, .. }
+            | Stmt::Switch { span, .. }
             | Stmt::Break { span }
             | Stmt::Continue { span }
             | Stmt::Error { span } => *span,
