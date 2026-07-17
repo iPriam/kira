@@ -13,9 +13,9 @@
 //! evidence, and the value it prints is one only the native half computes.
 #![cfg(feature = "llvm")]
 
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 /// A scratch directory that removes itself, holding a program and its build.
 struct Scratch(PathBuf);
@@ -46,6 +46,88 @@ impl Drop for Scratch {
 /// Runs `kirac live` on `path` with `backend` and returns (stdout, stderr, ok).
 fn live(path: &Path, backend: &str) -> (String, String, bool) {
     live_with(path, backend, &[])
+}
+
+/// A child that is killed when the test drops it, however the test ends.
+///
+/// A watched session runs until its own `--quit-after`, so a test that stops
+/// reading — because it saw what it came for, or because it failed — must not
+/// leave one running. Killing on drop is what turns a stuck session into a
+/// failing test rather than a hanging suite.
+struct Session(Child);
+
+impl Session {
+    /// Ends the session now, rather than at the end of the scope.
+    ///
+    /// Reading the session's stderr to EOF means waiting for the process to
+    /// exit, so it has to be stopped first or the read waits out the ceiling.
+    fn stop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// Runs a watched `kirac live` session and reads its output until `done` says
+/// enough has arrived, then stops the session and returns what it printed.
+///
+/// Waiting on the *event* rather than on a duration is the point. A reload
+/// rebuilds the program — for a hybrid app that is an LLVM compile and a link —
+/// and how long that takes depends on what else the machine is doing. A fixed
+/// budget therefore encodes the load of the machine that wrote it: these two
+/// tests failed under a parallel `cargo test` and passed alone. The session's
+/// `--quit-after` stays as a generous ceiling so a session that never gets
+/// there fails instead of hanging.
+fn live_until(
+    path: &Path,
+    backend: &str,
+    extra: &[&str],
+    done: impl Fn(&str) -> bool,
+) -> (String, String) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kirac"))
+        .arg("live")
+        .arg("--backend")
+        .arg(backend)
+        .args(extra)
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("kirac spawns");
+
+    let stdout_pipe = child.stdout.take().expect("stdout is piped");
+    let stderr_pipe = child.stderr.take().expect("stderr is piped");
+    let mut session = Session(child);
+
+    // stderr is drained on its own thread: a session that fills the pipe would
+    // otherwise block forever on a write nobody is reading.
+    let stderr_reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let mut pipe = stderr_pipe;
+        let _ = pipe.read_to_string(&mut text);
+        text
+    });
+
+    let mut stdout = String::new();
+    for line in BufReader::new(stdout_pipe).lines() {
+        let Ok(line) = line else {
+            break;
+        };
+        stdout.push_str(&line);
+        stdout.push('\n');
+        if done(&stdout) {
+            break;
+        }
+    }
+    // Stop the session so the ceiling is never actually waited out.
+    session.stop();
+    let stderr = stderr_reader.join().unwrap_or_default();
+    (stdout, stderr)
 }
 
 /// Runs `kirac live` with extra arguments.
@@ -214,14 +296,21 @@ fn a_runtime_only_edit_to_a_hybrid_app_hot_patches() {
         .expect("edit the program");
     });
 
-    let (stdout, stderr, ok) = live_with(&program, "hybrid", &["--watch", "--quit-after", "20s"]);
+    // Read until both halves of the evidence have arrived: the swapped-in code
+    // has printed, and the session has called the reload done. The ceiling only
+    // bounds a session that never gets there.
+    let (stdout, stderr) = live_until(
+        &program,
+        "hybrid",
+        &["--watch", "--quit-after", "180s"],
+        |seen| seen.contains("\n5020\n") && seen.contains("live.reload.completed"),
+    );
     editor.join().expect("the editor thread does not panic");
 
-    assert!(ok, "the watched hybrid session failed.\nstderr: {stderr}");
     assert!(
         stdout.contains("live.reload.completed mode=hotpatch"),
         "a @Runtime-only edit beside an unchanged native library must hot patch.\n\
-         stdout: {stdout}"
+         stdout: {stdout}\nstderr: {stderr}"
     );
     assert!(
         !stdout.contains("live.runner.relaunched"),
@@ -259,13 +348,21 @@ fn a_native_edit_to_a_hybrid_app_relaunches() {
         .expect("edit the program");
     });
 
-    let (stdout, stderr, ok) = live_with(&program, "hybrid", &["--watch", "--quit-after", "25s"]);
+    // A relaunch ends at `live.runner.relaunched`, not at
+    // `live.reload.completed`: only the hot-patch tier reports a completion,
+    // because only there is there a running process that took the swap. So the
+    // terminal event to wait for is the relaunch itself.
+    let (stdout, stderr) = live_until(
+        &program,
+        "hybrid",
+        &["--watch", "--quit-after", "180s"],
+        |seen| seen.contains("\n126\n") && seen.contains("live.runner.relaunched"),
+    );
     editor.join().expect("the editor thread does not panic");
 
-    assert!(ok, "the watched hybrid session failed.\nstderr: {stderr}");
     assert!(
         stdout.contains("mode=relaunch"),
-        "a native edit must relaunch.\nstdout: {stdout}"
+        "a native edit must relaunch.\nstdout: {stdout}\nstderr: {stderr}"
     );
     assert!(
         stdout.contains("live.runner.relaunched"),
