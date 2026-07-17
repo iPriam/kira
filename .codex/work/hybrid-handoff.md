@@ -74,7 +74,7 @@ synchronize.
 aborts on unwind, so no `catch_unwind` is needed — but a `VmError` inside the
 invoker has nowhere to go. It prints and exits 1, matching
 `kira_rt_trap_div_zero`, so a trap reached through native code and one reached
-directly look the same to a user. `backend_parity.rs` pins both directions.
+directly look the same to a user. `backend_parity/` pins both directions.
 
 ## Known gaps
 

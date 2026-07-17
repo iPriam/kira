@@ -235,6 +235,34 @@ pub enum Stmt {
         /// Span covering the statement.
         span: Span,
     },
+    /// A `for` loop over a half-open range (`for i in 0..5 { … }`).
+    ///
+    /// The range is written only here — Kira has no standalone range value —
+    /// so the bounds hang off this node rather than off an [`Expr`].
+    For {
+        /// The loop variable, bound fresh and immutable on each iteration.
+        name: Symbol,
+        /// Span of the loop variable's name token.
+        name_span: Span,
+        /// The inclusive lower bound.
+        start: ExprId,
+        /// The exclusive upper bound.
+        end: ExprId,
+        /// The loop body.
+        body: Block,
+        /// Span covering the statement.
+        span: Span,
+    },
+    /// A `break`: leave the innermost enclosing loop.
+    Break {
+        /// Span covering the statement.
+        span: Span,
+    },
+    /// A `continue`: skip to the innermost enclosing loop's next iteration.
+    Continue {
+        /// Span covering the statement.
+        span: Span,
+    },
     /// A statement position the parser could not parse; recovery inserts this.
     Error {
         /// Span covering the skipped tokens.
@@ -252,6 +280,9 @@ impl Stmt {
             | Stmt::Expr { span, .. }
             | Stmt::If { span, .. }
             | Stmt::While { span, .. }
+            | Stmt::For { span, .. }
+            | Stmt::Break { span }
+            | Stmt::Continue { span }
             | Stmt::Error { span } => *span,
         }
     }

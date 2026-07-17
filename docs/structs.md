@@ -3,7 +3,7 @@
 A struct is a value, and every backend pays for that differently. The VM copies
 a heap object on every read; the native backend copies an LLVM struct field by
 field. Those are two mechanisms for one rule, which is why the rule is proven by
-differential tests rather than asserted — `crates/kira-cli/tests/backend_parity.rs`
+differential tests rather than asserted — `crates/kira-cli/tests/backend_parity/`
 runs each case on VM, LLVM/native, and hybrid and requires identical output.
 
 ## The surface
@@ -44,10 +44,12 @@ so any text chosen here would be inventing language surface. The VM traps rather
 than printing something made up, which is the runtime restating what analysis
 already refused.
 
-**Struct methods parse but are reported** (`KPAR008`). The fields of a struct
-carrying a method still parse, so one method does not cost the whole
-declaration; but the method is never silently dropped, because a program missing
-a method means something else.
+**A method is a function with a receiver.** A struct's methods are collected
+into the same flat function table free functions live in, so nothing below
+analysis learns one was written inside a struct. The receiver is passed by
+value like any other parameter — writing to `self` in a method leaves the
+caller's value untouched — and a body may name a member bare, so `self.step`
+and `step` are the same read.
 
 ## The native seam
 
@@ -110,12 +112,12 @@ shared and costs nothing to "copy". A struct is not: `p.x = 1` writes through
 the address, so it is deep-copied wherever the VM copies one, through a helper
 generated per struct. Only the mutable spine is duplicated; the strings inside
 are still shared. Both address widths run the same lowering, and
-`crates/kira-wasm-runtime/tests/execution.rs` compares each case against the VM
+`crates/kira-wasm-runtime/tests/execution/` compares each case against the VM
 on `wasm32` and `wasm64` — a struct's field offsets differ between them, so a
 layout mistake shows up as a wrong value rather than hiding.
 
 ## Still open
 
-Struct **methods** and `@FFI.Struct { layout: c; }` are not implemented. The
-native representation was chosen with the second in mind, but the annotation,
-its zero-fill construction rule, and the C layout it promises are not built.
+`@FFI.Struct { layout: c; }` is not implemented. The native representation was
+chosen with it in mind, but the annotation, its zero-fill construction rule,
+and the C layout it promises are not built.

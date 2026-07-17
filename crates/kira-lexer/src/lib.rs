@@ -190,6 +190,7 @@ impl<'a> Lexer<'a> {
             (b'>', Some(b'=')) => Some(TokenKind::GtEq),
             (b'&', Some(b'&')) => Some(TokenKind::AmpAmp),
             (b'|', Some(b'|')) => Some(TokenKind::PipePipe),
+            (b'.', Some(b'.')) => Some(TokenKind::DotDot),
             _ => None,
         };
         if let Some(kind) = two {
