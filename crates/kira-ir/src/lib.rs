@@ -16,7 +16,10 @@
 pub mod ir;
 pub mod lower;
 
-pub use ir::{IrBinOp, IrCallee, IrExpr, IrExprId, IrFunction, IrPlace, IrProgram, IrStmt, IrUnOp};
+pub use ir::{
+    IrBinOp, IrCallee, IrExpr, IrExprId, IrFunction, IrPlace, IrPlaceStep, IrProgram, IrStmt,
+    IrUnOp,
+};
 pub use lower::lower;
 
 #[cfg(test)]

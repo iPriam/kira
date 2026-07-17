@@ -185,6 +185,11 @@ fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridError> {
         // actually emitted — the backend refuses to build one whose signature
         // mentions a struct.
         Type::Struct(_) => BridgeValueTag::STRUCT,
+        // Described, not carried, for the same reason a struct is — though not
+        // on the same grounds. See `BridgeValueTag::ARRAY`: the language lets
+        // an array cross, and what is missing is the ownership answer at the
+        // boundary, not a place to put it.
+        Type::Array(_) => BridgeValueTag::ARRAY,
         // A verified IR carries no `Error` type — reaching one means the
         // frontend let a broken program through, which is a compiler bug, not
         // something to encode into an artifact.

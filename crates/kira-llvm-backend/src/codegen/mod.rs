@@ -20,13 +20,16 @@
 //! drop, and no LLVM reference escapes that lifetime.
 
 mod bridge;
+mod elements;
 mod entry;
 mod ffi;
 mod lower;
 mod symbols;
 mod target;
 mod types;
+mod values;
 
+use std::collections::HashMap;
 use std::ffi::CStr;
 use std::path::Path;
 
@@ -36,6 +39,9 @@ use kira_semantics_model::Type;
 use llvm_sys::analysis::{LLVMVerifierFailureAction, LLVMVerifyModule};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
+use llvm_sys::target::{LLVMGetModuleDataLayout, LLVMTargetDataRef};
+
+use self::elements::Leaf;
 
 use self::ffi::{c_string, dispose_message, take_message};
 use self::symbols::symbol_name;
@@ -209,6 +215,18 @@ pub(crate) struct Codegen<'a> {
     struct_types: Vec<LLVMTypeRef>,
     /// Names every emitted string literal global uniquely.
     string_counter: u32,
+    /// The host target's data layout, borrowed from the module.
+    ///
+    /// An array sizes its element by asking LLVM for the type's ABI size on
+    /// this target (see [`Codegen::abi_size`]), so the stride matches what a
+    /// struct field's offset would be — a guess computed here could disagree.
+    /// Borrowed from the module, so it is valid as long as the module is and is
+    /// never disposed here.
+    target_data: LLVMTargetDataRef,
+    /// The clone and free leaves an array's runtime helpers call, one per
+    /// `(element type, leaf)`. Memoized so two arrays of the same element share
+    /// one leaf. See [`elements`].
+    element_leaves: HashMap<(Type, Leaf), LLVMValueRef>,
 }
 
 impl<'a> Codegen<'a> {
@@ -223,6 +241,14 @@ impl<'a> Codegen<'a> {
         let types = Types::new(owned.context);
         let runtime = declare_runtime(owned.module, &types);
 
+        // The module needs the host's data layout in place before any element
+        // is sized, and object emission sets the same layout again (harmlessly)
+        // when it runs. `target_data` borrows it from the module.
+        TargetMachine::host()?.set_module_layout(owned.module);
+        // SAFETY: the layout was just set, so the module has one; the returned
+        // handle borrows it and lives as long as the module does.
+        let target_data = unsafe { LLVMGetModuleDataLayout(owned.module) };
+
         let mut codegen = Codegen {
             program,
             context: owned.context,
@@ -233,8 +259,10 @@ impl<'a> Codegen<'a> {
             kind,
             engines,
             functions: Vec::with_capacity(program.functions.len()),
-            struct_types: Vec::with_capacity(program.structs.len()),
+            struct_types: Vec::with_capacity(program.types.structs().len()),
             string_counter: 0,
+            target_data,
+            element_leaves: HashMap::new(),
         };
         // Struct types come first: a function signature may name one, and a
         // struct's fields may name a struct declared before it.
@@ -260,7 +288,7 @@ impl<'a> Codegen<'a> {
     /// already in `struct_types` by the time it is asked for. The types are
     /// named so LLVM IR stays readable (`%Point`, not `{i64, i64}`).
     fn declare_structs(&mut self) -> Result<(), LlvmError> {
-        for def in self.program.structs.defs() {
+        for def in self.program.types.structs().defs() {
             let name = c_string(&def.name);
             let mut fields = Vec::with_capacity(def.fields.len());
             for field in &def.fields {
@@ -350,8 +378,10 @@ impl<'a> Codegen<'a> {
             Type::Float => self.types.f64,
             Type::Bool => self.types.i1,
             // A `String` is an opaque owned handle: one pointer the backend
-            // never inspects, matching the runtime's ABI.
-            Type::String => self.types.ptr,
+            // never inspects, matching the runtime's ABI. An array is the same
+            // shape and for the same reason — the runtime owns its layout, and
+            // this only ever passes the handle around.
+            Type::String | Type::Array(_) => self.types.ptr,
             Type::Void => self.types.void,
             Type::Struct(id) => *self
                 .struct_types

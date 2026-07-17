@@ -8,7 +8,7 @@
 //! entrypoint.
 
 use kira_runtime_abi::Execution;
-use kira_semantics_model::{StructId, StructTable, Type};
+use kira_semantics_model::{StructId, Type, TypeTable};
 use la_arena::{Arena, Idx};
 
 /// The typed binary operators, reused from the analyzer's instruction
@@ -25,8 +25,9 @@ pub type IrExprId = Idx<IrExpr>;
 pub struct IrProgram {
     /// Every function, in a stable order; [`IrProgram::main`] indexes into it.
     pub functions: Vec<IrFunction>,
-    /// Every struct the program declares: the one source of field layout.
-    pub structs: StructTable,
+    /// Every shape the program's types name: the one source of field layout
+    /// and of array element types.
+    pub types: TypeTable,
     /// Index of the `@Main` entrypoint within [`IrProgram::functions`].
     pub main: u32,
     /// Arena backing every [`IrExprId`] across all functions.
@@ -70,27 +71,35 @@ impl IrProgram {
             IrExpr::Binary { op, .. } => binop_result(*op),
             IrExpr::Call { result, .. } => *result,
             IrExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
-            IrExpr::Field { ty, .. } => *ty,
+            IrExpr::Field { ty, .. } | IrExpr::ArrayNew { ty, .. } | IrExpr::Index { ty, .. } => {
+                *ty
+            }
+            IrExpr::ArrayLen { .. } => Type::Int,
+            IrExpr::ArrayAppend { .. } => Type::Void,
         }
     }
 
     /// The type stored at `place`, evaluated in `function`'s scope.
     ///
-    /// Walks the place's field path through the struct table, so a backend
-    /// choosing storage for an assignment does not re-resolve it.
+    /// Walks the place's path through the type table, so a backend choosing
+    /// storage for an assignment does not re-resolve it.
     pub fn place_type(&self, function: &IrFunction, place: &IrPlace) -> Type {
         let mut ty = function
             .locals
             .get(place.local as usize)
             .copied()
             .unwrap_or(Type::Error);
-        for &index in &place.path {
-            ty = match ty {
-                Type::Struct(id) => self
-                    .structs
+        for step in &place.path {
+            ty = match (step, ty) {
+                (IrPlaceStep::Field(index), Type::Struct(id)) => self
+                    .types
+                    .structs()
                     .get(id)
-                    .and_then(|def| def.field(index))
+                    .and_then(|def| def.field(*index))
                     .map_or(Type::Error, |field| field.ty),
+                (IrPlaceStep::Index(_), array) => {
+                    self.types.element_of(array).unwrap_or(Type::Error)
+                }
                 _ => Type::Error,
             };
         }
@@ -225,16 +234,55 @@ pub enum IrStmt {
     Continue,
 }
 
-/// A writable location: a local slot, optionally walked into by field indices.
+/// One step of an [`IrPlace`]'s walk.
+///
+/// A field index is a constant the analyzer resolved; an array index is an
+/// expression with a value only at run time. Every backend has to treat the two
+/// differently, so they are different variants rather than one number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IrPlaceStep {
+    /// Walk into the field at this index, in declaration order.
+    Field(u32),
+    /// Walk into the array element this expression selects.
+    Index(IrExprId),
+}
+
+/// A writable location: a local slot, optionally walked into by fields and
+/// indices.
 ///
 /// The path is resolved at analysis time, so a backend writes through it
-/// directly — it never rebuilds the enclosing struct to change one field.
+/// directly — it never rebuilds the enclosing value to change one part of it.
+///
+/// **Evaluation order is fixed here**: a place's index expressions are
+/// evaluated left to right, and all of them before the assigned value. Every
+/// backend follows it, which is what keeps `xs[next()] = next()` agreeing on
+/// all four.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IrPlace {
     /// The local slot the place is rooted at.
     pub local: u32,
-    /// Field indices to walk, outermost first; empty writes the slot itself.
-    pub path: Vec<u32>,
+    /// Steps to walk, outermost first; empty writes the slot itself.
+    pub path: Vec<IrPlaceStep>,
+}
+
+impl IrPlace {
+    /// The index expressions this place evaluates, outermost first.
+    ///
+    /// The order is the contract: a backend pushes these in exactly this order
+    /// and the runtime consumes them in exactly this order.
+    pub fn indices(&self) -> impl Iterator<Item = IrExprId> + '_ {
+        self.path.iter().filter_map(|step| match step {
+            IrPlaceStep::Index(expr) => Some(*expr),
+            IrPlaceStep::Field(_) => None,
+        })
+    }
+
+    /// Whether every step is a field index — the shape that predates arrays.
+    pub fn is_all_fields(&self) -> bool {
+        self.path
+            .iter()
+            .all(|step| matches!(step, IrPlaceStep::Field(_)))
+    }
 }
 
 /// An expression in the IR.
@@ -291,6 +339,42 @@ pub enum IrExpr {
         index: u32,
         /// The field's type.
         ty: Type,
+    },
+    /// Construction of an array from its elements, in written order.
+    ArrayNew {
+        /// The array's type.
+        ty: Type,
+        /// The elements, in order.
+        elements: Vec<IrExprId>,
+    },
+    /// A read of one element of an array (`xs[i]`).
+    ///
+    /// An out-of-range or negative index is a **runtime trap**, not a static
+    /// check: an index is generally not a constant, so checking it here would
+    /// reject working programs.
+    Index {
+        /// The array-typed expression being read.
+        base: IrExprId,
+        /// The `Int`-typed index.
+        index: IrExprId,
+        /// The element's type.
+        ty: Type,
+    },
+    /// An array's element count (`xs.count`).
+    ArrayLen {
+        /// The array-typed expression being measured.
+        array: IrExprId,
+    },
+    /// `xs.append(v)`: push one element onto an array, in place.
+    ///
+    /// The receiver is a place, not an expression — see
+    /// [`kira_semantics_model::hir::HirExpr::ArrayAppend`] for why that is the
+    /// whole correctness argument rather than an optimization.
+    ArrayAppend {
+        /// The array being appended to.
+        place: IrPlace,
+        /// The element to push.
+        value: IrExprId,
     },
 }
 

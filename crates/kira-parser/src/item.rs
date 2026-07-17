@@ -11,7 +11,7 @@ use kira_runtime_abi::Execution;
 use kira_source::{FileSpan, Span};
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
-    Block, FieldDecl, Function, Item, Param, StructDecl, TypeRef, UnsupportedItem,
+    Block, FieldDecl, Function, Item, Param, StructDecl, TypeRef, TypeRefId, UnsupportedItem,
 };
 use kira_syntax_model::ownership::OwnershipMode;
 
@@ -292,10 +292,7 @@ impl Parser<'_> {
     /// parsing as they always did. A bare type yields
     /// [`OwnershipMode::Owned`], which is the default rather than a fallback.
     fn parse_param_ownership(&mut self) -> (OwnershipMode, Option<Span>) {
-        if self.at_word("borrow")
-            && self.peek_is_word(1, "mut")
-            && self.peek(2).kind == TokenKind::Identifier
-        {
+        if self.at_word("borrow") && self.peek_is_word(1, "mut") && self.peek_starts_type(2) {
             let start = self.current().span;
             self.bump(); // `borrow`
             let end = self.current().span;
@@ -305,13 +302,13 @@ impl Parser<'_> {
                 Some(Span::from_bounds(start.start, end.end())),
             );
         }
-        if self.at_word("borrow") && self.peek(1).kind == TokenKind::Identifier {
+        if self.at_word("borrow") && self.peek_starts_type(1) {
             let span = self.current().span;
             self.bump();
             return (OwnershipMode::BorrowRead, Some(span));
         }
         for (word, mode) in [("move", OwnershipMode::Move), ("copy", OwnershipMode::Copy)] {
-            if self.at_word(word) && self.peek(1).kind == TokenKind::Identifier {
+            if self.at_word(word) && self.peek_starts_type(1) {
                 let span = self.current().span;
                 self.bump();
                 return (mode, Some(span));
@@ -320,7 +317,7 @@ impl Parser<'_> {
         (OwnershipMode::Owned, None)
     }
 
-    fn parse_return_type(&mut self) -> Option<TypeRef> {
+    fn parse_return_type(&mut self) -> Option<TypeRefId> {
         // Kira accepts both `-> Type` and `): Type`.
         if self.eat(TokenKind::Arrow) || self.eat(TokenKind::Colon) {
             Some(self.parse_type_ref())
@@ -329,20 +326,38 @@ impl Parser<'_> {
         }
     }
 
-    pub(crate) fn parse_type_ref(&mut self) -> TypeRef {
+    /// Whether the token `n` ahead can begin a written type.
+    ///
+    /// A type starts with a name (`Int`, `Point`) or with `[` (`[Int]`). This
+    /// is what every contextual-keyword lookahead asks, and asking it in one
+    /// place is what keeps `borrow [Int]` from silently parsing as a parameter
+    /// whose type is named `borrow`.
+    pub(crate) fn peek_starts_type(&self, n: usize) -> bool {
+        matches!(
+            self.peek(n).kind,
+            TokenKind::Identifier | TokenKind::LBracket
+        )
+    }
+
+    /// Parses a written type: a name, or `[` element `]`, nested to any depth.
+    pub(crate) fn parse_type_ref(&mut self) -> TypeRefId {
+        if self.at(TokenKind::LBracket) {
+            let start = self.current().span;
+            self.bump(); // `[`
+            let element = self.parse_type_ref();
+            self.expect(TokenKind::RBracket);
+            let span = Span::from_bounds(start.start, self.previous_end());
+            return self.tree.add_type(TypeRef::Array { element, span });
+        }
         if self.at(TokenKind::Identifier) {
             let span = self.current().span;
             let name = self.intern_span(span);
             self.bump();
-            TypeRef { name, span }
-        } else {
-            let span = self.current().span;
-            self.error(span, "KPAR006", "expected a type name");
-            TypeRef {
-                name: Symbol::ERROR,
-                span,
-            }
+            return self.tree.add_type(TypeRef::Named { name, span });
         }
+        let span = self.current().span;
+        self.error(span, "KPAR006", "expected a type name");
+        self.tree.add_type(TypeRef::Error { span })
     }
 
     pub(crate) fn parse_block(&mut self) -> Block {

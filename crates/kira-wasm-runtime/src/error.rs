@@ -33,6 +33,17 @@ pub enum WasmError {
     /// A place walked into something that is not a struct.
     #[error("an assignment walks a field of a value that is not a struct (this is a compiler bug)")]
     NotAStruct,
+    /// An array operation found something that is not an array.
+    ///
+    /// A compiler bug, not a program error: analysis rejects indexing a
+    /// non-array, so a program that type-checked cannot reach this. An index
+    /// that is merely *out of range* is a runtime trap, and is nothing to do
+    /// with this.
+    #[error("an array operation reached a value that is not an array (this is a compiler bug)")]
+    NotAnArray,
+    /// An array type id named no row of the program's array table.
+    #[error("the wasm backend was handed an unknown array type (this is a compiler bug)")]
+    UnknownArray,
     /// `print` was handed a struct, which has no pinned rendering.
     ///
     /// Analysis rejects this before a program is lowered; it is reported rather

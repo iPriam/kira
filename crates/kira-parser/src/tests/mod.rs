@@ -6,9 +6,11 @@
 //! had grown to twice that. They stay a `#[cfg(test)]` module of this crate,
 //! beside the code they test.
 
+mod arrays;
+
 use crate::*;
 use kira_runtime_abi::Execution;
-use kira_syntax_model::ast::{Expr, Function, Item};
+use kira_syntax_model::ast::{Expr, Function, Item, TypeRef, TypeRefId};
 use kira_syntax_model::ownership::{OwnershipMode, OwnershipOp};
 
 fn parse_text(text: &str) -> ParseResult {
@@ -20,6 +22,16 @@ fn only_function(result: &ParseResult) -> &Function {
     match result.tree.items.as_slice() {
         [Item::Function(function)] => function,
         items => panic!("expected exactly one function, got {items:?}"),
+    }
+}
+
+/// Renders a written type back to its source spelling, so a test can assert
+/// the *shape* the parser built rather than an arena index.
+fn type_spelling(result: &ParseResult, id: TypeRefId) -> String {
+    match result.tree.type_ref(id) {
+        TypeRef::Named { name, .. } => result.interner.resolve(*name).to_owned(),
+        TypeRef::Array { element, .. } => format!("[{}]", type_spelling(result, *element)),
+        TypeRef::Error { .. } => "<error>".to_owned(),
     }
 }
 
@@ -395,7 +407,7 @@ fn parameter_ownership_modes_parse() {
     );
     // The prefix is stripped: the type is what remains.
     for param in &only_function(&result).params {
-        assert_eq!(result.interner.resolve(param.ty.name), "Int");
+        assert_eq!(type_spelling(&result, param.ty), "Int");
     }
 }
 
@@ -410,7 +422,7 @@ fn ownership_words_are_still_usable_as_parameter_names() {
     assert_eq!(function.params.len(), 4);
     for param in &function.params {
         assert_eq!(param.ownership, OwnershipMode::Owned);
-        assert_eq!(result.interner.resolve(param.ty.name), "Int");
+        assert_eq!(type_spelling(&result, param.ty), "Int");
     }
     assert_eq!(result.interner.resolve(function.params[0].name), "borrow");
 }

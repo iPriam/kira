@@ -99,11 +99,18 @@ impl Structs {
     }
 
     /// Emits every copy helper's body.
+    ///
+    /// `arrays` is needed because an **array field is mutable**, so a struct's
+    /// copy has to copy it — sharing the handle would let a write through one
+    /// struct be seen through the other, which is exactly what value semantics
+    /// forbid. A `String` field is still shared, per this module's docs: the
+    /// line is mutability, not heap-ness.
     pub fn define(
         &self,
         module: &mut Module,
         rt: &Runtime,
         table: &StructTable,
+        arrays: &crate::arrays::ArrayCopies,
     ) -> Result<(), WasmError> {
         for (index, def) in table.defs().iter().enumerate() {
             let id = struct_id_at(table, index)?;
@@ -130,10 +137,16 @@ impl Structs {
                 // Read the field out of the source.
                 func.local_get(source);
                 load_field(&mut func, field.ty, addr, offset)?;
-                // A nested struct is the mutable part, so it is copied too; a
-                // string is shared, per this module's docs.
-                if let Type::Struct(inner) = field.ty {
-                    func.call(self.copy(inner)?);
+                // A nested struct and an array are the mutable parts, so both
+                // are copied; a string is shared, per this module's docs.
+                match field.ty {
+                    Type::Struct(inner) => {
+                        func.call(self.copy(inner)?);
+                    }
+                    Type::Array(inner) => {
+                        func.call(arrays.copy(inner)?);
+                    }
+                    _ => {}
                 }
                 store_field(&mut func, field.ty, addr, offset)?;
             }
@@ -165,8 +178,9 @@ pub fn field_size(ty: Type, addr: AddrType) -> Result<u32, WasmError> {
     Ok(match ty {
         Type::Int | Type::Float => 8,
         Type::Bool => 4,
-        // A pointer, as wide as the memory is.
-        Type::String | Type::Struct(_) => match addr.val() {
+        // A pointer, as wide as the memory is. An array is one too: its
+        // value is its header's address.
+        Type::String | Type::Struct(_) | Type::Array(_) => match addr.val() {
             ValType::I64 => 8,
             _ => 4,
         },
@@ -192,7 +206,7 @@ pub fn load_field(
         Type::Bool => {
             func.i32_load(offset);
         }
-        Type::String | Type::Struct(_) => match addr.val() {
+        Type::String | Type::Struct(_) | Type::Array(_) => match addr.val() {
             ValType::I64 => {
                 func.i64_load(offset);
             }
@@ -224,7 +238,7 @@ pub fn store_field(
         Type::Bool => {
             func.i32_store(offset);
         }
-        Type::String | Type::Struct(_) => match addr.val() {
+        Type::String | Type::Struct(_) | Type::Array(_) => match addr.val() {
             ValType::I64 => {
                 func.i64_store(offset);
             }

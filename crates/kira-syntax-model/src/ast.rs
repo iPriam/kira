@@ -16,6 +16,8 @@ use la_arena::{Arena, Idx};
 pub type ExprId = Idx<Expr>;
 /// Handle to a statement stored in a [`SyntaxTree`].
 pub type StmtId = Idx<Stmt>;
+/// Handle to a written type reference stored in a [`SyntaxTree`].
+pub type TypeRefId = Idx<TypeRef>;
 
 /// A whole parsed source file: its top-level items plus the node arenas.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -26,6 +28,8 @@ pub struct SyntaxTree {
     pub exprs: Arena<Expr>,
     /// Arena backing every [`StmtId`].
     pub stmts: Arena<Stmt>,
+    /// Arena backing every [`TypeRefId`].
+    pub types: Arena<TypeRef>,
 }
 
 impl SyntaxTree {
@@ -52,6 +56,16 @@ impl SyntaxTree {
     /// Borrows a statement by handle.
     pub fn stmt(&self, id: StmtId) -> &Stmt {
         &self.stmts[id]
+    }
+
+    /// Interns a type reference node, returning its handle.
+    pub fn add_type(&mut self, ty: TypeRef) -> TypeRefId {
+        self.types.alloc(ty)
+    }
+
+    /// Borrows a type reference by handle.
+    pub fn type_ref(&self, id: TypeRefId) -> &TypeRef {
+        &self.types[id]
     }
 }
 
@@ -100,7 +114,7 @@ pub struct FieldDecl {
     /// `true` for `var`, `false` for `let`.
     pub mutable: bool,
     /// The declared member type.
-    pub ty: TypeRef,
+    pub ty: TypeRefId,
     /// The default initializer, when one was written.
     pub default: Option<ExprId>,
     /// Span covering the whole member.
@@ -125,7 +139,7 @@ pub struct Function {
     /// Declared parameters, in order.
     pub params: Vec<Param>,
     /// Declared return type, if written (absent means `Void`).
-    pub return_type: Option<TypeRef>,
+    pub return_type: Option<TypeRefId>,
     /// The function body.
     pub body: Block,
     /// Span covering the whole declaration.
@@ -148,18 +162,55 @@ pub struct Param {
     /// type was bare. Diagnostics point here to say where a mode came from.
     pub ownership_span: Option<Span>,
     /// The declared parameter type, with any ownership prefix stripped.
-    pub ty: TypeRef,
+    pub ty: TypeRefId,
     /// Span covering the whole parameter.
     pub span: Span,
 }
 
-/// A written type reference, e.g. `Int` or `String`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TypeRef {
-    /// The type name as an interned symbol.
-    pub name: Symbol,
-    /// Where the type name appears.
-    pub span: Span,
+/// A written type reference, e.g. `Int`, `Point`, `[Int]`, or `[[Byte]]`.
+///
+/// An arena node rather than a flat `Copy` struct because an array type nests:
+/// `[[Int]]`'s element is itself a written type. Following the index/arena law
+/// — a [`TypeRefId`] into the tree's arena, never a `Box` — is what keeps this
+/// free of the recursive-allocation-per-node cost and keeps the whole model
+/// lifetime-free.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeRef {
+    /// A named type: `Int`, `String`, `Point`.
+    Named {
+        /// The type name as an interned symbol.
+        name: Symbol,
+        /// Where the type name appears.
+        span: Span,
+    },
+    /// An array type: `[Int]`.
+    Array {
+        /// The written element type.
+        element: TypeRefId,
+        /// Span covering the brackets and their contents.
+        span: Span,
+    },
+    /// A type position the parser could not parse; recovery inserts this.
+    ///
+    /// A variant rather than a sentinel name, so analysis resolves it to
+    /// `Type::Error` **silently**: the parser already said what was wrong, and
+    /// a second "unknown type `<error>`" on top of it would name a type nobody
+    /// wrote.
+    Error {
+        /// Span of the malformed type.
+        span: Span,
+    },
+}
+
+impl TypeRef {
+    /// The span covering this type reference.
+    pub fn span(&self) -> Span {
+        match self {
+            TypeRef::Named { span, .. } | TypeRef::Array { span, .. } | TypeRef::Error { span } => {
+                *span
+            }
+        }
+    }
 }
 
 /// A parsed-but-unanalyzed top-level construct.
@@ -186,6 +237,28 @@ pub struct SwitchCase {
     pub span: Span,
 }
 
+/// What a [`Stmt::For`] iterates.
+///
+/// The two forms are told apart by the `..`, and they are separate variants
+/// rather than one expression because a range is **not a value** in Kira: there
+/// is no standalone range type, so `0..5` can only be written here. Making it a
+/// variant is what keeps a range out of [`Expr`] entirely.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForIterable {
+    /// A half-open integer range (`0..5`): `start` is included, `end` is not.
+    Range {
+        /// The inclusive lower bound.
+        start: ExprId,
+        /// The exclusive upper bound.
+        end: ExprId,
+    },
+    /// Every element of an array, in order (`xs`).
+    Each {
+        /// The array-typed expression being iterated.
+        array: ExprId,
+    },
+}
+
 /// A brace-delimited sequence of statements.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Block {
@@ -207,7 +280,7 @@ pub enum Stmt {
         /// `true` for `var`, `false` for `let`.
         mutable: bool,
         /// Optional written type annotation.
-        ty: Option<TypeRef>,
+        ty: Option<TypeRefId>,
         /// The initializing expression.
         init: ExprId,
         /// Span covering the statement.
@@ -259,19 +332,15 @@ pub enum Stmt {
         /// Span covering the statement.
         span: Span,
     },
-    /// A `for` loop over a half-open range (`for i in 0..5 { … }`).
-    ///
-    /// The range is written only here — Kira has no standalone range value —
-    /// so the bounds hang off this node rather than off an [`Expr`].
+    /// A `for` loop over a range (`for i in 0..5`) or an array
+    /// (`for x in xs`).
     For {
         /// The loop variable, bound fresh and immutable on each iteration.
         name: Symbol,
         /// Span of the loop variable's name token.
         name_span: Span,
-        /// The inclusive lower bound.
-        start: ExprId,
-        /// The exclusive upper bound.
-        end: ExprId,
+        /// What is being iterated.
+        iterable: ForIterable,
         /// The loop body.
         body: Block,
         /// Span covering the statement.
@@ -433,6 +502,26 @@ pub enum Expr {
         /// Span covering base and field.
         span: Span,
     },
+    /// An array literal (`[1, 2, 3]`, `[]`).
+    ///
+    /// Commas are *optional* separators: `[1 2 3]` and one element per line are
+    /// both legal, so the parser ends an element where an element ends rather
+    /// than at a comma.
+    ArrayLit {
+        /// The written elements, in order.
+        elements: Vec<ExprId>,
+        /// Span covering the brackets and their contents.
+        span: Span,
+    },
+    /// An index read (`xs[0]`).
+    Index {
+        /// The indexed expression.
+        base: ExprId,
+        /// The index expression.
+        index: ExprId,
+        /// Span covering base and brackets.
+        span: Span,
+    },
     /// An ownership transfer written on an expression (`move mesh`,
     /// `copy count`).
     ///
@@ -487,6 +576,8 @@ impl Expr {
             | Expr::StructLit { span, .. }
             | Expr::MethodCall { span, .. }
             | Expr::Field { span, .. }
+            | Expr::ArrayLit { span, .. }
+            | Expr::Index { span, .. }
             | Expr::Ownership { span, .. }
             | Expr::Error { span } => *span,
         }

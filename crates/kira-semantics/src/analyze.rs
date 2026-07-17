@@ -162,6 +162,24 @@ impl FnCtx {
         self.ownership[local.0 as usize].moved = Some(span);
     }
 
+    /// Snapshots the ownership state so an *effectful* trial analysis can be
+    /// rolled back.
+    ///
+    /// Analyzing a receiver to learn its type also runs its ownership effects —
+    /// `move xs` marks `xs` gone. When that analysis is only a probe (the array
+    /// path re-resolves the receiver from syntax instead), those effects have to
+    /// be undone, or a later use of the receiver reports a move that never
+    /// happened. An expression declares no locals, so the state's length is
+    /// stable and a whole-vector snapshot restores it exactly.
+    pub(crate) fn ownership_snapshot(&self) -> Vec<LocalOwnership> {
+        self.ownership.clone()
+    }
+
+    /// Restores a snapshot taken by [`FnCtx::ownership_snapshot`].
+    pub(crate) fn restore_ownership(&mut self, snapshot: Vec<LocalOwnership>) {
+        self.ownership = snapshot;
+    }
+
     /// The name a local was declared with.
     pub(crate) fn local_name(&self, local: LocalId) -> String {
         self.locals[local.0 as usize].name.clone()
@@ -254,7 +272,8 @@ impl<'a> Analyzer<'a> {
                 Item::Struct(declaration) => {
                     let owner = self
                         .program
-                        .structs
+                        .types
+                        .structs()
                         .lookup(self.interner.resolve(declaration.name));
                     for method in &declaration.methods {
                         callables.push(Callable {
@@ -281,7 +300,7 @@ impl<'a> Analyzer<'a> {
                 function
                     .params
                     .iter()
-                    .map(|param| self.resolve_type(param.ty.name, param.ty.span)),
+                    .map(|param| self.resolve_type_ref(param.ty)),
             );
             // A method's receiver borrows: `p.sum()` reads `p` and leaves it
             // usable. The oracle says the same — an unannotated receiver is
@@ -295,7 +314,7 @@ impl<'a> Analyzer<'a> {
                 param_ownership.push(self.check_param_ownership(param));
             }
             let return_type = match &function.return_type {
-                Some(type_ref) => self.resolve_type(type_ref.name, type_ref.span),
+                Some(type_ref) => self.resolve_type_ref(*type_ref),
                 None => Type::Void,
             };
             let id = FuncId(self.sigs.len() as u32);
@@ -377,7 +396,7 @@ impl<'a> Analyzer<'a> {
         match callable.receiver {
             Some(id) => format!(
                 "{}.{written}",
-                self.program.structs.type_name(Type::Struct(id))
+                self.program.types.type_name(Type::Struct(id))
             ),
             None => written.to_owned(),
         }
@@ -432,7 +451,7 @@ impl<'a> Analyzer<'a> {
         let param_modes = self.sigs[id.0 as usize].param_ownership.clone();
         let receiver_slots = usize::from(callable.receiver.is_some());
         for (index, param) in function.params.iter().enumerate() {
-            let ty = self.resolve_type(param.ty.name, param.ty.span);
+            let ty = self.resolve_type_ref(param.ty);
             let name = self.interner.resolve(param.name).to_owned();
             let mode = param_modes
                 .get(index + receiver_slots)
@@ -477,9 +496,7 @@ impl<'a> Analyzer<'a> {
     pub(crate) fn resolve_field_quietly(&self, base_ty: Type, name: &str) -> bool {
         matches!(base_ty, Type::Struct(id)
             if self
-                .program
-                .structs
-                .get(id)
+                .program.types.structs().get(id)
                 .is_some_and(|def| def.field_index(name).is_some()))
     }
 
@@ -508,7 +525,8 @@ impl<'a> Analyzer<'a> {
         };
         let resolved = self
             .program
-            .structs
+            .types
+            .structs()
             .get(id)
             .and_then(|def| def.field_index(name).map(|index| (index, def)))
             .and_then(|(index, def)| def.field(index).map(|field| (index, field.ty)));
@@ -534,33 +552,13 @@ impl<'a> Analyzer<'a> {
         self.sigs[id.0 as usize].param_ownership.clone()
     }
 
-    /// Resolves a written type name to a builtin or a declared struct.
-    pub(crate) fn resolve_type(&mut self, name: kira_core::Symbol, span: Span) -> Type {
-        let text = self.interner.resolve(name).to_owned();
-        if let Some(ty) = Type::from_name(&text) {
-            return ty;
-        }
-        if let Some(id) = self.program.structs.lookup(&text) {
-            return Type::Struct(id);
-        }
-        self.emit(
-            span,
-            "KSEM050",
-            format!(
-                "unknown type `{text}` (v0 supports Int, Float, Bool, String, Void, \
-                 and declared structs)"
-            ),
-        );
-        Type::Error
-    }
-
     /// The spelling of `ty` for a diagnostic.
     ///
     /// Owned rather than borrowed on purpose: a struct's name lives in
-    /// `self.program`, and holding a borrow of it across an `emit` — which
-    /// needs `&mut self` — would not compile.
+    /// `self.program` and an array's is built on demand, and holding a borrow
+    /// across an `emit` — which needs `&mut self` — would not compile.
     pub(crate) fn type_name(&self, ty: Type) -> String {
-        self.program.structs.type_name(ty).to_owned()
+        self.program.types.type_name(ty)
     }
 
     pub(crate) fn emit(&mut self, span: Span, code: &'static str, message: impl Into<String>) {

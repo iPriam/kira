@@ -21,6 +21,10 @@ pub struct StrId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StructId(u32);
 
+/// A handle to a heap-allocated array value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArrayId(u32);
+
 /// A runtime value on the operand stack or in a local slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value {
@@ -34,6 +38,8 @@ pub enum Value {
     Str(StrId),
     /// A handle to a heap struct.
     Struct(StructId),
+    /// A handle to a heap array.
+    Array(ArrayId),
     /// The unit value.
     Void,
 }
@@ -45,6 +51,8 @@ enum Object {
     Str(String),
     /// A struct's fields, in declaration order.
     Struct(Vec<Value>),
+    /// An array's elements, in order.
+    Array(Vec<Value>),
 }
 
 /// A snapshot of heap allocation counters.
@@ -88,6 +96,99 @@ impl Heap {
     /// stack) hands over ownership, exactly as a `Str` handle is handed over.
     pub fn alloc_struct(&mut self, fields: Vec<Value>) -> StructId {
         StructId(self.alloc_object(Object::Struct(fields)))
+    }
+
+    /// Allocates an array of `elements` on the heap, returning its handle.
+    ///
+    /// As with a struct, the elements are taken rather than copied: whatever
+    /// produced them hands over ownership.
+    pub fn alloc_array(&mut self, elements: Vec<Value>) -> ArrayId {
+        ArrayId(self.alloc_object(Object::Array(elements)))
+    }
+
+    /// Borrows the elements of the array behind a handle.
+    ///
+    /// Returns an empty slice for a handle whose slot was already freed or
+    /// holds something else, so a misbehaving caller cannot panic the VM.
+    pub fn elements(&self, id: ArrayId) -> &[Value] {
+        match self.slots.get(id.0 as usize) {
+            Some(Some(Object::Array(elements))) => elements,
+            _ => &[],
+        }
+    }
+
+    /// The number of elements in an array, or `None` when the handle does not
+    /// name one.
+    pub fn array_len(&self, id: ArrayId) -> Option<usize> {
+        match self.slots.get(id.0 as usize) {
+            Some(Some(Object::Array(elements))) => Some(elements.len()),
+            _ => None,
+        }
+    }
+
+    /// The value at `index` of an array, or `None` when the handle does not
+    /// name an array with that many elements.
+    pub fn element(&self, id: ArrayId, index: usize) -> Option<Value> {
+        self.elements(id).get(index).copied()
+    }
+
+    /// Replaces the element at `index`, dropping what was there, and reports
+    /// whether the element existed.
+    ///
+    /// Returns `false` — having changed nothing and dropped nothing — when the
+    /// handle does not name an array with that element.
+    pub fn set_element(&mut self, id: ArrayId, index: usize, value: Value) -> bool {
+        let Some(previous) = self.element(id, index) else {
+            return false;
+        };
+        self.drop_value(previous);
+        match self.slots.get_mut(id.0 as usize) {
+            Some(Some(Object::Array(elements))) => match elements.get_mut(index) {
+                Some(slot) => {
+                    *slot = value;
+                    true
+                }
+                None => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Pushes `value` onto the end of an array, reporting whether the handle
+    /// named one.
+    ///
+    /// The array grows in place: this is the one operation whose whole purpose
+    /// is that the *caller's* array changes, which is why `append` resolves a
+    /// place rather than taking a value.
+    pub fn push_element(&mut self, id: ArrayId, value: Value) -> bool {
+        match self.slots.get_mut(id.0 as usize) {
+            Some(Some(Object::Array(elements))) => {
+                elements.push(value);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Frees the array behind a handle, recursively dropping its elements.
+    ///
+    /// Bounded by the program's nesting depth for the same reason
+    /// [`Heap::free_struct`] is: an array's element type is resolved during
+    /// analysis against types that already resolve, so a cycle is
+    /// unrepresentable.
+    pub fn free_array(&mut self, id: ArrayId) {
+        let taken = match self.slots.get_mut(id.0 as usize) {
+            Some(slot @ Some(Object::Array(_))) => slot.take(),
+            _ => None,
+        };
+        let Some(Object::Array(elements)) = taken else {
+            return;
+        };
+        self.freed += 1;
+        self.free_list.push(id.0);
+        for element in elements {
+            self.drop_value(element);
+        }
     }
 
     fn alloc_object(&mut self, object: Object) -> u32 {
@@ -198,15 +299,29 @@ impl Heap {
         match value {
             Value::Str(id) => self.free(id),
             Value::Struct(id) => self.free_struct(id),
+            Value::Array(id) => self.free_array(id),
             _ => {}
         }
     }
 
     /// Produces an independent copy of a value.
     ///
-    /// Deep by construction: a struct's copy owns fresh copies of its fields,
-    /// so no two live values ever share heap storage. That is what makes
-    /// `var b = a; b.x = 1` leave `a` alone.
+    /// Deep by construction: a struct's copy owns fresh copies of its fields
+    /// and an array's copy owns fresh copies of its elements, so no two live
+    /// values ever share heap storage. That is what makes `var b = a; b.x = 1`
+    /// leave `a` alone, and it is what keeps the drop accounting provable —
+    /// every handle has exactly one owner, so `current == 0` at exit means the
+    /// program balanced rather than that two owners freed one object once.
+    ///
+    /// **An array field inside a struct is deep-copied too**, which falls out
+    /// of the recursion rather than being a special case: the struct arm copies
+    /// each field, and a field that is an array takes the array arm.
+    ///
+    /// This is the one place the copy is expensive: reading an array copies all
+    /// of it, so `xs[i]` inside a loop is quadratic. That is the existing cost
+    /// model — a struct field read already deep-copies its struct — and the fix
+    /// is the by-reference load the `borrow mut` work needs, not a special case
+    /// here. See `.codex/work/arrays.md`.
     pub fn copy_value(&mut self, value: Value) -> Value {
         match value {
             Value::Str(id) => {
@@ -220,6 +335,14 @@ impl Heap {
                     .map(|field| self.copy_value(field))
                     .collect();
                 Value::Struct(self.alloc_struct(copies))
+            }
+            Value::Array(id) => {
+                let elements = self.elements(id).to_vec();
+                let copies = elements
+                    .into_iter()
+                    .map(|element| self.copy_value(element))
+                    .collect();
+                Value::Array(self.alloc_array(copies))
             }
             scalar => scalar,
         }
@@ -243,7 +366,12 @@ impl Heap {
             Value::Bool(b) => b.to_string(),
             Value::Str(id) => self.get(id).to_owned(),
             Value::Void => String::new(),
-            Value::Struct(_) => {
+            // A struct and an array are both the `None` case, and for the same
+            // reason: neither has a rendering the language corpus pins, so any
+            // text invented here would be inventing language surface. Analysis
+            // rejects both before a program runs; this is the runtime saying
+            // the same thing rather than printing something made up.
+            Value::Struct(_) | Value::Array(_) => {
                 self.drop_value(value);
                 return None;
             }
@@ -300,7 +428,7 @@ impl Heap {
             Value::Float(value) => NativeResult::Float(value),
             Value::Bool(value) => NativeResult::Bool(value),
             Value::Str(id) => NativeResult::Str(self.get(id).to_owned()),
-            Value::Struct(_) => return None,
+            Value::Struct(_) | Value::Array(_) => return None,
         })
     }
 }
@@ -414,6 +542,116 @@ mod tests {
         // The replaced string is freed, not leaked: only the struct is live.
         assert_eq!(heap.stats().current, 1);
         heap.drop_value(Value::Struct(id));
+        assert_eq!(heap.stats().current, 0);
+    }
+
+    #[test]
+    fn freeing_an_array_frees_its_elements() {
+        let mut heap = Heap::new();
+        let text = heap.alloc("label".to_owned());
+        let inner = heap.alloc_array(vec![Value::Str(text)]);
+        let outer = heap.alloc_array(vec![Value::Array(inner), Value::Int(7)]);
+        assert_eq!(heap.stats().current, 3);
+        heap.drop_value(Value::Array(outer));
+        assert_eq!(heap.stats().current, 0);
+    }
+
+    #[test]
+    fn copying_an_array_is_deep_so_writes_do_not_alias() {
+        let mut heap = Heap::new();
+        let text = heap.alloc("a".to_owned());
+        let original = heap.alloc_array(vec![Value::Str(text)]);
+        let Value::Array(copy) = heap.copy_value(Value::Array(original)) else {
+            panic!("an array copies to an array");
+        };
+        assert_ne!(original, copy, "a copy is its own object");
+
+        let replacement = heap.alloc("b".to_owned());
+        assert!(heap.set_element(copy, 0, Value::Str(replacement)));
+        let Some(Value::Str(original_text)) = heap.element(original, 0) else {
+            panic!("the original still holds its string");
+        };
+        assert_eq!(heap.get(original_text), "a");
+
+        heap.drop_value(Value::Array(original));
+        heap.drop_value(Value::Array(copy));
+        assert_eq!(
+            heap.stats().current,
+            0,
+            "no element is freed twice or leaked"
+        );
+    }
+
+    /// The question the array design turned on: copying a struct that holds an
+    /// array must copy the array, not share the handle. It falls out of the
+    /// recursion — the struct arm copies each field — but it is the behaviour
+    /// the whole ownership story rests on, so it is pinned directly rather than
+    /// inferred from the code.
+    #[test]
+    fn copying_a_struct_deep_copies_an_array_field() {
+        let mut heap = Heap::new();
+        let values = heap.alloc_array(vec![Value::Int(1), Value::Int(2)]);
+        let original = heap.alloc_struct(vec![Value::Array(values)]);
+
+        let Value::Struct(copy) = heap.copy_value(Value::Struct(original)) else {
+            panic!("a struct copies to a struct");
+        };
+        let Some(Value::Array(copied_values)) = heap.field(copy, 0) else {
+            panic!("the copy holds an array");
+        };
+        assert_ne!(
+            values, copied_values,
+            "the copy's array is its own object, not a shared handle"
+        );
+
+        // Mutating the copy's array must leave the original's alone.
+        assert!(heap.set_element(copied_values, 0, Value::Int(99)));
+        assert_eq!(heap.element(values, 0), Some(Value::Int(1)));
+        assert_eq!(heap.element(copied_values, 0), Some(Value::Int(99)));
+
+        // …and growing it must not grow the original's either.
+        assert!(heap.push_element(copied_values, Value::Int(3)));
+        assert_eq!(heap.array_len(values), Some(2));
+        assert_eq!(heap.array_len(copied_values), Some(3));
+
+        heap.drop_value(Value::Struct(original));
+        heap.drop_value(Value::Struct(copy));
+        assert_eq!(heap.stats().current, 0);
+    }
+
+    #[test]
+    fn overwriting_an_element_drops_what_was_there() {
+        let mut heap = Heap::new();
+        let text = heap.alloc("gone".to_owned());
+        let id = heap.alloc_array(vec![Value::Str(text)]);
+        assert_eq!(heap.stats().current, 2);
+        assert!(heap.set_element(id, 0, Value::Int(1)));
+        // The replaced string is freed, not leaked: only the array is live.
+        assert_eq!(heap.stats().current, 1);
+        heap.drop_value(Value::Array(id));
+        assert_eq!(heap.stats().current, 0);
+    }
+
+    #[test]
+    fn appending_grows_the_array_in_place() {
+        let mut heap = Heap::new();
+        let id = heap.alloc_array(Vec::new());
+        assert_eq!(heap.array_len(id), Some(0));
+        assert!(heap.push_element(id, Value::Int(1)));
+        assert!(heap.push_element(id, Value::Int(2)));
+        assert_eq!(heap.array_len(id), Some(2));
+        assert_eq!(heap.element(id, 1), Some(Value::Int(2)));
+        heap.drop_value(Value::Array(id));
+        assert_eq!(heap.stats().current, 0);
+    }
+
+    #[test]
+    fn an_array_has_no_invented_rendering_or_seam_shape() {
+        let mut heap = Heap::new();
+        let value = Value::Array(heap.alloc_array(vec![Value::Int(1)]));
+        assert_eq!(heap.lift(value), None);
+        // Refusing to render one still consumes it, so it does not leak.
+        assert_eq!(heap.format_and_consume(value), None);
         assert_eq!(heap.stats().current, 0);
     }
 

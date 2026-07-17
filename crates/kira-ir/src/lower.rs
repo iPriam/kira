@@ -7,17 +7,17 @@
 //! yields `None`.
 
 use kira_semantics_model::hir::{
-    Callee, HirExpr, HirExprId, HirPlace, HirProgram, HirStmt, HirStmtId,
+    Callee, HirExpr, HirExprId, HirPlace, HirPlaceStep, HirProgram, HirStmt, HirStmtId,
 };
 
-use crate::ir::{IrCallee, IrExpr, IrExprId, IrFunction, IrPlace, IrProgram, IrStmt};
+use crate::ir::{IrCallee, IrExpr, IrExprId, IrFunction, IrPlace, IrPlaceStep, IrProgram, IrStmt};
 
 /// Lowers an analyzed program to IR, or returns `None` when it has no `@Main`.
 pub fn lower(program: &HirProgram) -> Option<IrProgram> {
     let main = program.main?;
     let mut ir = IrProgram {
         functions: Vec::with_capacity(program.functions.len()),
-        structs: program.structs.clone(),
+        types: program.types.clone(),
         main: main.0,
         exprs: la_arena::Arena::new(),
     };
@@ -63,7 +63,7 @@ impl Lowerer<'_> {
                 init: self.lower_expr(init),
             },
             HirStmt::Assign { place, value } => IrStmt::Assign {
-                place: lower_place(&place),
+                place: self.lower_place(&place),
                 value: self.lower_expr(value),
             },
             HirStmt::Return { value } => IrStmt::Return {
@@ -126,6 +126,28 @@ impl Lowerer<'_> {
                 index,
                 ty,
             },
+            HirExpr::ArrayNew { ty, elements } => {
+                let ir_elements = elements
+                    .iter()
+                    .map(|&element| self.lower_expr(element))
+                    .collect();
+                IrExpr::ArrayNew {
+                    ty,
+                    elements: ir_elements,
+                }
+            }
+            HirExpr::Index { base, index, ty } => IrExpr::Index {
+                base: self.lower_expr(base),
+                index: self.lower_expr(index),
+                ty,
+            },
+            HirExpr::ArrayLen { array } => IrExpr::ArrayLen {
+                array: self.lower_expr(array),
+            },
+            HirExpr::ArrayAppend { place, value } => IrExpr::ArrayAppend {
+                place: self.lower_place(&place),
+                value: self.lower_expr(value),
+            },
             // An error node can only be reached when analysis already reported
             // diagnostics and the program is never run; lower it to a harmless
             // constant so lowering stays total.
@@ -133,12 +155,24 @@ impl Lowerer<'_> {
         };
         self.ir.exprs.alloc(node)
     }
-}
 
-fn lower_place(place: &HirPlace) -> IrPlace {
-    IrPlace {
-        local: place.local.0,
-        path: place.path.clone(),
+    /// Lowers a place, lowering the index expressions its path carries.
+    ///
+    /// A place is not a plain data copy any more: an `Index` step holds an
+    /// expression, which has to land in the IR's own arena like every other.
+    fn lower_place(&mut self, place: &HirPlace) -> IrPlace {
+        let path = place
+            .path
+            .iter()
+            .map(|step| match step {
+                HirPlaceStep::Field(index) => IrPlaceStep::Field(*index),
+                HirPlaceStep::Index(expr) => IrPlaceStep::Index(self.lower_expr(*expr)),
+            })
+            .collect();
+        IrPlace {
+            local: place.local.0,
+            path,
+        }
     }
 }
 

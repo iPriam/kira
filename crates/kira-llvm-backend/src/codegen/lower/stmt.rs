@@ -1,6 +1,6 @@
 //! Statement lowering: stores, returns, and the blocks `if`/`while` become.
 
-use kira_ir::{IrExprId, IrPlace, IrStmt};
+use kira_ir::{IrExprId, IrPlace, IrPlaceStep, IrStmt};
 use kira_semantics_model::Type;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
@@ -95,44 +95,106 @@ impl FunctionLowering<'_, '_> {
         self.store_through(pointer, ty, value)
     }
 
-    /// Stores into an assignment target, walking its field path.
+    /// Stores into an assignment target, walking its path to the slot to write.
     ///
-    /// The path is walked with GEPs into the local's `alloca`, so a nested
-    /// write lands in place rather than rebuilding the enclosing struct —
-    /// matching the VM's `StoreField`, which walks handles for the same reason.
+    /// The path is walked to the destination's address, so a nested write lands
+    /// in place rather than rebuilding the enclosing value — matching the VM's
+    /// place walk, which moves handles for the same reason.
+    ///
+    /// **Evaluation order** follows the IR contract: the walk evaluates the
+    /// path's index expressions left to right, and only then is the value
+    /// lowered — so `xs[next()] = next()` agrees across backends.
     fn store_place(&mut self, place: &IrPlace, expr: IrExprId) -> Result<(), LlvmError> {
-        let value = self.lower_expr(expr)?;
-        let mut pointer = self.local_pointer(place.local)?;
-        let mut ty = self.local_type(place.local)?;
-        for &index in &place.path {
-            let Type::Struct(id) = ty else {
-                return Err(LlvmError::Unsupported(
-                    "a field of a value that is not a struct",
-                ));
-            };
-            let struct_type = self.codegen.llvm_type(ty)?;
-            let name = c_string(&format!("field.{index}.ptr"));
-            // SAFETY: `pointer` points at a value of `struct_type`, and `index`
-            // came from that struct's own definition, so it names a real field.
-            pointer = unsafe {
-                LLVMBuildStructGEP2(
-                    self.codegen.builder,
-                    struct_type,
-                    pointer,
-                    index,
-                    name.as_ptr(),
-                )
-            };
-            ty = self
-                .codegen
-                .program
-                .structs
-                .get(id)
-                .and_then(|def| def.field(index))
-                .map(|field| field.ty)
-                .ok_or(LlvmError::Unsupported("a field the struct never declared"))?;
+        if place.path.is_empty() {
+            let value = self.lower_expr(expr)?;
+            let ty = self.local_type(place.local)?;
+            let pointer = self.local_pointer(place.local)?;
+            return self.store_through(pointer, ty, value);
         }
-        self.store_through(pointer, ty, value)
+        let (slot, ty) = self.walk_place(place.local, &place.path)?;
+        let value = self.lower_expr(expr)?;
+        self.store_through(slot, ty, value)
+    }
+
+    /// Walks `steps` from local `local`, leaving the address the last step
+    /// reaches and that value's type.
+    ///
+    /// A struct is an inline aggregate, so a `Field` step is address arithmetic
+    /// (a GEP). An array is an opaque handle stored in a slot, so an `Index`
+    /// step *loads* that handle and asks the runtime for the element's address —
+    /// which is where the two backends differ from a plain field chain, and
+    /// where the bounds check lives.
+    pub(super) fn walk_place(
+        &mut self,
+        local: u32,
+        steps: &[IrPlaceStep],
+    ) -> Result<(LLVMValueRef, Type), LlvmError> {
+        let mut pointer = self.local_pointer(local)?;
+        let mut ty = self.local_type(local)?;
+        for step in steps {
+            (pointer, ty) = self.walk_place_step(pointer, ty, step)?;
+        }
+        Ok((pointer, ty))
+    }
+
+    /// Walks one step: `pointer` is where the current value is stored, `ty` its
+    /// type; returns the storage address of the value the step reaches and its
+    /// type.
+    fn walk_place_step(
+        &mut self,
+        pointer: LLVMValueRef,
+        ty: Type,
+        step: &IrPlaceStep,
+    ) -> Result<(LLVMValueRef, Type), LlvmError> {
+        match step {
+            IrPlaceStep::Field(index) => {
+                let Type::Struct(id) = ty else {
+                    return Err(LlvmError::Unsupported(
+                        "a field of a value that is not a struct",
+                    ));
+                };
+                let struct_type = self.codegen.llvm_type(ty)?;
+                let name = c_string(&format!("field.{index}.ptr"));
+                // SAFETY: `pointer` points at a value of `struct_type`, and
+                // `index` came from that struct's own definition.
+                let field_ptr = unsafe {
+                    LLVMBuildStructGEP2(
+                        self.codegen.builder,
+                        struct_type,
+                        pointer,
+                        *index,
+                        name.as_ptr(),
+                    )
+                };
+                let field_ty = self
+                    .codegen
+                    .program
+                    .types
+                    .structs()
+                    .get(id)
+                    .and_then(|def| def.field(*index))
+                    .map(|field| field.ty)
+                    .ok_or(LlvmError::Unsupported("a field the struct never declared"))?;
+                Ok((field_ptr, field_ty))
+            }
+            IrPlaceStep::Index(index) => {
+                let element = self.codegen.element_of(ty)?;
+                // `pointer` holds the array handle; load it, then ask the
+                // runtime for the element's bounds-checked address.
+                // SAFETY: `pointer` points at a slot holding an array handle
+                // (a `ptr`), and the builder is on a live block.
+                let handle = unsafe {
+                    LLVMBuildLoad2(
+                        self.codegen.builder,
+                        self.codegen.types.ptr,
+                        pointer,
+                        c"array".as_ptr(),
+                    )
+                };
+                let slot = self.element_slot(handle, *index, element)?;
+                Ok((slot, element))
+            }
+        }
     }
 
     /// Stores `value` of type `ty` through `pointer`, dropping what was there.

@@ -138,15 +138,22 @@ impl Analyzer<'_> {
         op: OwnershipOp,
         operand: ExprId,
         span: Span,
+        expected: Option<Type>,
     ) -> HirExprId {
         match op {
-            OwnershipOp::Copy => self.analyze_copy_expr(ctx, operand, span),
-            OwnershipOp::Move => self.analyze_move_expr(ctx, operand, span),
+            OwnershipOp::Copy => self.analyze_copy_expr(ctx, operand, span, expected),
+            OwnershipOp::Move => self.analyze_move_expr(ctx, operand, span, expected),
         }
     }
 
-    fn analyze_copy_expr(&mut self, ctx: &mut FnCtx, operand: ExprId, span: Span) -> HirExprId {
-        let value = self.analyze_expr(ctx, operand);
+    fn analyze_copy_expr(
+        &mut self,
+        ctx: &mut FnCtx,
+        operand: ExprId,
+        span: Span,
+        expected: Option<Type>,
+    ) -> HirExprId {
+        let value = self.analyze_expr_expecting(ctx, operand, expected);
         let ty = self.program.expr(value).type_of();
         if ty.is_trivially_copyable() {
             return value;
@@ -162,11 +169,17 @@ impl Analyzer<'_> {
         self.program.exprs.alloc(HirExpr::Error)
     }
 
-    fn analyze_move_expr(&mut self, ctx: &mut FnCtx, operand: ExprId, span: Span) -> HirExprId {
+    fn analyze_move_expr(
+        &mut self,
+        ctx: &mut FnCtx,
+        operand: ExprId,
+        span: Span,
+        expected: Option<Type>,
+    ) -> HirExprId {
         let Some(local) = self.named_local(ctx, operand) else {
             // `move someCall()` / `move p.x`: nothing is bound, so nothing is
             // consumed. The operand still analyzes normally.
-            return self.analyze_expr(ctx, operand);
+            return self.analyze_expr_expecting(ctx, operand, expected);
         };
         let state = ctx.ownership_of(local).clone();
         let name = ctx.local_name(local);
@@ -261,7 +274,7 @@ impl Analyzer<'_> {
                     );
                     return self.program.exprs.alloc(HirExpr::Error);
                 }
-                self.analyze_expr(ctx, arg)
+                self.analyze_expr_expecting(ctx, arg, Some(expected))
             }
             OwnershipMode::Copy => {
                 if written == Some(OwnershipOp::Move) {
@@ -272,7 +285,7 @@ impl Analyzer<'_> {
                     );
                     return self.program.exprs.alloc(HirExpr::Error);
                 }
-                let value = self.analyze_expr(ctx, arg);
+                let value = self.analyze_expr_expecting(ctx, arg, Some(expected));
                 if written.is_none()
                     && let Some(local) = named
                     && !expected.is_trivially_copyable()
@@ -288,7 +301,7 @@ impl Analyzer<'_> {
                 value
             }
             OwnershipMode::Owned | OwnershipMode::Move => {
-                let value = self.analyze_expr(ctx, arg);
+                let value = self.analyze_expr_expecting(ctx, arg, Some(expected));
                 if written.is_none()
                     && let Some(local) = named
                     && !expected.is_trivially_copyable()

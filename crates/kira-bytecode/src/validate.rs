@@ -134,10 +134,17 @@ impl Module {
                     // VM is structurally typed), so the runtime checks each step
                     // against the value it actually finds and traps on a
                     // mismatch.
-                    Instruction::StoreField { slot, .. } => *slot < function.local_count,
-                    // `NewStruct` and `GetField` carry only counts and indices
-                    // that the runtime checks against the stack and the value in
-                    // hand; there is nothing static to bound them against.
+                    // The slot a place is rooted at is an index into this
+                    // frame, so every instruction carrying one is bounded here.
+                    Instruction::StoreField { slot, .. }
+                    | Instruction::StorePlace { slot, .. }
+                    | Instruction::ArrayAppend { slot, .. } => *slot < function.local_count,
+                    // `NewStruct`, `GetField`, `NewArray`, `ArrayGet`, and
+                    // `ArrayLen` carry only counts and indices that the runtime
+                    // checks against the stack and the value in hand; there is
+                    // nothing static to bound them against. An array index in
+                    // particular is a *value*, not an operand — out of bounds
+                    // is a runtime trap by design.
                     _ => true,
                 };
                 if !in_range {

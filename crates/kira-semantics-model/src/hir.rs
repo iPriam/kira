@@ -6,7 +6,7 @@
 //! to each other by index, so no HIR type carries a lifetime. Local indices
 //! are scoped to their owning function.
 
-use crate::ty::{StructId, StructTable, Type};
+use crate::ty::{StructId, Type, TypeTable};
 use kira_runtime_abi::Execution;
 use kira_source::Span;
 use kira_syntax_model::ownership::OwnershipMode;
@@ -39,8 +39,8 @@ pub struct LocalId(pub u32);
 pub struct HirProgram {
     /// Every analyzed function, in source order.
     pub functions: Vec<HirFunction>,
-    /// Every declared struct.
-    pub structs: StructTable,
+    /// Every shape the program's types name: its structs and its array types.
+    pub types: TypeTable,
     /// The index of the `@Main` entrypoint, when the program has a valid one.
     pub main: Option<FuncId>,
     /// Arena backing every [`HirExprId`].
@@ -161,18 +161,35 @@ pub enum HirStmt {
     Continue,
 }
 
-/// A writable location: a local, optionally walked into by field indices.
+/// One step of a [`HirPlace`]'s walk into a value.
+///
+/// The two steps differ in *when* they are known, which is the whole reason
+/// this is an enum rather than a list of numbers: a field index is resolved
+/// during analysis and is a constant from here down, while an array index is
+/// an expression that only has a value while the program runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HirPlaceStep {
+    /// Walk into the field at this index, in declaration order.
+    Field(u32),
+    /// Walk into the array element this expression selects.
+    Index(HirExprId),
+}
+
+/// A writable location: a local, optionally walked into by fields and indices.
 ///
 /// `p` is the local with an empty path; `b.size.x` is the local `b` with the
-/// path `[size, x]`, resolved to indices during analysis. Resolving the whole
-/// path up front is what lets a backend write through it in place instead of
-/// rebuilding the enclosing value.
+/// path `[Field(size), Field(x)]`; `grid[0].cells[2].x` is `grid` with
+/// `[Index(0), Field(cells), Index(2), Field(x)]`. Resolving the whole path up
+/// front is what lets a backend write through it in place instead of rebuilding
+/// the enclosing value — which is not an optimization but the semantics: an
+/// array is a shared object, so a write that rebuilt its owner would land
+/// somewhere nobody can see.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HirPlace {
     /// The local the place is rooted at.
     pub local: LocalId,
-    /// Field indices to walk, outermost first; empty writes the local itself.
-    pub path: Vec<u32>,
+    /// Steps to walk, outermost first; empty writes the local itself.
+    pub path: Vec<HirPlaceStep>,
 }
 
 /// An expression, carrying its resolved type.
@@ -242,6 +259,44 @@ pub enum HirExpr {
         /// The field's type.
         ty: Type,
     },
+    /// Construction of an array value from its written elements.
+    ///
+    /// Carries its own type rather than deriving it from the elements: an
+    /// empty literal (`[]`) has no element to ask, and the expected type is
+    /// what decides it.
+    ArrayNew {
+        /// The array's type (an interned [`Type::Array`]).
+        ty: Type,
+        /// The elements, in written order.
+        elements: Vec<HirExprId>,
+    },
+    /// A read of one element of an array (`xs[i]`).
+    Index {
+        /// The array-typed expression being read.
+        base: HirExprId,
+        /// The `Int`-typed index.
+        index: HirExprId,
+        /// The element's type.
+        ty: Type,
+    },
+    /// An array's element count (`xs.count`) — a property, not a call.
+    ArrayLen {
+        /// The array-typed expression being measured.
+        array: HirExprId,
+    },
+    /// `xs.append(v)`: push one element onto an array, in place.
+    ///
+    /// The receiver is a **place**, not an expression, and that is the whole
+    /// correctness argument for this node: reading an array yields an
+    /// independent value, so appending to a *read* would push onto something
+    /// nobody else can see and silently lose the write. Resolving the receiver
+    /// to a place is what makes `rows[0].xs.append(42)` land in `rows`.
+    ArrayAppend {
+        /// The array being appended to.
+        place: HirPlace,
+        /// The element to push.
+        value: HirExprId,
+    },
     /// A placeholder for an expression that failed to analyze.
     Error,
 }
@@ -258,8 +313,14 @@ impl HirExpr {
             | HirExpr::Unary { ty, .. }
             | HirExpr::Binary { ty, .. }
             | HirExpr::Call { ty, .. }
-            | HirExpr::Field { ty, .. } => *ty,
+            | HirExpr::Field { ty, .. }
+            | HirExpr::ArrayNew { ty, .. }
+            | HirExpr::Index { ty, .. } => *ty,
             HirExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
+            // `.count` is an `Int` and `.append` yields nothing; neither has a
+            // type to carry, because neither has one that can vary.
+            HirExpr::ArrayLen { .. } => Type::Int,
+            HirExpr::ArrayAppend { .. } => Type::Void,
             HirExpr::Error => Type::Error,
         }
     }

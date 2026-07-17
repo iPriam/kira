@@ -4,11 +4,11 @@
 //! because a parameter, a local, or a field may name a struct — so the table
 //! has to exist first.
 
-use kira_semantics_model::{FieldDef, StructDef, Type};
-use kira_source::Span;
+use kira_semantics_model::{FieldDef, StructDef};
 use kira_syntax_model::ast::{ExprId, Item, StructDecl};
 
 use crate::analyze::Analyzer;
+use crate::types::NameContext;
 
 impl Analyzer<'_> {
     /// Declares every struct, in source order, resolving field types as it goes.
@@ -26,7 +26,7 @@ impl Analyzer<'_> {
             };
             let (def, defaults) = self.resolve_struct_def(declaration);
             let name = def.name.clone();
-            match self.program.structs.declare(def) {
+            match self.program.types.structs_mut().declare(def) {
                 // Pushed only on success, which is what keeps `struct_defaults`
                 // indexed by the same ids the table mints.
                 Some(_) => self.struct_defaults.push(defaults),
@@ -58,7 +58,10 @@ impl Analyzer<'_> {
                 );
                 continue;
             }
-            let ty = self.resolve_field_type(&name, field.ty.name, field.ty.span);
+            let context = NameContext::Field {
+                owner: name.clone(),
+            };
+            let ty = self.resolve_type_in(field.ty, &context);
             fields.push(FieldDef {
                 name: field_name,
                 ty,
@@ -80,34 +83,5 @@ impl Analyzer<'_> {
             .and_then(|defaults| defaults.get(index as usize))
             .copied()
             .flatten()
-    }
-
-    /// Resolves a field's written type, with a diagnostic that distinguishes a
-    /// forward reference from an unknown name — they are different mistakes.
-    fn resolve_field_type(&mut self, owner: &str, name: kira_core::Symbol, span: Span) -> Type {
-        let text = self.interner.resolve(name).to_owned();
-        if let Some(ty) = Type::from_name(&text) {
-            return ty;
-        }
-        if let Some(id) = self.program.structs.lookup(&text) {
-            return Type::Struct(id);
-        }
-        let declared_later = self.tree.items.iter().any(|item| match item {
-            Item::Struct(other) => self.interner.resolve(other.name) == text,
-            _ => false,
-        });
-        if declared_later {
-            self.emit(
-                span,
-                "KSEM051",
-                format!(
-                    "struct `{owner}` cannot hold a `{text}` because `{text}` is declared \
-                     later in the file; move `{text}` above `{owner}`",
-                ),
-            );
-        } else {
-            self.emit(span, "KSEM050", format!("unknown type `{text}`"));
-        }
-        Type::Error
     }
 }

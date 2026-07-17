@@ -88,6 +88,51 @@ parameter, so writing to `self` inside a method leaves the caller's value
 alone. A method's body may name a member bare (`self.x` and `x` are the same
 read).
 
+## Arrays
+
+An array is a shared, growable, heap-backed sequence, written `[T]`. Its whole
+surface is two members — `.append(v)`, which grows it in place, and `.count`, a
+property with no parens — plus `xs[i]` to read and write elements:
+
+```kira
+let xs = [1, 2, 3]           // full the moment it exists; commas optional
+var ys: [Int] = []           // the universal idiom: an empty literal, grown
+for i in 0..5 { ys.append(i * i) }
+ys[1] = 99                   // an index write lands in place
+print(ys.count)              // a property, never `.count()`
+
+var grid: [[Int]] = [[1, 2], [3, 4]]
+grid[1][1] = 77              // a write walks as deep as the path goes
+```
+
+An out-of-range or negative index is a **runtime trap**, not a compile error —
+an index is rarely a constant, so a static check would reject working programs.
+A negative index and one past the end are *different* traps, because they are
+different mistakes.
+
+The value semantics are the mirror image of a struct's. A struct copies on
+binding, so a copy is independent. An array is a **handle**: reading one *out*
+of a place (an element, a returned value) copies it, so what you read cannot be
+perturbed afterwards — but the array itself aliases, which is why the ownership
+checker **moves it on binding** (`let alias = xs` ends `xs`). There is no array
+clone: `copy xs` is `KSEM116`. Independent arrays come from building with
+`append`, or from copying a struct that owns one — which deep-copies the array
+field rather than sharing the handle, the question the whole design turned on.
+
+Two edges match the struct ones, one for the same reason and one not:
+
+- **`print(someArray)` is rejected (`KSEM081`).** Same as a struct: no corpus
+  call site pins a separator or a bracket, so a format here would be invented
+  surface.
+- **An array cannot cross the `@Native`/`@Runtime` boundary yet.** Unlike a
+  struct, this is a *gap, not a decision* — the language does let an array
+  cross; what is missing is the ownership answer at the seam (who frees the
+  elements, what a native callee growing the array means for the other half). A
+  build that would need the crossing says so rather than guessing.
+
+See [.codex/work/arrays.md](.codex/work/arrays.md) for the design, and
+[examples/arrays/arrays.kira](examples/arrays/arrays.kira) for a tour.
+
 ## Ownership
 
 Kira owns by default, and says so at the call site. A plain parameter
@@ -117,8 +162,9 @@ there is nothing to lose track of.
 
 A struct nonetheless **copies when bound**: `var w = v` deep-copies, and `v`
 stays live. Needing `move` and moving on bind are different questions, and a
-struct answers them differently. Arrays will be the first type to answer the
-second one `yes`, because an array binding aliases where a struct copies.
+struct answers them differently. An **array** is the type that answers the
+second one `yes`: an array binding aliases where a struct copies, so binding one
+moves it (see [Arrays](#arrays)).
 
 `copy` is reserved but has no clone semantics: `copy` on anything non-trivial
 is `KSEM116` rather than a deep copy invented here. Borrow a value, move it, or
@@ -155,6 +201,16 @@ for i in lo..hi { print(i) }    // bounds are expressions, evaluated once
 
 A range is written only in a `for` header — `..` is not a value operator, so
 `let r = 0..4` is rejected rather than producing a range object.
+
+A `for` also walks an **array**: `for x in xs` binds each element in turn. It
+only reads, so `xs` is still usable afterwards, and the loop variable is a
+*copy*, so writing to what it names cannot perturb the iteration:
+
+```kira
+let xs = [10, 20, 30]
+var total = 0
+for x in xs { total = total + x }   // xs survives; x is an immutable copy
+```
 
 The loop variable is a fresh **immutable** binding on each iteration, scoped to
 the body: assigning to it is the same error assigning to any `let` is, and it

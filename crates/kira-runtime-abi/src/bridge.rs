@@ -52,6 +52,29 @@ impl BridgeValueTag {
     /// is the backend, which refuses to emit a crossing whose signature
     /// mentions a struct.
     pub const STRUCT: BridgeValueTag = BridgeValueTag(5);
+
+    /// An array: a type a manifest can *describe* but this seam cannot carry
+    /// yet.
+    ///
+    /// The tag exists for the same reason [`BridgeValueTag::STRUCT`] does — a
+    /// manifest has a row for every function in the program, including the many
+    /// that never cross — but the reason it does not travel is different, and
+    /// the difference is worth stating.
+    ///
+    /// A struct **may not** cross: it does not fit one tag and one word, and
+    /// deciding how it would is a language decision nobody has made.
+    ///
+    /// An array **should** cross — the language allows it — and does not yet
+    /// only because the ownership question at the boundary is unanswered: who
+    /// frees the elements, and what it means for the VM's heap accounting if a
+    /// native function grows the array it was handed. A wrong answer there is a
+    /// double free or a leak at the boundary, not a bad print, so it is refused
+    /// until the answer is designed rather than guessed at.
+    ///
+    /// So: this tag names a type and never travels. Every marshalling path
+    /// rejects it, and the backend refuses to emit a crossing whose signature
+    /// mentions one.
+    pub const ARRAY: BridgeValueTag = BridgeValueTag(6);
 }
 
 /// One Kira value crossing the runtime/native boundary.

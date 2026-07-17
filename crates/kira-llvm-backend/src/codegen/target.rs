@@ -67,18 +67,29 @@ impl TargetMachine {
         }
     }
 
-    /// Emits `module` as an object file at `path`.
-    pub(super) fn emit_object(&self, module: LLVMModuleRef, path: &Path) -> Result<(), LlvmError> {
-        let file = c_string(&path.to_string_lossy());
-        // SAFETY: `module` and `self.machine` are live; the target/data-layout
-        // are set from this same machine before emission, and LLVM allocates an
-        // owned message only on failure.
+    /// Sets `module`'s target triple and data layout to this host's.
+    ///
+    /// Setting copies the layout into the module, so the temporary handle is
+    /// disposed immediately; a borrowed reference to the module's own copy
+    /// (via `LLVMGetModuleDataLayout`) stays valid for the module's lifetime.
+    pub(super) fn set_module_layout(&self, module: LLVMModuleRef) {
+        // SAFETY: `module` and `self.machine` are live; the layout is set from
+        // this same machine and the temporary handle is disposed right after.
         unsafe {
             LLVMSetTarget(module, self.triple);
             let layout = LLVMCreateTargetDataLayout(self.machine);
             LLVMSetModuleDataLayout(module, layout);
             LLVMDisposeTargetData(layout);
+        }
+    }
 
+    /// Emits `module` as an object file at `path`.
+    pub(super) fn emit_object(&self, module: LLVMModuleRef, path: &Path) -> Result<(), LlvmError> {
+        let file = c_string(&path.to_string_lossy());
+        self.set_module_layout(module);
+        // SAFETY: `module` and `self.machine` are live, its data layout was set
+        // just above, and LLVM allocates an owned message only on failure.
+        unsafe {
             let mut message: *mut std::os::raw::c_char = std::ptr::null_mut();
             let failed = LLVMTargetMachineEmitToFile(
                 self.machine,
