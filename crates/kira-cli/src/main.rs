@@ -11,6 +11,7 @@ mod native;
 mod options;
 mod pipeline;
 mod serve;
+mod supervisor;
 mod wasm;
 
 use command::Command;
