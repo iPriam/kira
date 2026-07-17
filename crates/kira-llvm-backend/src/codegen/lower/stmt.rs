@@ -1,10 +1,11 @@
 //! Statement lowering: stores, returns, and the blocks `if`/`while` become.
 
-use kira_ir::{IrExprId, IrStmt};
+use kira_ir::{IrExprId, IrPlace, IrStmt};
 use kira_semantics_model::Type;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 
+use super::super::ffi::c_string;
 use super::FunctionLowering;
 use crate::LlvmError;
 
@@ -25,10 +26,10 @@ impl FunctionLowering<'_, '_> {
     /// Lowers one statement.
     fn lower_statement(&mut self, statement: &IrStmt) -> Result<(), LlvmError> {
         match statement {
-            // `let` and `=` are the same store: the VM compiles both to
-            // StoreLocal, which drops whatever the slot held.
+            // `let` and `=` to a bare local are the same store: the VM compiles
+            // both to StoreLocal, which drops whatever the slot held.
             IrStmt::Let { local, init } => self.store_local(*local, *init),
-            IrStmt::Assign { local, value } => self.store_local(*local, *value),
+            IrStmt::Assign { place, value } => self.store_place(place, *value),
             IrStmt::Return { value } => {
                 let returned = match value {
                     Some(expr) => Some(self.lower_expr(*expr)?),
@@ -38,12 +39,9 @@ impl FunctionLowering<'_, '_> {
             }
             IrStmt::Eval { expr } => {
                 let value = self.lower_expr(*expr)?;
-                // The VM's `Pop` drops the discarded value; only a string owns
-                // anything to reclaim.
-                if self.type_of(*expr) == Type::String {
-                    self.free_string(value);
-                }
-                Ok(())
+                // The VM's `Pop` drops the discarded value.
+                let ty = self.type_of(*expr);
+                self.drop_value(value, ty)
             }
             IrStmt::If {
                 cond,
@@ -63,20 +61,72 @@ impl FunctionLowering<'_, '_> {
         let value = self.lower_expr(expr)?;
         let ty = self.local_type(slot)?;
         let pointer = self.local_pointer(slot)?;
+        self.store_through(pointer, ty, value)
+    }
 
-        if ty == Type::String {
+    /// Stores into an assignment target, walking its field path.
+    ///
+    /// The path is walked with GEPs into the local's `alloca`, so a nested
+    /// write lands in place rather than rebuilding the enclosing struct —
+    /// matching the VM's `StoreField`, which walks handles for the same reason.
+    fn store_place(&mut self, place: &IrPlace, expr: IrExprId) -> Result<(), LlvmError> {
+        let value = self.lower_expr(expr)?;
+        let mut pointer = self.local_pointer(place.local)?;
+        let mut ty = self.local_type(place.local)?;
+        for &index in &place.path {
+            let Type::Struct(id) = ty else {
+                return Err(LlvmError::Unsupported(
+                    "a field of a value that is not a struct",
+                ));
+            };
+            let struct_type = self.codegen.llvm_type(ty)?;
+            let name = c_string(&format!("field.{index}.ptr"));
+            // SAFETY: `pointer` points at a value of `struct_type`, and `index`
+            // came from that struct's own definition, so it names a real field.
+            pointer = unsafe {
+                LLVMBuildStructGEP2(
+                    self.codegen.builder,
+                    struct_type,
+                    pointer,
+                    index,
+                    name.as_ptr(),
+                )
+            };
+            ty = self
+                .codegen
+                .program
+                .structs
+                .get(id)
+                .and_then(|def| def.field(index))
+                .map(|field| field.ty)
+                .ok_or(LlvmError::Unsupported("a field the struct never declared"))?;
+        }
+        self.store_through(pointer, ty, value)
+    }
+
+    /// Stores `value` of type `ty` through `pointer`, dropping what was there.
+    ///
+    /// The new value is computed *before* the old one is freed, matching the
+    /// VM's evaluate-then-store order — which is what makes `s = s + "x"` work:
+    /// the read clones `s` before the store frees the original.
+    fn store_through(
+        &mut self,
+        pointer: LLVMValueRef,
+        ty: Type,
+        value: LLVMValueRef,
+    ) -> Result<(), LlvmError> {
+        if self.owns_heap(ty) {
             let llvm_type = self.codegen.llvm_type(ty)?;
-            // SAFETY: `pointer` is this slot's alloca of `llvm_type`, and the
+            // SAFETY: `pointer` points at a value of `llvm_type`, and the
             // builder is positioned on a live block.
             let old = unsafe {
                 LLVMBuildLoad2(self.codegen.builder, llvm_type, pointer, c"old".as_ptr())
             };
-            // SAFETY: same slot and a matching value type.
+            // SAFETY: same location and a matching value type.
             unsafe { LLVMBuildStore(self.codegen.builder, value, pointer) };
-            self.free_string(old);
-            return Ok(());
+            return self.drop_value(old, ty);
         }
-        // SAFETY: `pointer` is this slot's alloca and `value` has its type.
+        // SAFETY: `pointer` points at a value of `ty` and `value` has its type.
         unsafe { LLVMBuildStore(self.codegen.builder, value, pointer) };
         Ok(())
     }
@@ -88,16 +138,17 @@ impl FunctionLowering<'_, '_> {
     /// freed here.
     pub(super) fn emit_return(&mut self, value: Option<LLVMValueRef>) -> Result<(), LlvmError> {
         for slot in 0..self.function.locals.len() as u32 {
-            if self.local_type(slot)? != Type::String {
+            let ty = self.local_type(slot)?;
+            if !self.owns_heap(ty) {
                 continue;
             }
             let pointer = self.local_pointer(slot)?;
-            let llvm_type = self.codegen.types.ptr;
-            // SAFETY: `pointer` is a live alloca holding a string handle.
+            let llvm_type = self.codegen.llvm_type(ty)?;
+            // SAFETY: `pointer` is a live alloca holding a value of `llvm_type`.
             let held = unsafe {
                 LLVMBuildLoad2(self.codegen.builder, llvm_type, pointer, c"drop".as_ptr())
             };
-            self.free_string(held);
+            self.drop_value(held, ty)?;
         }
         // SAFETY: the builder is positioned on an unterminated block, and
         // `value` matches the function's return type when present.

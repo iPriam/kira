@@ -140,7 +140,9 @@ impl Program {
         let result = vm.enter(&self.module, function_id, args)?;
         let lifted = vm.heap.lift(result);
         vm.heap.drop_value(result);
-        Ok(lifted)
+        lifted.ok_or(VmError::StructAtSeam {
+            function: function_id,
+        })
     }
 }
 
@@ -259,6 +261,11 @@ impl Vm<'_> {
                 Value::Bool(value) => NativeArg::Bool(value),
                 Value::Str(id) => NativeArg::Str(self.heap.get(id)),
                 Value::Void => NativeArg::Void,
+                // The hybrid ABI has no layout for a struct yet, so there is no
+                // honest way to hand one across. The split is checked when the
+                // program is built, so this is the runtime restating a rule
+                // rather than the first place it is enforced.
+                Value::Struct(_) => return Err(VmError::StructAtSeam { function: id }),
             });
         }
         let returned = self
@@ -273,6 +280,43 @@ impl Vm<'_> {
 
         let result = self.heap.absorb(returned?);
         self.stack.push(result);
+        Ok(())
+    }
+
+    /// Writes `value` into local `slot`, walking `path` field by field.
+    ///
+    /// Walking moves *handles*, never objects: each step reads the nested
+    /// struct's handle out of its parent, so the write lands in the same object
+    /// the local holds. Nothing is copied and nothing is rebuilt, which is what
+    /// makes `b.size.x = 1` a write rather than a reconstruction of `b`. That
+    /// is only sound because a struct's fields are exclusively owned — the deep
+    /// copy on every read is what guarantees no other value shares them.
+    fn store_field(
+        &mut self,
+        frame: &mut Frame,
+        slot: u16,
+        path: &[u16],
+        value: Value,
+    ) -> Result<(), VmError> {
+        let Some((&last, walk)) = path.split_last() else {
+            return Err(VmError::EmptyFieldPath);
+        };
+        let mut current = frame.locals[slot as usize];
+        for &step in walk {
+            let Value::Struct(id) = current else {
+                return Err(VmError::NotAStruct);
+            };
+            current = self
+                .heap
+                .field(id, step)
+                .ok_or(VmError::NoSuchField { index: step })?;
+        }
+        let Value::Struct(id) = current else {
+            return Err(VmError::NotAStruct);
+        };
+        if !self.heap.set_field(id, last, value) {
+            return Err(VmError::NoSuchField { index: last });
+        }
         Ok(())
     }
 
@@ -309,9 +353,51 @@ impl Vm<'_> {
             }
             Instruction::Print => {
                 let value = self.pop()?;
-                let line = self.heap.format_and_consume(value);
+                let line = self
+                    .heap
+                    .format_and_consume(value)
+                    .ok_or(VmError::UnprintableValue)?;
                 self.host.write_line(&line);
                 self.stack.push(Value::Void);
+            }
+            Instruction::NewStruct(count) => {
+                let first = self
+                    .stack
+                    .len()
+                    .checked_sub(count as usize)
+                    .ok_or(VmError::StackUnderflow)?;
+                // The fields were pushed in declaration order, so splitting
+                // them off preserves layout order — and moves them, so nothing
+                // is copied and nothing is left on the stack to double-free.
+                let fields = self.stack.split_off(first);
+                let id = self.heap.alloc_struct(fields);
+                self.stack.push(Value::Struct(id));
+            }
+            Instruction::GetField(index) => {
+                let base = self.pop()?;
+                let Value::Struct(id) = base else {
+                    self.heap.drop_value(base);
+                    return Err(VmError::NotAStruct);
+                };
+                let field = self
+                    .heap
+                    .field(id, index)
+                    .ok_or(VmError::NoSuchField { index })?;
+                // The field is copied out before the struct is dropped: the
+                // struct owns its fields, so handing one out without copying
+                // would hand out storage this drop is about to free.
+                let copy = self.heap.copy_value(field);
+                self.heap.drop_value(base);
+                self.stack.push(copy);
+            }
+            Instruction::StoreField { slot, path } => {
+                let value = self.pop()?;
+                if let Err(error) = self.store_field(frame, slot, path.steps(), value) {
+                    // The value was ours the moment it left the stack, so a
+                    // failed write frees it rather than leaking it.
+                    self.heap.drop_value(value);
+                    return Err(error);
+                }
             }
             Instruction::Jump(target) => self.jump(module, frame, target)?,
             Instruction::JumpIfFalse(target) => {

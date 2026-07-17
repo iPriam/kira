@@ -40,6 +40,7 @@ mod tests {
                 execution: kira_runtime_abi::Execution::Inherited,
                 body,
             }],
+            structs: Default::default(),
             main: 0,
             exprs,
         }

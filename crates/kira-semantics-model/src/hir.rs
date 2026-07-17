@@ -6,7 +6,7 @@
 //! to each other by index, so no HIR type carries a lifetime. Local indices
 //! are scoped to their owning function.
 
-use crate::ty::Type;
+use crate::ty::{StructId, StructTable, Type};
 use kira_runtime_abi::Execution;
 use kira_source::Span;
 use la_arena::{Arena, Idx};
@@ -31,12 +31,15 @@ pub struct LocalId(pub u32);
 /// rule: after analysis, names survive only for diagnostics and disassembly,
 /// and owning them keeps query results self-contained (no interner has to
 /// outlive a salsa revision) and keeps the VM subtree decoupled from the
-/// frontend's interner. Revisit when structs land and name-heavy metadata
-/// starts flowing through these types.
+/// frontend's interner. Structs kept that shape: a struct's name and its field
+/// names are diagnostic and codegen-naming material only — a field is resolved
+/// to an index during analysis, and nothing downstream looks one up by name.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct HirProgram {
     /// Every analyzed function, in source order.
     pub functions: Vec<HirFunction>,
+    /// Every declared struct.
+    pub structs: StructTable,
     /// The index of the `@Main` entrypoint, when the program has a valid one.
     pub main: Option<FuncId>,
     /// Arena backing every [`HirExprId`].
@@ -99,10 +102,10 @@ pub enum HirStmt {
         /// The initializing expression.
         init: HirExprId,
     },
-    /// Reassign an existing mutable local.
+    /// Write to an existing mutable place.
     Assign {
-        /// The local being written.
-        local: LocalId,
+        /// The place being written.
+        place: HirPlace,
         /// The new value.
         value: HirExprId,
     },
@@ -132,6 +135,20 @@ pub enum HirStmt {
         /// The loop body.
         body: Vec<HirStmtId>,
     },
+}
+
+/// A writable location: a local, optionally walked into by field indices.
+///
+/// `p` is the local with an empty path; `b.size.x` is the local `b` with the
+/// path `[size, x]`, resolved to indices during analysis. Resolving the whole
+/// path up front is what lets a backend write through it in place instead of
+/// rebuilding the enclosing value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirPlace {
+    /// The local the place is rooted at.
+    pub local: LocalId,
+    /// Field indices to walk, outermost first; empty writes the local itself.
+    pub path: Vec<u32>,
 }
 
 /// An expression, carrying its resolved type.
@@ -181,6 +198,26 @@ pub enum HirExpr {
         /// The call's result type.
         ty: Type,
     },
+    /// Construction of a struct value.
+    ///
+    /// Every field is present and in declaration order: the analyzer fills an
+    /// omitted field with its declared default, so nothing downstream has to
+    /// know defaults exist.
+    StructNew {
+        /// The struct being built.
+        struct_id: StructId,
+        /// One initializer per field, in declaration order.
+        fields: Vec<HirExprId>,
+    },
+    /// A read of one field of a struct value.
+    Field {
+        /// The struct-typed expression being read.
+        base: HirExprId,
+        /// The field's index in declaration order.
+        index: u32,
+        /// The field's type.
+        ty: Type,
+    },
     /// A placeholder for an expression that failed to analyze.
     Error,
 }
@@ -196,7 +233,9 @@ impl HirExpr {
             HirExpr::Local { ty, .. }
             | HirExpr::Unary { ty, .. }
             | HirExpr::Binary { ty, .. }
-            | HirExpr::Call { ty, .. } => *ty,
+            | HirExpr::Call { ty, .. }
+            | HirExpr::Field { ty, .. } => *ty,
+            HirExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
             HirExpr::Error => Type::Error,
         }
     }

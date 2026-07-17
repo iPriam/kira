@@ -37,6 +37,21 @@ impl BridgeValueTag {
     pub const BOOL: BridgeValueTag = BridgeValueTag(3);
     /// A string, payload as an owned native string handle.
     pub const STRING: BridgeValueTag = BridgeValueTag(4);
+    /// A struct: a type a manifest can *describe* but the seam cannot carry.
+    ///
+    /// A struct does not fit a [`BridgeValue`] — one tag and one word of
+    /// payload — and passing one would need an ABI decision (by value or by
+    /// pointer, and who frees the strings inside) that has not been made. The
+    /// tag exists anyway because a manifest describes every function in the
+    /// program, including the many that never cross: a `@Runtime` function
+    /// taking a struct and called only from other `@Runtime` code is an
+    /// ordinary program, and its row has to say what its parameters are.
+    ///
+    /// So this tag names a type, and never travels: no [`BridgeValue`] is ever
+    /// built with it, and every marshalling path rejects it. What enforces that
+    /// is the backend, which refuses to emit a crossing whose signature
+    /// mentions a struct.
+    pub const STRUCT: BridgeValueTag = BridgeValueTag(5);
 }
 
 /// One Kira value crossing the runtime/native boundary.
@@ -187,6 +202,19 @@ mod tests {
             payload: 1,
         };
         assert_eq!(foreign.decode(), None);
+    }
+
+    #[test]
+    fn a_struct_tag_names_a_type_but_never_decodes_as_a_value() {
+        // `STRUCT` exists so a manifest can describe a function that never
+        // crosses. It must never be readable as a value: if one ever appeared
+        // on the wire, guessing at its payload would be guessing at ownership.
+        let impossible = BridgeValue {
+            tag: BridgeValueTag::STRUCT,
+            reserved: [0; 7],
+            payload: 0xdead_beef,
+        };
+        assert_eq!(impossible.decode(), None);
     }
 
     #[test]

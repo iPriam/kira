@@ -200,6 +200,13 @@ pub(crate) struct Codegen<'a> {
     /// Only functions this module defines have a real entry; a function that
     /// lives in the other half is reached through the bridge instead.
     functions: Vec<Option<Callable>>,
+    /// The LLVM type of each declared struct, indexed by `StructId`.
+    ///
+    /// A struct lowers to a real LLVM struct with real field layout, not to a
+    /// boxed or tagged value. Fields sit where the target's ABI puts them,
+    /// which is what a `@FFI.Struct` will need — a box would be the wrong
+    /// foundation to put underneath it later.
+    struct_types: Vec<LLVMTypeRef>,
     /// Names every emitted string literal global uniquely.
     string_counter: u32,
 }
@@ -226,8 +233,12 @@ impl<'a> Codegen<'a> {
             kind,
             engines,
             functions: Vec::with_capacity(program.functions.len()),
+            struct_types: Vec::with_capacity(program.structs.len()),
             string_counter: 0,
         };
+        // Struct types come first: a function signature may name one, and a
+        // struct's fields may name a struct declared before it.
+        codegen.declare_structs()?;
         for (index, function) in program.functions.iter().enumerate() {
             // A function that runs on the other engine has no body here; its
             // callers reach it through the bridge, so there is nothing to
@@ -240,6 +251,31 @@ impl<'a> Codegen<'a> {
             codegen.functions.push(declared);
         }
         Ok(codegen)
+    }
+
+    /// Creates one named LLVM struct type per declared struct.
+    ///
+    /// Declaration order is resolution order — the analyzer rejects a field
+    /// naming a struct declared later — so every field type this needs is
+    /// already in `struct_types` by the time it is asked for. The types are
+    /// named so LLVM IR stays readable (`%Point`, not `{i64, i64}`).
+    fn declare_structs(&mut self) -> Result<(), LlvmError> {
+        for def in self.program.structs.defs() {
+            let name = c_string(&def.name);
+            let mut fields = Vec::with_capacity(def.fields.len());
+            for field in &def.fields {
+                fields.push(self.llvm_type(field.ty)?);
+            }
+            // SAFETY: the context is live, every field type belongs to it, and
+            // `fields` outlives the `SetBody` call that copies it.
+            let ty = unsafe {
+                let ty = LLVMStructCreateNamed(self.context, name.as_ptr());
+                LLVMStructSetBody(ty, fields.as_mut_ptr(), fields.len() as u32, 0);
+                ty
+            };
+            self.struct_types.push(ty);
+        }
+        Ok(())
     }
 
     /// Which engine owns function `index`.
@@ -317,6 +353,10 @@ impl<'a> Codegen<'a> {
             // never inspects, matching the runtime's ABI.
             Type::String => self.types.ptr,
             Type::Void => self.types.void,
+            Type::Struct(id) => *self
+                .struct_types
+                .get(id.index() as usize)
+                .ok_or(LlvmError::Unsupported("a struct the module never declared"))?,
             // Lowering only ever runs on a program that type-checked, so an
             // error type here means a broken frontend contract, not user input.
             Type::Error => {

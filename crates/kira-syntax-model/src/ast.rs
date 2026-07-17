@@ -59,9 +59,46 @@ impl SyntaxTree {
 pub enum Item {
     /// A function declaration.
     Function(Function),
-    /// A construct the v0 subset parses but does not yet analyze (struct,
-    /// enum, class, import, …); recorded so semantics can report it cleanly.
+    /// A `struct` declaration: a non-inheriting value shape.
+    Struct(StructDecl),
+    /// A construct the v0 subset parses but does not yet analyze (enum, class,
+    /// import, …); recorded so semantics can report it cleanly.
     Unsupported(UnsupportedItem),
+}
+
+/// A `struct` declaration: a named, non-inheriting value shape.
+///
+/// Members are written with `let` (immutable) or `var` (mutable) and may carry
+/// a default initializer. Members are separated by newlines or `;` — the
+/// parser treats both as insignificant, so the member keyword is what starts
+/// each one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDecl {
+    /// The struct's name.
+    pub name: Symbol,
+    /// Span of the name token, for diagnostics.
+    pub name_span: Span,
+    /// The stored members, in declaration order.
+    pub fields: Vec<FieldDecl>,
+    /// Span covering the whole declaration.
+    pub span: Span,
+}
+
+/// One stored member of a [`StructDecl`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldDecl {
+    /// The member's name.
+    pub name: Symbol,
+    /// Span of the name token.
+    pub name_span: Span,
+    /// `true` for `var`, `false` for `let`.
+    pub mutable: bool,
+    /// The declared member type.
+    pub ty: TypeRef,
+    /// The default initializer, when one was written.
+    pub default: Option<ExprId>,
+    /// Span covering the whole member.
+    pub span: Span,
 }
 
 /// A function declaration: signature plus body.
@@ -147,12 +184,13 @@ pub enum Stmt {
         /// Span covering the statement.
         span: Span,
     },
-    /// An assignment to an existing binding (`name = value`).
+    /// An assignment to an existing place (`name = value`, `p.x = value`).
+    ///
+    /// The target is an expression because a place is written with expression
+    /// syntax; semantics is what decides whether it names a place at all.
     Assign {
-        /// Target name.
-        name: Symbol,
-        /// Span of the target name.
-        name_span: Span,
+        /// The assigned-to place, as written.
+        target: ExprId,
         /// The value expression.
         value: ExprId,
         /// Span covering the statement.
@@ -283,11 +321,50 @@ pub enum Expr {
         /// Span covering the whole call.
         span: Span,
     },
+    /// A struct literal (`Point { x = 1, y = 2 }`).
+    StructLit {
+        /// The struct's name.
+        name: Symbol,
+        /// Span of the name.
+        name_span: Span,
+        /// The written field initializers, in source order.
+        fields: Vec<FieldInit>,
+        /// Span covering the whole literal.
+        span: Span,
+    },
+    /// A field read (`p.x`).
+    Field {
+        /// The expression the field is read from.
+        base: ExprId,
+        /// The field's name.
+        field: Symbol,
+        /// Span of the field name.
+        field_span: Span,
+        /// Span covering base and field.
+        span: Span,
+    },
     /// An expression the parser could not parse; recovery inserts this.
     Error {
         /// Span of the malformed expression.
         span: Span,
     },
+}
+
+/// One field initializer inside a [`Expr::StructLit`].
+///
+/// Both binders are accepted: `=` is canonical and `:` stays valid for the
+/// transition window. They normalize to this one node, so nothing downstream
+/// can tell which was written.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldInit {
+    /// The initialized field's name.
+    pub name: Symbol,
+    /// Span of the field name.
+    pub name_span: Span,
+    /// The value bound to the field.
+    pub value: ExprId,
+    /// Span covering the whole initializer.
+    pub span: Span,
 }
 
 impl Expr {
@@ -302,6 +379,8 @@ impl Expr {
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Call { span, .. }
+            | Expr::StructLit { span, .. }
+            | Expr::Field { span, .. }
             | Expr::Error { span } => *span,
         }
     }

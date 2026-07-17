@@ -42,6 +42,12 @@ impl FunctionLowering<'_, '_> {
                     }
                     // `print` consumes its string, so the helper frees it.
                     Type::String => self.codegen.runtime.print_str,
+                    // Analysis rejects printing a struct — what it renders is
+                    // not pinned by the language — so this is unreachable from
+                    // a program that type-checked.
+                    Type::Struct(_) => {
+                        return Err(LlvmError::Unsupported("a print of a struct"));
+                    }
                     Type::Void | Type::Error => {
                         return Err(LlvmError::Unsupported("printing a value with no type"));
                     }

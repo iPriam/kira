@@ -123,6 +123,11 @@ impl<'a> Codegen<'a> {
                 Type::Int | Type::Bool => LLVMConstInt(llvm_type, 0, 0),
                 Type::Float => LLVMConstReal(llvm_type, 0.0),
                 Type::String => LLVMConstPointerNull(llvm_type),
+                // Every field zeroed, which for a `String` field is the null
+                // handle the runtime already reads as `""` — so a fresh struct
+                // slot is free-able through the same path as any other, with no
+                // first-store special case.
+                Type::Struct(_) => LLVMConstNull(llvm_type),
                 Type::Void | Type::Error => {
                     return Err(LlvmError::Unsupported("a local with no runtime value"));
                 }
@@ -193,6 +198,110 @@ impl FunctionLowering<'_, '_> {
     /// Frees a string handle through the runtime.
     fn free_string(&mut self, value: LLVMValueRef) {
         self.call(self.codegen.runtime.str_free, &mut [value], c"");
+    }
+
+    /// Whether a value of `ty` owns heap storage that a copy must clone and a
+    /// drop must release.
+    fn owns_heap(&self, ty: Type) -> bool {
+        self.codegen.program.structs.owns_heap(ty)
+    }
+
+    /// Produces an independent copy of `value`, mirroring the VM's
+    /// `Heap::copy_value`.
+    ///
+    /// Deep, field by field: a struct's copy clones every string it reaches, so
+    /// no two live values share a handle and neither drop frees the other's.
+    /// Scalars and structs of scalars copy for free — LLVM's `insertvalue`
+    /// chain folds away — so the walk only costs anything where it must.
+    fn copy_value(&mut self, value: LLVMValueRef, ty: Type) -> Result<LLVMValueRef, LlvmError> {
+        if !self.owns_heap(ty) {
+            return Ok(value);
+        }
+        match ty {
+            Type::String => {
+                Ok(self.call(self.codegen.runtime.str_clone, &mut [value], c"str.copy"))
+            }
+            Type::Struct(id) => {
+                let field_types = self.field_types(id)?;
+                let mut copy = value;
+                for (index, field_ty) in field_types.into_iter().enumerate() {
+                    if !self.owns_heap(field_ty) {
+                        continue;
+                    }
+                    let field = self.extract_field(value, index as u32)?;
+                    let copied = self.copy_value(field, field_ty)?;
+                    copy = self.insert_field(copy, copied, index as u32)?;
+                }
+                Ok(copy)
+            }
+            // `owns_heap` is only true for the two cases above.
+            _ => Err(LlvmError::Unsupported("a copy of an unowned value")),
+        }
+    }
+
+    /// Releases whatever heap storage `value` owns, mirroring the VM's
+    /// `Heap::drop_value`.
+    fn drop_value(&mut self, value: LLVMValueRef, ty: Type) -> Result<(), LlvmError> {
+        if !self.owns_heap(ty) {
+            return Ok(());
+        }
+        match ty {
+            Type::String => {
+                self.free_string(value);
+                Ok(())
+            }
+            Type::Struct(id) => {
+                let field_types = self.field_types(id)?;
+                for (index, field_ty) in field_types.into_iter().enumerate() {
+                    if !self.owns_heap(field_ty) {
+                        continue;
+                    }
+                    let field = self.extract_field(value, index as u32)?;
+                    self.drop_value(field, field_ty)?;
+                }
+                Ok(())
+            }
+            _ => Err(LlvmError::Unsupported("a drop of an unowned value")),
+        }
+    }
+
+    /// The field types of a declared struct.
+    fn field_types(&self, id: kira_semantics_model::StructId) -> Result<Vec<Type>, LlvmError> {
+        self.codegen
+            .program
+            .structs
+            .get(id)
+            .map(|def| def.fields.iter().map(|field| field.ty).collect())
+            .ok_or(LlvmError::Unsupported(
+                "a struct the program never declared",
+            ))
+    }
+
+    /// Reads field `index` out of a struct *value*.
+    fn extract_field(
+        &mut self,
+        value: LLVMValueRef,
+        index: u32,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let name = c_string(&format!("field.{index}"));
+        // SAFETY: `value` is a struct value with more than `index` fields — the
+        // index came from that struct's own definition — and the builder is on
+        // a live block.
+        Ok(unsafe { LLVMBuildExtractValue(self.codegen.builder, value, index, name.as_ptr()) })
+    }
+
+    /// Returns `value` with field `index` replaced by `field`.
+    fn insert_field(
+        &mut self,
+        value: LLVMValueRef,
+        field: LLVMValueRef,
+        index: u32,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let name = c_string(&format!("with.{index}"));
+        // SAFETY: as `extract_field`, and `field` has field `index`'s type.
+        Ok(unsafe {
+            LLVMBuildInsertValue(self.codegen.builder, value, field, index, name.as_ptr())
+        })
     }
 
     /// Emits a call to `callable`.

@@ -98,14 +98,42 @@ fn missing_main_is_rejected() {
 
 #[test]
 fn unsupported_construct_is_rejected_cleanly() {
-    // A struct is outside the v0 subset: it must not crash the compiler, and it
-    // must be reported as not-yet-supported rather than silently ignored.
-    let output =
-        run_source("struct Point { let x: Int }\n@Main function main() { print(1) return }");
+    // An `enum` is outside the v0 subset: it must not crash the compiler, and
+    // it must be reported as not-yet-supported rather than silently ignored.
+    let output = run_source("enum Mode { Fast }\n@Main function main() { print(1) return }");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("KSEM900"), "stderr was: {stderr}");
     assert!(stderr.contains("not supported yet"));
+}
+
+#[test]
+fn a_struct_declaration_compiles_and_runs() {
+    // The counterpart to the case above: a struct used to be reported as
+    // unsupported, and is now ordinary language surface.
+    let output = run_source(
+        "struct Point { var x: Int  var y: Int = 4 }\n\
+         @Main function main() { let p = Point { x = 3 } print(p.x + p.y) return }",
+    );
+    assert!(
+        output.status.success(),
+        "stderr was: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
+}
+
+#[test]
+fn a_struct_method_is_reported_rather_than_ignored() {
+    // Methods are real language surface this compiler does not model yet.
+    // Silently dropping one would run a program that means something else.
+    let output = run_source(
+        "struct P { var x: Int\n function sum() -> Int { return x } }\n\
+         @Main function main() { print(1) return }",
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("KPAR008"), "stderr was: {stderr}");
 }
 
 #[test]

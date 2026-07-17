@@ -11,7 +11,7 @@ pub mod hir;
 pub mod ty;
 
 pub use hir::{
-    Builtin, Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirLocal, HirProgram,
-    HirStmt, HirStmtId, HirUnaryOp, LocalId,
+    Builtin, Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirLocal, HirPlace,
+    HirProgram, HirStmt, HirStmtId, HirUnaryOp, LocalId,
 };
-pub use ty::Type;
+pub use ty::{FieldDef, StructDef, StructId, StructTable, Type};
