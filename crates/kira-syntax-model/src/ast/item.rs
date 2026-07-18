@@ -16,9 +16,30 @@ pub enum Item {
     Struct(StructDecl),
     /// An `enum` declaration: a tagged union of named variants.
     Enum(EnumDecl),
+    /// A `type Name = Target` alias.
+    TypeAlias(TypeAliasDecl),
     /// A construct the v0 subset parses but does not yet analyze (class,
     /// import, …); recorded so semantics can report it cleanly.
     Unsupported(UnsupportedItem),
+}
+
+/// A `type Name = Target` alias: a second spelling for one written type.
+///
+/// The target is an ordinary [`TypeRef`], so an alias names anything a type
+/// position can — a builtin, a struct, an enum, an array, or another alias.
+/// Nothing below semantics learns aliases exist: analysis resolves the name to
+/// the type it stands for, and the HIR carries
+/// the target as if it had been written out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeAliasDecl {
+    /// The alias's name.
+    pub name: Symbol,
+    /// Span of the name token, for diagnostics.
+    pub name_span: Span,
+    /// The written target type.
+    pub target: TypeRefId,
+    /// Span covering the whole declaration.
+    pub span: Span,
 }
 
 /// An `enum` declaration: a named set of variants, each optionally carrying a

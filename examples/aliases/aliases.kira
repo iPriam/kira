@@ -1,0 +1,68 @@
+// Type aliases: a second spelling for a type you already have.
+//
+// `type Name = Target` binds a name to any written type — a builtin, a struct,
+// an enum, an array, or another alias. It is a spelling and nothing more:
+// `Count` and `Int` are the *same* type, so a value of one goes anywhere the
+// other does, and no backend ever learns the alias existed.
+//
+// Two things follow from "spelling, not a new type". Aliases chain, in either
+// declaration order — `Matrix` below is written before the `Buffer` it names.
+// And a chain that comes back to where it started is refused rather than
+// resolved, because there is no type at the end of it.
+
+type Count = Int
+type Buffer = [Count]
+type Matrix = [Buffer]
+
+// An alias reaches every position a type can be written: a struct field, a
+// parameter, a return type, a `let` annotation.
+struct Packet {
+    var payload: Buffer
+}
+
+function sum(buffer: borrow Buffer) -> Count {
+    var total = 0
+    for value in buffer {
+        total = total + value
+    }
+    return total
+}
+
+function build(size: Count) -> Packet {
+    var payload: Buffer = []
+    var i = 1
+    while i <= size {
+        payload.append(i * i)
+        i = i + 1
+    }
+    return Packet { payload: move payload }
+}
+
+function score(rows: borrow Matrix) -> Count {
+    var total = 0
+    for row in rows {
+        total = total + sum(row) + row.count
+    }
+    return total
+}
+
+@Main
+function main() {
+    let packet = build(4)
+    print(sum(packet.payload))
+
+    var first: Buffer = []
+    first.append(10)
+    first.append(20)
+
+    var rows: Matrix = []
+    rows.append(move first)
+    rows.append(move packet.payload)
+    print(score(rows))
+
+    // The alias is interchangeable with its target in both directions.
+    let n: Count = 6
+    let m: Int = n
+    print(n + m)
+    return
+}
