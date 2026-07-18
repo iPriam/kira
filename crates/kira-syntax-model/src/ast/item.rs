@@ -155,8 +155,31 @@ pub struct ClassDecl {
     pub overrides: Vec<OverrideFieldDecl>,
     /// The methods declared in the body, in declaration order.
     pub methods: Vec<ClassMethod>,
+    /// The `@Export` marker, when the declaration carried one.
+    ///
+    /// On a class the marker means *handle-eligible*: instances of an exported
+    /// class may cross the export boundary as opaque handles. It exports no
+    /// method — functions are the exported surface.
+    pub export: Option<ExportMark>,
     /// Span covering the whole declaration.
     pub span: Span,
+}
+
+/// The `@Export` annotation on a declaration, plus any payload it carried.
+///
+/// `@Export` is **bare**: it takes no argument list and no block. The parser
+/// still records a payload that was written rather than dropping it, so the
+/// refusal can point at what the author typed instead of at the annotation
+/// name.
+///
+/// New Kira design, not oracle behavior: the oracle has no export concept at
+/// all. What it does pin is the annotation grammar this rides on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportMark {
+    /// Span of the `@Export` annotation name.
+    pub span: Span,
+    /// Span of an argument list or block written after `@Export`, when one was.
+    pub payload_span: Option<Span>,
 }
 
 /// One name in a class's `extends` list.
@@ -221,6 +244,12 @@ pub struct Function {
     pub name_span: Span,
     /// Whether the declaration carried the `@Main` annotation.
     pub is_main: bool,
+    /// The `@Export` marker, when the declaration carried one.
+    ///
+    /// On a top-level function this is the export itself: the function joins
+    /// the library's consumer-facing surface. On a method it is refused —
+    /// v1 exports free functions only.
+    pub export: Option<ExportMark>,
     /// The engine the declaration selected with `@Runtime` / `@Native`.
     ///
     /// [`Execution::Inherited`] when neither was written — the syntax tree

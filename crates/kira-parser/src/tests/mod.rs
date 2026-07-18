@@ -11,6 +11,7 @@ mod arrays;
 mod classes;
 mod closures;
 mod enums;
+mod exports;
 
 use crate::*;
 use kira_runtime_abi::Execution;

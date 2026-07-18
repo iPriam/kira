@@ -1,0 +1,374 @@
+//! The `@Export` surface: which functions a library offers a consumer, what a
+//! name maps to, and everything the boundary refuses.
+//!
+//! `@Export` is **new Kira design**, not oracle behavior — the oracle has no
+//! library-export or embedding concept, and its `@FFI.*` family runs the other
+//! direction entirely. What is pinned, and obeyed here, is the annotation
+//! grammar the marker rides on.
+//!
+//! # Why the checks live in the frontend
+//!
+//! Every rule below has the same answer on every backend: whether a type can
+//! cross the boundary is a property of the type, not of the engine that carries
+//! it. Putting them here — above the backend split, beside the entrypoint rule
+//! [`crate::BuildKind`] already decides — is what keeps three engines from
+//! each growing their own opinion about what an export is.
+//!
+//! # What the boundary refuses, and why each one is a refusal
+//!
+//! The refusals are the standing never-travels set plus the two the export
+//! boundary adds. An array is refused because who frees its elements is
+//! undesigned; a struct and an enum because neither fits one tag and one word;
+//! a function value because it has no crossing representation at all. A class
+//! that is not itself `@Export` is refused rather than silently exported,
+//! because handle-eligibility is the author's decision. `move` and
+//! `borrow mut` are refused because the boundary contract is fixed per type:
+//! a mutable borrow across it would promise mutation of storage the other side
+//! does not manage.
+//!
+//! Refusing beats guessing here for the same reason `print(struct)` and
+//! struct-at-the-native-seam are refused: an invented answer becomes the
+//! contract the moment anything depends on it.
+
+use std::collections::HashSet;
+
+use kira_semantics_model::hir::{FuncId, HirExport};
+use kira_semantics_model::{OwnershipMode, StructId, Type};
+use kira_source::{SourceId, Span};
+use kira_syntax_model::ast::{ExportMark, Item};
+
+use crate::analyze::{Analyzer, Callable};
+use crate::build_kind::BuildKind;
+
+/// The name a consumer calls an exported Kira function by.
+///
+/// The mapping is lowerCamelCase to snake_case: `makeButton` becomes
+/// `make_button`, `clickAt` becomes `click_at`, and an acronym run breaks
+/// before its last capital, so `parseHTTPHeader` becomes `parse_http_header`.
+/// It is derived and never written — `@Export` takes no symbol override, so
+/// this function is the whole of the naming contract.
+///
+/// The mapping is deliberately not injective (`buttonLabel` and `button_label`
+/// both land on `button_label`), which is exactly why a collision is checked
+/// rather than assumed away.
+pub fn exported_name(kira_name: &str) -> String {
+    let chars: Vec<char> = kira_name.chars().collect();
+    let mut out = String::with_capacity(chars.len() + 4);
+    for (index, &ch) in chars.iter().enumerate() {
+        if ch.is_ascii_uppercase() {
+            let previous_is_lower_or_digit = index > 0
+                && (chars[index - 1].is_ascii_lowercase() || chars[index - 1].is_ascii_digit());
+            // The last capital of an acronym run belongs to the next word:
+            // `HTTPHeader` breaks before `H`, not before `TTPH`.
+            let starts_new_word = index > 0
+                && chars[index - 1].is_ascii_uppercase()
+                && chars.get(index + 1).is_some_and(char::is_ascii_lowercase);
+            if (previous_is_lower_or_digit || starts_new_word) && !out.ends_with('_') {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+impl Analyzer<'_> {
+    /// Checks every `@Export` in the program and records the surface that
+    /// survives.
+    ///
+    /// Runs after signatures are collected, because an export's refusals are
+    /// about its *resolved* parameter and return types, and after classes are
+    /// flattened, because handle-eligibility is a property of a class in the
+    /// struct table.
+    pub(crate) fn check_exports(&mut self, callables: &[Callable<'_>]) {
+        let exported_classes = self.exported_classes();
+        // A collision is reported against the second spelling: the first one is
+        // the one that stays valid, so the author renames the one they just hit.
+        let mut taken: HashSet<String> = HashSet::new();
+        for (index, callable) in callables.iter().enumerate() {
+            let Some(mark) = callable.function.export else {
+                continue;
+            };
+            self.source = callable.source;
+            let name_span = callable.function.name_span;
+            if callable.receiver.is_some() {
+                // A class mints handles; it does not publish its methods. The
+                // author wraps a method in an exported free function, which is
+                // sugar this can grow later without an ABI change.
+                self.emit(
+                    mark.span,
+                    "KSEM167",
+                    "`@Export` cannot annotate a method: a library exports \
+                     top-level functions, and an `@Export` class only makes its \
+                     instances crossable as handles. Wrap the method in an \
+                     exported function.",
+                );
+                continue;
+            }
+            if !self.check_export_is_allowed_here(mark, name_span) {
+                continue;
+            }
+            let kira_name = self.interner.resolve(callable.function.name).to_owned();
+            let id = FuncId(index as u32);
+            let signature_is_clean = self.check_export_signature(id, callable, &exported_classes);
+            let mapped = exported_name(&kira_name);
+            if taken.contains(&mapped) {
+                self.emit(
+                    name_span,
+                    "KSEM168",
+                    format!(
+                        "two exports map to the consumer name `{mapped}`: exported \
+                         names are derived by snake_casing, so `{kira_name}` collides \
+                         with an export declared earlier. Rename one."
+                    ),
+                );
+                continue;
+            }
+            taken.insert(mapped.clone());
+            if signature_is_clean {
+                self.program.exports.push(HirExport {
+                    kira_name,
+                    exported_name: mapped,
+                    function: id,
+                });
+            }
+        }
+    }
+
+    /// Whether this `@Export` may appear at all: the package must be a library
+    /// and the marker must be bare.
+    fn check_export_is_allowed_here(&mut self, mark: ExportMark, name_span: Span) -> bool {
+        let mut allowed = true;
+        if self.build_kind != BuildKind::Library {
+            self.emit(
+                name_span,
+                "KSEM159",
+                "`@Export` is only meaningful in a library package: an \
+                 application is entered at its `@Main`, not called by a \
+                 consumer. Set `let kind = .Library` in `package.kira`.",
+            );
+            allowed = false;
+        }
+        if let Some(payload) = mark.payload_span {
+            self.emit(
+                payload,
+                "KSEM166",
+                "`@Export` takes no arguments and no block: the consumer-facing \
+                 name is derived from the function's own name, and a symbol \
+                 override is surface nothing needs yet.",
+            );
+            allowed = false;
+        }
+        allowed
+    }
+
+    /// Checks an exported function's parameters and result against the
+    /// boundary contract, returning whether all of them may cross.
+    fn check_export_signature(
+        &mut self,
+        id: FuncId,
+        callable: &Callable<'_>,
+        exported_classes: &[StructId],
+    ) -> bool {
+        let modes = self.param_ownership(id);
+        let mut clean = true;
+        for (index, param) in callable.function.params.iter().enumerate() {
+            let mode = modes.get(index).copied().unwrap_or(OwnershipMode::Owned);
+            if matches!(mode, OwnershipMode::Move | OwnershipMode::BorrowMut) {
+                let span = param.ownership_span.unwrap_or(param.span);
+                self.emit(
+                    span,
+                    "KSEM165",
+                    format!(
+                        "an exported parameter may not declare `{}`: the export \
+                         boundary's ownership is fixed per type — scalars and \
+                         handles copy, a string is lent — so a per-parameter mode \
+                         would promise something the consumer's side cannot honor.",
+                        mode.spelling()
+                    ),
+                );
+                clean = false;
+            }
+            let ty = self.resolve_type_ref(param.ty);
+            clean &= self.check_export_type(ty, param.span, "parameter", exported_classes);
+        }
+        // A written result is checked against the span the author wrote it at;
+        // an absent one is `Void`, which always crosses and has no span.
+        if let Some(written) = callable.function.return_type {
+            let span = self.tree.type_ref(written).span();
+            let return_type = self.resolve_type_ref(written);
+            clean &= self.check_export_type(return_type, span, "result", exported_classes);
+        }
+        clean
+    }
+
+    /// Whether `ty` may cross the export boundary, reporting the reason when it
+    /// may not.
+    ///
+    /// `Error` passes silently: whatever produced it already spoke, and a
+    /// second diagnostic about a type nobody successfully wrote is noise.
+    fn check_export_type(
+        &mut self,
+        ty: Type,
+        span: Span,
+        position: &str,
+        exported_classes: &[StructId],
+    ) -> bool {
+        let name = self.type_name(ty);
+        match ty {
+            Type::Int(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::String
+            | Type::Void
+            | Type::Error => true,
+            Type::Array(_) => {
+                self.emit(
+                    span,
+                    "KSEM160",
+                    format!(
+                        "an array cannot cross the export boundary yet: `{name}` as \
+                         an export {position} leaves who frees the elements \
+                         undesigned. Pass the elements one at a time, or return a \
+                         handle to an `@Export` class that owns them."
+                    ),
+                );
+                false
+            }
+            Type::Enum(_) => {
+                self.emit(
+                    span,
+                    "KSEM162",
+                    format!(
+                        "an enum cannot cross the export boundary: `{name}` as an \
+                         export {position} is a tagged value, and the boundary \
+                         carries one tag and one word. Pass the payload, or wrap it \
+                         in an `@Export` class."
+                    ),
+                );
+                false
+            }
+            Type::Struct(id) => {
+                if self.as_function_type(ty).is_some() {
+                    self.emit(
+                        span,
+                        "KSEM163",
+                        format!(
+                            "a function value cannot cross the export boundary: \
+                             `{name}` as an export {position} has no crossing \
+                             representation. A consumer calling back into Kira is \
+                             just another export; Kira calling out is the native \
+                             import direction."
+                        ),
+                    );
+                    return false;
+                }
+                if !self.classes.contains_key(&id) {
+                    self.emit(
+                        span,
+                        "KSEM161",
+                        format!(
+                            "a struct cannot cross the export boundary by value: \
+                             `{name}` as an export {position} does not fit one tag \
+                             and one word. Declare it a class, mark it `@Export`, \
+                             and pass a handle instead."
+                        ),
+                    );
+                    return false;
+                }
+                if !exported_classes.contains(&id) {
+                    self.emit(
+                        span,
+                        "KSEM164",
+                        format!(
+                            "`{name}` is not an exported class, so it cannot be an \
+                             export {position}: only an `@Export` class crosses as \
+                             a handle. Mark `{name}` `@Export`."
+                        ),
+                    );
+                    return false;
+                }
+                true
+            }
+        }
+    }
+
+    /// Every class the program marked `@Export`, as struct ids.
+    ///
+    /// A class is a struct by the time anything downstream sees it, so
+    /// handle-eligibility is recorded as the set of struct ids classes were
+    /// declared as — which is also the form the type checks above compare
+    /// against.
+    fn exported_classes(&mut self) -> Vec<StructId> {
+        // Collected first, then reported: `emit` needs `&mut self` and the walk
+        // borrows the tree out of it.
+        let mut found: Vec<(SourceId, ExportMark, Option<StructId>)> = Vec::new();
+        for (source, item) in self.tree.items_with_source() {
+            let Item::Class(declaration) = item else {
+                continue;
+            };
+            let Some(mark) = declaration.export else {
+                continue;
+            };
+            // A class that failed to flatten has no row in the struct table and
+            // was already reported; its marker adds no second diagnostic.
+            let id = self
+                .program
+                .types
+                .structs()
+                .lookup(self.interner.resolve(declaration.name));
+            found.push((source, mark, id));
+        }
+        let mut exported = Vec::new();
+        for (source, mark, id) in found {
+            self.source = source;
+            let name_span = mark.span;
+            if self.check_export_is_allowed_here(mark, name_span) {
+                // Only a class the package may export at all becomes
+                // handle-eligible; refusing the marker and then honoring it
+                // would make the refusal a no-op.
+                exported.extend(id);
+            }
+        }
+        exported
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exported_name;
+
+    #[test]
+    fn a_camel_case_name_becomes_snake_case() {
+        assert_eq!(exported_name("makeButton"), "make_button");
+        assert_eq!(exported_name("clickAt"), "click_at");
+        assert_eq!(exported_name("buttonLabel"), "button_label");
+    }
+
+    #[test]
+    fn an_already_snake_case_name_is_unchanged() {
+        assert_eq!(exported_name("button_label"), "button_label");
+        assert_eq!(exported_name("add"), "add");
+    }
+
+    #[test]
+    fn an_acronym_run_breaks_before_its_last_capital() {
+        assert_eq!(exported_name("parseHTTPHeader"), "parse_http_header");
+        assert_eq!(exported_name("toJSON"), "to_json");
+    }
+
+    #[test]
+    fn a_digit_starts_a_new_word_before_a_capital() {
+        assert_eq!(exported_name("utf8Decode"), "utf8_decode");
+        assert_eq!(exported_name("v2Button"), "v2_button");
+    }
+
+    #[test]
+    fn the_mapping_is_not_injective_which_is_why_collisions_are_checked() {
+        // Both spellings land on the same consumer name. That is the whole
+        // reason `KSEM168` exists rather than the mapping being assumed safe.
+        assert_eq!(exported_name("buttonLabel"), exported_name("button_label"));
+    }
+}

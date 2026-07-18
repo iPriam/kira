@@ -28,6 +28,7 @@ mod classes;
 mod closures;
 mod decl;
 mod enums;
+mod exports;
 mod imports;
 mod operators;
 mod ownership;
@@ -38,6 +39,7 @@ mod types;
 
 pub use analyze::{Analysis, analyze};
 pub use build_kind::BuildKind;
+pub use exports::exported_name;
 pub use imports::{FileImports, ImportTable};
 
 use kira_core::Interner;

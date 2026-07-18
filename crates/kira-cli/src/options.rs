@@ -23,6 +23,16 @@ pub enum Device {
     Web(WasmDevice),
 }
 
+impl Device {
+    /// The name this device is spelled by on the command line.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::Web(device) => device.label(),
+        }
+    }
+}
+
 /// A parsed `run`/`build`/`check` invocation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompileOptions {
