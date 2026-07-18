@@ -299,21 +299,25 @@ impl Parser<'_> {
     /// Whether the current token can begin an expression (used to decide
     /// whether `return` carries a value).
     fn starts_expression(&self) -> bool {
-        matches!(
-            self.current_kind(),
+        match self.current_kind() {
             TokenKind::IntLiteral
-                | TokenKind::FloatLiteral
-                | TokenKind::StringLiteral
-                | TokenKind::True
-                | TokenKind::False
-                | TokenKind::Identifier
-                | TokenKind::LParen
-                | TokenKind::Minus
-                | TokenKind::Bang
-                // `return [1, 2, 3]` — an array literal is a value like any
-                // other, so `[` starts an expression.
-                | TokenKind::LBracket
-        )
+            | TokenKind::FloatLiteral
+            | TokenKind::StringLiteral
+            | TokenKind::True
+            | TokenKind::False
+            | TokenKind::Identifier
+            | TokenKind::LParen
+            | TokenKind::Minus
+            | TokenKind::Bang
+            // `return [1, 2, 3]` — an array literal is a value like any
+            // other, so `[` starts an expression.
+            | TokenKind::LBracket => true,
+            // `return .Red` — a leading-dot member is a value, so a `.` starts
+            // an expression exactly when a variant name follows it, matching
+            // the guard the primary parser reads the member with.
+            TokenKind::Dot => self.peek(1).kind == TokenKind::Identifier,
+            _ => false,
+        }
     }
 }
 
@@ -342,6 +346,23 @@ mod tests {
             .map(|&id| result.tree.stmt(id).clone())
             .collect();
         (result.tree.clone(), stmts)
+    }
+
+    /// `return .Red` must read the leading-dot member as the return value, not
+    /// as a bare `return` followed by a stray `.Red` statement.
+    #[test]
+    fn a_return_takes_a_leading_dot_member_as_its_value() {
+        let (tree, stmts) = body("function f() { return .Red }");
+        assert_eq!(stmts.len(), 1, "expected a single `return` statement");
+        match &stmts[0] {
+            Stmt::Return {
+                value: Some(expr), ..
+            } => assert!(matches!(
+                tree.expr(*expr),
+                kira_syntax_model::ast::Expr::DotMember { .. }
+            )),
+            other => panic!("expected `return` with a value, got {other:?}"),
+        }
     }
 
     #[test]

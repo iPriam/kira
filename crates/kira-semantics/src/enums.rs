@@ -169,7 +169,7 @@ impl Analyzer<'_> {
                 "KSEM120",
                 format!(
                     "enum `{}` has no variant `{member}`",
-                    self.type_name(expected.unwrap())
+                    self.type_name(Type::Enum(id))
                 ),
             );
             return self.program.exprs.alloc(HirExpr::Error);
