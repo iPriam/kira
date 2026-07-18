@@ -154,6 +154,30 @@ function main() {
     assert_eq!(output, "-1\n15\n");
 }
 
+/// Which branch decides a conditional's width is observable, because the width
+/// picks signed or unsigned `>>`. The rule is that the **then** branch decides,
+/// mirroring the left-operand rule for `+`, so the same bits shift two
+/// different ways depending on the order they are written in. Pinned here
+/// rather than left to a semantics assertion that only checks for silence: a
+/// future change to branch-type selection has to fail a test instead of quietly
+/// flipping shift signedness.
+#[test]
+fn a_conditional_takes_its_width_from_the_then_branch() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    var wide: U64 = 0
+    wide = wide - 1
+    print((true ? wide : 0) >> 60)
+    print((false ? 0 : wide) >> 60)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "15\n-1\n");
+}
+
 /// A shift count of 64 or more is defined, not undefined: every backend takes
 /// it modulo 64. LLVM would emit poison here without an explicit mask, so this
 /// is the case that pins the mask.
@@ -176,8 +200,8 @@ function main() {
 
 /// The precedence ladder, run rather than merely parsed. `&` binds tighter than
 /// `^`, which binds tighter than `|`; shifts bind tighter than the orderings but
-/// looser than `+`. A backend reading C's ladder instead prints different
-/// numbers here rather than failing to compile.
+/// looser than `+`. That is C's ladder; a backend reading Go's or Swift's
+/// instead prints different numbers here rather than failing to compile.
 ///
 /// The one rung this cannot exercise at run time is bitwise-below-equality:
 /// grouping `1 | (2 == 3)` makes the program a *type* error rather than a

@@ -175,15 +175,6 @@ impl Analyzer<'_> {
         }
     }
 
-    /// Type-checks a binary operation, threading expected types so a
-    /// leading-dot operand resolves and desugaring enum equality to a tag
-    /// comparison.
-    ///
-    /// A leading-dot member (`.Red`) has no bottom-up type: it resolves only
-    /// against an expected one. So when exactly one operand is a leading dot,
-    /// the *other* is analyzed first and its type becomes the dot's expectation
-    /// — which is what makes `c == .Red` and `red != .Green` type-check without
-    /// bidirectional inference in the general case.
     /// Type-checks `cond ? then : otherwise`.
     ///
     /// The expected-type hint is forwarded to both branches so an empty array
@@ -270,6 +261,15 @@ impl Analyzer<'_> {
         })
     }
 
+    /// Type-checks a binary operation, threading expected types so a
+    /// leading-dot operand resolves and desugaring enum equality to a tag
+    /// comparison.
+    ///
+    /// A leading-dot member (`.Red`) has no bottom-up type: it resolves only
+    /// against an expected one. So when exactly one operand is a leading dot,
+    /// the *other* is analyzed first and its type becomes the dot's expectation
+    /// — which is what makes `c == .Red` and `red != .Green` type-check without
+    /// bidirectional inference in the general case.
     fn analyze_binary(
         &mut self,
         ctx: &mut FnCtx,
