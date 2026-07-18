@@ -126,8 +126,7 @@ impl Vm<'_> {
     }
 
     fn concat(&mut self) -> Result<(), VmError> {
-        let rhs = self.pop_str()?;
-        let lhs = self.pop_str()?;
+        let (lhs, rhs) = self.pop_two_str()?;
         let mut joined = String::with_capacity(self.heap.get(lhs).len() + self.heap.get(rhs).len());
         joined.push_str(self.heap.get(lhs));
         joined.push_str(self.heap.get(rhs));
@@ -205,8 +204,7 @@ impl Vm<'_> {
     }
 
     fn str_compare(&mut self, instruction: Instruction) -> Result<(), VmError> {
-        let rhs = self.pop_str()?;
-        let lhs = self.pop_str()?;
+        let (lhs, rhs) = self.pop_two_str()?;
         let equal = self.heap.get(lhs) == self.heap.get(rhs);
         self.heap.free(lhs);
         self.heap.free(rhs);

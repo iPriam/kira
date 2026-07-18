@@ -45,6 +45,15 @@
 //! anything reduces to the old rule — `finish` reports 0 after every call —
 //! and a call that *traps* still balances, because a trap unwinds its frames and
 //! operand stack into the heap it borrowed rather than abandoning them.
+//!
+//! That holds for **every** trap a validating module can reach, not only the
+//! ones a Kira compiler emits. [`Module::validate`](kira_bytecode::Module) proves
+//! structure, not stack typing, so an ill-typed `.kbc` from anywhere can trap
+//! with a heap value already popped into a local the unwind cannot see — which
+//! is why each such path frees what it holds before it returns. When the heap
+//! died with the call that stranding was invisible; here it would be a permanent
+//! leak that [`finish`](Instance::finish) reports forever, and later steps read
+//! `finish().current == 0` as proof of balance.
 
 use std::collections::BTreeMap;
 
@@ -179,7 +188,7 @@ impl Instance {
                 // to end its caller's process over a case it thinks impossible.
                 other => self.heap.lower(other).ok_or(VmError::UncrossableExport {
                     function,
-                    kind: "argument",
+                    kind: "this argument",
                 }),
             };
             match value {
@@ -221,9 +230,9 @@ impl Instance {
             // so a value of one arriving is a disagreement worth naming.
             Value::Array(_) | Value::Enum(_) => {
                 let kind = if matches!(result, Value::Array(_)) {
-                    "array"
+                    "an array result"
                 } else {
-                    "enum"
+                    "an enum result"
                 };
                 self.heap.drop_value(result);
                 Err(VmError::UncrossableExport { function, kind })
@@ -233,7 +242,7 @@ impl Instance {
                 self.heap.drop_value(scalar);
                 lifted.ok_or(VmError::UncrossableExport {
                     function,
-                    kind: "value",
+                    kind: "this result",
                 })
             }
         }

@@ -8,27 +8,22 @@
 
 use kira_bytecode::module::Module;
 use kira_bytecode::op::Instruction;
-use kira_runtime_abi::{HostCapabilities, NativeArg, NativeResult};
+use kira_runtime_abi::{HostCapabilities, NativeArg};
 
 use crate::error::VmError;
-use crate::value::{Heap, HeapStats, Value};
+use crate::value::{Heap, Value};
 
 mod operators;
 mod place;
+mod program;
+
+pub(crate) use self::program::check_signature;
+pub use self::program::{Program, RunOutcome, execute};
 
 use self::place::{ResolvedStep, check_index};
 
 /// Guards against unbounded recursion turning into unbounded memory use.
 const MAX_CALL_DEPTH: usize = 1 << 20;
-
-/// The outcome of a completed run.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RunOutcome {
-    /// The value `@Main` returned (`Void` for a `Void` main).
-    pub result: Value,
-    /// Heap accounting at exit; `current` is 0 for a clean run.
-    pub heap: HeapStats,
-}
 
 /// One call frame: its function, program counter, and local slots.
 struct Frame {
@@ -37,133 +32,7 @@ struct Frame {
     locals: Vec<Value>,
 }
 
-/// Runs `module`'s entrypoint, sending output to `host`.
-///
-/// Returns the entrypoint's result and heap accounting on success, or a
-/// [`VmError`] trap. The final result value is dropped before accounting, so a
-/// clean run reports `current == 0`.
-pub fn execute(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOutcome, VmError> {
-    module.validate()?;
-    run_entry(module, host)
-}
-
-/// Runs `module`'s entrypoint on a fresh VM, assuming it is already validated.
-fn run_entry(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOutcome, VmError> {
-    let mut vm = Vm::new(host, Heap::new());
-    let main = module.main.ok_or(VmError::NoEntrypoint)?;
-    let result = vm.enter(module, main, &[])?;
-    // The program's result is no longer referenced by anything; drop it so
-    // heap accounting reflects a fully reclaimed program.
-    vm.heap.drop_value(result);
-    Ok(RunOutcome {
-        result,
-        heap: vm.heap.stats(),
-    })
-}
-
-/// An owned [`Module`] proven safe to interpret.
-///
-/// A `Module` is a public, deserializable artifact, so every index and operand
-/// in it is validated before anything is trusted — that is what lets
-/// interpretation index without the bounds checks it would otherwise need, and
-/// without panicking on a malformed artifact.
-///
-/// Validation is a whole-module pass, so it is done once here rather than per
-/// entry. That matters for a hybrid program, where the native half calls back
-/// into the VM through [`Program::call`] at every crossing: re-proving the
-/// module on each call would make a boundary crossing cost a scan of the
-/// program.
-///
-/// The module is *owned* rather than borrowed: a host loads bytecode from
-/// somewhere (a `.kbc` file, a network, memory), and the thing that runs it is
-/// the natural owner of it.
-pub struct Program {
-    module: Module,
-}
-
-impl Program {
-    /// Validates `module` and takes ownership of it, or reports why it cannot
-    /// be run.
-    pub fn load(module: Module) -> Result<Program, VmError> {
-        module.validate()?;
-        Ok(Program { module })
-    }
-
-    /// The module being run.
-    pub fn module(&self) -> &Module {
-        &self.module
-    }
-
-    /// Runs the entrypoint, sending output to `host`.
-    pub fn run(&self, host: &mut dyn HostCapabilities) -> Result<RunOutcome, VmError> {
-        run_entry(&self.module, host)
-    }
-
-    /// Runs one function by id with `args`, and returns what it produced.
-    ///
-    /// This is the mirror of [`HostCapabilities::call_native`]: that is how a
-    /// running program reaches the native half, and this is how the native half
-    /// reaches back. Both speak the same seam vocabulary, so an embedder hosting
-    /// a hybrid program marshals one way in each direction and nothing else.
-    ///
-    /// Ownership follows the same rule in both directions: **args borrow** (a
-    /// string arrives as a `&str` the caller still owns, and is copied into this
-    /// run's heap) and **the result owns** (a returned string is handed out as
-    /// an owned `String`, because handing a value out is a move).
-    ///
-    /// Each call runs on its own heap and operand stack. Nothing outlives the
-    /// call — the result is copied out before the heap is dropped — so calls
-    /// nest freely, which is exactly what a native function calling a
-    /// `@Runtime` function that calls a `@Native` function needs.
-    pub fn call(
-        &self,
-        host: &mut dyn HostCapabilities,
-        function_id: u32,
-        args: &[NativeArg<'_>],
-    ) -> Result<NativeResult, VmError> {
-        check_signature(&self.module, function_id, args.len())?;
-
-        let mut vm = Vm::new(host, Heap::new());
-        let result = vm.enter(&self.module, function_id, args)?;
-        let lifted = vm.heap.lift(result);
-        vm.heap.drop_value(result);
-        lifted.ok_or(VmError::StructAtSeam {
-            function: function_id,
-        })
-    }
-}
-
-/// Checks that `function_id` names a function of this module that takes exactly
-/// `arg_count` arguments.
-///
-/// The one place both embedder entry points ([`Program::call`] and
-/// [`crate::Instance::call`]) agree on what a well-formed request looks like, so
-/// a host driving the VM from an artifact that disagrees with this module is
-/// refused the same way through either door.
-pub(crate) fn check_signature(
-    module: &Module,
-    function_id: u32,
-    arg_count: usize,
-) -> Result<(), VmError> {
-    let function = module
-        .functions
-        .get(function_id as usize)
-        .ok_or(VmError::UnknownFunction(function_id))?;
-    if function.is_native() {
-        return Err(VmError::NativeEntry {
-            function: function_id,
-        });
-    }
-    if arg_count != usize::from(function.param_count) {
-        return Err(VmError::ArityMismatch {
-            function: function_id,
-            expected: function.param_count,
-            got: arg_count,
-        });
-    }
-    Ok(())
-}
-
+/// The running interpreter: a host, a heap, an operand stack, and scratch.
 pub(crate) struct Vm<'h> {
     host: &'h mut dyn HostCapabilities,
     pub(crate) heap: Heap,
@@ -247,13 +116,16 @@ impl<'h> Vm<'h> {
         if args.len() > frame.locals.len() {
             // Validation proves `param_count <= local_count` and the entry
             // points check arity, so this is unreachable through either door —
-            // it is here so the impossible case frees rather than panics.
+            // it is here so the impossible case frees rather than panics. The
+            // count is read before the values are freed, so the refusal names
+            // what actually arrived rather than a placeholder.
+            let got = args.len();
             self.discard(args);
             self.discard(frame.locals);
             return Err(VmError::ArityMismatch {
                 function: function_id,
                 expected: module.functions[function_id as usize].param_count,
-                got: 0,
+                got,
             });
         }
         for (slot, value) in args.into_iter().enumerate() {
@@ -327,9 +199,15 @@ impl<'h> Vm<'h> {
                     if frames.len() >= MAX_CALL_DEPTH {
                         return Err(VmError::CallDepthExceeded);
                     }
-                    let callee = new_frame(module, index)?;
-                    let filled = self.fill_params(module, index, callee)?;
-                    frames.push(filled);
+                    let mut callee = new_frame(module, index)?;
+                    if let Err(error) = self.fill_params(module, index, &mut callee) {
+                        // The callee is not on the frame stack yet, so the
+                        // unwind cannot see it — the arguments already moved
+                        // into its slots are freed here instead.
+                        self.discard(callee.locals);
+                        return Err(error);
+                    }
+                    frames.push(callee);
                 }
                 Instruction::CallNative(id) => self.call_native(module, id)?,
                 other => self.step(module, &mut frames[depth], other)?,
@@ -339,17 +217,22 @@ impl<'h> Vm<'h> {
 
     /// Pops arguments off the operand stack into a fresh callee frame's
     /// parameter slots (arguments were pushed left to right).
+    ///
+    /// Fills in place rather than taking the frame, so a mid-fill failure hands
+    /// the caller back a frame holding the slots already written — which it must
+    /// free, because a partially filled frame never reaches the frame stack the
+    /// unwind walks.
     fn fill_params(
         &mut self,
         module: &Module,
         index: u32,
-        mut frame: Frame,
-    ) -> Result<Frame, VmError> {
+        frame: &mut Frame,
+    ) -> Result<(), VmError> {
         let param_count = module.functions[index as usize].param_count as usize;
         for slot in (0..param_count).rev() {
             frame.locals[slot] = self.pop()?;
         }
-        Ok(frame)
+        Ok(())
     }
 
     /// Calls into the native half through the embedder.
@@ -472,10 +355,13 @@ impl<'h> Vm<'h> {
                     self.heap.drop_value(base);
                     return Err(VmError::NotAStruct);
                 };
-                let field = self
-                    .heap
-                    .field(id, index)
-                    .ok_or(VmError::NoSuchField { index })?;
+                let Some(field) = self.heap.field(id, index) else {
+                    // The struct was ours the moment it left the stack; a
+                    // refused projection frees it rather than abandoning it in
+                    // a heap that may outlive this call.
+                    self.heap.drop_value(base);
+                    return Err(VmError::NoSuchField { index });
+                };
                 // The field is copied out before the struct is dropped: the
                 // struct owns its fields, so handing one out without copying
                 // would hand out storage this drop is about to free.
@@ -564,10 +450,15 @@ impl<'h> Vm<'h> {
                     self.heap.drop_value(base);
                     return Err(VmError::NotAnArray);
                 };
-                let len = self.heap.array_len(id).ok_or(VmError::NotAnArray)?;
-                let count = i64::try_from(len).map_err(|_| VmError::ArrayTooLong)?;
+                let counted = self
+                    .heap
+                    .array_len(id)
+                    .ok_or(VmError::NotAnArray)
+                    .and_then(|len| i64::try_from(len).map_err(|_| VmError::ArrayTooLong));
+                // The array is freed on every path out, not just the one that
+                // produced a count.
                 self.heap.drop_value(base);
-                self.stack.push(Value::Int(count));
+                self.stack.push(Value::Int(counted?));
             }
             Instruction::NewEnum { tag, has_payload } => {
                 // The payload, when present, was pushed last, so it comes off
@@ -583,9 +474,11 @@ impl<'h> Vm<'h> {
                     self.heap.drop_value(base);
                     return Err(VmError::NotAnEnum);
                 };
-                let tag = self.heap.enum_tag(id).ok_or(VmError::NotAnEnum)?;
+                let tag = self.heap.enum_tag(id).ok_or(VmError::NotAnEnum);
+                // The box is freed on every path out, not just the one that
+                // found a tag.
                 self.heap.drop_value(base);
-                self.stack.push(Value::Int(i64::from(tag)));
+                self.stack.push(Value::Int(i64::from(tag?)));
             }
             Instruction::EnumPayload => {
                 // The same shape as `EnumTag`: the enum is consumed, an owned
@@ -596,10 +489,12 @@ impl<'h> Vm<'h> {
                     self.heap.drop_value(base);
                     return Err(VmError::NotAnEnum);
                 };
-                let payload = self
-                    .heap
-                    .enum_payload(id)
-                    .ok_or(VmError::MissingEnumPayload)?;
+                let Some(payload) = self.heap.enum_payload(id) else {
+                    // Same rule as `GetField`: a refused projection frees the
+                    // box it popped.
+                    self.heap.drop_value(base);
+                    return Err(VmError::MissingEnumPayload);
+                };
                 self.heap.drop_value(base);
                 self.stack.push(payload);
             }
@@ -648,31 +543,60 @@ impl<'h> Vm<'h> {
         self.stack.pop().ok_or(VmError::StackUnderflow)
     }
 
+    /// Reports a mismatched operand, freeing it first.
+    ///
+    /// The typed pops below take the value off the stack before they know it is
+    /// the wrong one, and a popped value is this VM's to own. Well-typed
+    /// bytecode never reaches here, but a `Module` is a public artifact and
+    /// validation proves structure rather than stack typing — so an ill-typed
+    /// module must trap without stranding storage in a heap that may outlive
+    /// the call.
+    fn mismatch(&mut self, value: Value, expected: &'static str) -> VmError {
+        self.heap.drop_value(value);
+        VmError::TypeMismatch { expected }
+    }
+
     fn pop_int(&mut self) -> Result<i64, VmError> {
         match self.pop()? {
             Value::Int(value) => Ok(value),
-            _ => Err(VmError::TypeMismatch { expected: "Int" }),
+            other => Err(self.mismatch(other, "Int")),
         }
     }
 
     fn pop_float(&mut self) -> Result<f64, VmError> {
         match self.pop()? {
             Value::Float(value) => Ok(value),
-            _ => Err(VmError::TypeMismatch { expected: "Float" }),
+            other => Err(self.mismatch(other, "Float")),
         }
     }
 
     fn pop_bool(&mut self) -> Result<bool, VmError> {
         match self.pop()? {
             Value::Bool(value) => Ok(value),
-            _ => Err(VmError::TypeMismatch { expected: "Bool" }),
+            other => Err(self.mismatch(other, "Bool")),
         }
     }
 
     fn pop_str(&mut self) -> Result<crate::value::StrId, VmError> {
         match self.pop()? {
             Value::Str(id) => Ok(id),
-            _ => Err(VmError::TypeMismatch { expected: "String" }),
+            other => Err(self.mismatch(other, "String")),
+        }
+    }
+
+    /// Pops the two string operands of a binary string op, right one first.
+    ///
+    /// Paired here rather than at each call site because the second pop is the
+    /// one that can fail with the first already in hand: an ill-typed module
+    /// would otherwise strand the right operand in a local no unwind can see.
+    fn pop_two_str(&mut self) -> Result<(crate::value::StrId, crate::value::StrId), VmError> {
+        let rhs = self.pop_str()?;
+        match self.pop_str() {
+            Ok(lhs) => Ok((lhs, rhs)),
+            Err(error) => {
+                self.heap.free(rhs);
+                Err(error)
+            }
         }
     }
 }

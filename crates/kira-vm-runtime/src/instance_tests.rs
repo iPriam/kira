@@ -334,10 +334,13 @@ fn a_result_that_cannot_cross_is_refused_by_name() {
         error,
         VmError::UncrossableExport {
             function: 5,
-            kind: "array",
+            kind: "an array result",
         }
     );
-    assert!(error.to_string().contains("array"), "{error}");
+    assert_eq!(
+        error.to_string(),
+        "an array result cannot cross the export boundary at function 5"
+    );
     assert_eq!(ui.stats().current, 0, "the refused array was freed");
     assert_eq!(ui.finish().current, 0);
 }
@@ -421,4 +424,133 @@ fn entering_a_native_function_is_refused() {
         ui.call(&mut host, id, &[]),
         Err(VmError::NativeEntry { function: id })
     );
+}
+
+/// A module that passes structural validation while being ill-typed on the
+/// operand stack, so every one of its functions traps somewhere that has a live
+/// heap value in hand.
+///
+/// `Module::validate` proves indices and operands in range, not stack typing —
+/// so a `.kbc` from anywhere but this compiler can reach these paths. Each
+/// function is return-terminated (validation requires it) and traps before ever
+/// reaching that return.
+///
+/// Function ids: 0 `main`, 1 mismatched second operand of `DivInt`,
+/// 2 mismatched second operand of `ConcatStr`, 3 `GetField` past the last field,
+/// 4 `EnumPayload` on a payload-less variant, 5 a `Call` whose arguments are not
+/// all on the stack.
+fn ill_typed() -> Module {
+    let bad_div = func(
+        "bad_div",
+        0,
+        0,
+        // [Str, Int] — the right operand pops as an Int, the left is a string.
+        vec![
+            I::ConstStr(0),
+            I::ConstInt(1),
+            I::DivInt,
+            I::ConstVoid,
+            I::Return,
+        ],
+    );
+    let bad_concat = func(
+        "bad_concat",
+        0,
+        0,
+        // [Int, Str] — the right operand pops as a string, the left is an Int,
+        // so the failure happens with a live string already in hand.
+        vec![
+            I::ConstInt(1),
+            I::ConstStr(0),
+            I::ConcatStr,
+            I::ConstVoid,
+            I::Return,
+        ],
+    );
+    let bad_field = func(
+        "bad_field",
+        0,
+        0,
+        vec![
+            I::ConstStr(0),
+            I::NewStruct(1),
+            I::GetField(7),
+            I::ConstVoid,
+            I::Return,
+        ],
+    );
+    let bad_payload = func(
+        "bad_payload",
+        0,
+        0,
+        vec![
+            I::NewEnum {
+                tag: 0,
+                has_payload: false,
+            },
+            I::EnumPayload,
+            I::ConstVoid,
+            I::Return,
+        ],
+    );
+    // Calls a two-parameter function with only one argument pushed, so the
+    // callee frame is half filled when the second pop underflows.
+    let bad_call = func(
+        "bad_call",
+        0,
+        0,
+        vec![I::ConstStr(0), I::Call(6), I::Return],
+    );
+    let takes_two = func("takes_two", 2, 2, vec![I::ConstVoid, I::Return]);
+    Module {
+        exports: Default::default(),
+        functions: vec![
+            func("main", 0, 0, vec![I::ReturnVoid]),
+            bad_div,
+            bad_concat,
+            bad_field,
+            bad_payload,
+            bad_call,
+            takes_two,
+        ],
+        main: Some(0),
+        strings: vec!["ok".to_owned()],
+    }
+}
+
+/// The instance's balance invariant holds for *every* trap a validating module
+/// can reach, not only the ones well-typed bytecode produces.
+///
+/// A heap that dies with its call hides a value stranded on an error path; a
+/// heap that outlives the call turns the same stranding into a permanent leak
+/// that `finish` would report forever. So each trap below is checked twice: it
+/// surfaces typed, and it left nothing behind.
+#[test]
+fn every_trap_a_validating_module_can_reach_still_balances() {
+    let expected = [
+        (1, VmError::TypeMismatch { expected: "Int" }),
+        (2, VmError::TypeMismatch { expected: "String" }),
+        (3, VmError::NoSuchField { index: 7 }),
+        (4, VmError::MissingEnumPayload),
+        (5, VmError::StackUnderflow),
+    ];
+    for (function, trap) in expected {
+        let mut host = CapturingHost::new();
+        let mut ui = Instance::load(ill_typed()).expect("a structurally valid module");
+        assert_eq!(
+            ui.call(&mut host, function, &[]),
+            Err(trap),
+            "function {function}"
+        );
+        assert!(
+            ui.stats().allocated > 0,
+            "function {function} allocated before it trapped"
+        );
+        assert_eq!(
+            ui.stats().current,
+            0,
+            "function {function} stranded a value in the persistent heap"
+        );
+        assert_eq!(ui.finish().current, 0, "function {function}");
+    }
 }
