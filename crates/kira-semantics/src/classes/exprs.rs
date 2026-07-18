@@ -129,7 +129,7 @@ impl Analyzer<'_> {
                 let name = self.program.types.type_name(Type::Struct(id));
                 self.emit(
                     span,
-                    "KSEM081",
+                    "KSEM082",
                     format!("field {slot} of `{name}` has no value and no default"),
                 );
                 self.program.exprs.alloc(HirExpr::Error)

@@ -13,18 +13,39 @@ use crate::analyze::Analyzer;
 
 /// Where a type name was written, for the diagnostic when it does not resolve.
 ///
-/// A struct field is the one position that can distinguish a *forward
-/// reference* from an unknown name, because only there is declaration order a
-/// rule. Everywhere else the two are the same mistake.
+/// A field is the one position that can distinguish a *forward reference* from
+/// an unknown name, because only there is declaration order a rule. Everywhere
+/// else the two are the same mistake.
 #[derive(Debug, Clone)]
 pub(crate) enum NameContext {
     /// An ordinary type position: a parameter, a return type, an annotation.
     Ordinary,
-    /// A field of the named struct.
+    /// A field of the named aggregate.
     Field {
-        /// The struct whose field this is.
+        /// What kind of aggregate declares this field.
+        owner_kind: AggregateKind,
+        /// The aggregate whose field this is.
         owner: String,
     },
+}
+
+/// The kind of aggregate a field belongs to, so a diagnostic can name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AggregateKind {
+    /// A `struct` declaration.
+    Struct,
+    /// A `class` declaration.
+    Class,
+}
+
+impl AggregateKind {
+    /// The keyword that introduces this kind, for use in a message.
+    pub(crate) fn noun(self) -> &'static str {
+        match self {
+            AggregateKind::Struct => "struct",
+            AggregateKind::Class => "class",
+        }
+    }
 }
 
 impl Analyzer<'_> {
@@ -105,7 +126,9 @@ impl Analyzer<'_> {
             return Type::Enum(id);
         }
         match context {
-            NameContext::Field { owner } => self.report_unknown_field_type(owner, &text, span),
+            NameContext::Field { owner_kind, owner } => {
+                self.report_unknown_field_type(*owner_kind, owner, &text, span)
+            }
             NameContext::Ordinary => self.emit(
                 span,
                 "KSEM050",
@@ -121,30 +144,38 @@ impl Analyzer<'_> {
     /// Reports a field's unresolvable type, distinguishing a forward reference
     /// from an unknown name — they are different mistakes with different fixes.
     ///
-    /// The two forward references are themselves different mistakes. A struct
+    /// The two forward references are themselves different mistakes. A type
     /// declared later in *this* file is moved above the one that wants it. A
-    /// struct declared in another file cannot be moved at all: what fixes it is
+    /// type declared in another file cannot be moved at all: what fixes it is
     /// an `import`, which is what puts that file ahead of this one in the
     /// program's dependencies-first module order.
-    fn report_unknown_field_type(&mut self, owner: &str, text: &str, span: Span) {
+    fn report_unknown_field_type(
+        &mut self,
+        owner_kind: AggregateKind,
+        owner: &str,
+        text: &str,
+        span: Span,
+    ) {
         let declared_in = self
             .tree
             .items_with_source()
             .find_map(|(source, item)| match item {
                 Item::Struct(other) if self.interner.resolve(other.name) == text => Some(source),
+                Item::Class(other) if self.interner.resolve(other.name) == text => Some(source),
                 _ => None,
             });
         let Some(source) = declared_in else {
             self.emit(span, "KSEM050", format!("unknown type `{text}`"));
             return;
         };
+        let kind = owner_kind.noun();
         let message = match source == self.source {
             true => format!(
-                "struct `{owner}` cannot hold a `{text}` because `{text}` is declared \
+                "{kind} `{owner}` cannot hold a `{text}` because `{text}` is declared \
                  later in the file; move `{text}` above `{owner}`",
             ),
             false => format!(
-                "struct `{owner}` cannot hold a `{text}` because `{text}` is declared in \
+                "{kind} `{owner}` cannot hold a `{text}` because `{text}` is declared in \
                  a file this one does not import; add the `import` that names it",
             ),
         };

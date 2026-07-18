@@ -1,7 +1,7 @@
 //! Semantic analysis of classes: flattening, override checking, ambiguity, and
 //! the subtyping this port deliberately does not have.
 
-use super::codes;
+use super::{codes, diagnostics};
 
 /// A `@Main` that does nothing, appended so a case is a whole program.
 const MAIN: &str = "@Main function main() { return }";
@@ -16,6 +16,39 @@ fn a_class_flattens_its_parents_fields_and_methods() {
              @Main function main() { print(Savings().gross()) return }"
         )
         .is_empty()
+    );
+}
+
+/// A field typed by a name declared later gets the move-it-above fix, and the
+/// message names each owner by its own keyword — a class owner called a
+/// `struct` would send the reader looking for a declaration that is not there.
+#[test]
+fn a_forward_referenced_field_type_is_explained_for_a_class_too() {
+    let reported = diagnostics(&format!(
+        "class Wallet {{ var card: Card = Card() }}\nclass Card {{ var id: Int = 1 }}\n{MAIN}"
+    ));
+    let messages: Vec<&str> = reported
+        .iter()
+        .filter(|diagnostic| diagnostic.code == Some("KSEM051"))
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect();
+    assert_eq!(
+        messages,
+        vec![
+            "class `Wallet` cannot hold a `Card` because `Card` is declared later in the file; \
+             move `Card` above `Wallet`"
+        ]
+    );
+
+    // The same shape with structs keeps saying `struct`.
+    let reported = diagnostics(&format!(
+        "struct Wallet {{ var card: Card }}\nstruct Card {{ var id: Int }}\n{MAIN}"
+    ));
+    assert!(
+        reported
+            .iter()
+            .any(|diagnostic| diagnostic.code == Some("KSEM051")
+                && diagnostic.message.starts_with("struct `Wallet`"))
     );
 }
 
