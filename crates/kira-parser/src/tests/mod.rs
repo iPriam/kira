@@ -9,6 +9,7 @@
 mod aliases;
 mod arrays;
 mod classes;
+mod closures;
 mod enums;
 
 use crate::*;
@@ -34,6 +35,21 @@ fn type_spelling(result: &ParseResult, id: TypeRefId) -> String {
     match result.tree.type_ref(id) {
         TypeRef::Named { name, .. } => result.interner.resolve(*name).to_owned(),
         TypeRef::Array { element, .. } => format!("[{}]", type_spelling(result, *element)),
+        TypeRef::Function {
+            params,
+            result: ret,
+            ..
+        } => {
+            let written: Vec<String> = params
+                .iter()
+                .map(|&param| type_spelling(result, param))
+                .collect();
+            format!(
+                "({}) -> {}",
+                written.join(", "),
+                type_spelling(result, *ret)
+            )
+        }
         TypeRef::Error { .. } => "<error>".to_owned(),
     }
 }

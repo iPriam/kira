@@ -281,6 +281,18 @@ pub enum TypeRef {
         /// Span covering the brackets and their contents.
         span: Span,
     },
+    /// A function type: `(Int) -> Void`, `() -> Void`, `(Int, Int) -> Int`.
+    ///
+    /// The result is always written — `->` and a type — because a function type
+    /// has no "absent means `Void`" spelling the way a declaration does.
+    Function {
+        /// The written parameter types, in order; empty for `() -> R`.
+        params: Vec<TypeRefId>,
+        /// The written result type.
+        result: TypeRefId,
+        /// Span covering the parameter list through the result.
+        span: Span,
+    },
     /// A type position the parser could not parse; recovery inserts this.
     ///
     /// A variant rather than a sentinel name, so analysis resolves it to
@@ -297,9 +309,10 @@ impl TypeRef {
     /// The span covering this type reference.
     pub fn span(&self) -> Span {
         match self {
-            TypeRef::Named { span, .. } | TypeRef::Array { span, .. } | TypeRef::Error { span } => {
-                *span
-            }
+            TypeRef::Named { span, .. }
+            | TypeRef::Array { span, .. }
+            | TypeRef::Function { span, .. }
+            | TypeRef::Error { span } => *span,
         }
     }
 }

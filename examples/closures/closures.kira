@@ -1,0 +1,103 @@
+// Closures: a function you can pass around, written `{ params in body }`.
+//
+// A closure's type is written `(A, B) -> R`. That type is what says what the
+// parameters are — a closure never annotates them — so a closure literal only
+// makes sense where something already expects a function type: a `let` with an
+// annotation, an argument, a field, or a `return`.
+//
+// Because a function type's own arrow would be ambiguous with the one that
+// introduces a result, a function returning a function writes its result after
+// a colon: `function make(): (Int) -> Int`.
+//
+// A closure *captures* the bindings it reads from around it. A capture is a
+// copy taken when the closure is built, so it must be an immutable `let` of a
+// scalar type. Capturing a `var` is refused: the copy would go stale, and there
+// is no shared mutable storage to borrow instead.
+
+// A function type in a parameter. `borrow` says the call does not consume it.
+function apply(f: borrow (Int) -> Int, x: Int) -> Int {
+    return f(x)
+}
+
+// A function type as a result, written after `:`.
+function makeAdder(step: Int): (Int) -> Int {
+    return { value in
+        return value + step
+    }
+}
+
+// A callback parameter is what makes the trailing form read well at the call
+// site: `each { value in … }`.
+function each(handler: (Int) -> Void) {
+    handler(1)
+    handler(2)
+    handler(3)
+    return
+}
+
+// A zero-parameter function type is `() -> R`, and its closure spells the empty
+// parameter list as a bare leading `in`.
+function run(handler: () -> Int) -> Int {
+    return handler()
+}
+
+// A closure is an ordinary value, so it can be stored in a field and called
+// through it.
+class Handlers {
+    let onStart: () -> Int
+    let onValue: (Int) -> Int
+}
+
+function fire(handlers: borrow Handlers) -> Int {
+    return handlers.onStart() + handlers.onValue(20)
+}
+
+@Main
+function main() {
+    // Each call to `makeAdder` produces a value of the same function type
+    // carrying its own captured `step`.
+    let add3 = makeAdder(3)
+    let add10 = makeAdder(10)
+    print(apply(add3, 1))
+    print(apply(add10, 1))
+
+    // A capture is read where the closure is built, not where it is called.
+    let factor = 6
+    let scale: (Int) -> Int = { value in
+        return value * factor
+    }
+    print(scale(7))
+
+    // The trailing form: a closure written after the arguments is the last
+    // argument. With no other arguments the parentheses disappear entirely.
+    let offset = 100
+    each { value in
+        print(value + offset)
+    }
+
+    // A zero-parameter closure, and a parameter shadowing a capture of the
+    // same name — the parameter is nearer, so it wins.
+    let value = 999
+    print(run { in
+        return value
+    })
+    print(apply({ value in return value }, 5))
+
+    // Closures nest: the inner one captures `base` through the outer one
+    // rather than reaching past it.
+    let base = 30
+    print(apply({ v in
+        let seen = v
+        return run { in
+            return base + seen
+        }
+    }, 2))
+
+    // A closure in a field. `move` transfers it, because a closure value owns
+    // its captures the way any other aggregate owns its fields.
+    let start: () -> Int = { in return 5 }
+    let double: (Int) -> Int = { v in return v * 2 }
+    let handlers: Handlers = Handlers(move start, move double)
+    print(fire(handlers))
+    return
+}

@@ -593,6 +593,65 @@ enum, or an earlier alias — may not be claimed (`KSEM130`): a silently-ignored
 `type Int = Float` would keep type-checking as `Int` and give a wrong answer
 instead of an error.
 
+## Closures
+
+A closure is a function value, written `{ params in body }`; its type is written
+`(A, B) -> R`. A closure never annotates its parameters, so a literal only makes
+sense where a function type is already expected — an annotation, an argument, a
+field, or a `return`. Nowhere else says what the parameters are, and guessing is
+refused (`KSEM134`) rather than attempted.
+
+```kira
+function apply(f: borrow (Int) -> Int, x: Int) -> Int { return f(x) }
+
+function makeAdder(step: Int): (Int) -> Int {    // a result type after `:`
+    return { value in return value + step }
+}
+
+let scale: (Int) -> Int = { v in return v * 2 }  // one parameter
+let pick: (Int, Int) -> Int = { a, b in return a }
+let now: () -> Int = { in return 1 }             // zero parameters: a bare `in`
+
+each { value in print(value) }                   // trailing: the last argument
+graphics.runWithConfig(2) { frame in ... }       // …after the other arguments
+```
+
+A function type is written after `:` on a declaration that returns one, because
+`->` would be ambiguous with the function type's own arrow. Both spellings stay
+valid for every other result type.
+
+**A closure costs no opcode, no IR node, and no backend code.** A function type
+becomes a synthesized struct — a tag plus the captures of every literal of that
+type — a literal becomes a lifted top-level function plus a value of that
+struct, and a call through a closure value becomes a call to a synthesized
+dispatcher that branches on the tag. Every construct that reaches the IR is one
+every backend already ran, which is why the feature lands on VM, LLVM/native,
+hybrid, and wasm at once and adds a path to none of them.
+
+**A capture is a copy, and must be an immutable scalar.** A closure copies what
+it reads from around it at the moment it is built:
+
+- A `let` of `Int`, `Float`, or `Bool` is captured by value.
+- A `var` is **refused** (`KSEM117`). The reference implementation *borrows* a
+  mutable capture so a write inside the closure is visible outside; nothing in
+  this runtime shares storage — every value is copied on read, on every backend
+  — so copying it would run and quietly give a different answer. This is the one
+  piece of the reference behaviour that is not reproduced, and it is refused
+  rather than approximated.
+- A `String`, struct, array, or enum is refused by the same code: those own heap
+  storage, and `isTriviallyCopyable` admits only the scalars.
+
+Captures nest and shadow the way bindings do. A closure two deep captures an
+outer binding *through* the closure between it rather than reaching past it, a
+parameter shadows a capture of the same name, and a name is readable as a
+capture before an inner `let` of that name rebinds it.
+
+A closure lifted out of a method has no `self`, so a bare field name in its body
+is an undefined name rather than a silent capture.
+
+See [.codex/work/closures.md](.codex/work/closures.md) for the design, and
+[examples/closures/closures.kira](examples/closures/closures.kira) for a tour.
+
 ## Live sessions
 
 `kirac live` builds a program into a `.klbundle`, serves it over a loopback

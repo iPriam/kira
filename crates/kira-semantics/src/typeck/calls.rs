@@ -83,7 +83,23 @@ impl Analyzer<'_> {
             );
             return self.program.exprs.alloc(HirExpr::Error);
         };
+        // A field of function type is *called* through this same syntax, so a
+        // closure in a field is tried before a method of that name is looked
+        // up. A method wins if both exist, because a method is what the
+        // receiver's type declares and a field only what it stores.
         let qualified = format!("{}.{name}", self.type_name(receiver_ty));
+        if self.lookup_function(&qualified).is_none()
+            && let Some(call) = self.analyze_field_closure_call(
+                ctx,
+                receiver_hir,
+                receiver_ty,
+                &name,
+                args,
+                method_span,
+            )
+        {
+            return call;
+        }
         if self.lookup_function(&qualified).is_none() {
             if let Type::Struct(owner) = receiver_ty
                 && self.report_ambiguous_member(owner, &name, method_span, true)

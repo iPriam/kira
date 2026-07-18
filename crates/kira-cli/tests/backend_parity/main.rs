@@ -171,6 +171,7 @@ mod arithmetic;
 mod arrays;
 mod bitwise;
 mod classes;
+mod closures;
 mod control_flow;
 mod enums;
 mod examples;

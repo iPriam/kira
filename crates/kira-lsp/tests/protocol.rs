@@ -322,3 +322,41 @@ fn type_aliases_reach_the_editor_through_the_shared_frontend() {
 
     server.shutdown();
 }
+
+/// Closures reach the editor by construction, for the same reason type aliases
+/// do: the server serves the same salsa `analyzed` query `kirac check` does, so
+/// a closure needs no LSP change to be understood. A closure program is clean,
+/// and a refused capture squiggles with the code semantics gave it.
+#[test]
+fn closures_reach_the_editor_through_the_shared_frontend() {
+    let mut server = Server::start();
+    let clean = server.open(
+        "file:///tmp/kira-lsp-test/closures.kira",
+        "function apply(f: borrow (Int) -> Int, x: Int) -> Int {\n    return f(x)\n}\n\
+         @Main\nfunction main() {\n    let step = 2\n    \
+         let bump: (Int) -> Int = { v in return v + step }\n    \
+         print(apply(bump, 1))\n    return\n}\n",
+    );
+    assert_eq!(
+        clean.as_array().map(Vec::len),
+        Some(0),
+        "a closure program is clean, got {clean}",
+    );
+
+    let captured_var = server.open(
+        "file:///tmp/kira-lsp-test/capture.kira",
+        "function run(f: () -> Int) -> Int {\n    return f()\n}\n\
+         @Main\nfunction main() {\n    var total = 0\n    \
+         print(run { in return total })\n    return\n}\n",
+    );
+    assert!(
+        captured_var
+            .as_array()
+            .expect("an array of diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "KSEM117"),
+        "the refused capture is reported to the editor: {captured_var}",
+    );
+
+    server.shutdown();
+}

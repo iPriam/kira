@@ -270,14 +270,14 @@ impl Parser<'_> {
 
     /// Whether the token `n` ahead can begin a written type.
     ///
-    /// A type starts with a name (`Int`, `Point`) or with `[` (`[Int]`). This
-    /// is what every contextual-keyword lookahead asks, and asking it in one
-    /// place is what keeps `borrow [Int]` from silently parsing as a parameter
-    /// whose type is named `borrow`.
+    /// A type starts with a name (`Int`, `Point`), with `[` (`[Int]`), or with
+    /// `(` (`(Int) -> Void`). This is what every contextual-keyword lookahead
+    /// asks, and asking it in one place is what keeps `borrow [Int]` from
+    /// silently parsing as a parameter whose type is named `borrow`.
     pub(crate) fn peek_starts_type(&self, n: usize) -> bool {
         matches!(
             self.peek(n).kind,
-            TokenKind::Identifier | TokenKind::LBracket
+            TokenKind::Identifier | TokenKind::LBracket | TokenKind::LParen
         )
     }
 
@@ -333,13 +333,23 @@ impl Parser<'_> {
         })
     }
 
-    /// Parses a written type: a name, or `[` element `]`, nested to any depth.
+    /// Parses a written type: a name, `[` element `]`, or a function type,
+    /// nested to any depth.
     ///
     /// A name may be **module-qualified** (`Support.Point`). The qualifier is
     /// kept in the interned name — a dot cannot appear in an identifier, so a
     /// qualified spelling can never collide with a declared one — and semantics
     /// is what strips it against the file's imports.
+    ///
+    /// A leading `(` always starts a function type: no other written type is
+    /// parenthesized, so there is nothing to disambiguate against. That is also
+    /// why a function result type is spelled with `:` rather than `->` on a
+    /// declaration — `function f(): (Int) -> Int` — and both spellings are
+    /// accepted for every other result type.
     pub(crate) fn parse_type_ref(&mut self) -> TypeRefId {
+        if self.at(TokenKind::LParen) {
+            return self.parse_function_type();
+        }
         if self.at(TokenKind::LBracket) {
             let start = self.current().span;
             self.bump(); // `[`
@@ -368,12 +378,59 @@ impl Parser<'_> {
         self.tree.add_type(TypeRef::Error { span })
     }
 
+    /// Parses `(A, B) -> R`, with the cursor on `(`.
+    ///
+    /// The result is mandatory: a function type with no `->` names nothing, so
+    /// a missing arrow is reported and the whole type recovers to
+    /// [`TypeRef::Error`] rather than silently becoming `() -> Void`.
+    fn parse_function_type(&mut self) -> TypeRefId {
+        let start = self.current().span;
+        self.bump(); // `(`
+        let mut params = Vec::new();
+        while !self.at(TokenKind::RParen) && !self.at_eof() {
+            let before = self.pos;
+            params.push(self.parse_type_ref());
+            self.eat(TokenKind::Comma);
+            // A parameter that consumed nothing would spin; force progress.
+            if self.pos == before {
+                self.bump();
+            }
+        }
+        self.expect(TokenKind::RParen);
+        if !self.eat(TokenKind::Arrow) {
+            let span = Span::from_bounds(start.start, self.previous_end());
+            self.error(span, "KPAR034", "expected `->` in a function type");
+            return self.tree.add_type(TypeRef::Error { span });
+        }
+        let result = self.parse_type_ref();
+        let span = Span::from_bounds(start.start, self.previous_end());
+        self.tree.add_type(TypeRef::Function {
+            params,
+            result,
+            span,
+        })
+    }
+
     pub(crate) fn parse_block(&mut self) -> Block {
         let start = self.current().span;
-        let mut stmts = Vec::new();
         if !self.expect(TokenKind::LBrace) {
-            return Block { stmts, span: start };
+            return Block {
+                stmts: Vec::new(),
+                span: start,
+            };
         }
+        self.parse_block_body(start)
+    }
+
+    /// Parses statements up to and including the closing `}`, with the opening
+    /// `{` (whose span is `start`) already consumed.
+    ///
+    /// Split out because a closure's body is the same statement list behind the
+    /// same brace, only reached after its parameters and `in` were consumed —
+    /// so it cannot call [`Parser::parse_block`], which would demand a second
+    /// `{`.
+    pub(crate) fn parse_block_body(&mut self, start: Span) -> Block {
+        let mut stmts = Vec::new();
         while !self.at(TokenKind::RBrace) && !self.at_eof() {
             let before = self.pos;
             while self.eat(TokenKind::Semicolon) {}

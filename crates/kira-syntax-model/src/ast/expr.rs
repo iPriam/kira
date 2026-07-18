@@ -1,6 +1,6 @@
 //! Expressions, their field-initializer helper, and the operator enums.
 
-use super::ExprId;
+use super::{Block, ExprId};
 use crate::ownership::OwnershipOp;
 use kira_core::Symbol;
 use kira_source::Span;
@@ -178,11 +178,38 @@ pub enum Expr {
         /// Span covering operator and operand.
         span: Span,
     },
+    /// A closure literal (`{ value in body }`, `{ in body }`, `{ a, b in … }`).
+    ///
+    /// The parameter list carries names only: a closure never writes its
+    /// parameter types, so what they are comes from the *expected type* at this
+    /// position, which only analysis knows. The bare leading `in` of a
+    /// zero-parameter closure is what distinguishes `{ in update() }` from a
+    /// block, and an empty parameter list is what records it.
+    Closure {
+        /// The parameter names, in order; empty for `{ in … }`.
+        params: Vec<ClosureParam>,
+        /// The closure body.
+        body: Block,
+        /// Span covering the braces and their contents.
+        span: Span,
+    },
     /// An expression the parser could not parse; recovery inserts this.
     Error {
         /// Span of the malformed expression.
         span: Span,
     },
+}
+
+/// One parameter of an [`Expr::Closure`].
+///
+/// A name and nothing else: closure parameters are never annotated, so there is
+/// no type to record here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosureParam {
+    /// The parameter name.
+    pub name: Symbol,
+    /// Span of the name token.
+    pub span: Span,
 }
 
 /// One field initializer inside a [`Expr::StructLit`].
@@ -222,6 +249,7 @@ impl Expr {
             | Expr::Index { span, .. }
             | Expr::DotMember { span, .. }
             | Expr::Ownership { span, .. }
+            | Expr::Closure { span, .. }
             | Expr::Error { span } => *span,
         }
     }

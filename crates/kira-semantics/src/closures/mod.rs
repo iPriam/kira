@@ -1,0 +1,173 @@
+//! Closures, resolved entirely in the frontend.
+//!
+//! A closure adds **no** IR node, **no** opcode, and **no** backend code. The
+//! whole feature is a desugar, in the same spirit as classes: a function type
+//! becomes a synthesized *representation struct*, a closure literal becomes a
+//! lifted top-level function plus a value of that struct, and calling a
+//! closure-typed value becomes a call to a synthesized *dispatcher* that
+//! switches on the struct's tag.
+//!
+//! # Why a struct and not a function pointer
+//!
+//! A function pointer would need an indirect call, which means a call table in
+//! wasm, a pointer type in LLVM, and a new opcode in the VM — the full
+//! horizontal slice for one feature. Defunctionalizing costs none of that: the
+//! set of closure literals in a program is finite and known once analysis
+//! finishes, so a call through a closure value is a branch over that set. Every
+//! construct the desugar emits — a struct, a field read, an `if`, a call — is
+//! one every backend already runs.
+//!
+//! # The representation
+//!
+//! For each distinct function type the program mentions, one struct:
+//!
+//! ```text
+//! struct `(Int) -> Void` { tag: Int, <captures of closure #0…>, <#1…>, … }
+//! ```
+//!
+//! Field 0 is the tag — which closure literal this value is. The remaining
+//! fields are the concatenation of every literal's captures, so two literals of
+//! the same type never share a slot and a value only ever fills its own. The
+//! fields grow as literals are found, which is why a literal's `StructNew` is
+//! *finalized* after all bodies are analyzed rather than built complete.
+//!
+//! # What is refused, and why
+//!
+//! A capture must be an immutable binding of a trivially-copyable type. The
+//! oracle borrows a mutable local instead of copying it, which needs shared
+//! mutable storage; nothing in this runtime has reference semantics yet — every
+//! value is copied on read, on every backend — so a `var` capture is refused
+//! (`KSEM117`) rather than silently copied, which would run and give the wrong
+//! answer. A `String`, struct, array, or enum capture is refused by the same
+//! code, matching the oracle: `isTriviallyCopyable` admits only the scalars.
+
+use std::collections::HashMap;
+
+use kira_semantics_model::hir::{FuncId, LocalId};
+use kira_semantics_model::{StructId, Type};
+
+mod calls;
+mod lift;
+
+/// One function type, and everything synthesized for it.
+#[derive(Debug, Clone)]
+pub(crate) struct FnTypeInfo {
+    /// The parameter types, in order.
+    pub(crate) params: Vec<Type>,
+    /// The result type.
+    pub(crate) result: Type,
+    /// The dispatcher's id, minted on the first call *through* a value of this
+    /// type. A type that is only ever constructed and never called needs none.
+    pub(crate) dispatcher: Option<FuncId>,
+    /// One entry per closure literal of this type, indexed by tag.
+    pub(crate) impls: Vec<ClosureImpl>,
+}
+
+/// One closure literal, lifted to a top-level function.
+#[derive(Debug, Clone)]
+pub(crate) struct ClosureImpl {
+    /// The lifted function's id.
+    pub(crate) function: FuncId,
+}
+
+/// A closure literal's `StructNew`, waiting for the field list to stop growing.
+#[derive(Debug, Clone)]
+pub(crate) struct ClosureSite {
+    /// The `HirExpr::StructNew` node to finalize.
+    pub(crate) expr: kira_semantics_model::hir::HirExprId,
+    /// The representation struct.
+    pub(crate) repr: StructId,
+    /// Which literal of that type this is.
+    pub(crate) tag: u32,
+    /// The field each captured value belongs in.
+    pub(crate) capture_fields: Vec<u32>,
+    /// The captured values, read in the *enclosing* frame, aligned with
+    /// `capture_fields`.
+    pub(crate) capture_values: Vec<kira_semantics_model::hir::HirExprId>,
+}
+
+/// The per-closure state a [`FnCtx`](crate::analyze::FnCtx) carries while a
+/// lifted body is being analyzed.
+#[derive(Debug, Clone)]
+pub(crate) struct ClosureCtx {
+    /// The representation struct this closure's captures live in.
+    pub(crate) repr: StructId,
+    /// Each capture, in discovery order.
+    pub(crate) captures: Vec<Capture>,
+}
+
+/// One captured binding, threaded through one frame.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Capture {
+    /// The slot the value is read from, in the *enclosing* frame.
+    pub(crate) outer: LocalId,
+    /// The slot it is bound to inside this closure.
+    pub(crate) inner: LocalId,
+    /// The representation struct field it travels in.
+    pub(crate) field: u32,
+}
+
+/// What resolving a name against the enclosing closure frames produced.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Captured {
+    /// The name resolves, to this slot in the current frame.
+    Local(LocalId),
+    /// The name resolves in an enclosing frame but may not be captured; a
+    /// diagnostic was already emitted.
+    Refused,
+    /// The name resolves in no frame at all.
+    Absent,
+}
+
+/// Whether a value of `ty` may be copied into a closure without a `copy`.
+///
+/// The oracle's `isTriviallyCopyable`: the scalars and nothing else. A
+/// `String`, a struct, an array, and an enum all own heap storage, and copying
+/// one into a closure is exactly the "non-Copy owned capture" `KSEM117` names.
+pub(crate) fn is_trivially_copyable(ty: Type) -> bool {
+    matches!(
+        ty,
+        Type::Int(_) | Type::Float(_) | Type::Bool | Type::Void | Type::Error
+    )
+}
+
+/// The interning key for a function type: its parameters and its result.
+pub(crate) type FnTypeKey = (Vec<Type>, Type);
+
+/// Every function type the program mentions, and the struct each became.
+#[derive(Debug, Default)]
+pub(crate) struct FnTypeTable {
+    /// Keyed by the representation struct, which is what a [`Type`] carries.
+    by_struct: HashMap<StructId, FnTypeInfo>,
+    /// Keyed by shape, so `(Int) -> Void` written twice is one type.
+    by_shape: HashMap<FnTypeKey, StructId>,
+}
+
+impl FnTypeTable {
+    /// The function type behind a struct id, or `None` when the struct is an
+    /// ordinary one the user declared.
+    pub(crate) fn get(&self, id: StructId) -> Option<&FnTypeInfo> {
+        self.by_struct.get(&id)
+    }
+
+    /// The function type behind a struct id, mutably.
+    pub(crate) fn get_mut(&mut self, id: StructId) -> Option<&mut FnTypeInfo> {
+        self.by_struct.get_mut(&id)
+    }
+
+    /// The struct already minted for `key`, if any.
+    pub(crate) fn lookup(&self, key: &FnTypeKey) -> Option<StructId> {
+        self.by_shape.get(key).copied()
+    }
+
+    /// Records a freshly minted representation struct.
+    pub(crate) fn insert(&mut self, key: FnTypeKey, id: StructId, info: FnTypeInfo) {
+        self.by_shape.insert(key, id);
+        self.by_struct.insert(id, info);
+    }
+
+    /// Every function type, as `(struct, info)`, in no particular order.
+    pub(crate) fn rows(&self) -> impl Iterator<Item = (StructId, &FnTypeInfo)> {
+        self.by_struct.iter().map(|(&id, info)| (id, info))
+    }
+}

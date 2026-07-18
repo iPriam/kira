@@ -14,6 +14,9 @@ pub use hir::{
     Builtin, Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirLocal, HirPlace,
     HirPlaceStep, HirProgram, HirStmt, HirStmtId, HirUnaryOp, LocalId,
 };
+/// The engine a function's body runs on, anchored in `kira-runtime-abi` and
+/// re-exported here so the analyzer names it from one place.
+pub use kira_runtime_abi::Execution;
 /// The five ownership modes, anchored in the syntax model and re-exported here
 /// so the analyzer and everything above it name them from one place.
 pub use kira_syntax_model::ownership::{OwnershipMode, OwnershipOp};

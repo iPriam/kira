@@ -233,6 +233,10 @@ impl Parser<'_> {
             // an expression exactly when a variant name follows it, matching
             // the guard the primary parser reads the member with.
             TokenKind::Dot => self.peek(1).kind == TokenKind::Identifier,
+            // `return { value in … }` — a closure is a value, so a `{` starts
+            // an expression exactly when it opens one. Any other `{` does not:
+            // a block is not an expression here.
+            TokenKind::LBrace => self.at_closure_start(),
             _ => false,
         }
     }
