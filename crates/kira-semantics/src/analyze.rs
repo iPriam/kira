@@ -611,6 +611,25 @@ impl<'a> Analyzer<'a> {
         self.sigs[id.0 as usize].param_ownership.clone()
     }
 
+    /// The resolved type of each parameter of `id`, receiver included.
+    ///
+    /// Reading these beats re-resolving the written [`TypeRef`]: resolution
+    /// reports an unknown name every time it runs, so a second pass over an
+    /// already-resolved signature would report the same unknown type twice.
+    ///
+    /// [`TypeRef`]: kira_syntax_model::ast::TypeRef
+    pub(crate) fn param_types(&self, id: FuncId) -> Vec<Type> {
+        self.sigs[id.0 as usize].params.clone()
+    }
+
+    /// The resolved return type of `id`, `Void` when none was written.
+    ///
+    /// Read rather than re-resolved, for the reason [`Self::param_types`]
+    /// gives.
+    pub(crate) fn signature_return_type(&self, id: FuncId) -> Type {
+        self.sigs[id.0 as usize].return_type
+    }
+
     /// The spelling of `ty` for a diagnostic.
     ///
     /// Owned rather than borrowed on purpose: a struct's name lives in

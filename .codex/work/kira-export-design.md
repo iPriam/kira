@@ -147,7 +147,7 @@ function buttonLabel(b: Button) -> String {
 @Export
 function clickAt(b: Button, x: I64, y: I64) -> Bool {
     b.clicks = b.clicks + 1
-    return x >= 0 and x < b.width
+    return x >= 0 && x < b.width
 }
 ```
 

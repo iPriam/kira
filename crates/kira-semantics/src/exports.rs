@@ -173,6 +173,12 @@ impl Analyzer<'_> {
         exported_classes: &[StructId],
     ) -> bool {
         let modes = self.param_ownership(id);
+        // Types come from the collected signature, never from re-resolving what
+        // was written: resolution reports an unknown name every time it runs,
+        // so re-resolving here would report the same unknown type a second
+        // time. A method is refused before this point, so slot 0 is a real
+        // parameter and the two sequences align.
+        let types = self.param_types(id);
         let mut clean = true;
         for (index, param) in callable.function.params.iter().enumerate() {
             let mode = modes.get(index).copied().unwrap_or(OwnershipMode::Owned);
@@ -191,14 +197,17 @@ impl Analyzer<'_> {
                 );
                 clean = false;
             }
-            let ty = self.resolve_type_ref(param.ty);
+            // A parameter with no collected type is one the signature pass
+            // already refused; `Error` is what it recorded, and `Error` crosses
+            // silently.
+            let ty = types.get(index).copied().unwrap_or(Type::Error);
             clean &= self.check_export_type(ty, param.span, "parameter", exported_classes);
         }
         // A written result is checked against the span the author wrote it at;
         // an absent one is `Void`, which always crosses and has no span.
         if let Some(written) = callable.function.return_type {
             let span = self.tree.type_ref(written).span();
-            let return_type = self.resolve_type_ref(written);
+            let return_type = self.signature_return_type(id);
             clean &= self.check_export_type(return_type, span, "result", exported_classes);
         }
         clean

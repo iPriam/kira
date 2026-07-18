@@ -112,6 +112,18 @@ impl Parser<'_> {
                 self.tree.push_item(self.source, Item::Class(declaration));
             }
         } else if self.at(TokenKind::Struct) {
+            // `@Main`, `@Runtime`, and `@Native` select how a *function* runs,
+            // so they say nothing about a struct either. Same rule as the class
+            // arm above, so the same code: an execution or entrypoint marker on
+            // a non-function item is refused rather than silently dropped.
+            if annotations.is_main || annotations.execution != Execution::Inherited {
+                self.error(
+                    start,
+                    "KPAR041",
+                    "`@Main`, `@Runtime`, and `@Native` select how a *function* runs, \
+                     so none of them may annotate a struct",
+                );
+            }
             // Only a class mints handles, so `@Export struct` is refused by
             // name and pointed at the fix. The struct is still parsed and
             // registered: dropping it would turn one refusal into an
