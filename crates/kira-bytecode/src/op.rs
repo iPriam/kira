@@ -90,6 +90,20 @@ pub enum Instruction {
     GtUInt,
     /// Integer greater-or-equal, unsigned.
     GeUInt,
+    /// Bitwise AND on the raw 64-bit pattern.
+    BitAnd,
+    /// Bitwise OR on the raw 64-bit pattern.
+    BitOr,
+    /// Bitwise XOR on the raw 64-bit pattern.
+    BitXor,
+    /// Left shift; the shift amount is taken modulo 64.
+    Shl,
+    /// Arithmetic (sign-propagating) right shift; amount modulo 64.
+    ShrInt,
+    /// Logical (zero-filling) right shift; amount modulo 64.
+    ShrUInt,
+    /// Bitwise complement on the raw 64-bit pattern.
+    BitNot,
     /// Float equality.
     EqFloat,
     /// Float inequality.
@@ -400,6 +414,21 @@ mod opcode {
     pub const LE_UINT: u8 = 0x3b;
     pub const GT_UINT: u8 = 0x3c;
     pub const GE_UINT: u8 = 0x3d;
+
+    // The bitwise operators and shifts. Appended after `GE_UINT`, which is
+    // where the set ended before them; adding an opcode is not an ABI change.
+    //
+    // As with add/sub/mul, there is deliberately no unsigned twin for `&`, `|`,
+    // `^`, or `<<`: those act on bits, and a bit has no sign. Only `>>` needs
+    // both, because what fills the vacated high bits is precisely the question
+    // signedness answers.
+    pub const BIT_AND: u8 = 0x3e;
+    pub const BIT_OR: u8 = 0x3f;
+    pub const BIT_XOR: u8 = 0x40;
+    pub const SHL: u8 = 0x41;
+    pub const SHR_INT: u8 = 0x42;
+    pub const SHR_UINT: u8 = 0x43;
+    pub const BIT_NOT: u8 = 0x44;
 }
 
 #[cfg(test)]

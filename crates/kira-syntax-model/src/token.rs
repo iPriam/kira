@@ -143,6 +143,18 @@ pub enum TokenKind {
     AmpAmp,
     /// `||`
     PipePipe,
+    /// `&`
+    Amp,
+    /// `|`
+    Pipe,
+    /// `^`
+    Caret,
+    /// `~`
+    Tilde,
+    /// `<<`
+    LtLt,
+    /// `>>`
+    GtGt,
     /// `!`
     Bang,
 
@@ -240,6 +252,12 @@ impl TokenKind {
             TokenKind::GtEq => "`>=`",
             TokenKind::AmpAmp => "`&&`",
             TokenKind::PipePipe => "`||`",
+            TokenKind::Amp => "`&`",
+            TokenKind::Pipe => "`|`",
+            TokenKind::Caret => "`^`",
+            TokenKind::Tilde => "`~`",
+            TokenKind::LtLt => "`<<`",
+            TokenKind::GtGt => "`>>`",
             TokenKind::Bang => "`!`",
             TokenKind::Unknown => "unknown token",
             TokenKind::Eof => "end of input",

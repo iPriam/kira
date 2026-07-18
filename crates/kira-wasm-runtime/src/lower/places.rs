@@ -331,6 +331,17 @@ impl Lowering<'_> {
             IrExpr::EnumPayload { value, .. } => self.expr_depth(*value),
             IrExpr::Unary { operand, .. } => self.expr_depth(*operand),
             IrExpr::Binary { lhs, rhs, .. } => self.expr_depth(*lhs).max(self.expr_depth(*rhs)),
+            // Only one branch runs, so the branches do not stack: the scratch
+            // a `? :` needs is the deepest of the three, not their sum.
+            IrExpr::Select {
+                cond,
+                then,
+                otherwise,
+                ..
+            } => self
+                .expr_depth(*cond)
+                .max(self.expr_depth(*then))
+                .max(self.expr_depth(*otherwise)),
             IrExpr::Call { args, .. } => args
                 .iter()
                 .map(|&arg| self.expr_depth(arg))

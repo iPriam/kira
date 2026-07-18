@@ -106,6 +106,17 @@ impl Lowerer<'_> {
                 lhs: self.lower_expr(lhs),
                 rhs: self.lower_expr(rhs),
             },
+            HirExpr::Select {
+                cond,
+                then,
+                otherwise,
+                ty,
+            } => IrExpr::Select {
+                cond: self.lower_expr(cond),
+                then: self.lower_expr(then),
+                otherwise: self.lower_expr(otherwise),
+                ty,
+            },
             HirExpr::Call { callee, args, ty } => {
                 let ir_args = args.iter().map(|&arg| self.lower_expr(arg)).collect();
                 IrExpr::Call {

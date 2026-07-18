@@ -156,8 +156,12 @@ pub const I64_REM_U: u8 = 0x82;
 pub const I64_AND: u8 = 0x83;
 /// `i64.or`
 pub const I64_OR: u8 = 0x84;
+/// `i64.xor`
+pub const I64_XOR: u8 = 0x85;
 /// `i64.shl`
 pub const I64_SHL: u8 = 0x86;
+/// `i64.shr_s`
+pub const I64_SHR_S: u8 = 0x87;
 /// `i64.shr_u`
 pub const I64_SHR_U: u8 = 0x88;
 /// `f64.abs`

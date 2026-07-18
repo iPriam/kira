@@ -31,6 +31,12 @@ impl FunctionLowering<'_, '_> {
                 Ok(self.lower_unary(op, value))
             }
             IrExpr::Binary { op, lhs, rhs } => self.lower_binary(op, lhs, rhs),
+            IrExpr::Select {
+                cond,
+                then,
+                otherwise,
+                ty,
+            } => self.lower_select(cond, then, otherwise, ty),
             IrExpr::Call { callee, args, .. } => self.lower_call(callee, &args),
             IrExpr::StructNew { struct_id, fields } => self.lower_struct_new(struct_id, &fields),
             IrExpr::EnumNew {

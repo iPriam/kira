@@ -407,6 +407,58 @@ Six opcodes carry the signedness to the VM (`DIV_UINT`, `REM_UINT`, `LT_UINT`,
 lowers them to `udiv`/`urem` and the unsigned `icmp` predicates, and wasm to
 `i64.div_u`/`i64.rem_u` and the `_u` comparisons.
 
+## Conditionals and bitwise operators
+
+`c ? a : b` is the language's only expression that is **control flow**: exactly
+one branch is evaluated. That matters whenever a branch can fail, and it is why
+no backend lowers this to a `select` instruction — a select evaluates both.
+
+```kira
+function safeDivide(numerator: Int, divisor: Int) -> Int {
+    return divisor == 0 ? 0 : numerator / divisor
+}
+```
+
+The condition must be `Bool`; there is no truthiness. Both branches must agree
+on a type, with a bare literal acting as the wildcard it is elsewhere, so
+`flag ? 0 : u8Value` is a `U8`. Two `Void` branches are rejected: a `? :` has to
+leave a value behind. The form nests to the right, so `a ? 1 : b ? 2 : 3` reads
+as a chain of tests without parentheses.
+
+`& | ^ ~ << >>` act on the raw 64 bits of an integer. `&`, `|`, `^`, and `<<`
+need no unsigned twin — a bit has no sign — but `>>` does, and takes its form
+from the **left** operand's spelling: signed propagates the sign bit, unsigned
+fills with zeros.
+
+```kira
+let signed: I64 = -1
+var unsigned: U64 = 0
+unsigned = unsigned - 1   // the same 64 bits
+print(signed >> 60)       // -1
+print(unsigned >> 60)     // 15
+```
+
+A shift count is taken **modulo 64** on every backend rather than trapping, so
+`1 << 64` is `1`. Nothing is undefined; LLVM's shifts would be poison here, so
+the native backend masks the count explicitly to match the VM and wasm.
+
+**The precedence ladder is not C's**, loosest to tightest:
+
+```
+? :   ||   &&   |   ^   &   == !=   < <= > >=   << >>   + -   * / %
+```
+
+Two rungs differ. The bitwise operators bind **looser than equality**, so
+`flags & 8 == 8` groups as `flags & (8 == 8)` — a type error, since `&` wants
+two integers. Write `(flags & 8) == 8`. And the shifts bind **tighter than the
+orderings but looser than `+`**, so `1 + 2 << 3` is `(1 + 2) << 3`, which is 24.
+
+Seven opcodes carry the operators to the VM (`BIT_AND`, `BIT_OR`, `BIT_XOR`,
+`SHL`, `SHR_INT`, `SHR_UINT`, `BIT_NOT`, appended after `GE_UINT`). The
+conditional needs **no opcode at all**: it compiles to the jump-and-patch shape
+`&&`/`||` already use, lowers to a branch and a phi natively, and is wasm's
+value-typed `if`.
+
 ## Type aliases
 
 `type Name = Target` binds a name to a written type. It is a **spelling, not a

@@ -72,6 +72,41 @@ fn the_unsigned_opcodes_are_appended_after_the_previous_last_one() {
 }
 
 #[test]
+fn round_trips_the_bitwise_and_shift_opcodes() {
+    // As with the unsigned set, round-tripping these together keeps a decoder
+    // that collapsed one onto another from passing: `ShrUInt` must come back as
+    // `ShrUInt`, never as `ShrInt`, because the two disagree on every negative
+    // input.
+    let code = vec![
+        Instruction::BitAnd,
+        Instruction::BitOr,
+        Instruction::BitXor,
+        Instruction::Shl,
+        Instruction::ShrInt,
+        Instruction::ShrUInt,
+        Instruction::BitNot,
+    ];
+    let bytes = encode(&code);
+    assert_eq!(decode(&bytes).unwrap(), code);
+}
+
+#[test]
+fn the_bitwise_opcodes_are_appended_after_the_unsigned_ones() {
+    // Append-only, again spelled literally: the bitwise set starts one past
+    // `GE_UINT`, which was the last opcode before it, and nothing earlier
+    // moved. A renumber fails here rather than silently redirecting a module
+    // that is already on disk.
+    assert_eq!(opcode::GE_UINT, 0x3d);
+    assert_eq!(opcode::BIT_AND, 0x3e);
+    assert_eq!(opcode::BIT_OR, 0x3f);
+    assert_eq!(opcode::BIT_XOR, 0x40);
+    assert_eq!(opcode::SHL, 0x41);
+    assert_eq!(opcode::SHR_INT, 0x42);
+    assert_eq!(opcode::SHR_UINT, 0x43);
+    assert_eq!(opcode::BIT_NOT, 0x44);
+}
+
+#[test]
 fn unknown_opcode_is_reported() {
     let err = decode(&[0xff]).unwrap_err();
     assert!(matches!(

@@ -1,8 +1,20 @@
 //! Expression parsing via precedence climbing.
 //!
-//! Binding powers encode Kira's operator precedence (lowest to highest): `||`,
-//! `&&`, comparisons, `+`/`-`, `*`/`/`/`%`, then prefix `-`/`!`, then primaries
-//! and call postfixes. All binary operators are left-associative.
+//! Binding powers encode Kira's operator precedence (lowest to highest):
+//! `||`, `&&`, `|`, `^`, `&`, `==`/`!=`, the four orderings, `<<`/`>>`,
+//! `+`/`-`, `*`/`/`/`%`, then prefix `-`/`!`/`~`, then primaries and call
+//! postfixes. All binary operators are left-associative.
+//!
+//! Two levels of that ladder are worth stating because C would order them
+//! differently and getting them wrong changes what an accepted program means:
+//! the bitwise operators bind **looser** than equality (so `a & b == c` is
+//! `a & (b == c)`, not `(a & b) == c`), and the shifts bind **tighter** than
+//! the orderings but looser than `+`/`-` (so `a + b << c` is `(a + b) << c`).
+//! Both follow the oracle's grammar rather than C's.
+//!
+//! The conditional `? :` sits below every binary operator and is the one
+//! right-associative form: `a ? b : c ? d : e` groups as `a ? b : (c ? d : e)`,
+//! because each branch is parsed as a full expression.
 
 use kira_lexer::decode_string_literal;
 use kira_source::Span;
@@ -15,7 +27,27 @@ use crate::Parser;
 impl Parser<'_> {
     /// Parses a full expression.
     pub(crate) fn parse_expr(&mut self) -> ExprId {
-        self.parse_binary(0)
+        let cond = self.parse_binary(0);
+        if !self.at(TokenKind::Question) {
+            return cond;
+        }
+        self.bump(); // `?`
+        // Both branches are full expressions, which is what makes the form
+        // right-associative and lets a nested `? :` sit in the else position
+        // without parentheses.
+        let then = self.parse_expr();
+        self.expect(TokenKind::Colon);
+        let otherwise = self.parse_expr();
+        let span = Span::from_bounds(
+            self.tree.expr(cond).span().start,
+            self.tree.expr(otherwise).span().end(),
+        );
+        self.tree.add_expr(Expr::Conditional {
+            cond,
+            then,
+            otherwise,
+            span,
+        })
     }
 
     /// Builds a placeholder error expression node.
@@ -64,6 +96,7 @@ impl Parser<'_> {
                 | TokenKind::False
                 | TokenKind::Minus
                 | TokenKind::Bang
+                | TokenKind::Tilde
                 | TokenKind::LBracket
         );
         starts_operand.then_some(op)
@@ -81,6 +114,7 @@ impl Parser<'_> {
         let op = match self.current_kind() {
             TokenKind::Minus => Some(UnaryOp::Neg),
             TokenKind::Bang => Some(UnaryOp::Not),
+            TokenKind::Tilde => Some(UnaryOp::BitNot),
             _ => None,
         };
         if let Some(op) = op {
@@ -438,17 +472,22 @@ fn binary_op(kind: TokenKind) -> Option<(BinaryOp, u8)> {
     let pair = match kind {
         TokenKind::PipePipe => (BinaryOp::Or, 1),
         TokenKind::AmpAmp => (BinaryOp::And, 2),
-        TokenKind::EqEq => (BinaryOp::Eq, 3),
-        TokenKind::BangEq => (BinaryOp::Ne, 3),
-        TokenKind::Lt => (BinaryOp::Lt, 3),
-        TokenKind::LtEq => (BinaryOp::Le, 3),
-        TokenKind::Gt => (BinaryOp::Gt, 3),
-        TokenKind::GtEq => (BinaryOp::Ge, 3),
-        TokenKind::Plus => (BinaryOp::Add, 4),
-        TokenKind::Minus => (BinaryOp::Sub, 4),
-        TokenKind::Star => (BinaryOp::Mul, 5),
-        TokenKind::Slash => (BinaryOp::Div, 5),
-        TokenKind::Percent => (BinaryOp::Rem, 5),
+        TokenKind::Pipe => (BinaryOp::BitOr, 3),
+        TokenKind::Caret => (BinaryOp::BitXor, 4),
+        TokenKind::Amp => (BinaryOp::BitAnd, 5),
+        TokenKind::EqEq => (BinaryOp::Eq, 6),
+        TokenKind::BangEq => (BinaryOp::Ne, 6),
+        TokenKind::Lt => (BinaryOp::Lt, 7),
+        TokenKind::LtEq => (BinaryOp::Le, 7),
+        TokenKind::Gt => (BinaryOp::Gt, 7),
+        TokenKind::GtEq => (BinaryOp::Ge, 7),
+        TokenKind::LtLt => (BinaryOp::Shl, 8),
+        TokenKind::GtGt => (BinaryOp::Shr, 8),
+        TokenKind::Plus => (BinaryOp::Add, 9),
+        TokenKind::Minus => (BinaryOp::Sub, 9),
+        TokenKind::Star => (BinaryOp::Mul, 10),
+        TokenKind::Slash => (BinaryOp::Div, 10),
+        TokenKind::Percent => (BinaryOp::Rem, 10),
         _ => return None,
     };
     Some(pair)
@@ -498,6 +537,17 @@ mod tests {
                 spelling(*op),
                 render(tree, *rhs, interner)
             ),
+            Expr::Conditional {
+                cond,
+                then,
+                otherwise,
+                ..
+            } => format!(
+                "({} ? {} : {})",
+                render(tree, *cond, interner),
+                render(tree, *then, interner),
+                render(tree, *otherwise, interner)
+            ),
             other => format!("{other:?}"),
         }
     }
@@ -543,6 +593,104 @@ mod tests {
         assert_eq!(
             return_shape("function f() { return 2 * -3 }"),
             "(2 * (Neg 3))"
+        );
+    }
+
+    // The bitwise ladder. Each of these would group differently in C, so they
+    // are the tests that pin the oracle's grammar rather than a familiar one.
+
+    #[test]
+    fn bitwise_and_binds_tighter_than_xor_and_or() {
+        assert_eq!(
+            return_shape("function f() { return 1 | 2 ^ 3 & 4 }"),
+            "(1 | (2 ^ (3 & 4)))"
+        );
+    }
+
+    #[test]
+    fn bitwise_or_binds_looser_than_equality() {
+        // C would read this as `(a | b) == c`. Kira does not.
+        assert_eq!(
+            return_shape("function f() { return 1 | 2 == 3 }"),
+            "(1 | (2 == 3))"
+        );
+    }
+
+    #[test]
+    fn bitwise_binds_tighter_than_logical_and() {
+        assert_eq!(
+            return_shape("function f() { return true && 1 | 2 }"),
+            "(true && (1 | 2))"
+        );
+    }
+
+    #[test]
+    fn shift_binds_tighter_than_comparison_and_looser_than_addition() {
+        assert_eq!(
+            return_shape("function f() { return 1 + 2 << 3 < 4 }"),
+            "(((1 + 2) << 3) < 4)"
+        );
+    }
+
+    #[test]
+    fn shift_is_left_associative() {
+        assert_eq!(
+            return_shape("function f() { return 1 << 2 >> 3 }"),
+            "((1 << 2) >> 3)"
+        );
+    }
+
+    #[test]
+    fn complement_binds_tighter_than_bitwise_and() {
+        assert_eq!(
+            return_shape("function f() { return ~1 & 2 }"),
+            "((BitNot 1) & 2)"
+        );
+    }
+
+    // The conditional.
+
+    #[test]
+    fn conditional_binds_looser_than_every_binary_operator() {
+        assert_eq!(
+            return_shape("function f() { return a || b ? 1 + 2 : 3 | 4 }"),
+            "((a || b) ? (1 + 2) : (3 | 4))"
+        );
+    }
+
+    #[test]
+    fn conditional_is_right_associative() {
+        assert_eq!(
+            return_shape("function f() { return a ? 1 : b ? 2 : 3 }"),
+            "(a ? 1 : (b ? 2 : 3))"
+        );
+    }
+
+    #[test]
+    fn conditional_nests_in_its_then_branch() {
+        assert_eq!(
+            return_shape("function f() { return a ? b ? 1 : 2 : 3 }"),
+            "(a ? (b ? 1 : 2) : 3)"
+        );
+    }
+
+    /// A conditional missing its `:` recovers rather than derailing the parse:
+    /// the error is reported and the function still yields one return
+    /// statement, so later items keep being parsed.
+    #[test]
+    fn conditional_without_colon_recovers() {
+        let result = parse(SourceId::new(0), "function f() { return a ? 1 2 }");
+        assert!(
+            !result.diagnostics.is_empty(),
+            "a missing `:` must be diagnosed"
+        );
+        let function = match &result.tree.items[0] {
+            Item::Function(f) => f,
+            other => panic!("expected function, got {other:?}"),
+        };
+        assert!(
+            !function.body.stmts.is_empty(),
+            "the function body must survive the error"
         );
     }
 }

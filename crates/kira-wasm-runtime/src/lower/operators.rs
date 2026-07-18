@@ -89,6 +89,15 @@ impl Lowering<'_> {
             IrBinOp::ConcatStr => func.call(self.runtime.str_concat),
             IrBinOp::EqStr => func.call(self.runtime.str_eq),
             IrBinOp::NeStr => func.call(self.runtime.str_eq).i32_eqz(),
+            // wasm's shifts already take the amount modulo 64, which is the
+            // rule the VM and the native backend are made to match, so no
+            // masking is needed here.
+            IrBinOp::BitAnd => func.i64_and(),
+            IrBinOp::BitOr => func.i64_or(),
+            IrBinOp::BitXor => func.i64_xor(),
+            IrBinOp::Shl => func.i64_shl(),
+            IrBinOp::ShrInt => func.i64_shr_s(),
+            IrBinOp::ShrUInt => func.i64_shr_u(),
             // Handled above; listed so a new operator cannot fall through.
             IrBinOp::And
             | IrBinOp::Or

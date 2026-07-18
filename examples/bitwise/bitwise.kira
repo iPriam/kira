@@ -1,0 +1,125 @@
+// The conditional expression and the bitwise operators.
+//
+// Two features that arrived together because they share a shape: both are
+// small, both are frontend-looking, and both hide a rule that a backend can get
+// silently wrong.
+//
+// `c ? a : b` is the language's only expression that is *control flow*. Exactly
+// one branch runs. That distinction is invisible until a branch can fail, and
+// then it is the whole feature — see `safeDivide` below, whose else branch
+// would trap if it were ever evaluated.
+//
+// The bitwise operators `& | ^ ~ << >>` act on the raw 64 bits of an integer.
+// Their surprise is the precedence ladder, which is not C's.
+
+@Main
+function main() {
+    permissions()
+    packing()
+    precedence()
+    guarding()
+    return
+}
+
+// `&`, `|`, `^`, and `~` are the four ways to combine or invert bits.
+//
+// `&` keeps a bit only where both sides have it, `|` where either does, `^`
+// where exactly one does, and `~` flips every bit — including the sign bit,
+// which is why `~0` is `-1` rather than a large positive number.
+function permissions() {
+    let read = 4
+    let write = 2
+    let execute = 1
+
+    let readWrite = read | write
+    print(readWrite)
+
+    // Testing a flag: mask it off and compare. The parentheses are required —
+    // see `precedence` for why.
+    print((readWrite & write) == write)
+    print((readWrite & execute) == execute)
+
+    // Clearing a flag is an AND with the complement.
+    print(readWrite & ~write)
+
+    // XOR toggles: applying it twice returns the original value.
+    print((readWrite ^ execute) ^ execute)
+    return
+}
+
+// The shifts move bits left or right, and `>>` is the one operator whose answer
+// depends on how its *left* operand was spelled.
+//
+// On a signed type `>>` propagates the sign bit, so a negative number stays
+// negative. On an unsigned one it fills with zeros. The same 64 bits give two
+// different numbers, which is the entire reason the operator has two forms.
+//
+// A shift count is taken modulo 64 rather than trapping, so no count is
+// undefined: `1 << 64` is `1`, not an error and not zero.
+function packing() {
+    print(1 << 10)
+    print(1024 >> 3)
+
+    // Signed: the sign bit is copied into the vacated positions.
+    let signed: I64 = -1
+    print(signed >> 60)
+
+    // Unsigned: zeros are. `unsigned` holds the same 64 bits as `signed` —
+    // all ones — built by wrapping rather than written as a literal, because
+    // `U64`'s maximum does not fit in the `i64` a literal is read as.
+    var unsigned: U64 = 0
+    unsigned = unsigned - 1
+    print(unsigned >> 60)
+
+    // Counts of 64 and beyond wrap rather than trapping.
+    var count = 64
+    print(1 << count)
+    print(1 << (count + 1))
+    return
+}
+
+// The ladder, loosest to tightest:
+//
+//     ? :   ||   &&   |   ^   &   == !=   < <= > >=   << >>   + -   * / %
+//
+// Two rungs differ from C and are worth memorizing.
+//
+// The bitwise operators bind **looser than equality**. So `flags & 8 == 8` is
+// `flags & (8 == 8)` — a type error in Kira, since `&` wants two integers, not
+// an integer and a `Bool`. Write `(flags & 8) == 8`, as `permissions` does.
+//
+// The shifts bind **tighter than the orderings but looser than `+`**. So
+// `1 + 2 << 3` is `(1 + 2) << 3`, which is 24 rather than 17.
+function precedence() {
+    print(1 | 2 ^ 3 & 6)
+    print(1 + 2 << 3)
+    print(1 << 2 + 3)
+    return
+}
+
+// What makes `? :` an expression rather than sugar for an `if`.
+//
+// It has a value, so it composes: it goes inside a call argument, inside
+// arithmetic, and into a `return`. And it nests to the right, so a chain reads
+// as a series of tests without any parentheses.
+function guarding() {
+    let n = 7
+    print(n > 5 ? "big" : "small")
+    print(1 + (n > 5 ? 10 : 20) * 2)
+
+    var i = 0
+    while i < 4 {
+        print(i == 0 ? "zero" : i == 1 ? "one" : i == 2 ? "two" : "many")
+        i = i + 1
+    }
+
+    // The untaken branch is never evaluated. `safeDivide` relies on exactly
+    // that: with a zero divisor the division would trap, and it never runs.
+    print(safeDivide(84, 2))
+    print(safeDivide(84, 0))
+    return
+}
+
+function safeDivide(numerator: Int, divisor: Int) -> Int {
+    return divisor == 0 ? 0 : numerator / divisor
+}

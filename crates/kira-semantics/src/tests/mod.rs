@@ -5,6 +5,7 @@ mod aliases;
 mod arrays;
 mod enums;
 mod matches;
+mod operators;
 mod widths;
 
 use super::*;

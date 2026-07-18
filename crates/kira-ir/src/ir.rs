@@ -67,6 +67,7 @@ impl IrProgram {
                 IrUnOp::NegInt => Type::INT,
                 IrUnOp::NegFloat => Type::FLOAT,
                 IrUnOp::Not => Type::Bool,
+                IrUnOp::BitNot => Type::INT,
             },
             IrExpr::Binary { op, .. } => binop_result(*op),
             IrExpr::Call { result, .. } => *result,
@@ -76,6 +77,7 @@ impl IrProgram {
             | IrExpr::ArrayNew { ty, .. }
             | IrExpr::EnumPayload { ty, .. }
             | IrExpr::Index { ty, .. } => *ty,
+            IrExpr::Select { ty, .. } => *ty,
             IrExpr::ArrayLen { .. } | IrExpr::EnumTag { .. } => Type::INT,
             IrExpr::ArrayAppend { .. } => Type::Void,
         }
@@ -122,7 +124,13 @@ fn binop_result(op: IrBinOp) -> Type {
         | IrBinOp::DivInt
         | IrBinOp::RemInt
         | IrBinOp::DivUInt
-        | IrBinOp::RemUInt => Type::INT,
+        | IrBinOp::RemUInt
+        | IrBinOp::BitAnd
+        | IrBinOp::BitOr
+        | IrBinOp::BitXor
+        | IrBinOp::Shl
+        | IrBinOp::ShrInt
+        | IrBinOp::ShrUInt => Type::INT,
         IrBinOp::AddFloat | IrBinOp::SubFloat | IrBinOp::MulFloat | IrBinOp::DivFloat => {
             Type::FLOAT
         }
@@ -327,6 +335,21 @@ pub enum IrExpr {
         lhs: IrExprId,
         /// Right operand.
         rhs: IrExprId,
+    },
+    /// A conditional expression, `cond ? then : otherwise`.
+    ///
+    /// Exactly one branch is evaluated, so this is control flow rather than a
+    /// select instruction: every backend lowers it as a branch and a join, the
+    /// same shape `And`/`Or` already use.
+    Select {
+        /// The `Bool` condition.
+        cond: IrExprId,
+        /// The value when the condition holds.
+        then: IrExprId,
+        /// The value when it does not.
+        otherwise: IrExprId,
+        /// The type both branches agreed on.
+        ty: Type,
     },
     /// A call to a builtin or user function.
     Call {
