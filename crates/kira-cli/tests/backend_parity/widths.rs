@@ -227,3 +227,58 @@ fn widths_pass_through_functions_and_struct_fields() {
         }"#,
     );
 }
+
+#[test]
+fn a_plain_left_operand_makes_a_mixed_operation_signed() {
+    // The left operand decides signedness, so a plain `Int` on the left keeps
+    // the operation signed even when the right side is a `U8`. The oracle
+    // prints -3, -1, and true here.
+    //
+    // Every earlier case in this file puts the written width on the left, and
+    // that gap is exactly how a wrong unification rule survived review: all
+    // four backends agreed with each other while all four disagreed with the
+    // oracle. Backend parity is not oracle parity.
+    assert_parity(
+        r#"@Main function main() {
+            let neg: Int = 0 - 10
+            let three: U8 = 3
+            print(neg / three)
+            print(neg % three)
+            print(neg < three)
+            return
+        }"#,
+    );
+}
+
+#[test]
+fn swapping_the_operands_swaps_the_signedness() {
+    // The same two values with the sides exchanged: now the `U8` is on the
+    // left, so this is unsigned and prints 0 rather than -3.
+    assert_parity(
+        r#"@Main function main() {
+            let neg: U8 = 0 - 10
+            let three: Int = 3
+            print(neg / three)
+            print(neg < three)
+            return
+        }"#,
+    );
+}
+
+#[test]
+fn a_width_typed_for_bound_and_array_index_run_on_every_backend() {
+    assert_parity(
+        r#"@Main function main() {
+            let count: U8 = 3
+            for i in 0..count {
+                print(i)
+            }
+            var xs: [Int] = []
+            xs.append(10)
+            xs.append(20)
+            let at: U16 = 1
+            print(xs[at])
+            return
+        }"#,
+    );
+}

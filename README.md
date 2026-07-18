@@ -379,6 +379,20 @@ print(big > two)   // true — unsigned; signed this would be false
 print(big / two)   // 9223372036854775807 — signed this would be 0
 ```
 
+**The left operand decides.** When one side is a plain `Int`/`Float` and the
+other carries a width, the operation takes its type — and so its signedness —
+from the left side alone. Mixing is allowed, but it is not symmetric:
+
+```kira
+let neg: Int = 0 - 10
+let three: U8 = 3
+print(neg / three)   // -3    — LHS is plain `Int`, so this is a signed divide
+print(three / neg)   // 0     — LHS is `U8`, so this one is unsigned
+```
+
+Two *different* written widths agree on nothing: `u8Value + i64Value` is a type
+error, because the language has no widening.
+
 What a width does **not** do is narrow arithmetic. A `U8` sum of `250` and `10`
 is `260`, not `4`: every operation wraps at the representation's 64 bits, never
 at the written width. Narrowing is behavior the language does not define, so
