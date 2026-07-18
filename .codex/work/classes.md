@@ -52,18 +52,15 @@ its dynamic type, which is what makes monomorphization total.
 
 ## A class instance is a value, not a reference
 
-The oracle settles this, and it was worth checking rather than assuming: the
-implicit-move predicate is `array | enum_instance | construct_any`, and a class
-is in none of those. `lowerNamedTypeInner`
-(`packages/kira_ir/src/lower_from_hir_types.zig:91`) falls every named
-`type_decl` through to `.kind = .ffi_struct` — class and struct alike — and
-`.ffi_struct` is the exact predicate gating `copy_indirect` at
-`packages/kira_ir/src/lower_from_hir.zig:286`. So a class instance deep-copies
-on bind on the same path a struct does.
+No corpus site binds a class instance twice, so the oracle was asked directly.
+Given `class Account { var balance: Int = 10 }`, binding `let a =
+Account(balance: 1)`, then `var b = a`, then `b.balance = 99`, it prints `1`
+then `99`: the second binding copied, and `a` remained usable afterwards, so
+the bind was a copy and not a move. A class instance therefore behaves exactly
+as a struct instance does.
 
-No corpus site binds a class instance twice, so this is derived from the
-lowering rather than observed. `a_class_instance_is_a_value_not_a_reference` in
-the parity suite pins it on vm/llvm/hybrid.
+`a_class_instance_is_a_value_not_a_reference` in the parity suite pins the same
+program on vm/llvm/hybrid here.
 
 ## Diagnostics
 
@@ -84,7 +81,7 @@ Codes are this repo's own, assigned fresh — they are not the oracle's numberin
 | KSEM072 | `override let` overrides no inherited field |
 | KSEM073 | `override function` overrides no inherited method |
 | KSEM074 | redeclaring an inherited field without `override` |
-| KSEM081 | constructor field has neither value nor default |
+| KSEM082 | constructor field has neither value nor default |
 
 A class may extend a `struct`, not only a `class` — `FsaAmbiguousInheritedFieldLookup`
 and `FsbInvalidParentQualification` both do.

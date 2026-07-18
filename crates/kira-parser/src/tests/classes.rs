@@ -92,7 +92,7 @@ fn an_override_field_may_not_restate_a_type() {
         .iter()
         .filter_map(|diagnostic| diagnostic.code)
         .collect();
-    assert_eq!(codes, ["KPAR014"]);
+    assert_eq!(codes, ["KPAR036"]);
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn override_var_is_refused() {
         .iter()
         .filter_map(|diagnostic| diagnostic.code)
         .collect();
-    assert_eq!(codes, ["KPAR013"]);
+    assert_eq!(codes, ["KPAR035"]);
 }
 
 #[test]
@@ -135,5 +135,5 @@ fn a_missing_parent_name_is_reported() {
         .iter()
         .filter_map(|diagnostic| diagnostic.code)
         .collect();
-    assert_eq!(codes, ["KPAR012"]);
+    assert_eq!(codes, ["KPAR034"]);
 }

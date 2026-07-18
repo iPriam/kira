@@ -101,6 +101,7 @@ impl Analyzer<'_> {
             let (kind, declared) = match item {
                 Item::Struct(declaration) => ("struct", declaration.name),
                 Item::Enum(declaration) => ("enum", declaration.name),
+                Item::Class(declaration) => ("class", declaration.name),
                 _ => continue,
             };
             if self.interner.resolve(declared) == name {

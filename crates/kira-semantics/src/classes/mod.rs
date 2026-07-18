@@ -24,7 +24,7 @@ use kira_source::SourceId;
 use kira_syntax_model::ast::{ClassDecl, ExprId, Item};
 
 use crate::analyze::Analyzer;
-use crate::types::NameContext;
+use crate::types::{AggregateKind, NameContext};
 
 /// How a member name resolved against one class's inherited members.
 ///
@@ -135,9 +135,12 @@ impl<'a> Analyzer<'a> {
 impl Analyzer<'_> {
     /// Orders class declarations so every class follows its parents.
     ///
-    /// Reports each class caught in an inheritance cycle and drops it from the
-    /// order: a cycle has no valid flattening, so `class Left extends Right` /
-    /// `class Right extends Left` names both and declares neither.
+    /// Reports one KSEM064 per cycle, at the edge that closes it, and drops
+    /// every class in that cycle from the order: a cycle has no valid
+    /// flattening, so `class Left extends Right` / `class Right extends Left`
+    /// declares neither. Only the closing class is blamed; the rest of the
+    /// cycle goes undeclared and its uses are reported by the orphan
+    /// propagation pass instead of each earning a cycle diagnostic of its own.
     fn class_order(&mut self, declarations: &[(SourceId, &ClassDecl)]) -> Vec<usize> {
         let by_name: HashMap<&str, usize> = declarations
             .iter()
@@ -354,6 +357,7 @@ impl Analyzer<'_> {
                 continue;
             }
             let context = NameContext::Field {
+                owner_kind: AggregateKind::Class,
                 owner: name.to_owned(),
             };
             let ty = self.resolve_type_in(field.ty, &context);
