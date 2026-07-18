@@ -322,6 +322,20 @@ pub enum HirExpr {
         /// The enum-typed expression whose tag is read.
         value: HirExprId,
     },
+    /// An enum value's payload, as an owned value of the variant's payload type.
+    ///
+    /// This is what a `match` arm's binding reads. The variant is *not* checked
+    /// at run time: a `match` only projects a payload inside the arm its tag
+    /// test already selected, so the tag is known to be the one whose payload
+    /// `ty` describes. Reading it yields an owned copy — a `String` payload is
+    /// cloned out of the box — so the binding outlives the enum it came from
+    /// and the box still owns its own payload.
+    EnumPayload {
+        /// The enum-typed expression whose payload is read.
+        value: HirExprId,
+        /// The selected variant's declared payload type.
+        ty: Type,
+    },
     /// A placeholder for an expression that failed to analyze.
     Error,
 }
@@ -340,6 +354,7 @@ impl HirExpr {
             | HirExpr::Call { ty, .. }
             | HirExpr::Field { ty, .. }
             | HirExpr::ArrayNew { ty, .. }
+            | HirExpr::EnumPayload { ty, .. }
             | HirExpr::Index { ty, .. } => *ty,
             HirExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
             HirExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),

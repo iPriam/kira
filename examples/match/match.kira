@@ -1,0 +1,83 @@
+// match: dispatch on an enum's variant, binding the variant's payload.
+//
+// A `match` is not a `switch`. A `switch` compares its subject to arbitrary
+// label expressions with `==`; a `match` names variants of the subject's enum,
+// which is what lets an arm bind a payload — and what makes coverage a question
+// worth asking. So a `match` is checked exhaustive and checked for a variant
+// matched twice, and a `switch` is neither.
+
+enum Shade { Light Mid Dark }
+
+enum Note { Tag(String) Rank(Int) Blank }
+
+// Arrow arms: `Variant -> <one statement>`, with an optional trailing `;`.
+//
+// This function has no trailing `return`, and needs none: the match covers
+// every variant and every arm returns, so the match itself is a definite
+// return.
+function rank(s: borrow Shade) -> Int {
+    match s {
+        Light -> return 1;
+        Mid -> return 2;
+        Dark -> return 3;
+    }
+}
+
+// Arrow-block arms: `Variant -> { … }`. A binding in parentheses names the
+// variant's payload, and is visible only inside its own arm — so two arms may
+// bind the same name to different variants' payloads.
+function describe(n: borrow Note) -> String {
+    var out = ""
+    match n {
+        Tag(text) -> { out = "tag:" + text }
+        // An arm may ignore a payload it does not need.
+        Rank -> { out = "ranked" }
+        Blank -> { out = "blank" }
+    }
+    return out
+}
+
+// A bound payload is an owned copy: it outlives the enum it was read from, and
+// the enum still owns its own.
+function label(n: borrow Note) -> String {
+    match n {
+        Tag(text) -> return text;
+        Rank(value) -> { if value > 10 { return "high" } return "low" }
+        Blank -> return "none";
+    }
+}
+
+@Main
+function main() {
+    let light: Shade = .Light
+    let dark: Shade = .Dark
+    print(rank(light) * 10 + rank(dark))
+
+    let tagged: Note = .Tag("hello")
+    let ranked: Note = .Rank(42)
+    let blank: Note = .Blank
+    print(describe(tagged))
+    print(describe(ranked))
+    print(describe(blank))
+
+    print(label(tagged))
+    print(label(ranked))
+
+    // The subject is an expression, evaluated exactly once. `break` inside an
+    // arm belongs to the enclosing loop, not to the match — an arm is an `if`,
+    // and an `if` is not a loop.
+    var seen = 0
+    var i = 0
+    while i < 10 {
+        var step: Shade = .Light
+        if i == 4 { step = .Dark }
+        match step {
+            Light -> { seen = seen + 1 }
+            Mid -> { seen = seen + 100 }
+            Dark -> { break }
+        }
+        i = i + 1
+    }
+    print(seen)
+    return
+}

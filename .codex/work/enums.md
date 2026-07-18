@@ -43,15 +43,13 @@ payload }` and `EnumTag { value }`.
 ## Scope boundary (what is refused, and why)
 
 - **Non-scalar payloads** (`struct`/`enum`/`array`) are refused at the
-  declaration (`KSEM118`). The box carries one word; an aggregate has no form in
-  it yet, and — decisively — a payload is **unobservable without `match`**, so
-  supporting it would be a value-typed boxing problem for near-zero observable
-  behavior. Nested-enum and construct payloads (`One(EmxInner)`,
-  `Filled(some EmxShape)`) belong with `match`.
-- **`match`** is not here. The observable operation on an enum in this feature
-  is `==` alone; a payload is built, moved, and dropped, but never read. That is
-  what every parity/execution test asserts: an enum turned into an `Int` by tag
-  comparison, identical on VM == LLVM == hybrid == wasm32 == wasm64.
+  declaration (`KSEM118`). The box carries one word, and an aggregate has no
+  form in it yet. Nested-enum and construct payloads (`One(EmxInner)`,
+  `Filled(some EmxShape)`) still wait on that, not on `match` — the original
+  argument for deferring them was that a payload is unobservable without
+  `match`, and `match` has since landed. See
+  [match.md](match.md); the payload types it reads are exactly the ones
+  `KSEM118` admits.
 - **`print(enum)`** (`KSEM081`) and **enum at the native seam**
   (`EnumAtSeam` / `BridgeValueTag::ENUM`) are refused like a struct.
 

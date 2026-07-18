@@ -6,12 +6,19 @@
 //!
 //! # Desugaring happens here
 //!
-//! Two of the language's statements do not exist below this module. A `for`
+//! Three of the language's statements do not exist below this module. A `for`
 //! becomes the one loop shape the HIR has ([`HirStmt::While`]), and a `switch`
-//! becomes a chain of [`HirStmt::If`]. So the IR, the bytecode compiler, the
-//! VM, the LLVM backend, and the WASM backend never learn either one exists —
-//! and neither can disagree with the construct it desugars to on any backend,
-//! because by the time a backend sees one, it *is* that construct.
+//! and a `match` both become a chain of [`HirStmt::If`]. So the IR, the
+//! bytecode compiler, the VM, the LLVM backend, and the WASM backend never
+//! learn any of them exists — and none can disagree with the construct it
+//! desugars to on any backend, because by the time a backend sees one, it *is*
+//! that construct.
+//!
+//! `match` is the case that shows where the limit of a desugar sits: the
+//! control flow costs nothing, but binding a variant's payload needed one new
+//! *expression* ([`kira_semantics_model::HirExpr::EnumPayload`]) that every
+//! backend does have to implement. One node beat one statement form in every
+//! layer. See [`matches`] for the shape.
 //!
 //! That is the first thing to try when adding syntax: a construct the HIR can
 //! already express costs a rewrite here instead of a node in every layer.
@@ -25,6 +32,7 @@ use crate::analyze::{Analyzer, FnCtx};
 use crate::place::PlacePurpose;
 
 mod fors;
+mod matches;
 
 impl Analyzer<'_> {
     /// Whether a statement list is guaranteed to execute a `return`.
@@ -217,6 +225,11 @@ impl Analyzer<'_> {
                 default_block,
                 ..
             } => self.analyze_switch(ctx, subject, &cases, default_block.as_ref(), out),
+            Stmt::Match {
+                subject,
+                arms,
+                span,
+            } => self.analyze_match(ctx, subject, &arms, span, out),
             Stmt::Break { span } => {
                 if self.check_in_loop(ctx, span, "break", "KSEM041") {
                     let hir = self.program.stmts.alloc(HirStmt::Break);

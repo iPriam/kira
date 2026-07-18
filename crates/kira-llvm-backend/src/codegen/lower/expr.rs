@@ -40,6 +40,7 @@ impl FunctionLowering<'_, '_> {
                 payload,
             } => self.lower_enum_new(enum_id, tag, payload),
             IrExpr::EnumTag { value } => self.lower_enum_tag(value),
+            IrExpr::EnumPayload { value, ty } => self.lower_enum_payload(value, ty),
             IrExpr::Field { base, index, ty } => self.lower_field(base, index, ty),
             IrExpr::ArrayNew { ty, elements } => self.lower_array_new(ty, &elements),
             IrExpr::Index { base, index, ty } => self.lower_index(base, index, ty),
@@ -307,6 +308,60 @@ impl FunctionLowering<'_, '_> {
         );
         self.drop_value(enum_value, value_ty)?;
         Ok(tag)
+    }
+
+    /// Reads an enum value's payload as an owned value of type `ty`.
+    ///
+    /// The same order as the VM's `EnumPayload`: the enum is evaluated (a local
+    /// read clones it), the payload is read *owned* — `kira_rt_enum_payload`
+    /// clones a `String` — and only then is the enum released. Reading before
+    /// releasing is what keeps a `String` payload alive across the free.
+    fn lower_enum_payload(&mut self, value: IrExprId, ty: Type) -> Result<LLVMValueRef, LlvmError> {
+        let value_ty = self.type_of(value);
+        let enum_value = self.lower_expr(value)?;
+        let word = self.call(
+            self.codegen.runtime.enum_payload,
+            &mut [enum_value],
+            c"enum.payload",
+        );
+        let decoded = self.decode_enum_payload(ty, word)?;
+        self.drop_value(enum_value, value_ty)?;
+        Ok(decoded)
+    }
+
+    /// Decodes a payload word back into a value of type `ty`.
+    ///
+    /// The exact inverse of [`Self::encode_enum_payload`], which is what makes a
+    /// round trip through the box lossless on every payload type the
+    /// declaration admits.
+    fn decode_enum_payload(
+        &mut self,
+        ty: Type,
+        word: LLVMValueRef,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let builder = self.codegen.builder;
+        let types = self.codegen.types;
+        // SAFETY: `word` is the `i64` the box stores for a payload of `ty`, put
+        // there by `encode_enum_payload`, and the builder is on a live block.
+        unsafe {
+            Ok(match ty {
+                Type::Int => word,
+                Type::Float => {
+                    LLVMBuildBitCast(builder, word, types.f64, c"enum.payload.float".as_ptr())
+                }
+                Type::Bool => {
+                    LLVMBuildTrunc(builder, word, types.i1, c"enum.payload.bool".as_ptr())
+                }
+                Type::String => {
+                    LLVMBuildIntToPtr(builder, word, types.ptr, c"enum.payload.str".as_ptr())
+                }
+                _ => {
+                    return Err(LlvmError::Unsupported(
+                        "an enum payload of an unsupported type",
+                    ));
+                }
+            })
+        }
     }
 
     /// Lowers a unary operator.

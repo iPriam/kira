@@ -26,6 +26,7 @@ fn round_trips_a_mixed_instruction_stream() {
             has_payload: false,
         },
         Instruction::EnumTag,
+        Instruction::EnumPayload,
         Instruction::Print,
         Instruction::ReturnVoid,
         Instruction::Return,
