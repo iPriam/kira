@@ -139,9 +139,10 @@ mod tests {
     /// the same way everything before them did — six new tokens and a new
     /// expression node, and the LSP learns none of them.
     ///
-    /// The bad case is chosen for the rung of the precedence ladder that
-    /// differs from C: `flags & 8 == 8` groups as `flags & (8 == 8)`, so an
-    /// editor squiggles it rather than silently accepting C's reading.
+    /// The bad case is chosen for the rung of the precedence ladder that is
+    /// most often misremembered: `flags & 8 == 8` groups as `flags & (8 == 8)`,
+    /// as it does in C but not in Go or Swift, so an editor squiggles it rather
+    /// than silently accepting the tighter-`&` reading.
     #[test]
     fn conditional_and_bitwise_syntax_analyze_the_way_the_compiler_does() {
         let clean = analyze(

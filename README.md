@@ -442,16 +442,18 @@ A shift count is taken **modulo 64** on every backend rather than trapping, so
 `1 << 64` is `1`. Nothing is undefined; LLVM's shifts would be poison here, so
 the native backend masks the count explicitly to match the VM and wasm.
 
-**The precedence ladder is not C's**, loosest to tightest:
+**The precedence ladder is exactly C's**, loosest to tightest:
 
 ```
 ? :   ||   &&   |   ^   &   == !=   < <= > >=   << >>   + -   * / %
 ```
 
-Two rungs differ. The bitwise operators bind **looser than equality**, so
-`flags & 8 == 8` groups as `flags & (8 == 8)` — a type error, since `&` wants
-two integers. Write `(flags & 8) == 8`. And the shifts bind **tighter than the
-orderings but looser than `+`**, so `1 + 2 << 3` is `(1 + 2) << 3`, which is 24.
+Two rungs surprise people anyway, because Go and Swift moved them and memory
+tends to follow the newer language. The bitwise operators bind **looser than
+equality** — C's classic wart — so `flags & 8 == 8` groups as `flags & (8 == 8)`,
+a type error here since `&` wants two integers. Write `(flags & 8) == 8`. And
+the shifts bind **tighter than the orderings but looser than `+`**, so
+`1 + 2 << 3` is `(1 + 2) << 3`, which is 24.
 
 Seven opcodes carry the operators to the VM (`BIT_AND`, `BIT_OR`, `BIT_XOR`,
 `SHL`, `SHR_INT`, `SHR_UINT`, `BIT_NOT`, appended after `GE_UINT`). The
