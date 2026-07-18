@@ -66,6 +66,53 @@ fn an_export_indexes_the_function_it_names() {
     );
 }
 
+/// An export records the signature a consumer is generated against, not just a
+/// name: the types travel with the export all the way into the artifact, so they
+/// are captured here, from the signature the boundary checks just approved.
+#[test]
+fn an_export_records_the_signature_a_consumer_is_generated_against() {
+    let text = "@Export\nclass Button { var title: String = \"\" }\n\
+                @Export\nfunction makeButton(title: String) -> Button { return Button() }\n\
+                @Export\nfunction clickAt(x: I64, y: F64) -> Bool { return true }\n\
+                @Export\nfunction reset(v: Int) { return }";
+    let db = salsa::DatabaseImpl::new();
+    let source = SourceProgram::new(
+        &db,
+        text.to_owned(),
+        "test.kira".to_owned(),
+        Vec::new(),
+        BuildKind::Library,
+    );
+    let program = analyzed(&db, source);
+    assert!(
+        library_diagnostics(text).is_empty(),
+        "{:?}",
+        library_codes(text)
+    );
+    let signatures: Vec<(&str, usize, Type)> = program
+        .exports
+        .iter()
+        .map(|export| {
+            (
+                export.exported_name.as_str(),
+                export.params.len(),
+                export.result,
+            )
+        })
+        .collect();
+    assert_eq!(signatures[0].0, "make_button");
+    assert_eq!(signatures[0].1, 1);
+    assert!(
+        matches!(signatures[0].2, Type::Struct(_)),
+        "a handle result keeps the class it denotes: {:?}",
+        signatures[0].2
+    );
+    assert_eq!(program.exports[0].params[0], Type::String);
+    assert_eq!(signatures[1], ("click_at", 2, Type::Bool));
+    // A function with no written result exports as `Void`, not as nothing.
+    assert_eq!(signatures[2], ("reset", 1, Type::Void));
+}
+
 #[test]
 fn a_library_that_exports_nothing_has_an_empty_surface() {
     assert!(exports("function add(a: Int) -> Int { return a }").is_empty());

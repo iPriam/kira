@@ -56,6 +56,10 @@ pub struct IrExport {
     pub exported_name: String,
     /// Index of the exported function within [`IrProgram::functions`].
     pub function: u32,
+    /// The parameter types, in declaration order.
+    pub params: Vec<Type>,
+    /// The result type ([`Type::Void`] when the function returns nothing).
+    pub result: Type,
 }
 
 impl IrProgram {

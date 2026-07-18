@@ -128,10 +128,15 @@ impl Analyzer<'_> {
             }
             taken.insert(mapped.clone());
             if signature_is_clean {
+                // Read off the collected signature, never re-resolved: the
+                // surface a consumer is generated against has to be the same
+                // types the checks above just approved.
                 self.program.exports.push(HirExport {
                     kira_name,
                     exported_name: mapped,
                     function: id,
+                    params: self.param_types(id),
+                    result: self.signature_return_type(id),
                 });
             }
         }

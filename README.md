@@ -784,12 +784,21 @@ work. All of them are checked in
 analysis, above the backend split, so three engines cannot grow three opinions
 about what an export is.
 
-Today that surface is checked and nothing more: `kirac check` verifies it, and
-`kirac build` refuses a library that declares an export on **every** backend,
-each naming what its own engine still owes — the VM's KBC1 exports section, the
-native engine's `kira_lib_*` trampolines, both halves for hybrid. The exports
-section, the persistent VM instance, the native trampolines, and the generated
-Rust wrapper crate are the remaining steps; see
+The wire format the surface travels in is in place: a compiled module carries an
+appended **KBC1 exports section** — a class list plus, per export, its consumer
+name, its Kira name, the function it resolves to, and its parameter and result
+types. The section is written only when there is something to export, so an
+application's bytes are what they always were, and a module from before it
+existed decodes as a module with no exports. Handles cross as
+`BridgeValueTag::HANDLE` (tag 8, one opaque word owned by the side that minted
+it), which the opposite direction — a Rust crate consumed *from* Kira — shares
+rather than appending a second tag for.
+
+No engine *serves* that surface yet: `kirac check` verifies it, and `kirac build`
+refuses a library that declares an export on **every** backend, each naming what
+its own engine still owes — the VM's persistent instance and generated wrapper
+crate, the native engine's `kira_lib_*` trampolines, both halves for hybrid.
+Those, and the wrapper crate, are the remaining steps; see
 [.codex/work/kira-export-design.md](.codex/work/kira-export-design.md).
 
 ## Live sessions

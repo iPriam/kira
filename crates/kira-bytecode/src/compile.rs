@@ -15,91 +15,14 @@ use kira_ir::{
     IrBinOp, IrCallee, IrExpr, IrExprId, IrPlace, IrPlaceStep, IrProgram, IrStmt, IrUnOp,
 };
 
+mod error;
+
+pub use error::CompileError;
+
+use crate::exports::build_export_table;
 use crate::module::{FuncProto, Module};
 use crate::op::{FieldPath, Instruction, PathStep, PlacePath};
 use kira_runtime_abi::Execution;
-
-/// An error raised while lowering IR to bytecode.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum CompileError {
-    /// A function needs more local slots than the format's `u16` can address.
-    #[error("function `{function}` needs {count} local slots; the bytecode format allows 65535")]
-    TooManyLocals {
-        /// The offending function's name.
-        function: String,
-        /// The requested number of local slots.
-        count: u32,
-    },
-    /// An IR expression referenced a local slot beyond the `u16` range.
-    #[error("function `{function}` references local slot {slot}, beyond the format's 65535")]
-    LocalSlotOutOfRange {
-        /// The offending function's name.
-        function: String,
-        /// The out-of-range slot index.
-        slot: u32,
-    },
-    /// The program has more distinct string constants than the pool can index.
-    #[error("program has too many distinct string constants for the bytecode format")]
-    TooManyStrings,
-    /// Internal invariant: a jump patch landed on a non-jump instruction.
-    #[error("bytecode compiler invariant violated: patch target is not a jump")]
-    PatchedNonJump,
-    /// Internal invariant: a short-circuit operator reached opcode selection.
-    #[error("bytecode compiler invariant violated: short-circuit operator has no opcode")]
-    ShortCircuitOpcode,
-    /// Internal invariant: a `break`/`continue` reached codegen with no
-    /// enclosing loop, which analysis is supposed to have rejected.
-    #[error(
-        "bytecode compiler invariant violated: `break`/`continue` outside a loop in `{function}`"
-    )]
-    JumpOutsideLoop {
-        /// The offending function's name.
-        function: String,
-    },
-    /// A struct has more fields than the format's `u16` operand can count.
-    #[error("function `{function}` builds a struct of {count} fields; the format allows 65535")]
-    TooManyFields {
-        /// The offending function's name.
-        function: String,
-        /// The requested number of fields.
-        count: usize,
-    },
-    /// A nested field assignment walks deeper than the format can encode.
-    #[error("function `{function}` assigns through {count} nested fields; the format allows 65535")]
-    FieldPathTooDeep {
-        /// The offending function's name.
-        function: String,
-        /// The requested path depth.
-        count: usize,
-    },
-    /// An array literal has more elements than the format's `u32` can count.
-    #[error("function `{function}` builds an array of {count} elements; the format allows 2^32-1")]
-    TooManyElements {
-        /// The offending function's name.
-        function: String,
-        /// The requested number of elements.
-        count: usize,
-    },
-    /// An enum has a variant tag beyond the format's `u16` operand.
-    #[error(
-        "function `{function}` constructs enum variant #{tag}; the format allows 65535 variants"
-    )]
-    TooManyVariants {
-        /// The offending function's name.
-        function: String,
-        /// The out-of-range variant tag.
-        tag: u32,
-    },
-    /// Internal invariant: a place with an array index reached the static
-    /// field-path encoder, which cannot express one.
-    #[error(
-        "bytecode compiler invariant violated: dynamic index in a static field path in `{function}`"
-    )]
-    DynamicFieldPath {
-        /// The offending function's name.
-        function: String,
-    },
-}
 
 /// Compiles a lowered program into a runnable module for the VM.
 ///
@@ -179,6 +102,7 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
         functions,
         main: program.main,
         strings: strings.into_vec(),
+        exports: build_export_table(program)?,
     })
 }
 

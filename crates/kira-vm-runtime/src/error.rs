@@ -168,4 +168,19 @@ pub enum VmError {
         /// The function at the boundary.
         function: u32,
     },
+    /// A handle reached this seam, and this run has no heap that outlives it.
+    ///
+    /// A handle names an object in a heap that survives between calls; a `call`
+    /// runs on a heap it drops at the end, so there is nothing here for the word
+    /// to denote. Handles belong to the export boundary, whose persistent
+    /// instance is what gives them a home — so this refuses by name rather than
+    /// resolving a word into whatever object happens to sit at it.
+    #[error(
+        "function {function} passes a handle across the native seam, which has no heap that \
+         outlives the call"
+    )]
+    HandleAtSeam {
+        /// The function at the boundary.
+        function: u32,
+    },
 }

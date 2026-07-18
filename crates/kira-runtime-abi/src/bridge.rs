@@ -85,6 +85,28 @@ impl BridgeValueTag {
     /// word, and how it would is a language decision nobody has made. Every
     /// marshalling path rejects it; this tag only names the type in a manifest.
     pub const ENUM: BridgeValueTag = BridgeValueTag(7);
+
+    /// An opaque handle to an object one side owns and the other only names.
+    ///
+    /// Unlike [`BridgeValueTag::STRUCT`], [`BridgeValueTag::ARRAY`], and
+    /// [`BridgeValueTag::ENUM`], this tag **travels**: it is what an `@Export`
+    /// class's instances cross a library boundary as. The payload is one opaque
+    /// word whose meaning belongs entirely to the side that produced it — a
+    /// rooted-heap id when a VM-engine library made it, pointer bits when a
+    /// native-engine one did. The receiving side never dereferences it, never
+    /// interprets it, and never invents one: a handle it did not receive is a
+    /// handle it cannot name.
+    ///
+    /// That is also why a handle fits where a struct does not. A struct would
+    /// have to carry its fields across, and who frees the strings inside them is
+    /// undesigned. A handle carries nothing: the object stays where it was
+    /// allocated, and exactly one generated destructor frees it.
+    ///
+    /// Appended, never renumbered. The number is shared with the opposite
+    /// direction (a Rust crate consumed *from* Kira), which needs the same tag
+    /// for the same reason; it is defined here once so the two can never
+    /// disagree.
+    pub const HANDLE: BridgeValueTag = BridgeValueTag(8);
 }
 
 /// One Kira value crossing the runtime/native boundary.
@@ -125,6 +147,12 @@ pub enum BridgeData {
     /// The handle is opaque here: this crate is in the VM's portable cone and
     /// never dereferences it. Only the native side owns and frees it.
     String(u64),
+    /// An opaque handle to an object the producing side owns.
+    ///
+    /// The word is meaningful only to whoever made it (see
+    /// [`BridgeValueTag::HANDLE`]); nothing here reads it, and a receiver that
+    /// cannot resolve it reports that rather than guessing.
+    Handle(u64),
 }
 
 impl BridgeValue {
@@ -143,6 +171,7 @@ impl BridgeValue {
             BridgeData::Float(value) => (BridgeValueTag::FLOAT, value.to_bits()),
             BridgeData::Bool(value) => (BridgeValueTag::BOOL, u64::from(value)),
             BridgeData::String(handle) => (BridgeValueTag::STRING, handle),
+            BridgeData::Handle(handle) => (BridgeValueTag::HANDLE, handle),
         };
         BridgeValue {
             tag,
@@ -164,6 +193,10 @@ impl BridgeValue {
             // normalize a bool to exactly 1.
             BridgeValueTag::BOOL => BridgeData::Bool(self.payload != 0),
             BridgeValueTag::STRING => BridgeData::String(self.payload),
+            // A handle's payload is opaque, so every bit pattern decodes: this
+            // side is not the one that can tell a live handle from a stale one,
+            // and the side that can rejects an unknown one by name.
+            BridgeValueTag::HANDLE => BridgeData::Handle(self.payload),
             _ => return None,
         })
     }
@@ -204,6 +237,9 @@ mod tests {
             BridgeData::Bool(false),
             BridgeData::String(0),
             BridgeData::String(0xdead_beef),
+            BridgeData::Handle(0),
+            BridgeData::Handle(1),
+            BridgeData::Handle(u64::MAX),
         ] {
             let encoded = BridgeValue::encode(data);
             assert_eq!(
@@ -248,6 +284,61 @@ mod tests {
             payload: 0xdead_beef,
         };
         assert_eq!(impossible.decode(), None);
+    }
+
+    /// The tag numbers are the wire contract, so they are spelled out rather
+    /// than only round-tripped: appending is safe, renumbering is not, and a
+    /// renumbering must fail here instead of silently reinterpreting artifacts
+    /// that already exist.
+    #[test]
+    fn the_tag_bytes_are_pinned() {
+        assert_eq!(BridgeValueTag::VOID.0, 0);
+        assert_eq!(BridgeValueTag::INT.0, 1);
+        assert_eq!(BridgeValueTag::FLOAT.0, 2);
+        assert_eq!(BridgeValueTag::BOOL.0, 3);
+        assert_eq!(BridgeValueTag::STRING.0, 4);
+        assert_eq!(BridgeValueTag::STRUCT.0, 5);
+        assert_eq!(BridgeValueTag::ARRAY.0, 6);
+        assert_eq!(BridgeValueTag::ENUM.0, 7);
+        assert_eq!(BridgeValueTag::HANDLE.0, 8);
+    }
+
+    /// A handle is written as tag 8 with the producer's word in the payload,
+    /// unaltered, and nothing in the reserved bytes.
+    #[test]
+    fn a_handle_encodes_as_tag_eight_with_the_payload_untouched() {
+        let encoded = BridgeValue::encode(BridgeData::Handle(0x0123_4567_89ab_cdef));
+        assert_eq!(encoded.tag, BridgeValueTag::HANDLE);
+        assert_eq!(encoded.tag.0, 8);
+        assert_eq!(encoded.payload, 0x0123_4567_89ab_cdef);
+        assert_eq!(encoded.reserved, [0; 7]);
+    }
+
+    /// Unlike the never-travels tags, a handle *does* cross, so every payload
+    /// decodes here. Whether the word names a live object is a question only
+    /// its producer can answer, and it answers by name rather than by guess.
+    #[test]
+    fn every_handle_payload_decodes_because_only_its_producer_can_judge_it() {
+        for payload in [0, 1, u64::MAX] {
+            let value = BridgeValue {
+                tag: BridgeValueTag::HANDLE,
+                reserved: [0; 7],
+                payload,
+            };
+            assert_eq!(value.decode(), Some(BridgeData::Handle(payload)));
+        }
+    }
+
+    /// The tag next to `HANDLE` is still unassigned, and an artifact naming it
+    /// must be rejected rather than read as a handle whose number drifted.
+    #[test]
+    fn the_tag_after_handle_is_still_unknown() {
+        let value = BridgeValue {
+            tag: BridgeValueTag(9),
+            reserved: [0; 7],
+            payload: 1,
+        };
+        assert_eq!(value.decode(), None);
     }
 
     #[test]

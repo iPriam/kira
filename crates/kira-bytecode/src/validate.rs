@@ -9,8 +9,11 @@
 //! - every function has non-empty, return-terminated code,
 //! - `param_count <= local_count` for every function,
 //! - every `ConstStr`/`LoadLocal`/`StoreLocal`/`Call`/`Jump`/`JumpIfFalse`
-//!   operand is in range.
+//!   operand is in range,
+//! - every export names a real function at the arity it claims, every handle
+//!   names a listed class, and no consumer-facing name is claimed twice.
 
+use crate::exports::ExportType;
 use crate::module::Module;
 use crate::op::Instruction;
 
@@ -62,6 +65,45 @@ pub enum ModuleValidateError {
         index: usize,
         /// The offending instruction.
         instruction: Instruction,
+    },
+    /// An export names a function index outside the function table.
+    #[error(
+        "export `{export}` names function {function}, which is out of range ({function_count} \
+         functions)"
+    )]
+    ExportFunctionOutOfRange {
+        /// The offending export's consumer-facing name.
+        export: String,
+        /// The index it claimed.
+        function: u32,
+        /// How many functions the module actually has.
+        function_count: u32,
+    },
+    /// An export's declared arity disagrees with the function it names.
+    #[error("export `{export}` declares {declared} parameters; its function takes {actual}")]
+    ExportArityMismatch {
+        /// The offending export's consumer-facing name.
+        export: String,
+        /// The arity the export table claimed.
+        declared: usize,
+        /// The arity the function actually has.
+        actual: u16,
+    },
+    /// A handle type names a class outside the export table's class list.
+    #[error("export `{export}` names class {class}, which is out of range ({class_count} classes)")]
+    ExportClassOutOfRange {
+        /// The offending export's consumer-facing name.
+        export: String,
+        /// The class index it claimed.
+        class: u32,
+        /// How many classes the table actually lists.
+        class_count: u32,
+    },
+    /// Two exports claim the same consumer-facing name.
+    #[error("two exports are named `{export}`")]
+    DuplicateExport {
+        /// The name claimed twice.
+        export: String,
     },
 }
 
@@ -161,6 +203,56 @@ impl Module {
                 }
             }
         }
+        self.validate_exports()
+    }
+
+    /// Proves the export table's indices and arities against this module.
+    ///
+    /// A module is a public artifact and the export table is what a consumer's
+    /// generated wrapper trusts, so every claim in it is checked here: an export
+    /// naming a function that does not exist, a handle naming a class the table
+    /// does not list, or a signature whose arity disagrees with the function it
+    /// names would each turn into a call made against the wrong frame.
+    fn validate_exports(&self) -> Result<(), ModuleValidateError> {
+        let function_count = self.functions.len() as u32;
+        let class_count = self.exports.classes.len() as u32;
+        let mut seen: Vec<&str> = Vec::with_capacity(self.exports.functions.len());
+        for export in &self.exports.functions {
+            let Some(function) = self.functions.get(export.function as usize) else {
+                return Err(ModuleValidateError::ExportFunctionOutOfRange {
+                    export: export.name.clone(),
+                    function: export.function,
+                    function_count,
+                });
+            };
+            if export.params.len() != usize::from(function.param_count) {
+                return Err(ModuleValidateError::ExportArityMismatch {
+                    export: export.name.clone(),
+                    declared: export.params.len(),
+                    actual: function.param_count,
+                });
+            }
+            for ty in export.params.iter().chain(std::iter::once(&export.result)) {
+                if let ExportType::Handle { class } = ty
+                    && *class >= class_count
+                {
+                    return Err(ModuleValidateError::ExportClassOutOfRange {
+                        export: export.name.clone(),
+                        class: *class,
+                        class_count,
+                    });
+                }
+            }
+            // The frontend refuses a collision (two Kira names snake_casing onto
+            // one consumer name), but this module need not be one it wrote, and
+            // a consumer resolving a name to two functions has no way to choose.
+            if seen.contains(&export.name.as_str()) {
+                return Err(ModuleValidateError::DuplicateExport {
+                    export: export.name.clone(),
+                });
+            }
+            seen.push(&export.name);
+        }
         Ok(())
     }
 }
@@ -168,6 +260,7 @@ impl Module {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exports::{ExportTable, ModuleExport};
     use crate::module::FuncProto;
 
     fn func(name: &str, params: u16, locals: u16, code: Vec<Instruction>) -> FuncProto {
@@ -182,10 +275,117 @@ mod tests {
 
     fn module_of(functions: Vec<FuncProto>, main: u32, strings: Vec<String>) -> Module {
         Module {
+            exports: Default::default(),
             functions,
             main: Some(main),
             strings,
         }
+    }
+
+    /// A library exporting one function that takes a string and hands back a
+    /// `Button` handle — the smallest module that exercises every export check.
+    fn exporting_library(exports: ExportTable) -> Module {
+        Module {
+            exports,
+            functions: vec![func(
+                "makeButton",
+                1,
+                1,
+                vec![Instruction::LoadLocal(0), Instruction::Return],
+            )],
+            main: None,
+            strings: vec![],
+        }
+    }
+
+    fn make_button() -> ModuleExport {
+        ModuleExport {
+            name: "make_button".to_owned(),
+            kira_name: "makeButton".to_owned(),
+            function: 0,
+            params: vec![ExportType::String],
+            result: ExportType::Handle { class: 0 },
+        }
+    }
+
+    #[test]
+    fn a_well_formed_export_table_validates() {
+        let module = exporting_library(ExportTable {
+            classes: vec!["Button".to_owned()],
+            functions: vec![make_button()],
+        });
+        assert_eq!(module.validate(), Ok(()));
+    }
+
+    #[test]
+    fn an_export_naming_no_function_is_rejected() {
+        let module = exporting_library(ExportTable {
+            classes: vec!["Button".to_owned()],
+            functions: vec![ModuleExport {
+                function: 9,
+                ..make_button()
+            }],
+        });
+        assert_eq!(
+            module.validate(),
+            Err(ModuleValidateError::ExportFunctionOutOfRange {
+                export: "make_button".to_owned(),
+                function: 9,
+                function_count: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn an_export_whose_arity_disagrees_with_its_function_is_rejected() {
+        let module = exporting_library(ExportTable {
+            classes: vec!["Button".to_owned()],
+            functions: vec![ModuleExport {
+                params: vec![ExportType::String, ExportType::Int],
+                ..make_button()
+            }],
+        });
+        assert_eq!(
+            module.validate(),
+            Err(ModuleValidateError::ExportArityMismatch {
+                export: "make_button".to_owned(),
+                declared: 2,
+                actual: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn a_handle_naming_no_class_is_rejected() {
+        // The class list is empty, so the handle denotes nothing a consumer
+        // could name — an untyped word, which is what the class list exists to
+        // prevent.
+        let module = exporting_library(ExportTable {
+            classes: Vec::new(),
+            functions: vec![make_button()],
+        });
+        assert_eq!(
+            module.validate(),
+            Err(ModuleValidateError::ExportClassOutOfRange {
+                export: "make_button".to_owned(),
+                class: 0,
+                class_count: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn two_exports_with_one_consumer_name_are_rejected() {
+        let module = exporting_library(ExportTable {
+            classes: vec!["Button".to_owned()],
+            functions: vec![make_button(), make_button()],
+        });
+        assert_eq!(
+            module.validate(),
+            Err(ModuleValidateError::DuplicateExport {
+                export: "make_button".to_owned(),
+            })
+        );
     }
 
     #[test]
@@ -213,6 +413,7 @@ mod tests {
     #[test]
     fn a_library_module_validates_with_no_entrypoint() {
         let module = Module {
+            exports: Default::default(),
             functions: vec![func("add", 2, 2, vec![Instruction::ReturnVoid])],
             main: None,
             strings: vec![],
@@ -224,6 +425,7 @@ mod tests {
     fn a_library_module_still_validates_its_function_bodies() {
         // No entrypoint relaxes the entrypoint check and nothing else.
         let module = Module {
+            exports: Default::default(),
             functions: vec![func("add", 0, 0, vec![])],
             main: None,
             strings: vec![],

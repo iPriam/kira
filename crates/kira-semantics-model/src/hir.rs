@@ -69,6 +69,14 @@ pub struct HirExport {
     pub exported_name: String,
     /// The function this export names.
     pub function: FuncId,
+    /// The resolved parameter types, in declaration order.
+    ///
+    /// Recorded here rather than looked up from the function later because the
+    /// export surface is what a consumer's generated wrapper is built against:
+    /// it has to travel with the export, all the way into the artifact.
+    pub params: Vec<Type>,
+    /// The resolved result type ([`Type::Void`] when none was written).
+    pub result: Type,
 }
 
 impl HirProgram {
