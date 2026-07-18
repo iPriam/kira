@@ -1,0 +1,29 @@
+[package]
+name = "kira-export-consumer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+# Nothing depends on this crate: it exists to be built and tested.
+publish = false
+
+[lib]
+# Named for what it is rather than for the crate, because the crate's whole
+# content is the generated library plus the tests that call it.
+path = "src/lib.rs"
+
+[build-dependencies]
+# The compiler itself. A consumer builds the Kira library it embeds, through the
+# same frontend and the same generator `kirac` drives — not a second copy.
+kira-build.workspace = true
+thiserror.workspace = true
+
+[dependencies]
+# What the generated wrapper is written against. These are the three lines a
+# real consumer's `Cargo.toml` carries, and they are here for the same reason.
+kira-bytecode.workspace = true
+kira-main.workspace = true
+kira-runtime-abi.workspace = true
+
+[lints]
+workspace = true

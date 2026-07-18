@@ -146,12 +146,11 @@ fn a_library_artifact_is_not_an_executable() {
 // ---------------------------------------------------------------------------
 // The `@Export` surface
 //
-// Step 1 lands the frontend only, so parity here is a refusal: all three
-// backends see the same checked export surface and all three decline to build
-// it. What makes that a parity result rather than three separate "no"s is that
-// they agree on the verdict, the exit status, and the surface they name — each
-// differing only in which engine's missing piece it reports, which is the one
-// thing that genuinely differs between them.
+// The VM engine serves it and the other two do not yet, so parity here is not
+// "all three agree" — it is that all three see the *same* export surface, and
+// each says what it does with it. The surface is frontend work above the
+// backend split, so the names must be identical on all three; the verdicts
+// differ, by name, with a reason and a redirection.
 // ---------------------------------------------------------------------------
 
 /// The motivating library, in the shapes v1 supports: a handle-eligible class,
@@ -171,39 +170,65 @@ function buttonWidth(b: Button) -> Int { return b.width }\n\
 function clickAt(b: Button, x: Int) -> Bool { return x >= 0 && x < b.width }";
 
 #[test]
-fn every_backend_refuses_to_build_an_export_the_same_way() {
+fn every_backend_sees_the_same_export_surface() {
+    // The one thing that must not differ. The VM builds it and the other two
+    // refuse it, but all three read the identical derived consumer names — a
+    // backend that disagreed here would have grown its own opinion about what
+    // an export is, which is exactly what putting the checks in the frontend
+    // prevents.
     let path = write_library(EXPORTING_LIBRARY);
     let runs: Vec<(&str, Output)> = BACKENDS
         .iter()
         .map(|backend| (*backend, build_on(&path, backend)))
         .collect();
+    let generated = path
+        .parent()
+        .expect("package directory")
+        .join(".kira-build")
+        .join("rust")
+        .join("parity")
+        .join("src")
+        .join("lib.rs");
+    let wrapper = std::fs::read_to_string(&generated).unwrap_or_default();
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
 
     for (backend, run) in &runs {
-        assert_eq!(
-            run.status.code(),
-            Some(1),
-            "the {backend} backend did not refuse to build an export:\nstderr: {}",
-            String::from_utf8_lossy(&run.stderr),
-        );
-        let stdout = String::from_utf8_lossy(&run.stdout);
-        assert!(
-            stdout.contains("Failed to build") && !stdout.contains("Successfully built"),
-            "the {backend} backend claimed a build it refused:\nstdout: {stdout}",
-        );
         let stderr = String::from_utf8_lossy(&run.stderr);
-        assert!(
-            stderr.contains("library export is not built yet"),
-            "the {backend} backend refused for a different reason: {stderr}",
-        );
-        // The surface itself is frontend work, above the backend split, so all
-        // three must report the identical derived names. A backend that
-        // disagreed here would have grown its own opinion about what an export
-        // is, which is exactly what putting the checks in the frontend prevents.
-        assert!(
-            stderr.contains("make_button, button_width, click_at"),
-            "the {backend} backend named a different surface: {stderr}",
-        );
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        match *backend {
+            "vm" => {
+                assert!(
+                    run.status.success(),
+                    "the vm engine failed to build an export:\nstderr: {stderr}",
+                );
+                assert!(stdout.contains("3 exports"), "stdout: {stdout}");
+                for method in ["make_button", "button_width", "click_at"] {
+                    assert!(
+                        wrapper.contains(&format!("pub fn {method}(")),
+                        "the generated wrapper has no `{method}`:\n{wrapper}",
+                    );
+                }
+            }
+            _ => {
+                assert_eq!(
+                    run.status.code(),
+                    Some(1),
+                    "the {backend} backend did not refuse to build an export:\nstderr: {stderr}",
+                );
+                assert!(
+                    stdout.contains("Failed to build") && !stdout.contains("Successfully built"),
+                    "the {backend} backend claimed a build it refused:\nstdout: {stdout}",
+                );
+                assert!(
+                    stderr.contains("library export is not built yet"),
+                    "the {backend} backend refused for a different reason: {stderr}",
+                );
+                assert!(
+                    stderr.contains("make_button, button_width, click_at"),
+                    "the {backend} backend named a different surface: {stderr}",
+                );
+            }
+        }
     }
 }
 

@@ -22,9 +22,10 @@ Crates live in `crates/`, organized into layers with no upward dependencies.
 | 4 | `kira-glsl-backend`, `kira-wgsl-backend`, `kira-hlsl-backend`, `kira-msl-backend`, `kira-spirv-backend`, `kira-bytecode`, `kira-vm-runtime`, `kira-native-bridge`, `kira-hybrid-runtime`, `kira-debug`, `kira-llvm-backend`, `kira-wasm-runtime` |
 | 5 | `kira-manifest`, `kira-project`, `kira-package-manager`, `kira-build-definition`, `kira-main` (Rust embedding surface: staticlib/cdylib/rlib) |
 | 6 | `kira-program-graph` |
-| 7 | `kira-build` |
+| 7 | `kira-build` (frontend driver, library builds, generated Rust wrapper crates) |
 | 8 | `kira-instruments`, `kira-linter`, `kira-doc`, `kira-app-generation`, `kira-live` |
 | 9 | `kira-cli` (binary `kirac`) |
+| tests | `kira-export-consumer` (a Rust program consuming a Kira library, end to end) |
 | runners | `kira-desktop-runner` (binary `kira-desktop-runner`) |
 | tools | `kira-bootstrapper` (binary `kira`), `kira-devflow` (binary `devflow`) |
 
@@ -718,7 +719,7 @@ Package uifoundation {
 
 ```sh
 kirac check uifoundation.kira                      # clean with no @Main
-kirac build --backend vm uifoundation.kira         # a .kbc with no entrypoint
+kirac build --backend vm uifoundation.kira         # a .kbc plus a Rust crate
 kirac build --backend llvm uifoundation.kira       # a shared library, no C main
 kirac build --backend hybrid uifoundation.kira     # both halves plus a manifest
 kirac run uifoundation.kira                        # refused: no entrypoint
@@ -793,12 +794,60 @@ existed decodes as a module with no exports. Handles cross as
 it), which the opposite direction — a Rust crate consumed *from* Kira — shares
 rather than appending a second tag for.
 
-No engine *serves* that surface yet: `kirac check` verifies it, and `kirac build`
-refuses a library that declares an export on **every** backend, each naming what
-its own engine still owes — the VM's persistent instance and generated wrapper
-crate, the native engine's `kira_lib_*` trampolines, both halves for hybrid.
-Those, and the wrapper crate, are the remaining steps; see
+### The VM engine: a Kira library as a Rust crate
+
+`kirac build` in a library package produces two things — the artifact, and the
+Rust crate a consumer actually depends on:
+
+```sh
+$ kirac build uifoundation.kira            # --backend vm is the default
+Successfully built .kira-build/lib/uifoundation.kbc
+  3 exports -> .kira-build/rust/uifoundation
+```
+
+```toml
+[dependencies]
+uifoundation = { path = "../uifoundation/.kira-build/rust/uifoundation" }
+```
+
+```rust
+let ui = Uifoundation::load()?;
+let button = ui.make_button("ok")?;     // a handle out
+println!("{}", ui.button_label(&button)?);   // an owned String out
+assert!(ui.click_at(&button, 4, 8)?);   // Rust re-entering Kira
+drop(button);                           // releases the Kira object
+```
+
+The generated crate `include_bytes!`s the `.kbc` and runs it on a persistent VM
+instance inside the consumer's process. **No linker, no LLVM, no `unsafe`** —
+which is why this engine is the one provable on a machine that has none of them,
+and why the crate also builds for `wasm32-unknown-unknown`. A Rust wasm
+application embedding a Kira library is this feature's Web answer; a wasm *C-ABI
+library artifact* stays refused, for the reason above.
+
+A wrapper and the library it was generated from are built separately, so they can
+disagree. The VM engine has no link step to fail, so the guard is data:
+`load()` checks the embedded module's class list, every export's name, arity,
+parameter types and result type, and finally a content hash — and names the first
+thing that moved.
+
+Exported classes become Rust newtypes over a handle. Dropping one releases the
+object it names, and nothing else does; use-after-free is not expressible,
+because every method borrows the handle and `Drop` consumes it. The wrapper types
+are neither `Send` nor `Sync`: one instance belongs to one thread.
+
+The generated crate is a build artifact — regenerated on every build, never
+committed, its dependency paths true only of the checkout that produced it.
+
+`--backend llvm` and `--backend hybrid` do not serve an export yet and are
+refused by name, each saying what its own engine still owes and pointing at
+`--backend vm`. See
 [.codex/work/kira-export-design.md](.codex/work/kira-export-design.md).
+
+`crates/kira-export-consumer` is the proof: a Rust crate whose `build.rs`
+compiles the Kira library in `fixture/uifoundation/`, generates the wrapper
+through the same generator `kirac` drives, compiles it under this workspace's
+lint gate, and calls it.
 
 ## Live sessions
 

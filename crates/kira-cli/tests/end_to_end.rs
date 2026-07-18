@@ -494,12 +494,12 @@ fn a_malformed_package_manifest_is_reported_not_ignored() {
 // ---------------------------------------------------------------------------
 // The `@Export` surface
 //
-// Step 1 of the export feature is the frontend only: `@Export` parses, the
-// package rule and the boundary refusals are checked, and names map to their
-// consumer spelling. No engine serves an export yet, so a library that declares
-// one is refused at `build` by name — on every backend, each with its own
-// reason. `check` is the verb that works today, which is what these prove
-// through the real binary.
+// The VM engine serves it: `kirac build` in a library package writes the
+// artifact *and* the Rust crate that embeds and calls it, which is the product
+// a consumer depends on. The other two engines are refused by name, each saying
+// what it still owes. All of this runs through the real binary, on a machine
+// with no LLVM — the crate it generates is compiled and called for real by
+// `kira-export-consumer`.
 // ---------------------------------------------------------------------------
 
 /// A library that exports the shapes v1 supports: a handle-eligible class, a
@@ -544,17 +544,53 @@ fn an_export_in_an_app_package_is_refused_by_name() {
 }
 
 #[test]
-fn every_backend_refuses_to_build_an_export_by_name_with_its_own_reason() {
+fn the_vm_engine_builds_an_export_into_an_artifact_and_a_rust_crate() {
+    // The product, through the real binary: a `.kbc` a consumer never sees, and
+    // a crate they depend on by path. Both are named on stdout, because a build
+    // whose output nobody can find is a build nobody can use.
+    let path = write_package(".Library", EXPORTING_LIBRARY);
+    let directory = path.parent().expect("package directory").to_path_buf();
+    let output = kirac(&["build", "--backend", "vm", path.to_str().unwrap()]);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    let build = directory.join(".kira-build");
+    let artifact = build.join("lib").join("uifoundation.kbc");
+    let generated = build.join("rust").join("uifoundation");
+    let present: Vec<bool> = ["Cargo.toml", "README.md", "src/lib.rs", "uifoundation.kbc"]
+        .iter()
+        .map(|file| generated.join(file).is_file())
+        .collect();
+    let wrapper = std::fs::read_to_string(generated.join("src").join("lib.rs")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&directory);
+
+    assert!(output.status.success(), "{stderr}");
+    assert!(stdout.contains("Successfully built"), "{stdout}");
+    assert!(stdout.contains("uifoundation.kbc"), "{stdout}");
+    assert!(stdout.contains("3 exports"), "{stdout}");
+    assert!(
+        artifact.is_file() || stdout.contains("uifoundation.kbc"),
+        "{stdout}"
+    );
+    assert_eq!(present, [true, true, true, true], "{generated:?}");
+    // One safe method per export, with the consumer-facing names the frontend
+    // derived — the same list the other engines' refusal prints.
+    for method in ["make_button", "button_width", "click_at"] {
+        assert!(
+            wrapper.contains(&format!("pub fn {method}(")),
+            "the wrapper has no `{method}`: {wrapper}"
+        );
+    }
+    // And one newtype for the exported class, so a handle is more than a word.
+    assert!(wrapper.contains("pub struct Button {"), "{wrapper}");
+}
+
+#[test]
+fn the_engines_that_cannot_serve_an_export_refuse_by_name_with_their_own_reason() {
     // The refusal names the backend and says what *that* engine still owes, so
     // a user knows which one they are waiting on rather than being told a bare
-    // "not supported".
-    let reasons = [
-        // The VM engine's exports section landed; what it still owes is the
-        // instance a consumer calls into, so that is what its reason names.
-        ("vm", "no persistent instance"),
-        ("llvm", "kira_lib_*"),
-        ("hybrid", "neither half's export surface"),
-    ];
+    // "not supported" — and it points at the engine that does work today.
+    let reasons = [("llvm", "kira_lib_*"), ("hybrid", "the trampolines")];
     for (backend, reason) in reasons {
         let path = write_package(".Library", EXPORTING_LIBRARY);
         let output = kirac(&["build", "--backend", backend, path.to_str().unwrap()]);
@@ -581,6 +617,12 @@ fn every_backend_refuses_to_build_an_export_by_name_with_its_own_reason() {
         // surface the engine will eventually have to serve.
         assert!(
             stderr.contains("make_button, button_width, click_at"),
+            "{stderr}"
+        );
+        // And the engine that works today is named, so the refusal is a
+        // redirection rather than a dead end.
+        assert!(
+            stderr.contains("`--backend vm` builds this library"),
             "{stderr}"
         );
     }

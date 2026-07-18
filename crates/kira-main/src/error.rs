@@ -8,6 +8,7 @@
 use kira_bytecode::exports::{ExportTable, ExportType};
 use kira_bytecode::module::ModuleDecodeError;
 use kira_bytecode::validate::ModuleValidateError;
+use kira_runtime_abi::NativeResult;
 use kira_vm_runtime::VmError;
 
 /// A failure loading, checking, or calling an embedded Kira library.
@@ -59,9 +60,52 @@ pub enum Error {
         /// The kind the caller actually passed.
         found: &'static str,
     },
+    /// The call ran and returned a value of a kind the export cannot return.
+    ///
+    /// A generated wrapper lifts a result by matching the one kind its export's
+    /// declared result type allows. That match has to be total, and this is the
+    /// arm it is total *with* — not a case anything expects to reach, since
+    /// [`Library::verify`](crate::Library::verify) already agreed the signature
+    /// with the artifact. Naming it beats an `unwrap` in generated code that a
+    /// consumer would see panic from a file they did not write.
+    #[error("export `{export}` returned {found}, but its signature says it returns {expected}")]
+    UnexpectedResult {
+        /// The export that was called.
+        export: String,
+        /// The kind its declared result type allows.
+        expected: &'static str,
+        /// The kind it actually produced.
+        found: &'static str,
+    },
     /// The call ran and the VM refused it or the program trapped.
     #[error("{0}")]
     Vm(#[from] VmError),
+}
+
+impl Error {
+    /// Names a result whose kind the export's declared signature rules out.
+    ///
+    /// The constructor exists so that generated code spells this in one call
+    /// rather than carrying its own copy of [`describe_result`].
+    pub fn unexpected_result(export: &str, expected: &'static str, found: &NativeResult) -> Error {
+        Error::UnexpectedResult {
+            export: export.to_owned(),
+            expected,
+            found: describe_result(found),
+        }
+    }
+}
+
+/// A one-phrase name for what a call actually produced.
+pub fn describe_result(result: &NativeResult) -> &'static str {
+    match result {
+        NativeResult::Void => "nothing",
+        NativeResult::Int(_) => "an integer",
+        NativeResult::Float(_) => "a float",
+        NativeResult::Bool(_) => "a boolean",
+        NativeResult::Str(_) => "a string",
+        NativeResult::Handle(_) => "a handle",
+    }
 }
 
 /// The specific way a library and the wrapper built for it disagree.
