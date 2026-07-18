@@ -221,11 +221,16 @@ pub enum VmError {
     /// Analysis refuses every uncrossable type on an `@Export` signature, so
     /// reaching this means a module and the wrapper calling it disagree — never
     /// a program that merely type-checked.
-    #[error("function {function} returns a {kind}, which cannot cross the export boundary")]
+    ///
+    /// The message is direction-neutral because both directions raise it: an
+    /// argument the instance cannot bring in and a result it cannot hand out are
+    /// the same disagreement, and `kind` is what says which.
+    #[error("{kind} cannot cross the export boundary at function {function}")]
     UncrossableExport {
-        /// The exported function that produced it.
+        /// The exported function at the boundary.
         function: u32,
-        /// What it produced, named as the language names it.
+        /// The offending value as a noun phrase the message reads as a subject
+        /// ("an array result", "this argument").
         kind: &'static str,
     },
 }
