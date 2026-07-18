@@ -741,9 +741,55 @@ one self-contained module entered at a single export, and the string and
 allocator contract across a wasm module boundary is undesigned. Compiling the VM
 into a wasm consumer is the supported Web path.
 
-What a library does not have yet is a way to say which functions a consumer may
-call. `@Export`, the symbols it mints, and the generated Rust wrapper crate are
-the next step; see
+### `@Export`: the consumer-facing surface
+
+`@Export` names the functions a consumer may call. It is **new Kira design** —
+the oracle has no library-export concept — and it is bare: no arguments, no
+block, no symbol override. The consumer's name is derived by snake_casing, so
+`makeButton` is reached as `make_button`.
+
+```kira
+@Export
+class Button {                                  // handle-eligible
+    var title: String = ""
+    var width: Int = 120
+    function label() -> String { return self.title }
+}
+
+@Export
+function makeButton(title: String) -> Button {  // a handle out
+    var b = Button()
+    b.title = title
+    return b
+}
+
+@Export
+function buttonWidth(b: Button) -> Int { return b.width }
+```
+
+`@Export` on a class means only that its instances may cross as opaque handles;
+it exports no method. Functions are the exported surface, so an author wraps a
+method in an exported function.
+
+The boundary refuses what it cannot carry, by name and with a reason, rather
+than inventing a representation: an array (`KSEM160`, who frees the elements is
+undesigned), a struct or an enum by value (`KSEM161`/`KSEM162`, neither fits one
+tag and one word), a function value (`KSEM163`), a class that is not itself
+`@Export` (`KSEM164`), and a `move` or `borrow mut` parameter (`KSEM165`,
+the boundary's ownership is fixed per type). `@Export` in an application package
+is `KSEM159`, a payload after it is `KSEM166`, a method export is `KSEM167`, and
+two exports colliding after snake_casing is `KSEM168`. `@Export` on a `struct`
+is refused in the parser (`KPAR043`), which points at the `class` that would
+work. All of them are checked in
+analysis, above the backend split, so three engines cannot grow three opinions
+about what an export is.
+
+Today that surface is checked and nothing more: `kirac check` verifies it, and
+`kirac build` refuses a library that declares an export on **every** backend,
+each naming what its own engine still owes — the VM's KBC1 exports section, the
+native engine's `kira_lib_*` trampolines, both halves for hybrid. The exports
+section, the persistent VM instance, the native trampolines, and the generated
+Rust wrapper crate are the remaining steps; see
 [.codex/work/kira-export-design.md](.codex/work/kira-export-design.md).
 
 ## Live sessions

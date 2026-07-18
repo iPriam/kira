@@ -295,6 +295,7 @@ mod tests {
             }],
             types: Default::default(),
             main: Some(0),
+            exports: Vec::new(),
             exprs,
         }
     }
