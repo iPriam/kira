@@ -473,7 +473,6 @@ dependencies = [
  "kira-semantics",
  "kira-source",
  "kira-syntax-model",
- "thiserror",
 ]
 
 [[package]]

@@ -59,7 +59,14 @@ proceeds and is what both a diagnostic's file and a qualified name's import set
 are read from.
 
 Modules are parsed **before** the entry file, dependencies first, because a
-struct field may only name a struct declared earlier.
+struct field may only name a struct declared earlier. "Dependencies first" is a
+property of the import graph, never of the entry file's typing order: the
+loader walks depth-first **post-order**, recording a module only once
+everything it imports is recorded. A pre-order walk plus a final reverse looks
+equivalent and is not — with `import b` before `import a` in the entry and `b`
+importing `a`, it emits `b` ahead of `a` and rejects a field of `b` that names
+one of `a`'s structs. A cycle is the one graph with no such order; it still
+terminates and still yields each module once.
 
 **`Root.name` is recognized in the analyzer, not the parser.** The parser
 cannot tell `Support.hello()` from `point.length()`: both are

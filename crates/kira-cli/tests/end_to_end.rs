@@ -235,6 +235,45 @@ fn runs_a_program_spread_across_modules() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n12\n");
 }
 
+/// A diamond import graph through the real binary: the entry imports `a` and
+/// `b`, `b` imports `a` and holds one of its structs in a field.
+///
+/// The entry deliberately names `a` first, which is the order a depth-first
+/// *pre-order* walk gets wrong: it records `a` then `b`, and the reverse that
+/// followed put `b`'s items ahead of `a`'s, rejecting `struct BBox` with a
+/// KSEM051 telling the author to move a struct that lives in another file.
+/// Dependencies-first is a property of the graph, not of the entry file's
+/// typing order.
+#[test]
+fn runs_a_diamond_import_graph() {
+    let path = write_program(
+        "import a\nimport b\n\
+         @Main function main() { \
+         let boxed = BBox { corner: APoint { x: 1, y: 2 } } \
+         print(bValue() + boxed.corner.x - 1) return }",
+        &[
+            (
+                "a",
+                "struct APoint { let x: Int  let y: Int }\n\
+                 function aValue() -> Int { return 3 }",
+            ),
+            (
+                "b",
+                "import a\nstruct BBox { let corner: APoint }\n\
+                 function bValue() -> Int { return aValue() + 4 }",
+            ),
+        ],
+    );
+    let output = kirac(&["run", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
+}
+
 /// An import that names no file on disk is a compile error, and the message
 /// names the module and where the compiler looked.
 #[test]

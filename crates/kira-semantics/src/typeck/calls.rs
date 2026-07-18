@@ -29,6 +29,16 @@ impl Analyzer<'_> {
         method_span: kira_source::Span,
         args: &[ExprId],
     ) -> HirExprId {
+        // `Support.hello()` is a *module-qualified free call*, not a method
+        // call, and it is recognized here because the parser cannot tell the
+        // two apart: both are `<expr> . name ( args )`. What separates them is
+        // that the receiver is a bare name which is no local and which this
+        // file imported as a module — a question only the analyzer, holding the
+        // file-scoped import table, can answer.
+        if let Some(call) = self.analyze_qualified_call(ctx, receiver, method, method_span, args) {
+            return call;
+        }
+
         // Analyzing the receiver is how its type is known, and its type is what
         // decides which surface the call belongs to. For an array that is all
         // this pass is for: `append` needs the receiver as a *place*, which is
@@ -45,16 +55,6 @@ impl Analyzer<'_> {
         // leaving that in place would report a phantom use-after-move on a later
         // `xs`. The array path re-resolves the receiver from syntax anyway, so
         // the probe's move is undone before it runs.
-        // `Support.hello()` is a *module-qualified free call*, not a method
-        // call, and it is recognized here because the parser cannot tell the
-        // two apart: both are `<expr> . name ( args )`. What separates them is
-        // that the receiver is a bare name which is no local and which this
-        // file imported as a module — a question only the analyzer, holding the
-        // file-scoped import table, can answer.
-        if let Some(call) = self.analyze_qualified_call(ctx, receiver, method, method_span, args) {
-            return call;
-        }
-
         let mark = self.diagnostics.len();
         let ownership = ctx.ownership_snapshot();
         let receiver_hir = self.analyze_expr(ctx, receiver);
@@ -258,18 +258,6 @@ impl Analyzer<'_> {
         })
     }
 
-    /// Type-checks a call whose arguments are still syntax.
-    ///
-    /// Ownership is the reason this exists. A parameter's [`OwnershipMode`]
-    /// decides whether its argument must say `move`, may not say `move`, or
-    /// must say `copy` — and answering that needs the *written* argument, not
-    /// the analyzed one: `f(mesh)` and `f(move mesh)` produce the same HIR and
-    /// differ only in what the source said. So each argument is analyzed
-    /// against the mode its parameter declared, and only then handed to
-    /// [`Analyzer::analyze_user_call`] for the type check.
-    ///
-    /// `leading` carries arguments already analyzed — a method's receiver —
-    /// which occupy the first parameter slots.
     /// Resolves `Root.name(args)` when `Root` is a module this file imported.
     ///
     /// Returns `None` when the shape is not a module-qualified call at all, so
@@ -308,6 +296,18 @@ impl Analyzer<'_> {
         None
     }
 
+    /// Type-checks a call whose arguments are still syntax.
+    ///
+    /// Ownership is the reason this exists. A parameter's [`OwnershipMode`]
+    /// decides whether its argument must say `move`, may not say `move`, or
+    /// must say `copy` — and answering that needs the *written* argument, not
+    /// the analyzed one: `f(mesh)` and `f(move mesh)` produce the same HIR and
+    /// differ only in what the source said. So each argument is analyzed
+    /// against the mode its parameter declared, and only then handed to
+    /// [`Analyzer::analyze_user_call`] for the type check.
+    ///
+    /// `leading` carries arguments already analyzed — a method's receiver —
+    /// which occupy the first parameter slots.
     pub(crate) fn analyze_user_call_from_syntax(
         &mut self,
         ctx: &mut FnCtx,
