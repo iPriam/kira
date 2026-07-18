@@ -35,7 +35,7 @@ mod tests {
                 param_count: 0,
                 // Bytecode only needs the slot count; the VM tags values
                 // dynamically, so the slot types are immaterial here.
-                locals: vec![kira_semantics_model::Type::Int; local_count as usize],
+                locals: vec![kira_semantics_model::Type::INT; local_count as usize],
                 return_type: kira_semantics_model::Type::Void,
                 execution: kira_runtime_abi::Execution::Inherited,
                 body,

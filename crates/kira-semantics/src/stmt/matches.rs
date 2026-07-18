@@ -122,7 +122,7 @@ impl Analyzer<'_> {
             ty: subject_ty,
         });
         let tag_expr = self.program.exprs.alloc(HirExpr::EnumTag { value: read });
-        let tag_slot = ctx.declare_hidden(Type::Int, false);
+        let tag_slot = ctx.declare_hidden(Type::INT, false);
         let bind_tag = self.program.stmts.alloc(HirStmt::Let {
             local: tag_slot,
             init: tag_expr,
@@ -313,7 +313,7 @@ impl Analyzer<'_> {
     fn tag_test(&mut self, tag_slot: LocalId, tag: u32) -> HirExprId {
         let read = self.program.exprs.alloc(HirExpr::Local {
             local: tag_slot,
-            ty: Type::Int,
+            ty: Type::INT,
         });
         let expected = self.program.exprs.alloc(HirExpr::Int(i64::from(tag)));
         self.program.exprs.alloc(HirExpr::Binary {

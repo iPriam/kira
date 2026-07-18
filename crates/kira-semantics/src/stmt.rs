@@ -389,7 +389,7 @@ impl Analyzer<'_> {
     fn read_int_local(&mut self, local: LocalId) -> HirExprId {
         self.program.exprs.alloc(HirExpr::Local {
             local,
-            ty: Type::Int,
+            ty: Type::INT,
         })
     }
 
@@ -398,7 +398,7 @@ impl Analyzer<'_> {
         let span = self.tree.expr(expr).span();
         let hir = self.analyze_expr(ctx, expr);
         let ty = self.program.expr(hir).type_of();
-        if ty != Type::Int && ty != Type::Error {
+        if ty != Type::INT && ty != Type::Error {
             self.emit(
                 span,
                 "KSEM043",

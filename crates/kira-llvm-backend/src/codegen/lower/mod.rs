@@ -18,6 +18,7 @@
 
 mod call;
 mod expr;
+mod operators;
 mod stmt;
 
 use kira_ir::{IrExprId, IrFunction};
@@ -121,8 +122,8 @@ impl<'a> Codegen<'a> {
         // SAFETY: `llvm_type` belongs to this module's context.
         Ok(unsafe {
             match ty {
-                Type::Int | Type::Bool => LLVMConstInt(llvm_type, 0, 0),
-                Type::Float => LLVMConstReal(llvm_type, 0.0),
+                Type::Int(_) | Type::Bool => LLVMConstInt(llvm_type, 0, 0),
+                Type::Float(_) => LLVMConstReal(llvm_type, 0.0),
                 // A fresh array slot holds the null handle, which the runtime's
                 // `array_len` reads as `0` and `array_free` treats as nothing to
                 // free — so a slot is reclaimable through the same path before

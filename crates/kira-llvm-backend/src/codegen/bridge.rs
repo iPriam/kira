@@ -30,8 +30,8 @@ enum PayloadForm {
 fn bridge_tag_of(ty: Type) -> Result<(u8, Option<PayloadForm>), LlvmError> {
     Ok(match ty {
         Type::Void => (BridgeValueTag::VOID.0, None),
-        Type::Int => (BridgeValueTag::INT.0, Some(PayloadForm::AsIs)),
-        Type::Float => (BridgeValueTag::FLOAT.0, Some(PayloadForm::FloatBits)),
+        Type::Int(_) => (BridgeValueTag::INT.0, Some(PayloadForm::AsIs)),
+        Type::Float(_) => (BridgeValueTag::FLOAT.0, Some(PayloadForm::FloatBits)),
         Type::Bool => (BridgeValueTag::BOOL.0, Some(PayloadForm::Widen)),
         Type::String => (BridgeValueTag::STRING.0, Some(PayloadForm::PointerBits)),
         // A `BridgeValue` is 16 bytes with a one-word payload; a struct does
@@ -82,8 +82,8 @@ impl Codegen<'_> {
                 c"arg.payload".as_ptr(),
             );
             Ok(match ty {
-                Type::Int => payload,
-                Type::Float => {
+                Type::Int(_) => payload,
+                Type::Float(_) => {
                     LLVMBuildBitCast(self.builder, payload, types.f64, c"arg.float".as_ptr())
                 }
                 Type::Bool => LLVMBuildTrunc(self.builder, payload, types.i1, c"arg.bool".as_ptr()),

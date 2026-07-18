@@ -374,8 +374,8 @@ impl<'a> Codegen<'a> {
     /// The LLVM type a Kira value type lowers to.
     fn llvm_type(&self, ty: Type) -> Result<LLVMTypeRef, LlvmError> {
         Ok(match ty {
-            Type::Int => self.types.i64,
-            Type::Float => self.types.f64,
+            Type::Int(_) => self.types.i64,
+            Type::Float(_) => self.types.f64,
             Type::Bool => self.types.i1,
             // A `String` is an opaque owned handle: one pointer the backend
             // never inspects, matching the runtime's ABI. An array and an enum

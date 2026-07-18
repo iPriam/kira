@@ -1,0 +1,100 @@
+// Fixed-width scalar types: I8..I64, U8..U64, F32, and F64.
+//
+// These are *spellings*, not new representations. Every integer type — bare
+// `Int` included — is one 64-bit two's-complement value at run time, and every
+// float type is one 64-bit IEEE-754 value. Writing `I32` does not make a
+// narrower box; it makes a distinct name.
+//
+// A spelling decides exactly two things.
+//
+// First, distinctness. Two *written* widths must match exactly: a `U8` does not
+// flow into an `I64` and `u8Value + i64Value` is an error, because this language
+// has no implicit widening. Bare `Int` and `Float` are the exception — each is a
+// wildcard matching any width in its kind, which is what lets an integer literal
+// be written at every width without a conversion rule.
+//
+// Second, the signedness of `/`, `%`, and the four orderings. The `U` spellings
+// select unsigned versions of those six operators, and only those six: `+`, `-`,
+// `*`, and `==` are bit-identical under either signedness, so they need no
+// unsigned twin.
+//
+// What a width does NOT do is narrow arithmetic. A `U8` sum of 250 and 10 is
+// 260, not 4 — every operation wraps at the representation's 64 bits, never at
+// the written width.
+
+// `Byte` is not a builtin. The language spells it as an alias, which is why it
+// behaves exactly as `U8` does, unsigned division included.
+type Byte = U8
+
+struct Reading {
+    var sensor: U32
+    var offset: I16
+}
+
+// A width is checked at a parameter, at a return, and at a field — everywhere a
+// type can be written.
+function halve(value: U64) -> U64 {
+    let two: U64 = 2
+    return value / two
+}
+
+function midpoint(low: I32, high: I32) -> I32 {
+    let two: I32 = 2
+    return (low + high) / two
+}
+
+@Main
+function main() {
+    // Every integer spelling, each carrying a value that fits the name.
+    let tiny: I8 = 7
+    let small: I16 = 300
+    let medium: I32 = 70000
+    let large: I64 = 5000000000
+    print(tiny + 1)
+    print(small + 1)
+    print(medium + 1)
+    print(large + 1)
+
+    // Unsigned is where a spelling becomes visible. Read as a `U64`, -1 is
+    // 18446744073709551615 — so it is *greater* than 2, and halving it gives a
+    // huge number rather than the 0 signed division would give.
+    let big: U64 = -1
+    let two: U64 = 2
+    print(big > two)
+    print(halve(big))
+    print(big % two)
+
+    // The same operators on a signed width keep their signed answers.
+    let below: I64 = -8
+    let three: I64 = 3
+    print(below < three)
+    print(below / three)
+    print(below % three)
+
+    // An alias carries its target's signedness through unchanged.
+    let level: Byte = 250
+    let step: Byte = 5
+    print(level / step)
+
+    // Arithmetic wraps at 64 bits, not at the written width.
+    print(level + step)
+
+    // A literal is usable at any width, and mixes with one freely.
+    let counted: U16 = 60000
+    print(counted + 1)
+
+    // Floats have widths too, and the same exactness rule.
+    let coarse: F32 = 1.5
+    let fine: F64 = 2.25
+    print(coarse + 0.5)
+    print(fine / 0.25)
+    print(coarse < 2.0)
+
+    // Widths pass through structs and functions.
+    var reading = Reading { sensor: 4000000000, offset: -12 }
+    reading.sensor = reading.sensor + 1
+    print(reading.sensor)
+    print(reading.offset - 1)
+    print(midpoint(-10, 40))
+    return
+}

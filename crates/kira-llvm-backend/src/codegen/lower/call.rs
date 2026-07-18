@@ -33,8 +33,8 @@ impl FunctionLowering<'_, '_> {
                     Type::Enum(_) => {
                         return Err(LlvmError::Unsupported("a print of an enum"));
                     }
-                    Type::Int => self.codegen.runtime.print_int,
-                    Type::Float => self.codegen.runtime.print_float,
+                    Type::Int(_) => self.codegen.runtime.print_int,
+                    Type::Float(_) => self.codegen.runtime.print_float,
                     Type::Bool => {
                         // Booleans are `i1` in registers but cross the C ABI as
                         // a byte.

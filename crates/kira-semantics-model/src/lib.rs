@@ -18,6 +18,6 @@ pub use hir::{
 /// so the analyzer and everything above it name them from one place.
 pub use kira_syntax_model::ownership::{OwnershipMode, OwnershipOp};
 pub use ty::{
-    ArrayId, ArrayTable, EnumDef, EnumId, EnumTable, FieldDef, StructDef, StructId, StructTable,
-    Type, TypeTable, VariantDef,
+    ArrayId, ArrayTable, EnumDef, EnumId, EnumTable, FieldDef, FloatSpelling, IntSpelling,
+    StructDef, StructId, StructTable, Type, TypeTable, VariantDef,
 };
