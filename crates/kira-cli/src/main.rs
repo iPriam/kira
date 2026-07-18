@@ -5,6 +5,7 @@
 mod command;
 mod dispatch;
 mod hybrid;
+mod library;
 mod live;
 mod native;
 mod options;

@@ -1,0 +1,65 @@
+// UI Foundation: the motivating library, authored in Kira and consumed from
+// Rust. Every shape v1 supports appears here exactly once, because this file is
+// what proves the export boundary rather than what demonstrates it.
+//
+// A handle-eligible class: instances cross to Rust as opaque handles.
+@Export
+class Button {
+    var title: String = ""
+    var width: Int = 120
+}
+
+// Handle out: the constructor-shaped export.
+@Export
+function makeButton(title: String) -> Button {
+    var button = Button()
+    button.title = title
+    return button
+}
+
+// Handle in, scalar out.
+@Export
+function buttonWidth(button: Button) -> Int {
+    return button.width
+}
+
+// Handle in, owned string out.
+@Export
+function buttonLabel(button: Button) -> String {
+    return button.title
+}
+
+// Several scalars in, a boolean out: Rust re-entering Kira per event is what a
+// callback means in this direction.
+@Export
+function clickAt(button: Button, x: Int, y: Int) -> Bool {
+    return x >= 0 && x < button.width && y >= 0
+}
+
+// Handle in, handle out. An exported parameter is lent, so this returns a new
+// button rather than widening the one it was given.
+@Export
+function widen(button: Button, by: Int) -> Button {
+    var wider = Button()
+    wider.title = button.title
+    wider.width = button.width + by
+    return wider
+}
+
+// No arguments, and a float, to keep the nullary and floating-point paths of
+// the generator exercised by something that runs.
+@Export
+function defaultWidth() -> Int {
+    return 120
+}
+
+@Export
+function aspectRatio(button: Button) -> Float {
+    return 0.5
+}
+
+// Not exported. A library may hold whatever it likes behind the boundary; only
+// what is marked crosses.
+function hidden() -> Int {
+    return 7
+}

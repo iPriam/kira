@@ -1,8 +1,40 @@
-//! The build system: orchestrates the frontend, backends, and packaging.
+//! The build system: drives the frontend, then packages what a consumer needs.
 //!
 //! Layer 7 of the Kira package graph.
 //!
-//! Design pending. Drives a source tree through frontend, IR, backend
-//! selection, and artifact packaging, including managed toolchain fetch. FFI
-//! autobind (generating Kira bindings for native libraries) is critical path
-//! for KG/kira-graphics, not tail work, and is designed in here.
+//! # What lives here and why
+//!
+//! Two things, and they are the same thing seen from either end:
+//!
+//! - [`frontend`] turns a path to a `.kira` file into an
+//!   [`IrProgram`](kira_ir::IrProgram) plus the diagnostics that came out on the
+//!   way. It is a *library* function rather than CLI code because `kirac` is not
+//!   the only thing that compiles Kira: a consumer crate's `build.rs` builds the
+//!   library it embeds, and it must reach the identical pipeline rather than a
+//!   second one that drifts from it.
+//! - [`library`] takes that program and produces what a Rust consumer actually
+//!   depends on: the `.kbc` artifact, and a generated wrapper crate around it
+//!   ([`wrapper`]).
+//!
+//! # The generated crate is code
+//!
+//! [`wrapper::generate`] is pure — spec in, file contents out, no filesystem —
+//! so what it emits can be asserted on directly. Everything it emits is held to
+//! the same bar as hand-written code here: it is `rustfmt`-shaped, it carries a
+//! doc comment on every public item, and it contains no `unsafe`. The VM engine
+//! needs none — the wrapper embeds bytecode and calls `kira-main` through safe
+//! Rust — which is exactly why this is the engine that a consumer can build on a
+//! machine with no LLVM and no linker.
+//!
+//! FFI autobind — generating *Kira* bindings for a native library, the opposite
+//! direction — is designed in here too, and is not built yet.
+
+pub mod frontend;
+pub mod library;
+pub mod wrapper;
+
+pub use frontend::{Compiled, FrontendError, compile};
+pub use library::{
+    LibraryArtifacts, LibraryBuildError, LibraryBuildOptions, build_library, toolchain_root,
+};
+pub use wrapper::{GeneratedCrate, GeneratedFile, WrapperSpec, generate};
