@@ -8,7 +8,7 @@ use super::{parse_text, type_spelling};
 
 /// The one enum declaration in `text`.
 fn only_enum(result: &ParseResult) -> &kira_syntax_model::ast::EnumDecl {
-    match result.tree.items.as_slice() {
+    match result.tree.items() {
         [Item::Enum(declaration)] => declaration,
         items => panic!("expected exactly one enum, got {items:?}"),
     }
@@ -58,7 +58,7 @@ fn a_leading_dot_member_parses_with_and_without_a_payload() {
     // `.Red` (no parens) and `.Ok(12)` (a payload argument).
     let result = parse_text("@Main function main() { let a = .Red\n let b = .Ok(12) return }");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    let function = match &result.tree.items[0] {
+    let function = match &result.tree.items()[0] {
         Item::Function(f) => f,
         other => panic!("expected a function, got {other:?}"),
     };
@@ -107,7 +107,7 @@ fn a_malformed_variant_does_not_derail_the_file() {
     assert!(
         result
             .tree
-            .items
+            .items()
             .iter()
             .any(|item| matches!(item, Item::Function(_))),
         "the function after a bad enum still parses"

@@ -36,10 +36,40 @@ pub struct ParseResult {
 /// This is the single entry point the frontend calls; it runs the lexer and
 /// then the parser, merging their diagnostics in source order.
 pub fn parse(source: SourceId, text: &str) -> ParseResult {
-    let lexed = kira_lexer::lex(source, text);
-    let mut parser = Parser::new(source, text, lexed.tokens);
-    parser.diagnostics = lexed.diagnostics;
-    parser.parse_program()
+    parse_files(&[(source, text)])
+}
+
+/// Lexes and parses several files into **one** tree.
+///
+/// Imports are file-scoped, but a program is one thing: the analyzer resolves
+/// names across every file at once, so every file's items land in a single
+/// arena set and a single interner. Which file an item came from is not lost —
+/// [`SyntaxTree::items_with_source`] carries it, and that is what the
+/// file-scoped import gate reads.
+///
+/// Files are parsed in the order given, and that order is the item order in the
+/// tree. Callers pass dependencies before dependents, because a struct field
+/// may only name a struct declared earlier.
+pub fn parse_files(files: &[(SourceId, &str)]) -> ParseResult {
+    let mut tree = SyntaxTree::new();
+    let mut interner = Interner::new();
+    let mut diagnostics = Vec::new();
+    for &(source, text) in files {
+        let lexed = kira_lexer::lex(source, text);
+        let mut parser = Parser::new(source, text, lexed.tokens);
+        parser.diagnostics = lexed.diagnostics;
+        parser.tree = tree;
+        parser.interner = interner;
+        let result = parser.parse_program();
+        tree = result.tree;
+        interner = result.interner;
+        diagnostics.extend(result.diagnostics);
+    }
+    ParseResult {
+        tree,
+        interner,
+        diagnostics,
+    }
 }
 
 /// The parser's mutable working state.
@@ -172,7 +202,14 @@ impl<'a> Parser<'a> {
     /// diagnostic rather than bailing.
     fn intern_span(&mut self, span: Span) -> Symbol {
         let text = span.slice(self.text).to_owned();
-        match self.interner.intern(&text) {
+        self.intern_text(&text, span)
+    }
+
+    /// Interns text the parser assembled rather than sliced — a dotted type
+    /// name is spelled across several tokens — reporting a full interner at
+    /// `span` exactly as [`Parser::intern_span`] does.
+    fn intern_text(&mut self, text: &str, span: Span) -> Symbol {
+        match self.interner.intern(text) {
             Ok(symbol) => symbol,
             Err(full) => {
                 self.error(span, "KPAR030", full.to_string());

@@ -257,6 +257,7 @@ dependencies = [
  "kira-llvm-backend",
  "kira-manifest",
  "kira-native-bridge",
+ "kira-program-graph",
  "kira-runtime-abi",
  "kira-semantics",
  "kira-semantics-model",
@@ -415,6 +416,7 @@ name = "kira-lsp"
 version = "0.1.0"
 dependencies = [
  "kira-diagnostics",
+ "kira-program-graph",
  "kira-semantics",
  "kira-source",
  "lsp-server",
@@ -466,6 +468,13 @@ dependencies = [
 [[package]]
 name = "kira-program-graph"
 version = "0.1.0"
+dependencies = [
+ "kira-parser",
+ "kira-semantics",
+ "kira-source",
+ "kira-syntax-model",
+ "thiserror",
+]
 
 [[package]]
 name = "kira-project"

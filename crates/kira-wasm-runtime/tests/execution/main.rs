@@ -47,9 +47,28 @@ impl kira_runtime_abi::HostCapabilities for Collector {
 
 /// Compiles `source` to IR through the same frontend the CLI drives.
 fn lower(source: &str) -> kira_ir::IrProgram {
+    lower_modules(source, &[])
+}
+
+/// Compiles a multi-module program to IR.
+///
+/// The modules are handed to the frontend directly rather than written to disk:
+/// module *loading* is the CLI's job and needs a filesystem, but module
+/// *resolution* is the frontend's and does not — which is exactly why the
+/// module texts are an input. So an import resolves here with no temp
+/// directory, in a test that also has to run under `wasm32`'s rules.
+fn lower_modules(source: &str, modules: &[(&str, &str)]) -> kira_ir::IrProgram {
     let db = salsa::DatabaseImpl::new();
+    let modules: Vec<kira_semantics::ModuleSource> = modules
+        .iter()
+        .map(|&(module, text)| kira_semantics::ModuleSource {
+            module: module.to_owned(),
+            path: format!("{module}.kira"),
+            text: text.to_owned(),
+        })
+        .collect();
     let program =
-        kira_semantics::SourceProgram::new(&db, source.to_owned(), "test.kira".to_owned());
+        kira_semantics::SourceProgram::new(&db, source.to_owned(), "test.kira".to_owned(), modules);
     let analyzed = kira_semantics::analyzed(&db, program);
     kira_ir::lower(&analyzed).expect("a runnable program")
 }
@@ -175,6 +194,58 @@ fn execute(bytes: &[u8], device: WasmDevice) -> Result<Vec<String>, String> {
     }
 }
 
+/// Runs `source` on the VM as a multi-module program.
+fn run_modules_on_vm(source: &str, modules: &[(&str, &str)]) -> Result<Vec<String>, String> {
+    let ir = lower_modules(source, modules);
+    let module = kira_bytecode::compile(&ir).map_err(|error| error.to_string())?;
+    let mut host = Collector::default();
+    match kira_vm_runtime::execute(&module, &mut host) {
+        Ok(_) => Ok(host.lines),
+        Err(trap) => Err(trap.to_string()),
+    }
+}
+
+/// Runs a multi-module program as a wasm module on `device`.
+fn run_modules_on_wasm(
+    source: &str,
+    modules: &[(&str, &str)],
+    device: WasmDevice,
+) -> Result<Vec<String>, String> {
+    let ir = lower_modules(source, modules);
+    let bytes = kira_wasm_runtime::compile(&ir, device).map_err(|error| error.to_string())?;
+    execute(&bytes, device)
+}
+
+/// Asserts the VM and both wasm devices agree on a multi-module program.
+///
+/// Imports vanish in the frontend: the IR a wasm module is built from carries
+/// no trace of how many files the program was written in. That is the claim —
+/// so the way to check it is to run a program whose answer comes out of an
+/// imported module and require the same three engines to agree on it.
+fn assert_module_parity(source: &str, modules: &[(&str, &str)]) {
+    let expected = run_modules_on_vm(source, modules);
+    for device in [WasmDevice::Wasm32, WasmDevice::Wasm64] {
+        let actual = run_modules_on_wasm(source, modules, device);
+        match (&expected, &actual) {
+            (Ok(vm), Ok(wasm)) => assert_eq!(
+                vm,
+                wasm,
+                "the vm and {} disagree on output for:\n{source}",
+                device.label()
+            ),
+            (Err(vm), Err(wasm)) => assert!(
+                wasm.contains(vm.as_str()),
+                "the vm trapped with `{vm}` but {} reported:\n{wasm}\nfor:\n{source}",
+                device.label()
+            ),
+            (vm, wasm) => panic!(
+                "the vm produced {vm:?} but {} produced {wasm:?} for:\n{source}",
+                device.label()
+            ),
+        }
+    }
+}
+
 /// Runs `source` as a wasm module on `device`, returning its output lines.
 fn run_on_wasm(source: &str, device: WasmDevice) -> Result<Vec<String>, String> {
     let ir = lower(source);
@@ -237,6 +308,7 @@ mod calls;
 mod control_flow;
 mod enums;
 mod floats;
+mod imports;
 mod matches;
 mod memory;
 mod ownership;

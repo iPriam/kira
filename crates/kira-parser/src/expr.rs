@@ -505,7 +505,7 @@ mod tests {
     fn return_shape(text: &str) -> String {
         let result = parse(SourceId::new(0), text);
         let tree = &result.tree;
-        let function = match &tree.items[0] {
+        let function = match &tree.items()[0] {
             Item::Function(f) => f,
             other => panic!("expected function, got {other:?}"),
         };
@@ -685,7 +685,7 @@ mod tests {
             !result.diagnostics.is_empty(),
             "a missing `:` must be diagnosed"
         );
-        let function = match &result.tree.items[0] {
+        let function = match &result.tree.items()[0] {
             Item::Function(f) => f,
             other => panic!("expected function, got {other:?}"),
         };

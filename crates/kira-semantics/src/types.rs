@@ -66,7 +66,28 @@ impl Analyzer<'_> {
         span: Span,
         context: &NameContext,
     ) -> Type {
-        let text = self.interner.resolve(name).to_owned();
+        let written = self.interner.resolve(name).to_owned();
+        // A module-qualified spelling (`Support.Point`) names the same type the
+        // module declares bare. Stripping the qualifier is the whole of it:
+        // top-level names are unique across a package, so `Support.Point` and
+        // `Point` cannot be two different types — what the qualifier buys is
+        // the file-scope check that this file actually imported `Support`.
+        let text = match written.split_once('.') {
+            Some((root, member)) => {
+                if self.module_for_root(root).is_none() {
+                    if !self.report_unimported_root(root, span) {
+                        self.emit(
+                            span,
+                            "KSEM050",
+                            format!("unknown type `{written}`: `{root}` is not an imported module"),
+                        );
+                    }
+                    return Type::Error;
+                }
+                member.to_owned()
+            }
+            None => written.clone(),
+        };
         if let Some(ty) = Type::from_name(&text) {
             return ty;
         }
@@ -100,7 +121,7 @@ impl Analyzer<'_> {
     /// Reports a field's unresolvable type, distinguishing a forward reference
     /// from an unknown name — they are different mistakes with different fixes.
     fn report_unknown_field_type(&mut self, owner: &str, text: &str, span: Span) {
-        let declared_later = self.tree.items.iter().any(|item| match item {
+        let declared_later = self.tree.items().iter().any(|item| match item {
             Item::Struct(other) => self.interner.resolve(other.name) == text,
             _ => false,
         });

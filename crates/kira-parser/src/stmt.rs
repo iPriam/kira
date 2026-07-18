@@ -252,7 +252,7 @@ mod tests {
             "unexpected diagnostics: {:?}",
             result.diagnostics
         );
-        let function = match &result.tree.items[0] {
+        let function = match &result.tree.items()[0] {
             Item::Function(function) => function,
             other => panic!("expected a function, got {other:?}"),
         };
@@ -380,6 +380,6 @@ mod tests {
     fn a_for_without_a_loop_variable_still_parses_the_program() {
         let result = parse(SourceId::new(0), "function f() { for in 0..5 { } }");
         assert!(!result.diagnostics.is_empty());
-        assert_eq!(result.tree.items.len(), 1, "the function is still there");
+        assert_eq!(result.tree.items().len(), 1, "the function is still there");
     }
 }

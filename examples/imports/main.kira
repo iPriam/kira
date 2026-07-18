@@ -1,0 +1,31 @@
+// Imports: a program spread across several files.
+//
+// Imports are FILE-scoped. This file imports what it names; `geometry.kira`
+// imports what *it* names, and neither import carries into the other. Writing
+// the import in every file that needs it is the rule, not repetition to be
+// tidied away.
+//
+// An import does two things: it makes the module part of the program, and it
+// binds a namespace root this file may qualify names with. `as` chooses the
+// spelling of that root; without it, the module's own name serves.
+
+import geometry as Geo
+import shapes.Rect as Rect
+
+@Main
+function main() {
+    // Qualified through the alias, and bare: a module's declarations are
+    // visible across the program, and the qualifier is how a reader sees where
+    // a name came from.
+    let origin: Geo.Point = Point { x: 0, y: 0 }
+    let corner = Point { x: 3, y: 4 }
+    print(origin.x + corner.manhattan())
+
+    // A dotted module path is a directory: `shapes.Rect` is `shapes/Rect.kira`.
+    print(Rect.area(corner))
+
+    // `geometry.kira` imports `shapes.Rect` itself, which is what lets it call
+    // into it — this file's import did not do that for it.
+    print(Geo.describe(corner))
+    return
+}

@@ -461,6 +461,54 @@ conditional needs **no opcode at all**: it compiles to the jump-and-patch shape
 `&&`/`||` already use, lowers to a branch and a phi natively, and is wasm's
 value-typed `if`.
 
+## Imports
+
+A program is a directory of `.kira` files. One of them declares `@Main` and is
+the entry file; the rest are modules, and an `import` is what pulls one into
+the program:
+
+```kira
+import geometry as Geo
+import shapes.Rect as Rect
+
+@Main
+function main() {
+    let origin: Geo.Point = Point { x: 0, y: 0 }
+    print(Rect.area(origin))
+    return
+}
+```
+
+A module name is a *name*, not a path: no slashes, no extension, no `..`. A
+single segment is a sibling file (`geometry` is `geometry.kira`), and a dot is
+a directory separator (`shapes.Rect` is `shapes/Rect.kira`), both resolved
+against the entry file's directory. An import naming no readable file is
+`KSEM032`.
+
+Imports are **file-scoped**. An import written in `main.kira` says nothing
+about `geometry.kira`: every file writes the imports it needs, and a module
+that wants `shapes.Rect` imports it itself. Referring to a namespace root this
+file did not import is `KSEM027`, even when a sibling imported it.
+
+What an import binds is a **namespace root** — the `as` name, or the module's
+last path segment when no alias is written. The root is a qualifier for names
+the module declares: `Geo.Point` as a type, `Rect.area(p)` as a call. It is not
+a visibility gate. A package's top-level declarations are visible bare
+everywhere in the package, so `Point` and `area(p)` work too; the qualifier is
+how a reader sees where a name came from.
+
+Two modules that import each other are a legal program. Loading is
+visited-set-guarded, so a cycle terminates and each file lands in the program
+once — there is no import-cycle diagnostic, because the reference
+implementation accepts these and rejecting them would break working programs.
+
+`import Foundation` parses and resolves like any other import, and reports
+`KSEM032` here: there is no Foundation package in this repo yet.
+
+Imports are resolved entirely in the frontend. By the time the IR exists a
+program is one flat list of functions, so no backend — VM, LLVM, hybrid, or
+wasm — learns that a program was ever more than one file.
+
 ## Type aliases
 
 `type Name = Target` binds a name to a written type. It is a **spelling, not a
@@ -520,9 +568,17 @@ full-document sync and nothing else, so a client knows not to ask for more;
 anything that asks anyway gets `MethodNotFound` rather than a wrong answer.
 Hover, completion, and goto-definition are not implemented yet.
 
-Analysis is **per-file**: each open document is analyzed alone, because the
-language has no imports or modules yet. There are no project-wide diagnostics,
-and nothing is reported for a file that is not open.
+Analysis is **per-document, whole-program**: each open document is analyzed as
+the *entry* file of a program, and every module it imports is read off disk and
+analyzed with it. So a name a sibling module declares resolves in the editor,
+and an `import` that names no file squiggles.
+
+Two consequences worth knowing. Modules are read **from disk**, not from open
+editor buffers, so an unsaved edit in `support.kira` is not what `main.kira` is
+checked against. And diagnostics are still published for one document at a
+time: an error inside an imported module is reported when you open *that*
+file, not as a squiggle on the file that imported it. Nothing is reported for a
+file that is not open.
 
 The server runs the same salsa frontend `kirac check` does, so an editor
 squiggle and a command-line error are the same computation rather than two

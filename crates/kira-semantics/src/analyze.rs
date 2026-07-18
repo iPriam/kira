@@ -34,6 +34,12 @@ pub(crate) struct Callable<'a> {
     pub(crate) receiver: Option<StructId>,
     /// The declaration as written.
     pub(crate) function: &'a Function,
+    /// The file the declaration was written in.
+    ///
+    /// Carried so a diagnostic about this function points into the right file,
+    /// and so its body resolves qualified names against *that* file's imports —
+    /// which is the whole of file scoping.
+    pub(crate) source: SourceId,
 }
 
 /// The signature of a user function, resolved before bodies are checked so
@@ -53,12 +59,23 @@ struct FuncSig {
 }
 
 /// Analyzes a parsed program.
-pub fn analyze(source: SourceId, tree: &SyntaxTree, interner: &Interner) -> Analysis {
-    Analyzer::new(source, tree, interner).run()
+///
+/// `modules` names every module the program was loaded with and the file each
+/// one is, so an `import` that names something else can be reported as
+/// unresolved. A single-file program passes an empty slice.
+pub fn analyze(tree: &SyntaxTree, interner: &Interner, modules: &[(String, SourceId)]) -> Analysis {
+    Analyzer::new(tree, interner, modules).run()
 }
 
 pub(crate) struct Analyzer<'a> {
+    /// The file whose item is being analyzed right now.
+    ///
+    /// One tree spans every file of the program, so this moves as the analyzer
+    /// walks: it is what a diagnostic's span is attributed to, and what decides
+    /// which file's imports a qualified name resolves against.
     pub(crate) source: SourceId,
+    /// Every file's imports, keyed by file.
+    pub(crate) imports: crate::imports::ImportTable,
     pub(crate) tree: &'a SyntaxTree,
     pub(crate) interner: &'a Interner,
     sigs: Vec<FuncSig>,
@@ -236,9 +253,12 @@ impl FnCtx {
 }
 
 impl<'a> Analyzer<'a> {
-    fn new(source: SourceId, tree: &'a SyntaxTree, interner: &'a Interner) -> Self {
-        Self {
-            source,
+    fn new(tree: &'a SyntaxTree, interner: &'a Interner, modules: &[(String, SourceId)]) -> Self {
+        let entries = crate::imports::collect_imports(tree, interner);
+        let imports = crate::imports::ImportTable::build(modules, &entries);
+        let mut analyzer = Self {
+            source: crate::FILE_SOURCE_ID,
+            imports,
             tree,
             interner,
             sigs: Vec::new(),
@@ -248,7 +268,9 @@ impl<'a> Analyzer<'a> {
             aliases: AliasTable::new(),
             program: HirProgram::default(),
             diagnostics: Vec::new(),
-        }
+        };
+        analyzer.report_unresolved_imports(&entries);
+        analyzer
     }
 
     fn run(mut self) -> Analysis {
@@ -262,6 +284,11 @@ impl<'a> Analyzer<'a> {
         self.collect_structs();
         let callables = self.callables();
         self.collect_signatures(&callables);
+        // `@Main` is a property of the program, not of any one file, and the
+        // "no `@Main`" diagnostic has no span to point at — so it is attributed
+        // to the entry file rather than to whichever module happened to declare
+        // the last signature.
+        self.source = crate::FILE_SOURCE_ID;
         self.check_main();
         // Bodies are analyzed in the same order the signatures were collected,
         // which is what makes a `FuncId` index both.
@@ -285,11 +312,12 @@ impl<'a> Analyzer<'a> {
     /// and never learns that some of them were written inside a struct.
     fn callables(&self) -> Vec<Callable<'a>> {
         let mut callables = Vec::new();
-        for item in &self.tree.items {
+        for (source, item) in self.tree.items_with_source() {
             match item {
                 Item::Function(function) => callables.push(Callable {
                     receiver: None,
                     function,
+                    source,
                 }),
                 Item::Struct(declaration) => {
                     let owner = self
@@ -301,10 +329,11 @@ impl<'a> Analyzer<'a> {
                         callables.push(Callable {
                             receiver: owner,
                             function: method,
+                            source,
                         });
                     }
                 }
-                Item::Enum(_) | Item::TypeAlias(_) | Item::Unsupported(_) => {}
+                Item::Enum(_) | Item::TypeAlias(_) | Item::Import(_) | Item::Unsupported(_) => {}
             }
         }
         callables
@@ -314,6 +343,9 @@ impl<'a> Analyzer<'a> {
         let mut main_seen = false;
         for callable in callables {
             let function = callable.function;
+            // A signature's types are written in the file the function was, so
+            // they resolve against that file's imports.
+            self.source = callable.source;
             let name = self.callable_name(*callable);
             // A method's receiver is parameter 0, so its signature carries the
             // struct type ahead of what was written.
@@ -451,6 +483,10 @@ impl<'a> Analyzer<'a> {
 
     fn analyze_function(&mut self, id: FuncId, callable: &Callable<'a>) -> HirFunction {
         let function = callable.function;
+        // The body resolves qualified names against the imports of the file it
+        // was written in — not the entry file's, and not the union of all of
+        // them. That is what "file-scoped" means.
+        self.source = callable.source;
         let sig_return = self.sigs[id.0 as usize].return_type;
         let mut ctx = FnCtx::new(sig_return);
         // A method's receiver is local 0, named `self`. It is immutable: a

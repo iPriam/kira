@@ -44,6 +44,55 @@ fn write_source(source: &str) -> PathBuf {
     path
 }
 
+/// Writes an entry program plus the modules it imports into one directory.
+///
+/// Returns the entry path. Module names are file stems, and a dotted name is a
+/// directory path — the same rule the compiler resolves an `import` by — so a
+/// case can write `("Foundation/Web", ...)` for `import Foundation.Web`.
+fn write_program(entry: &str, modules: &[(&str, &str)]) -> PathBuf {
+    let path = write_source(entry);
+    let directory = path.parent().expect("program directory");
+    for (name, text) in modules {
+        let module = directory.join(format!("{name}.kira"));
+        if let Some(parent) = module.parent() {
+            std::fs::create_dir_all(parent).expect("module directory");
+        }
+        std::fs::write(&module, text).expect("write module");
+    }
+    path
+}
+
+/// Asserts every backend agrees on a multi-module program.
+fn assert_module_parity(entry: &str, modules: &[(&str, &str)]) -> String {
+    let path = write_program(entry, modules);
+    let runs: Vec<(&str, Output)> = BACKENDS
+        .iter()
+        .map(|backend| (*backend, run_on(&path, backend)))
+        .collect();
+    let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
+
+    let (_, reference) = &runs[0];
+    let expected = String::from_utf8_lossy(&reference.stdout).into_owned();
+    for (backend, run) in &runs[1..] {
+        assert_eq!(
+            expected,
+            String::from_utf8_lossy(&run.stdout),
+            "the vm and {backend} backends disagree on output for:\n{entry}\n\
+             vm stderr: {}\n{backend} stderr: {}",
+            String::from_utf8_lossy(&reference.stderr),
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            reference.status.code(),
+            run.status.code(),
+            "the vm and {backend} backends disagree on exit code for:\n{entry}\n\
+             {backend} stderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+    expected
+}
+
 /// Runs `source` on one backend.
 fn run_on(source_path: &std::path::Path, backend: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_kirac"))
@@ -124,6 +173,7 @@ mod bitwise;
 mod control_flow;
 mod enums;
 mod examples;
+mod imports;
 mod logic;
 mod matches;
 mod ownership;

@@ -61,6 +61,8 @@ pub enum TokenKind {
     False,
     /// `import`
     Import,
+    /// `as`
+    As,
     /// `struct`
     Struct,
     /// `enum`
@@ -179,6 +181,7 @@ impl TokenKind {
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "import" => TokenKind::Import,
+            "as" => TokenKind::As,
             "struct" => TokenKind::Struct,
             "enum" => TokenKind::Enum,
             "class" => TokenKind::Class,
@@ -212,6 +215,7 @@ impl TokenKind {
             TokenKind::True => "`true`",
             TokenKind::False => "`false`",
             TokenKind::Import => "`import`",
+            TokenKind::As => "`as`",
             TokenKind::Struct => "`struct`",
             TokenKind::Enum => "`enum`",
             TokenKind::Class => "`class`",

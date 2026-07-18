@@ -11,8 +11,8 @@ use kira_runtime_abi::Execution;
 use kira_source::{FileSpan, Span};
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
-    Block, EnumDecl, FieldDecl, Function, Item, Param, StructDecl, TypeAliasDecl, TypeRef,
-    TypeRefId, UnsupportedItem, VariantDecl,
+    Block, EnumDecl, FieldDecl, Function, ImportDecl, Item, Param, StructDecl, TypeAliasDecl,
+    TypeRef, TypeRefId, UnsupportedItem, VariantDecl,
 };
 use kira_syntax_model::ownership::OwnershipMode;
 
@@ -24,27 +24,31 @@ impl Parser<'_> {
             TokenKind::At => self.parse_annotated_item(),
             TokenKind::Function => {
                 if let Some(function) = self.parse_function(false, Execution::Inherited) {
-                    self.tree.items.push(Item::Function(function));
+                    self.tree.push_item(self.source, Item::Function(function));
                 }
             }
             TokenKind::Struct => {
                 if let Some(declaration) = self.parse_struct() {
-                    self.tree.items.push(Item::Struct(declaration));
+                    self.tree.push_item(self.source, Item::Struct(declaration));
                 }
             }
             TokenKind::Enum => {
                 if let Some(declaration) = self.parse_enum() {
-                    self.tree.items.push(Item::Enum(declaration));
+                    self.tree.push_item(self.source, Item::Enum(declaration));
                 }
             }
             TokenKind::Type => {
                 if let Some(declaration) = self.parse_type_alias() {
-                    self.tree.items.push(Item::TypeAlias(declaration));
+                    self.tree
+                        .push_item(self.source, Item::TypeAlias(declaration));
                 }
             }
-            TokenKind::Class | TokenKind::Import | TokenKind::Identifier => {
-                self.parse_unsupported_item()
+            TokenKind::Import => {
+                if let Some(declaration) = self.parse_import() {
+                    self.tree.push_item(self.source, Item::Import(declaration));
+                }
             }
+            TokenKind::Class | TokenKind::Identifier => self.parse_unsupported_item(),
             _ => {
                 // Stray token at top level: skip it with a diagnostic.
                 let span = self.current().span;
@@ -101,7 +105,7 @@ impl Parser<'_> {
         }
         if self.at(TokenKind::Function) {
             if let Some(function) = self.parse_function(is_main, execution) {
-                self.tree.items.push(Item::Function(function));
+                self.tree.push_item(self.source, Item::Function(function));
             }
         } else {
             // Annotated non-function construct: parse-don't-crash.
@@ -479,7 +483,64 @@ impl Parser<'_> {
         )
     }
 
+    /// Parses `import Module[.Sub…] [as Alias]`.
+    ///
+    /// Recovery: a malformed path yields no item at all rather than a partial
+    /// one, because an import with no module names nothing a later phase could
+    /// resolve — the parser has already said what was wrong, and inventing a
+    /// module would produce a second, misleading "unresolved import".
+    fn parse_import(&mut self) -> Option<ImportDecl> {
+        let start = self.current().span;
+        self.expect(TokenKind::Import);
+        let mut path = Vec::new();
+        let path_start = self.current().span;
+        loop {
+            if !self.at(TokenKind::Identifier) {
+                self.error(
+                    self.current().span,
+                    "KPAR016",
+                    "expected a module name after `import`",
+                );
+                return None;
+            }
+            let span = self.current().span;
+            path.push(self.intern_span(span));
+            self.bump();
+            if !self.eat(TokenKind::Dot) {
+                break;
+            }
+        }
+        let path_span = Span::from_bounds(path_start.start, self.previous_end());
+        // `as` is a keyword, so the alias clause needs no contextual lookahead.
+        let (alias, alias_span) = if self.eat(TokenKind::As) {
+            if self.at(TokenKind::Identifier) {
+                let span = self.current().span;
+                let symbol = self.intern_span(span);
+                self.bump();
+                (Some(symbol), Some(span))
+            } else {
+                self.error(self.current().span, "KPAR017", "expected a name after `as`");
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+        let span = Span::from_bounds(start.start, self.previous_end());
+        Some(ImportDecl {
+            path,
+            path_span,
+            alias,
+            alias_span,
+            span,
+        })
+    }
+
     /// Parses a written type: a name, or `[` element `]`, nested to any depth.
+    ///
+    /// A name may be **module-qualified** (`Support.Point`). The qualifier is
+    /// kept in the interned name — a dot cannot appear in an identifier, so a
+    /// qualified spelling can never collide with a declared one — and semantics
+    /// is what strips it against the file's imports.
     pub(crate) fn parse_type_ref(&mut self) -> TypeRefId {
         if self.at(TokenKind::LBracket) {
             let start = self.current().span;
@@ -490,9 +551,18 @@ impl Parser<'_> {
             return self.tree.add_type(TypeRef::Array { element, span });
         }
         if self.at(TokenKind::Identifier) {
-            let span = self.current().span;
-            let name = self.intern_span(span);
+            let start = self.current().span;
+            let mut text = self.text_of(start).to_owned();
             self.bump();
+            while self.at(TokenKind::Dot) && self.peek(1).kind == TokenKind::Identifier {
+                self.bump(); // `.`
+                let segment = self.current().span;
+                text.push('.');
+                text.push_str(self.text_of(segment));
+                self.bump();
+            }
+            let span = Span::from_bounds(start.start, self.previous_end());
+            let name = self.intern_text(&text, span);
             return self.tree.add_type(TypeRef::Named { name, span });
         }
         let span = self.current().span;
@@ -549,9 +619,10 @@ impl Parser<'_> {
             }
         }
         let span = Span::from_bounds(start.start, self.previous_end());
-        self.tree
-            .items
-            .push(Item::Unsupported(UnsupportedItem { keyword, span }));
+        self.tree.push_item(
+            self.source,
+            Item::Unsupported(UnsupportedItem { keyword, span }),
+        );
         let file_span = FileSpan::new(self.source, span);
         let mut diagnostic = Diagnostic::single(
             Severity::Error,

@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 kira-source.workspace = true
 kira-diagnostics.workspace = true
+kira-program-graph.workspace = true
 kira-semantics.workspace = true
 kira-ir.workspace = true
 kira-semantics-model.workspace = true

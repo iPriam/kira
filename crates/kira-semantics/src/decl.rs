@@ -20,10 +20,13 @@ impl Analyzer<'_> {
     /// than something to detect after the fact — which is also what lets
     /// `StructTable::owns_heap` recurse without a visited set.
     pub(crate) fn collect_structs(&mut self) {
-        for item in &self.tree.items {
+        let tree = self.tree;
+        for (source, item) in tree.items_with_source() {
             let Item::Struct(declaration) = item else {
                 continue;
             };
+            // Field types resolve against the imports of the declaring file.
+            self.source = source;
             let (def, defaults) = self.resolve_struct_def(declaration);
             let name = def.name.clone();
             match self.program.types.structs_mut().declare(def) {

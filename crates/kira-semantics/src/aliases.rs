@@ -60,10 +60,13 @@ impl Analyzer<'_> {
     /// silently-ignored `type Int = Float` would type-check as `Int` and give a
     /// wrong answer instead of an error.
     pub(crate) fn collect_type_aliases(&mut self) {
-        for item in &self.tree.items {
+        let tree = self.tree;
+        for (source, item) in tree.items_with_source() {
             let Item::TypeAlias(declaration) = item else {
                 continue;
             };
+            // An alias is written in one file, so its diagnostics point there.
+            self.source = source;
             let name = self.interner.resolve(declaration.name).to_owned();
             if let Some(what) = self.alias_name_collision(&name) {
                 self.emit(
@@ -94,7 +97,7 @@ impl Analyzer<'_> {
         }
         // The struct and enum tables are empty at this point, so the check runs
         // against the declarations as written.
-        for item in &self.tree.items {
+        for item in self.tree.items() {
             let (kind, declared) = match item {
                 Item::Struct(declaration) => ("struct", declaration.name),
                 Item::Enum(declaration) => ("enum", declaration.name),

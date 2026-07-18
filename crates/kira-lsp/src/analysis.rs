@@ -25,27 +25,49 @@ pub struct Analysis {
     pub file: SourceFile,
 }
 
-/// The source id every single-file analysis uses.
+/// The source id the document being edited is analyzed under.
 ///
-/// Kira has no modules yet: one document is one program, and the frontend pins
-/// it at this id. A diagnostic pointing anywhere else is one this server cannot
-/// place, and it says so rather than guessing.
+/// A program is no longer one file: the document is the *entry* file, and every
+/// module it imports is analyzed alongside it under a later id. This server
+/// publishes diagnostics for one document at a time — that is what the protocol
+/// asks of it — so a diagnostic pointing into an imported module belongs to a
+/// different file's squiggles and is dropped here rather than misplaced onto
+/// this one. Opening that module analyzes it in turn and shows the same
+/// diagnostic where it lives.
 pub const DOCUMENT_SOURCE: SourceId = FILE_SOURCE_ID;
 
-/// Analyzes one document's text.
+/// Analyzes one document's text, together with the modules it imports.
+///
+/// The document's own directory is the module root, so `import support` in
+/// `~/app/main.kira` reads `~/app/support.kira` **from disk** — the version on
+/// disk, not an unsaved editor buffer. That is a real limitation and a
+/// deliberate one: routing an open buffer into the module set means the server
+/// owning a document store keyed by module path, and a wrong answer from a
+/// stale buffer is worse than a right answer from a saved file.
 ///
 /// A fresh database per call: salsa's incrementality is wasted here, because a
 /// new `SourceProgram` input on each keystroke invalidates everything
 /// downstream of it anyway. Reusing one database across edits is the
-/// optimization this wants, and it is worth doing when a document is big enough
-/// to notice — v0 programs are one file and analysis is microseconds.
+/// optimization this wants, and it is worth doing when a program is big enough
+/// to notice.
 pub fn analyze(path: &str, text: &str) -> Analysis {
+    let modules = kira_program_graph::load_modules(std::path::Path::new(path), text);
     let db = salsa::DatabaseImpl::new();
-    let source = SourceProgram::new(&db, text.to_owned(), path.to_owned());
+    let source = SourceProgram::new(&db, text.to_owned(), path.to_owned(), modules);
     let _ = kira_semantics::analyzed(&db, source);
     let diagnostics = kira_semantics::analyzed::accumulated::<DiagnosticAccumulator>(&db, source)
         .into_iter()
         .map(|accumulated| accumulated.0.clone())
+        // A diagnostic in an imported module is that module's to show. The
+        // conversion layer drops any label outside `DOCUMENT_SOURCE` anyway;
+        // filtering here is what keeps a module's error from arriving as a
+        // span-less entry pinned to line 1 of this document.
+        .filter(|diagnostic: &Diagnostic| {
+            diagnostic
+                .labels
+                .iter()
+                .any(|label| label.span.source == DOCUMENT_SOURCE)
+        })
         .collect();
 
     Analysis {
@@ -266,6 +288,69 @@ mod tests {
             .expect("a non-exhaustive match is reported");
         assert_eq!(diagnostic.severity, Severity::Error);
         assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
+    }
+
+    /// Imports are the first feature that makes the server multi-file, and
+    /// this is where that stops being a claim.
+    ///
+    /// The server analyzes the document as the *entry* file of a program and
+    /// reads the modules it imports off disk, so a name that only a sibling
+    /// module declares resolves in the editor exactly as it does for
+    /// `kirac check` — and an import that names no file squiggles.
+    #[test]
+    fn imports_analyze_the_way_the_compiler_does() {
+        let directory = std::env::temp_dir().join(format!(
+            "kira_lsp_imports_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).expect("temp dir");
+        std::fs::write(
+            directory.join("support.kira"),
+            "function supportValue() -> Int { return 42 }",
+        )
+        .expect("write module");
+        let entry = directory.join("main.kira");
+        let path = entry.to_string_lossy().into_owned();
+
+        let clean = analyze(
+            &path,
+            "import support as Support\n\
+             @Main function main() { print(Support.supportValue()) return }",
+        );
+        assert!(clean.diagnostics.is_empty(), "{:?}", clean.diagnostics);
+
+        let missing = analyze(
+            &path,
+            "import nowhere\n@Main function main() { print(1) return }",
+        );
+        let diagnostic = missing
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == Some("KSEM032"))
+            .expect("an unresolved import is reported");
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
+
+        // A file-scoped rule is what makes this the editor's problem too: the
+        // sibling imports nothing, so its qualified reference does not resolve
+        // — and the squiggle belongs to the sibling, not to this document.
+        std::fs::write(
+            directory.join("leak.kira"),
+            "function leakValue() -> Int { return support.supportValue() }",
+        )
+        .expect("write module");
+        let leaking = analyze(
+            &path,
+            "import support\nimport leak\n@Main function main() { print(leakValue()) return }",
+        );
+        assert!(
+            leaking.diagnostics.is_empty(),
+            "a sibling module's error is not pinned onto this document: {:?}",
+            leaking.diagnostics
+        );
+
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]

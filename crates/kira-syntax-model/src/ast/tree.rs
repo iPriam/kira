@@ -1,6 +1,7 @@
 //! The whole-file container and the arena handle types every node references.
 
 use super::{Expr, Item, Stmt, TypeRef};
+use kira_source::SourceId;
 use la_arena::{Arena, Idx};
 
 /// Handle to an expression stored in a [`SyntaxTree`].
@@ -10,11 +11,22 @@ pub type StmtId = Idx<Stmt>;
 /// Handle to a written type reference stored in a [`SyntaxTree`].
 pub type TypeRefId = Idx<TypeRef>;
 
-/// A whole parsed source file: its top-level items plus the node arenas.
+/// A whole parsed program: the top-level items of every file it is built from,
+/// plus the node arenas they all share.
+///
+/// One tree spans **many files**. Imports are file-scoped, so resolution has to
+/// know which file each item came from; `items` and `item_sources` carry that,
+/// and they are kept in step by construction — [`SyntaxTree::push_item`] is the
+/// only way to add an item and it pushes to both, so `item_sources[i]` always
+/// describes `items[i]`. Both are private for exactly that reason; read them
+/// through [`SyntaxTree::items`] and [`SyntaxTree::items_with_source`].
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SyntaxTree {
-    /// Top-level items in source order.
-    pub items: Vec<Item>,
+    /// Top-level items, dependency modules first and each file's items in
+    /// source order.
+    items: Vec<Item>,
+    /// The file each item came from, positionally aligned with `items`.
+    item_sources: Vec<SourceId>,
     /// Arena backing every [`ExprId`].
     pub exprs: Arena<Expr>,
     /// Arena backing every [`StmtId`].
@@ -27,6 +39,26 @@ impl SyntaxTree {
     /// Creates an empty tree.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Appends a top-level item, recording the file it was written in.
+    pub fn push_item(&mut self, source: SourceId, item: Item) {
+        self.items.push(item);
+        self.item_sources.push(source);
+    }
+
+    /// Every top-level item, in order.
+    pub fn items(&self) -> &[Item] {
+        &self.items
+    }
+
+    /// Every top-level item paired with the file it was written in.
+    ///
+    /// Total by construction: the pairing comes from zipping two vectors that
+    /// only [`SyntaxTree::push_item`] ever grows, so there is no index to get
+    /// wrong and nothing to unwrap.
+    pub fn items_with_source(&self) -> impl Iterator<Item = (SourceId, &Item)> {
+        self.item_sources.iter().copied().zip(self.items.iter())
     }
 
     /// Interns an expression node, returning its handle.

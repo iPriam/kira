@@ -18,9 +18,37 @@ pub enum Item {
     Enum(EnumDecl),
     /// A `type Name = Target` alias.
     TypeAlias(TypeAliasDecl),
+    /// An `import Module [as Alias]` declaration.
+    Import(ImportDecl),
     /// A construct the v0 subset parses but does not yet analyze (class,
     /// import, …); recorded so semantics can report it cleanly.
     Unsupported(UnsupportedItem),
+}
+
+/// An `import Module [as Alias]` declaration.
+///
+/// Imports are **file-scoped**: an import written in one file says nothing
+/// about its siblings, so the declaration is recorded as an ordinary item and
+/// the file it came from — which [`SyntaxTree`](super::SyntaxTree) tracks
+/// alongside every item — is what gives it its scope.
+///
+/// The module path is dotted (`Foundation.Web`), stored one segment per
+/// element; a single-segment path is the common case. The alias is the name the
+/// file spells the module's namespace root with; when none is written the last
+/// segment serves.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportDecl {
+    /// The dotted module path, one symbol per segment. Never empty for a
+    /// well-formed import.
+    pub path: Vec<Symbol>,
+    /// Span covering the whole dotted path, for diagnostics about the module.
+    pub path_span: Span,
+    /// The `as Alias` name, when one was written.
+    pub alias: Option<Symbol>,
+    /// Span of the alias token, when one was written.
+    pub alias_span: Option<Span>,
+    /// Span covering the whole declaration.
+    pub span: Span,
 }
 
 /// A `type Name = Target` alias: a second spelling for one written type.
