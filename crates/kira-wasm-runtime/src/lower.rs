@@ -18,7 +18,7 @@ use kira_semantics_model::Type;
 use crate::arrays::ArrayCopies;
 use crate::encode::ValType;
 use crate::error::WasmError;
-use crate::func::{BlockType::Empty, Func, FuncIdx, LocalIdx};
+use crate::func::{BlockType, BlockType::Empty, Func, FuncIdx, LocalIdx};
 use crate::literals::Literals;
 use crate::rt::Runtime;
 use crate::structs::{Structs, load_field, store_field};
@@ -495,9 +495,42 @@ impl<'a> Lowering<'a> {
                         self.expr(func, function, *operand)?;
                         func.i32_eqz();
                     }
+                    // wasm has no integer complement either, and `x ^ -1` is
+                    // the identity that gives it: every bit flipped.
+                    IrUnOp::BitNot => {
+                        self.expr(func, function, *operand)?;
+                        func.i64_const(-1);
+                        func.i64_xor();
+                    }
                 }
             }
             IrExpr::Binary { op, lhs, rhs } => self.binary(func, function, *op, *lhs, *rhs)?,
+            // A `? :` is exactly wasm's value-typed `if`: the condition is
+            // consumed, one arm runs, and the block's result type is what both
+            // arms leave. `Void` never reaches here — the analyzer rejects a
+            // conditional whose branches produce nothing — so the block always
+            // has a value type.
+            IrExpr::Select {
+                cond,
+                then,
+                otherwise,
+                ty,
+            } => {
+                let (cond, then, otherwise, ty) = (*cond, *then, *otherwise, *ty);
+                // `value_of`, not `val_type`: a branch yielding a `String`,
+                // struct, array, or enum yields an *address*, which is as wide
+                // as the memory is. Naming the narrow type here would validate
+                // on wasm32 and fail to validate on wasm64.
+                let val = self
+                    .value_of(ty, func.addr().val())?
+                    .ok_or(WasmError::UnsupportedOperator)?;
+                self.expr(func, function, cond)?;
+                func.if_(BlockType::Value(val));
+                self.expr(func, function, then)?;
+                func.else_();
+                self.expr(func, function, otherwise)?;
+                func.end();
+            }
             IrExpr::Call {
                 callee,
                 args,

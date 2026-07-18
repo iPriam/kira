@@ -502,6 +502,10 @@ impl Vm<'_> {
                 let value = self.pop_bool()?;
                 self.stack.push(Value::Bool(!value));
             }
+            Instruction::BitNot => {
+                let value = self.pop_int()?;
+                self.stack.push(Value::Int(!value));
+            }
             Instruction::NegInt => {
                 let value = self.pop_int()?;
                 self.stack.push(Value::Int(value.wrapping_neg()));

@@ -223,6 +223,9 @@ impl Parser<'_> {
             | TokenKind::LParen
             | TokenKind::Minus
             | TokenKind::Bang
+            // `return ~mask` — `~` is a prefix operator like `-` and `!`, so
+            // it starts an expression the same way they do.
+            | TokenKind::Tilde
             // `return [1, 2, 3]` — an array literal is a value like any
             // other, so `[` starts an expression.
             | TokenKind::LBracket => true,

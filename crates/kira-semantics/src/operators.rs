@@ -22,6 +22,10 @@ pub(crate) fn resolve_unary(op: UnaryOp, operand: Type) -> Option<(HirUnaryOp, T
         (UnaryOp::Neg, Type::Int(_)) => Some((HirUnaryOp::NegInt, operand)),
         (UnaryOp::Neg, Type::Float(_)) => Some((HirUnaryOp::NegFloat, operand)),
         (UnaryOp::Not, Type::Bool) => Some((HirUnaryOp::Not, Type::Bool)),
+        // `~` keeps the operand's spelling for the same reason `-` does: it is
+        // one instruction on the raw bit pattern at every width and under
+        // either signedness.
+        (UnaryOp::BitNot, Type::Int(_)) => Some((HirUnaryOp::BitNot, operand)),
         _ => None,
     }
 }
@@ -55,11 +59,30 @@ fn unify_numeric(lt: Type, rt: Type) -> Option<Type> {
     compatible.then_some(lt)
 }
 
+/// The type the two branches of a `? :` agree on, or `None` when they do not.
+///
+/// Agreement is the same relation arithmetic uses, for the same reason: a bare
+/// integer or float literal is a wildcard that pairs with any written width, so
+/// `wide ? 0 : u8Value` types as `U8` without a conversion rule, while two
+/// *different* written widths agree on nothing. Everything non-numeric must
+/// match exactly — there is no widening and no common supertype, because the
+/// language has no subtyping.
+///
+/// When both are numeric the **then** branch decides the spelling, mirroring
+/// the left-operand rule in [`unify_numeric`].
+pub(crate) fn unify_branches(then: Type, otherwise: Type) -> Option<Type> {
+    if then == otherwise {
+        return Some(then);
+    }
+    unify_numeric(then, otherwise)
+}
+
 /// The symbolic spelling of a unary operator, for diagnostics.
 pub(crate) fn unary_spelling(op: UnaryOp) -> &'static str {
     match op {
         UnaryOp::Neg => "-",
         UnaryOp::Not => "!",
+        UnaryOp::BitNot => "~",
     }
 }
 
@@ -74,8 +97,59 @@ pub(crate) fn resolve_binary(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBin
         B::Eq | B::Ne => equality(op, lt, rt),
         B::And if lt == Type::Bool && rt == Type::Bool => Some((H::And, Type::Bool)),
         B::Or if lt == Type::Bool && rt == Type::Bool => Some((H::Or, Type::Bool)),
+        B::BitAnd | B::BitOr | B::BitXor => bitwise(op, lt, rt),
+        B::Shl | B::Shr => shift(op, lt, rt),
         _ => None,
     }
+}
+
+/// `&`, `|`, and `^`: two integers agreeing on a spelling, result that type.
+///
+/// These unify exactly as `+` does rather than demanding identical spellings,
+/// so a bare integer literal is usable as a mask at any width — `flags & 0x0f`
+/// types the same way `flags + 1` does. Floats, strings, and `Bool` are
+/// rejected: there is no bitwise `Bool` operator, because `&&`/`||` already
+/// occupy that meaning and are short-circuiting where these are not.
+fn bitwise(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
+    use BinaryOp as B;
+    use HirBinaryOp as H;
+    let ty = unify_numeric(lt, rt)?;
+    if !matches!(ty, Type::Int(_)) {
+        return None;
+    }
+    let hir = match op {
+        B::BitAnd => H::BitAnd,
+        B::BitOr => H::BitOr,
+        B::BitXor => H::BitXor,
+        _ => return None,
+    };
+    Some((hir, ty))
+}
+
+/// `<<` and `>>`: the result takes the **left** operand's type, and the shift
+/// amount may be any integer spelling.
+///
+/// A shift is the one binary operator whose two operands are not required to
+/// agree, and deliberately so: the right side is a count, not a value of the
+/// same kind, so `u8Flags << i64Places` is well typed where `u8Flags +
+/// i64Places` is not. Signedness is read off the left operand alone, which is
+/// what decides whether `>>` propagates the sign or fills with zeros.
+///
+/// The shift amount is taken modulo 64 at run time on every backend rather than
+/// trapping, so a count of 64 or more is defined rather than undefined.
+fn shift(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
+    use BinaryOp as B;
+    use HirBinaryOp as H;
+    if !matches!(lt, Type::Int(_)) || !matches!(rt, Type::Int(_)) {
+        return None;
+    }
+    let hir = match op {
+        B::Shl => H::Shl,
+        B::Shr if lt.is_unsigned_int() => H::ShrUInt,
+        B::Shr => H::ShrInt,
+        _ => return None,
+    };
+    Some((hir, lt))
 }
 
 fn arithmetic(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {

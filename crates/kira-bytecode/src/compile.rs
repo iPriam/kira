@@ -373,6 +373,12 @@ impl FnCompiler<'_> {
                 self.code.push(unary_instruction(op));
             }
             IrExpr::Binary { op, lhs, rhs } => self.compile_binary(*op, *lhs, *rhs)?,
+            IrExpr::Select {
+                cond,
+                then,
+                otherwise,
+                ..
+            } => self.compile_select(*cond, *then, *otherwise)?,
             IrExpr::StructNew { fields, .. } => {
                 let fields = fields.clone();
                 let count =
@@ -515,6 +521,26 @@ impl FnCompiler<'_> {
         self.patch_to_here(to_end)
     }
 
+    /// `c ? a : b`: evaluate exactly one branch.
+    ///
+    /// The same jump-and-patch shape as `&&`/`||`, which is why a conditional
+    /// expression needs no opcode of its own: the branch already exists, and
+    /// both branches leave one value on the stack, so the join is implicit.
+    fn compile_select(
+        &mut self,
+        cond: IrExprId,
+        then: IrExprId,
+        otherwise: IrExprId,
+    ) -> Result<(), CompileError> {
+        self.compile_expr(cond)?;
+        let to_else = self.emit_placeholder_jump_if_false();
+        self.compile_expr(then)?;
+        let to_end = self.emit_placeholder_jump();
+        self.patch_to_here(to_else)?;
+        self.compile_expr(otherwise)?;
+        self.patch_to_here(to_end)
+    }
+
     /// `a || b`: evaluate `b` only when `a` is false.
     fn compile_or(&mut self, lhs: IrExprId, rhs: IrExprId) -> Result<(), CompileError> {
         self.compile_expr(lhs)?;
@@ -619,6 +645,7 @@ fn unary_instruction(op: IrUnOp) -> Instruction {
         IrUnOp::NegInt => Instruction::NegInt,
         IrUnOp::NegFloat => Instruction::NegFloat,
         IrUnOp::Not => Instruction::Not,
+        IrUnOp::BitNot => Instruction::BitNot,
     }
 }
 
@@ -656,6 +683,12 @@ fn binary_instruction(op: IrBinOp) -> Result<Instruction, CompileError> {
         IrBinOp::NeBool => Instruction::NeBool,
         IrBinOp::EqStr => Instruction::EqStr,
         IrBinOp::NeStr => Instruction::NeStr,
+        IrBinOp::BitAnd => Instruction::BitAnd,
+        IrBinOp::BitOr => Instruction::BitOr,
+        IrBinOp::BitXor => Instruction::BitXor,
+        IrBinOp::Shl => Instruction::Shl,
+        IrBinOp::ShrInt => Instruction::ShrInt,
+        IrBinOp::ShrUInt => Instruction::ShrUInt,
         // Short-circuit operators are compiled as control flow, never as a
         // single opcode; reaching here is a compiler bug surfaced typed.
         IrBinOp::And | IrBinOp::Or => return Err(CompileError::ShortCircuitOpcode),

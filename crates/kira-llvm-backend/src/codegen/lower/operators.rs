@@ -7,6 +7,7 @@
 //! the rules the VM fixes have one place to be mirrored.
 
 use kira_ir::{IrBinOp, IrExprId, IrUnOp};
+use kira_semantics_model::Type;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 use llvm_sys::{LLVMIntPredicate, LLVMRealPredicate};
@@ -25,7 +26,10 @@ impl FunctionLowering<'_, '_> {
             match op {
                 IrUnOp::NegInt => LLVMBuildNeg(builder, value, c"neg".as_ptr()),
                 IrUnOp::NegFloat => LLVMBuildFNeg(builder, value, c"fneg".as_ptr()),
-                IrUnOp::Not => LLVMBuildNot(builder, value, c"not".as_ptr()),
+                // `!` on an `i1` and `~` on an `i64` are the same instruction:
+                // LLVM's `not` complements every bit of whatever width it is
+                // given, which for a one-bit boolean is logical negation.
+                IrUnOp::Not | IrUnOp::BitNot => LLVMBuildNot(builder, value, c"not".as_ptr()),
             }
         }
     }
@@ -76,6 +80,24 @@ impl FunctionLowering<'_, '_> {
                 }
                 IrBinOp::EqStr | IrBinOp::NeStr => {
                     return Ok(self.lower_string_compare(op, left, right));
+                }
+                IrBinOp::BitAnd => LLVMBuildAnd(builder, left, right, c"and".as_ptr()),
+                IrBinOp::BitOr => LLVMBuildOr(builder, left, right, c"or".as_ptr()),
+                IrBinOp::BitXor => LLVMBuildXor(builder, left, right, c"xor".as_ptr()),
+                // The one place LLVM would disagree with the VM: a shift by 64
+                // or more is *poison* for `shl`/`lshr`/`ashr`, where the VM and
+                // wasm both take the amount modulo 64. Masking the amount here
+                // is what makes the three backends agree, and it costs an `and`
+                // that the optimizer drops whenever the count is a constant in
+                // range.
+                IrBinOp::Shl | IrBinOp::ShrInt | IrBinOp::ShrUInt => {
+                    let mask = LLVMConstInt(self.codegen.types.i64, 63, 0);
+                    let amount = LLVMBuildAnd(builder, right, mask, c"shamt".as_ptr());
+                    match op {
+                        IrBinOp::Shl => LLVMBuildShl(builder, left, amount, c"shl".as_ptr()),
+                        IrBinOp::ShrUInt => LLVMBuildLShr(builder, left, amount, c"lshr".as_ptr()),
+                        _ => LLVMBuildAShr(builder, left, amount, c"ashr".as_ptr()),
+                    }
                 }
                 other => {
                     let predicate = integer_predicate(other);
@@ -257,6 +279,63 @@ impl FunctionLowering<'_, '_> {
     ///
     /// `short_circuit_on` is the left value that fixes the result: `true` for
     /// `||`, `false` for `&&`.
+    /// Lowers `cond ? then : otherwise`.
+    ///
+    /// A branch and a phi, not `LLVMBuildSelect`: a select evaluates **both**
+    /// operands, which a conditional expression must never do — one branch may
+    /// divide by zero, index out of bounds, or call a function with an effect.
+    /// This is the same shape [`Self::lower_short_circuit`] uses, generalized
+    /// to any result type instead of `i1`.
+    pub(super) fn lower_select(
+        &mut self,
+        cond: IrExprId,
+        then: IrExprId,
+        otherwise: IrExprId,
+        ty: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let condition = self.lower_expr(cond)?;
+        let function = self.current_function();
+        let then_block = self.append_block(function, c"sel.then");
+        let else_block = self.append_block(function, c"sel.else");
+        let done_block = self.append_block(function, c"sel.end");
+        let builder = self.codegen.builder;
+
+        // SAFETY: all three blocks belong to the function being built and
+        // `condition` is an `i1`; each block is terminated exactly once below.
+        unsafe { LLVMBuildCondBr(builder, condition, then_block, else_block) };
+
+        self.position_at(then_block);
+        let then_value = self.lower_expr(then)?;
+        // SAFETY: the then block is unterminated; join it to the end. The exit
+        // block is re-read rather than assumed, because lowering the branch may
+        // itself have created blocks (a nested conditional, or a division).
+        let then_exit = unsafe {
+            LLVMBuildBr(builder, done_block);
+            LLVMGetInsertBlock(builder)
+        };
+
+        self.position_at(else_block);
+        let else_value = self.lower_expr(otherwise)?;
+        // SAFETY: as above, for the else branch.
+        let else_exit = unsafe {
+            LLVMBuildBr(builder, done_block);
+            LLVMGetInsertBlock(builder)
+        };
+
+        let llvm_type = self.codegen.llvm_type(ty)?;
+        self.position_at(done_block);
+        // SAFETY: the phi joins the two predecessors just built, both of
+        // `llvm_type` — the analyzer proved the branches share a Kira type.
+        let result = unsafe {
+            let phi = LLVMBuildPhi(builder, llvm_type, c"sel".as_ptr());
+            let mut values = [then_value, else_value];
+            let mut blocks = [then_exit, else_exit];
+            LLVMAddIncoming(phi, values.as_mut_ptr(), blocks.as_mut_ptr(), 2);
+            phi
+        };
+        Ok(result)
+    }
+
     fn lower_short_circuit(
         &mut self,
         lhs: IrExprId,

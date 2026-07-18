@@ -230,6 +230,24 @@ pub enum HirExpr {
         /// The result type.
         ty: Type,
     },
+    /// A conditional expression, `cond ? then : otherwise`.
+    ///
+    /// Kept as a node rather than desugared: a `? :` can sit anywhere an
+    /// expression can, and rewriting it into an `if` statement over a temporary
+    /// would need statement hoisting out of arbitrary expression position,
+    /// which this lowering deliberately does not do. Every backend already
+    /// branches at expression level for `&&`/`||`, so the node costs a reuse of
+    /// that machinery rather than new machinery.
+    Select {
+        /// The `Bool` condition.
+        cond: HirExprId,
+        /// The value when the condition holds.
+        then: HirExprId,
+        /// The value when it does not.
+        otherwise: HirExprId,
+        /// The type both branches agreed on.
+        ty: Type,
+    },
     /// A call to a builtin or user function.
     Call {
         /// What is being called.
@@ -355,6 +373,7 @@ impl HirExpr {
             HirExpr::Local { ty, .. }
             | HirExpr::Unary { ty, .. }
             | HirExpr::Binary { ty, .. }
+            | HirExpr::Select { ty, .. }
             | HirExpr::Call { ty, .. }
             | HirExpr::Field { ty, .. }
             | HirExpr::ArrayNew { ty, .. }
@@ -396,6 +415,8 @@ pub enum HirUnaryOp {
     NegFloat,
     /// Boolean negation.
     Not,
+    /// Bitwise complement (`~`) on the raw 64-bit pattern.
+    BitNot,
 }
 
 /// A type-resolved binary operator: each variant fixes its operand types, so
@@ -478,4 +499,24 @@ pub enum HirBinaryOp {
     And,
     /// Short-circuiting logical OR.
     Or,
+    /// Bitwise AND (`&`) on the raw 64-bit pattern.
+    ///
+    /// The three bitwise operators need no unsigned twin for the same reason
+    /// `+` does not: they act on bits, and a bit has no sign.
+    BitAnd,
+    /// Bitwise OR (`|`) on the raw 64-bit pattern.
+    BitOr,
+    /// Bitwise XOR (`^`) on the raw 64-bit pattern.
+    BitXor,
+    /// Left shift (`<<`). The shift amount is taken modulo 64.
+    ///
+    /// Signedness-free: shifting bits left discards the high end either way.
+    Shl,
+    /// Arithmetic right shift (`>>`), sign-propagating — the signed spellings.
+    ///
+    /// Unlike `<<`, `>>` *does* need an unsigned twin: what fills the vacated
+    /// high bits is exactly the question signedness answers.
+    ShrInt,
+    /// Logical right shift (`>>`), zero-filling — the `U8`..`U64` spellings.
+    ShrUInt,
 }
