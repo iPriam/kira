@@ -5,6 +5,7 @@
 //! that are control flow rather than instructions.
 
 use kira_ir::{IrExpr, IrExprId, IrPlace};
+use kira_runtime_abi::EnumPayloadKind;
 use kira_semantics_model::Type;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
@@ -265,7 +266,8 @@ impl FunctionLowering<'_, '_> {
         ))
     }
 
-    /// Encodes a payload value into `(owns_str, payload_word)` for the enum box.
+    /// Encodes a payload value into `(payload_kind, payload_word)` for the enum
+    /// box.
     fn encode_enum_payload(
         &mut self,
         ty: Type,
@@ -282,8 +284,11 @@ impl FunctionLowering<'_, '_> {
                     LLVMBuildBitCast(builder, value, types.i64, c"enum.float.bits".as_ptr())
                 }
                 Type::Bool => LLVMBuildZExt(builder, value, types.i64, c"enum.bool.bits".as_ptr()),
-                Type::String => {
-                    LLVMBuildPtrToInt(builder, value, types.i64, c"enum.str.bits".as_ptr())
+                // A nested enum is a handle exactly as a `String` is, so it
+                // encodes the same way; only the kind the box records differs,
+                // which is what makes its clone/free recurse.
+                Type::String | Type::Enum(_) => {
+                    LLVMBuildPtrToInt(builder, value, types.i64, c"enum.handle.bits".as_ptr())
                 }
                 _ => {
                     return Err(LlvmError::Unsupported(
@@ -292,10 +297,8 @@ impl FunctionLowering<'_, '_> {
                 }
             }
         };
-        let owns_str = self
-            .codegen
-            .const_int(i64::from(matches!(ty, Type::String)));
-        Ok((owns_str, word))
+        let kind = self.codegen.const_int(payload_kind(ty));
+        Ok((kind, word))
     }
 
     /// Reads an enum value's discriminant tag as an `Int`.
@@ -357,8 +360,8 @@ impl FunctionLowering<'_, '_> {
                 Type::Bool => {
                     LLVMBuildTrunc(builder, word, types.i1, c"enum.payload.bool".as_ptr())
                 }
-                Type::String => {
-                    LLVMBuildIntToPtr(builder, word, types.ptr, c"enum.payload.str".as_ptr())
+                Type::String | Type::Enum(_) => {
+                    LLVMBuildIntToPtr(builder, word, types.ptr, c"enum.payload.handle".as_ptr())
                 }
                 _ => {
                     return Err(LlvmError::Unsupported(
@@ -367,5 +370,50 @@ impl FunctionLowering<'_, '_> {
                 }
             })
         }
+    }
+}
+
+/// The payload kind the enum box records for a payload of type `ty`.
+///
+/// Mirrors `kira_native_bridge::enums`' `PAYLOAD_*` constants, which decide what
+/// the box's clone and free reclaim. The two are kept in step by
+/// `the_payload_kinds_match_the_runtime`, below — the backend and the runtime
+/// archive are compiled separately, so nothing but a test makes them agree.
+fn payload_kind(ty: Type) -> i64 {
+    match ty {
+        Type::String => EnumPayloadKind::STR,
+        Type::Enum(_) => EnumPayloadKind::ENUM,
+        _ => EnumPayloadKind::INERT,
+    }
+    .as_i64()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::payload_kind;
+    use kira_runtime_abi::EnumPayloadKind;
+    use kira_semantics_model::{EnumDef, EnumTable, Type};
+
+    /// The kinds this lowering emits are the ones the runtime interprets.
+    ///
+    /// A drift here is the silent failure the ABI marker exists to catch: the
+    /// symbols still resolve, and the box simply forgets to free its payload.
+    #[test]
+    fn the_payload_kinds_match_the_runtime() {
+        assert_eq!(payload_kind(Type::INT), EnumPayloadKind::INERT.as_i64());
+        assert_eq!(payload_kind(Type::Bool), EnumPayloadKind::INERT.as_i64());
+        assert_eq!(payload_kind(Type::String), EnumPayloadKind::STR.as_i64());
+        // An id is minted only by the table, so the test declares one.
+        let mut enums = EnumTable::new();
+        let id = enums
+            .declare(EnumDef {
+                name: "E".to_owned(),
+                variants: Vec::new(),
+            })
+            .expect("a fresh table accepts the first declaration");
+        assert_eq!(
+            payload_kind(Type::Enum(id)),
+            EnumPayloadKind::ENUM.as_i64()
+        );
     }
 }

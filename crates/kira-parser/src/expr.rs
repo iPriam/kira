@@ -106,6 +106,17 @@ impl Parser<'_> {
     }
 
     fn parse_unary(&mut self) -> ExprId {
+        // `try` binds like a prefix operator so `try f(n)` takes the whole
+        // call. Whether this position is one where a `try` is allowed at all is
+        // a question for analysis, not the parser.
+        if self.at(TokenKind::Try) {
+            let start = self.current().span;
+            self.bump(); // `try`
+            let value = self.parse_unary();
+            let value_span = self.tree.expr(value).span();
+            let span = Span::from_bounds(start.start, value_span.end());
+            return self.tree.add_expr(Expr::Try { value, span });
+        }
         if let Some(op) = self.ownership_op_here() {
             let start = self.current().span;
             self.bump(); // `move` / `copy`

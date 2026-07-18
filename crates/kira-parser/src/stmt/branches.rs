@@ -120,6 +120,75 @@ impl Parser<'_> {
         })
     }
 
+    /// Parses `attempt { … } handle { <Variant>[(<binding>)] { … } … }`.
+    ///
+    /// `handle` is matched as an *identifier*, not a keyword: the reference
+    /// lexes it as one, so `let handle = 1` has to keep working. That costs
+    /// nothing here — nothing else may follow an `attempt` body.
+    ///
+    /// A handler arm is spelled like a `match` arm with the `->` removed, and
+    /// becomes the same [`MatchArm`]. The arm's body is always a block: without
+    /// an arrow there is no way to tell a lone-statement arm from the next
+    /// arm's head, so the reference does not offer one.
+    pub(super) fn parse_attempt(&mut self) -> StmtId {
+        let start = self.current().span;
+        self.bump(); // `attempt`
+        let body = self.parse_block();
+
+        let mut handlers = Vec::new();
+        if self.at_word("handle") {
+            self.bump(); // `handle`
+            self.expect(TokenKind::LBrace);
+            while !self.at(TokenKind::RBrace) && !self.at_eof() {
+                match self.parse_handler_arm() {
+                    Some(arm) => handlers.push(arm),
+                    None => self.recover_to_next_arm(),
+                }
+            }
+            self.expect(TokenKind::RBrace);
+        } else {
+            self.error(
+                self.current().span,
+                "KPAR016",
+                "expected `handle` after an `attempt` body",
+            );
+        }
+
+        let span = Span::from_bounds(start.start, self.previous_end());
+        self.tree.add_stmt(Stmt::Attempt {
+            body,
+            handlers,
+            span,
+        })
+    }
+
+    /// Parses one `handle` arm, or reports and returns `None` when the head is
+    /// not a variant name.
+    fn parse_handler_arm(&mut self) -> Option<MatchArm> {
+        let start = self.current().span;
+        if !self.at(TokenKind::Identifier) {
+            self.error(
+                start,
+                "KPAR017",
+                "expected a failure variant name to start a `handle` arm",
+            );
+            return None;
+        }
+        let variant_span = self.current().span;
+        let variant = self.intern_span(variant_span);
+        self.bump();
+        let binding = self.parse_payload_binding();
+        let body = self.parse_block();
+        let span = Span::from_bounds(start.start, self.previous_end());
+        Some(MatchArm {
+            variant,
+            variant_span,
+            binding,
+            body,
+            span,
+        })
+    }
+
     /// Parses one `match` arm, or reports and returns `None` when the head is
     /// not a pattern.
     fn parse_match_arm(&mut self) -> Option<MatchArm> {
@@ -136,26 +205,7 @@ impl Parser<'_> {
         let variant = self.intern_span(variant_span);
         self.bump();
 
-        // `Label(text)` binds the variant's payload; `Red` binds nothing.
-        let binding = if self.eat(TokenKind::LParen) {
-            let binding = if self.at(TokenKind::Identifier) {
-                let span = self.current().span;
-                let name = self.intern_span(span);
-                self.bump();
-                Some(MatchBinding { name, span })
-            } else {
-                self.error(
-                    self.current().span,
-                    "KPAR015",
-                    "expected a name to bind the variant's payload to",
-                );
-                None
-            };
-            self.expect(TokenKind::RParen);
-            binding
-        } else {
-            None
-        };
+        let binding = self.parse_payload_binding();
 
         self.expect(TokenKind::Arrow);
         let body = self.parse_match_arm_body();
@@ -167,6 +217,31 @@ impl Parser<'_> {
             body,
             span,
         })
+    }
+
+    /// Parses an optional `(<name>)` payload binding after a variant name.
+    ///
+    /// Shared by `match` and `handle` arms, which spell it identically:
+    /// `Label(text)` binds the variant's payload, `Red` binds nothing.
+    fn parse_payload_binding(&mut self) -> Option<MatchBinding> {
+        if !self.eat(TokenKind::LParen) {
+            return None;
+        }
+        let binding = if self.at(TokenKind::Identifier) {
+            let span = self.current().span;
+            let name = self.intern_span(span);
+            self.bump();
+            Some(MatchBinding { name, span })
+        } else {
+            self.error(
+                self.current().span,
+                "KPAR015",
+                "expected a name to bind the variant's payload to",
+            );
+            None
+        };
+        self.expect(TokenKind::RParen);
+        binding
     }
 
     /// Parses an arm's body: a block as written, or a lone statement wrapped in
@@ -388,6 +463,85 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.code == Some("KPAR014")),
             "expected KPAR014, got {:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.tree.items().len(), 1, "the function still parses");
+    }
+
+    /// The shape of an `attempt`: a body, then arms with no arrow.
+    #[test]
+    fn an_attempt_parses_its_body_and_handler_arms() {
+        let (tree, stmts) = body(
+            "function f() { attempt { let v = try g() return v } \
+             handle { TooSmall { return 0 } TooBig(reason) { return 1 } } }",
+        );
+        let Stmt::Attempt { body, handlers, .. } = &stmts[0] else {
+            panic!("expected an attempt, got {:?}", stmts[0]);
+        };
+        assert_eq!(body.stmts.len(), 2);
+        assert_eq!(handlers.len(), 2);
+
+        // `TooSmall { … }` — no arrow, no binding.
+        assert!(handlers[0].binding.is_none());
+        assert_eq!(handlers[0].body.stmts.len(), 1);
+
+        // `TooBig(reason) { … }` — the binding is its own name.
+        let binding = handlers[1].binding.expect("the second arm binds a payload");
+        assert_ne!(binding.name, handlers[1].variant);
+
+        // The `try` is the whole initializer of the `let`, which is the one
+        // position analysis accepts it in.
+        let Stmt::Let { init, .. } = tree.stmt(body.stmts[0]) else {
+            panic!("expected a let");
+        };
+        assert!(matches!(
+            tree.expr(*init),
+            kira_syntax_model::ast::Expr::Try { .. }
+        ));
+    }
+
+    /// `handle` is an identifier, not a keyword — the reference lexes it as one,
+    /// so it has to stay usable as a name.
+    #[test]
+    fn handle_is_still_available_as_a_name() {
+        let (_, stmts) = body("function f() { let handle = 1 return handle }");
+        assert!(matches!(stmts[0], Stmt::Let { .. }));
+    }
+
+    /// An `attempt` body with no `handle` after it is reported, and the function
+    /// still parses.
+    #[test]
+    fn an_attempt_without_a_handle_is_reported_and_recovers() {
+        let result = parse(
+            SourceId::new(0),
+            "function f() { attempt { let v = try g() } }",
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == Some("KPAR016")),
+            "expected KPAR016, got {:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.tree.items().len(), 1, "the function still parses");
+    }
+
+    /// One unparseable handler arm is reported and skipped; the arms around it
+    /// survive.
+    #[test]
+    fn a_handler_arm_without_a_variant_name_is_reported_and_recovers() {
+        let result = parse(
+            SourceId::new(0),
+            "function f() { attempt { let v = try g() } \
+             handle { A { return 1 } 42 { return 2 } B { return 3 } } }",
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == Some("KPAR017")),
+            "expected KPAR017, got {:?}",
             result.diagnostics
         );
         assert_eq!(result.tree.items().len(), 1, "the function still parses");

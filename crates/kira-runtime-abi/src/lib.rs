@@ -17,10 +17,12 @@
 //! gains a filesystem, process, or thread dependency.
 
 pub mod bridge;
+pub mod enum_payload;
 pub mod execution;
 pub mod ownership;
 
 pub use bridge::{BridgeData, BridgeValue, BridgeValueTag};
+pub use enum_payload::EnumPayloadKind;
 pub use execution::Execution;
 pub use ownership::Ownership;
 
@@ -40,13 +42,13 @@ pub use ownership::Ownership;
 /// So the version is baked into a symbol name ([`RUNTIME_ABI_MARKER`]) that the
 /// backend emits a reference to. A stale archive does not define this version's
 /// marker, so the link fails by name instead of the program failing at runtime.
-pub const RUNTIME_ABI_VERSION: u32 = 1;
+pub const RUNTIME_ABI_VERSION: u32 = 2;
 
 /// The marker symbol the runtime archive defines and generated code references.
 ///
 /// Its name carries [`RUNTIME_ABI_VERSION`]; a test in `kira-native-bridge`
 /// fails if the archive's marker and this name ever drift apart.
-pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_1";
+pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_2";
 
 /// The symbols a hybrid host resolves out of a loaded native half by name.
 ///

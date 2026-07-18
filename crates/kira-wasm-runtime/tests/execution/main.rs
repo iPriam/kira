@@ -321,6 +321,7 @@ fn assert_parity(source: &str) {
 
 mod aliases;
 mod arrays;
+mod attempts;
 mod bitwise;
 mod calls;
 mod classes;

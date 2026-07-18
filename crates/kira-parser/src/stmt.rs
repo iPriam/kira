@@ -33,6 +33,7 @@ impl Parser<'_> {
             TokenKind::Continue => Some(self.parse_continue()),
             TokenKind::Switch => Some(self.parse_switch()),
             TokenKind::Match => Some(self.parse_match()),
+            TokenKind::Attempt => Some(self.parse_attempt()),
             _ => Some(self.parse_expr_or_assign()),
         }
     }

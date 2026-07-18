@@ -42,14 +42,14 @@ payload }` and `EnumTag { value }`.
 
 ## Scope boundary (what is refused, and why)
 
-- **Non-scalar payloads** (`struct`/`enum`/`array`) are refused at the
-  declaration (`KSEM118`). The box carries one word, and an aggregate has no
-  form in it yet. Nested-enum and construct payloads (`One(EmxInner)`,
-  `Filled(some EmxShape)`) still wait on that, not on `match` — the original
-  argument for deferring them was that a payload is unobservable without
-  `match`, and `match` has since landed. See
-  [match.md](match.md); the payload types it reads are exactly the ones
-  `KSEM118` admits.
+- **Aggregate payloads** (`struct`/`array`) are refused at the declaration
+  (`KSEM118`). The box carries one word, and an aggregate has no form in it yet.
+- **A nested enum payload is now admitted** (`One(EmxInner)`). It is a handle,
+  so it fits the one word — and `attempt`/`try`/`handle` forced the issue,
+  because a `Result`-shaped value carries its failure enum inside `Error`. The
+  native box gained a payload *kind* to reclaim it recursively; see
+  [attempt.md](attempt.md). Construct payloads (`Filled(some EmxShape)`) still
+  wait.
 - **`print(enum)`** (`KSEM081`) and **enum at the native seam**
   (`EnumAtSeam` / `BridgeValueTag::ENUM`) are refused like a struct.
 

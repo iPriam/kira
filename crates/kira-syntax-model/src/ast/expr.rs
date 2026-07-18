@@ -163,6 +163,21 @@ pub enum Expr {
         /// Span covering the whole member expression.
         span: Span,
     },
+    /// A `try`: unwrap a `Result`-shaped value, routing its failure to the
+    /// enclosing `attempt`'s handlers.
+    ///
+    /// This is an expression because that is how it is written
+    /// (`let v = try f(n)`), not because it is one everywhere: analysis accepts
+    /// it only as the whole initializer of a `let` directly inside an
+    /// `attempt` body, and reports any other position. See
+    /// `kira_semantics::stmt::attempts` for why that restriction is the
+    /// reference's, not a shortcut.
+    Try {
+        /// The `Result`-shaped operand being unwrapped.
+        value: ExprId,
+        /// Span covering `try <value>`.
+        span: Span,
+    },
     /// An ownership transfer written on an expression (`move mesh`,
     /// `copy count`).
     ///
@@ -248,6 +263,7 @@ impl Expr {
             | Expr::ArrayLit { span, .. }
             | Expr::Index { span, .. }
             | Expr::DotMember { span, .. }
+            | Expr::Try { span, .. }
             | Expr::Ownership { span, .. }
             | Expr::Closure { span, .. }
             | Expr::Error { span } => *span,
