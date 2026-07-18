@@ -14,6 +14,7 @@ use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_syntax_model::ast::{BinaryOp, Expr, ExprId};
 
 use crate::analyze::{Analyzer, FnCtx};
+use crate::classes::Qualifier;
 use crate::operators::{resolve_binary, resolve_unary, unary_spelling, unify_branches};
 
 mod calls;
@@ -83,7 +84,14 @@ impl Analyzer<'_> {
                     None => match self.implicit_field(ctx, &name) {
                         Some(expr) => expr,
                         None => {
-                            self.emit(span, "KSEM060", format!("undefined name `{name}`"));
+                            // A name several parents declare is inherited but
+                            // unresolvable, which is a different mistake from
+                            // one nobody declared — and a different fix.
+                            if !ctx.receiver.is_some_and(|owner| {
+                                self.report_ambiguous_member(owner, &name, span, false)
+                            }) {
+                                self.emit(span, "KSEM060", format!("undefined name `{name}`"));
+                            }
                             self.program.exprs.alloc(HirExpr::Error)
                         }
                     },
@@ -129,6 +137,19 @@ impl Analyzer<'_> {
                 ..
             } => {
                 let name = self.interner.resolve(callee).to_owned();
+                // A class is constructed by calling it, so a call whose callee
+                // names a class is a constructor, not a function call.
+                if let Some(id) = self.class_named(&name)
+                    && ctx.resolve(&name).is_none()
+                {
+                    return self.analyze_class_new(ctx, id, &args, callee_span);
+                }
+                // A bare call inside a method may name one of the receiver's
+                // own or inherited methods, the way a bare name may read one of
+                // its fields.
+                if let Some(call) = self.implicit_method_call(ctx, &name, &args, callee_span) {
+                    return call;
+                }
                 if name == "print" {
                     // `print` borrows: it renders its argument and consumes
                     // nothing the caller could miss.
@@ -153,9 +174,23 @@ impl Analyzer<'_> {
                 field_span,
                 ..
             } => {
+                let name = self.interner.resolve(field).to_owned();
+                // `ClsAlpha.v` reads a parent's field through `self`; the base
+                // is a type name, not a value, so it must be recognized before
+                // anything tries to analyze it as one.
+                match self.parent_qualifier_of(ctx, base) {
+                    Qualifier::Parent(qualifier) => {
+                        return self.analyze_parent_field(ctx, qualifier, &name, field_span);
+                    }
+                    // The qualifier was a type name and it did not apply here;
+                    // that was already reported, so say nothing more about it.
+                    Qualifier::Rejected => {
+                        return self.program.exprs.alloc(HirExpr::Error);
+                    }
+                    Qualifier::NotAType => {}
+                }
                 let base_hir = self.analyze_expr(ctx, base);
                 let base_ty = self.program.expr(base_hir).type_of();
-                let name = self.interner.resolve(field).to_owned();
                 // An array has no fields, but it does have `.count` — a
                 // property, written with the same syntax a field read uses.
                 if base_ty.is_array() {

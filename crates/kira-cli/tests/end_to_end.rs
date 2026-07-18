@@ -98,13 +98,34 @@ fn missing_main_is_rejected() {
 
 #[test]
 fn unsupported_construct_is_rejected_cleanly() {
-    // A `class` is outside the v0 subset: it must not crash the compiler, and
+    // A `construct` is outside the subset: it must not crash the compiler, and
     // it must be reported as not-yet-supported rather than silently ignored.
-    let output = run_source("class Mode { }\n@Main function main() { print(1) return }");
+    let output = run_source("construct Mode { }\n@Main function main() { print(1) return }");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("KSEM900"), "stderr was: {stderr}");
     assert!(stderr.contains("not supported yet"));
+}
+
+#[test]
+fn a_class_declaration_compiles_and_runs() {
+    // The counterpart to the case above: a `class` used to be reported as
+    // unsupported, and is now ordinary language surface. An inherited method
+    // reads a field default the subclass overrode, and a parent-qualified call
+    // runs the parent body against this instance.
+    let output = run_source(
+        "class Account { var balance: Int = 100\n let rate: Int = 2\n \
+           function gross() -> Int { return self.balance * self.rate } }\n\
+         class Savings extends Account { override let rate = 5\n \
+           function bonus() -> Int { return Account.gross() + self.balance } }\n\
+         @Main function main() { print(Savings().gross()) print(Savings().bonus()) return }",
+    );
+    assert!(
+        output.status.success(),
+        "stderr was: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "500\n600\n");
 }
 
 #[test]

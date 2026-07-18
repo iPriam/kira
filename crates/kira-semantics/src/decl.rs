@@ -32,7 +32,21 @@ impl Analyzer<'_> {
             match self.program.types.structs_mut().declare(def) {
                 // Pushed only on success, which is what keeps `struct_defaults`
                 // indexed by the same ids the table mints.
-                Some(_) => self.struct_defaults.push(defaults),
+                Some(id) => {
+                    self.struct_defaults.push(defaults);
+                    // A class may extend a struct, so a struct's methods have to
+                    // be inheritable — which means recording them the same way a
+                    // class's are.
+                    let methods = declaration
+                        .methods
+                        .iter()
+                        .map(|method| crate::classes::OwnMethod {
+                            name: self.interner.resolve(method.name).to_owned(),
+                            arity: method.params.len(),
+                        })
+                        .collect();
+                    self.own_methods.insert(id, methods);
+                }
                 None => self.emit(
                     declaration.name_span,
                     "KSEM004",

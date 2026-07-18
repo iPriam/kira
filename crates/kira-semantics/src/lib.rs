@@ -23,6 +23,7 @@
 mod aliases;
 mod analyze;
 mod arrays;
+mod classes;
 mod decl;
 mod enums;
 mod imports;

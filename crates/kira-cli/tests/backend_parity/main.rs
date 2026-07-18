@@ -170,6 +170,7 @@ mod aliases;
 mod arithmetic;
 mod arrays;
 mod bitwise;
+mod classes;
 mod control_flow;
 mod enums;
 mod examples;

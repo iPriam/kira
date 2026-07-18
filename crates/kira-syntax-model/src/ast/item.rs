@@ -14,6 +14,8 @@ pub enum Item {
     Function(Function),
     /// A `struct` declaration: a non-inheriting value shape.
     Struct(StructDecl),
+    /// A `class` declaration: a value shape that inherits members.
+    Class(ClassDecl),
     /// An `enum` declaration: a tagged union of named variants.
     Enum(EnumDecl),
     /// A `type Name = Target` alias.
@@ -126,6 +128,71 @@ pub struct StructDecl {
     pub methods: Vec<Function>,
     /// Span covering the whole declaration.
     pub span: Span,
+}
+
+/// A `class` declaration: a value shape that inherits members from its parents.
+///
+/// A class differs from a [`StructDecl`] in exactly three ways: it names
+/// parents, its members may be marked `override`, and its methods may call a
+/// parent's version of a member by qualifying it (`ClsAccount.gross()`, which
+/// is how this language spells "super"). Everything else about it is a struct,
+/// and semantics flattens it into one.
+///
+/// The parent list is comma-separated (`extends ClsAlpha, ClsBeta`) and may
+/// name a `struct` as readily as a `class`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassDecl {
+    /// The class's name.
+    pub name: Symbol,
+    /// Span of the name token, for diagnostics.
+    pub name_span: Span,
+    /// The written parents, in declaration order. Empty when no `extends` was
+    /// written — a class need not inherit.
+    pub parents: Vec<ParentRef>,
+    /// The members this class declares itself, in declaration order.
+    pub fields: Vec<FieldDecl>,
+    /// The `override let name = value` members, in declaration order.
+    pub overrides: Vec<OverrideFieldDecl>,
+    /// The methods declared in the body, in declaration order.
+    pub methods: Vec<ClassMethod>,
+    /// Span covering the whole declaration.
+    pub span: Span,
+}
+
+/// One name in a class's `extends` list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParentRef {
+    /// The parent type's name.
+    pub name: Symbol,
+    /// Span of the name token, for diagnostics about this parent.
+    pub span: Span,
+}
+
+/// An `override let name = value` member: a new default for an inherited field.
+///
+/// It carries no type, because it declares no field — the inherited field's
+/// slot and type are what it rebinds. That is why this is its own node rather
+/// than a [`FieldDecl`] with a flag.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverrideFieldDecl {
+    /// The inherited member's name.
+    pub name: Symbol,
+    /// Span of the name token.
+    pub name_span: Span,
+    /// The replacement default. Required: an override with no value would say
+    /// nothing.
+    pub default: ExprId,
+    /// Span covering the whole member.
+    pub span: Span,
+}
+
+/// One method of a [`ClassDecl`], plus whether it was written `override`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassMethod {
+    /// Whether the declaration carried the `override` keyword.
+    pub is_override: bool,
+    /// The method itself.
+    pub function: Function,
 }
 
 /// One stored member of a [`StructDecl`].

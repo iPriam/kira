@@ -8,6 +8,7 @@
 
 mod aliases;
 mod arrays;
+mod classes;
 mod enums;
 
 use crate::*;
@@ -121,8 +122,9 @@ fn colon_return_type_is_accepted() {
 
 #[test]
 fn unsupported_constructs_do_not_crash() {
-    // `class` is still outside the subset (enums now parse; see `tests::enums`).
-    let result = parse_text("class C { }\n@Main function main() { return }");
+    // `construct` is still outside the subset (enums and classes now parse;
+    // see `tests::enums` and `tests::classes`).
+    let result = parse_text("construct C { }\n@Main function main() { return }");
     assert_eq!(result.tree.items().len(), 2);
     assert!(matches!(result.tree.items()[0], Item::Unsupported(_)));
     assert!(matches!(result.tree.items()[1], Item::Function(_)));

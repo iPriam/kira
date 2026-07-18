@@ -88,6 +88,64 @@ parameter, so writing to `self` inside a method leaves the caller's value
 alone. A method's body may name a member bare (`self.x` and `x` are the same
 read).
 
+## Classes
+
+A class is a struct that inherits. It has everything a struct has — fields with
+defaults, methods, value semantics — plus `extends`, `override`, and
+parent-qualified access:
+
+```kira
+class Account {
+    var balance: Int = 100
+    let rate: Int = 2
+
+    function gross() -> Int { return self.balance * self.rate }
+}
+
+class Savings extends Account {
+    override let rate = 5                       // the same slot, a new default
+
+    function bonus() -> Int {
+        return Account.gross() + self.balance   // this is how "super" is spelled
+    }
+}
+
+print(Account().gross())    // 200
+print(Savings().gross())    // 500 — the inherited method reads the new default
+```
+
+A class is **built by calling it**, not with a `{ }` literal. Arguments fill
+the fields that declare no default, in flattened order; every field with a
+default takes it. A class is a **value**, like a struct: `var b = a` copies, and
+mutating the copy leaves the original alone.
+
+`extends` takes a comma-separated list, and may name a `struct` as readily as a
+class. Two parents declaring the same name keeps **both** — they are separate
+fields and separate methods — so the bare name is ambiguous (`KSEM067` for a
+method, `KSEM068` for a field) and qualifying it says which was meant.
+
+Nothing below semantics learns classes exist. A class flattens into an ordinary
+struct, and each class gets its **own copy** of every method it inherits, with
+`self` typed as that class. That is worth stating plainly because it buys the
+one thing inheritance usually costs: since `self` is always statically the
+concrete class, an inherited method calling `self.m()` reaches the override, and
+it does so identically on the VM, native, hybrid, and wasm — with nothing
+dispatched at run time. The reference implementation has a live vm/llvm
+divergence on exactly this shape and steers its corpus around it; here it is a
+tested case.
+
+One edge is deliberate rather than pending:
+
+- **There is no subtyping.** A `Savings` is not assignable to an `Account`
+  binding or parameter (`KSEM063`). Nothing in the language corpus binds a
+  derived instance to an ancestor type, so nothing pins what it would mean —
+  and admitting it is precisely what would reintroduce the dispatch question
+  the flattening removes. Every class instance's static type is its dynamic
+  type.
+
+See [.codex/work/classes.md](.codex/work/classes.md) for the design, and
+[examples/classes/classes.kira](examples/classes/classes.kira) for a tour.
+
 ## Arrays
 
 An array is a shared, growable, heap-backed sequence, written `[T]`. Its whole

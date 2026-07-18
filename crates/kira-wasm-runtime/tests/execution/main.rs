@@ -305,6 +305,7 @@ mod aliases;
 mod arrays;
 mod bitwise;
 mod calls;
+mod classes;
 mod control_flow;
 mod enums;
 mod floats;
