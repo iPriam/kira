@@ -4,6 +4,7 @@
 mod aliases;
 mod arrays;
 mod enums;
+mod imports;
 mod matches;
 mod operators;
 mod widths;
@@ -12,11 +13,36 @@ use super::*;
 use kira_semantics_model::Type;
 
 fn diagnostics(text: &str) -> Vec<Diagnostic> {
+    module_diagnostics(text, &[])
+}
+
+/// The diagnostics of a program built from an entry file plus named modules.
+///
+/// The modules are handed in directly, which is what module loading looks like
+/// from this crate's side: resolving `import support` to a file is the CLI's
+/// job and needs a disk, and this crate has none.
+fn module_diagnostics(text: &str, modules: &[(&str, &str)]) -> Vec<Diagnostic> {
     let db = salsa::DatabaseImpl::new();
-    let source = SourceProgram::new(&db, text.to_owned(), "test.kira".to_owned());
+    let modules: Vec<ModuleSource> = modules
+        .iter()
+        .map(|&(module, text)| ModuleSource {
+            module: module.to_owned(),
+            path: format!("{module}.kira"),
+            text: text.to_owned(),
+        })
+        .collect();
+    let source = SourceProgram::new(&db, text.to_owned(), "test.kira".to_owned(), modules);
     analyzed::accumulated::<DiagnosticAccumulator>(&db, source)
         .into_iter()
         .map(|accumulator| accumulator.0.clone())
+        .collect()
+}
+
+/// The diagnostic codes of a multi-module program, in order.
+fn module_codes(text: &str, modules: &[(&str, &str)]) -> Vec<&'static str> {
+    module_diagnostics(text, modules)
+        .into_iter()
+        .filter_map(|diagnostic| diagnostic.code)
         .collect()
 }
 
@@ -490,6 +516,7 @@ fn analyzed_program_records_types_and_main() {
         &db,
         "@Main function main() { let x = 3 print(x) return }".to_owned(),
         "test.kira".to_owned(),
+        Vec::new(),
     );
     let program = analyzed(&db, source);
     assert!(program.main.is_some());

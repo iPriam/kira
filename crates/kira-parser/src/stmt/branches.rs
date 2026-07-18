@@ -216,7 +216,7 @@ mod tests {
             "unexpected diagnostics: {:?}",
             result.diagnostics
         );
-        let function = match &result.tree.items[0] {
+        let function = match &result.tree.items()[0] {
             Item::Function(function) => function,
             other => panic!("expected a function, got {other:?}"),
         };
@@ -329,7 +329,7 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.code == Some("KPAR013"))
         );
-        assert_eq!(result.tree.items.len(), 1, "the function still parses");
+        assert_eq!(result.tree.items().len(), 1, "the function still parses");
     }
 
     /// Both arm spellings, and a payload binding, in one match.
@@ -390,7 +390,7 @@ mod tests {
             "expected KPAR014, got {:?}",
             result.diagnostics
         );
-        assert_eq!(result.tree.items.len(), 1, "the function still parses");
+        assert_eq!(result.tree.items().len(), 1, "the function still parses");
     }
 
     /// A `(` with no name inside is reported, and the arm still parses.

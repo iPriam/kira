@@ -20,7 +20,7 @@ mod tree;
 
 pub use expr::{BinaryOp, Expr, FieldInit, UnaryOp};
 pub use item::{
-    EnumDecl, FieldDecl, Function, Item, Param, StructDecl, TypeAliasDecl, TypeRef,
+    EnumDecl, FieldDecl, Function, ImportDecl, Item, Param, StructDecl, TypeAliasDecl, TypeRef,
     UnsupportedItem, VariantDecl,
 };
 pub use stmt::{Block, ForIterable, MatchArm, MatchBinding, Stmt, SwitchCase};

@@ -390,8 +390,15 @@ fn compile(path: &str) -> Result<Compiled, i32> {
         EXIT_USAGE
     })?;
 
-    // The SourceMap mirrors the salsa input under the same fixed id, so
-    // diagnostic spans render against the file text.
+    // Everything the entry file imports, transitively, dependencies first. An
+    // import that names no readable file comes back as nothing here and is
+    // reported by the frontend, which has the span to point at.
+    let modules = kira_program_graph::load_modules(std::path::Path::new(path), &text);
+
+    // The SourceMap mirrors the salsa input file for file and in the same
+    // order, so diagnostic spans render against the file they were written in:
+    // the entry file at `FILE_SOURCE_ID`, then module `i` at
+    // `module_source_id(i)`.
     let mut sources = SourceMap::new();
     let id = sources
         .insert(path.to_owned(), text.clone())
@@ -402,9 +409,18 @@ fn compile(path: &str) -> Result<Compiled, i32> {
             EXIT_FAILURE
         })?;
     debug_assert_eq!(id, FILE_SOURCE_ID);
+    for (index, module) in modules.iter().enumerate() {
+        let id = sources
+            .insert(module.path.clone(), module.text.clone())
+            .map_err(|full| {
+                eprintln!("kirac: {full}");
+                EXIT_FAILURE
+            })?;
+        debug_assert_eq!(id, kira_semantics::module_source_id(index));
+    }
 
     let db = salsa::DatabaseImpl::new();
-    let source = SourceProgram::new(&db, text, path.to_owned());
+    let source = SourceProgram::new(&db, text, path.to_owned(), modules);
     let ir = lowered(&db, source);
     let diagnostics = lowered::accumulated::<DiagnosticAccumulator>(&db, source)
         .into_iter()
@@ -437,6 +453,7 @@ mod tests {
             &db,
             "@Main function main() { print(1) return }".to_owned(),
             "test.kira".to_owned(),
+            Vec::new(),
         );
         let ir = lowered(&db, source).expect("a runnable program");
         assert_eq!(ir.functions.len(), 1);
@@ -450,6 +467,7 @@ mod tests {
             &db,
             "function f() { return }".to_owned(),
             "t.kira".to_owned(),
+            Vec::new(),
         );
         assert!(lowered(&db, source).is_none());
         // The missing-main diagnostic still surfaces through the accumulator.
@@ -464,6 +482,7 @@ mod tests {
             &db,
             "@Main function main() { print(missing) return }".to_owned(),
             "t.kira".to_owned(),
+            Vec::new(),
         );
         // Analyzing directly and through lowering must agree on diagnostics.
         let _ = analyzed(&db, source);

@@ -18,8 +18,21 @@ fn every_example_agrees_on_every_backend() {
         if !directory.is_dir() {
             continue;
         }
-        for file in std::fs::read_dir(&directory).expect("read example directory") {
-            let source = file.expect("example file").path();
+        // An example directory is a *program*, not a bag of files: once one of
+        // them declares `@Main` and imports the others, running a module on its
+        // own would only prove that a library has no entry point. So a
+        // directory with a `main.kira` is entered through it, and every other
+        // directory keeps the one-file-is-the-program rule it had.
+        let entry = directory.join("main.kira");
+        let sources: Vec<PathBuf> = if entry.is_file() {
+            vec![entry]
+        } else {
+            std::fs::read_dir(&directory)
+                .expect("read example directory")
+                .map(|file| file.expect("example file").path())
+                .collect()
+        };
+        for source in sources {
             if source.extension().is_none_or(|kind| kind != "kira") {
                 continue;
             }
