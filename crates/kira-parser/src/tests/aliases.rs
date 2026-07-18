@@ -9,7 +9,7 @@ use kira_syntax_model::ast::{Item, TypeAliasDecl};
 fn aliases(result: &ParseResult) -> Vec<&TypeAliasDecl> {
     result
         .tree
-        .items
+        .items()
         .iter()
         .filter_map(|item| match item {
             Item::TypeAlias(declaration) => Some(declaration),
@@ -42,8 +42,8 @@ fn an_alias_target_may_be_an_array_of_any_depth() {
 fn aliases_sit_beside_the_other_items() {
     let result = parse_text("type Count = Int\nfunction f(n: Count) { return }");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert!(matches!(result.tree.items[0], Item::TypeAlias(_)));
-    assert!(matches!(result.tree.items[1], Item::Function(_)));
+    assert!(matches!(result.tree.items()[0], Item::TypeAlias(_)));
+    assert!(matches!(result.tree.items()[1], Item::Function(_)));
 }
 
 /// `type` is a keyword, so it can no longer be an identifier — and a
@@ -61,7 +61,7 @@ fn an_alias_without_a_name_is_reported_and_recovery_continues() {
     assert!(
         result
             .tree
-            .items
+            .items()
             .iter()
             .any(|item| matches!(item, Item::Function(_))),
         "the function after the bad alias still parsed",
@@ -82,7 +82,7 @@ fn an_alias_without_an_equals_is_reported_and_recovery_continues() {
     assert!(
         result
             .tree
-            .items
+            .items()
             .iter()
             .any(|item| matches!(item, Item::Function(_))),
         "the function after the bad alias still parsed",
@@ -99,7 +99,7 @@ fn an_alias_with_a_malformed_target_yields_an_error_type() {
     assert!(
         result
             .tree
-            .items
+            .items()
             .iter()
             .any(|item| matches!(item, Item::Function(_))),
     );

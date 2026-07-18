@@ -1,0 +1,17 @@
+// A module. It needs `shapes.Rect` for itself: main.kira importing it means
+// nothing here.
+
+import shapes.Rect as Rect
+
+struct Point {
+    let x: Int
+    let y: Int
+
+    function manhattan() -> Int {
+        return x + y
+    }
+}
+
+function describe(p: borrow Point) -> Int {
+    return Rect.area(p) + p.manhattan()
+}

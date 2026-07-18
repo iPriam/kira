@@ -184,3 +184,109 @@ fn newline_continuation_matches_the_reference_at_runtime() {
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
 }
+
+/// Writes an entry program plus the modules it imports into one directory, and
+/// returns the entry path. A dotted module name is a directory path.
+fn write_program(entry: &str, modules: &[(&str, &str)]) -> PathBuf {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let directory = std::env::temp_dir().join(format!("kirac_e2e_program_{pid}_{unique}"));
+    std::fs::create_dir_all(&directory).expect("temp dir");
+    for (name, text) in modules {
+        let module = directory.join(format!("{name}.kira"));
+        if let Some(parent) = module.parent() {
+            std::fs::create_dir_all(parent).expect("module directory");
+        }
+        std::fs::write(&module, text).expect("write module");
+    }
+    let path = directory.join("main.kira");
+    std::fs::write(&path, entry).expect("write entry");
+    path
+}
+
+/// `kirac` resolves an import against the entry file's directory, so a program
+/// spread over several files runs from the real binary the way a user runs it.
+#[test]
+fn runs_a_program_spread_across_modules() {
+    let path = write_program(
+        "import geometry as Geo\nimport shapes.Rect as Rect\n\
+         @Main function main() { let p: Geo.Point = Point { x: 3, y: 4 } \
+         print(p.manhattan()) print(Rect.area(p)) return }",
+        &[
+            (
+                "geometry",
+                "struct Point { let x: Int  let y: Int\n\
+                 function manhattan() -> Int { return x + y } }",
+            ),
+            (
+                "shapes/Rect",
+                "function area(p: borrow Point) -> Int { return p.x * p.y }",
+            ),
+        ],
+    );
+    let output = kirac(&["run", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n12\n");
+}
+
+/// An import that names no file on disk is a compile error, and the message
+/// names the module and where the compiler looked.
+#[test]
+fn an_import_of_a_missing_module_is_rejected() {
+    let path = write_program(
+        "import nowhere\n@Main function main() { print(1) return }",
+        &[],
+    );
+    let output = kirac(&["check", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("KSEM032"), "{stderr}");
+    assert!(stderr.contains("nowhere"), "{stderr}");
+}
+
+/// A diagnostic raised inside an imported module is rendered against *that*
+/// file — the header names the module, not the entry program.
+#[test]
+fn a_modules_diagnostic_renders_against_the_module_file() {
+    let path = write_program(
+        "import broken\n@Main function main() { print(1) return }",
+        &[("broken", "function bad() -> Int { return nope }")],
+    );
+    let output = kirac(&["check", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("KSEM060"), "{stderr}");
+    assert!(
+        stderr.contains("broken.kira"),
+        "the module's own path is what the error points at: {stderr}"
+    );
+}
+
+/// Imports are file-scoped: the entry file's import does not put a namespace
+/// root into a sibling module.
+#[test]
+fn a_siblings_import_does_not_carry_into_a_module() {
+    let path = write_program(
+        "import support\nimport leak\n@Main function main() { print(leakValue()) return }",
+        &[
+            ("support", "function supportValue() -> Int { return 1 }"),
+            (
+                "leak",
+                "function leakValue() -> Int { return support.supportValue() }",
+            ),
+        ],
+    );
+    let output = kirac(&["check", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("KSEM027"), "{stderr}");
+}

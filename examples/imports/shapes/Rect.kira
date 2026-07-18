@@ -1,0 +1,5 @@
+// A module reached by a dotted path: `import shapes.Rect` reads this file.
+
+function area(p: borrow Point) -> Int {
+    return p.x * p.y
+}

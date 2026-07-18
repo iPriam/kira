@@ -221,7 +221,7 @@ fn an_unclosed_array_literal_is_reported_and_recovers() {
         "an unclosed `[` must be reported"
     );
     // Recovery keeps the following declaration: the parser never bails.
-    assert_eq!(result.tree.items.len(), 2, "{:?}", result.tree.items);
+    assert_eq!(result.tree.items().len(), 2, "{:?}", result.tree.items());
 }
 
 #[test]

@@ -28,10 +28,13 @@ impl Analyzer<'_> {
     /// is resolved against the enums and structs declared so far, exactly as a
     /// struct field's type is.
     pub(crate) fn collect_enums(&mut self) {
-        for item in &self.tree.items {
+        let tree = self.tree;
+        for (source, item) in tree.items_with_source() {
             let Item::Enum(declaration) = item else {
                 continue;
             };
+            // Payload types resolve against the imports of the declaring file.
+            self.source = source;
             let (def, defaults) = self.resolve_enum_def(declaration);
             let name = def.name.clone();
             match self.program.types.enums_mut().declare(def) {
