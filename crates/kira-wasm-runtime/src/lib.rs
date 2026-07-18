@@ -172,9 +172,13 @@ pub fn compile(program: &IrProgram, device: WasmDevice) -> Result<Vec<u8>, WasmE
         }
     }
 
+    // A wasm module is entered at one exported entrypoint, so a library — which
+    // has none — is refused by name rather than emitted as a module nothing can
+    // start.
+    let entry = program.main.ok_or(WasmError::LibraryUnsupported)?;
     let main = *handles
-        .get(program.main as usize)
-        .ok_or(WasmError::UnknownFunction(program.main))?;
+        .get(entry as usize)
+        .ok_or(WasmError::UnknownFunction(entry))?;
     if !module.export(main, web::MAIN_EXPORT) {
         return Err(WasmError::Wiring);
     }
@@ -290,7 +294,7 @@ mod tests {
                 body: vec![IrStmt::Eval { expr: call }, IrStmt::Return { value: None }],
             }],
             types: Default::default(),
-            main: 0,
+            main: Some(0),
             exprs,
         }
     }

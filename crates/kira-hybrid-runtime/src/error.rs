@@ -7,6 +7,13 @@ use kira_hybrid_definition::ManifestDecodeError;
 /// Why a hybrid program could not be loaded or run.
 #[derive(Debug, thiserror::Error)]
 pub enum HybridError {
+    /// The bundle is a library, so there is no entrypoint to run.
+    ///
+    /// A hybrid library loads, validates, and binds its native half exactly as
+    /// a hybrid application does — it just cannot be *started*, because a
+    /// library is entered by its consumer one call at a time.
+    #[error("this hybrid bundle is a library: it has no entrypoint to run")]
+    NoEntrypoint,
     /// An artifact named by the manifest could not be read.
     #[error("cannot read `{path}`: {source}")]
     Io {

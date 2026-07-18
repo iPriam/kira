@@ -106,7 +106,10 @@ impl Session {
     /// rather than assuming the bytecode half starts every program.
     pub fn run(&self) -> Result<(), HybridError> {
         let _active = ActiveSession::install(self);
-        let entry = self.manifest.entry_function();
+        let entry = self
+            .manifest
+            .entry_function()
+            .ok_or(HybridError::NoEntrypoint)?;
 
         match entry.execution {
             Execution::Native => {
