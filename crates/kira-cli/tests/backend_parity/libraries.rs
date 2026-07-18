@@ -208,28 +208,26 @@ fn every_backend_refuses_to_build_an_export_the_same_way() {
 }
 
 #[test]
-fn every_backend_agrees_an_exporting_library_checks_clean() {
-    // The refusal is the *engine's*, not the frontend's: the same package that
-    // no backend will build passes `check` on all three, because `check` stops
-    // at the frontend and the frontend is where this step is finished.
+fn checking_an_exporting_library_stops_at_a_clean_frontend() {
+    // The refusal the test above proves is the *engine's*, not the frontend's:
+    // the same package no backend will build passes `check`, because `check`
+    // stops at the frontend and the frontend is where this step is finished.
+    //
+    // Deliberately one run, not one per backend: `kirac check` takes no
+    // `--backend` (pipeline.rs::check reads only a path), so looping the
+    // backends here would run the identical command three times and prove
+    // nothing about any of them. What makes this frontend-wide is that the
+    // export checks sit above the backend split at all.
     let path = write_library(EXPORTING_LIBRARY);
-    let runs: Vec<(&str, Output)> = BACKENDS
-        .iter()
-        .map(|backend| {
-            let run = Command::new(env!("CARGO_BIN_EXE_kirac"))
-                .args(["check", path.to_str().unwrap()])
-                .output()
-                .expect("run kirac");
-            (*backend, run)
-        })
-        .collect();
+    let run = Command::new(env!("CARGO_BIN_EXE_kirac"))
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .expect("run kirac");
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
 
-    for (backend, run) in &runs {
-        assert!(
-            run.status.success(),
-            "checking an exporting library failed for {backend}:\nstderr: {}",
-            String::from_utf8_lossy(&run.stderr),
-        );
-    }
+    assert!(
+        run.status.success(),
+        "checking an exporting library failed:\nstderr: {}",
+        String::from_utf8_lossy(&run.stderr),
+    );
 }

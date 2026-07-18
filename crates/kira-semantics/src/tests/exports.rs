@@ -198,6 +198,31 @@ fn an_exported_class_may_be_a_result_as_well_as_a_parameter() {
 }
 
 #[test]
+fn an_unknown_type_on_an_exported_function_is_not_reported_an_extra_time() {
+    // The export check reads the types the signature pass already resolved
+    // rather than re-resolving what was written. Re-resolving would report the
+    // unknown name again, so marking a function `@Export` would make an
+    // unrelated typo noisier — a marker must not change how many times an
+    // error about something else is reported.
+    let plain = "function makeButton(title: Widget) -> String { return \"\" }";
+    let exported = "@Export\nfunction makeButton(title: Widget) -> String { return \"\" }";
+    let plain_count = library_diagnostics(plain)
+        .iter()
+        .filter(|diagnostic| diagnostic.code == Some("KSEM050"))
+        .count();
+    let exported_count = library_diagnostics(exported)
+        .iter()
+        .filter(|diagnostic| diagnostic.code == Some("KSEM050"))
+        .count();
+    assert_eq!(
+        exported_count,
+        plain_count,
+        "`@Export` added a KSEM050: {:?}",
+        library_diagnostics(exported)
+    );
+}
+
+#[test]
 fn an_export_marker_on_a_class_in_an_application_is_refused() {
     // The class half of the marker obeys the same package rule as the function
     // half — otherwise an application could mint handle-eligible classes for a
