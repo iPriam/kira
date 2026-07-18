@@ -51,11 +51,11 @@ use kira_syntax_model::ast::{ExprId, MatchArm};
 use crate::analyze::{Analyzer, FnCtx};
 
 /// One arm, resolved against the subject's enum.
-struct ResolvedArm {
-    /// The variant's discriminant.
-    tag: u32,
+pub(crate) struct ResolvedArm {
+    /// The variant discriminant.
+    pub(crate) tag: u32,
     /// The statements the arm runs, payload binding included.
-    body: Vec<HirStmtId>,
+    pub(crate) body: Vec<HirStmtId>,
 }
 
 impl Analyzer<'_> {
@@ -188,7 +188,7 @@ impl Analyzer<'_> {
     /// The binding is declared in a scope of its own, wrapping the body's, so
     /// it is visible to the arm and to nothing else — two arms may bind the
     /// same name to different variants' payloads without colliding.
-    fn analyze_arm_body(
+    pub(crate) fn analyze_arm_body(
         &mut self,
         ctx: &mut FnCtx,
         enum_id: EnumId,
@@ -291,7 +291,11 @@ impl Analyzer<'_> {
     /// Built from the back, because an `else` has to exist before the `if` that
     /// points at it. The last arm becomes the chain's tail unconditionally —
     /// see this module's header for why that is correctness, not shortcut.
-    fn build_chain(&mut self, tag_slot: LocalId, resolved: Vec<ResolvedArm>) -> Vec<HirStmtId> {
+    pub(crate) fn build_chain(
+        &mut self,
+        tag_slot: LocalId,
+        resolved: Vec<ResolvedArm>,
+    ) -> Vec<HirStmtId> {
         let mut arms = resolved.into_iter().rev();
         let Some(last) = arms.next() else {
             return Vec::new();
@@ -310,7 +314,7 @@ impl Analyzer<'_> {
     }
 
     /// Builds `<tag> == <discriminant>` for one arm.
-    fn tag_test(&mut self, tag_slot: LocalId, tag: u32) -> HirExprId {
+    pub(crate) fn tag_test(&mut self, tag_slot: LocalId, tag: u32) -> HirExprId {
         let read = self.program.exprs.alloc(HirExpr::Local {
             local: tag_slot,
             ty: Type::INT,

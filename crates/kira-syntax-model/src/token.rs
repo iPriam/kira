@@ -75,6 +75,10 @@ pub enum TokenKind {
     Override,
     /// `match`
     Match,
+    /// `attempt`
+    Attempt,
+    /// `try`
+    Try,
     /// `for`
     For,
     /// `in`
@@ -192,6 +196,11 @@ impl TokenKind {
             "extends" => TokenKind::Extends,
             "override" => TokenKind::Override,
             "match" => TokenKind::Match,
+            // `handle` is deliberately absent: the reference lexes it as an
+            // identifier, so it is recognized contextually after an `attempt`
+            // block and stays usable as a name everywhere else.
+            "attempt" => TokenKind::Attempt,
+            "try" => TokenKind::Try,
             "for" => TokenKind::For,
             "in" => TokenKind::In,
             "switch" => TokenKind::Switch,
@@ -228,6 +237,8 @@ impl TokenKind {
             TokenKind::Extends => "`extends`",
             TokenKind::Override => "`override`",
             TokenKind::Match => "`match`",
+            TokenKind::Attempt => "`attempt`",
+            TokenKind::Try => "`try`",
             TokenKind::For => "`for`",
             TokenKind::In => "`in`",
             TokenKind::Switch => "`switch`",

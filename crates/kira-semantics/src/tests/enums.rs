@@ -104,18 +104,34 @@ fn a_payload_of_the_wrong_type_is_reported() {
 }
 
 #[test]
-fn a_non_scalar_payload_is_refused_at_the_declaration() {
-    // A nested-enum payload resolves to an enum type and is then refused: the
-    // box carries one type-erased word, and an aggregate has no form there yet.
-    // (A struct payload cannot even resolve — structs are declared after enums,
-    // so it is an unknown type, KSEM050 — which is refusal enough.)
+fn an_aggregate_payload_is_refused_at_the_declaration() {
+    // An array payload is refused: the box carries one type-erased word, and an
+    // aggregate has no form there yet. (A struct payload cannot even resolve —
+    // structs are declared after enums, so it is an unknown type, KSEM050 —
+    // which is refusal enough.)
     assert_eq!(
         codes(
-            "enum Inner { A }\n\
-             enum E { Wrap(Inner) }\n\
+            "enum E { Wrap([Int]) }\n\
              @Main function main() { return }"
         ),
         vec!["KSEM118"]
+    );
+}
+
+/// A *nested enum* payload is admitted, unlike an aggregate one: it is a handle,
+/// so it fits the box's one word. `attempt`/`try`/`handle` needs it, because a
+/// `Result`-shaped value carries its failure enum inside `Error`. Every layer
+/// reclaims it recursively — see `.codex/work/attempt.md`.
+#[test]
+fn a_nested_enum_payload_is_admitted() {
+    assert!(
+        codes(
+            "enum Inner { A }\n\
+             enum E { Wrap(Inner) Empty }\n\
+             @Main function main() { let e: E = .Wrap(.A) \
+             match e { Wrap(i) -> { print(\"w\") } Empty -> { print(\"e\") } } return }"
+        )
+        .is_empty()
     );
 }
 

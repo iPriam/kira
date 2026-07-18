@@ -10,23 +10,30 @@
 //! compiled separately and have to agree on it.
 //!
 //! ```text
-//!   tag       the variant's discriminant, the value `==` compares
-//!   owns_str  1 when `payload` is an owned `KStr`, 0 when it is inert bits
-//!   payload   the variant's single payload, type-erased into one word
+//!   tag           the variant's discriminant, the value `==` compares
+//!   payload_kind  what `payload` is, and so what clone/free owe it
+//!   payload       the variant's single payload, type-erased into one word
 //! ```
 //!
-//! # Why the payload is one word plus a flag, not a type
+//! # Why the payload is one word plus a kind, not a type
 //!
 //! The box is generic over the variant's payload type. A scalar (`Int`,
 //! `Float`, `Bool`) fits one word directly — the backend passes its bits and
 //! this code copies them, owning nothing. A `String` payload is an owned `KStr`
-//! handle, which is also one word, but it must be cloned when the enum is
-//! cloned and freed when the enum is freed. The `owns_str` flag is what lets
-//! one clone/free pair serve both without the box carrying the payload's type:
-//! the flag says whether that word is a handle to reclaim.
+//! handle, and a *nested enum* payload is an owned [`KEnum`] handle; both are
+//! one word too, but each must be cloned when the enum is cloned and freed when
+//! it is freed. [`KiraEnum::payload_kind`] is what lets one clone/free pair
+//! serve all three without the box carrying the payload's type: the kind says
+//! whether that word is a handle to reclaim, and which kind of handle.
 //!
-//! A struct/enum/array payload is refused at the declaration (`KSEM118`), so
-//! the one-word slot never has to carry an aggregate.
+//! A nested enum is what `Result`-shaped values are made of — `Error` carries
+//! the failure enum — so `attempt`/`try`/`handle` is the construct that needs
+//! [`PAYLOAD_ENUM`]. Recursion terminates because a payload's type is resolved
+//! against types that already resolve, so a cycle is unrepresentable; the VM's
+//! heap relies on the same argument.
+//!
+//! A struct or array payload is still refused at the declaration (`KSEM118`),
+//! so the one-word slot never has to carry an aggregate.
 //!
 //! # Ownership
 //!
@@ -40,10 +47,19 @@
 //! These names are a wire contract with the backend's lowering and are
 //! append-only: never rename one or change a signature in place.
 
+use kira_runtime_abi::EnumPayloadKind;
+
 use crate::runtime::{KStr, kira_rt_str_clone, kira_rt_str_free};
 
 /// A Kira enum at the native ABI: an opaque owned handle.
 pub type KEnum = *mut KiraEnum;
+
+/// Payload word is inert bits (a scalar, or no payload at all); owns nothing.
+pub const PAYLOAD_INERT: i64 = EnumPayloadKind::INERT.as_i64();
+/// Payload word is an owned [`KStr`] to clone and free with the box.
+pub const PAYLOAD_STR: i64 = EnumPayloadKind::STR.as_i64();
+/// Payload word is an owned [`KEnum`] to clone and free with the box.
+pub const PAYLOAD_ENUM: i64 = EnumPayloadKind::ENUM.as_i64();
 
 /// The heap box behind a [`KEnum`].
 ///
@@ -54,22 +70,25 @@ pub type KEnum = *mut KiraEnum;
 pub struct KiraEnum {
     /// The variant's discriminant.
     tag: i64,
-    /// 1 when `payload` is an owned `KStr` to clone/free; 0 otherwise.
-    owns_str: i64,
+    /// What `payload` is: [`PAYLOAD_INERT`], [`PAYLOAD_STR`], or
+    /// [`PAYLOAD_ENUM`].
+    payload_kind: i64,
     /// The variant's single payload, type-erased into one word.
     payload: u64,
 }
 
 /// Boxes a fresh enum value.
 ///
-/// `owns_str` is 1 when `payload` is a `KStr` the box takes ownership of, and 0
-/// when it holds inert scalar bits (or no payload — a payload-less variant
-/// passes 0/0).
+/// `payload_kind` says what the box takes ownership of: [`PAYLOAD_INERT`] for
+/// scalar bits or no payload at all, [`PAYLOAD_STR`] for an owned `KStr`,
+/// [`PAYLOAD_ENUM`] for an owned nested `KEnum`. An unrecognized kind is
+/// treated as inert, which leaks rather than corrupting — the conservative
+/// direction for a word this code cannot interpret.
 #[unsafe(no_mangle)]
-pub extern "C" fn kira_rt_enum_new(tag: i64, owns_str: i64, payload: u64) -> KEnum {
+pub extern "C" fn kira_rt_enum_new(tag: i64, payload_kind: i64, payload: u64) -> KEnum {
     Box::into_raw(Box::new(KiraEnum {
         tag,
-        owns_str,
+        payload_kind,
         payload,
     }))
 }
@@ -92,15 +111,14 @@ pub unsafe extern "C" fn kira_rt_enum_tag(value: KEnum) -> i64 {
 
 /// Reads an enum's payload as an *owned* word, leaving the enum untouched.
 ///
-/// This is what a `match` arm's binding reads. A `String` payload is cloned, so
-/// the returned handle is the caller's to free and the box still owns its own —
-/// the same affine discipline [`kira_rt_enum_clone`] follows. A scalar payload
-/// is returned by bits and owns nothing. A null handle reads as 0, mirroring
-/// [`kira_rt_enum_tag`].
+/// This is what a `match` arm's binding — and a `handle` arm's — reads. A
+/// `String` or nested-enum payload is cloned, so the returned handle is the
+/// caller's to free and the box still owns its own: the same affine discipline
+/// [`kira_rt_enum_clone`] follows. A scalar payload is returned by bits and owns
+/// nothing. A null handle reads as 0, mirroring [`kira_rt_enum_tag`].
 ///
-/// The caller knows from the variant's declared payload type whether the word
-/// is a `KStr` to free, which is why the flag does not have to come back with
-/// it.
+/// The caller knows from the variant's declared payload type which kind of
+/// handle it got, which is why the kind does not have to come back with it.
 ///
 /// # Safety
 /// `value` must be null or a live handle from this runtime; it is left
@@ -112,18 +130,22 @@ pub unsafe extern "C" fn kira_rt_enum_payload(value: KEnum) -> u64 {
     }
     // SAFETY: a non-null handle is a live `KiraEnum` that outlives this read.
     let source = unsafe { &*value };
-    if source.owns_str != 0 {
-        // SAFETY: `owns_str` promises `payload` is a live `KStr`; cloning it
+    match source.payload_kind {
+        // SAFETY: the kind promises `payload` is a live `KStr`; cloning it
         // reads it and leaves it in place.
-        return unsafe { kira_rt_str_clone(source.payload as KStr) } as u64;
+        PAYLOAD_STR => (unsafe { kira_rt_str_clone(source.payload as KStr) }) as u64,
+        // SAFETY: the kind promises `payload` is a live `KEnum`; cloning it
+        // reads it and leaves it in place.
+        PAYLOAD_ENUM => (unsafe { kira_rt_enum_clone(source.payload as KEnum) }) as u64,
+        _ => source.payload,
     }
-    source.payload
 }
 
 /// Produces an independent copy of an enum (clone-on-read for locals).
 ///
-/// A `String` payload is cloned so the copy shares no storage with the source;
-/// a scalar payload is copied by bits. A null handle clones to null.
+/// A `String` or nested-enum payload is cloned so the copy shares no storage
+/// with the source; a scalar payload is copied by bits. A null handle clones to
+/// null. The clone is deep, matching the VM's `Heap::copy_value`.
 ///
 /// # Safety
 /// `value` must be null or a live handle; it is left untouched.
@@ -134,23 +156,24 @@ pub unsafe extern "C" fn kira_rt_enum_clone(value: KEnum) -> KEnum {
     }
     // SAFETY: a non-null handle is a live `KiraEnum` that outlives this read.
     let source = unsafe { &*value };
-    let payload = if source.owns_str != 0 {
-        // SAFETY: `owns_str` promises `payload` is a live `KStr`; cloning it
+    let payload = match source.payload_kind {
+        // SAFETY: the kind promises `payload` is a live `KStr`; cloning it
         // reads it and leaves it in place.
-        let cloned = unsafe { kira_rt_str_clone(source.payload as KStr) };
-        cloned as u64
-    } else {
-        source.payload
+        PAYLOAD_STR => (unsafe { kira_rt_str_clone(source.payload as KStr) }) as u64,
+        // SAFETY: the kind promises `payload` is a live `KEnum`; cloning it
+        // reads it and leaves it in place.
+        PAYLOAD_ENUM => (unsafe { kira_rt_enum_clone(source.payload as KEnum) }) as u64,
+        _ => source.payload,
     };
     Box::into_raw(Box::new(KiraEnum {
         tag: source.tag,
-        owns_str: source.owns_str,
+        payload_kind: source.payload_kind,
         payload,
     }))
 }
 
-/// Frees an enum, releasing an owned `String` payload. A null handle is a
-/// no-op.
+/// Frees an enum, releasing an owned `String` or nested-enum payload. A null
+/// handle is a no-op.
 ///
 /// # Safety
 /// `value` must be null or a live handle from this runtime, freed at most once.
@@ -162,10 +185,16 @@ pub unsafe extern "C" fn kira_rt_enum_free(value: KEnum) {
     // SAFETY: the handle came from `Box::into_raw`, and the caller's free-once
     // contract makes this the only reclaim of it.
     let boxed = unsafe { Box::from_raw(value) };
-    if boxed.owns_str != 0 {
-        // SAFETY: `owns_str` promises `payload` is a live `KStr`, freed here
+    match boxed.payload_kind {
+        // SAFETY: the kind promises `payload` is a live `KStr`, freed here
         // exactly once as the box is reclaimed.
-        unsafe { kira_rt_str_free(boxed.payload as KStr) };
+        PAYLOAD_STR => unsafe { kira_rt_str_free(boxed.payload as KStr) },
+        // SAFETY: the kind promises `payload` is a live `KEnum`, freed here
+        // exactly once as the box is reclaimed. Recursion is bounded by the
+        // program's nesting depth, which is finite because a payload type
+        // resolves against types that already resolve.
+        PAYLOAD_ENUM => unsafe { kira_rt_enum_free(boxed.payload as KEnum) },
+        _ => {}
     }
 }
 
@@ -183,7 +212,7 @@ mod tests {
     fn a_scalar_enum_round_trips_its_tag_and_frees_cleanly() {
         // SAFETY: the handle is live and freed exactly once.
         unsafe {
-            let value = kira_rt_enum_new(2, 0, 42);
+            let value = kira_rt_enum_new(2, PAYLOAD_INERT, 42);
             assert_eq!(kira_rt_enum_tag(value), 2);
             let copy = kira_rt_enum_clone(value);
             assert_eq!(kira_rt_enum_tag(copy), 2);
@@ -201,7 +230,7 @@ mod tests {
         // free; a leak would surface as a reported leak.
         // SAFETY: every handle below is live and freed exactly once.
         unsafe {
-            let value = kira_rt_enum_new(0, 1, str_handle("payload") as u64);
+            let value = kira_rt_enum_new(0, PAYLOAD_STR, str_handle("payload") as u64);
             let copy = kira_rt_enum_clone(value);
             assert_ne!(
                 (*value).payload,
@@ -220,7 +249,7 @@ mod tests {
         // the box's own — the affine guarantee the VM proves with heap counters.
         // SAFETY: every handle below is live and freed exactly once.
         unsafe {
-            let value = kira_rt_enum_new(1, 1, str_handle("bound") as u64);
+            let value = kira_rt_enum_new(1, PAYLOAD_STR, str_handle("bound") as u64);
             let read = kira_rt_enum_payload(value) as KStr;
             assert_ne!(
                 read as u64,
@@ -230,9 +259,63 @@ mod tests {
             kira_rt_enum_free(value);
             kira_rt_str_free(read);
 
-            let scalar = kira_rt_enum_new(0, 0, 77);
+            let scalar = kira_rt_enum_new(0, PAYLOAD_INERT, 77);
             assert_eq!(kira_rt_enum_payload(scalar), 77);
             kira_rt_enum_free(scalar);
+        }
+    }
+
+    /// The box is `#[repr(C)]`, so its layout is pinned here beside it.
+    #[test]
+    fn the_enum_box_layout_is_pinned() {
+        assert_eq!(size_of::<KiraEnum>(), 24);
+        assert_eq!(align_of::<KiraEnum>(), 8);
+        assert_eq!(size_of::<KEnum>(), size_of::<usize>());
+    }
+
+    /// A nested enum payload — what a `Result`-shaped `Error` variant carries —
+    /// is cloned deeply and freed exactly once with its owner.
+    ///
+    /// Under Miri or ASan a shared inner handle would surface here as a double
+    /// free, and a missed recursive free as a leak.
+    #[test]
+    fn a_nested_enum_payload_is_cloned_deeply_and_freed_with_its_owner() {
+        // SAFETY: every handle below is live and freed exactly once.
+        unsafe {
+            // `Error(.MissingNode("boom"))`: an enum whose payload is an enum
+            // whose payload is a string — two levels of recursion.
+            let inner = kira_rt_enum_new(1, PAYLOAD_STR, str_handle("boom") as u64);
+            let outer = kira_rt_enum_new(0, PAYLOAD_ENUM, inner as u64);
+
+            let copy = kira_rt_enum_clone(outer);
+            assert_ne!(
+                (*outer).payload,
+                (*copy).payload,
+                "the clone owns its own nested enum"
+            );
+            assert_eq!(kira_rt_enum_tag((*copy).payload as KEnum), 1);
+
+            // A payload read is owned: freeing the outer must leave it valid.
+            let read = kira_rt_enum_payload(outer) as KEnum;
+            assert_ne!(read as u64, (*outer).payload, "the read owns its own enum");
+            kira_rt_enum_free(outer);
+            assert_eq!(kira_rt_enum_tag(read), 1, "the read survives its source");
+            kira_rt_enum_free(read);
+            kira_rt_enum_free(copy);
+        }
+    }
+
+    /// An unrecognized kind owns nothing rather than reinterpreting the word.
+    #[test]
+    fn an_unknown_payload_kind_is_treated_as_inert() {
+        // SAFETY: the handle is live and freed exactly once; the payload word
+        // is never dereferenced because the kind is not one that owns.
+        unsafe {
+            let value = kira_rt_enum_new(0, 99, 0xdead_beef);
+            assert_eq!(kira_rt_enum_payload(value), 0xdead_beef);
+            let copy = kira_rt_enum_clone(value);
+            kira_rt_enum_free(value);
+            kira_rt_enum_free(copy);
         }
     }
 

@@ -1,0 +1,123 @@
+// attempt / try / handle: run a body that may fail, and route the failure to
+// the arm that names it.
+//
+// `try` unwraps a `Result`-shaped value — an enum with an `Ok` variant and an
+// `Error` variant whose payload is the failure enum. On `Ok` the body carries
+// on with the unwrapped value; on `Error` control leaves the body for the
+// `handle` arm naming that failure.
+//
+// "Result-shaped" is structural, not a particular declared type: any enum with
+// that `Ok`/`Error` pair works, which is why the outcome enums below are
+// declared right here.
+//
+// The construct is a desugar. An `attempt` becomes the same `if`/`else` chain a
+// `match` becomes, so no backend learns that `attempt`, `try`, or `handle`
+// exists — see `.codex/work/attempt.md`.
+
+enum ClampError { TooSmall TooBig }
+
+enum ClampOutcome {
+    Ok: Int
+    Error: ClampError
+}
+
+function clamp(n: Int) -> ClampOutcome {
+    if n < 0 {
+        return .Error(.TooSmall)
+    }
+    if n > 100 {
+        return .Error(.TooBig)
+    }
+    return .Ok(n)
+}
+
+// A handler arm is spelled `Variant { … }` — no `->`, unlike a `match` arm.
+//
+// This function has no trailing `return`, and needs none: the statements after
+// the `try` run only when it succeeded, so they are the `else` of the failure
+// test. Both branches return, so the `attempt` is a definite return.
+function process(n: Int) -> Int {
+    attempt {
+        let v = try clamp(n)
+        return v * 2
+    } handle {
+        TooSmall { return 0 - 1 }
+        TooBig { return 0 - 2 }
+    }
+}
+
+// A failure may carry a payload, which its handler arm binds and reads. The
+// failure enum lives inside the outcome's `Error` variant, so reading `reason`
+// projects a payload out of two nested enum boxes.
+enum RenderFailure {
+    MissingNode: String = "missing"
+    InvalidState: String = "invalid"
+}
+
+enum RenderOutcome {
+    Ok: Int
+    Error: RenderFailure
+}
+
+function render(useMissing: Bool) -> RenderOutcome {
+    if useMissing {
+        return .Error(.MissingNode("boom"))
+    }
+    return .Error(.InvalidState("halt"))
+}
+
+function reasonOf(useMissing: Bool) -> String {
+    attempt {
+        let value = try render(useMissing)
+        return "rendered"
+    } handle {
+        MissingNode(reason) { return reason }
+        InvalidState(reason) { return reason }
+    }
+}
+
+// Two `try`s in one body: the second nests inside the first's success branch,
+// and both route to the same handlers. Every `try` in one `attempt` must fail
+// with the same enum, for exactly that reason.
+enum StepError { First Second }
+
+enum StepOutcome {
+    Ok: Int
+    Error: StepError
+}
+
+function step(n: Int, failAt: Int) -> StepOutcome {
+    if n == failAt {
+        if n == 1 {
+            return .Error(.First)
+        }
+        return .Error(.Second)
+    }
+    return .Ok(n * 10)
+}
+
+function twoSteps(failAt: Int) -> Int {
+    attempt {
+        let a = try step(1, failAt)
+        let b = try step(2, failAt)
+        return a + b
+    } handle {
+        First { return 0 - 1 }
+        Second { return 0 - 2 }
+    }
+}
+
+@Main
+function main() {
+    print(process(50))
+    print(process(0 - 5))
+    print(process(200))
+
+    print(reasonOf(true))
+    print(reasonOf(false))
+
+    print(twoSteps(0))
+    print(twoSteps(1))
+    print(twoSteps(2))
+    return
+}

@@ -31,6 +31,7 @@ use kira_syntax_model::ast::{Block, ExprId, ForIterable, Stmt, StmtId, SwitchCas
 use crate::analyze::{Analyzer, FnCtx};
 use crate::place::PlacePurpose;
 
+mod attempts;
 mod fors;
 mod matches;
 
@@ -230,6 +231,11 @@ impl Analyzer<'_> {
                 arms,
                 span,
             } => self.analyze_match(ctx, subject, &arms, span, out),
+            Stmt::Attempt {
+                body,
+                handlers,
+                span,
+            } => self.analyze_attempt(ctx, &body, &handlers, span, out),
             Stmt::Break { span } => {
                 if self.check_in_loop(ctx, span, "break", "KSEM041") {
                     let hir = self.program.stmts.alloc(HirStmt::Break);

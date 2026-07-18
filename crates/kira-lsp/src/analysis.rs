@@ -231,6 +231,46 @@ mod tests {
         );
     }
 
+    /// `attempt`/`try`/`handle` needs no LSP wiring, and this says so.
+    ///
+    /// The construct reaches the editor by construction: the server serves
+    /// diagnostics from the same salsa `analyzed` query `kirac check` uses, so
+    /// new syntax is understood the moment analysis understands it. A clean
+    /// `attempt` produces no diagnostics, and each of its own checks squiggles
+    /// with a span an editor can render.
+    #[test]
+    fn attempt_and_try_analyze_the_way_the_compiler_does() {
+        let clean = analyze(
+            "t.kira",
+            "enum E { A }\n\
+             enum O { Ok: Int Error: E }\n\
+             function f() -> O { return .Ok(1) }\n\
+             function g() -> Int { attempt { let v = try f() return v } \
+             handle { A { return 0 } } }\n\
+             @Main function main() { print(g()) return }",
+        );
+        assert!(
+            clean.diagnostics.is_empty(),
+            "a well-formed attempt is clean: {:?}",
+            clean.diagnostics
+        );
+
+        let stray = analyze(
+            "t.kira",
+            "enum E { A }\n\
+             enum O { Ok: Int Error: E }\n\
+             function f() -> O { return .Ok(1) }\n\
+             @Main function main() { let v = try f() print(v) return }",
+        );
+        let diagnostic = stray
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == Some("KSEM137"))
+            .expect("`try` outside an `attempt` is reported");
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
+    }
+
     /// Fixed-width spellings need no LSP wiring either, and this says so.
     ///
     /// A width is resolved by the same `analyzed` query the compiler uses, so
