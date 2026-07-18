@@ -4,7 +4,6 @@
 
 mod command;
 mod dispatch;
-mod host;
 mod hybrid;
 mod live;
 mod native;

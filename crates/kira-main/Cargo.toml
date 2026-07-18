@@ -8,5 +8,11 @@ repository.workspace = true
 [lib]
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[dependencies]
+kira-bytecode.workspace = true
+kira-runtime-abi.workspace = true
+kira-vm-runtime.workspace = true
+thiserror.workspace = true
+
 [lints]
 workspace = true

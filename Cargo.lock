@@ -255,6 +255,7 @@ dependencies = [
  "kira-ir",
  "kira-live",
  "kira-llvm-backend",
+ "kira-main",
  "kira-manifest",
  "kira-native-bridge",
  "kira-program-graph",
@@ -430,6 +431,12 @@ dependencies = [
 [[package]]
 name = "kira-main"
 version = "0.1.0"
+dependencies = [
+ "kira-bytecode",
+ "kira-runtime-abi",
+ "kira-vm-runtime",
+ "thiserror",
+]
 
 [[package]]
 name = "kira-manifest"

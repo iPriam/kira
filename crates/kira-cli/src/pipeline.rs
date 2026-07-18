@@ -15,7 +15,7 @@
 //! The backends:
 //!
 //! - `vm` compiles the verified IR to bytecode; `run` executes it on the VM
-//!   with the [`StdHost`](crate::host::StdHost),
+//!   with the [`StdoutHost`](kira_main::StdoutHost),
 //! - `llvm` compiles the same IR to a native object and links an executable;
 //!   `run` then executes that,
 //! - `hybrid` splits the same IR on its `@Runtime`/`@Native` annotations and
@@ -39,11 +39,11 @@ use kira_source::SourceMap;
 
 use kira_wasm_runtime::WasmDevice;
 
-use crate::host::StdHost;
 use crate::hybrid;
 use crate::native;
 use crate::options::{CompileOptions, Device};
 use crate::wasm;
+use kira_main::StdoutHost;
 
 /// Analyzes and lowers the source program to IR.
 ///
@@ -387,7 +387,7 @@ fn run_on_vm(ir: &IrProgram) -> i32 {
             return EXIT_FAILURE;
         }
     };
-    let mut host = StdHost;
+    let mut host = StdoutHost;
     match kira_vm_runtime::execute(&module, &mut host) {
         Ok(_) => EXIT_OK,
         Err(trap) => {
