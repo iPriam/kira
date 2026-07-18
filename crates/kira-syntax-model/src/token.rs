@@ -83,6 +83,8 @@ pub enum TokenKind {
     Break,
     /// `continue`
     Continue,
+    /// `type`
+    Type,
 
     // Punctuation and operators.
     /// `(`
@@ -176,6 +178,7 @@ impl TokenKind {
             "default" => TokenKind::Default,
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
+            "type" => TokenKind::Type,
             _ => return None,
         })
     }
@@ -208,6 +211,7 @@ impl TokenKind {
             TokenKind::Default => "`default`",
             TokenKind::Break => "`break`",
             TokenKind::Continue => "`continue`",
+            TokenKind::Type => "`type`",
             TokenKind::LParen => "`(`",
             TokenKind::RParen => "`)`",
             TokenKind::LBrace => "`{`",

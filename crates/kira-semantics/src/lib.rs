@@ -10,6 +10,7 @@
 //! into the [`DiagnosticAccumulator`], which salsa propagates up the call
 //! graph, so a caller collects every diagnostic from one `accumulated` call.
 
+mod aliases;
 mod analyze;
 mod arrays;
 mod decl;

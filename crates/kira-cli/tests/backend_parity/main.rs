@@ -117,6 +117,7 @@ fn assert_trap_parity(source: &str, before_the_trap: &str) {
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
 }
 
+mod aliases;
 mod arithmetic;
 mod arrays;
 mod control_flow;

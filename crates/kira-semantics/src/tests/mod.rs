@@ -1,6 +1,7 @@
 //! Semantic-analysis tests: the diagnostics `kirac check` reports, driven
 //! through the same salsa `analyzed` query the CLI and the LSP use.
 
+mod aliases;
 mod arrays;
 mod enums;
 mod matches;

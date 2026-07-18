@@ -15,6 +15,7 @@ use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::{ExprId, Function, Item};
 
+use crate::aliases::AliasTable;
 use crate::ownership::LocalOwnership;
 
 /// The result of analyzing one program.
@@ -77,6 +78,11 @@ pub(crate) struct Analyzer<'a> {
     /// is unanalyzed syntax, and the table is a model type that carries none. A
     /// construction site analyzes only the default it needs.
     pub(crate) enum_defaults: Vec<Vec<Option<ExprId>>>,
+    /// Every `type Name = Target` alias, keyed by name.
+    ///
+    /// Registered before anything is resolved and consulted from
+    /// `resolve_named_type`, so an alias reaches every type position at once.
+    pub(crate) aliases: AliasTable,
     pub(crate) program: HirProgram,
     pub(crate) diagnostics: Vec<Diagnostic>,
 }
@@ -239,12 +245,17 @@ impl<'a> Analyzer<'a> {
             sig_index: HashMap::new(),
             struct_defaults: Vec::new(),
             enum_defaults: Vec::new(),
+            aliases: AliasTable::new(),
             program: HirProgram::default(),
             diagnostics: Vec::new(),
         }
     }
 
     fn run(mut self) -> Analysis {
+        // Aliases are registered first because any of the three collections
+        // below may name one; they resolve lazily on first use, so registering
+        // them here does not require the struct or enum table to exist yet.
+        self.collect_type_aliases();
         // Enums are declared before structs, so a struct field may name one; a
         // struct is declared before signatures, so a parameter may name either.
         self.collect_enums();
@@ -293,7 +304,7 @@ impl<'a> Analyzer<'a> {
                         });
                     }
                 }
-                Item::Enum(_) | Item::Unsupported(_) => {}
+                Item::Enum(_) | Item::TypeAlias(_) | Item::Unsupported(_) => {}
             }
         }
         callables

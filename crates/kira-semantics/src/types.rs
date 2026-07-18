@@ -70,6 +70,13 @@ impl Analyzer<'_> {
         if let Some(ty) = Type::from_name(&text) {
             return ty;
         }
+        // Aliases come before the nominal tables and after the builtins: a
+        // builtin name is never available to alias (collecting them rejects
+        // that), and an alias name can collide with no struct or enum, so the
+        // order decides nothing except how fast the common case is found.
+        if let Some(ty) = self.resolve_alias_name(&text, context) {
+            return ty;
+        }
         if let Some(id) = self.program.types.structs().lookup(&text) {
             return Type::Struct(id);
         }
