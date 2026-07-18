@@ -20,6 +20,7 @@ pub mod project_manifest;
 pub mod tests_config;
 pub mod toml_text;
 
+pub use declaration_loader::{DeclarationError, load as load_declaration};
 pub use dependency::DependencySpec;
 pub use lockfile::LockFile;
 pub use package_manifest::PackageManifest;

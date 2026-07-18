@@ -20,6 +20,7 @@ mod scope;
 pub(crate) use scope::FnCtx;
 
 use crate::aliases::AliasTable;
+use crate::build_kind::BuildKind;
 
 /// The result of analyzing one program.
 #[derive(Debug, Clone)]
@@ -73,8 +74,17 @@ struct FuncSig {
 /// `modules` names every module the program was loaded with and the file each
 /// one is, so an `import` that names something else can be reported as
 /// unresolved. A single-file program passes an empty slice.
-pub fn analyze(tree: &SyntaxTree, interner: &Interner, modules: &[(String, SourceId)]) -> Analysis {
-    Analyzer::new(tree, interner, modules).run()
+///
+/// `build_kind` decides the entrypoint rule: an application must declare a
+/// `@Main` and a library must not. That check lives here, above the backend
+/// split, which is why the kind is a frontend input rather than a backend flag.
+pub fn analyze(
+    tree: &SyntaxTree,
+    interner: &Interner,
+    modules: &[(String, SourceId)],
+    build_kind: BuildKind,
+) -> Analysis {
+    Analyzer::new(tree, interner, modules, build_kind).run()
 }
 
 pub(crate) struct Analyzer<'a> {
@@ -84,6 +94,9 @@ pub(crate) struct Analyzer<'a> {
     /// walks: it is what a diagnostic's span is attributed to, and what decides
     /// which file's imports a qualified name resolves against.
     pub(crate) source: SourceId,
+    /// Whether this program is an application (needs `@Main`) or a library
+    /// (must not have one).
+    build_kind: BuildKind,
     /// Every file's imports, keyed by file.
     pub(crate) imports: crate::imports::ImportTable,
     pub(crate) tree: &'a SyntaxTree,
@@ -151,11 +164,17 @@ pub(crate) struct Analyzer<'a> {
 }
 
 impl<'a> Analyzer<'a> {
-    fn new(tree: &'a SyntaxTree, interner: &'a Interner, modules: &[(String, SourceId)]) -> Self {
+    fn new(
+        tree: &'a SyntaxTree,
+        interner: &'a Interner,
+        modules: &[(String, SourceId)],
+        build_kind: BuildKind,
+    ) -> Self {
         let entries = crate::imports::collect_imports(tree, interner);
         let imports = crate::imports::ImportTable::build(modules, &entries);
         let mut analyzer = Self {
             source: crate::FILE_SOURCE_ID,
+            build_kind,
             imports,
             tree,
             interner,
@@ -398,6 +417,12 @@ impl<'a> Analyzer<'a> {
         )
     }
 
+    /// Checks the entrypoint rule for the kind of thing being built.
+    ///
+    /// An application needs exactly one `@Main`; a library must have none. Both
+    /// halves are decided here rather than in a backend because the answer is
+    /// the same for every backend: an entrypoint is a property of the program,
+    /// not of the engine that runs it.
     fn check_main(&mut self) {
         // Snapshot the entrypoint's identity before emitting, so the
         // immutable borrow of `self.sigs` does not overlap `self.emit`.
@@ -406,19 +431,30 @@ impl<'a> Analyzer<'a> {
             .iter()
             .find(|sig| sig.is_main)
             .map(|sig| (sig.name.clone(), sig.params.is_empty(), sig.name_span));
-        match main {
-            None => {
+        match (self.build_kind, main) {
+            (BuildKind::Application, None) => {
                 self.emit(
                     Span::new(0, 0),
                     "KSEM011",
                     "program has no `@Main` function to run",
                 );
             }
-            Some((name, no_params, name_span)) => {
+            (BuildKind::Application, Some((name, no_params, name_span))) => {
                 if !no_params {
                     self.emit(name_span, "KSEM012", "`@Main` must take no parameters");
                 }
                 self.program.main = self.sig_index.get(&name).copied();
+            }
+            // A library has no entrypoint by definition, so its absence is not
+            // an error and `program.main` stays `None`.
+            (BuildKind::Library, None) => {}
+            (BuildKind::Library, Some((_, _, name_span))) => {
+                self.emit(
+                    name_span,
+                    "KSEM158",
+                    "a library package cannot declare `@Main`: a library is \
+                     entered by its consumer, not run",
+                );
             }
         }
     }

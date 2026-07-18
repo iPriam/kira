@@ -15,6 +15,13 @@ pub enum VmError {
     /// The module failed structural validation before execution began.
     #[error("invalid module: {0}")]
     Module(#[from] ModuleValidateError),
+    /// Execution was asked to run a module that carries no entrypoint.
+    ///
+    /// A library module is well-formed and validates cleanly; it simply has
+    /// nothing to start. Reported by name rather than as a validation failure,
+    /// because the module is not broken — the request was.
+    #[error("this module is a library: it has no entrypoint to run")]
+    NoEntrypoint,
     /// Integer division or remainder by zero.
     #[error("vm divide does not allow division by zero")]
     DivideByZero,

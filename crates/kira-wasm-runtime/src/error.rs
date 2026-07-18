@@ -5,6 +5,22 @@ use std::path::PathBuf;
 /// A failure while building a Kira wasm module.
 #[derive(Debug, thiserror::Error)]
 pub enum WasmError {
+    /// A library was handed to the wasm backend, which builds only whole
+    /// programs.
+    ///
+    /// Refused by name rather than silently emitting a module with no start
+    /// function. The wasm backend emits one self-contained module and links no
+    /// foreign code, so a *library* artifact for a JS host would need a
+    /// string/allocator contract across the module boundary that is undesigned.
+    /// The recorded yes-path: the module builder already supports arbitrary
+    /// named exports (it exports only `MAIN_EXPORT` today), so exporting one
+    /// symbol per Kira export is the shape this grows into.
+    #[error(
+        "a library cannot be built as a wasm module yet: the wasm backend emits one \
+         self-contained module with a single entrypoint, and the string/allocator \
+         contract across a wasm module boundary is undesigned"
+    )]
+    LibraryUnsupported,
     /// An IR node carried the error type.
     ///
     /// Lowering only ever runs on a program that type-checked, so this is a

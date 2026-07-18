@@ -23,9 +23,16 @@ impl Codegen<'_> {
     /// same — freeing the result first when it owns a string, exactly as the VM
     /// drops it.
     pub(super) fn lower_entry_point(&mut self) -> Result<(), LlvmError> {
-        let entry = self.functions[self.program.main as usize]
+        let main_function = self
+            .program
+            .main_function()
+            .ok_or(LlvmError::Unsupported("an executable with no entrypoint"))?;
+        let index = self
+            .program
+            .main
+            .ok_or(LlvmError::Unsupported("an executable with no entrypoint"))?;
+        let entry = self.functions[index as usize]
             .ok_or(LlvmError::Unsupported("an entrypoint with no native body"))?;
-        let main_function = self.program.main_function();
 
         // SAFETY: every value and type below belongs to this live module, and
         // the builder is positioned on a block of the function being built.

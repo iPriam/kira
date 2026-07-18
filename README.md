@@ -705,6 +705,47 @@ is an undefined name rather than a silent capture.
 See [.codex/work/closures.md](.codex/work/closures.md) for the design, and
 [examples/closures/closures.kira](examples/closures/closures.kira) for a tour.
 
+## Library packages
+
+A package declaring `kind = .Library` in its `package.kira` builds to a linkable
+artifact instead of a program, and needs no `@Main`:
+
+```kira
+Package uifoundation {
+    let version = "0.1.0"
+    let kind = .Library
+}
+```
+
+```sh
+kirac check uifoundation.kira                      # clean with no @Main
+kirac build --backend vm uifoundation.kira         # a .kbc with no entrypoint
+kirac build --backend llvm uifoundation.kira       # a shared library, no C main
+kirac build --backend hybrid uifoundation.kira     # both halves plus a manifest
+kirac run uifoundation.kira                        # refused: no entrypoint
+```
+
+`kirac` finds the manifest by walking up from the source file, so the package is
+what decides this and there is no flag that could disagree with it. A file with
+no `package.kira` above it is a program, which is why a bare `.kira` handed to
+the compiler still reports a missing `@Main`.
+
+The entrypoint rule lives in analysis, above the backend split, so it is one
+rule rather than three: an application must declare exactly one `@Main`
+(`KSEM011`), and a library must declare none (`KSEM158`). Running a library is
+refused identically on all three backends, because there is nothing backend-
+specific about a package having no way in.
+
+Building a library as a *wasm* module is refused by name: the wasm backend emits
+one self-contained module entered at a single export, and the string and
+allocator contract across a wasm module boundary is undesigned. Compiling the VM
+into a wasm consumer is the supported Web path.
+
+What a library does not have yet is a way to say which functions a consumer may
+call. `@Export`, the symbols it mints, and the generated Rust wrapper crate are
+the next step; see
+[.codex/work/kira-export-design.md](.codex/work/kira-export-design.md).
+
 ## Live sessions
 
 `kirac live` builds a program into a `.klbundle`, serves it over a loopback
