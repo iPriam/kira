@@ -120,22 +120,34 @@ impl Analyzer<'_> {
 
     /// Reports a field's unresolvable type, distinguishing a forward reference
     /// from an unknown name — they are different mistakes with different fixes.
+    ///
+    /// The two forward references are themselves different mistakes. A struct
+    /// declared later in *this* file is moved above the one that wants it. A
+    /// struct declared in another file cannot be moved at all: what fixes it is
+    /// an `import`, which is what puts that file ahead of this one in the
+    /// program's dependencies-first module order.
     fn report_unknown_field_type(&mut self, owner: &str, text: &str, span: Span) {
-        let declared_later = self.tree.items().iter().any(|item| match item {
-            Item::Struct(other) => self.interner.resolve(other.name) == text,
-            _ => false,
-        });
-        if declared_later {
-            self.emit(
-                span,
-                "KSEM051",
-                format!(
-                    "struct `{owner}` cannot hold a `{text}` because `{text}` is declared \
-                     later in the file; move `{text}` above `{owner}`",
-                ),
-            );
-        } else {
+        let declared_in = self
+            .tree
+            .items_with_source()
+            .find_map(|(source, item)| match item {
+                Item::Struct(other) if self.interner.resolve(other.name) == text => Some(source),
+                _ => None,
+            });
+        let Some(source) = declared_in else {
             self.emit(span, "KSEM050", format!("unknown type `{text}`"));
-        }
+            return;
+        };
+        let message = match source == self.source {
+            true => format!(
+                "struct `{owner}` cannot hold a `{text}` because `{text}` is declared \
+                 later in the file; move `{text}` above `{owner}`",
+            ),
+            false => format!(
+                "struct `{owner}` cannot hold a `{text}` because `{text}` is declared in \
+                 a file this one does not import; add the `import` that names it",
+            ),
+        };
+        self.emit(span, "KSEM051", message);
     }
 }
