@@ -232,6 +232,7 @@ fn assert_parity(source: &str) {
 
 mod aliases;
 mod arrays;
+mod bitwise;
 mod calls;
 mod control_flow;
 mod enums;

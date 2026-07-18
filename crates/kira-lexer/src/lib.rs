@@ -190,6 +190,8 @@ impl<'a> Lexer<'a> {
             (b'>', Some(b'=')) => Some(TokenKind::GtEq),
             (b'&', Some(b'&')) => Some(TokenKind::AmpAmp),
             (b'|', Some(b'|')) => Some(TokenKind::PipePipe),
+            (b'<', Some(b'<')) => Some(TokenKind::LtLt),
+            (b'>', Some(b'>')) => Some(TokenKind::GtGt),
             (b'.', Some(b'.')) => Some(TokenKind::DotDot),
             _ => None,
         };
@@ -219,6 +221,10 @@ impl<'a> Lexer<'a> {
             b'%' => Some(TokenKind::Percent),
             b'<' => Some(TokenKind::Lt),
             b'>' => Some(TokenKind::Gt),
+            b'&' => Some(TokenKind::Amp),
+            b'|' => Some(TokenKind::Pipe),
+            b'^' => Some(TokenKind::Caret),
+            b'~' => Some(TokenKind::Tilde),
             b'!' => Some(TokenKind::Bang),
             _ => None,
         };

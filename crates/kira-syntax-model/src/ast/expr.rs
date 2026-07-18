@@ -63,6 +63,22 @@ pub enum Expr {
         /// Span covering both operands.
         span: Span,
     },
+    /// A conditional expression, `cond ? then : otherwise`.
+    ///
+    /// The one expression in the language that is control flow: exactly one
+    /// branch is evaluated, which is why it cannot be desugared into a call
+    /// and why every backend lowers it as a branch rather than a select
+    /// instruction.
+    Conditional {
+        /// The `Bool` condition.
+        cond: ExprId,
+        /// The value when the condition holds.
+        then: ExprId,
+        /// The value when it does not.
+        otherwise: ExprId,
+        /// Span covering the condition through the else branch.
+        span: Span,
+    },
     /// A call to a named function (or the `print` builtin).
     Call {
         /// The callee name.
@@ -197,6 +213,7 @@ impl Expr {
             | Expr::Name { span, .. }
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
+            | Expr::Conditional { span, .. }
             | Expr::Call { span, .. }
             | Expr::StructLit { span, .. }
             | Expr::MethodCall { span, .. }
@@ -217,6 +234,8 @@ pub enum UnaryOp {
     Neg,
     /// Logical negation (`!x`).
     Not,
+    /// Bitwise complement (`~x`).
+    BitNot,
 }
 
 /// A binary operator.
@@ -248,6 +267,16 @@ pub enum BinaryOp {
     And,
     /// `||`
     Or,
+    /// `&`
+    BitAnd,
+    /// `|`
+    BitOr,
+    /// `^`
+    BitXor,
+    /// `<<`
+    Shl,
+    /// `>>`
+    Shr,
 }
 
 impl BinaryOp {
@@ -267,6 +296,11 @@ impl BinaryOp {
             BinaryOp::Ge => ">=",
             BinaryOp::And => "&&",
             BinaryOp::Or => "||",
+            BinaryOp::BitAnd => "&",
+            BinaryOp::BitOr => "|",
+            BinaryOp::BitXor => "^",
+            BinaryOp::Shl => "<<",
+            BinaryOp::Shr => ">>",
         }
     }
 }

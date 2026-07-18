@@ -135,6 +135,47 @@ mod tests {
         assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
     }
 
+    /// The conditional expression and the bitwise operators reach the editor
+    /// the same way everything before them did — six new tokens and a new
+    /// expression node, and the LSP learns none of them.
+    ///
+    /// The bad case is chosen for the rung of the precedence ladder that
+    /// differs from C: `flags & 8 == 8` groups as `flags & (8 == 8)`, so an
+    /// editor squiggles it rather than silently accepting C's reading.
+    #[test]
+    fn conditional_and_bitwise_syntax_analyze_the_way_the_compiler_does() {
+        let clean = analyze(
+            "t.kira",
+            "@Main function main() { let flags = 6 print((flags & 2) == 2 ? flags << 1 : ~flags) \
+             print(flags | 1) print(flags ^ 3) print(flags >> 1) return }",
+        );
+        assert!(clean.diagnostics.is_empty(), "{:?}", clean.diagnostics);
+
+        let mis_grouped = analyze(
+            "t.kira",
+            "@Main function main() { let flags = 6 print(flags & 8 == 8) return }",
+        );
+        let diagnostic = mis_grouped
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == Some("KSEM071"))
+            .expect("`&` against a `Bool` is reported");
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
+
+        let bad_condition = analyze(
+            "t.kira",
+            "@Main function main() { print(1 ? 2 : 3) return }",
+        );
+        assert!(
+            bad_condition
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == Some("KSEM131")),
+            "a non-boolean condition is reported"
+        );
+    }
+
     /// Fixed-width spellings need no LSP wiring either, and this says so.
     ///
     /// A width is resolved by the same `analyzed` query the compiler uses, so

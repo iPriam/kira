@@ -34,8 +34,38 @@ impl Vm<'_> {
             }
             I::EqBool | I::NeBool => self.bool_compare(instruction),
             I::EqStr | I::NeStr => self.str_compare(instruction),
+            I::BitAnd | I::BitOr | I::BitXor | I::Shl | I::ShrInt | I::ShrUInt => {
+                self.bitwise(instruction)
+            }
             _ => Err(VmError::BadDispatch),
         }
+    }
+
+    /// The bitwise operators and shifts, on the raw 64-bit pattern.
+    ///
+    /// Two rules the other backends mirror exactly. The shift amount is taken
+    /// **modulo 64** rather than trapping or saturating, so `x << 64` is `x`;
+    /// Rust's `wrapping_shl`/`wrapping_shr` mask the same way wasm's shifts do,
+    /// while LLVM's `shl` would be poison, so the native backend masks
+    /// explicitly to land here. And `>>` is the one shift with two forms:
+    /// `ShrInt` propagates the sign bit, `ShrUInt` fills with zeros, which is
+    /// why the compiler picks between them from the *left* operand's spelling
+    /// rather than the VM inspecting anything.
+    fn bitwise(&mut self, instruction: Instruction) -> Result<(), VmError> {
+        use Instruction as I;
+        let rhs = self.pop_int()?;
+        let lhs = self.pop_int()?;
+        let value = match instruction {
+            I::BitAnd => lhs & rhs,
+            I::BitOr => lhs | rhs,
+            I::BitXor => lhs ^ rhs,
+            I::Shl => lhs.wrapping_shl(rhs as u32),
+            I::ShrInt => lhs.wrapping_shr(rhs as u32),
+            I::ShrUInt => ((lhs as u64).wrapping_shr(rhs as u32)) as i64,
+            _ => return Err(VmError::BadDispatch),
+        };
+        self.stack.push(Value::Int(value));
+        Ok(())
     }
 
     fn int_arith(&mut self, instruction: Instruction) -> Result<(), VmError> {

@@ -177,9 +177,17 @@ impl Func {
     pub fn i64_or(&mut self) -> &mut Self {
         self.simple(op::I64_OR)
     }
+    /// Emits `i64.xor`.
+    pub fn i64_xor(&mut self) -> &mut Self {
+        self.simple(op::I64_XOR)
+    }
     /// Emits `i64.shl`.
     pub fn i64_shl(&mut self) -> &mut Self {
         self.simple(op::I64_SHL)
+    }
+    /// Emits `i64.shr_s`.
+    pub fn i64_shr_s(&mut self) -> &mut Self {
+        self.simple(op::I64_SHR_S)
     }
     /// Emits `i64.shr_u`.
     pub fn i64_shr_u(&mut self) -> &mut Self {
