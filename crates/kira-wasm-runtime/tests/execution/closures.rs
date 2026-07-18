@@ -257,3 +257,65 @@ function main() {
 "#,
     );
 }
+
+#[test]
+fn a_closure_returning_a_string_agrees_with_the_vm() {
+    // wasm's i32 word makes a fabricated integer return for a pointer-shaped
+    // result the same hazard it is on LLVM, so a non-scalar result is pinned
+    // here too rather than left to the scalar cases.
+    assert_parity(
+        r#"
+@Main
+function main() {
+    let greet: () -> String = { in return "hello" }
+    print(greet())
+    return
+}
+"#,
+    );
+}
+
+#[test]
+fn a_closure_returning_a_struct_agrees_with_the_vm() {
+    assert_parity(
+        r#"
+struct Point {
+    let x: Int
+    let y: Int
+}
+
+function pick(which: Int, a: borrow () -> Point, b: borrow () -> Point) -> Point {
+    if which == 0 {
+        return a()
+    }
+    return b()
+}
+
+@Main
+function main() {
+    let one: () -> Point = { in return Point { x: 1, y: 2 } }
+    let two: () -> Point = { in return Point { x: 3, y: 4 } }
+    print(pick(0, one, two).x)
+    print(pick(1, one, two).y)
+    return
+}
+"#,
+    );
+}
+
+#[test]
+fn a_function_type_with_no_literal_anywhere_still_lowers() {
+    assert_parity(
+        r#"
+function apply(f: borrow (Int) -> String) -> String {
+    return f(1)
+}
+
+@Main
+function main() {
+    print("ok")
+    return
+}
+"#,
+    );
+}

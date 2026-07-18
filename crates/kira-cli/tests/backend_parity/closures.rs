@@ -333,3 +333,86 @@ function main() {
     // 3 * (0 + 1 + 2 + 3)
     assert_eq!(output, "18\n");
 }
+
+#[test]
+fn a_closure_returning_a_string_agrees_on_every_backend() {
+    // The dispatcher's tail used to fabricate an `Int(0)` for any result type
+    // it had no literal for, which the VM ran and the LLVM verifier rejected.
+    // A non-scalar result is what makes that visible.
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    let greet: () -> String = { in return "hello" }
+    print(greet())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "hello\n");
+}
+
+#[test]
+fn a_closure_returning_a_struct_agrees_on_every_backend() {
+    let output = assert_parity(
+        r#"
+struct Point {
+    let x: Int
+    let y: Int
+}
+
+function pick(which: Int, a: borrow () -> Point, b: borrow () -> Point) -> Point {
+    if which == 0 {
+        return a()
+    }
+    return b()
+}
+
+@Main
+function main() {
+    let one: () -> Point = { in return Point { x: 1, y: 2 } }
+    let two: () -> Point = { in return Point { x: 3, y: 4 } }
+    print(pick(0, one, two).x)
+    print(pick(1, one, two).y)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "1\n4\n");
+}
+
+#[test]
+fn a_function_type_with_no_literal_anywhere_still_builds() {
+    // `apply` is never called and no closure of its parameter's type exists, so
+    // the dispatcher this mints has zero branches. It is unreachable, but every
+    // backend still type-checks it, so its terminator must be well typed.
+    let output = assert_parity(
+        r#"
+function apply(f: borrow (Int) -> String) -> String {
+    return f(1)
+}
+
+@Main
+function main() {
+    print("ok")
+    return
+}
+"#,
+    );
+    assert_eq!(output, "ok\n");
+}
+
+#[test]
+fn a_closure_returning_an_array_agrees_on_every_backend() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    let names: () -> [String] = { in return ["a", "b", "c"] }
+    print(names().count)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "3\n");
+}

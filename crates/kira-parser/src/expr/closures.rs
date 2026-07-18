@@ -92,7 +92,7 @@ impl Parser<'_> {
                 let span = self.current().span;
                 self.error(
                     span,
-                    "KPAR035",
+                    "KPAR039",
                     format!(
                         "expected a closure parameter name, found {}",
                         self.current_kind().describe()
@@ -183,7 +183,7 @@ impl Parser<'_> {
             _ => {
                 self.error(
                     span,
-                    "KPAR036",
+                    "KPAR040",
                     "a trailing closure must follow a call, a name, or a method",
                 );
                 self.error_expr(span)
