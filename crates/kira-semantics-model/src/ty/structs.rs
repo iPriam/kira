@@ -94,6 +94,26 @@ impl StructTable {
         self.defs.get(id.0 as usize)
     }
 
+    /// Appends a field to an already-declared struct, returning its index.
+    ///
+    /// Exists for the *synthesized* struct a function type becomes: the closure
+    /// literals of one type are discovered while bodies are analyzed, one after
+    /// another, and each contributes its captures — so that struct's field list
+    /// is only complete once analysis is. Growing it in place is what lets a
+    /// function type be a `Type` (and so be written in a parameter, a field, or
+    /// an annotation) before anything is known about the closures that will
+    /// inhabit it.
+    ///
+    /// Never used on a struct the source declared: those are complete the
+    /// moment they are declared, and appending to one would silently change a
+    /// layout that construction sites already agreed on.
+    pub fn push_field(&mut self, id: StructId, field: FieldDef) -> Option<u32> {
+        let def = self.defs.get_mut(id.0 as usize)?;
+        let index = u32::try_from(def.fields.len()).ok()?;
+        def.fields.push(field);
+        Some(index)
+    }
+
     /// Every declared struct, in declaration order.
     pub fn defs(&self) -> &[StructDef] {
         &self.defs

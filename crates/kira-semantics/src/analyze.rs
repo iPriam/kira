@@ -9,14 +9,17 @@ use std::collections::{BTreeSet, HashMap};
 
 use kira_core::Interner;
 use kira_diagnostics::{Diagnostic, Label, Severity};
-use kira_semantics_model::hir::{FuncId, HirFunction, HirLocal, HirProgram, LocalId};
+use kira_semantics_model::hir::{FuncId, HirFunction, HirProgram};
 use kira_semantics_model::{OwnershipMode, StructId, Type};
 use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::{ExprId, Function, Item};
 
+mod scope;
+
+pub(crate) use scope::FnCtx;
+
 use crate::aliases::AliasTable;
-use crate::ownership::LocalOwnership;
 
 /// The result of analyzing one program.
 #[derive(Debug, Clone)]
@@ -124,156 +127,27 @@ pub(crate) struct Analyzer<'a> {
     /// Kept so a class that merely *names* one is not reported a second time
     /// for a parent that exists in the source but not in the table.
     pub(crate) unflattenable_classes: BTreeSet<String>,
+    /// Every function type the program mentions, and the struct each became.
+    ///
+    /// Beside the struct table for the same reason `classes` is: a function
+    /// type *is* a struct by the time anything downstream sees it, and this is
+    /// the only place that remembers which struct ids came from one. It never
+    /// leaves analysis.
+    pub(crate) fn_types: crate::closures::FnTypeTable,
+    /// The id every synthesized function is offset from: the number of
+    /// functions the source declares.
+    pub(crate) synth_base: u32,
+    /// Synthesized function bodies — lifted closures and dispatchers — indexed
+    /// by their id less [`Analyzer::synth_base`].
+    pub(crate) synth: Vec<Option<HirFunction>>,
+    /// Each closure literal's value, waiting for its type's field list to stop
+    /// growing.
+    pub(crate) closure_sites: Vec<crate::closures::ClosureSite>,
+    /// The engine the function being analyzed runs on, so a closure lifted out
+    /// of its body runs on the same one.
+    pub(crate) current_execution: kira_semantics_model::Execution,
     pub(crate) program: HirProgram,
     pub(crate) diagnostics: Vec<Diagnostic>,
-}
-
-/// Per-function analysis state: the growing local table and the lexical scope
-/// stack mapping names to slots.
-pub(crate) struct FnCtx {
-    pub(crate) locals: Vec<HirLocal>,
-    /// Ownership state per local, positionally aligned with `locals`.
-    ///
-    /// The two vectors are kept in step by construction: `declare` and
-    /// `declare_hidden` are the only ways to add a local and both push to
-    /// both, so `ownership[i]` always describes `locals[i]`.
-    ownership: Vec<LocalOwnership>,
-    pub(crate) scopes: Vec<HashMap<String, LocalId>>,
-    pub(crate) return_type: Type,
-    /// The struct this body is a method of, when it is one.
-    ///
-    /// A method's body may name a field bare — `return value + step` rather
-    /// than `self.step` — so a name that resolves to no local is tried against
-    /// this struct's fields before it is called undefined.
-    pub(crate) receiver: Option<StructId>,
-    /// How many loops enclose the statement being analyzed.
-    ///
-    /// A `break`/`continue` at depth zero has no loop to act on and is
-    /// reported; every one that survives analysis therefore has a target.
-    pub(crate) loop_depth: u32,
-}
-
-impl FnCtx {
-    pub(crate) fn new(return_type: Type) -> Self {
-        Self {
-            locals: Vec::new(),
-            ownership: Vec::new(),
-            scopes: vec![HashMap::new()],
-            return_type,
-            receiver: None,
-            loop_depth: 0,
-        }
-    }
-
-    pub(crate) fn push_scope(&mut self) {
-        self.scopes.push(HashMap::new());
-    }
-
-    pub(crate) fn pop_scope(&mut self) {
-        self.scopes.pop();
-    }
-
-    /// Declares a new owned local in the innermost scope, returning its slot.
-    ///
-    /// Every `let`/`var` binding is owned; only a parameter can be anything
-    /// else, and it uses [`FnCtx::declare_param`].
-    pub(crate) fn declare(&mut self, name: &str, ty: Type, mutable: bool) -> LocalId {
-        self.declare_param(name, ty, mutable, OwnershipMode::Owned)
-    }
-
-    /// Declares a local with an explicit ownership mode, returning its slot.
-    pub(crate) fn declare_param(
-        &mut self,
-        name: &str,
-        ty: Type,
-        mutable: bool,
-        ownership: OwnershipMode,
-    ) -> LocalId {
-        let id = LocalId(self.locals.len() as u32);
-        self.locals.push(HirLocal {
-            name: name.to_owned(),
-            ty,
-            mutable,
-            ownership,
-        });
-        self.ownership.push(LocalOwnership {
-            mode: ownership,
-            moved: None,
-        });
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name.to_owned(), id);
-        }
-        id
-    }
-
-    /// The ownership state of a local slot.
-    pub(crate) fn ownership_of(&self, local: LocalId) -> &LocalOwnership {
-        &self.ownership[local.0 as usize]
-    }
-
-    /// Records that `local`'s value was moved out at `span`.
-    pub(crate) fn mark_moved(&mut self, local: LocalId, span: Span) {
-        self.ownership[local.0 as usize].moved = Some(span);
-    }
-
-    /// Snapshots the ownership state so an *effectful* trial analysis can be
-    /// rolled back.
-    ///
-    /// Analyzing a receiver to learn its type also runs its ownership effects —
-    /// `move xs` marks `xs` gone. When that analysis is only a probe (the array
-    /// path re-resolves the receiver from syntax instead), those effects have to
-    /// be undone, or a later use of the receiver reports a move that never
-    /// happened. An expression declares no locals, so the state's length is
-    /// stable and a whole-vector snapshot restores it exactly.
-    pub(crate) fn ownership_snapshot(&self) -> Vec<LocalOwnership> {
-        self.ownership.clone()
-    }
-
-    /// Restores a snapshot taken by [`FnCtx::ownership_snapshot`].
-    pub(crate) fn restore_ownership(&mut self, snapshot: Vec<LocalOwnership>) {
-        self.ownership = snapshot;
-    }
-
-    /// The name a local was declared with.
-    pub(crate) fn local_name(&self, local: LocalId) -> String {
-        self.locals[local.0 as usize].name.clone()
-    }
-
-    /// Declares a local slot bound to no name, returning it.
-    ///
-    /// A desugaring needs storage the source never named — a `for` loop's
-    /// cursor and limit. Binding it into no scope is what makes it
-    /// unreachable: user code cannot read it, write it, or shadow it, whatever
-    /// it spells its own variables, because name resolution only ever consults
-    /// the scope stack.
-    pub(crate) fn declare_hidden(&mut self, ty: Type, mutable: bool) -> LocalId {
-        let id = LocalId(self.locals.len() as u32);
-        self.locals.push(HirLocal {
-            name: String::new(),
-            ty,
-            mutable,
-            ownership: OwnershipMode::Owned,
-        });
-        self.ownership.push(LocalOwnership::owned());
-        id
-    }
-
-    /// Whether `local` may be reassigned.
-    pub(crate) fn is_mutable(&self, local: LocalId) -> bool {
-        self.locals[local.0 as usize].mutable
-    }
-
-    /// Resolves a name to a local slot, searching innermost scope outward.
-    pub(crate) fn resolve(&self, name: &str) -> Option<LocalId> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name).copied())
-    }
-
-    pub(crate) fn local_type(&self, local: LocalId) -> Type {
-        self.locals[local.0 as usize].ty
-    }
 }
 
 impl<'a> Analyzer<'a> {
@@ -293,6 +167,11 @@ impl<'a> Analyzer<'a> {
             classes: HashMap::new(),
             own_methods: HashMap::new(),
             unflattenable_classes: BTreeSet::new(),
+            fn_types: crate::closures::FnTypeTable::default(),
+            synth_base: 0,
+            synth: Vec::new(),
+            closure_sites: Vec::new(),
+            current_execution: kira_semantics_model::Execution::Inherited,
             program: HirProgram::default(),
             diagnostics: Vec::new(),
         };
@@ -313,6 +192,10 @@ impl<'a> Analyzer<'a> {
         // are declared once every struct exists.
         self.collect_classes();
         let callables = self.callables();
+        // Every synthesized function sits after every declared one, so the
+        // declared count is the offset a reserved id is measured from. Fixed
+        // here, before any signature can reserve one.
+        self.synth_base = callables.len() as u32;
         self.collect_signatures(&callables);
         // `@Main` is a property of the program, not of any one file, and the
         // "no `@Main`" diagnostic has no span to point at — so it is attributed
@@ -326,6 +209,9 @@ impl<'a> Analyzer<'a> {
             let hir_function = self.analyze_function(FuncId(index as u32), callable);
             self.program.functions.push(hir_function);
         }
+        // Lifted closure bodies and dispatchers are appended here, which is the
+        // one point at which every function type's literal set is final.
+        self.finalize_closures();
         Analysis {
             program: self.program,
             diagnostics: self.diagnostics,
@@ -544,6 +430,7 @@ impl<'a> Analyzer<'a> {
         // them. That is what "file-scoped" means.
         self.source = callable.source;
         let sig_return = self.sigs[id.0 as usize].return_type;
+        self.current_execution = function.execution;
         let mut ctx = FnCtx::new(sig_return);
         // A method's receiver is local 0, named `self`. It is immutable: a
         // method receives a copy like any other by-value parameter, so writing

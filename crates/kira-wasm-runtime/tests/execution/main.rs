@@ -84,6 +84,24 @@ fn run_on_vm(source: &str) -> Result<Vec<String>, String> {
     }
 }
 
+/// Asserts `source` reclaims every allocation it made.
+///
+/// The VM's heap counts allocations and frees together, so `current == 0` at
+/// exit is the proof that every copy was matched by a drop. Parity says the
+/// backends agree on *output*; this says the run was also balanced, which a
+/// program that agreed while leaking would pass.
+fn assert_heap_balanced(source: &str) {
+    let ir = lower(source);
+    let module = kira_bytecode::compile(&ir).expect("the program compiles");
+    let mut host = Collector::default();
+    let outcome = kira_vm_runtime::execute(&module, &mut host).expect("the program runs");
+    assert_eq!(
+        outcome.heap.current, 0,
+        "every allocation must be reclaimed, {} allocated and {} freed",
+        outcome.heap.allocated, outcome.heap.freed
+    );
+}
+
 /// What the module told the host, as the host saw it.
 #[derive(Default)]
 struct Host {
@@ -306,6 +324,7 @@ mod arrays;
 mod bitwise;
 mod calls;
 mod classes;
+mod closures;
 mod control_flow;
 mod enums;
 mod floats;

@@ -4,6 +4,7 @@
 mod aliases;
 mod arrays;
 mod classes;
+mod closures;
 mod enums;
 mod imports;
 mod matches;

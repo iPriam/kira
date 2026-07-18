@@ -64,10 +64,18 @@ impl Analyzer<'_> {
                 args,
                 span,
             } => self.analyze_dot_member(ctx, name, name_span, &args, span, expected),
+            Expr::Closure {
+                ref params,
+                ref body,
+                span,
+            } => self.analyze_closure(ctx, params, body, span, expected),
             Expr::Name { symbol, span } => {
                 let name = self.interner.resolve(symbol).to_owned();
-                match ctx.resolve(&name) {
-                    Some(local) => {
+                // A name that lives in an enclosing closure frame is captured
+                // here, on the one path every read of a name passes through.
+                match self.resolve_capturing(ctx, &name, span) {
+                    crate::closures::Captured::Refused => self.program.exprs.alloc(HirExpr::Error),
+                    crate::closures::Captured::Local(local) => {
                         // Reading a moved-out local is the first of KSEM107's
                         // three messages, and it is checked here — at the one
                         // place every read of a local passes through — rather
@@ -81,7 +89,7 @@ impl Analyzer<'_> {
                     // A local wins over a field of the same name: the nearer
                     // binding is what a reader expects, and it is what lets a
                     // method take a parameter named like a field.
-                    None => match self.implicit_field(ctx, &name) {
+                    crate::closures::Captured::Absent => match self.implicit_field(ctx, &name) {
                         Some(expr) => expr,
                         None => {
                             // A name several parents declare is inherited but
@@ -137,6 +145,14 @@ impl Analyzer<'_> {
                 ..
             } => {
                 let name = self.interner.resolve(callee).to_owned();
+                // A binding of function type is called by naming it, and the
+                // binding wins over a function of the same name for the same
+                // reason a local wins over a field: the nearer name is the one
+                // a reader means.
+                if let Some(call) = self.analyze_local_closure_call(ctx, &name, &args, callee_span)
+                {
+                    return call;
+                }
                 // A class is constructed by calling it, so a call whose callee
                 // names a class is a constructor, not a function call.
                 if let Some(id) = self.class_named(&name)
