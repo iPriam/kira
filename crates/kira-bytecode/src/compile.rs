@@ -80,6 +80,16 @@ pub enum CompileError {
         /// The requested number of elements.
         count: usize,
     },
+    /// An enum has a variant tag beyond the format's `u16` operand.
+    #[error(
+        "function `{function}` constructs enum variant #{tag}; the format allows 65535 variants"
+    )]
+    TooManyVariants {
+        /// The offending function's name.
+        function: String,
+        /// The out-of-range variant tag.
+        tag: u32,
+    },
     /// Internal invariant: a place with an array index reached the static
     /// field-path encoder, which cannot express one.
     #[error(
@@ -420,9 +430,9 @@ impl FnCompiler<'_> {
             }
             IrExpr::EnumNew { tag, payload, .. } => {
                 let (tag, payload) = (*tag, *payload);
-                let tag = u16::try_from(tag).map_err(|_| CompileError::TooManyFields {
+                let tag = u16::try_from(tag).map_err(|_| CompileError::TooManyVariants {
                     function: self.function_name.to_owned(),
-                    count: tag as usize,
+                    tag,
                 })?;
                 // The payload, when present, is pushed first so it is on top of
                 // the stack for `NewEnum` to take, exactly as a struct's fields
