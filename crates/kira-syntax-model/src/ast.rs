@@ -18,7 +18,7 @@ mod item;
 mod stmt;
 mod tree;
 
-pub use expr::{BinaryOp, Expr, FieldInit, UnaryOp};
+pub use expr::{BinaryOp, ClosureParam, Expr, FieldInit, UnaryOp};
 pub use item::{
     ClassDecl, ClassMethod, EnumDecl, FieldDecl, Function, ImportDecl, Item, OverrideFieldDecl,
     Param, ParentRef, StructDecl, TypeAliasDecl, TypeRef, UnsupportedItem, VariantDecl,

@@ -19,10 +19,13 @@
 use kira_lexer::decode_string_literal;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
-use kira_syntax_model::ast::{BinaryOp, Expr, ExprId, FieldInit, UnaryOp};
+use kira_syntax_model::ast::{BinaryOp, Expr, ExprId, UnaryOp};
 use kira_syntax_model::ownership::OwnershipOp;
 
 use crate::Parser;
+
+mod aggregates;
+mod closures;
 
 impl Parser<'_> {
     /// Parses a full expression.
@@ -157,6 +160,14 @@ impl Parser<'_> {
                 base = self.tree.add_expr(Expr::Index { base, index, span });
                 continue;
             }
+            // A trailing closure is the call's last argument. It is gated on
+            // struct literals being permitted because both answer the same
+            // question — whether a `{` after an expression belongs to the
+            // expression or opens the body of an enclosing `if`/`while`/`for`.
+            if !self.no_struct_literal && self.at_closure_start() {
+                base = self.attach_trailing_closure(base);
+                continue;
+            }
             break;
         }
         base
@@ -201,51 +212,15 @@ impl Parser<'_> {
         }))
     }
 
-    /// Whether an array literal's element loop has run out of elements.
-    ///
-    /// `]` and EOF are the honest ends. `}` is a **recovery** end: a brace can
-    /// never appear at an array literal's top level — one inside an element,
-    /// as in `[P { x = 1 }]`, is consumed by that element's own parse — so
-    /// reaching one means the `[` was never closed. Stopping here bounds an
-    /// unclosed literal to its enclosing block instead of letting it swallow
-    /// the rest of the file.
-    fn at_array_end(&self) -> bool {
-        self.at(TokenKind::RBracket) || self.at(TokenKind::RBrace) || self.at_eof()
-    }
-
-    /// Parses `[a, b, c]`, with the cursor on `[`.
-    ///
-    /// Commas are **optional** separators, not required ones: newlines are
-    /// insignificant in Kira, so `[1 2 3]` and one element per line are as
-    /// legal as `[1, 2, 3]`, and a trailing comma is fine. The loop therefore
-    /// ends an element where the element ends and treats a comma as noise —
-    /// the same shape a struct literal's fields already use.
-    fn parse_array_literal(&mut self) -> ExprId {
-        let start = self.current().span;
-        self.bump(); // `[`
-        let mut elements = Vec::new();
-        self.with_struct_literals(|parser| {
-            while !parser.at_array_end() {
-                let before = parser.pos;
-                while parser.eat(TokenKind::Semicolon) {}
-                if parser.at_array_end() {
-                    break;
-                }
-                elements.push(parser.parse_expr());
-                parser.eat(TokenKind::Comma);
-                // An element that consumed nothing would spin; force progress.
-                if parser.pos == before {
-                    parser.bump();
-                }
-            }
-        });
-        self.expect(TokenKind::RBracket);
-        let span = Span::from_bounds(start.start, self.previous_end());
-        self.tree.add_expr(Expr::ArrayLit { elements, span })
-    }
-
     fn parse_primary(&mut self) -> ExprId {
         let token = self.current();
+        // A closure literal stands on its own wherever a value does — a `let`
+        // initializer, a `return`, an argument. Unlike the trailing form this
+        // is *not* gated on struct literals: `{ x in … }` cannot be confused
+        // with a control-flow body, because a body never follows nothing.
+        if self.at_closure_start() {
+            return self.parse_closure();
+        }
         match token.kind {
             TokenKind::IntLiteral => self.parse_int(token.span),
             TokenKind::FloatLiteral => self.parse_float(token.span),
@@ -355,7 +330,8 @@ impl Parser<'_> {
                 args,
                 span,
             })
-        } else if self.at(TokenKind::LBrace) && !self.no_struct_literal {
+        } else if self.at(TokenKind::LBrace) && !self.no_struct_literal && !self.at_closure_start()
+        {
             self.parse_struct_literal(symbol, name_span)
         } else {
             self.tree.add_expr(Expr::Name {
@@ -363,80 +339,6 @@ impl Parser<'_> {
                 span: name_span,
             })
         }
-    }
-
-    /// Parses the `{ … }` of a struct literal, with the cursor on `{`.
-    ///
-    /// Field initializers are separated by `,` or by nothing at all — newlines
-    /// are insignificant, so a separator cannot be required. Both binders are
-    /// accepted: `=` is canonical, `:` stays valid for the transition window,
-    /// and the two may be mixed in one literal.
-    fn parse_struct_literal(&mut self, name: kira_core::Symbol, name_span: Span) -> ExprId {
-        self.bump(); // `{`
-        let mut fields = Vec::new();
-        // A literal's fields are values, not conditions: a nested literal is
-        // legal here even when this one sits in a condition.
-        self.with_struct_literals(|parser| {
-            while !parser.at(TokenKind::RBrace) && !parser.at_eof() {
-                let before = parser.pos;
-                while parser.eat(TokenKind::Semicolon) {}
-                if parser.at(TokenKind::RBrace) || parser.at_eof() {
-                    break;
-                }
-                if let Some(field) = parser.parse_field_init() {
-                    fields.push(field);
-                }
-                parser.eat(TokenKind::Comma);
-                if parser.pos == before {
-                    parser.bump();
-                }
-            }
-        });
-        self.expect(TokenKind::RBrace);
-        let span = Span::from_bounds(name_span.start, self.previous_end());
-        self.tree.add_expr(Expr::StructLit {
-            name,
-            name_span,
-            fields,
-            span,
-        })
-    }
-
-    /// Parses one `name = value` / `name: value` field initializer.
-    fn parse_field_init(&mut self) -> Option<FieldInit> {
-        if !self.at(TokenKind::Identifier) {
-            let span = self.current().span;
-            self.error(
-                span,
-                "KPAR023",
-                format!(
-                    "expected a field name in a struct literal, found {}",
-                    self.current_kind().describe()
-                ),
-            );
-            self.bump();
-            return None;
-        }
-        let name_span = self.current().span;
-        let name = self.intern_span(name_span);
-        self.bump();
-        if !self.eat(TokenKind::Equals) && !self.eat(TokenKind::Colon) {
-            let span = self.current().span;
-            self.error(
-                span,
-                "KPAR024",
-                "expected `=` after a field name in a struct literal",
-            );
-            return None;
-        }
-        let value = self.parse_expr();
-        let span = Span::from_bounds(name_span.start, self.previous_end());
-        Some(FieldInit {
-            name,
-            name_span,
-            value,
-            span,
-        })
     }
 
     fn parse_call_args(&mut self) -> Vec<ExprId> {
