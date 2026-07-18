@@ -6,6 +6,7 @@
 //! had grown to twice that. They stay a `#[cfg(test)]` module of this crate,
 //! beside the code they test.
 
+mod aliases;
 mod arrays;
 mod enums;
 

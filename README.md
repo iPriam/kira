@@ -341,6 +341,32 @@ Because coverage is checked, an exhaustive `match` whose arms all return is
 itself a **definite return** — which is why `rank` above needs no trailing
 `return`. As in a `switch`, `break` inside an arm belongs to the enclosing loop.
 
+## Type aliases
+
+`type Name = Target` binds a name to a written type. It is a **spelling, not a
+new type**: `Count` and `Int` below are the same type, so a value of one goes
+anywhere the other does and no backend ever learns the alias existed — analysis
+resolves it away, which is why the feature costs no opcode and no lowering.
+
+```kira
+type Count = Int
+type Buffer = [Count]
+type Matrix = [Buffer]
+```
+
+The target is an ordinary type reference, so an alias names anything a type
+position can: a builtin, a struct, an enum, an array of any depth, or another
+alias. Aliases chain in either declaration order — `Matrix` above would resolve
+just as well written first — because resolution is lazy rather than
+order-dependent the way a struct field's type is.
+
+Two ways to get one wrong are reported. A chain that comes back to where it
+started has no type at the end of it and is refused (`KSEM157`) rather than
+resolved. And a name that already means something — a builtin, a struct, an
+enum, or an earlier alias — may not be claimed (`KSEM130`): a silently-ignored
+`type Int = Float` would keep type-checking as `Int` and give a wrong answer
+instead of an error.
+
 ## Live sessions
 
 `kirac live` builds a program into a `.klbundle`, serves it over a loopback

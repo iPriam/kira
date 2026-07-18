@@ -286,3 +286,39 @@ fn an_unsupported_request_is_refused_without_killing_the_server() {
     assert_eq!(diagnostics.as_array().map(Vec::len), Some(0));
     server.shutdown();
 }
+
+/// New syntax reaches the editor by construction: the server serves the same
+/// salsa `analyzed` query `kirac check` does, so a `type` alias needs no LSP
+/// change to be understood. This is the test that says so — an aliased program
+/// is clean, and a cyclic alias squiggles with the code semantics gave it.
+#[test]
+fn type_aliases_reach_the_editor_through_the_shared_frontend() {
+    let mut server = Server::start();
+    let clean = server.open(
+        "file:///tmp/kira-lsp-test/aliases.kira",
+        "type Count = Int\ntype Buffer = [Count]\n@Main\nfunction main() {\n    \
+         var xs: Buffer = []\n    xs.append(1)\n    let n: Count = xs.count\n    \
+         print(n)\n    return\n}\n",
+    );
+    assert_eq!(
+        clean.as_array().map(Vec::len),
+        Some(0),
+        "an aliased program is clean, got {clean}",
+    );
+
+    let cyclic = server.open(
+        "file:///tmp/kira-lsp-test/cyclic.kira",
+        "type A = B\ntype B = A\n@Main\nfunction main() {\n    let x: A = 1\n    \
+         print(x)\n    return\n}\n",
+    );
+    assert!(
+        cyclic
+            .as_array()
+            .expect("an array of diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "KSEM157"),
+        "the alias cycle is reported to the editor: {cyclic}",
+    );
+
+    server.shutdown();
+}

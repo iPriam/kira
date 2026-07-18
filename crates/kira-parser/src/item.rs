@@ -11,8 +11,8 @@ use kira_runtime_abi::Execution;
 use kira_source::{FileSpan, Span};
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
-    Block, EnumDecl, FieldDecl, Function, Item, Param, StructDecl, TypeRef, TypeRefId,
-    UnsupportedItem, VariantDecl,
+    Block, EnumDecl, FieldDecl, Function, Item, Param, StructDecl, TypeAliasDecl, TypeRef,
+    TypeRefId, UnsupportedItem, VariantDecl,
 };
 use kira_syntax_model::ownership::OwnershipMode;
 
@@ -35,6 +35,11 @@ impl Parser<'_> {
             TokenKind::Enum => {
                 if let Some(declaration) = self.parse_enum() {
                     self.tree.items.push(Item::Enum(declaration));
+                }
+            }
+            TokenKind::Type => {
+                if let Some(declaration) = self.parse_type_alias() {
+                    self.tree.items.push(Item::TypeAlias(declaration));
                 }
             }
             TokenKind::Class | TokenKind::Import | TokenKind::Identifier => {
@@ -343,6 +348,36 @@ impl Parser<'_> {
         })
     }
 
+    // ----- type aliases --------------------------------------------------
+
+    /// Parses `type Name = Target`.
+    ///
+    /// The target is an ordinary type reference, so `type ByteMatrix =
+    /// [[Byte]]` needs no grammar of its own. A missing name yields no node at
+    /// all: an alias with nothing to bind would register a name nobody wrote,
+    /// and the `type` keyword is already consumed, so recovery still advances.
+    fn parse_type_alias(&mut self) -> Option<TypeAliasDecl> {
+        let start = self.current().span;
+        self.expect(TokenKind::Type);
+        if !self.at(TokenKind::Identifier) {
+            self.error(self.current().span, "KPAR032", "expected a type alias name");
+            return None;
+        }
+        let name_span = self.current().span;
+        let name = self.intern_span(name_span);
+        self.bump();
+        // `=` is required, not optional: `type Name` on its own aliases nothing.
+        self.expect(TokenKind::Equals);
+        let target = self.parse_type_ref();
+        let span = Span::from_bounds(start.start, self.previous_end());
+        Some(TypeAliasDecl {
+            name,
+            name_span,
+            target,
+            span,
+        })
+    }
+
     // ----- shared signature pieces ---------------------------------------
 
     fn parse_params(&mut self) -> Vec<Param> {
@@ -541,6 +576,7 @@ fn is_item_start(kind: TokenKind) -> bool {
             | TokenKind::Function
             | TokenKind::Struct
             | TokenKind::Enum
+            | TokenKind::Type
             | TokenKind::Class
             | TokenKind::Import
     )
