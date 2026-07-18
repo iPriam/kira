@@ -450,6 +450,14 @@ impl FnCompiler<'_> {
                 self.compile_expr(value)?;
                 self.code.push(Instruction::EnumTag);
             }
+            IrExpr::EnumPayload { value, .. } => {
+                // The payload's type is a backend concern only where values are
+                // typed statically; a VM `Value` describes itself, so the
+                // instruction needs no operand.
+                let value = *value;
+                self.compile_expr(value)?;
+                self.code.push(Instruction::EnumPayload);
+            }
             IrExpr::Call { callee, args, .. } => {
                 let callee = *callee;
                 let args = args.clone();

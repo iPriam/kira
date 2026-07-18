@@ -457,6 +457,17 @@ impl<'a> Lowering<'a> {
                 self.expr(func, function, value)?;
                 func.i64_load(0);
             }
+            IrExpr::EnumPayload { value, ty } => {
+                let (value, ty) = (*value, *ty);
+                // The box address is on the stack; the payload sits at offset 8,
+                // where `enum_new` stored it. Copied out for the same reason a
+                // field read is: the box owns its payload, and the binding
+                // outlives the box.
+                let addr = func.addr();
+                self.expr(func, function, value)?;
+                load_field(func, ty, addr, 8)?;
+                self.copy_if_mutable(func, ty)?;
+            }
             IrExpr::ArrayLen { array } => {
                 let array = *array;
                 self.expr(func, function, array)?;

@@ -155,10 +155,8 @@ a parameter, a return type, a struct field, or the other side of a comparison.
 So `.Red` alone is not a value; `let c: Color = .Red` is. A dot against a
 non-enum type, or in a position with no expected type, is refused (`KSEM119`).
 
-The one operation on an enum is comparison: `==` and `!=` compare
-**discriminants**, so `c == .Red` asks which variant `c` is. Reading a payload
-back out is `match`, a separate feature — so a payload is built, moved, and
-dropped, but not yet inspected.
+`==` and `!=` compare **discriminants**, so `c == .Red` asks which variant `c`
+is. Reading a payload back out is [`match`](#match).
 
 ```kira
 function rank(c: Color) -> Int {
@@ -301,6 +299,47 @@ A `switch` is a statement, not an expression: an arm that wants to produce a
 value assigns to a `var` or returns. **`break` inside an arm belongs to the
 enclosing loop, not to the switch** — a switch is not a loop, so a `break` in
 one that no loop encloses is reported.
+
+## Match
+
+A `match` dispatches on an **enum's variant**. Arms are written with an arrow,
+and take either a single statement or a block. Variants are **unqualified** —
+the subject's type already says which enum they belong to, so it is `Light`,
+never `Shade.Light` or `.Light`.
+
+```kira
+function rank(s: borrow Shade) -> Int {
+    match s {
+        Light -> return 1;
+        Mid -> return 2;
+        Dark -> return 3;
+    }
+}
+```
+
+A parenthesized name **binds the variant's payload**, and is visible only inside
+its own arm — so two arms may bind the same name to different payloads. The
+binding is an owned copy that outlives the enum it was read from, and it is
+immutable.
+
+```kira
+match note {
+    Tag(text) -> { print(text) }
+    Rank(value) -> { if value > 10 { print("high") } }
+    Blank -> { print("none") }   // an arm may ignore a payload it does not need
+}
+```
+
+Unlike a `switch`, a `match` is **checked**: every variant must be covered
+(`KSEM129`), and a variant matched twice is reported (`KSEM127`). That is the
+whole reason the two constructs are separate — a `switch` label is an arbitrary
+expression, so there is no variant set to be exhaustive over. Neither check
+applies to `switch`, and a `match` subject that is not an enum is refused
+(`KSEM125`).
+
+Because coverage is checked, an exhaustive `match` whose arms all return is
+itself a **definite return** — which is why `rank` above needs no trailing
+`return`. As in a `switch`, `break` inside an arm belongs to the enclosing loop.
 
 ## Live sessions
 

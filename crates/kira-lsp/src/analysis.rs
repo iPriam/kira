@@ -163,6 +163,36 @@ mod tests {
     }
 
     #[test]
+    fn match_syntax_analyzes_the_way_the_compiler_does() {
+        // Same claim as the enum test, for the construct built on top of it: no
+        // LSP-specific wiring, so a `match` checks clean here and a
+        // non-exhaustive one squiggles, because both come off the one
+        // `analyzed` query.
+        let clean = analyze(
+            "t.kira",
+            "enum Shade { Light Mid Dark }\n\
+             function rank(s: borrow Shade) -> Int { match s { Light -> return 1; \
+             Mid -> return 2; Dark -> return 3; } }\n\
+             @Main function main() { let d: Shade = .Dark print(rank(d)) return }",
+        );
+        assert!(clean.diagnostics.is_empty(), "{:?}", clean.diagnostics);
+
+        let bad = analyze(
+            "t.kira",
+            "enum Shade { Light Mid Dark }\n\
+             @Main function main() { let s: Shade = .Mid\n\
+             match s { Light -> { print(1) } Mid -> { print(2) } } return }",
+        );
+        let diagnostic = bad
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == Some("KSEM129"))
+            .expect("a non-exhaustive match is reported");
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
+    }
+
+    #[test]
     fn a_clean_program_has_no_diagnostics() {
         let analysis = analyze("t.kira", "@Main function main() { print(1) return }");
         assert!(
