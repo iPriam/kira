@@ -69,22 +69,55 @@ pub fn load(text: &str) -> Result<ProjectManifest, DeclarationError> {
     Ok(manifest)
 }
 
+/// True when `text[start..end]` is a whole word rather than part of a longer
+/// identifier, so `MyPackage` and `outlet` are not mistaken for `Package` and
+/// `let`.
+fn is_whole_word(text: &str, start: usize, end: usize) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let before_ok = text[..start].chars().next_back().is_none_or(|c| !ident(c));
+    let after_ok = text[end..].chars().next().is_none_or(|c| !ident(c));
+    before_ok && after_ok
+}
+
 /// Splits `Package <name> { <body> }` into the name and the body.
+///
+/// The header is the first whole-word `Package` that is followed by a single
+/// identifier and a `{`. Scanning past a candidate whose name is not one
+/// identifier is what keeps a leading `// Package manifest` comment from being
+/// taken as the header and its multi-line remainder from becoming the name.
 fn split_header(text: &str) -> Result<(&str, &str), DeclarationError> {
-    let start = text
-        .find("Package")
-        .ok_or(DeclarationError::MissingHeader)?;
-    let after = &text[start + "Package".len()..];
-    let open = after.find('{').ok_or(DeclarationError::MissingHeader)?;
-    let name = after[..open].trim();
-    if name.is_empty() {
+    let mut searched = 0usize;
+    // A `Package ... {` was seen but never with a usable name: that is a named
+    // failure (`MissingName`), not "this is not a declaration".
+    let mut saw_open_header = false;
+    while let Some(rel) = text[searched..].find("Package") {
+        let start = searched + rel;
+        let after_keyword = start + "Package".len();
+        searched = after_keyword;
+        if !is_whole_word(text, start, after_keyword) {
+            continue;
+        }
+        let after = &text[after_keyword..];
+        let Some(open) = after.find('{') else {
+            continue;
+        };
+        saw_open_header = true;
+        let name = after[..open].trim();
+        // One identifier, nothing else: a name carrying whitespace means this
+        // `Package` was not the header.
+        if name.is_empty() || name.chars().any(char::is_whitespace) {
+            continue;
+        }
+        let close = after.rfind('}').ok_or(DeclarationError::MissingHeader)?;
+        if close < open {
+            return Err(DeclarationError::MissingHeader);
+        }
+        return Ok((name, &after[open + 1..close]));
+    }
+    if saw_open_header {
         return Err(DeclarationError::MissingName);
     }
-    let close = after.rfind('}').ok_or(DeclarationError::MissingHeader)?;
-    if close < open {
-        return Err(DeclarationError::MissingHeader);
-    }
-    Ok((name, &after[open + 1..close]))
+    Err(DeclarationError::MissingHeader)
 }
 
 /// Yields every top-level `let <key> = <value>` in a declaration body.
@@ -94,7 +127,7 @@ fn split_header(text: &str) -> Result<(&str, &str), DeclarationError> {
 fn entries(body: &str) -> Vec<(&str, &str)> {
     let mut out = Vec::new();
     let mut rest = body;
-    while let Some(at) = rest.find("let ") {
+    while let Some(at) = find_let(rest) {
         let line = &rest[at + "let ".len()..];
         let Some(eq) = line.find('=') else {
             break;
@@ -108,6 +141,20 @@ fn entries(body: &str) -> Vec<(&str, &str)> {
         rest = &value_start[value.len()..];
     }
     out
+}
+
+/// The byte offset of the next whole-word `let ` binding, skipping an
+/// identifier that merely ends in `let` (`outlet = ...`).
+fn find_let(text: &str) -> Option<usize> {
+    let mut searched = 0usize;
+    while let Some(rel) = text[searched..].find("let ") {
+        let at = searched + rel;
+        searched = at + "let".len();
+        if is_whole_word(text, at, at + "let".len()) {
+            return Some(at);
+        }
+    }
+    None
 }
 
 /// The text of one value: to the end of a balanced brace group, or to the end
@@ -131,13 +178,18 @@ fn brace_group_end(text: &str) -> Option<usize> {
         return None;
     }
     let mut depth = 0usize;
-    for (offset, ch) in text.char_indices().skip(open) {
+    // Iterate the slice that starts *on* the brace. `open` is a byte offset, so
+    // using it as a `skip` count over characters would start past the brace
+    // whenever a multi-byte character precedes it, and the first `}` would then
+    // underflow `depth`. Starting on the `{` makes the increment come first, so
+    // `depth` can never go below zero.
+    for (offset, ch) in text[open..].char_indices() {
         match ch {
             '{' => depth += 1,
             '}' => {
                 depth -= 1;
                 if depth == 0 {
-                    return Some(offset + 1);
+                    return Some(open + offset + 1);
                 }
             }
             _ => {}
@@ -265,6 +317,68 @@ mod tests {
             load("Package { let kind = .App }").unwrap_err(),
             DeclarationError::MissingName
         );
+    }
+
+    #[test]
+    fn a_non_ascii_character_before_a_brace_does_not_panic() {
+        // Regression: `brace_group_end` used the byte offset of `{` as a count
+        // of characters to skip, so a multi-byte character before the brace
+        // started iteration past it and the first `}` underflowed the depth.
+        // Every `kirac` verb reads a manifest, so this decoder must refuse
+        // malformed input rather than abort the process.
+        let text = "Package p {\n let note = é {}\n let kind = .Library\n}";
+        assert_eq!(load(text).unwrap().kind, PackageKind::Library);
+
+        let quoted = "Package p {\n let s = \"café\" {}\n let kind = .Library\n}";
+        assert_eq!(load(quoted).unwrap().kind, PackageKind::Library);
+    }
+
+    #[test]
+    fn a_non_ascii_value_never_panics_on_any_prefix() {
+        // Every byte-boundary-respecting prefix of a manifest full of
+        // multi-byte text is either read or refused by name; none may panic.
+        let text = "Package pé {\n let version = \"1.0.0\"\n \
+            let defaults = Defaults { mode: .Vm, note: \"héllo → wörld\" }\n \
+            let kind = .Library\n}";
+        for end in 0..=text.len() {
+            if text.is_char_boundary(end) {
+                let _ = load(&text[..end]);
+            }
+        }
+    }
+
+    #[test]
+    fn a_leading_comment_mentioning_package_is_not_the_header() {
+        // Regression: anchoring on the first `Package` in the file made the
+        // name the whole `manifest\nPackage demo` run, which parsed as a
+        // package silently named garbage.
+        let text = "// Package manifest for the demo\nPackage demo {\n let kind = .Library\n}";
+        let manifest = load(text).unwrap();
+        assert_eq!(manifest.name, "demo");
+        assert_eq!(manifest.kind, PackageKind::Library);
+    }
+
+    #[test]
+    fn a_header_whose_name_is_not_one_identifier_is_refused() {
+        assert_eq!(
+            load("// Package notes here\n").unwrap_err(),
+            DeclarationError::MissingHeader
+        );
+        assert_eq!(
+            load("Package two names {\n let kind = .App\n}").unwrap_err(),
+            DeclarationError::MissingName
+        );
+    }
+
+    #[test]
+    fn an_identifier_ending_in_let_is_not_a_binding() {
+        // Regression: `find("let ")` matched inside `outlet `, which yielded an
+        // empty key and swallowed the real value that followed it.
+        let text = "Package p {\n outlet = \"x\"\n let kind = .Library\n}";
+        assert_eq!(load(text).unwrap().kind, PackageKind::Library);
+        // And a genuine binding named `outlet` still reads as one.
+        let bound = "Package p {\n let outlet = \"x\"\n let kind = .Library\n}";
+        assert_eq!(load(bound).unwrap().kind, PackageKind::Library);
     }
 
     #[test]
