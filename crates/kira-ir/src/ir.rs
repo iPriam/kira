@@ -54,8 +54,8 @@ impl IrProgram {
     /// shapes; the VM never needs it.
     pub fn expr_type(&self, function: &IrFunction, id: IrExprId) -> Type {
         match &self.exprs[id] {
-            IrExpr::Int(_) => Type::Int,
-            IrExpr::Float(_) => Type::Float,
+            IrExpr::Int(_) => Type::INT,
+            IrExpr::Float(_) => Type::FLOAT,
             IrExpr::Bool(_) => Type::Bool,
             IrExpr::Str(_) => Type::String,
             IrExpr::Local(slot) => function
@@ -64,8 +64,8 @@ impl IrProgram {
                 .copied()
                 .unwrap_or(Type::Error),
             IrExpr::Unary { op, .. } => match op {
-                IrUnOp::NegInt => Type::Int,
-                IrUnOp::NegFloat => Type::Float,
+                IrUnOp::NegInt => Type::INT,
+                IrUnOp::NegFloat => Type::FLOAT,
                 IrUnOp::Not => Type::Bool,
             },
             IrExpr::Binary { op, .. } => binop_result(*op),
@@ -76,7 +76,7 @@ impl IrProgram {
             | IrExpr::ArrayNew { ty, .. }
             | IrExpr::EnumPayload { ty, .. }
             | IrExpr::Index { ty, .. } => *ty,
-            IrExpr::ArrayLen { .. } | IrExpr::EnumTag { .. } => Type::Int,
+            IrExpr::ArrayLen { .. } | IrExpr::EnumTag { .. } => Type::INT,
             IrExpr::ArrayAppend { .. } => Type::Void,
         }
     }
@@ -112,11 +112,19 @@ impl IrProgram {
 /// The result type of a typed binary operator.
 fn binop_result(op: IrBinOp) -> Type {
     match op {
-        IrBinOp::AddInt | IrBinOp::SubInt | IrBinOp::MulInt | IrBinOp::DivInt | IrBinOp::RemInt => {
-            Type::Int
-        }
+        // Every integer width shares one representation, so the *result* of
+        // integer arithmetic is reported as plain `Int` whatever the operands
+        // were spelled. Nothing downstream re-derives signedness from this: the
+        // operator itself already carries it (`DivUInt` versus `DivInt`).
+        IrBinOp::AddInt
+        | IrBinOp::SubInt
+        | IrBinOp::MulInt
+        | IrBinOp::DivInt
+        | IrBinOp::RemInt
+        | IrBinOp::DivUInt
+        | IrBinOp::RemUInt => Type::INT,
         IrBinOp::AddFloat | IrBinOp::SubFloat | IrBinOp::MulFloat | IrBinOp::DivFloat => {
-            Type::Float
+            Type::FLOAT
         }
         IrBinOp::ConcatStr => Type::String,
         IrBinOp::EqInt
@@ -125,6 +133,10 @@ fn binop_result(op: IrBinOp) -> Type {
         | IrBinOp::LeInt
         | IrBinOp::GtInt
         | IrBinOp::GeInt
+        | IrBinOp::LtUInt
+        | IrBinOp::LeUInt
+        | IrBinOp::GtUInt
+        | IrBinOp::GeUInt
         | IrBinOp::EqFloat
         | IrBinOp::NeFloat
         | IrBinOp::LtFloat

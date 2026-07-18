@@ -113,6 +113,10 @@ impl Func {
     pub fn i64_lt_s(&mut self) -> &mut Self {
         self.simple(op::I64_LT_S)
     }
+    /// Emits `i64.lt_u`.
+    pub fn i64_lt_u(&mut self) -> &mut Self {
+        self.simple(op::I64_LT_U)
+    }
     /// Emits `i64.gt_s`.
     pub fn i64_gt_s(&mut self) -> &mut Self {
         self.simple(op::I64_GT_S)
@@ -128,6 +132,10 @@ impl Func {
     /// Emits `i64.le_s`.
     pub fn i64_le_s(&mut self) -> &mut Self {
         self.simple(op::I64_LE_S)
+    }
+    /// Emits `i64.le_u`.
+    pub fn i64_le_u(&mut self) -> &mut Self {
+        self.simple(op::I64_LE_U)
     }
     /// Emits `i64.ge_s`.
     pub fn i64_ge_s(&mut self) -> &mut Self {

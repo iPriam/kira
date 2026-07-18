@@ -7,17 +7,46 @@
 //! with the `switch` desugar in [`crate::stmt`], which is why what a `case` may
 //! match and what `==` accepts cannot drift — they are one function.
 
-use kira_semantics_model::Type;
 use kira_semantics_model::hir::{HirBinaryOp, HirUnaryOp};
+use kira_semantics_model::{FloatSpelling, IntSpelling, Type};
 use kira_syntax_model::ast::{BinaryOp, UnaryOp};
 
 /// Resolves a unary operator against its operand type to a typed HIR op and
 /// result type. Returns `None` for an unsupported combination.
 pub(crate) fn resolve_unary(op: UnaryOp, operand: Type) -> Option<(HirUnaryOp, Type)> {
     match (op, operand) {
-        (UnaryOp::Neg, Type::Int) => Some((HirUnaryOp::NegInt, Type::Int)),
-        (UnaryOp::Neg, Type::Float) => Some((HirUnaryOp::NegFloat, Type::Float)),
+        // Negation keeps the operand's spelling: `-x` on an `I32` is an `I32`.
+        // It is the same instruction at every width, and on an unsigned one
+        // too — negation is two's-complement wrapping, which is
+        // signedness-free.
+        (UnaryOp::Neg, Type::Int(_)) => Some((HirUnaryOp::NegInt, operand)),
+        (UnaryOp::Neg, Type::Float(_)) => Some((HirUnaryOp::NegFloat, operand)),
         (UnaryOp::Not, Type::Bool) => Some((HirUnaryOp::Not, Type::Bool)),
+        _ => None,
+    }
+}
+
+/// The single type two numeric operands agree on, or `None` when they do not.
+///
+/// A bare `Int`/`Float` is a wildcard, so it yields to a written width: `x + 1`
+/// on a `U8` local is a `U8`, which is what makes an integer literal usable at
+/// every width without a conversion rule. Two *different* written widths agree
+/// on nothing — `u8Value + i64Value` is a type error, not a promotion — because
+/// the language has no widening.
+fn unify_numeric(lt: Type, rt: Type) -> Option<Type> {
+    match (lt, rt) {
+        (Type::Int(a), Type::Int(b)) => match (a, b) {
+            _ if a == b => Some(lt),
+            (IntSpelling::Plain, _) => Some(rt),
+            (_, IntSpelling::Plain) => Some(lt),
+            _ => None,
+        },
+        (Type::Float(a), Type::Float(b)) => match (a, b) {
+            _ if a == b => Some(lt),
+            (FloatSpelling::Plain, _) => Some(rt),
+            (_, FloatSpelling::Plain) => Some(lt),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -52,39 +81,48 @@ fn arithmetic(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
     if op == B::Add && lt == Type::String && rt == Type::String {
         return Some((H::ConcatStr, Type::String));
     }
-    if lt != rt || !lt.is_numeric() {
-        return None;
-    }
-    let hir = match (op, lt) {
-        (B::Add, Type::Int) => H::AddInt,
-        (B::Sub, Type::Int) => H::SubInt,
-        (B::Mul, Type::Int) => H::MulInt,
-        (B::Div, Type::Int) => H::DivInt,
-        (B::Rem, Type::Int) => H::RemInt,
-        (B::Add, Type::Float) => H::AddFloat,
-        (B::Sub, Type::Float) => H::SubFloat,
-        (B::Mul, Type::Float) => H::MulFloat,
-        (B::Div, Type::Float) => H::DivFloat,
+    let ty = unify_numeric(lt, rt)?;
+    // `/` and `%` are the two arithmetic operators whose result depends on
+    // signedness. `+`, `-`, and `*` wrap identically either way, and at 64 bits
+    // for every width: a `U8` sum of 250 and 10 is 260, not 4. Narrowing to the
+    // written width is behavior the language does not define, so nothing here
+    // masks.
+    let unsigned = ty.is_unsigned_int();
+    let hir = match (op, ty) {
+        (B::Add, Type::Int(_)) => H::AddInt,
+        (B::Sub, Type::Int(_)) => H::SubInt,
+        (B::Mul, Type::Int(_)) => H::MulInt,
+        (B::Div, Type::Int(_)) if unsigned => H::DivUInt,
+        (B::Div, Type::Int(_)) => H::DivInt,
+        (B::Rem, Type::Int(_)) if unsigned => H::RemUInt,
+        (B::Rem, Type::Int(_)) => H::RemInt,
+        (B::Add, Type::Float(_)) => H::AddFloat,
+        (B::Sub, Type::Float(_)) => H::SubFloat,
+        (B::Mul, Type::Float(_)) => H::MulFloat,
+        (B::Div, Type::Float(_)) => H::DivFloat,
         _ => return None,
     };
-    Some((hir, lt))
+    Some((hir, ty))
 }
 
 fn comparison(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
     use BinaryOp as B;
     use HirBinaryOp as H;
-    if lt != rt || !lt.is_numeric() {
-        return None;
-    }
-    let hir = match (op, lt) {
-        (B::Lt, Type::Int) => H::LtInt,
-        (B::Le, Type::Int) => H::LeInt,
-        (B::Gt, Type::Int) => H::GtInt,
-        (B::Ge, Type::Int) => H::GeInt,
-        (B::Lt, Type::Float) => H::LtFloat,
-        (B::Le, Type::Float) => H::LeFloat,
-        (B::Gt, Type::Float) => H::GtFloat,
-        (B::Ge, Type::Float) => H::GeFloat,
+    let ty = unify_numeric(lt, rt)?;
+    let unsigned = ty.is_unsigned_int();
+    let hir = match (op, ty) {
+        (B::Lt, Type::Int(_)) if unsigned => H::LtUInt,
+        (B::Le, Type::Int(_)) if unsigned => H::LeUInt,
+        (B::Gt, Type::Int(_)) if unsigned => H::GtUInt,
+        (B::Ge, Type::Int(_)) if unsigned => H::GeUInt,
+        (B::Lt, Type::Int(_)) => H::LtInt,
+        (B::Le, Type::Int(_)) => H::LeInt,
+        (B::Gt, Type::Int(_)) => H::GtInt,
+        (B::Ge, Type::Int(_)) => H::GeInt,
+        (B::Lt, Type::Float(_)) => H::LtFloat,
+        (B::Le, Type::Float(_)) => H::LeFloat,
+        (B::Gt, Type::Float(_)) => H::GtFloat,
+        (B::Ge, Type::Float(_)) => H::GeFloat,
         _ => return None,
     };
     Some((hir, Type::Bool))
@@ -102,15 +140,20 @@ pub(crate) fn equality_op(subject: Type, label: Type) -> Option<HirBinaryOp> {
 fn equality(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
     use BinaryOp as B;
     use HirBinaryOp as H;
-    if lt != rt {
-        return None;
-    }
+    // Numerics unify on their spelling; everything else must match exactly.
+    // Equality alone among the comparisons has no unsigned twin: it compares
+    // bit patterns, which are the same under either signedness.
+    let lt = match (lt.is_numeric(), rt.is_numeric()) {
+        (true, true) => unify_numeric(lt, rt)?,
+        _ if lt == rt => lt,
+        _ => return None,
+    };
     let is_eq = op == B::Eq;
     let hir = match lt {
-        Type::Int if is_eq => H::EqInt,
-        Type::Int => H::NeInt,
-        Type::Float if is_eq => H::EqFloat,
-        Type::Float => H::NeFloat,
+        Type::Int(_) if is_eq => H::EqInt,
+        Type::Int(_) => H::NeInt,
+        Type::Float(_) if is_eq => H::EqFloat,
+        Type::Float(_) => H::NeFloat,
         Type::Bool if is_eq => H::EqBool,
         Type::Bool => H::NeBool,
         Type::String if is_eq => H::EqStr,

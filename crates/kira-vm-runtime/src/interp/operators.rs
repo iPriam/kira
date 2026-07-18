@@ -20,7 +20,7 @@ impl Vm<'_> {
     pub(super) fn binary(&mut self, instruction: Instruction) -> Result<(), VmError> {
         use Instruction as I;
         match instruction {
-            I::AddInt | I::SubInt | I::MulInt | I::DivInt | I::RemInt => {
+            I::AddInt | I::SubInt | I::MulInt | I::DivInt | I::RemInt | I::DivUInt | I::RemUInt => {
                 self.int_arith(instruction)
             }
             I::AddFloat | I::SubFloat | I::MulFloat | I::DivFloat => self.float_arith(instruction),
@@ -28,6 +28,7 @@ impl Vm<'_> {
             I::EqInt | I::NeInt | I::LtInt | I::LeInt | I::GtInt | I::GeInt => {
                 self.int_compare(instruction)
             }
+            I::LtUInt | I::LeUInt | I::GtUInt | I::GeUInt => self.uint_compare(instruction),
             I::EqFloat | I::NeFloat | I::LtFloat | I::LeFloat | I::GtFloat | I::GeFloat => {
                 self.float_compare(instruction)
             }
@@ -56,6 +57,22 @@ impl Vm<'_> {
                     return Err(VmError::DivideByZero);
                 }
                 lhs.wrapping_rem(rhs)
+            }
+            // The `U8`..`U64` spellings: reinterpret the same 64 bits as
+            // unsigned, divide, reinterpret back. No `wrapping_` needed —
+            // unsigned division has no overflowing pair, which is why the
+            // signed `MIN / -1` special case has no twin here.
+            I::DivUInt => {
+                if rhs == 0 {
+                    return Err(VmError::DivideByZero);
+                }
+                ((lhs as u64) / (rhs as u64)) as i64
+            }
+            I::RemUInt => {
+                if rhs == 0 {
+                    return Err(VmError::DivideByZero);
+                }
+                ((lhs as u64) % (rhs as u64)) as i64
             }
             _ => return Err(VmError::BadDispatch),
         };
@@ -102,6 +119,26 @@ impl Vm<'_> {
             I::LeInt => lhs <= rhs,
             I::GtInt => lhs > rhs,
             I::GeInt => lhs >= rhs,
+            _ => return Err(VmError::BadDispatch),
+        };
+        self.stack.push(Value::Bool(value));
+        Ok(())
+    }
+
+    /// Ordering for the `U8`..`U64` spellings.
+    ///
+    /// Equality has no unsigned twin and needs none: `==` on two 64-bit
+    /// patterns is the same question under either signedness, so `EqInt`
+    /// serves both and only the four orderings appear here.
+    fn uint_compare(&mut self, instruction: Instruction) -> Result<(), VmError> {
+        use Instruction as I;
+        let rhs = self.pop_int()? as u64;
+        let lhs = self.pop_int()? as u64;
+        let value = match instruction {
+            I::LtUInt => lhs < rhs,
+            I::LeUInt => lhs <= rhs,
+            I::GtUInt => lhs > rhs,
+            I::GeUInt => lhs >= rhs,
             _ => return Err(VmError::BadDispatch),
         };
         self.stack.push(Value::Bool(value));

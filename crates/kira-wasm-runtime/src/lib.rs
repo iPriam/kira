@@ -335,7 +335,7 @@ mod tests {
         // `Int` is 64-bit on both: the device widens addresses, not arithmetic.
         for device in [WasmDevice::Wasm32, WasmDevice::Wasm64] {
             assert_eq!(
-                value_type(Type::Int, device).expect("a type"),
+                value_type(Type::INT, device).expect("a type"),
                 Some(ValType::I64)
             );
             assert_eq!(value_type(Type::Void, device).expect("a type"), None);

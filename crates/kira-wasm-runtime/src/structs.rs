@@ -176,7 +176,7 @@ fn struct_id_at(table: &StructTable, index: usize) -> Result<StructId, WasmError
 /// How many bytes a field of `ty` occupies.
 pub fn field_size(ty: Type, addr: AddrType) -> Result<u32, WasmError> {
     Ok(match ty {
-        Type::Int | Type::Float => 8,
+        Type::Int(_) | Type::Float(_) => 8,
         Type::Bool => 4,
         // A pointer, as wide as the memory is. An array is one too: its
         // value is its header's address.
@@ -197,10 +197,10 @@ pub fn load_field(
     offset: u64,
 ) -> Result<(), WasmError> {
     match ty {
-        Type::Int => {
+        Type::Int(_) => {
             func.i64_load(offset);
         }
-        Type::Float => {
+        Type::Float(_) => {
             func.f64_load(offset);
         }
         Type::Bool => {
@@ -229,10 +229,10 @@ pub fn store_field(
     offset: u64,
 ) -> Result<(), WasmError> {
     match ty {
-        Type::Int => {
+        Type::Int(_) => {
             func.i64_store(offset);
         }
-        Type::Float => {
+        Type::Float(_) => {
             func.f64_store(offset);
         }
         Type::Bool => {

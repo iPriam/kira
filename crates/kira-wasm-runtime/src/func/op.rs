@@ -96,12 +96,16 @@ pub const I64_EQ: u8 = 0x51;
 pub const I64_NE: u8 = 0x52;
 /// `i64.lt_s`
 pub const I64_LT_S: u8 = 0x53;
+/// `i64.lt_u`
+pub const I64_LT_U: u8 = 0x54;
 /// `i64.gt_s`
 pub const I64_GT_S: u8 = 0x55;
 /// `i64.gt_u`
 pub const I64_GT_U: u8 = 0x56;
 /// `i64.le_s`
 pub const I64_LE_S: u8 = 0x57;
+/// `i64.le_u`
+pub const I64_LE_U: u8 = 0x58;
 /// `i64.ge_s`
 pub const I64_GE_S: u8 = 0x59;
 /// `i64.ge_u`

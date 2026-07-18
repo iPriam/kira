@@ -8,21 +8,30 @@
 
 pub mod arrays;
 pub mod enums;
+pub mod scalars;
 pub mod structs;
 pub mod table;
 
 pub use arrays::{ArrayId, ArrayTable};
 pub use enums::{EnumDef, EnumId, EnumTable, VariantDef};
+pub use scalars::{FloatSpelling, IntSpelling};
 pub use structs::{FieldDef, StructDef, StructId, StructTable};
 pub use table::TypeTable;
 
 /// A resolved Kira type in the v0 subset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Type {
-    /// The 64-bit signed integer type (`Int`).
-    Int,
-    /// The 64-bit floating-point type (`Float`).
-    Float,
+    /// A 64-bit two's-complement integer, carrying how it was spelled.
+    ///
+    /// `Int`, `I8`..`I64`, and `U8`..`U64` are all this variant: they share one
+    /// runtime representation and differ only in the [`IntSpelling`] they
+    /// carry. See [`scalars`] for what that spelling decides — distinctness and
+    /// the signedness of `/`, `%`, and ordering — and, just as importantly, for
+    /// what it does not.
+    Int(IntSpelling),
+    /// A 64-bit IEEE-754 float, carrying how it was spelled (`Float`, `F32`, or
+    /// `F64`).
+    Float(FloatSpelling),
     /// The boolean type (`Bool`).
     Bool,
     /// The heap string type (`String`).
@@ -47,16 +56,33 @@ pub enum Type {
 }
 
 impl Type {
+    /// The bare `Int` type, and the type of every integer literal.
+    pub const INT: Type = Type::Int(IntSpelling::Plain);
+
+    /// The bare `Float` type, and the type of every float literal.
+    pub const FLOAT: Type = Type::Float(FloatSpelling::Plain);
+
     /// Resolves a written *builtin* type name, or `None` when it is not one.
     ///
     /// A struct name is not a builtin, so resolving one needs the program's
     /// [`StructTable`]; the analyzer tries this first and the table second. An
     /// array type has no name to resolve — `[Int]` is syntax the parser builds
     /// a type reference from, not an identifier — so it never reaches here.
+    ///
+    /// The fixed-width names resolve here too, each to its kind carrying its
+    /// spelling. `Byte` is deliberately **not** among them: it is not a builtin
+    /// but a library-level `type Byte = U8` alias, so it resolves once type
+    /// aliases exist rather than being hardcoded as a ninth integer name.
     pub fn from_name(name: &str) -> Option<Type> {
+        if let Some(spelling) = IntSpelling::from_name(name) {
+            return Some(Type::Int(spelling));
+        }
+        if let Some(spelling) = FloatSpelling::from_name(name) {
+            return Some(Type::Float(spelling));
+        }
         Some(match name {
-            "Int" => Type::Int,
-            "Float" => Type::Float,
+            "Int" => Type::INT,
+            "Float" => Type::FLOAT,
             "Bool" => Type::Bool,
             "String" => Type::String,
             "Void" => Type::Void,
@@ -66,17 +92,50 @@ impl Type {
 
     /// Whether a value of `self` may be used where `target` is expected.
     ///
-    /// v0 requires exact matches (no implicit `Int`->`Float` widening); the
-    /// `Error` type is compatible in both directions to stop cascades. Arrays
-    /// compare by [`ArrayId`], which the table interns, so `[Int]` is
-    /// assignable to `[Int]` and to nothing else.
+    /// v0 requires exact matches — there is no implicit `Int`->`Float`
+    /// widening, and none between integer widths either — while the `Error`
+    /// type is compatible in both directions to stop cascades. Arrays compare
+    /// by [`ArrayId`], which the table interns, so `[Int]` is assignable to
+    /// `[Int]` and to nothing else.
+    ///
+    /// Numeric spellings add one rule: within a kind, a *named* width must
+    /// match exactly, but the bare spelling (`Int`, `Float`) is a **wildcard**
+    /// matching any width. So `U8` and `I64` are incompatible while both accept
+    /// an integer literal, which is how `let x: U8 = 5` type-checks with no
+    /// conversion rule.
+    ///
+    /// That makes assignability deliberately **non-transitive**: `U8` -> `Int`
+    /// and `Int` -> `I64` both hold, `U8` -> `I64` does not. The wildcard is
+    /// what a literal needs and the exactness is what a width means; this is
+    /// the language's rule, not an artifact, so it is reproduced rather than
+    /// smoothed over.
     pub fn assignable_to(self, target: Type) -> bool {
-        self == Type::Error || target == Type::Error || self == target
+        match (self, target) {
+            (Type::Error, _) | (_, Type::Error) => true,
+            (Type::Int(from), Type::Int(to)) => {
+                from == IntSpelling::Plain || to == IntSpelling::Plain || from == to
+            }
+            (Type::Float(from), Type::Float(to)) => {
+                from == FloatSpelling::Plain || to == FloatSpelling::Plain || from == to
+            }
+            _ => self == target,
+        }
     }
 
-    /// Whether this is one of the numeric types (`Int` or `Float`).
+    /// Whether this is one of the numeric types (any integer or float
+    /// spelling).
     pub fn is_numeric(self) -> bool {
-        matches!(self, Type::Int | Type::Float)
+        matches!(self, Type::Int(_) | Type::Float(_))
+    }
+
+    /// Whether `/`, `%`, and the four ordering comparisons on this type are
+    /// unsigned.
+    ///
+    /// True for exactly `U8`..`U64`. This is the one predicate that reaches
+    /// past the type checker: it picks the opcode the compiler emits, and so
+    /// the instruction each backend lowers to.
+    pub fn is_unsigned_int(self) -> bool {
+        matches!(self, Type::Int(spelling) if spelling.is_unsigned())
     }
 
     /// Whether this is an array type.
@@ -100,7 +159,10 @@ impl Type {
     /// the corpus pins no rendering for one, so any text invented here would be
     /// inventing language surface.
     pub fn is_printable(self) -> bool {
-        matches!(self, Type::Int | Type::Float | Type::Bool | Type::String)
+        matches!(
+            self,
+            Type::Int(_) | Type::Float(_) | Type::Bool | Type::String
+        )
     }
 
     /// Whether a value of this type owns heap storage that a copy must clone
@@ -111,7 +173,10 @@ impl Type {
     /// the answer for both is the table's to give — see
     /// [`TypeTable::owns_heap`].
     pub fn is_scalar(self) -> bool {
-        matches!(self, Type::Int | Type::Float | Type::Bool | Type::Void)
+        matches!(
+            self,
+            Type::Int(_) | Type::Float(_) | Type::Bool | Type::Void
+        )
     }
 
     /// Whether a value of this type reaches an owned parameter without an
@@ -137,7 +202,7 @@ impl Type {
     /// exist as separate questions.
     pub fn is_trivially_copyable(self) -> bool {
         match self {
-            Type::Int | Type::Float | Type::Bool | Type::Void => true,
+            Type::Int(_) | Type::Float(_) | Type::Bool | Type::Void => true,
             // An expression that already failed to analyze must not also
             // collect an ownership diagnostic on top of its type error.
             Type::Error => true,
@@ -165,8 +230,8 @@ impl Type {
     pub fn moves_on_bind(self) -> bool {
         match self {
             Type::Array(_) | Type::Enum(_) => true,
-            Type::Int
-            | Type::Float
+            Type::Int(_)
+            | Type::Float(_)
             | Type::Bool
             | Type::Void
             | Type::Error
@@ -188,7 +253,7 @@ mod tests {
                 name: "Point".to_owned(),
                 fields: vec![FieldDef {
                     name: "x".to_owned(),
-                    ty: Type::Int,
+                    ty: Type::INT,
                     mutable: true,
                 }],
             })
@@ -200,7 +265,7 @@ mod tests {
     fn a_struct_type_names_itself_in_diagnostics() {
         let (table, id) = table_with_point();
         assert_eq!(table.type_name(Type::Struct(id)), "Point");
-        assert_eq!(table.type_name(Type::Int), "Int");
+        assert_eq!(table.type_name(Type::INT), "Int");
     }
 
     #[test]
@@ -216,7 +281,7 @@ mod tests {
     #[test]
     fn an_array_needs_move_and_also_moves_on_bind() {
         let mut table = TypeTable::new();
-        let ints = table.array_of(Type::Int);
+        let ints = table.array_of(Type::INT);
         // The one type that answers both questions `no`/`yes`: it needs `move`
         // into an owned parameter *and* `let alias = xs` consumes `xs`.
         assert!(!ints.is_trivially_copyable());
@@ -226,8 +291,8 @@ mod tests {
     #[test]
     fn a_string_needs_move_and_a_scalar_does_not() {
         assert!(!Type::String.is_trivially_copyable());
-        assert!(Type::Int.is_trivially_copyable());
-        assert!(Type::Float.is_trivially_copyable());
+        assert!(Type::INT.is_trivially_copyable());
+        assert!(Type::FLOAT.is_trivially_copyable());
         assert!(Type::Bool.is_trivially_copyable());
         assert!(Type::Void.is_trivially_copyable());
     }
@@ -235,10 +300,10 @@ mod tests {
     #[test]
     fn only_an_array_moves_on_bind() {
         let (mut table, id) = table_with_point();
-        let ints = table.array_of(Type::Int);
+        let ints = table.array_of(Type::INT);
         for ty in [
-            Type::Int,
-            Type::Float,
+            Type::INT,
+            Type::FLOAT,
             Type::Bool,
             Type::Void,
             Type::Error,
@@ -259,18 +324,18 @@ mod tests {
     #[test]
     fn an_array_is_not_printable_because_no_format_is_pinned() {
         let mut table = TypeTable::new();
-        let ints = table.array_of(Type::Int);
+        let ints = table.array_of(Type::INT);
         // Same evidence as a struct: no corpus call site, no golden file. A
         // separator invented here would be invented language surface.
         assert!(!ints.is_printable());
-        assert!(Type::Int.is_printable());
+        assert!(Type::INT.is_printable());
     }
 
     #[test]
     fn interned_array_types_are_equal_and_assignable() {
         let mut table = TypeTable::new();
-        let a = table.array_of(Type::Int);
-        let b = table.array_of(Type::Int);
+        let a = table.array_of(Type::INT);
+        let b = table.array_of(Type::INT);
         let strings = table.array_of(Type::String);
         assert_eq!(a, b);
         assert!(a.assignable_to(b));

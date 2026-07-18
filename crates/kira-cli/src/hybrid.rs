@@ -172,8 +172,11 @@ fn manifest(
 /// The bridge tag for an IR type, or why it cannot cross.
 fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridError> {
     Ok(match ty {
-        Type::Int => BridgeValueTag::INT,
-        Type::Float => BridgeValueTag::FLOAT,
+        // Every integer width crosses the seam as one tag, because every
+        // integer width *is* one 64-bit representation. The written width is a
+        // front-end distinction; the bridge carries values, not spellings.
+        Type::Int(_) => BridgeValueTag::INT,
+        Type::Float(_) => BridgeValueTag::FLOAT,
         Type::Bool => BridgeValueTag::BOOL,
         Type::String => BridgeValueTag::STRING,
         Type::Void => BridgeValueTag::VOID,
@@ -233,8 +236,8 @@ mod tests {
 
     #[test]
     fn every_v0_type_has_a_bridge_tag() {
-        assert_eq!(tag(Type::Int, "f").expect("int"), BridgeValueTag::INT);
-        assert_eq!(tag(Type::Float, "f").expect("float"), BridgeValueTag::FLOAT);
+        assert_eq!(tag(Type::INT, "f").expect("int"), BridgeValueTag::INT);
+        assert_eq!(tag(Type::FLOAT, "f").expect("float"), BridgeValueTag::FLOAT);
         assert_eq!(tag(Type::Bool, "f").expect("bool"), BridgeValueTag::BOOL);
         assert_eq!(
             tag(Type::String, "f").expect("string"),

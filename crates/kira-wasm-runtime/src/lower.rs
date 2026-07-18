@@ -12,17 +12,18 @@
 //! - `&&` and `||` evaluate their right operand only when the left decides
 //!   nothing, matching the bytecode compiler's jumps.
 
-use kira_ir::{IrBinOp, IrCallee, IrExpr, IrExprId, IrFunction, IrProgram, IrStmt, IrUnOp};
+use kira_ir::{IrCallee, IrExpr, IrExprId, IrFunction, IrProgram, IrStmt, IrUnOp};
 use kira_semantics_model::Type;
 
 use crate::arrays::ArrayCopies;
 use crate::encode::ValType;
 use crate::error::WasmError;
-use crate::func::{BlockType, BlockType::Empty, Func, FuncIdx, LocalIdx};
+use crate::func::{BlockType::Empty, Func, FuncIdx, LocalIdx};
 use crate::literals::Literals;
 use crate::rt::Runtime;
 use crate::structs::{Structs, load_field, store_field};
 
+mod operators;
 mod places;
 
 /// Lowers one function at a time against a fixed set of handles.
@@ -122,8 +123,8 @@ impl<'a> Lowering<'a> {
     /// that returns nothing.
     pub fn val_type(ty: Type) -> Result<Option<ValType>, WasmError> {
         Ok(match ty {
-            Type::Int => Some(ValType::I64),
-            Type::Float => Some(ValType::F64),
+            Type::Int(_) => Some(ValType::I64),
+            Type::Float(_) => Some(ValType::F64),
             Type::Bool => Some(ValType::I32),
             // All four are addresses; `value_of` widens them to the memory's
             // width. An array's value is its header's address, and an enum's is
@@ -506,127 +507,6 @@ impl<'a> Lowering<'a> {
         Ok(())
     }
 
-    /// Lowers a binary operation.
-    fn binary(
-        &mut self,
-        func: &mut Func,
-        function: &IrFunction,
-        op: IrBinOp,
-        lhs: IrExprId,
-        rhs: IrExprId,
-    ) -> Result<(), WasmError> {
-        // `&&` and `||` decide whether the right operand runs at all, so they
-        // are branches rather than operators.
-        match op {
-            IrBinOp::And => {
-                self.expr(func, function, lhs)?;
-                func.if_(BlockType::Value(ValType::I32));
-                self.expr(func, function, rhs)?;
-                func.else_();
-                func.i32_const(0);
-                func.end();
-                return Ok(());
-            }
-            IrBinOp::Or => {
-                self.expr(func, function, lhs)?;
-                func.if_(BlockType::Value(ValType::I32));
-                func.i32_const(1);
-                func.else_();
-                self.expr(func, function, rhs)?;
-                func.end();
-                return Ok(());
-            }
-            IrBinOp::DivInt | IrBinOp::RemInt => {
-                return self.int_division(func, function, op, lhs, rhs);
-            }
-            _ => {}
-        }
-
-        self.expr(func, function, lhs)?;
-        self.expr(func, function, rhs)?;
-
-        match op {
-            IrBinOp::AddInt => func.i64_add(),
-            IrBinOp::SubInt => func.i64_sub(),
-            IrBinOp::MulInt => func.i64_mul(),
-            IrBinOp::AddFloat => func.f64_add(),
-            IrBinOp::SubFloat => func.f64_sub(),
-            IrBinOp::MulFloat => func.f64_mul(),
-            IrBinOp::DivFloat => func.f64_div(),
-            IrBinOp::EqInt => func.i64_eq(),
-            IrBinOp::NeInt => func.i64_ne(),
-            IrBinOp::LtInt => func.i64_lt_s(),
-            IrBinOp::LeInt => func.i64_le_s(),
-            IrBinOp::GtInt => func.i64_gt_s(),
-            IrBinOp::GeInt => func.i64_ge_s(),
-            IrBinOp::EqFloat => func.f64_eq(),
-            IrBinOp::NeFloat => func.f64_ne(),
-            IrBinOp::LtFloat => func.f64_lt(),
-            IrBinOp::LeFloat => func.f64_le(),
-            IrBinOp::GtFloat => func.f64_gt(),
-            IrBinOp::GeFloat => func.f64_ge(),
-            IrBinOp::EqBool => func.i32_eq(),
-            IrBinOp::NeBool => func.i32_ne(),
-            IrBinOp::ConcatStr => func.call(self.runtime.str_concat),
-            IrBinOp::EqStr => func.call(self.runtime.str_eq),
-            IrBinOp::NeStr => func.call(self.runtime.str_eq).i32_eqz(),
-            // Handled above; listed so a new operator cannot fall through.
-            IrBinOp::And | IrBinOp::Or | IrBinOp::DivInt | IrBinOp::RemInt => {
-                return Err(WasmError::UnsupportedOperator);
-            }
-        };
-        Ok(())
-    }
-
-    /// Lowers `/` or `%` on integers, with Kira's answers for the two cases
-    /// wasm would decide differently.
-    fn int_division(
-        &mut self,
-        func: &mut Func,
-        function: &IrFunction,
-        op: IrBinOp,
-        lhs: IrExprId,
-        rhs: IrExprId,
-    ) -> Result<(), WasmError> {
-        let left = func.local(ValType::I64);
-        let right = func.local(ValType::I64);
-
-        self.expr(func, function, lhs)?;
-        self.expr(func, function, rhs)?;
-        func.local_set(right);
-        func.local_set(left);
-
-        // By zero is a Kira trap, and it is raised before the engine can raise
-        // its own — so a Web user reads the same sentence a VM user does.
-        func.local_get(right).i64_eqz();
-        func.if_(Empty);
-        func.call(self.runtime.trap_div_zero).unreachable();
-        func.end();
-
-        // `Int::MIN / -1` overflows: wasm traps, the VM wraps to `Int::MIN`,
-        // and `Int::MIN % -1` is zero rather than a trap.
-        func.local_get(left)
-            .i64_const(i64::MIN)
-            .i64_eq()
-            .local_get(right)
-            .i64_const(-1)
-            .i64_eq()
-            .i32_and();
-        func.if_(BlockType::Value(ValType::I64));
-        match op {
-            IrBinOp::DivInt => func.i64_const(i64::MIN),
-            _ => func.i64_const(0),
-        };
-        func.else_();
-        func.local_get(left).local_get(right);
-        match op {
-            IrBinOp::DivInt => func.i64_div_s(),
-            _ => func.i64_rem_s(),
-        };
-        func.end();
-        Ok(())
-    }
-
     /// Lowers a call to `print` or to a user function.
     fn call(
         &mut self,
@@ -651,8 +531,8 @@ impl<'a> Lowering<'a> {
                 // Rendering happens in the module: `print` hands the host bytes,
                 // never a number to format.
                 match ty {
-                    Type::Int => func.call(self.runtime.str_from_i64),
-                    Type::Float => func.call(self.runtime.str_from_f64),
+                    Type::Int(_) => func.call(self.runtime.str_from_i64),
+                    Type::Float(_) => func.call(self.runtime.str_from_f64),
                     Type::Bool => func.call(self.runtime.str_from_bool),
                     Type::String => func,
                     Type::Void => {

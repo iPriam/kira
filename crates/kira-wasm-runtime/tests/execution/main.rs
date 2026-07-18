@@ -241,3 +241,4 @@ mod memory;
 mod ownership;
 mod scalars;
 mod structs;
+mod widths;

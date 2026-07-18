@@ -122,12 +122,12 @@ mod tests {
                 fields: vec![
                     FieldDef {
                         name: "x".to_owned(),
-                        ty: Type::Int,
+                        ty: Type::INT,
                         mutable: true,
                     },
                     FieldDef {
                         name: "y".to_owned(),
-                        ty: Type::Int,
+                        ty: Type::INT,
                         mutable: false,
                     },
                 ],

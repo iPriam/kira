@@ -77,8 +77,10 @@ impl TypeTable {
     /// is nowhere in the table to point at.
     pub fn type_name(&self, ty: Type) -> String {
         match ty {
-            Type::Int => "Int".to_owned(),
-            Type::Float => "Float".to_owned(),
+            // A width names itself: a mismatch between `U8` and `I64` has to
+            // say which two types it means, not report both as "Int".
+            Type::Int(spelling) => spelling.name().to_owned(),
+            Type::Float(spelling) => spelling.name().to_owned(),
             Type::Bool => "Bool".to_owned(),
             Type::String => "String".to_owned(),
             Type::Void => "Void".to_owned(),
@@ -131,7 +133,7 @@ mod tests {
     #[test]
     fn an_array_names_itself_by_its_element() {
         let mut table = TypeTable::new();
-        let ints = table.array_of(Type::Int);
+        let ints = table.array_of(Type::INT);
         assert_eq!(table.type_name(ints), "[Int]");
         let nested = table.array_of(ints);
         assert_eq!(table.type_name(nested), "[[Int]]");
@@ -146,7 +148,7 @@ mod tests {
                 name: "Point".to_owned(),
                 fields: vec![FieldDef {
                     name: "x".to_owned(),
-                    ty: Type::Int,
+                    ty: Type::INT,
                     mutable: true,
                 }],
             })
@@ -158,9 +160,9 @@ mod tests {
     #[test]
     fn an_array_owns_heap_storage_whatever_it_holds() {
         let mut table = TypeTable::new();
-        let ints = table.array_of(Type::Int);
+        let ints = table.array_of(Type::INT);
         // `Int` owns nothing, but the array holding them is itself an object.
-        assert!(!table.owns_heap(Type::Int));
+        assert!(!table.owns_heap(Type::INT));
         assert!(table.owns_heap(ints));
     }
 
@@ -173,7 +175,7 @@ mod tests {
                 name: "Pair".to_owned(),
                 fields: vec![FieldDef {
                     name: "w".to_owned(),
-                    ty: Type::Int,
+                    ty: Type::INT,
                     mutable: true,
                 }],
             })
@@ -206,13 +208,13 @@ mod tests {
             })
             .expect("declares");
         assert!(table.owns_heap(Type::Struct(nested)));
-        assert!(!table.owns_heap(Type::Int));
+        assert!(!table.owns_heap(Type::INT));
     }
 
     #[test]
     fn a_struct_holding_an_array_owns_heap_storage() {
         let mut table = TypeTable::new();
-        let ints = table.array_of(Type::Int);
+        let ints = table.array_of(Type::INT);
         let holder = table
             .structs_mut()
             .declare(StructDef {
@@ -230,8 +232,8 @@ mod tests {
     #[test]
     fn an_array_type_resolves_to_its_element() {
         let mut table = TypeTable::new();
-        let ints = table.array_of(Type::Int);
-        assert_eq!(table.element_of(ints), Some(Type::Int));
-        assert_eq!(table.element_of(Type::Int), None);
+        let ints = table.array_of(Type::INT);
+        assert_eq!(table.element_of(ints), Some(Type::INT));
+        assert_eq!(table.element_of(Type::INT), None);
     }
 }

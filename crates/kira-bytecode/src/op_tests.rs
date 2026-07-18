@@ -36,6 +36,42 @@ fn round_trips_a_mixed_instruction_stream() {
 }
 
 #[test]
+fn round_trips_the_unsigned_arithmetic_and_ordering_opcodes() {
+    // The six opcodes the `U8`..`U64` spellings need. Round-tripping them
+    // separately keeps a decoder that silently mapped one onto its signed twin
+    // from passing: `DivUInt` must come back as `DivUInt`, not `DivInt`.
+    let code = vec![
+        Instruction::DivUInt,
+        Instruction::RemUInt,
+        Instruction::LtUInt,
+        Instruction::LeUInt,
+        Instruction::GtUInt,
+        Instruction::GeUInt,
+    ];
+    let bytes = encode(&code);
+    assert_eq!(decode(&bytes).unwrap(), code);
+}
+
+#[test]
+fn the_unsigned_opcodes_are_appended_after_the_previous_last_one() {
+    // Opcodes are append-only: a module already written decodes by these
+    // numbers, so the unsigned set starts one past `ENUM_PAYLOAD` and nothing
+    // before it moved. Spelled literally so a renumber fails here rather than
+    // silently redirecting an existing artifact.
+    assert_eq!(opcode::ENUM_PAYLOAD, 0x37);
+    assert_eq!(opcode::DIV_UINT, 0x38);
+    assert_eq!(opcode::REM_UINT, 0x39);
+    assert_eq!(opcode::LT_UINT, 0x3a);
+    assert_eq!(opcode::LE_UINT, 0x3b);
+    assert_eq!(opcode::GT_UINT, 0x3c);
+    assert_eq!(opcode::GE_UINT, 0x3d);
+    // The signed opcodes they sit beside are untouched.
+    assert_eq!(opcode::DIV_INT, 0x0f);
+    assert_eq!(opcode::REM_INT, 0x10);
+    assert_eq!(opcode::LT_INT, 0x18);
+}
+
+#[test]
 fn unknown_opcode_is_reported() {
     let err = decode(&[0xff]).unwrap_err();
     assert!(matches!(

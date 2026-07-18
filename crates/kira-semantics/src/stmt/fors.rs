@@ -55,8 +55,8 @@ impl Analyzer<'_> {
         // The cursor and limit are hidden: they occupy local slots but are
         // bound to no name, so a body cannot read, write, or shadow them — not
         // even one that declares a variable spelled the same way.
-        let cursor = ctx.declare_hidden(Type::Int, true);
-        let limit = ctx.declare_hidden(Type::Int, false);
+        let cursor = ctx.declare_hidden(Type::INT, true);
+        let limit = ctx.declare_hidden(Type::INT, false);
         let cursor_init = self.program.stmts.alloc(HirStmt::Let {
             local: cursor,
             init: start_expr,
@@ -82,7 +82,7 @@ impl Analyzer<'_> {
         // body and gone afterwards.
         ctx.push_scope();
         let user_name = self.interner.resolve(name).to_owned();
-        let variable = ctx.declare(&user_name, Type::Int, false);
+        let variable = ctx.declare(&user_name, Type::INT, false);
         let cursor_copy = self.read_int_local(cursor);
         let bind = self.program.stmts.alloc(HirStmt::Let {
             local: variable,
@@ -95,7 +95,7 @@ impl Analyzer<'_> {
             op: HirBinaryOp::AddInt,
             lhs: step_read,
             rhs: one,
-            ty: Type::Int,
+            ty: Type::INT,
         });
         let step = self.program.stmts.alloc(HirStmt::Assign {
             place: HirPlace {
@@ -212,14 +212,14 @@ impl Analyzer<'_> {
             .program
             .exprs
             .alloc(HirExpr::ArrayLen { array: array_read });
-        let limit = ctx.declare_hidden(Type::Int, false);
+        let limit = ctx.declare_hidden(Type::INT, false);
         let bind_limit = self.program.stmts.alloc(HirStmt::Let {
             local: limit,
             init: count,
         });
         out.push(bind_limit);
 
-        let cursor = ctx.declare_hidden(Type::Int, true);
+        let cursor = ctx.declare_hidden(Type::INT, true);
         let zero = self.program.exprs.alloc(HirExpr::Int(0));
         let bind_cursor = self.program.stmts.alloc(HirStmt::Let {
             local: cursor,
@@ -262,7 +262,7 @@ impl Analyzer<'_> {
             op: HirBinaryOp::AddInt,
             lhs: step_read,
             rhs: one,
-            ty: Type::Int,
+            ty: Type::INT,
         });
         let step = self.program.stmts.alloc(HirStmt::Assign {
             place: HirPlace {

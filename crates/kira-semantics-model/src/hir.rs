@@ -344,8 +344,12 @@ impl HirExpr {
     /// The resolved type of this expression.
     pub fn type_of(&self) -> Type {
         match self {
-            HirExpr::Int(_) => Type::Int,
-            HirExpr::Float(_) => Type::Float,
+            // A literal carries the *plain* spelling, which is the wildcard in
+            // `Type::assignable_to`. That one fact is what lets `let x: U8 = 5`
+            // check without any implicit-conversion rule: the literal is
+            // assignable to every width rather than being converted to one.
+            HirExpr::Int(_) => Type::INT,
+            HirExpr::Float(_) => Type::FLOAT,
             HirExpr::Bool(_) => Type::Bool,
             HirExpr::Str(_) => Type::String,
             HirExpr::Local { ty, .. }
@@ -360,7 +364,7 @@ impl HirExpr {
             HirExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),
             // `.count` and a tag read are both `Int`; `.append` yields nothing.
             // None has a type that can vary, so none carries one.
-            HirExpr::ArrayLen { .. } | HirExpr::EnumTag { .. } => Type::Int,
+            HirExpr::ArrayLen { .. } | HirExpr::EnumTag { .. } => Type::INT,
             HirExpr::ArrayAppend { .. } => Type::Void,
             HirExpr::Error => Type::Error,
         }
@@ -404,10 +408,19 @@ pub enum HirBinaryOp {
     SubInt,
     /// Integer multiplication.
     MulInt,
-    /// Integer division (truncating).
+    /// Integer division (truncating), signed.
     DivInt,
-    /// Integer remainder.
+    /// Integer remainder, signed.
     RemInt,
+    /// Integer division (truncating), unsigned — the `U8`..`U64` spellings.
+    ///
+    /// Separate from [`HirBinaryOp::DivInt`] because signedness is the one
+    /// thing an integer's written width decides. `+`, `-`, and `*` need no
+    /// unsigned twin: two's-complement wrapping is bit-identical for both
+    /// signednesses, so they would be the same instruction.
+    DivUInt,
+    /// Integer remainder, unsigned — the `U8`..`U64` spellings.
+    RemUInt,
     /// Float addition.
     AddFloat,
     /// Float subtraction.
@@ -430,6 +443,17 @@ pub enum HirBinaryOp {
     GtInt,
     /// Integer greater-or-equal.
     GeInt,
+    /// Integer less-than, unsigned — the `U8`..`U64` spellings.
+    ///
+    /// Ordering needs an unsigned twin for the same reason division does, and
+    /// equality does not: `==` compares bit patterns, which is signedness-free.
+    LtUInt,
+    /// Integer less-or-equal, unsigned.
+    LeUInt,
+    /// Integer greater-than, unsigned.
+    GtUInt,
+    /// Integer greater-or-equal, unsigned.
+    GeUInt,
     /// Float comparisons.
     EqFloat,
     /// Float inequality.

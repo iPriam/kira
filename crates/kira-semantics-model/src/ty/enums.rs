@@ -201,7 +201,7 @@ mod tests {
                     },
                     VariantDef {
                         name: "At".to_owned(),
-                        payload: Some(Type::Int),
+                        payload: Some(Type::INT),
                     },
                 ],
             })

@@ -341,6 +341,58 @@ Because coverage is checked, an exhaustive `match` whose arms all return is
 itself a **definite return** — which is why `rank` above needs no trailing
 `return`. As in a `switch`, `break` inside an arm belongs to the enclosing loop.
 
+## Fixed-width scalars
+
+`I8`, `I16`, `I32`, `I64`, `U8`, `U16`, `U32`, `U64`, `F32`, and `F64` name
+integer and float types alongside bare `Int` and `Float`. They are **spellings,
+not representations**: every integer type is one 64-bit two's-complement value
+at run time and every float type one 64-bit IEEE-754 value, so `I32` does not
+allocate a narrower box.
+
+A spelling decides exactly two things.
+
+**Distinctness.** Two *written* widths must match exactly — a `U8` does not flow
+into an `I64`, and `u8Value + i64Value` is `KSEM071` — because the language has
+no implicit widening. Bare `Int` and `Float` are the exception: each is a
+wildcard matching any width in its kind, which is what lets an integer literal
+be written at any width with no conversion rule.
+
+```kira
+let small: U8 = 5     // a literal is plain `Int`, so it fits any width
+let plain: Int = small // a width flows into the wildcard
+let back: U8 = plain   // and back out of it
+```
+
+That makes assignability deliberately **non-transitive**: `U8` → `Int` and
+`Int` → `I64` both hold while `U8` → `I64` does not. The wildcard is what a
+literal needs and the exactness is what a width means.
+
+**Signedness of `/`, `%`, and the four orderings.** A `U` spelling selects the
+unsigned form of those six operators and only those six — `+`, `-`, `*`, and
+`==` are bit-identical under either signedness, so they need no unsigned twin.
+Read as a `U64`, `-1` is `18446744073709551615`:
+
+```kira
+let big: U64 = -1
+let two: U64 = 2
+print(big > two)   // true — unsigned; signed this would be false
+print(big / two)   // 9223372036854775807 — signed this would be 0
+```
+
+What a width does **not** do is narrow arithmetic. A `U8` sum of `250` and `10`
+is `260`, not `4`: every operation wraps at the representation's 64 bits, never
+at the written width. Narrowing is behavior the language does not define, so
+this port declines to invent it.
+
+`Byte` is not a builtin. The language spells it as an alias — `type Byte = U8` —
+which is why it behaves exactly as `U8` does, unsigned division included. There
+is no `I128`, no `U128`, and no `Char`.
+
+Six opcodes carry the signedness to the VM (`DIV_UINT`, `REM_UINT`, `LT_UINT`,
+`LE_UINT`, `GT_UINT`, `GE_UINT`, appended after `ENUM_PAYLOAD`); native code
+lowers them to `udiv`/`urem` and the unsigned `icmp` predicates, and wasm to
+`i64.div_u`/`i64.rem_u` and the `_u` comparisons.
+
 ## Type aliases
 
 `type Name = Target` binds a name to a written type. It is a **spelling, not a

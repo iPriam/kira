@@ -97,8 +97,8 @@ mod tests {
     #[test]
     fn the_same_element_interns_to_the_same_id() {
         let mut table = ArrayTable::new();
-        let first = table.intern(Type::Int).expect("interns");
-        let again = table.intern(Type::Int).expect("interns");
+        let first = table.intern(Type::INT).expect("interns");
+        let again = table.intern(Type::INT).expect("interns");
         assert_eq!(first, again, "`[Int]` written twice is one type");
         assert_eq!(table.len(), 1);
         // Which is what makes the type-level equality work.
@@ -108,18 +108,18 @@ mod tests {
     #[test]
     fn different_elements_are_different_types() {
         let mut table = ArrayTable::new();
-        let ints = table.intern(Type::Int).expect("interns");
+        let ints = table.intern(Type::INT).expect("interns");
         let strings = table.intern(Type::String).expect("interns");
         assert_ne!(ints, strings);
         assert_ne!(Type::Array(ints), Type::Array(strings));
-        assert_eq!(table.element(ints), Some(Type::Int));
+        assert_eq!(table.element(ints), Some(Type::INT));
         assert_eq!(table.element(strings), Some(Type::String));
     }
 
     #[test]
     fn nesting_is_a_row_whose_element_is_an_array() {
         let mut table = ArrayTable::new();
-        let inner = table.intern(Type::Int).expect("interns");
+        let inner = table.intern(Type::INT).expect("interns");
         let outer = table.intern(Type::Array(inner)).expect("interns");
         assert_ne!(inner, outer, "`[Int]` and `[[Int]]` are different types");
         assert_eq!(table.element(outer), Some(Type::Array(inner)));
