@@ -20,12 +20,11 @@ Crates live in `crates/`, organized into layers with no upward dependencies.
 | 2 | `kira-semantics-model`, `kira-shader-model`, `kira-ksl-semantics`, `kira-semantics` |
 | 3 | `kira-ir`, `kira-shader-ir`, `kira-hybrid-definition`, `kira-backend-api`, `kira-native-lib-definition` |
 | 4 | `kira-glsl-backend`, `kira-wgsl-backend`, `kira-hlsl-backend`, `kira-msl-backend`, `kira-spirv-backend`, `kira-bytecode`, `kira-vm-runtime`, `kira-native-bridge`, `kira-hybrid-runtime`, `kira-debug`, `kira-llvm-backend`, `kira-wasm-runtime` |
-| 5 | `kira-manifest`, `kira-project`, `kira-package-manager`, `kira-build-definition` |
+| 5 | `kira-manifest`, `kira-project`, `kira-package-manager`, `kira-build-definition`, `kira-main` (Rust embedding surface: staticlib/cdylib/rlib) |
 | 6 | `kira-program-graph` |
 | 7 | `kira-build` |
 | 8 | `kira-instruments`, `kira-linter`, `kira-doc`, `kira-app-generation`, `kira-live` |
 | 9 | `kira-cli` (binary `kirac`) |
-| 10 | `kira-main` (C ABI facade: staticlib/cdylib/rlib) |
 | runners | `kira-desktop-runner` (binary `kira-desktop-runner`) |
 | tools | `kira-bootstrapper` (binary `kira`), `kira-devflow` (binary `devflow`) |
 

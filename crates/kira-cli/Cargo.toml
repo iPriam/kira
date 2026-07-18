@@ -20,6 +20,7 @@ kira-semantics.workspace = true
 kira-ir.workspace = true
 kira-semantics-model.workspace = true
 kira-bytecode.workspace = true
+kira-main.workspace = true
 kira-vm-runtime.workspace = true
 kira-runtime-abi.workspace = true
 kira-backend-api.workspace = true
