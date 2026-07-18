@@ -180,6 +180,107 @@ fn a_bare_int_accepts_and_is_accepted_by_any_width() {
 }
 
 #[test]
+fn a_mixed_operation_takes_its_type_from_the_left_operand() {
+    // The left operand decides, and this is *asymmetric*: `1 + i32Value` is a
+    // plain `Int` (wildcard-assignable to `I64`), while `i32Value + 1` is an
+    // `I32` (which is not). Verified against the oracle in both directions —
+    // a symmetric "the written width wins" rule accepts the second and passes
+    // every backend-parity test while still being wrong.
+    assert!(
+        diagnostics(
+            "@Main function main() {
+                 let narrow: I32 = 3
+                 let wide: I64 = 1 + narrow
+                 print(wide)
+                 return
+             }"
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        codes(
+            "@Main function main() {
+                 let narrow: I32 = 3
+                 let wide: I64 = narrow + 1
+                 print(wide)
+                 return
+             }"
+        ),
+        vec!["KSEM020"]
+    );
+}
+
+#[test]
+fn a_for_range_bound_accepts_any_integer_width() {
+    // KSEM043 is a *kind* check, not an exact-spelling one: the oracle runs
+    // `for i in 0..u8Count`. Reading `Type::INT` as a pattern here would reject
+    // it, because `Type::INT` is only the plain spelling.
+    assert!(
+        diagnostics(
+            "@Main function main() {
+                 let count: U8 = 3
+                 for i in 0..count {
+                     print(i)
+                 }
+                 return
+             }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_for_range_bound_still_rejects_a_non_integer() {
+    assert_eq!(
+        codes(
+            "@Main function main() {
+                 let limit: Float = 3.0
+                 for i in 0..limit {
+                     print(i)
+                 }
+                 return
+             }"
+        ),
+        vec!["KSEM043"]
+    );
+}
+
+#[test]
+fn an_array_index_accepts_any_integer_width() {
+    // Same kind-not-spelling rule as the `for` bound: `xs[u8Index]` runs on the
+    // oracle. An index is consumed as a position, so its width means nothing.
+    assert!(
+        diagnostics(
+            "@Main function main() {
+                 var xs: [Int] = []
+                 xs.append(10)
+                 xs.append(20)
+                 let at: U8 = 1
+                 print(xs[at])
+                 return
+             }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn an_array_index_still_rejects_a_non_integer() {
+    assert_eq!(
+        codes(
+            "@Main function main() {
+                 var xs: [Int] = []
+                 xs.append(10)
+                 let at: Float = 0.0
+                 print(xs[at])
+                 return
+             }"
+        ),
+        vec!["KSEM102"]
+    );
+}
+
+#[test]
 fn there_is_no_byte_builtin() {
     // `Byte` is a library alias — `type Byte = U8` — not a builtin, so an
     // unaliased use is an unknown type. Hardcoding it here would invent a

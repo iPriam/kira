@@ -51,8 +51,30 @@ Reproduced, not smoothed over.
 
 `unify_numeric` in `kira-semantics/src/operators.rs` is new and load-bearing.
 The operator tables previously demanded `lt == rt`, which the wildcard breaks:
-`u8Value + 1` has a `U8` and a plain `Int` operand. Unification yields to the
-written width, so the result of `u8Value + 1` is `U8` and stays unsigned.
+`u8Value + 1` has a `U8` and a plain `Int` operand.
+
+**The left operand decides**, and this is asymmetric. Compatibility is the
+loose part — a plain `Int`/`Float` pairs with any width — but the *result* is
+always the left type, never the width merely because it was written. So
+`u8Value / 1` is an unsigned `U8` divide while `1 / u8Value` is a signed plain
+`Int` one. A first pass here invented a symmetric "written width wins" rule
+instead; the oracle's is `resolveBinaryType` returning `lhs_ty` after an `eql`
+compatibility test, with signedness read off `exprType(node.lhs)` alone in
+`lower_from_hir.zig`. Differential runs pinned it: for `let neg: Int = 0 - 10`
+and `let v: U8 = 3`, `neg / v` is `-3` and `neg < v` is `true`, while
+`u8Negative / plainInt` is `6148914691236517202` and its `<` is `false`.
+
+The internal parity harness could not have caught the symmetric rule — all four
+backends were consistently wrong together, because the divergence is in
+semantics, upstream of every backend. Only a run against the oracle exposes a
+bug of that shape, which is the lesson worth keeping: **backend parity is not
+oracle parity.** The width tests now always include a left-side-plain case.
+
+Two nearby sites had the same mechanical-rewrite bug in a different form:
+`analyze_bound` (`for` range bounds) and `analyze_index_expr` (array indexes)
+compared `ty != Type::INT`, an exact-*spelling* test where a *kind* test was
+meant. Both now use `matches!(ty, Type::Int(_))`; the oracle accepts
+`for i in 0..u8Count` and `xs[u8Index]`.
 
 ## Not desugared
 

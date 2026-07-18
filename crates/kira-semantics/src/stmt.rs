@@ -393,12 +393,17 @@ impl Analyzer<'_> {
         })
     }
 
-    /// Analyzes one `for` range bound, requiring `Int`.
+    /// Analyzes one `for` range bound, requiring an integer.
+    ///
+    /// Any integer *spelling* qualifies — `for i in 0..u8Count` is legal, not
+    /// just a bare `Int`. This is a kind check, deliberately not an exact-type
+    /// one: a bound is counted with, never stored, so its width is irrelevant
+    /// to the loop.
     fn analyze_bound(&mut self, ctx: &mut FnCtx, expr: ExprId) -> HirExprId {
         let span = self.tree.expr(expr).span();
         let hir = self.analyze_expr(ctx, expr);
         let ty = self.program.expr(hir).type_of();
-        if ty != Type::INT && ty != Type::Error {
+        if !matches!(ty, Type::Int(_)) && ty != Type::Error {
             self.emit(
                 span,
                 "KSEM043",
