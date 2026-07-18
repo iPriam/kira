@@ -462,28 +462,41 @@ impl Heap {
     /// The seam's rule is that arguments borrow, so a string is copied in here
     /// rather than aliased: the caller's storage stays the caller's, and the
     /// value this returns is this heap's to drop like any other.
-    pub fn lower(&mut self, argument: NativeArg<'_>) -> Value {
-        match argument {
+    ///
+    /// A handle is the `None` case. Its word names an object in a heap that
+    /// outlives one call, and this heap does not have one: each call runs on a
+    /// fresh [`Heap`] that is dropped when the call ends, so there is nothing a
+    /// handle could denote. Saying so beats minting a value: a wrong answer
+    /// about a handle is a wrong answer about *which object*, which is a
+    /// use-after-free, not a bad print. The persistent instance is what gives
+    /// handles a home; until then the caller reports the refusal by name.
+    pub fn lower(&mut self, argument: NativeArg<'_>) -> Option<Value> {
+        Some(match argument {
             NativeArg::Void => Value::Void,
             NativeArg::Int(value) => Value::Int(value),
             NativeArg::Float(value) => Value::Float(value),
             NativeArg::Bool(value) => Value::Bool(value),
             NativeArg::Str(text) => Value::Str(self.alloc(text.to_owned())),
-        }
+            NativeArg::Handle(_) => return None,
+        })
     }
 
     /// Takes an owned seam result into this heap as a runtime value.
     ///
     /// The seam's rule is that results own, so a returned string is *moved* in
     /// rather than copied: nothing else holds it.
-    pub fn absorb(&mut self, result: NativeResult) -> Value {
-        match result {
+    ///
+    /// A handle is the `None` case, for the reason [`Heap::lower`] gives: this
+    /// heap has no representation for an object it did not allocate.
+    pub fn absorb(&mut self, result: NativeResult) -> Option<Value> {
+        Some(match result {
             NativeResult::Void => Value::Void,
             NativeResult::Int(value) => Value::Int(value),
             NativeResult::Float(value) => Value::Float(value),
             NativeResult::Bool(value) => Value::Bool(value),
             NativeResult::Str(text) => Value::Str(self.alloc(text)),
-        }
+            NativeResult::Handle(_) => return None,
+        })
     }
 
     /// Renders a runtime value as a seam result, leaving `value` untouched, or

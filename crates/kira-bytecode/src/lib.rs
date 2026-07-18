@@ -10,11 +10,13 @@
 //! dynamic-loading calls, and it compiles for `wasm32-unknown-unknown`.
 
 pub mod compile;
+pub mod exports;
 pub mod module;
 pub mod op;
 pub mod validate;
 
 pub use compile::{CompileError, compile, compile_hybrid};
+pub use exports::{ExportTable, ExportType, ModuleExport};
 pub use module::{FuncProto, MAGIC, Module, ModuleDecodeError};
 pub use op::{DecodeError, Instruction, decode, encode};
 pub use validate::ModuleValidateError;
@@ -127,6 +129,77 @@ mod tests {
         let bytes = module.to_bytes();
         assert_eq!(Module::from_bytes(&bytes).unwrap(), module);
         assert_eq!(module.strings, vec!["hi".to_owned()]);
+    }
+
+    /// A compiled library carries its export surface into the artifact, and the
+    /// artifact survives a round trip through bytes with it.
+    ///
+    /// This is the whole point of the section: the consumer's generated wrapper
+    /// is checked against what the module says about itself, so what the module
+    /// says has to make the trip.
+    #[test]
+    fn a_library_compiles_its_export_surface_into_the_module() {
+        use kira_ir::ir::IrExport;
+        use kira_semantics_model::{Type, ty::StructDef};
+
+        let mut program = IrProgram {
+            functions: vec![IrFunction {
+                name: "makeButton".to_owned(),
+                param_count: 1,
+                locals: vec![Type::String],
+                return_type: Type::Void,
+                execution: kira_runtime_abi::Execution::Inherited,
+                body: vec![IrStmt::Return { value: None }],
+            }],
+            types: Default::default(),
+            main: None,
+            exports: Vec::new(),
+            exprs: la_arena::Arena::new(),
+        };
+        let button = program
+            .types
+            .structs_mut()
+            .declare(StructDef {
+                name: "Button".to_owned(),
+                fields: Vec::new(),
+            })
+            .expect("a fresh struct table takes the declaration");
+        program.exports.push(IrExport {
+            kira_name: "makeButton".to_owned(),
+            exported_name: "make_button".to_owned(),
+            function: 0,
+            params: vec![Type::String],
+            result: Type::Struct(button),
+        });
+
+        let module = compile(&program).expect("compiles");
+        assert_eq!(module.main, None);
+        // The class list is derived from the signatures that mention it, so the
+        // handle's index and the list cannot disagree.
+        assert_eq!(module.exports.classes, ["Button"]);
+        let export = &module.exports.functions[0];
+        assert_eq!(export.name, "make_button");
+        assert_eq!(export.kira_name, "makeButton");
+        assert_eq!(export.params, vec![ExportType::String]);
+        assert_eq!(export.result, ExportType::Handle { class: 0 });
+        assert_eq!(module.validate(), Ok(()));
+        assert_eq!(Module::from_bytes(&module.to_bytes()).unwrap(), module);
+    }
+
+    /// An application carries no export table at all — including in its bytes.
+    #[test]
+    fn an_application_carries_no_export_table() {
+        let program = single_main(
+            vec![IrStmt::Return { value: None }],
+            la_arena::Arena::new(),
+            0,
+        );
+        let module = compile(&program).expect("compiles");
+        assert!(module.exports.is_empty());
+        assert_eq!(
+            Module::from_bytes(&module.to_bytes()).unwrap().exports,
+            module.exports
+        );
     }
 
     #[test]

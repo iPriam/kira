@@ -549,7 +549,9 @@ fn every_backend_refuses_to_build_an_export_by_name_with_its_own_reason() {
     // a user knows which one they are waiting on rather than being told a bare
     // "not supported".
     let reasons = [
-        ("vm", "KBC1 exports section"),
+        // The VM engine's exports section landed; what it still owes is the
+        // instance a consumer calls into, so that is what its reason names.
+        ("vm", "no persistent instance"),
         ("llvm", "kira_lib_*"),
         ("hybrid", "neither half's export surface"),
     ];

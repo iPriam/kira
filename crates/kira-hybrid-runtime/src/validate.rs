@@ -159,6 +159,7 @@ mod tests {
 
     fn module() -> Module {
         Module {
+            exports: Default::default(),
             functions: vec![
                 FuncProto {
                     name: "main".to_owned(),

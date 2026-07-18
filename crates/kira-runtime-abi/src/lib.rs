@@ -94,6 +94,18 @@ pub enum NativeArg<'a> {
     Bool(bool),
     /// A borrowed string, valid for this call only.
     Str(&'a str),
+    /// An opaque handle to an object the *caller's* side owns.
+    ///
+    /// The safe mirror of [`BridgeValueTag::HANDLE`]: one word whose meaning
+    /// belongs to whoever minted it. A handle copies like a scalar — passing one
+    /// transfers no ownership, which is why it needs no borrow lifetime — and
+    /// the object behind it outlives the call either way.
+    ///
+    /// A receiver that has no way to resolve the word says so with a typed
+    /// error. Today the `@Native` seam is such a receiver: handles belong to the
+    /// export boundary, and the VM grows a handle representation with the
+    /// persistent instance, not here.
+    Handle(u64),
 }
 
 /// What a native function returned to the VM.
@@ -112,6 +124,12 @@ pub enum NativeResult {
     Bool(bool),
     /// An owned string.
     Str(String),
+    /// An opaque handle to an object the *producing* side owns.
+    ///
+    /// Unlike [`NativeResult::Str`], this is not a move of storage: the object
+    /// stays where it was allocated and exactly one generated destructor frees
+    /// it. What moves is the right to name it. See [`NativeArg::Handle`].
+    Handle(u64),
 }
 
 /// Why a call into native code could not be made.

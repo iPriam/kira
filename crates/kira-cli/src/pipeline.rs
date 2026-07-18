@@ -214,10 +214,10 @@ fn web_backend_is_built(verb: &str, backend: BackendMode, device: WasmDevice) ->
 /// no consumer could reach it.
 ///
 /// Refused per backend rather than once above them because the work each one
-/// owes is different — the VM engine needs a KBC1 exports section, the native
-/// engine needs stable trampolines, the hybrid engine needs both halves to
-/// agree — and a user told "not built yet" deserves to know which engine they
-/// are waiting on.
+/// owes is different — the VM engine needs a persistent instance and a wrapper
+/// crate, the native engine needs stable trampolines, the hybrid engine needs
+/// both halves to agree — and a user told "not built yet" deserves to know
+/// which engine they are waiting on.
 fn export_engine_is_built(
     verb: &str,
     backend: BackendMode,
@@ -244,17 +244,18 @@ fn export_engine_is_built(
         }
         Device::Host => match backend {
             BackendMode::VmBytecode => {
-                "the VM engine has no KBC1 exports section and no persistent \
-                 instance for a consumer to call into yet"
+                "the VM engine writes the KBC1 exports section but has no \
+                 persistent instance for a consumer to call into, and no \
+                 generated wrapper crate to call it from, yet"
             }
             BackendMode::LlvmNative => {
                 "the native engine emits no stable `kira_lib_*` trampoline per \
                  export and no per-library ABI marker yet"
             }
             BackendMode::Hybrid => {
-                "the hybrid engine has neither half's export surface yet: the \
-                 bytecode half needs the exports section and the native half \
-                 needs the trampolines"
+                "the hybrid engine serves neither half's export surface yet: \
+                 the bytecode half needs a persistent instance and the native \
+                 half needs the trampolines"
             }
         },
     };

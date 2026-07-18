@@ -320,6 +320,7 @@ mod tests {
     /// A module that prints one string and returns.
     fn printing_module() -> Module {
         Module {
+            exports: Default::default(),
             main: Some(0),
             strings: vec!["from the bundle".to_owned()],
             functions: vec![FuncProto {
@@ -665,6 +666,7 @@ mod tests {
         let dir = TempDir::new("bad-link");
         let mut host = DesktopHost::new(dir.0.clone());
         let module = Module {
+            exports: Default::default(),
             main: Some(0),
             strings: Vec::new(),
             functions: vec![FuncProto {

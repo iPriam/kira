@@ -35,6 +35,8 @@ pub fn lower(program: &HirProgram) -> IrProgram {
                 kira_name: export.kira_name.clone(),
                 exported_name: export.exported_name.clone(),
                 function: export.function.0,
+                params: export.params.clone(),
+                result: export.result,
             })
             .collect(),
         exprs: la_arena::Arena::new(),
