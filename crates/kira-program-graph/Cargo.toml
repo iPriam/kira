@@ -10,7 +10,6 @@ kira-parser.workspace = true
 kira-semantics.workspace = true
 kira-source.workspace = true
 kira-syntax-model.workspace = true
-thiserror.workspace = true
 
 [lints]
 workspace = true

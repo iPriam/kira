@@ -112,6 +112,66 @@ fn mutually_importing_modules_run_the_same_on_every_backend() {
     assert_eq!(out, "7\n");
 }
 
+/// A diamond: the entry imports `a` and `b`, and `b` also imports `a` and
+/// names a struct `a` declares.
+///
+/// The shape exists to pin the module *order*, not the arithmetic. The walk is
+/// depth-first post-order, so `a` is recorded before `b` because `b` imports
+/// it — never because of where the entry file listed either one.
+///
+/// A pre-order walk gets this wrong in exactly one direction, which is the one
+/// spelled here: with `a` listed first it records `a` then `b`, and the final
+/// reverse puts `b`'s items ahead of `a`'s, so `struct BBox` is rejected for
+/// holding a type "declared later".
+#[test]
+fn a_diamond_import_graph_runs_the_same_on_every_backend() {
+    let out = assert_module_parity(
+        "import a\nimport b\n\
+         @Main function main() { \
+         let boxed = BBox { corner: APoint { x: 1, y: 2 } } \
+         print(bValue() + boxed.corner.x - 1) return }",
+        &[
+            (
+                "a",
+                "struct APoint { let x: Int  let y: Int }\n\
+                 function aValue() -> Int { return 3 }",
+            ),
+            (
+                "b",
+                "import a\nstruct BBox { let corner: APoint }\n\
+                 function bValue() -> Int { return aValue() + 4 }",
+            ),
+        ],
+    );
+    assert_eq!(out, "7\n");
+}
+
+/// The same diamond with the entry's imports the other way round: which order
+/// the entry file lists independent imports in decides nothing about whether a
+/// sibling module compiles.
+#[test]
+fn a_diamonds_entry_import_order_does_not_decide_the_program() {
+    let out = assert_module_parity(
+        "import b\nimport a\n\
+         @Main function main() { \
+         let boxed = BBox { corner: APoint { x: 1, y: 2 } } \
+         print(bValue() + boxed.corner.x - 1) return }",
+        &[
+            (
+                "a",
+                "struct APoint { let x: Int  let y: Int }\n\
+                 function aValue() -> Int { return 3 }",
+            ),
+            (
+                "b",
+                "import a\nstruct BBox { let corner: APoint }\n\
+                 function bValue() -> Int { return aValue() + 4 }",
+            ),
+        ],
+    );
+    assert_eq!(out, "7\n");
+}
+
 /// An `@Runtime`/`@Native` split across module boundaries: the hybrid backend
 /// builds a real execution boundary out of functions that were written in
 /// different files, and still agrees with the two single-engine backends.
