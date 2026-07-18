@@ -233,9 +233,11 @@ struct/array ones:
   rendering, so a format here would be invented surface.
 - **An enum cannot cross the `@Native`/`@Runtime` boundary.** Like a struct, it
   is a tagged value with no one-word form, and how it would cross is undecided.
-- **A payload may be `Int`, `Float`, `Bool`, or `String` only.** A
-  struct/enum/array payload is refused (`KSEM118`): the runtime box carries one
-  type-erased word, which an aggregate has no form in yet.
+- **A payload may be `Int`, `Float`, `Bool`, `String`, or another enum.** A
+  struct or array payload is refused (`KSEM118`): the runtime box carries one
+  type-erased word, which an aggregate has no form in yet. A nested enum is a
+  handle, so it fits that word — and it has to, because a `Result`-shaped
+  value's `Error` variant carries the failure enum.
 
 See [.codex/work/enums.md](.codex/work/enums.md) for the design, and
 [examples/enums/enums.kira](examples/enums/enums.kira) for a tour.
@@ -398,6 +400,57 @@ applies to `switch`, and a `match` subject that is not an enum is refused
 Because coverage is checked, an exhaustive `match` whose arms all return is
 itself a **definite return** — which is why `rank` above needs no trailing
 `return`. As in a `switch`, `break` inside an arm belongs to the enclosing loop.
+
+## Attempt, try, and handle
+
+`try` unwraps a **`Result`-shaped** value: an enum with an `Ok` variant and an
+`Error` variant whose payload is the failure enum. On `Ok` the body carries on
+with the unwrapped value; on `Error` control leaves the body for the `handle`
+arm naming that failure.
+
+```kira
+enum ClampError { TooSmall TooBig }
+
+enum ClampOutcome {
+    Ok: Int
+    Error: ClampError
+}
+
+function process(n: Int) -> Int {
+    attempt {
+        let v = try clamp(n)
+        return v * 2
+    } handle {
+        TooSmall { return 0 - 1 }
+        TooBig { return 0 - 2 }
+    }
+}
+```
+
+"Result-shaped" is **structural, not nominal** — any enum with that `Ok`/`Error`
+pair works, which is why `ClampOutcome` is declared right there. A handler arm is
+spelled `Variant { … }` with **no arrow**, unlike a `match` arm, and a
+parenthesized name binds the failure's payload exactly as a `match` binding does.
+
+`try` is a **keyword**, never `?`, and it is accepted in exactly one position:
+as the whole initializer of a `let` directly inside an `attempt` body. Anywhere
+else — outside an `attempt`, or nested in a larger expression — is refused
+(`KSEM137`), because the corpus writes only that one spelling and nothing pins
+what `g(try f(), try h())` would mean.
+
+The handlers are checked the way a `match` is. Every reachable failure variant
+must be handled (`KSEM139`), an arm naming something that is not a variant of
+the failure enum is reported (`KSEM140`), and a failure handled twice is
+reported (`KSEM142`). Because all the arms route the same value, **every `try`
+in one `attempt` must fail with the same enum** (`KSEM141`); a `try` on
+something that is not `Result`-shaped is `KSEM138`, and an `attempt` with no
+`try` at all is `KSEM143`.
+
+Statements after a `try` run only when it succeeded, so they nest into the
+success branch. That is what makes `process` above a definite return with no
+trailing `return`: the failure test's two branches both return.
+
+See [.codex/work/attempt.md](.codex/work/attempt.md) for the desugar.
 
 ## Fixed-width scalars
 

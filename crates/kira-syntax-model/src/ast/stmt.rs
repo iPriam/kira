@@ -195,6 +195,21 @@ pub enum Stmt {
         /// Span covering the whole statement.
         span: Span,
     },
+    /// An `attempt { … } handle { … }`: run a body that may `try`, and route
+    /// the failure to the arm naming its variant.
+    ///
+    /// The handler arms carry the same shape as a [`Stmt::Match`] arm — a
+    /// variant name with an optional payload binding — and reuse [`MatchArm`]
+    /// for exactly that reason. Only the spelling differs: a handler arm is
+    /// written `MissingNode(reason) { … }`, with no `->`.
+    Attempt {
+        /// The guarded body, in which `try` may appear.
+        body: Block,
+        /// The handler arms, in source order.
+        handlers: Vec<MatchArm>,
+        /// Span covering the whole statement.
+        span: Span,
+    },
     /// A `break`: leave the innermost enclosing loop.
     Break {
         /// Span covering the statement.
@@ -225,6 +240,7 @@ impl Stmt {
             | Stmt::For { span, .. }
             | Stmt::Switch { span, .. }
             | Stmt::Match { span, .. }
+            | Stmt::Attempt { span, .. }
             | Stmt::Break { span }
             | Stmt::Continue { span }
             | Stmt::Error { span } => *span,

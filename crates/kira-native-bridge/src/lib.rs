@@ -19,6 +19,6 @@ pub mod hybrid;
 pub mod runtime;
 
 pub use array::{KArray, KiraArray};
-pub use enums::{KEnum, KiraEnum};
+pub use enums::{KEnum, KiraEnum, PAYLOAD_ENUM, PAYLOAD_INERT, PAYLOAD_STR};
 pub use hybrid::{RuntimeInvoker, kira_hybrid_call_runtime, kira_hybrid_install_runtime_invoker};
 pub use runtime::{KStr, KiraString};

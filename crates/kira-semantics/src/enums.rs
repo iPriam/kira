@@ -86,20 +86,33 @@ impl Analyzer<'_> {
 
     /// Restricts an enum payload to a type the runtime box can carry.
     ///
-    /// The box holds one type-erased value slot, which a scalar or a `String`
-    /// crosses cleanly. A struct, an enum, or an array payload has no
+    /// The box holds one type-erased value slot, which a scalar, a `String`, or
+    /// a nested enum handle crosses cleanly. A struct or an array payload has no
     /// representation there yet, so it is refused rather than silently
     /// mislowered — the same precedent as a struct at the native seam.
+    ///
+    /// A nested enum is admitted because `Result`-shaped values are built from
+    /// one: `Error` carries the failure enum, which is what
+    /// `attempt`/`try`/`handle` routes on. Every layer already reclaims it
+    /// recursively — the VM's `Heap::copy_value`/`free_enum`, the native box's
+    /// `EnumPayloadKind::ENUM`, and the WASM lowering's handle payload — and the
+    /// recursion terminates because a payload's type resolves against types that
+    /// already resolve, so a cycle is unrepresentable.
     fn check_payload_type(&mut self, ty: Type, span: Span) -> Type {
         match ty {
-            Type::Int(_) | Type::Float(_) | Type::Bool | Type::String | Type::Error => ty,
+            Type::Int(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::String
+            | Type::Enum(_)
+            | Type::Error => ty,
             _ => {
                 self.emit(
                     span,
                     "KSEM118",
                     format!(
                         "an enum payload of type `{}` is not supported yet; a payload may be \
-                         `Int`, `Float`, `Bool`, or `String`",
+                         `Int`, `Float`, `Bool`, `String`, or another enum",
                         self.type_name(ty)
                     ),
                 );

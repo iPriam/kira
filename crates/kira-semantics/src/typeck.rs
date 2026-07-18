@@ -54,6 +54,21 @@ impl Analyzer<'_> {
             Expr::Ownership { op, operand, span } => {
                 self.analyze_ownership_expr(ctx, op, operand, span, expected)
             }
+            // Reaching a `try` *here* means it is not the whole initializer of a
+            // `let` directly inside an `attempt` body — the one position
+            // `stmt::attempts` intercepts, and the only one the reference
+            // pins. The operand is still analyzed so its own mistakes surface.
+            Expr::Try { value, span } => {
+                self.analyze_expr(ctx, value);
+                self.emit(
+                    span,
+                    "KSEM137",
+                    "`try` is only allowed as the initializer of a `let` directly inside an \
+                     `attempt` body"
+                        .to_owned(),
+                );
+                self.program.exprs.alloc(HirExpr::Error)
+            }
             Expr::ArrayLit { elements, span } => {
                 self.analyze_array_literal(ctx, &elements, span, expected)
             }
