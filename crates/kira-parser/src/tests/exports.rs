@@ -90,6 +90,31 @@ fn only_export_may_annotate_a_class() {
 }
 
 #[test]
+fn only_export_may_annotate_a_struct() {
+    // Same rule as the class arm, and the same failure it guards against: an
+    // engine or entrypoint marker on a struct means nothing, so it is refused
+    // rather than silently discarded. The struct still lands in the tree.
+    for text in [
+        "@Main\nstruct Point { let x: Int }",
+        "@Native\nstruct Point { let x: Int }",
+        "@Runtime\nstruct Point { let x: Int }",
+    ] {
+        let result = parse_text(text);
+        let codes: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.code)
+            .collect();
+        assert_eq!(codes, vec!["KPAR041"], "{text}");
+        assert!(
+            matches!(result.tree.items(), [Item::Struct(_)]),
+            "the struct must still be registered: {:?}",
+            result.tree.items()
+        );
+    }
+}
+
+#[test]
 fn an_annotated_method_parses_as_a_method() {
     // The marker reaches semantics, which refuses a method export by name. It
     // must not land in the "expected a class member" arm, which would report
