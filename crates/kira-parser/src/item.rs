@@ -11,8 +11,7 @@ use kira_runtime_abi::Execution;
 use kira_source::{FileSpan, Span};
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
-    Block, EnumDecl, FieldDecl, Function, ImportDecl, Item, Param, StructDecl, TypeAliasDecl,
-    TypeRef, TypeRefId, UnsupportedItem, VariantDecl,
+    Block, Function, ImportDecl, Item, Param, TypeAliasDecl, TypeRef, TypeRefId, UnsupportedItem,
 };
 use kira_syntax_model::ownership::OwnershipMode;
 
@@ -48,7 +47,12 @@ impl Parser<'_> {
                     self.tree.push_item(self.source, Item::Import(declaration));
                 }
             }
-            TokenKind::Class | TokenKind::Identifier => self.parse_unsupported_item(),
+            TokenKind::Class => {
+                if let Some(declaration) = self.parse_class() {
+                    self.tree.push_item(self.source, Item::Class(declaration));
+                }
+            }
+            TokenKind::Identifier => self.parse_unsupported_item(),
             _ => {
                 // Stray token at top level: skip it with a diagnostic.
                 let span = self.current().span;
@@ -113,7 +117,11 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_function(&mut self, is_main: bool, execution: Execution) -> Option<Function> {
+    pub(crate) fn parse_function(
+        &mut self,
+        is_main: bool,
+        execution: Execution,
+    ) -> Option<Function> {
         let start = self.current().span;
         self.expect(TokenKind::Function);
         let (name, name_span) = if self.at(TokenKind::Identifier) {
@@ -138,216 +146,6 @@ impl Parser<'_> {
             params,
             return_type,
             body,
-            span,
-        })
-    }
-
-    // ----- structs ------------------------------------------------------
-
-    /// Parses `struct Name { <member>* }`.
-    ///
-    /// Members are `let`/`var` bindings. Newlines and `;` are both
-    /// insignificant, so the member keyword is what starts each member and a
-    /// member with no keyword is reported rather than silently skipped.
-    fn parse_struct(&mut self) -> Option<StructDecl> {
-        let start = self.current().span;
-        self.expect(TokenKind::Struct);
-        let (name, name_span) = if self.at(TokenKind::Identifier) {
-            let span = self.current().span;
-            (self.intern_span(span), span)
-        } else {
-            self.error(self.current().span, "KPAR007", "expected a struct name");
-            (Symbol::ERROR, self.current().span)
-        };
-        if self.at(TokenKind::Identifier) {
-            self.bump();
-        }
-        let mut fields = Vec::new();
-        let mut methods = Vec::new();
-        if !self.expect(TokenKind::LBrace) {
-            let span = Span::from_bounds(start.start, self.previous_end());
-            return Some(StructDecl {
-                name,
-                name_span,
-                fields,
-                methods,
-                span,
-            });
-        }
-        while !self.at(TokenKind::RBrace) && !self.at_eof() {
-            let before = self.pos;
-            while self.eat(TokenKind::Semicolon) {}
-            if self.at(TokenKind::RBrace) || self.at_eof() {
-                break;
-            }
-            match self.current_kind() {
-                TokenKind::Let => {
-                    if let Some(field) = self.parse_field(false) {
-                        fields.push(field);
-                    }
-                }
-                TokenKind::Var => {
-                    if let Some(field) = self.parse_field(true) {
-                        fields.push(field);
-                    }
-                }
-                TokenKind::Function => {
-                    if let Some(method) = self.parse_function(false, Execution::Inherited) {
-                        methods.push(method);
-                    }
-                }
-                kind => {
-                    let span = self.current().span;
-                    self.error(
-                        span,
-                        "KPAR009",
-                        format!(
-                            "expected `let`, `var`, or `function` to start a struct member, \
-                             found {}",
-                            kind.describe()
-                        ),
-                    );
-                    self.bump();
-                }
-            }
-            while self.eat(TokenKind::Semicolon) {}
-            if self.pos == before {
-                self.bump();
-            }
-        }
-        self.expect(TokenKind::RBrace);
-        let span = Span::from_bounds(start.start, self.previous_end());
-        Some(StructDecl {
-            name,
-            name_span,
-            fields,
-            methods,
-            span,
-        })
-    }
-
-    /// Parses one `let`/`var` struct member, with the keyword at the cursor.
-    fn parse_field(&mut self, mutable: bool) -> Option<FieldDecl> {
-        let start = self.current().span;
-        self.bump(); // `let` / `var`
-        if !self.at(TokenKind::Identifier) {
-            self.error(self.current().span, "KPAR010", "expected a member name");
-            return None;
-        }
-        let name_span = self.current().span;
-        let name = self.intern_span(name_span);
-        self.bump();
-        // A member's type is required: a struct's shape is its contract, and
-        // there is no initializer to infer it from when the default is absent.
-        self.expect(TokenKind::Colon);
-        let ty = self.parse_type_ref();
-        let default = self.eat(TokenKind::Equals).then(|| self.parse_expr());
-        let span = Span::from_bounds(start.start, self.previous_end());
-        Some(FieldDecl {
-            name,
-            name_span,
-            mutable,
-            ty,
-            default,
-            span,
-        })
-    }
-
-    // ----- enums ---------------------------------------------------------
-
-    /// Parses `enum Name { <variant>* }`.
-    ///
-    /// Variants are separated by newlines, spaces, or `;` — never commas, which
-    /// the enum grammar does not use — so the variant name is what starts each
-    /// one and a non-name where a variant is expected is reported rather than
-    /// silently skipped.
-    fn parse_enum(&mut self) -> Option<EnumDecl> {
-        let start = self.current().span;
-        self.expect(TokenKind::Enum);
-        let (name, name_span) = if self.at(TokenKind::Identifier) {
-            let span = self.current().span;
-            (self.intern_span(span), span)
-        } else {
-            self.error(self.current().span, "KPAR030", "expected an enum name");
-            (Symbol::ERROR, self.current().span)
-        };
-        if self.at(TokenKind::Identifier) {
-            self.bump();
-        }
-        let mut variants = Vec::new();
-        if !self.expect(TokenKind::LBrace) {
-            let span = Span::from_bounds(start.start, self.previous_end());
-            return Some(EnumDecl {
-                name,
-                name_span,
-                variants,
-                span,
-            });
-        }
-        while !self.at(TokenKind::RBrace) && !self.at_eof() {
-            let before = self.pos;
-            while self.eat(TokenKind::Semicolon) {}
-            if self.at(TokenKind::RBrace) || self.at_eof() {
-                break;
-            }
-            if self.at(TokenKind::Identifier) {
-                if let Some(variant) = self.parse_variant() {
-                    variants.push(variant);
-                }
-            } else {
-                let span = self.current().span;
-                self.error(
-                    span,
-                    "KPAR031",
-                    format!(
-                        "expected an enum variant name, found {}",
-                        self.current_kind().describe()
-                    ),
-                );
-                self.bump();
-            }
-            while self.eat(TokenKind::Semicolon) {}
-            if self.pos == before {
-                self.bump();
-            }
-        }
-        self.expect(TokenKind::RBrace);
-        let span = Span::from_bounds(start.start, self.previous_end());
-        Some(EnumDecl {
-            name,
-            name_span,
-            variants,
-            span,
-        })
-    }
-
-    /// Parses one enum variant, with the name at the cursor.
-    ///
-    /// Three shapes: `Name` (payload-less), `Name(Type)` (a payload), and
-    /// `Name: Type = default` (a payload with a default supplied when the
-    /// variant is built with none). The `= default` only follows the `:` form.
-    fn parse_variant(&mut self) -> Option<VariantDecl> {
-        let name_span = self.current().span;
-        let name = self.intern_span(name_span);
-        self.bump();
-        let (payload, default) = if self.at(TokenKind::LParen) {
-            self.bump(); // `(`
-            let ty = self.parse_type_ref();
-            self.expect(TokenKind::RParen);
-            (Some(ty), None)
-        } else if self.eat(TokenKind::Colon) {
-            let ty = self.parse_type_ref();
-            let default = self.eat(TokenKind::Equals).then(|| self.parse_expr());
-            (Some(ty), default)
-        } else {
-            (None, None)
-        };
-        let span = Span::from_bounds(name_span.start, self.previous_end());
-        Some(VariantDecl {
-            name,
-            name_span,
-            payload,
-            default,
             span,
         })
     }

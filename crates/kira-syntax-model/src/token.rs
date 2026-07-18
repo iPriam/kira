@@ -69,6 +69,10 @@ pub enum TokenKind {
     Enum,
     /// `class`
     Class,
+    /// `extends`
+    Extends,
+    /// `override`
+    Override,
     /// `match`
     Match,
     /// `for`
@@ -185,6 +189,8 @@ impl TokenKind {
             "struct" => TokenKind::Struct,
             "enum" => TokenKind::Enum,
             "class" => TokenKind::Class,
+            "extends" => TokenKind::Extends,
+            "override" => TokenKind::Override,
             "match" => TokenKind::Match,
             "for" => TokenKind::For,
             "in" => TokenKind::In,
@@ -219,6 +225,8 @@ impl TokenKind {
             TokenKind::Struct => "`struct`",
             TokenKind::Enum => "`enum`",
             TokenKind::Class => "`class`",
+            TokenKind::Extends => "`extends`",
+            TokenKind::Override => "`override`",
             TokenKind::Match => "`match`",
             TokenKind::For => "`for`",
             TokenKind::In => "`in`",

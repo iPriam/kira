@@ -9,6 +9,7 @@
 //! compiler share this one frontend. The parser owns no global state; it
 //! interns identifiers into an [`Interner`] returned alongside the tree.
 
+mod aggregate;
 mod expr;
 mod item;
 mod stmt;

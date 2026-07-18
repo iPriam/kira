@@ -1,0 +1,164 @@
+// Classes: a struct that inherits.
+//
+// A class has everything a struct has — fields with defaults, methods, value
+// semantics — plus three things a struct does not: it names parents with
+// `extends`, its members may be marked `override`, and its methods can call a
+// parent's version of a member by qualifying it.
+//
+// A class is a *value*, like a struct. `var b = a` copies; mutating the copy
+// leaves the original alone. It is not a reference, and there is no null.
+//
+// A class is built by calling it — `Account()` — not with a `{ }` literal.
+// Arguments fill the fields that declare no default, in order; every field that
+// declares one takes it.
+
+class Account {
+    var balance: Int = 100
+    let rate: Int = 2
+
+    function gross() -> Int {
+        return self.balance * self.rate
+    }
+
+    function tier() -> Int {
+        return 1
+    }
+}
+
+// `override let` gives an inherited field a new default. It is the *same*
+// field, not a second one — so `gross`, inherited unchanged from `Account`,
+// reads this `rate` and returns 500 rather than 200.
+class Savings extends Account {
+    override let rate = 5
+
+    override function tier() -> Int {
+        return 2
+    }
+
+    // `Account.gross()` is how this language spells "super": the parent's body,
+    // run against this instance. It reads the overridden `rate`.
+    function bonus() -> Int {
+        return Account.gross() + self.balance
+    }
+}
+
+class Premium extends Savings {
+    override let rate = 11
+
+    override function tier() -> Int {
+        return 3
+    }
+}
+
+// An inherited method that calls `self.<method>()` reaches the *override*. Each
+// class compiles its own copy of every method it inherits, with `self` typed as
+// that class, so `describe` below is three functions, not one — and every
+// backend agrees on all three without dispatching anything at run time.
+class Shape {
+    function sides() -> Int {
+        return 0
+    }
+
+    function describe() -> Int {
+        return self.sides() * 10
+    }
+}
+
+class Triangle extends Shape {
+    override function sides() -> Int {
+        return 3
+    }
+}
+
+class Square extends Shape {
+    override function sides() -> Int {
+        return 4
+    }
+}
+
+// `extends` takes a comma-separated list. Two parents declaring the same name
+// keeps *both* — they are separate fields and separate methods — so the bare
+// name is ambiguous and qualifying it is how you say which you meant.
+class Alpha {
+    let v: Int = 3
+
+    function weight() -> Int {
+        return 7
+    }
+}
+
+class Beta {
+    let v: Int = 4
+
+    function weight() -> Int {
+        return 9
+    }
+}
+
+class Combo extends Alpha, Beta {
+    function blend() -> Int {
+        return Alpha.v + Beta.v + Alpha.weight() + Beta.weight()
+    }
+}
+
+// A class may extend a struct, not only another class.
+struct Tagged {
+    let tag: Int = 11
+
+    function label() -> Int {
+        return self.tag * 2
+    }
+}
+
+class Retagged extends Tagged {
+    override let tag = 21
+}
+
+// A field with no default is a constructor parameter, filled positionally.
+class Holder {
+    let values: [Int]
+    let scale: Int = 10
+
+    function score() -> Int {
+        return self.values[0] * self.scale + self.values.count
+    }
+}
+
+@Main
+function main() {
+    // Inherited method, overridden field default: one slot, three defaults.
+    print(Account().gross())
+    print(Savings().gross())
+    print(Premium().gross())
+
+    // Overridden methods.
+    print(Account().tier())
+    print(Savings().tier())
+    print(Premium().tier())
+
+    // Parent-qualified call: `Account.gross()` on a `Savings` instance.
+    print(Savings().bonus())
+
+    // An inherited body reaching each class's own override.
+    print(Shape().describe())
+    print(Triangle().describe())
+    print(Square().describe())
+
+    // Multiple inheritance, disambiguated by naming the parent.
+    print(Combo().blend())
+
+    // Extending a struct.
+    print(Retagged().label())
+
+    // Positional construction.
+    print(Holder([7, 8, 9]).score())
+
+    // A class is a value: the copy moves independently of the original.
+    var first = Account()
+    var second = first
+    second.balance = 500
+    print(first.balance)
+    print(second.balance)
+
+    return
+}

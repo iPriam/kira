@@ -102,6 +102,38 @@ mod tests {
         assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
     }
 
+    /// Classes reach the editor for the same reason every other construct did:
+    /// the server serves the compiler's own `analyzed` query. Inheritance,
+    /// `override`, and parent qualification all resolve here without the LSP
+    /// learning that classes exist — and an ambiguous inherited member still
+    /// squiggles.
+    #[test]
+    fn class_syntax_analyzes_the_way_the_compiler_does() {
+        let clean = analyze(
+            "t.kira",
+            "class Account { var balance: Int = 100\n let rate: Int = 2\n \
+               function gross() -> Int { return self.balance * self.rate } }\n\
+             class Savings extends Account { override let rate = 5\n \
+               function bonus() -> Int { return Account.gross() + self.balance } }\n\
+             @Main function main() { print(Savings().bonus()) return }",
+        );
+        assert!(clean.diagnostics.is_empty(), "{:?}", clean.diagnostics);
+
+        let ambiguous = analyze(
+            "t.kira",
+            "class Left { let v: Int = 1 }\nclass Right { let v: Int = 2 }\n\
+             class Child extends Left, Right { function read() -> Int { return v } }\n\
+             @Main function main() { return }",
+        );
+        let diagnostic = ambiguous
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == Some("KSEM068"))
+            .expect("an ambiguous inherited field is reported");
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
+    }
+
     /// Ownership reaches the editor for the same reason `for` did: the server
     /// serves the compiler's own `analyzed` query, so a use-after-move
     /// squiggles in an editor without the LSP learning that `move` exists.
