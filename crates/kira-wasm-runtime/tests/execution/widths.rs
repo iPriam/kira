@@ -132,3 +132,51 @@ fn an_unsigned_width_works_inside_a_loop_and_a_condition() {
         }"#,
     );
 }
+
+#[test]
+fn a_plain_left_operand_makes_a_mixed_operation_signed() {
+    // wasm picks a different instruction for each signedness — `i64.div_s` and
+    // `i64.lt_s` here, not the `_u` forms — so the left-decides rule has to
+    // survive lowering, not only type-checking.
+    assert_parity(
+        r#"@Main function main() {
+            let neg: Int = 0 - 10
+            let three: U8 = 3
+            print(neg / three)
+            print(neg % three)
+            print(neg < three)
+            return
+        }"#,
+    );
+}
+
+#[test]
+fn swapping_the_operands_swaps_the_signedness() {
+    assert_parity(
+        r#"@Main function main() {
+            let neg: U8 = 0 - 10
+            let three: Int = 3
+            print(neg / three)
+            print(neg < three)
+            return
+        }"#,
+    );
+}
+
+#[test]
+fn a_width_typed_for_bound_and_array_index_lower_to_wasm() {
+    assert_parity(
+        r#"@Main function main() {
+            let count: U8 = 3
+            for i in 0..count {
+                print(i)
+            }
+            var xs: [Int] = []
+            xs.append(10)
+            xs.append(20)
+            let at: U16 = 1
+            print(xs[at])
+            return
+        }"#,
+    );
+}

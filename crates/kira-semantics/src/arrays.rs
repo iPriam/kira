@@ -149,7 +149,12 @@ impl Analyzer<'_> {
         })
     }
 
-    /// Analyzes an index expression, requiring `Int`.
+    /// Analyzes an index expression, requiring an integer.
+    ///
+    /// Any integer *spelling* indexes — `xs[u8Index]` is legal, not just a bare
+    /// `Int`. Like the `for` bound, this is a kind check rather than an
+    /// exact-type one: the index is consumed as a position, so its width
+    /// carries no meaning here.
     ///
     /// Whether the index is *in range* is deliberately not asked: it is a
     /// runtime trap, not a static check, because an index is generally not a
@@ -158,7 +163,7 @@ impl Analyzer<'_> {
         let span = self.tree.expr(index).span();
         let hir = self.analyze_expr(ctx, index);
         let ty = self.program.expr(hir).type_of();
-        if ty != Type::INT && ty != Type::Error {
+        if !matches!(ty, Type::Int(_)) && ty != Type::Error {
             self.emit(
                 span,
                 "KSEM102",

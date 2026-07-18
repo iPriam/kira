@@ -26,29 +26,33 @@ pub(crate) fn resolve_unary(op: UnaryOp, operand: Type) -> Option<(HirUnaryOp, T
     }
 }
 
-/// The single type two numeric operands agree on, or `None` when they do not.
+/// The type two numeric operands agree on, or `None` when they do not.
 ///
-/// A bare `Int`/`Float` is a wildcard, so it yields to a written width: `x + 1`
-/// on a `U8` local is a `U8`, which is what makes an integer literal usable at
-/// every width without a conversion rule. Two *different* written widths agree
-/// on nothing — `u8Value + i64Value` is a type error, not a promotion — because
-/// the language has no widening.
+/// **The left operand decides.** When the two are compatible, the result is
+/// `lt` — never `rt`, even when `rt` carries the written width and `lt` is a
+/// bare `Int`/`Float`. So `plainInt / u8Value` is a *signed* divide producing a
+/// plain `Int`, while `u8Value / plainInt` is an *unsigned* one producing a
+/// `U8`. The two spellings are not interchangeable across the operator, and
+/// that asymmetry is the language's rule, not an accident of this function:
+/// arithmetic takes its result type from the left operand, and `/`, `%`, and
+/// the four orderings take their signedness from the same place.
+///
+/// Compatibility is separate from, and looser than, that choice: a bare
+/// `Int`/`Float` is a wildcard that pairs with any width, which is what makes
+/// an integer literal usable at every width without a conversion rule. Two
+/// *different* written widths agree on nothing — `u8Value + i64Value` is a type
+/// error, not a promotion — because the language has no widening.
 fn unify_numeric(lt: Type, rt: Type) -> Option<Type> {
-    match (lt, rt) {
-        (Type::Int(a), Type::Int(b)) => match (a, b) {
-            _ if a == b => Some(lt),
-            (IntSpelling::Plain, _) => Some(rt),
-            (_, IntSpelling::Plain) => Some(lt),
-            _ => None,
-        },
-        (Type::Float(a), Type::Float(b)) => match (a, b) {
-            _ if a == b => Some(lt),
-            (FloatSpelling::Plain, _) => Some(rt),
-            (_, FloatSpelling::Plain) => Some(lt),
-            _ => None,
-        },
-        _ => None,
-    }
+    let compatible = match (lt, rt) {
+        (Type::Int(a), Type::Int(b)) => {
+            a == b || a == IntSpelling::Plain || b == IntSpelling::Plain
+        }
+        (Type::Float(a), Type::Float(b)) => {
+            a == b || a == FloatSpelling::Plain || b == FloatSpelling::Plain
+        }
+        _ => false,
+    };
+    compatible.then_some(lt)
 }
 
 /// The symbolic spelling of a unary operator, for diagnostics.
@@ -87,6 +91,9 @@ fn arithmetic(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
     // for every width: a `U8` sum of 250 and 10 is 260, not 4. Narrowing to the
     // written width is behavior the language does not define, so nothing here
     // masks.
+    //
+    // `ty` is the *left* operand's type (see `unify_numeric`), so this reads
+    // signedness off the LHS alone.
     let unsigned = ty.is_unsigned_int();
     let hir = match (op, ty) {
         (B::Add, Type::Int(_)) => H::AddInt,
@@ -108,6 +115,8 @@ fn arithmetic(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
 fn comparison(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
     use BinaryOp as B;
     use HirBinaryOp as H;
+    // As in `arithmetic`, `ty` is the left operand's type: an ordering compares
+    // as signed or unsigned according to how the LHS was spelled.
     let ty = unify_numeric(lt, rt)?;
     let unsigned = ty.is_unsigned_int();
     let hir = match (op, ty) {
