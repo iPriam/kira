@@ -89,7 +89,7 @@ impl Analyzer<'_> {
     /// mislowered — the same precedent as a struct at the native seam.
     fn check_payload_type(&mut self, ty: Type, span: Span) -> Type {
         match ty {
-            Type::Int | Type::Float | Type::Bool | Type::String | Type::Error => ty,
+            Type::Int(_) | Type::Float(_) | Type::Bool | Type::String | Type::Error => ty,
             _ => {
                 self.emit(
                     span,

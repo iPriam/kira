@@ -158,7 +158,7 @@ impl Analyzer<'_> {
         let span = self.tree.expr(index).span();
         let hir = self.analyze_expr(ctx, index);
         let ty = self.program.expr(hir).type_of();
-        if ty != Type::Int && ty != Type::Error {
+        if ty != Type::INT && ty != Type::Error {
             self.emit(
                 span,
                 "KSEM102",

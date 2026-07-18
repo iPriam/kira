@@ -5,6 +5,7 @@ mod aliases;
 mod arrays;
 mod enums;
 mod matches;
+mod widths;
 
 use super::*;
 use kira_semantics_model::Type;
@@ -492,5 +493,5 @@ fn analyzed_program_records_types_and_main() {
     let program = analyzed(&db, source);
     assert!(program.main.is_some());
     assert_eq!(program.functions.len(), 1);
-    assert_eq!(program.functions[0].locals[0].ty, Type::Int);
+    assert_eq!(program.functions[0].locals[0].ty, Type::INT);
 }

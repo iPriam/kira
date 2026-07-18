@@ -135,6 +135,40 @@ mod tests {
         assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
     }
 
+    /// Fixed-width spellings need no LSP wiring either, and this says so.
+    ///
+    /// A width is resolved by the same `analyzed` query the compiler uses, so
+    /// `U8` and `F32` type-check in the editor and a mismatch between two
+    /// written widths squiggles — with the diagnostic naming both widths rather
+    /// than calling them both "Int", which is the part an editor user actually
+    /// reads.
+    #[test]
+    fn fixed_width_types_analyze_the_way_the_compiler_does() {
+        let clean = analyze(
+            "t.kira",
+            "@Main function main() { let a: U8 = 5 let b: I64 = 6 let c: F32 = 1.5 \
+             print(a + 1) print(b + 1) print(c + 0.5) return }",
+        );
+        assert!(clean.diagnostics.is_empty(), "{:?}", clean.diagnostics);
+
+        let bad = analyze(
+            "t.kira",
+            "@Main function main() { let a: U8 = 1 let b: I64 = a return }",
+        );
+        let diagnostic = bad
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == Some("KSEM020"))
+            .expect("a width mismatch is reported");
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
+        assert!(
+            diagnostic.message.contains("U8") && diagnostic.message.contains("I64"),
+            "the message names both widths: {}",
+            diagnostic.message
+        );
+    }
+
     #[test]
     fn enum_syntax_analyzes_the_way_the_compiler_does() {
         // New syntax reaches the editor by construction: the LSP serves the same

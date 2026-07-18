@@ -49,10 +49,17 @@ pub enum Instruction {
     SubInt,
     /// Integer multiplication.
     MulInt,
-    /// Integer division (truncating; traps on divide-by-zero).
+    /// Integer division, signed (truncating; traps on divide-by-zero).
     DivInt,
-    /// Integer remainder (traps on divide-by-zero).
+    /// Integer remainder, signed (traps on divide-by-zero).
     RemInt,
+    /// Integer division, unsigned (traps on divide-by-zero).
+    ///
+    /// Emitted for the `U8`..`U64` spellings. Unlike the signed form this
+    /// cannot overflow, so it has no `MIN / -1` special case.
+    DivUInt,
+    /// Integer remainder, unsigned (traps on divide-by-zero).
+    RemUInt,
     /// Float addition.
     AddFloat,
     /// Float subtraction.
@@ -75,6 +82,14 @@ pub enum Instruction {
     GtInt,
     /// Integer greater-or-equal.
     GeInt,
+    /// Integer less-than, unsigned.
+    LtUInt,
+    /// Integer less-or-equal, unsigned.
+    LeUInt,
+    /// Integer greater-than, unsigned.
+    GtUInt,
+    /// Integer greater-or-equal, unsigned.
+    GeUInt,
     /// Float equality.
     EqFloat,
     /// Float inequality.
@@ -372,6 +387,19 @@ mod opcode {
     /// Appended for `match` payload bindings; adding an opcode is not an ABI
     /// change.
     pub const ENUM_PAYLOAD: u8 = 0x37;
+    // Unsigned integer division, remainder, and ordering, for the `U8`..`U64`
+    // spellings. Appended after `ENUM_PAYLOAD`, which is where the set ended
+    // before them; adding an opcode is not an ABI change.
+    //
+    // There is deliberately no unsigned add/sub/mul and no unsigned equality:
+    // two's-complement wrapping and bitwise equality are identical under either
+    // signedness, so those would duplicate an existing opcode.
+    pub const DIV_UINT: u8 = 0x38;
+    pub const REM_UINT: u8 = 0x39;
+    pub const LT_UINT: u8 = 0x3a;
+    pub const LE_UINT: u8 = 0x3b;
+    pub const GT_UINT: u8 = 0x3c;
+    pub const GE_UINT: u8 = 0x3d;
 }
 
 #[cfg(test)]
