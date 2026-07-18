@@ -7,6 +7,7 @@ mod attempts;
 mod classes;
 mod closures;
 mod enums;
+mod exports;
 mod imports;
 mod libraries;
 mod matches;

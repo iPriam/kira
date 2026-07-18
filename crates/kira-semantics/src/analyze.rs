@@ -96,7 +96,7 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) source: SourceId,
     /// Whether this program is an application (needs `@Main`) or a library
     /// (must not have one).
-    build_kind: BuildKind,
+    pub(crate) build_kind: BuildKind,
     /// Every file's imports, keyed by file.
     pub(crate) imports: crate::imports::ImportTable,
     pub(crate) tree: &'a SyntaxTree,
@@ -222,6 +222,10 @@ impl<'a> Analyzer<'a> {
         // the last signature.
         self.source = crate::FILE_SOURCE_ID;
         self.check_main();
+        // Exports are checked once signatures exist, because every refusal is
+        // about a *resolved* parameter or result type, and once classes are
+        // flattened, because handle-eligibility is a property of a struct row.
+        self.check_exports(&callables);
         // Bodies are analyzed in the same order the signatures were collected,
         // which is what makes a `FuncId` index both.
         for (index, callable) in callables.iter().enumerate() {

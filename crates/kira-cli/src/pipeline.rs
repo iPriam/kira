@@ -203,6 +203,75 @@ fn web_backend_is_built(verb: &str, backend: BackendMode, device: WasmDevice) ->
     Err(EXIT_FAILURE)
 }
 
+/// Whether the engine `backend` selects can build a library's `@Export`
+/// surface, reporting it by name when it cannot.
+///
+/// Nothing can, today. `@Export` is checked by the frontend — a refused export
+/// is a compile error before any backend sees the program — but no engine yet
+/// emits an export table or the consumer wrapper that calls one, so a library
+/// that declares exports would otherwise build an artifact with an invisible
+/// surface. That is worse than refusing: the artifact would look complete and
+/// no consumer could reach it.
+///
+/// Refused per backend rather than once above them because the work each one
+/// owes is different — the VM engine needs a KBC1 exports section, the native
+/// engine needs stable trampolines, the hybrid engine needs both halves to
+/// agree — and a user told "not built yet" deserves to know which engine they
+/// are waiting on.
+fn export_engine_is_built(
+    verb: &str,
+    backend: BackendMode,
+    device: Device,
+    ir: &IrProgram,
+) -> Result<(), i32> {
+    if ir.exports.is_empty() {
+        return Ok(());
+    }
+    let names: Vec<&str> = ir
+        .exports
+        .iter()
+        .map(|export| export.exported_name.as_str())
+        .collect();
+    let missing = match device {
+        // The wasm refusal is about the artifact, not the engine: one module,
+        // one export, and an undesigned string/allocator contract across a
+        // module boundary. It stands whether or not the library declares
+        // exports, and this names the export half of it.
+        Device::Web(_) => {
+            "the wasm backend emits one self-contained module with a single \
+             entrypoint, and the string/allocator contract across a wasm module \
+             boundary is undesigned"
+        }
+        Device::Host => match backend {
+            BackendMode::VmBytecode => {
+                "the VM engine has no KBC1 exports section and no persistent \
+                 instance for a consumer to call into yet"
+            }
+            BackendMode::LlvmNative => {
+                "the native engine emits no stable `kira_lib_*` trampoline per \
+                 export and no per-library ABI marker yet"
+            }
+            BackendMode::Hybrid => {
+                "the hybrid engine has neither half's export surface yet: the \
+                 bytecode half needs the exports section and the native half \
+                 needs the trampolines"
+            }
+        },
+    };
+    eprintln!(
+        "kirac {verb}: `--backend {}` on `--device {}`: library export is not built yet: \
+         {missing}\n\
+         note: this package exports {}\n\
+         note: `@Export` is checked by the frontend today; `kirac check` verifies the \
+         surface, and no engine serves it yet",
+        backend.label(),
+        device.label(),
+        names.join(", "),
+    );
+    println!("Failed to {verb}");
+    Err(EXIT_FAILURE)
+}
+
 /// Runs `kirac build [--backend vm|llvm|hybrid] [--device host|wasm32|wasm64]
 /// <file>`: compile to artifacts under `.kira-build/`, without executing
 /// anything.
@@ -215,6 +284,9 @@ pub fn build(args: &[String]) -> i32 {
         Ok(ir) => ir,
         Err(code) => return code,
     };
+    if let Err(code) = export_engine_is_built("build", options.backend, options.device, &ir) {
+        return code;
+    }
     // A library and a program are built by different paths on every backend:
     // one produces a linkable artifact, the other something the OS can start.
     let is_library = ir.main.is_none();

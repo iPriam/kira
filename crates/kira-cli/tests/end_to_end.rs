@@ -490,3 +490,132 @@ fn a_malformed_package_manifest_is_reported_not_ignored() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("is not a package kind"), "{stderr}");
 }
+
+// ---------------------------------------------------------------------------
+// The `@Export` surface
+//
+// Step 1 of the export feature is the frontend only: `@Export` parses, the
+// package rule and the boundary refusals are checked, and names map to their
+// consumer spelling. No engine serves an export yet, so a library that declares
+// one is refused at `build` by name — on every backend, each with its own
+// reason. `check` is the verb that works today, which is what these prove
+// through the real binary.
+// ---------------------------------------------------------------------------
+
+/// A library that exports the shapes v1 supports: a handle-eligible class, a
+/// constructor-shaped export, and scalars both ways.
+const EXPORTING_LIBRARY: &str = "@Export\n\
+     class Button {\n\
+         var title: String = \"\"\n\
+         var width: Int = 120\n\
+         function label() -> String { return self.title }\n\
+     }\n\
+     @Export\n\
+     function makeButton(title: String) -> Button { \
+         var b = Button() b.title = title return b }\n\
+     @Export\n\
+     function buttonWidth(b: Button) -> Int { return b.width }\n\
+     @Export\n\
+     function clickAt(b: Button, x: Int) -> Bool { return x >= 0 && x < b.width }";
+
+#[test]
+fn an_exporting_library_checks_clean() {
+    let path = write_package(".Library", EXPORTING_LIBRARY);
+    let output = kirac(&["check", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+}
+
+#[test]
+fn an_export_in_an_app_package_is_refused_by_name() {
+    // Same source, `.App` instead of `.Library`, and the marker stops being
+    // meaningful. The manifest is what decides, exactly as it does for `@Main`.
+    let path = write_package(
+        ".App",
+        "@Main function main() { print(1) return }\n\
+         @Export\nfunction add(a: Int) -> Int { return a }",
+    );
+    let output = kirac(&["check", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("KSEM159"), "{stderr}");
+}
+
+#[test]
+fn every_backend_refuses_to_build_an_export_by_name_with_its_own_reason() {
+    // The refusal names the backend and says what *that* engine still owes, so
+    // a user knows which one they are waiting on rather than being told a bare
+    // "not supported".
+    let reasons = [
+        ("vm", "KBC1 exports section"),
+        ("llvm", "kira_lib_*"),
+        ("hybrid", "neither half's export surface"),
+    ];
+    for (backend, reason) in reasons {
+        let path = write_package(".Library", EXPORTING_LIBRARY);
+        let output = kirac(&["build", "--backend", backend, path.to_str().unwrap()]);
+        let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "the {backend} backend built an export"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("library export is not built yet"),
+            "the {backend} backend refused for a different reason: {stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("`--backend {backend}`")),
+            "the refusal did not name the backend: {stderr}"
+        );
+        assert!(
+            stderr.contains(reason),
+            "the {backend} reason was missing: {stderr}"
+        );
+        // The derived consumer names are listed, so the author can see what
+        // surface the engine will eventually have to serve.
+        assert!(
+            stderr.contains("make_button, button_width, click_at"),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
+fn the_web_refuses_to_build_an_export_too() {
+    let path = write_package(".Library", EXPORTING_LIBRARY);
+    let output = kirac(&[
+        "build",
+        "--backend",
+        "llvm",
+        "--device",
+        "wasm32",
+        path.to_str().unwrap(),
+    ]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("library export is not built yet"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("`--device wasm32`"), "{stderr}");
+    assert!(
+        stderr.contains("string/allocator contract"),
+        "the wasm reason was missing: {stderr}"
+    );
+}
+
+#[test]
+fn a_library_that_exports_nothing_still_builds() {
+    // The refusal is scoped to a declared export, not to libraries: step 0's
+    // artifact must keep working.
+    let path = write_package(".Library", LIBRARY_SOURCE);
+    let output = kirac(&["build", "--backend", "vm", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+}

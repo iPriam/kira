@@ -43,10 +43,32 @@ pub struct HirProgram {
     pub types: TypeTable,
     /// The index of the `@Main` entrypoint, when the program has a valid one.
     pub main: Option<FuncId>,
+    /// The `@Export` surface, in declaration order.
+    ///
+    /// Empty for an application and for a library that exports nothing. Only
+    /// exports that passed every boundary check are listed: a refused one is a
+    /// compile error, and recording it would hand a backend a signature the
+    /// frontend already rejected.
+    pub exports: Vec<HirExport>,
     /// Arena backing every [`HirExprId`].
     pub exprs: Arena<HirExpr>,
     /// Arena backing every [`HirStmtId`].
     pub stmts: Arena<HirStmt>,
+}
+
+/// One function a library offers its consumer.
+///
+/// New Kira design: the oracle has no export concept. The exported name is
+/// derived, never written — `@Export` takes no symbol override.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirExport {
+    /// The function's name as the Kira author wrote it (`makeButton`).
+    pub kira_name: String,
+    /// The name a consumer calls it by: `kira_name` in snake_case
+    /// (`make_button`). Two exports mapping to one of these is an error.
+    pub exported_name: String,
+    /// The function this export names.
+    pub function: FuncId,
 }
 
 impl HirProgram {

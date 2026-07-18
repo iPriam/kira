@@ -35,8 +35,27 @@ pub struct IrProgram {
     /// single function that starts it. Backends read this to decide whether to
     /// emit an entry point at all.
     pub main: Option<u32>,
+    /// The `@Export` surface a library offers its consumer, in declaration
+    /// order; empty for an application and for a library that exports nothing.
+    ///
+    /// Carried across from the HIR unchanged: nothing about lowering can add
+    /// to it or take from it, because whether a function may be exported was
+    /// decided in the frontend, above the backend split.
+    pub exports: Vec<IrExport>,
     /// Arena backing every [`IrExprId`] across all functions.
     pub exprs: Arena<IrExpr>,
+}
+
+/// One function a library offers its consumer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IrExport {
+    /// The function's name as the Kira author wrote it (`makeButton`).
+    pub kira_name: String,
+    /// The name a consumer calls it by: `kira_name` in snake_case
+    /// (`make_button`).
+    pub exported_name: String,
+    /// Index of the exported function within [`IrProgram::functions`].
+    pub function: u32,
 }
 
 impl IrProgram {

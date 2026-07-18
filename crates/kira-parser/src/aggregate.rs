@@ -252,6 +252,7 @@ impl Parser<'_> {
                 fields,
                 overrides,
                 methods,
+                export: None,
                 span,
             });
         }
@@ -278,6 +279,28 @@ impl Parser<'_> {
                             is_override: false,
                             function,
                         });
+                    }
+                }
+                // An annotated member. The annotations are recorded on the
+                // method rather than rejected here, so `@Export` on a method is
+                // refused in semantics by name — with the reason — instead of
+                // as a syntax error about a missing `let`.
+                TokenKind::At => {
+                    let annotations = self.parse_annotations();
+                    if self.at(TokenKind::Function) {
+                        if let Some(function) = self.parse_function_annotated(&annotations) {
+                            methods.push(ClassMethod {
+                                is_override: false,
+                                function,
+                            });
+                        }
+                    } else {
+                        let span = self.current().span;
+                        self.error(
+                            span,
+                            "KPAR042",
+                            "expected `function` after an annotation in a class body",
+                        );
                     }
                 }
                 TokenKind::Override => self.parse_override_member(&mut overrides, &mut methods),
@@ -309,6 +332,7 @@ impl Parser<'_> {
             fields,
             overrides,
             methods,
+            export: None,
             span,
         })
     }

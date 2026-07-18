@@ -15,7 +15,9 @@ use kira_semantics_model::hir::{
     Callee, HirExpr, HirExprId, HirPlace, HirPlaceStep, HirProgram, HirStmt, HirStmtId,
 };
 
-use crate::ir::{IrCallee, IrExpr, IrExprId, IrFunction, IrPlace, IrPlaceStep, IrProgram, IrStmt};
+use crate::ir::{
+    IrCallee, IrExport, IrExpr, IrExprId, IrFunction, IrPlace, IrPlaceStep, IrProgram, IrStmt,
+};
 
 /// Lowers an analyzed program to IR.
 ///
@@ -26,6 +28,15 @@ pub fn lower(program: &HirProgram) -> IrProgram {
         functions: Vec::with_capacity(program.functions.len()),
         types: program.types.clone(),
         main: program.main.map(|main| main.0),
+        exports: program
+            .exports
+            .iter()
+            .map(|export| IrExport {
+                kira_name: export.kira_name.clone(),
+                exported_name: export.exported_name.clone(),
+                function: export.function.0,
+            })
+            .collect(),
         exprs: la_arena::Arena::new(),
     };
     let mut lowerer = Lowerer {

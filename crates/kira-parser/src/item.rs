@@ -11,11 +11,33 @@ use kira_runtime_abi::Execution;
 use kira_source::{FileSpan, Span};
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
-    Block, Function, ImportDecl, Item, Param, TypeAliasDecl, TypeRef, TypeRefId, UnsupportedItem,
+    Block, ExportMark, Function, ImportDecl, Item, Param, TypeAliasDecl, TypeRef, TypeRefId,
+    UnsupportedItem,
 };
 use kira_syntax_model::ownership::OwnershipMode;
 
 use crate::Parser;
+
+/// What a run of `@Name` annotations on one declaration said.
+pub(crate) struct Annotations {
+    /// Whether `@Main` was written.
+    pub(crate) is_main: bool,
+    /// The engine `@Runtime` / `@Native` selected, or
+    /// [`Execution::Inherited`] when neither was written.
+    pub(crate) execution: Execution,
+    /// The `@Export` marker, when one was written.
+    pub(crate) export: Option<ExportMark>,
+}
+
+impl Default for Annotations {
+    fn default() -> Self {
+        Self {
+            is_main: false,
+            execution: Execution::Inherited,
+            export: None,
+        }
+    }
+}
 
 impl Parser<'_> {
     pub(crate) fn parse_item(&mut self) {
@@ -68,37 +90,61 @@ impl Parser<'_> {
 
     fn parse_annotated_item(&mut self) {
         let start = self.current().span;
-        let mut is_main = false;
-        let mut execution = Execution::Inherited;
-        // Consume one or more `@Name` annotations.
+        let annotations = self.parse_annotations();
+        if self.at(TokenKind::Function) {
+            if let Some(function) = self.parse_function_annotated(&annotations) {
+                self.tree.push_item(self.source, Item::Function(function));
+            }
+        } else if self.at(TokenKind::Class) {
+            // `@Export class` is the handle-eligibility marker, so a class is
+            // the one non-function item annotations reach.
+            if annotations.is_main || annotations.execution != Execution::Inherited {
+                self.error(
+                    start,
+                    "KPAR041",
+                    "only `@Export` may annotate a class; `@Main`, `@Runtime`, and \
+                     `@Native` select how a *function* runs",
+                );
+            }
+            if let Some(mut declaration) = self.parse_class() {
+                declaration.export = annotations.export;
+                declaration.span = Span::from_bounds(start.start, self.previous_end());
+                self.tree.push_item(self.source, Item::Class(declaration));
+            }
+        } else if self.at(TokenKind::Struct) {
+            // Only a class mints handles, so `@Export struct` is refused by
+            // name and pointed at the fix. The struct is still parsed and
+            // registered: dropping it would turn one refusal into an
+            // unresolved-type cascade at every use.
+            if annotations.export.is_some() {
+                self.error(
+                    start,
+                    "KPAR043",
+                    "a struct cannot be `@Export`: an export boundary carries one \
+                     tag and one word, so only a class crosses — as an opaque \
+                     handle. Declare this a `class` to export it.",
+                );
+            }
+            if let Some(declaration) = self.parse_struct() {
+                self.tree.push_item(self.source, Item::Struct(declaration));
+            }
+        } else {
+            // Annotated non-function construct: parse-don't-crash.
+            self.parse_unsupported_item_from(start);
+        }
+    }
+
+    /// Consumes a run of `@Name` annotations and reports what they said.
+    ///
+    /// Shared by the top level and a class body, so a method's annotations are
+    /// recorded rather than hitting the "expected a class member" arm — which
+    /// is what lets `@Export` on a method be refused by name in semantics
+    /// instead of as a syntax error about the wrong thing.
+    pub(crate) fn parse_annotations(&mut self) -> Annotations {
+        let mut annotations = Annotations::default();
         while self.at(TokenKind::At) {
             self.bump();
-            if self.at(TokenKind::Identifier) {
-                let name_span = self.current().span;
-                match self.text_of(name_span) {
-                    "Main" => is_main = true,
-                    name => {
-                        if let Some(selected) = Execution::from_annotation(name) {
-                            // Two engines on one function is a contradiction,
-                            // not a refinement: the second would silently win.
-                            if execution != Execution::Inherited && execution != selected {
-                                self.error(
-                                    name_span,
-                                    "KPAR005",
-                                    "a function selects one execution engine; \
-                                     `@Runtime` and `@Native` cannot both apply",
-                                );
-                            }
-                            execution = selected;
-                        }
-                    }
-                }
-                self.bump();
-                // Skip an optional `(...)` annotation argument list.
-                if self.at(TokenKind::LParen) {
-                    self.skip_balanced(TokenKind::LParen, TokenKind::RParen);
-                }
-            } else {
+            if !self.at(TokenKind::Identifier) {
                 self.error(
                     self.current().span,
                     "KPAR003",
@@ -106,15 +152,68 @@ impl Parser<'_> {
                 );
                 break;
             }
-        }
-        if self.at(TokenKind::Function) {
-            if let Some(function) = self.parse_function(is_main, execution) {
-                self.tree.push_item(self.source, Item::Function(function));
+            let name_span = self.current().span;
+            let is_export = match self.text_of(name_span) {
+                "Main" => {
+                    annotations.is_main = true;
+                    false
+                }
+                "Export" => true,
+                name => {
+                    if let Some(selected) = Execution::from_annotation(name) {
+                        // Two engines on one function is a contradiction,
+                        // not a refinement: the second would silently win.
+                        if annotations.execution != Execution::Inherited
+                            && annotations.execution != selected
+                        {
+                            self.error(
+                                name_span,
+                                "KPAR005",
+                                "a function selects one execution engine; \
+                                 `@Runtime` and `@Native` cannot both apply",
+                            );
+                        }
+                        annotations.execution = selected;
+                    }
+                    false
+                }
+            };
+            self.bump();
+            // An optional `(...)` argument list, and — for `@Export` only —
+            // the pinned `{ name: value; }` annotation block. Both are skipped
+            // balanced and their span recorded: `@Export` takes neither, and
+            // the refusal points at what was written.
+            let mut payload_span = None;
+            if self.at(TokenKind::LParen) {
+                let open = self.current().span;
+                self.skip_balanced(TokenKind::LParen, TokenKind::RParen);
+                payload_span = Some(Span::from_bounds(open.start, self.previous_end()));
+            } else if is_export && self.at(TokenKind::LBrace) {
+                let open = self.current().span;
+                self.skip_balanced(TokenKind::LBrace, TokenKind::RBrace);
+                payload_span = Some(Span::from_bounds(open.start, self.previous_end()));
             }
-        } else {
-            // Annotated non-function construct: parse-don't-crash.
-            self.parse_unsupported_item_from(start);
+            if is_export {
+                // A repeated `@Export` keeps the first mark; the payload of
+                // whichever spelling carried one is what gets refused.
+                let existing = annotations.export.and_then(|mark| mark.payload_span);
+                annotations.export = Some(ExportMark {
+                    span: annotations.export.map_or(name_span, |mark| mark.span),
+                    payload_span: payload_span.or(existing),
+                });
+            }
         }
+        annotations
+    }
+
+    /// Parses a function carrying the annotations already consumed for it.
+    pub(crate) fn parse_function_annotated(
+        &mut self,
+        annotations: &Annotations,
+    ) -> Option<Function> {
+        let mut function = self.parse_function(annotations.is_main, annotations.execution)?;
+        function.export = annotations.export;
+        Some(function)
     }
 
     pub(crate) fn parse_function(
@@ -142,6 +241,9 @@ impl Parser<'_> {
             name,
             name_span,
             is_main,
+            // Set by `parse_function_annotated` when annotations preceded the
+            // declaration; a bare `function` carries none.
+            export: None,
             execution,
             params,
             return_type,

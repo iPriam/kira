@@ -142,3 +142,94 @@ fn a_library_artifact_is_not_an_executable() {
         artifacts.display(),
     );
 }
+
+// ---------------------------------------------------------------------------
+// The `@Export` surface
+//
+// Step 1 lands the frontend only, so parity here is a refusal: all three
+// backends see the same checked export surface and all three decline to build
+// it. What makes that a parity result rather than three separate "no"s is that
+// they agree on the verdict, the exit status, and the surface they name — each
+// differing only in which engine's missing piece it reports, which is the one
+// thing that genuinely differs between them.
+// ---------------------------------------------------------------------------
+
+/// The motivating library, in the shapes v1 supports: a handle-eligible class,
+/// a constructor-shaped export, and scalars in both directions.
+const EXPORTING_LIBRARY: &str = "\
+@Export\n\
+class Button {\n\
+    var title: String = \"\"\n\
+    var width: Int = 120\n\
+    function label() -> String { return self.title }\n\
+}\n\
+@Export\n\
+function makeButton(title: String) -> Button { var b = Button() b.title = title return b }\n\
+@Export\n\
+function buttonWidth(b: Button) -> Int { return b.width }\n\
+@Export\n\
+function clickAt(b: Button, x: Int) -> Bool { return x >= 0 && x < b.width }";
+
+#[test]
+fn every_backend_refuses_to_build_an_export_the_same_way() {
+    let path = write_library(EXPORTING_LIBRARY);
+    let runs: Vec<(&str, Output)> = BACKENDS
+        .iter()
+        .map(|backend| (*backend, build_on(&path, backend)))
+        .collect();
+    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+
+    for (backend, run) in &runs {
+        assert_eq!(
+            run.status.code(),
+            Some(1),
+            "the {backend} backend did not refuse to build an export:\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        assert!(
+            stdout.contains("Failed to build") && !stdout.contains("Successfully built"),
+            "the {backend} backend claimed a build it refused:\nstdout: {stdout}",
+        );
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(
+            stderr.contains("library export is not built yet"),
+            "the {backend} backend refused for a different reason: {stderr}",
+        );
+        // The surface itself is frontend work, above the backend split, so all
+        // three must report the identical derived names. A backend that
+        // disagreed here would have grown its own opinion about what an export
+        // is, which is exactly what putting the checks in the frontend prevents.
+        assert!(
+            stderr.contains("make_button, button_width, click_at"),
+            "the {backend} backend named a different surface: {stderr}",
+        );
+    }
+}
+
+#[test]
+fn every_backend_agrees_an_exporting_library_checks_clean() {
+    // The refusal is the *engine's*, not the frontend's: the same package that
+    // no backend will build passes `check` on all three, because `check` stops
+    // at the frontend and the frontend is where this step is finished.
+    let path = write_library(EXPORTING_LIBRARY);
+    let runs: Vec<(&str, Output)> = BACKENDS
+        .iter()
+        .map(|backend| {
+            let run = Command::new(env!("CARGO_BIN_EXE_kirac"))
+                .args(["check", path.to_str().unwrap()])
+                .output()
+                .expect("run kirac");
+            (*backend, run)
+        })
+        .collect();
+    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+
+    for (backend, run) in &runs {
+        assert!(
+            run.status.success(),
+            "checking an exporting library failed for {backend}:\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+}
