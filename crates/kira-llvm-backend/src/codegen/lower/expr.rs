@@ -411,9 +411,6 @@ mod tests {
                 variants: Vec::new(),
             })
             .expect("a fresh table accepts the first declaration");
-        assert_eq!(
-            payload_kind(Type::Enum(id)),
-            EnumPayloadKind::ENUM.as_i64()
-        );
+        assert_eq!(payload_kind(Type::Enum(id)), EnumPayloadKind::ENUM.as_i64());
     }
 }
