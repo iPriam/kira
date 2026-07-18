@@ -17,7 +17,7 @@ upward reference in `[dev-dependencies]` (cargo's only legal cycle).
   `Execution`, `Ownership`, `HostCapabilities`), `kira-diagnostics`,
   `kira-diagnostic-messages`, `kira-toolchain`, `kira-dynamic-ffi`
 - **1 — syntax:** `kira-lexer`, `kira-parser`, `kira-syntax-model`,
-  `kira-ksl-parser`, `kira-ksl-syntax-model`, `kira-main`
+  `kira-ksl-parser`, `kira-ksl-syntax-model`
 - **2 — semantics:** `kira-semantics`, `kira-semantics-model`,
   `kira-ksl-semantics`, `kira-shader-model`
 - **3 — IR and interfaces:** `kira-ir`, `kira-shader-ir`,
@@ -28,7 +28,8 @@ upward reference in `[dev-dependencies]` (cargo's only legal cycle).
   (`kira-msl-backend`, `kira-glsl-backend`, `kira-hlsl-backend`,
   `kira-wgsl-backend`, `kira-spirv-backend`)
 - **5–8 — project and tools:** `kira-manifest`, `kira-project`,
-  `kira-package-manager`, `kira-build-definition` (5), `kira-program-graph`
+  `kira-package-manager`, `kira-build-definition`, `kira-main` (5),
+  `kira-program-graph`
   (6), `kira-build` (7), `kira-app-generation`, `kira-doc`,
   `kira-instruments`, `kira-linter`, `kira-live` (8)
 - **top — binaries:** `kira-cli` (`kirac`), `kira-bootstrapper` (`kira`),
@@ -78,6 +79,14 @@ that linked the LLVM backend could not ship to a machine without it.
   world only through `HostCapabilities`. Native-only functionality (dynamic
   FFI, `dlopen`) is feature-gated and lives outside the portable core —
   `kira-hybrid-runtime` and `kira-native-bridge` are where it belongs.
+- **Put the embedding surface in `kira-main`.** Route anything a *consumer* of a
+  Kira library needs — loading an artifact, checking it against the wrapper
+  generated for it, instantiating it with a host, calling an export by name,
+  releasing a handle — through `kira-main` (5), which sits above
+  `kira-vm-runtime` because it embeds it. Keep it Rust: the C facade is v2
+  growth of the same crate, and every C signature is append-only forever. The
+  default `StdoutHost` lives here too, so `kira-cli` uses it rather than
+  defining a second one.
 - **Build the frontend as salsa queries.** Express parsing and semantics as
   queries: no hidden global state, no interior-mutability caches smuggled
   into analysis. The parser is error-resilient — it always produces a tree
