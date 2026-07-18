@@ -169,6 +169,7 @@ impl Analyzer<'_> {
         }
         inner.closure = Some(ClosureCtx {
             repr,
+            tag,
             captures: Vec::new(),
         });
 
@@ -183,6 +184,7 @@ impl Analyzer<'_> {
 
         let closure = inner.closure.take().unwrap_or(ClosureCtx {
             repr,
+            tag,
             captures: Vec::new(),
         });
         // Each capture is bound at entry by reading its field out of the
@@ -304,6 +306,14 @@ impl Analyzer<'_> {
             return Captured::Local(existing.inner);
         }
         let repr = closure.repr;
+        // A capture is a read of the enclosing binding, so it answers to the
+        // move checker exactly as a bare mention of the name does. Checking
+        // here rather than in `typeck` is what makes it reach the *outer*
+        // binding: the body only ever sees the fresh inner one, which was never
+        // moved out of.
+        if !self.check_local_live(outer, outer_local, span) {
+            return Captured::Refused;
+        }
         let ty = outer.local_type(outer_local);
         if outer.is_mutable(outer_local) {
             self.emit(
@@ -328,11 +338,17 @@ impl Analyzer<'_> {
             );
             return Captured::Refused;
         }
+        // The literal's tag is in the name because one representation struct
+        // holds the captures of *every* literal of its type: two literals that
+        // each capture an `x` first would otherwise mint two fields named `x$0`
+        // in one `StructDef`, and the rest of the workspace reads a struct's
+        // field names as unique.
+        let tag = ctx.closure.as_ref().map_or(0, |c| c.tag);
         let Some(field) = self.program.types.structs_mut().push_field(
             repr,
             FieldDef {
                 name: format!(
-                    "{name}${}",
+                    "{name}${tag}_{}",
                     ctx.closure.as_ref().map_or(0, |c| c.captures.len())
                 ),
                 ty,

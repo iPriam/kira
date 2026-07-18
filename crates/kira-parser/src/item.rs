@@ -399,7 +399,7 @@ impl Parser<'_> {
         self.expect(TokenKind::RParen);
         if !self.eat(TokenKind::Arrow) {
             let span = Span::from_bounds(start.start, self.previous_end());
-            self.error(span, "KPAR034", "expected `->` in a function type");
+            self.error(span, "KPAR038", "expected `->` in a function type");
             return self.tree.add_type(TypeRef::Error { span });
         }
         let result = self.parse_type_ref();

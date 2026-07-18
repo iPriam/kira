@@ -92,6 +92,9 @@ pub(crate) struct ClosureSite {
 pub(crate) struct ClosureCtx {
     /// The representation struct this closure's captures live in.
     pub(crate) repr: StructId,
+    /// Which literal of that type this is, so a capture's synthesized field
+    /// name is unique across every literal sharing the representation struct.
+    pub(crate) tag: u32,
     /// Each capture, in discovery order.
     pub(crate) captures: Vec<Capture>,
 }

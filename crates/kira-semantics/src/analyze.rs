@@ -495,6 +495,9 @@ impl<'a> Analyzer<'a> {
     ///
     /// For a diagnostic that needs to know, not for resolving one.
     pub(crate) fn resolve_field_quietly(&self, base_ty: Type, name: &str) -> bool {
+        if self.as_function_type(base_ty).is_some() {
+            return false;
+        }
         matches!(base_ty, Type::Struct(id)
             if self
                 .program.types.structs().get(id)
@@ -524,6 +527,21 @@ impl<'a> Analyzer<'a> {
             }
             return None;
         };
+        // A function type is a struct only because that is how closures are
+        // desugared. The oracle pins no member access on a function value, so
+        // letting the ordinary field path run here would publish the
+        // representation — `f.tag` — as invented surface.
+        if self.as_function_type(base_ty).is_some() {
+            self.emit(
+                span,
+                "KSEM136",
+                format!(
+                    "`{}` is a function; a function has no members, only a call",
+                    self.type_name(base_ty)
+                ),
+            );
+            return None;
+        }
         let resolved = self
             .program
             .types
