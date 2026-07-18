@@ -1,7 +1,7 @@
 //! Calling a closure value, and finishing the desugar once analysis is done.
 
 use kira_semantics_model::hir::{
-    Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirStmt, HirStmtId,
+    Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirStmt, HirStmtId, LocalId,
 };
 use kira_semantics_model::{OwnershipMode, StructId, Type};
 use kira_source::Span;
@@ -216,7 +216,7 @@ impl Analyzer<'_> {
                     // never reads it, and the dispatcher only ever reads the
                     // fields its own tag names, so any value of the right type
                     // does.
-                    None => fields.push(self.zero_value(ty)),
+                    None => fields.push(self.default_value(ty)),
                 }
             }
             if let HirExpr::StructNew { fields: slot, .. } = &mut self.program.exprs[site.expr] {
@@ -225,14 +225,96 @@ impl Analyzer<'_> {
         }
     }
 
-    /// A value of `ty` for a field nothing reads.
-    fn zero_value(&mut self, ty: Type) -> HirExprId {
+    /// One dispatcher branch: forward the closure value and every parameter to
+    /// the lifted body, and return what it returns.
+    fn dispatch_arm(
+        &mut self,
+        target: FuncId,
+        env: LocalId,
+        repr: StructId,
+        param_locals: &[LocalId],
+        params: &[Type],
+        result: Type,
+    ) -> Vec<HirStmtId> {
+        let mut args = vec![self.program.exprs.alloc(HirExpr::Local {
+            local: env,
+            ty: Type::Struct(repr),
+        })];
+        for (&local, &ty) in param_locals.iter().zip(params.iter()) {
+            args.push(self.program.exprs.alloc(HirExpr::Local { local, ty }));
+        }
+        let call = self.program.exprs.alloc(HirExpr::Call {
+            callee: Callee::User(target),
+            args,
+            ty: result,
+        });
+        if result == Type::Void {
+            vec![
+                self.program.stmts.alloc(HirStmt::Expr { expr: call }),
+                self.program.stmts.alloc(HirStmt::Return { value: None }),
+            ]
+        } else {
+            vec![
+                self.program
+                    .stmts
+                    .alloc(HirStmt::Return { value: Some(call) }),
+            ]
+        }
+    }
+
+    /// A well-typed value of `ty`, for a slot nothing reads.
+    ///
+    /// Every arm builds a value the backends agree is of `ty`, because a
+    /// backend type-checks what it is handed: an `Int(0)` standing in for a
+    /// `String` passes the VM and is rejected by the LLVM verifier, which is
+    /// exactly the parity break this exists to make impossible.
+    ///
+    /// The recursion terminates because a type can only name types declared
+    /// before it: a struct field of the struct's own type is `KSEM051`, and an
+    /// enum payload of the enum's own type is `KSEM050`.
+    fn default_value(&mut self, ty: Type) -> HirExprId {
         let node = match ty {
             Type::Float(_) => HirExpr::Float(0.0),
             Type::Bool => HirExpr::Bool(false),
-            // Every capture is trivially copyable (`KSEM117` refuses the rest),
-            // so the scalars are the whole of what can appear here.
-            _ => HirExpr::Int(0),
+            Type::String => HirExpr::Str(String::new()),
+            Type::Array(_) => HirExpr::ArrayNew {
+                ty,
+                elements: Vec::new(),
+            },
+            Type::Struct(id) => {
+                let field_types: Vec<Type> = match self.program.types.structs().get(id) {
+                    Some(def) => def.fields.iter().map(|field| field.ty).collect(),
+                    None => Vec::new(),
+                };
+                let fields = field_types
+                    .into_iter()
+                    .map(|field_ty| self.default_value(field_ty))
+                    .collect();
+                HirExpr::StructNew {
+                    struct_id: id,
+                    fields,
+                }
+            }
+            Type::Enum(id) => {
+                // The first variant, because an enum's variants are ordered and
+                // the first one always exists for any enum a value can have.
+                let payload_ty = self
+                    .program
+                    .types
+                    .enums()
+                    .get(id)
+                    .and_then(|def| def.variant(0))
+                    .and_then(|variant| variant.payload);
+                let payload = payload_ty.map(|payload_ty| self.default_value(payload_ty));
+                HirExpr::EnumNew {
+                    enum_id: id,
+                    tag: 0,
+                    payload,
+                }
+            }
+            // `Void` never reaches here (its callers return without a value)
+            // and `Error` means the program is already rejected.
+            Type::Int(_) | Type::Void | Type::Error => HirExpr::Int(0),
         };
         self.program.exprs.alloc(node)
     }
@@ -249,13 +331,13 @@ impl Analyzer<'_> {
             .collect();
         rows.sort_by_key(|&(_, dispatcher)| dispatcher.0);
         for (repr, dispatcher) in rows {
-            let function = self.dispatcher_body(repr, dispatcher);
+            let function = self.dispatcher_body(repr);
             self.fill_synth(dispatcher, function);
         }
     }
 
     /// The dispatcher for one function type: a branch per closure literal.
-    fn dispatcher_body(&mut self, repr: StructId, dispatcher: FuncId) -> HirFunction {
+    fn dispatcher_body(&mut self, repr: StructId) -> HirFunction {
         let Some((params, result, impls)) = self
             .fn_types
             .get(repr)
@@ -279,8 +361,19 @@ impl Analyzer<'_> {
             param_locals.push(ctx.declare_hidden(ty, false));
         }
 
-        let mut body: Vec<HirStmtId> = Vec::with_capacity(impls.len() + 1);
+        // The last literal is the chain's unconditional tail rather than one
+        // more tested branch. That is not an optimization: a tested last branch
+        // leaves a fall-through the dispatcher would have to return *some*
+        // value from, and no value of an arbitrary result type can be conjured
+        // that every backend agrees is of that type.
+        let mut body: Vec<HirStmtId> = Vec::with_capacity(impls.len().max(1));
         for (tag, closure) in impls.iter().enumerate() {
+            let arm =
+                self.dispatch_arm(closure.function, env, repr, &param_locals, &params, result);
+            if tag + 1 == impls.len() {
+                body.extend(arm);
+                break;
+            }
             let tag_read = {
                 let base = self.program.exprs.alloc(HirExpr::Local {
                     local: env,
@@ -299,48 +392,26 @@ impl Analyzer<'_> {
                 rhs: wanted,
                 ty: Type::Bool,
             });
-            let mut args = vec![self.program.exprs.alloc(HirExpr::Local {
-                local: env,
-                ty: Type::Struct(repr),
-            })];
-            for (&local, &ty) in param_locals.iter().zip(params.iter()) {
-                args.push(self.program.exprs.alloc(HirExpr::Local { local, ty }));
-            }
-            let call = self.program.exprs.alloc(HirExpr::Call {
-                callee: Callee::User(closure.function),
-                args,
-                ty: result,
-            });
-            let then_body = if result == Type::Void {
-                vec![
-                    self.program.stmts.alloc(HirStmt::Expr { expr: call }),
-                    self.program.stmts.alloc(HirStmt::Return { value: None }),
-                ]
-            } else {
-                vec![
-                    self.program
-                        .stmts
-                        .alloc(HirStmt::Return { value: Some(call) }),
-                ]
-            };
             body.push(self.program.stmts.alloc(HirStmt::If {
                 cond,
-                then_body,
+                then_body: arm,
                 else_body: Vec::new(),
             }));
         }
-        // Falls through only for a tag no literal minted, which no value can
-        // carry: a closure value is only ever built by a literal, and each is
-        // built with its own tag.
-        let tail = if result == Type::Void {
-            HirStmt::Return { value: None }
-        } else {
-            let zero = self.zero_value(result);
-            HirStmt::Return { value: Some(zero) }
-        };
-        body.push(self.program.stmts.alloc(tail));
+        if impls.is_empty() {
+            // A function type mentioned and called, but with no literal
+            // anywhere in the program: nothing can build a value of it, so no
+            // call can reach this. It still needs a well-typed terminator,
+            // because a backend type-checks a body it can prove is dead.
+            let tail = if result == Type::Void {
+                HirStmt::Return { value: None }
+            } else {
+                let value = self.default_value(result);
+                HirStmt::Return { value: Some(value) }
+            };
+            body.push(self.program.stmts.alloc(tail));
+        }
 
-        let _ = dispatcher;
         HirFunction {
             name: format!("{}$call", self.type_name(Type::Struct(repr))),
             param_count: 1 + params.len() as u32,

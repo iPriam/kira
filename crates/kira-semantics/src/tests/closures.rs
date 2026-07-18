@@ -161,3 +161,36 @@ fn a_closure_may_be_declared_but_never_called() {
             .is_empty()
     );
 }
+
+#[test]
+fn capturing_a_moved_local_is_rejected() {
+    // A capture is a read of the enclosing binding, so it answers to the move
+    // checker. Without the check in `capture` the closure body only ever sees
+    // the fresh inner binding, which was never moved out of, and the stale
+    // value would be read.
+    assert_eq!(
+        codes(
+            "struct Mesh { let id: Int }\n\
+             function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+             @Main function main() { var mesh = Mesh { id: 3 } \
+             print(consume(move mesh)) \
+             let f: () -> Int = { in return mesh.id } print(f()) return }"
+        ),
+        vec!["KSEM107"]
+    );
+}
+
+#[test]
+fn a_function_value_has_no_members() {
+    // The representation struct is an implementation detail of the desugar.
+    // `tag` is a legal identifier and the repr is an ordinary struct, so
+    // without a refusal here `f.tag` would resolve and print 0 — surface the
+    // oracle does not have.
+    assert_eq!(
+        codes(
+            "@Main function main() { let f: (Int) -> Int = { v in return v } \
+             print(f.tag) return }"
+        ),
+        vec!["KSEM136"]
+    );
+}

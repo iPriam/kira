@@ -35,6 +35,20 @@ never share a slot. Three moving parts:
 
 Everything that reaches the IR is a struct, a field read, an `if`, and a call.
 
+**The last literal is the tag chain's unconditional tail**, not one more tested
+branch. That is a correctness requirement, not a saving: a tested last branch
+leaves a fall-through, the fall-through needs a `return`, and no value of an
+arbitrary result type can be conjured that every backend agrees is of that type.
+An earlier draft returned `Int(0)` there, which the VM and hybrid ran and the
+LLVM verifier rejected — for `() -> String`, and for a program with no closure
+literal in it at all. A function type that is called but has *no* literal
+anywhere still mints a dispatcher, and that one alone gets a terminator built by
+`default_value`, which is well typed for every `Type`.
+
+The representation struct is not surface. `f.tag` is refused (`KSEM136`) rather
+than resolved, because the oracle pins no member access on a function value and
+letting the ordinary field path run would publish the desugar as language.
+
 ## Why not a function pointer
 
 A function pointer needs an indirect call: a table and an `elem` section in
@@ -127,12 +141,13 @@ Codes are this repo's own, assigned fresh.
 
 | Code | Case |
 |---|---|
-| KPAR034 | a function type with no `->` |
-| KPAR035 | a closure parameter that is not a name |
-| KPAR036 | a trailing closure after something that cannot take one |
+| KPAR038 | a function type with no `->` |
+| KPAR039 | a closure parameter that is not a name |
+| KPAR040 | a trailing closure after something that cannot take one |
 | KSEM117 | a capture that is a `var`, or is not trivially copyable |
 | KSEM134 | a closure where no function type is expected |
 | KSEM135 | a closure whose parameter count does not match its type |
+| KSEM136 | member access on a function value (`f.tag`) |
 
 `KSEM062`, `KSEM063`, and `KSEM032` are reused for a closure call's argument
 count, its argument types, and its body's result — a closure call is a call, and

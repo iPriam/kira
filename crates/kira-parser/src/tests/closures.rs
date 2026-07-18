@@ -62,7 +62,7 @@ fn a_function_type_without_an_arrow_is_reported() {
         result
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KPAR034")),
+            .any(|diagnostic| diagnostic.code == Some("KPAR038")),
         "{:?}",
         result.diagnostics
     );
@@ -202,7 +202,7 @@ fn a_malformed_closure_parameter_recovers() {
         result
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KPAR035")),
+            .any(|diagnostic| diagnostic.code == Some("KPAR039")),
         "{:?}",
         result.diagnostics
     );
