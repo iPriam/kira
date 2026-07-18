@@ -226,6 +226,19 @@ version = "0.1.0"
 [[package]]
 name = "kira-build"
 version = "0.1.0"
+dependencies = [
+ "kira-bytecode",
+ "kira-diagnostics",
+ "kira-ir",
+ "kira-main",
+ "kira-manifest",
+ "kira-program-graph",
+ "kira-project",
+ "kira-semantics",
+ "kira-source",
+ "salsa",
+ "thiserror",
+]
 
 [[package]]
 name = "kira-build-definition"
@@ -247,6 +260,7 @@ name = "kira-cli"
 version = "0.1.0"
 dependencies = [
  "kira-backend-api",
+ "kira-build",
  "kira-bytecode",
  "kira-desktop-runner",
  "kira-diagnostics",
@@ -323,6 +337,17 @@ name = "kira-dynamic-ffi"
 version = "0.1.0"
 dependencies = [
  "libloading",
+ "thiserror",
+]
+
+[[package]]
+name = "kira-export-consumer"
+version = "0.1.0"
+dependencies = [
+ "kira-build",
+ "kira-bytecode",
+ "kira-main",
+ "kira-runtime-abi",
  "thiserror",
 ]
 

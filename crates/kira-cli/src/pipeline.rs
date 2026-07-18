@@ -32,35 +32,19 @@
 //! observable behavior comparable — and what the parity tests check.
 
 use kira_backend_api::BackendMode;
-use kira_diagnostics::{Diagnostic, has_errors, renderer};
+use kira_build::{Compiled, FrontendError};
+use kira_diagnostics::{Diagnostic, renderer};
 use kira_ir::IrProgram;
-use kira_semantics::{DiagnosticAccumulator, FILE_SOURCE_ID, SourceProgram};
 use kira_source::SourceMap;
 
 use kira_wasm_runtime::WasmDevice;
 
 use crate::hybrid;
+use crate::library;
 use crate::native;
 use crate::options::{CompileOptions, Device};
 use crate::wasm;
 use kira_main::StdoutHost;
-
-/// Analyzes and lowers the source program to IR.
-///
-/// This query lives in the CLI (the embedder), not in `kira-ir`: the IR crate
-/// sits in the VM's dependency cone, and the portable core must stay
-/// salsa-free. It depends on the analyzer query, so all lexer/parser/semantic
-/// diagnostics accumulate under it and are gathered with
-/// `lowered::accumulated::<DiagnosticAccumulator>`.
-///
-/// Total, because lowering is: a library lowers to IR with `main: None`, and
-/// whether that is acceptable was already decided by the frontend from the
-/// package's [`kira_semantics::BuildKind`].
-#[salsa::tracked(returns(clone))]
-fn lowered(db: &dyn salsa::Database, source: SourceProgram) -> IrProgram {
-    let program = kira_semantics::analyzed(db, source);
-    kira_ir::lower(&program)
-}
 
 /// Process exit code for a clean run.
 pub const EXIT_OK: i32 = 0;
@@ -78,7 +62,7 @@ pub fn check(args: &[String]) -> i32 {
     match compile(path) {
         Ok(compiled) => {
             emit_diagnostics(&compiled.diagnostics, &compiled.sources);
-            if has_errors(&compiled.diagnostics) {
+            if compiled.has_errors() {
                 EXIT_FAILURE
             } else {
                 println!("ok: {path}");
@@ -206,18 +190,15 @@ fn web_backend_is_built(verb: &str, backend: BackendMode, device: WasmDevice) ->
 /// Whether the engine `backend` selects can build a library's `@Export`
 /// surface, reporting it by name when it cannot.
 ///
-/// Nothing can, today. `@Export` is checked by the frontend — a refused export
-/// is a compile error before any backend sees the program — but no engine yet
-/// emits an export table or the consumer wrapper that calls one, so a library
-/// that declares exports would otherwise build an artifact with an invisible
-/// surface. That is worse than refusing: the artifact would look complete and
-/// no consumer could reach it.
+/// **The VM engine can**, and is the default: it writes the KBC1 exports
+/// section, embeds the artifact in a generated Rust crate, and runs it on a
+/// persistent instance. That is the product a consumer gets today.
 ///
-/// Refused per backend rather than once above them because the work each one
-/// owes is different — the VM engine needs a persistent instance and a wrapper
-/// crate, the native engine needs stable trampolines, the hybrid engine needs
-/// both halves to agree — and a user told "not built yet" deserves to know
-/// which engine they are waiting on.
+/// The other two cannot yet, and are refused rather than allowed to write an
+/// artifact with an invisible surface — which would look complete and be
+/// unreachable. Refused per backend rather than once above them because the
+/// work each one owes is different, and a user told "not built yet" deserves to
+/// know which engine they are waiting on.
 fn export_engine_is_built(
     verb: &str,
     backend: BackendMode,
@@ -237,25 +218,28 @@ fn export_engine_is_built(
         // one export, and an undesigned string/allocator contract across a
         // module boundary. It stands whether or not the library declares
         // exports, and this names the export half of it.
+        //
+        // A Rust *application* compiled to wasm that embeds the library is a
+        // different thing entirely, and it works: the generated crate builds for
+        // `wasm32-unknown-unknown` because everything under it does.
         Device::Web(_) => {
             "the wasm backend emits one self-contained module with a single \
              entrypoint, and the string/allocator contract across a wasm module \
-             boundary is undesigned"
+             boundary is undesigned\n\
+             note: a Rust program that embeds this library and is itself compiled \
+             to wasm needs none of that — build with `--backend vm` and depend on \
+             the generated crate"
         }
         Device::Host => match backend {
-            BackendMode::VmBytecode => {
-                "the VM engine writes the KBC1 exports section but has no \
-                 persistent instance for a consumer to call into, and no \
-                 generated wrapper crate to call it from, yet"
-            }
+            BackendMode::VmBytecode => return Ok(()),
             BackendMode::LlvmNative => {
                 "the native engine emits no stable `kira_lib_*` trampoline per \
                  export and no per-library ABI marker yet"
             }
             BackendMode::Hybrid => {
                 "the hybrid engine serves neither half's export surface yet: \
-                 the bytecode half needs a persistent instance and the native \
-                 half needs the trampolines"
+                 the bytecode half needs the native half's trampolines to agree \
+                 with it, and the trampolines do not exist"
             }
         },
     };
@@ -263,8 +247,8 @@ fn export_engine_is_built(
         "kirac {verb}: `--backend {}` on `--device {}`: library export is not built yet: \
          {missing}\n\
          note: this package exports {}\n\
-         note: `@Export` is checked by the frontend today; `kirac check` verifies the \
-         surface, and no engine serves it yet",
+         note: `--backend vm` builds this library's export surface today, into \
+         `.kira-build/rust/<package>/`",
         backend.label(),
         device.label(),
         names.join(", "),
@@ -281,22 +265,24 @@ pub fn build(args: &[String]) -> i32 {
         Ok(options) => options,
         Err(code) => return code,
     };
-    let ir = match verified_ir(&options.path) {
-        Ok(ir) => ir,
+    let compiled = match verified(&options.path) {
+        Ok(compiled) => compiled,
         Err(code) => return code,
     };
-    if let Err(code) = export_engine_is_built("build", options.backend, options.device, &ir) {
+    let ir = &compiled.ir;
+    if let Err(code) = export_engine_is_built("build", options.backend, options.device, ir) {
         return code;
     }
     // A library and a program are built by different paths on every backend:
-    // one produces a linkable artifact, the other something the OS can start.
+    // one produces something a consumer depends on, the other something the OS
+    // can start.
     let is_library = ir.main.is_none();
 
     if let Device::Web(device) = options.device {
         if let Err(code) = web_backend_is_built("build", options.backend, device) {
             return code;
         }
-        return match wasm::build(&ir, std::path::Path::new(&options.path), device) {
+        return match wasm::build(ir, std::path::Path::new(&options.path), device) {
             Ok(artifacts) => {
                 println!("Successfully built {}", artifacts.wasm.display());
                 EXIT_OK
@@ -310,10 +296,27 @@ pub fn build(args: &[String]) -> i32 {
     }
 
     match options.backend {
+        BackendMode::VmBytecode if is_library => {
+            // The VM engine is the one that serves a consumer today: the
+            // artifact is the bytecode *plus* the Rust crate that embeds and
+            // calls it, because a `.kbc` on its own is nothing a Rust program
+            // can depend on.
+            match library::build(&compiled, std::path::Path::new(&options.path)) {
+                Ok(artifacts) => {
+                    library::report(&artifacts);
+                    EXIT_OK
+                }
+                Err(error) => {
+                    eprintln!("kirac: {error}");
+                    println!("Failed to build");
+                    EXIT_FAILURE
+                }
+            }
+        }
         BackendMode::VmBytecode => {
-            // The VM's artifact is the bytecode module itself; compiling it is
-            // the whole build.
-            match kira_bytecode::compile(&ir) {
+            // A program's VM artifact is the bytecode module itself; compiling
+            // it is the whole build.
+            match kira_bytecode::compile(ir) {
                 Ok(_) => {
                     println!("Successfully built");
                     EXIT_OK
@@ -327,9 +330,9 @@ pub fn build(args: &[String]) -> i32 {
         }
         BackendMode::LlvmNative => {
             let built = if is_library {
-                build_native_library(&ir, &options)
+                build_native_library(ir, &options)
             } else {
-                build_native(&ir, &options)
+                build_native(ir, &options)
             };
             match built {
                 Some(_) => {
@@ -343,7 +346,7 @@ pub fn build(args: &[String]) -> i32 {
             }
         }
         BackendMode::Hybrid => match hybrid::build(
-            &ir,
+            ir,
             std::path::Path::new(&options.path),
             options.emit_llvm_ir,
         ) {
@@ -459,18 +462,23 @@ fn parse_options(verb: &str, args: &[String]) -> Result<CompileOptions, i32> {
     })
 }
 
-/// Compiles `path` and returns its IR, or the exit code to report.
+/// Compiles `path` and returns everything about it, or the exit code to report.
 ///
 /// Diagnostics are rendered here, so callers only decide what to do with a
 /// program that is known good. The IR may be a library's — it carries no
 /// entrypoint then, and the caller decides whether that is usable.
-fn verified_ir(path: &str) -> Result<IrProgram, i32> {
+fn verified(path: &str) -> Result<Compiled, i32> {
     let compiled = compile(path)?;
     emit_diagnostics(&compiled.diagnostics, &compiled.sources);
-    if has_errors(&compiled.diagnostics) {
+    if compiled.has_errors() {
         return Err(EXIT_FAILURE);
     }
-    Ok(compiled.ir)
+    Ok(compiled)
+}
+
+/// Compiles `path` and returns its IR alone, for a caller that needs no more.
+fn verified_ir(path: &str) -> Result<IrProgram, i32> {
+    Ok(verified(path)?.ir)
 }
 
 /// Compiles `path` and returns its IR, refusing a library by name.
@@ -494,90 +502,20 @@ fn runnable_ir(verb: &str, path: &str) -> Result<IrProgram, i32> {
     Ok(ir)
 }
 
-/// A compiled program plus everything needed to report on it.
-struct Compiled {
-    sources: SourceMap,
-    diagnostics: Vec<Diagnostic>,
-    ir: IrProgram,
-}
-
-/// What kind of thing the package containing `source` builds.
+/// Reads and compiles `path` through the frontend `kira-build` owns.
 ///
-/// The manifest is discovered by walking up from the source file, which is what
-/// makes `kirac build lib/thing.kira` inside a library package build a library
-/// without a flag: the package already said so, and a flag that could disagree
-/// with it would be a second source of truth.
-///
-/// No manifest means an application — a bare `.kira` file handed to `kirac` is
-/// a program. A manifest that exists and cannot be read is an error, because
-/// building the wrong kind of artifact silently is worse than not building.
-fn build_kind_of(source: &std::path::Path) -> Result<kira_semantics::BuildKind, i32> {
-    match kira_project::manifest_for(source) {
-        Ok(Some(found)) => Ok(match found.kind() {
-            kira_manifest::PackageKind::Library => kira_semantics::BuildKind::Library,
-            kira_manifest::PackageKind::App => kira_semantics::BuildKind::Application,
-        }),
-        Ok(None) => Ok(kira_semantics::BuildKind::Application),
-        Err(error) => {
-            eprintln!("kirac: {error}");
-            Err(EXIT_FAILURE)
-        }
-    }
-}
-
-/// Reads and compiles `path` through the salsa frontend and IR lowering.
-///
-/// Returns `Err(exit_code)` only for I/O problems (a missing or unreadable
-/// file); compile errors are carried as diagnostics, not as an error here.
+/// Returns `Err(exit_code)` only for problems that prevent compiling at all
+/// (a missing or unreadable file, an unusable manifest); compile errors are
+/// carried as diagnostics, not as an error here.
 fn compile(path: &str) -> Result<Compiled, i32> {
-    let text = std::fs::read_to_string(path).map_err(|error| {
-        eprintln!("kirac: cannot read `{path}`: {error}");
-        EXIT_USAGE
-    })?;
-
-    // Everything the entry file imports, transitively, dependencies first. An
-    // import that names no readable file comes back as nothing here and is
-    // reported by the frontend, which has the span to point at.
-    let modules = kira_program_graph::load_modules(std::path::Path::new(path), &text);
-
-    // The SourceMap mirrors the salsa input file for file and in the same
-    // order, so diagnostic spans render against the file they were written in:
-    // the entry file at `FILE_SOURCE_ID`, then module `i` at
-    // `module_source_id(i)`.
-    let mut sources = SourceMap::new();
-    let id = sources
-        .insert(path.to_owned(), text.clone())
-        .map_err(|full| {
-            // One file into an empty map cannot fill it; this is unreachable rather
-            // than merely unlikely, but it is reported, not asserted away.
-            eprintln!("kirac: {full}");
-            EXIT_FAILURE
-        })?;
-    debug_assert_eq!(id, FILE_SOURCE_ID);
-    for (index, module) in modules.iter().enumerate() {
-        let id = sources
-            .insert(module.path.clone(), module.text.clone())
-            .map_err(|full| {
-                eprintln!("kirac: {full}");
-                EXIT_FAILURE
-            })?;
-        debug_assert_eq!(id, kira_semantics::module_source_id(index));
-    }
-
-    let build_kind = build_kind_of(std::path::Path::new(path))?;
-
-    let db = salsa::DatabaseImpl::new();
-    let source = SourceProgram::new(&db, text, path.to_owned(), modules, build_kind);
-    let ir = lowered(&db, source);
-    let diagnostics = lowered::accumulated::<DiagnosticAccumulator>(&db, source)
-        .into_iter()
-        .map(|accumulated| accumulated.0.clone())
-        .collect();
-
-    Ok(Compiled {
-        sources,
-        diagnostics,
-        ir,
+    kira_build::compile(std::path::Path::new(path)).map_err(|error| {
+        eprintln!("kirac: {error}");
+        // A path the user typed that is not there is a usage error; everything
+        // else got far enough that the invocation itself was fine.
+        match error {
+            FrontendError::Read { .. } => EXIT_USAGE,
+            FrontendError::SourceMapFull { .. } | FrontendError::Discovery(_) => EXIT_FAILURE,
+        }
     })
 }
 
@@ -591,66 +529,11 @@ fn emit_diagnostics(diagnostics: &[Diagnostic], sources: &SourceMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kira_semantics::analyzed;
 
     #[test]
-    fn lowers_a_clean_program() {
-        let db = salsa::DatabaseImpl::new();
-        let source = SourceProgram::application(
-            &db,
-            "@Main function main() { print(1) return }".to_owned(),
-            "test.kira".to_owned(),
-            Vec::new(),
-        );
-        let ir = lowered(&db, source);
-        assert_eq!(ir.functions.len(), 1);
-        assert_eq!(ir.main, Some(0));
-    }
-
-    #[test]
-    fn an_application_without_main_still_reports_ksem011() {
-        let db = salsa::DatabaseImpl::new();
-        let source = SourceProgram::application(
-            &db,
-            "function f() { return }".to_owned(),
-            "t.kira".to_owned(),
-            Vec::new(),
-        );
-        // Lowering is total now, so the refusal is the diagnostic, not the
-        // absence of IR.
-        let diags = lowered::accumulated::<DiagnosticAccumulator>(&db, source);
-        assert!(diags.iter().any(|d| d.0.code == Some("KSEM011")));
-    }
-
-    #[test]
-    fn a_library_lowers_with_no_entrypoint_and_no_diagnostics() {
-        let db = salsa::DatabaseImpl::new();
-        let source = SourceProgram::new(
-            &db,
-            "function f() { return }".to_owned(),
-            "t.kira".to_owned(),
-            Vec::new(),
-            kira_semantics::BuildKind::Library,
-        );
-        let ir = lowered(&db, source);
-        assert_eq!(ir.main, None);
-        assert_eq!(ir.functions.len(), 1);
-        let diags = lowered::accumulated::<DiagnosticAccumulator>(&db, source);
-        assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    #[test]
-    fn diagnostics_propagate_through_lowering() {
-        let db = salsa::DatabaseImpl::new();
-        let source = SourceProgram::application(
-            &db,
-            "@Main function main() { print(missing) return }".to_owned(),
-            "t.kira".to_owned(),
-            Vec::new(),
-        );
-        // Analyzing directly and through lowering must agree on diagnostics.
-        let _ = analyzed(&db, source);
-        let diags = lowered::accumulated::<DiagnosticAccumulator>(&db, source);
-        assert!(diags.iter().any(|d| d.0.code == Some("KSEM060")));
+    fn a_frontend_read_failure_is_a_usage_error_and_the_rest_are_not() {
+        // The exit-code split the CLI owns: a path the user typed that is not
+        // there is bad usage, and anything past that is a failed build.
+        assert_eq!(compile("/nonexistent/kirac/x.kira").err(), Some(EXIT_USAGE));
     }
 }

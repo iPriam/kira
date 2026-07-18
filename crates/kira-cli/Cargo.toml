@@ -20,6 +20,9 @@ kira-semantics.workspace = true
 kira-ir.workspace = true
 kira-semantics-model.workspace = true
 kira-bytecode.workspace = true
+# The build system: the frontend query and the library/wrapper-crate build both
+# live there, so `kirac` drives them rather than owning a second copy.
+kira-build.workspace = true
 kira-main.workspace = true
 kira-vm-runtime.workspace = true
 kira-runtime-abi.workspace = true
