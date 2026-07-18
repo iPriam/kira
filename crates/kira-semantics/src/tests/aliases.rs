@@ -119,6 +119,13 @@ fn an_alias_may_not_claim_a_name_that_is_already_taken() {
         codes("enum E { A B }\ntype E = Int\n@Main function main() { return }"),
         vec!["KSEM130"]
     );
+    // A class flattens into the struct table, so its name is as taken as a
+    // struct's — the collision check has to see the declaration, not the table,
+    // because the table is still empty when aliases are collected.
+    assert_eq!(
+        codes("class C { var x: Int = 1 }\ntype C = Int\n@Main function main() { return }"),
+        vec!["KSEM130"]
+    );
 }
 
 /// An alias whose target does not resolve reports at each use site, against

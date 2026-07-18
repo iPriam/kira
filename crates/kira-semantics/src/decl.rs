@@ -8,7 +8,7 @@ use kira_semantics_model::{FieldDef, StructDef};
 use kira_syntax_model::ast::{ExprId, Item, StructDecl};
 
 use crate::analyze::Analyzer;
-use crate::types::NameContext;
+use crate::types::{AggregateKind, NameContext};
 
 impl Analyzer<'_> {
     /// Declares every struct, in source order, resolving field types as it goes.
@@ -76,6 +76,7 @@ impl Analyzer<'_> {
                 continue;
             }
             let context = NameContext::Field {
+                owner_kind: AggregateKind::Struct,
                 owner: name.clone(),
             };
             let ty = self.resolve_type_in(field.ty, &context);

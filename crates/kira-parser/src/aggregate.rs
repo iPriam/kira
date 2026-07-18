@@ -18,6 +18,9 @@ use crate::Parser;
 impl Parser<'_> {
     // ----- structs ------------------------------------------------------
 
+    /// Parses `struct Name { <member>* }`.
+    ///
+    /// Members are `let`/`var` bindings. Newlines and `;` are both
     /// insignificant, so the member keyword is what starts each member and a
     /// member with no keyword is reported rather than silently skipped.
     pub(crate) fn parse_struct(&mut self) -> Option<StructDecl> {
@@ -235,7 +238,7 @@ impl Parser<'_> {
     pub(crate) fn parse_class(&mut self) -> Option<ClassDecl> {
         let start = self.current().span;
         self.expect(TokenKind::Class);
-        let (name, name_span) = self.parse_declaration_name("KPAR011", "expected a class name");
+        let (name, name_span) = self.parse_declaration_name("KPAR033", "expected a class name");
         let parents = self.parse_extends_list();
         let mut fields = Vec::new();
         let mut overrides = Vec::new();
@@ -325,7 +328,7 @@ impl Parser<'_> {
             if !self.at(TokenKind::Identifier) {
                 self.error(
                     self.current().span,
-                    "KPAR012",
+                    "KPAR034",
                     "expected a parent type name",
                 );
                 break;
@@ -370,7 +373,7 @@ impl Parser<'_> {
                 if is_var {
                     self.error(
                         keyword_span,
-                        "KPAR013",
+                        "KPAR035",
                         "`override` a field with `let`: the inherited field already decided \
                          whether it is mutable",
                     );
@@ -387,7 +390,7 @@ impl Parser<'_> {
                 if self.at(TokenKind::Colon) {
                     self.error(
                         self.current().span,
-                        "KPAR014",
+                        "KPAR036",
                         "an `override` field takes no type: it rebinds the inherited field",
                     );
                     self.bump();
@@ -409,7 +412,7 @@ impl Parser<'_> {
                 let span = self.current().span;
                 self.error(
                     span,
-                    "KPAR015",
+                    "KPAR037",
                     format!(
                         "expected `function` or `let` after `override`, found {}",
                         kind.describe()
