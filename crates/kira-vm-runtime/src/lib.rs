@@ -10,12 +10,23 @@
 //! - **Affine strings.** Strings live on a heap with drop accounting; a clean
 //!   run reclaims every allocation ([`HeapStats::current`] is 0 at exit).
 //! - **Match-in-loop.** Dispatch is a single `match` over decoded instructions.
+//!
+//! # Two ways in, and why there are two
+//!
+//! [`execute`] and [`Program`] run a *program*: each call gets its own heap, and
+//! that heap is gone when the call ends. [`Instance`] runs a *library*: one heap
+//! for the instance's whole life, with a root table naming the objects the
+//! consumer still holds. A library needs the second because Kira has no globals,
+//! so an object returned by one call has nowhere else to live until the next
+//! one. See [`instance`] for what "balanced" means once a heap outlives a call.
 
 pub mod error;
+pub mod instance;
 pub mod interp;
 pub mod value;
 
 pub use error::VmError;
+pub use instance::{Instance, RootId};
 pub use interp::{Program, RunOutcome, execute};
 pub use value::{Heap, HeapStats, StrId, Value};
 
@@ -175,6 +186,30 @@ mod tests {
         assert!(
             error.to_string().contains("handle"),
             "the refusal names what it refused: {error}"
+        );
+    }
+
+    /// A host that asks the VM to enter a `@Native` function is refused by name.
+    ///
+    /// A native function carries a signature and no body, so entering one used
+    /// to read past the end of empty code. Bytecode has never been allowed to
+    /// `Call` one — validation rejects that — and an embedder is now held to the
+    /// same rule, through the same check both entry points share.
+    #[test]
+    fn a_host_cannot_enter_a_native_function() {
+        let mut native = func("hot", 1, 1, vec![]);
+        native.execution = kira_runtime_abi::Execution::Native;
+        let module = Module {
+            exports: Default::default(),
+            functions: vec![func("main", 0, 0, vec![I::ReturnVoid]), native],
+            main: Some(0),
+            strings: Vec::new(),
+        };
+        let program = Program::load(module).expect("a valid module");
+        let mut host = CapturingHost::new();
+        assert_eq!(
+            program.call(&mut host, 1, &[kira_runtime_abi::NativeArg::Int(1)]),
+            Err(VmError::NativeEntry { function: 1 })
         );
     }
 

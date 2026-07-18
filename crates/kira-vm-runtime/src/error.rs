@@ -51,6 +51,18 @@ pub enum VmError {
         /// How many arguments the host passed.
         got: usize,
     },
+    /// A host asked the VM to enter a `@Native` function.
+    ///
+    /// A native function's body lives in the other half of a hybrid program, so
+    /// the module carries a signature and no code — bytecode may not `Call` one
+    /// (validation rejects that), and neither may an embedder. Entering one
+    /// would run off the end of an empty body, so it is refused by name here
+    /// instead.
+    #[error("function {function} is native: its body is not in this module")]
+    NativeEntry {
+        /// The function the host asked for.
+        function: u32,
+    },
     /// A `CallNative` could not be completed by the host.
     ///
     /// The VM never performs a native call itself, so it reports the host's
@@ -182,5 +194,38 @@ pub enum VmError {
     HandleAtSeam {
         /// The function at the boundary.
         function: u32,
+    },
+    /// A handle named no live object in the instance it was presented to.
+    ///
+    /// Either the consumer released it and then used it, or it came from a
+    /// different instance. A root id is never reused, so this is always a
+    /// mistake about *which object* — which is exactly the mistake that must
+    /// never resolve into whatever now sits at that word. See
+    /// [`crate::Instance`].
+    #[error("handle {root} names no live object in this instance")]
+    DanglingRoot {
+        /// The word the caller presented.
+        root: u64,
+    },
+    /// An instance ran out of root ids.
+    ///
+    /// Root ids are never reused — that is what makes a released handle a typed
+    /// error instead of a silent hit on some later object — so the supply is
+    /// finite. Exhausting `u64` of them takes longer than any process runs; the
+    /// variant exists so the counter converts typed rather than wrapping around
+    /// onto a live root.
+    #[error("this instance has no root ids left")]
+    RootSpaceExhausted,
+    /// A value with no crossing form reached the export boundary.
+    ///
+    /// Analysis refuses every uncrossable type on an `@Export` signature, so
+    /// reaching this means a module and the wrapper calling it disagree — never
+    /// a program that merely type-checked.
+    #[error("function {function} returns a {kind}, which cannot cross the export boundary")]
+    UncrossableExport {
+        /// The exported function that produced it.
+        function: u32,
+        /// What it produced, named as the language names it.
+        kind: &'static str,
     },
 }

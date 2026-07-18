@@ -49,12 +49,7 @@ pub fn execute(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOu
 
 /// Runs `module`'s entrypoint on a fresh VM, assuming it is already validated.
 fn run_entry(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOutcome, VmError> {
-    let mut vm = Vm {
-        host,
-        heap: Heap::new(),
-        stack: Vec::new(),
-        steps: Vec::new(),
-    };
+    let mut vm = Vm::new(host, Heap::new());
     let main = module.main.ok_or(VmError::NoEntrypoint)?;
     let result = vm.enter(module, main, &[])?;
     // The program's result is no longer referenced by anything; drop it so
@@ -126,25 +121,9 @@ impl Program {
         function_id: u32,
         args: &[NativeArg<'_>],
     ) -> Result<NativeResult, VmError> {
-        let function = self
-            .module
-            .functions
-            .get(function_id as usize)
-            .ok_or(VmError::UnknownFunction(function_id))?;
-        if args.len() != usize::from(function.param_count) {
-            return Err(VmError::ArityMismatch {
-                function: function_id,
-                expected: function.param_count,
-                got: args.len(),
-            });
-        }
+        check_signature(&self.module, function_id, args.len())?;
 
-        let mut vm = Vm {
-            host,
-            heap: Heap::new(),
-            stack: Vec::new(),
-            steps: Vec::new(),
-        };
+        let mut vm = Vm::new(host, Heap::new());
         let result = vm.enter(&self.module, function_id, args)?;
         let lifted = vm.heap.lift(result);
         vm.heap.drop_value(result);
@@ -154,9 +133,40 @@ impl Program {
     }
 }
 
-struct Vm<'h> {
+/// Checks that `function_id` names a function of this module that takes exactly
+/// `arg_count` arguments.
+///
+/// The one place both embedder entry points ([`Program::call`] and
+/// [`crate::Instance::call`]) agree on what a well-formed request looks like, so
+/// a host driving the VM from an artifact that disagrees with this module is
+/// refused the same way through either door.
+pub(crate) fn check_signature(
+    module: &Module,
+    function_id: u32,
+    arg_count: usize,
+) -> Result<(), VmError> {
+    let function = module
+        .functions
+        .get(function_id as usize)
+        .ok_or(VmError::UnknownFunction(function_id))?;
+    if function.is_native() {
+        return Err(VmError::NativeEntry {
+            function: function_id,
+        });
+    }
+    if arg_count != usize::from(function.param_count) {
+        return Err(VmError::ArityMismatch {
+            function: function_id,
+            expected: function.param_count,
+            got: arg_count,
+        });
+    }
+    Ok(())
+}
+
+pub(crate) struct Vm<'h> {
     host: &'h mut dyn HostCapabilities,
-    heap: Heap,
+    pub(crate) heap: Heap,
     stack: Vec<Value>,
     /// Reusable scratch for a dynamic place's resolved steps.
     ///
@@ -169,7 +179,26 @@ struct Vm<'h> {
     steps: Vec<ResolvedStep>,
 }
 
-impl Vm<'_> {
+impl<'h> Vm<'h> {
+    /// A VM that runs on `heap` and reaches the world through `host`.
+    ///
+    /// The heap is taken rather than created here because it does not always
+    /// belong to one run: [`crate::Instance`] lends the VM a heap that outlives
+    /// the call and takes it back afterwards.
+    pub(crate) fn new(host: &'h mut dyn HostCapabilities, heap: Heap) -> Self {
+        Vm {
+            host,
+            heap,
+            stack: Vec::new(),
+            steps: Vec::new(),
+        }
+    }
+
+    /// Gives the heap back, whatever the run did with it.
+    pub(crate) fn into_heap(self) -> Heap {
+        self.heap
+    }
+
     /// Runs `function_id` with `args` in its parameter slots, to completion.
     ///
     /// Arguments are lowered into this run's own heap, so the caller's storage
@@ -180,18 +209,95 @@ impl Vm<'_> {
         function_id: u32,
         args: &[NativeArg<'_>],
     ) -> Result<Value, VmError> {
-        let mut frame = new_frame(module, function_id)?;
-        for (slot, argument) in args.iter().enumerate() {
-            frame.locals[slot] = self.heap.lower(*argument).ok_or(VmError::HandleAtSeam {
+        let mut lowered = Vec::with_capacity(args.len());
+        for argument in args {
+            match self.heap.lower(*argument) {
+                Some(value) => lowered.push(value),
+                None => {
+                    // The arguments already lowered are this heap's; a refused
+                    // call frees them rather than leaving them behind.
+                    self.discard(lowered);
+                    return Err(VmError::HandleAtSeam {
+                        function: function_id,
+                    });
+                }
+            }
+        }
+        self.enter_values(module, function_id, lowered)
+    }
+
+    /// Runs `function_id` with values already lowered into this VM's heap.
+    ///
+    /// Takes ownership of `args`: every one of them is either moved into a
+    /// parameter slot — and dropped with the frame — or freed here, on every
+    /// path out, including the ones that never start the function.
+    pub(crate) fn enter_values(
+        &mut self,
+        module: &Module,
+        function_id: u32,
+        args: Vec<Value>,
+    ) -> Result<Value, VmError> {
+        let mut frame = match new_frame(module, function_id) {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.discard(args);
+                return Err(error);
+            }
+        };
+        if args.len() > frame.locals.len() {
+            // Validation proves `param_count <= local_count` and the entry
+            // points check arity, so this is unreachable through either door —
+            // it is here so the impossible case frees rather than panics.
+            self.discard(args);
+            self.discard(frame.locals);
+            return Err(VmError::ArityMismatch {
                 function: function_id,
-            })?;
+                expected: module.functions[function_id as usize].param_count,
+                got: 0,
+            });
+        }
+        for (slot, value) in args.into_iter().enumerate() {
+            frame.locals[slot] = value;
         }
         self.run(module, frame)
     }
 
+    /// Frees a batch of values this VM owns.
+    fn discard(&mut self, values: impl IntoIterator<Item = Value>) {
+        for value in values {
+            self.heap.drop_value(value);
+        }
+    }
+
+    /// Runs to completion, reclaiming everything still live if it traps.
+    ///
+    /// A trap leaves live frames and a non-empty operand stack, and both hold
+    /// heap storage. Freeing them here is what makes heap accounting mean
+    /// something after a failed call: when the heap belongs to one run it is
+    /// about to be dropped anyway, but an [`crate::Instance`]'s heap outlives
+    /// the call, so a trap that left its frames behind would leak into it.
     fn run(&mut self, module: &Module, entry: Frame) -> Result<Value, VmError> {
         let mut frames = vec![entry];
+        match self.dispatch(module, &mut frames) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.unwind(&mut frames);
+                Err(error)
+            }
+        }
+    }
 
+    /// Frees every local of every live frame and everything left on the operand
+    /// stack.
+    fn unwind(&mut self, frames: &mut Vec<Frame>) {
+        for frame in frames.drain(..) {
+            self.discard(frame.locals);
+        }
+        let leftovers = std::mem::take(&mut self.stack);
+        self.discard(leftovers);
+    }
+
+    fn dispatch(&mut self, module: &Module, frames: &mut Vec<Frame>) -> Result<Value, VmError> {
         loop {
             let depth = frames.len() - 1;
             let frame = &mut frames[depth];
