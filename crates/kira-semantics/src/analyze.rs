@@ -5,7 +5,7 @@
 //! mismatches become [`HirExpr::Error`] nodes (type `Error`), which the type
 //! lattice treats as compatible everywhere so one mistake does not cascade.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use kira_core::Interner;
 use kira_diagnostics::{Diagnostic, Label, Severity};
@@ -32,6 +32,13 @@ pub struct Analysis {
 pub(crate) struct Callable<'a> {
     /// The struct whose method this is; `None` for a free function.
     pub(crate) receiver: Option<StructId>,
+    /// For a class method copied from an ancestor, the ancestor that wrote the
+    /// body; `None` for a free function or a method written where it lives.
+    ///
+    /// This is what makes inheritance work without a vtable: the same body is
+    /// registered once per class that inherits it, each time with `receiver`
+    /// set to *that* class, so `self` is statically the concrete type.
+    pub(crate) origin: Option<StructId>,
     /// The declaration as written.
     pub(crate) function: &'a Function,
     /// The file the declaration was written in.
@@ -100,6 +107,23 @@ pub(crate) struct Analyzer<'a> {
     /// Registered before anything is resolved and consulted from
     /// `resolve_named_type`, so an alias reaches every type position at once.
     pub(crate) aliases: AliasTable,
+    /// Per-class flattening results, keyed by the struct id the class was
+    /// declared as.
+    ///
+    /// A class *is* a struct by the time anything downstream sees it, so this
+    /// is the only place that remembers which struct ids came from a class and
+    /// what each one inherited. It never leaves analysis.
+    pub(crate) classes: HashMap<StructId, crate::classes::ClassInfo>,
+    /// The methods each struct and class declares itself, keyed by id.
+    ///
+    /// Kept beside the struct table because a method is not part of a struct's
+    /// shape — the table carries layout, and this carries what was written.
+    pub(crate) own_methods: HashMap<StructId, Vec<crate::classes::OwnMethod>>,
+    /// Classes dropped before flattening because their parents form a cycle.
+    ///
+    /// Kept so a class that merely *names* one is not reported a second time
+    /// for a parent that exists in the source but not in the table.
+    pub(crate) unflattenable_classes: BTreeSet<String>,
     pub(crate) program: HirProgram,
     pub(crate) diagnostics: Vec<Diagnostic>,
 }
@@ -266,6 +290,9 @@ impl<'a> Analyzer<'a> {
             struct_defaults: Vec::new(),
             enum_defaults: Vec::new(),
             aliases: AliasTable::new(),
+            classes: HashMap::new(),
+            own_methods: HashMap::new(),
+            unflattenable_classes: BTreeSet::new(),
             program: HirProgram::default(),
             diagnostics: Vec::new(),
         };
@@ -282,6 +309,9 @@ impl<'a> Analyzer<'a> {
         // struct is declared before signatures, so a parameter may name either.
         self.collect_enums();
         self.collect_structs();
+        // Classes flatten into the same table, and may extend a struct, so they
+        // are declared once every struct exists.
+        self.collect_classes();
         let callables = self.callables();
         self.collect_signatures(&callables);
         // `@Main` is a property of the program, not of any one file, and the
@@ -316,6 +346,7 @@ impl<'a> Analyzer<'a> {
             match item {
                 Item::Function(function) => callables.push(Callable {
                     receiver: None,
+                    origin: None,
                     function,
                     source,
                 }),
@@ -328,10 +359,14 @@ impl<'a> Analyzer<'a> {
                     for method in &declaration.methods {
                         callables.push(Callable {
                             receiver: owner,
+                            origin: None,
                             function: method,
                             source,
                         });
                     }
+                }
+                Item::Class(declaration) => {
+                    self.class_callables(declaration, source, &mut callables)
                 }
                 Item::Enum(_) | Item::TypeAlias(_) | Item::Import(_) | Item::Unsupported(_) => {}
             }
@@ -447,13 +482,34 @@ impl<'a> Analyzer<'a> {
     /// no user name can collide with a qualified one.
     pub(crate) fn callable_name(&self, callable: Callable<'_>) -> String {
         let written = self.interner.resolve(callable.function.name);
-        match callable.receiver {
-            Some(id) => format!(
-                "{}.{written}",
-                self.program.types.type_name(Type::Struct(id))
-            ),
-            None => written.to_owned(),
+        let Some(id) = callable.receiver else {
+            return written.to_owned();
+        };
+        let receiver = self.program.types.type_name(Type::Struct(id));
+        // A class carries one copy of every method any ancestor declares. The
+        // copy that wins bare lookup takes the plain `Class.method` name a call
+        // site spells; a copy an override shadows takes a qualified name, which
+        // is what `ClsSquare.scaledArea()` inside `ClsCube` resolves to. `$`
+        // cannot appear in an identifier, so neither can collide with a user
+        // name.
+        match callable.origin {
+            Some(origin) if !self.is_most_derived(id, origin, written) => {
+                let origin = self.program.types.type_name(Type::Struct(origin));
+                format!("{receiver}.{origin}${written}")
+            }
+            _ => format!("{receiver}.{written}"),
         }
+    }
+
+    /// Whether `origin`'s copy of `method` is the one bare lookup on `class`
+    /// finds.
+    pub(crate) fn is_most_derived(&self, class: StructId, origin: StructId, method: &str) -> bool {
+        matches!(
+            self.classes
+                .get(&class)
+                .and_then(|info| info.bare_methods.get(method)),
+            Some(crate::classes::Member::One(winner)) if *winner == origin
+        )
     }
 
     fn check_main(&mut self) {

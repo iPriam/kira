@@ -85,6 +85,11 @@ impl Analyzer<'_> {
         };
         let qualified = format!("{}.{name}", self.type_name(receiver_ty));
         if self.lookup_function(&qualified).is_none() {
+            if let Type::Struct(owner) = receiver_ty
+                && self.report_ambiguous_member(owner, &name, method_span, true)
+            {
+                return self.program.exprs.alloc(HirExpr::Error);
+            }
             // A field holding a value is not callable, and saying so names the
             // likelier mistake than "no such method".
             let message = match self.resolve_field_quietly(receiver_ty, &name) {
@@ -282,6 +287,22 @@ impl Analyzer<'_> {
         // becoming unusable as a variable.
         if ctx.resolve(&root).is_some() {
             return None;
+        }
+        // `ClsAccount.gross()` inside a subclass method: the parent's body run
+        // against `self`. Checked before the module table, because a parent
+        // type name is nearer than a module name.
+        if self.program.types.structs().lookup(&root).is_some() {
+            // Once the root is known to be a type name, this path owns the
+            // call: falling through would analyze the type name as a value and
+            // report it undefined on top of whatever was already said.
+            let Some(qualifier) = self.resolve_parent_qualifier(ctx, &root, span) else {
+                for &arg in args {
+                    self.analyze_expr(ctx, arg);
+                }
+                return Some(self.program.exprs.alloc(HirExpr::Error));
+            };
+            let name = self.interner.resolve(method).to_owned();
+            return Some(self.analyze_parent_call(ctx, qualifier, &name, args, method_span));
         }
         if self.module_for_root(&root).is_some() {
             let name = self.interner.resolve(method).to_owned();

@@ -3,6 +3,7 @@
 
 mod aliases;
 mod arrays;
+mod classes;
 mod enums;
 mod imports;
 mod matches;
