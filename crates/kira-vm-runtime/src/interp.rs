@@ -182,7 +182,9 @@ impl Vm<'_> {
     ) -> Result<Value, VmError> {
         let mut frame = new_frame(module, function_id)?;
         for (slot, argument) in args.iter().enumerate() {
-            frame.locals[slot] = self.heap.lower(*argument);
+            frame.locals[slot] = self.heap.lower(*argument).ok_or(VmError::HandleAtSeam {
+                function: function_id,
+            })?;
         }
         self.run(module, frame)
     }
@@ -297,7 +299,10 @@ impl Vm<'_> {
             self.heap.drop_value(value);
         }
 
-        let result = self.heap.absorb(returned?);
+        let result = self
+            .heap
+            .absorb(returned?)
+            .ok_or(VmError::HandleAtSeam { function: id })?;
         self.stack.push(result);
         Ok(())
     }

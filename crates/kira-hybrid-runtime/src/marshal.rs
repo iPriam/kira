@@ -55,6 +55,9 @@ pub fn lower_args(library: &NativeLibrary, args: &[NativeArg<'_>]) -> Vec<Bridge
                 NativeArg::Float(value) => BridgeData::Float(value),
                 NativeArg::Bool(value) => BridgeData::Bool(value),
                 NativeArg::Str(text) => BridgeData::String(library.new_string(text)),
+                // A handle is one opaque word and copies like a scalar: there
+                // is nothing to allocate and nothing for the callee to free.
+                NativeArg::Handle(handle) => BridgeData::Handle(handle),
             };
             BridgeValue::encode(data)
         })
@@ -86,6 +89,10 @@ pub unsafe fn lift_result(
             let text = unsafe { library.take_string(handle) };
             NativeResult::Str(text.map_err(|_| MarshalError::NotUtf8 { index: 0 })?)
         }
+        // Carried through untouched: this layer cannot tell whether the word
+        // names a live object, and the VM — which can — refuses a handle it has
+        // no representation for, by name.
+        BridgeData::Handle(handle) => NativeResult::Handle(handle),
     })
 }
 
@@ -105,6 +112,8 @@ pub enum OwnedArg {
     Bool(bool),
     /// An owned string, copied out of the handle native code transferred.
     Str(String),
+    /// An opaque handle, copied like a scalar — nothing was transferred to own.
+    Handle(u64),
 }
 
 impl OwnedArg {
@@ -116,6 +125,7 @@ impl OwnedArg {
             OwnedArg::Float(value) => NativeArg::Float(*value),
             OwnedArg::Bool(value) => NativeArg::Bool(*value),
             OwnedArg::Str(text) => NativeArg::Str(text),
+            OwnedArg::Handle(handle) => NativeArg::Handle(*handle),
         }
     }
 }
@@ -158,6 +168,9 @@ pub unsafe fn take_args(
                     continue;
                 }
             },
+            // Nothing to take: a handle is a word, and the object behind it
+            // belongs to whoever minted it for as long as it lives.
+            BridgeData::Handle(handle) => OwnedArg::Handle(handle),
         };
         owned.push(argument);
     }
@@ -179,6 +192,7 @@ pub fn lower_result(library: &NativeLibrary, result: NativeResult) -> BridgeValu
         NativeResult::Float(value) => BridgeData::Float(value),
         NativeResult::Bool(value) => BridgeData::Bool(value),
         NativeResult::Str(text) => BridgeData::String(library.new_string(&text)),
+        NativeResult::Handle(handle) => BridgeData::Handle(handle),
     };
     BridgeValue::encode(data)
 }
@@ -194,5 +208,15 @@ mod tests {
         assert_eq!(OwnedArg::Void.borrow(), NativeArg::Void);
         let text = OwnedArg::Str("hi".to_owned());
         assert_eq!(text.borrow(), NativeArg::Str("hi"));
+        assert_eq!(OwnedArg::Handle(9).borrow(), NativeArg::Handle(9));
+    }
+
+    /// A handle round-trips through the wire encoding with its payload intact
+    /// and no allocation on either side — the property that makes it copy like
+    /// a scalar rather than move like a string.
+    #[test]
+    fn a_handle_survives_the_wire_encoding_unaltered() {
+        let encoded = BridgeValue::encode(BridgeData::Handle(u64::MAX));
+        assert_eq!(encoded.decode(), Some(BridgeData::Handle(u64::MAX)));
     }
 }
