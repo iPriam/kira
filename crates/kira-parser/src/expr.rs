@@ -5,12 +5,12 @@
 //! `+`/`-`, `*`/`/`/`%`, then prefix `-`/`!`/`~`, then primaries and call
 //! postfixes. All binary operators are left-associative.
 //!
-//! Two levels of that ladder are worth stating because C would order them
-//! differently and getting them wrong changes what an accepted program means:
-//! the bitwise operators bind **looser** than equality (so `a & b == c` is
-//! `a & (b == c)`, not `(a & b) == c`), and the shifts bind **tighter** than
-//! the orderings but looser than `+`/`-` (so `a + b << c` is `(a + b) << c`).
-//! Both follow the oracle's grammar rather than C's.
+//! That ladder is C's, rung for rung. Two levels are still worth stating,
+//! because Go and Swift moved them and getting them wrong changes what an
+//! accepted program means: the bitwise operators bind **looser** than equality
+//! (so `a & b == c` is `a & (b == c)`, not `(a & b) == c` — C's classic wart),
+//! and the shifts bind **tighter** than the orderings but looser than `+`/`-`
+//! (so `a + b << c` is `(a + b) << c`).
 //!
 //! The conditional `? :` sits below every binary operator and is the one
 //! right-associative form: `a ? b : c ? d : e` groups as `a ? b : (c ? d : e)`,
@@ -596,8 +596,9 @@ mod tests {
         );
     }
 
-    // The bitwise ladder. Each of these would group differently in C, so they
-    // are the tests that pin the oracle's grammar rather than a familiar one.
+    // The bitwise ladder. Each of these groups as C groups it, and as Go and
+    // Swift do not, so they pin the rungs a contributor is most likely to
+    // "correct" from memory.
 
     #[test]
     fn bitwise_and_binds_tighter_than_xor_and_or() {
@@ -609,7 +610,7 @@ mod tests {
 
     #[test]
     fn bitwise_or_binds_looser_than_equality() {
-        // C would read this as `(a | b) == c`. Kira does not.
+        // C reads this the same way; Go and Swift read it as `(1 | 2) == 3`.
         assert_eq!(
             return_shape("function f() { return 1 | 2 == 3 }"),
             "(1 | (2 == 3))"

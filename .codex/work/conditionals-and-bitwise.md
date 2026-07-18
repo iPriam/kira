@@ -58,7 +58,9 @@ a right shift is precisely the question signedness answers, so `ShrInt` and
 
 **Bitwise binds looser than equality.** This is the oracle's ladder
 (`parser_types_exprs.zig`: conditional → `||` → `&&` → `|` → `^` → `&` →
-equality → comparison → shift → term → factor), not C's, and the difference is
+equality → comparison → shift → term → factor), which is C's ladder — that file
+says so itself, "Bitwise precedence (C-style)" and "Matches C". The rung is
+worth calling out because Go and Swift moved it, and here the difference is
 observable: `flags & 8 == 8` groups as `flags & (8 == 8)` and is a **type
 error** rather than a different number. Splitting equality and comparison into
 separate rungs while renumbering also fixed a pre-existing divergence — both sat

@@ -45,9 +45,12 @@ fn conditional_branches_must_agree_on_a_type() {
 }
 
 /// A bare literal is a wildcard against a written width, exactly as it is for
-/// `+`, so a mask or a default constant needs no conversion.
+/// `+`, so a mask or a default constant needs no conversion. Which of the two
+/// widths the conditional then *takes* is not visible in a diagnostic; the
+/// then-branch rule is pinned by its observable effect on shift signedness in
+/// `backend_parity::bitwise::a_conditional_takes_its_width_from_the_then_branch`.
 #[test]
-fn a_bare_literal_branch_takes_the_written_width() {
+fn a_bare_literal_branch_agrees_with_a_written_width() {
     assert!(
         diagnostics("@Main function main() { let w: U8 = 7 let x = true ? 0 : w print(x) return }")
             .is_empty()

@@ -62,14 +62,18 @@ fn unify_numeric(lt: Type, rt: Type) -> Option<Type> {
 /// The type the two branches of a `? :` agree on, or `None` when they do not.
 ///
 /// Agreement is the same relation arithmetic uses, for the same reason: a bare
-/// integer or float literal is a wildcard that pairs with any written width, so
-/// `wide ? 0 : u8Value` types as `U8` without a conversion rule, while two
-/// *different* written widths agree on nothing. Everything non-numeric must
-/// match exactly — there is no widening and no common supertype, because the
-/// language has no subtyping.
+/// integer or float literal is a wildcard that pairs with any written width,
+/// while two *different* written widths agree on nothing. Everything
+/// non-numeric must match exactly — there is no widening and no common
+/// supertype, because the language has no subtyping.
 ///
 /// When both are numeric the **then** branch decides the spelling, mirroring
-/// the left-operand rule in [`unify_numeric`].
+/// the left-operand rule in [`unify_numeric`], so the pairing is not
+/// symmetric: `wide ? u8Value : 0` types as `U8`, and `wide ? 0 : u8Value`
+/// types as plain `Int`. The asymmetry is observable, because the width picks
+/// the shift: `(true ? u64AllOnes : 0) >> 60` is an unsigned shift printing
+/// `15`, while `(false ? 0 : u64AllOnes) >> 60` is a signed one printing `-1`.
+/// `a_conditional_takes_its_width_from_the_then_branch` pins both spellings.
 pub(crate) fn unify_branches(then: Type, otherwise: Type) -> Option<Type> {
     if then == otherwise {
         return Some(then);

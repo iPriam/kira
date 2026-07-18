@@ -10,7 +10,8 @@
 // would trap if it were ever evaluated.
 //
 // The bitwise operators `& | ^ ~ << >>` act on the raw 64 bits of an integer.
-// Their surprise is the precedence ladder, which is not C's.
+// Their surprise is the precedence ladder, which is C's — including the two
+// rungs most people misremember.
 
 @Main
 function main() {
@@ -82,7 +83,9 @@ function packing() {
 //
 //     ? :   ||   &&   |   ^   &   == !=   < <= > >=   << >>   + -   * / %
 //
-// Two rungs differ from C and are worth memorizing.
+// That is C's ladder, rung for rung. Two of its rungs are still worth
+// memorizing, because Go and Swift moved them and intuition follows the newer
+// language.
 //
 // The bitwise operators bind **looser than equality**. So `flags & 8 == 8` is
 // `flags & (8 == 8)` — a type error in Kira, since `&` wants two integers, not

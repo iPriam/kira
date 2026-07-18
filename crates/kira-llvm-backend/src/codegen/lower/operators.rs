@@ -274,11 +274,6 @@ impl FunctionLowering<'_, '_> {
         }
     }
 
-    /// Lowers `&&`/`||` as branches, evaluating the right operand only when the
-    /// left does not already decide the answer.
-    ///
-    /// `short_circuit_on` is the left value that fixes the result: `true` for
-    /// `||`, `false` for `&&`.
     /// Lowers `cond ? then : otherwise`.
     ///
     /// A branch and a phi, not `LLVMBuildSelect`: a select evaluates **both**
@@ -336,6 +331,11 @@ impl FunctionLowering<'_, '_> {
         Ok(result)
     }
 
+    /// Lowers `&&`/`||` as branches, evaluating the right operand only when the
+    /// left does not already decide the answer.
+    ///
+    /// `short_circuit_on` is the left value that fixes the result: `true` for
+    /// `||`, `false` for `&&`.
     fn lower_short_circuit(
         &mut self,
         lhs: IrExprId,
