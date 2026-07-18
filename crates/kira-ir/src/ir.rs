@@ -28,8 +28,13 @@ pub struct IrProgram {
     /// Every shape the program's types name: the one source of field layout
     /// and of array element types.
     pub types: TypeTable,
-    /// Index of the `@Main` entrypoint within [`IrProgram::functions`].
-    pub main: u32,
+    /// Index of the `@Main` entrypoint within [`IrProgram::functions`], or
+    /// `None` for a library.
+    ///
+    /// A library is entered by its consumer, one call at a time, so it has no
+    /// single function that starts it. Backends read this to decide whether to
+    /// emit an entry point at all.
+    pub main: Option<u32>,
     /// Arena backing every [`IrExprId`] across all functions.
     pub exprs: Arena<IrExpr>,
 }
@@ -40,9 +45,14 @@ impl IrProgram {
         &self.exprs[id]
     }
 
-    /// The entrypoint function.
-    pub fn main_function(&self) -> &IrFunction {
-        &self.functions[self.main as usize]
+    /// The entrypoint function, or `None` for a library or an out-of-range
+    /// index.
+    ///
+    /// Returns an option rather than indexing: a library genuinely has no
+    /// entrypoint, and a caller that needs one has to say what it does without
+    /// it instead of panicking on a program that is merely a library.
+    pub fn main_function(&self) -> Option<&IrFunction> {
+        self.functions.get(self.main? as usize)
     }
 
     /// The static type of expression `id`, evaluated in `function`'s scope.

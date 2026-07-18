@@ -29,6 +29,9 @@ kira-hybrid-definition.workspace = true
 kira-hybrid-runtime.workspace = true
 kira-live.workspace = true
 kira-manifest.workspace = true
+# Manifest discovery: `kirac` walks up from the source file to the package that
+# governs it, which is what makes `kind = .Library` reach the frontend.
+kira-project.workspace = true
 # Not called from Rust: depending on the native runtime makes cargo build
 # `libkira_native_bridge.a` into the same profile directory as `kirac`, which is
 # where the native link step looks for it.

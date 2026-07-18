@@ -48,7 +48,7 @@ fn program_printing(values: &[f64]) -> kira_ir::IrProgram {
             body,
         }],
         types: Default::default(),
-        main: 0,
+        main: Some(0),
         exprs,
     }
 }

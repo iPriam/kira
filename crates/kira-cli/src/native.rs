@@ -118,6 +118,32 @@ pub fn build(
     Ok(kira_llvm_backend::build_native(program, &options)?)
 }
 
+/// Builds `program` into a native shared library.
+///
+/// The library counterpart of [`build`]: same object, no C `main`, and the
+/// shared library rather than the executable is the artifact. A library and a
+/// program never write to the same output path, so a directory that holds one
+/// cannot be mistaken for holding the other.
+pub fn build_library(
+    program: &IrProgram,
+    source: &Path,
+    emit_llvm_ir: bool,
+) -> Result<NativeArtifacts, NativeError> {
+    let artifacts =
+        Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
+    let options = NativeBuildOptions {
+        module_name: artifacts.stem.clone(),
+        object_path: artifacts.object(),
+        // A library has no entrypoint, so there is nothing to link an
+        // executable around.
+        executable_path: None,
+        shared_library_path: Some(artifacts.shared_library()),
+        ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
+        runtime_archive: runtime_archive()?,
+    };
+    Ok(kira_llvm_backend::build_native_library(program, &options)?)
+}
+
 /// Runs a built native executable, returning its exit code.
 ///
 /// The child inherits this process's streams, so a native run's output is

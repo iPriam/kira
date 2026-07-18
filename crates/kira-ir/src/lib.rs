@@ -58,9 +58,9 @@ mod tests {
 
     #[test]
     fn lowers_a_program_with_a_main() {
-        let ir = lower(&tiny_program()).expect("a runnable program");
+        let ir = lower(&tiny_program());
         assert_eq!(ir.functions.len(), 1);
-        assert_eq!(ir.main, 0);
+        assert_eq!(ir.main, Some(0));
         assert_eq!(ir.functions[0].name, "main");
         // print(1) then return: an Eval of a Print call, then a Return.
         assert!(matches!(ir.functions[0].body[0], IrStmt::Eval { .. }));
@@ -71,9 +71,15 @@ mod tests {
     }
 
     #[test]
-    fn a_program_without_main_does_not_lower() {
+    fn a_program_without_main_still_lowers_its_functions() {
+        // A library: no entrypoint, but every function is still compiled. The
+        // bodies are what a consumer calls.
         let mut program = tiny_program();
         program.main = None;
-        assert!(lower(&program).is_none());
+        let ir = lower(&program);
+        assert_eq!(ir.main, None);
+        assert!(ir.main_function().is_none());
+        assert_eq!(ir.functions.len(), 1);
+        assert_eq!(ir.functions[0].name, "main");
     }
 }

@@ -2,9 +2,14 @@
 //!
 //! Lowering is a mechanical, total pass: it copies the resolved HIR into the
 //! IR's own arena, translating builtin calls to [`IrCallee::Print`] and user
-//! calls to slot-indexed [`IrCallee::User`]. It runs only on a program that
-//! carries a valid `@Main`; otherwise there is nothing to run and lowering
-//! yields `None`.
+//! calls to slot-indexed [`IrCallee::User`].
+//!
+//! It carries the entrypoint across as an option rather than requiring one. A
+//! library has no `@Main` by definition and still has every function in it
+//! worth compiling, so "no entrypoint" is a property of the program the
+//! backends read, not a reason to lower nothing. Whether a missing entrypoint
+//! is an *error* was already decided upstream, by
+//! [`kira_semantics::BuildKind`].
 
 use kira_semantics_model::hir::{
     Callee, HirExpr, HirExprId, HirPlace, HirPlaceStep, HirProgram, HirStmt, HirStmtId,
@@ -12,13 +17,15 @@ use kira_semantics_model::hir::{
 
 use crate::ir::{IrCallee, IrExpr, IrExprId, IrFunction, IrPlace, IrPlaceStep, IrProgram, IrStmt};
 
-/// Lowers an analyzed program to IR, or returns `None` when it has no `@Main`.
-pub fn lower(program: &HirProgram) -> Option<IrProgram> {
-    let main = program.main?;
+/// Lowers an analyzed program to IR.
+///
+/// Total: every analyzed program lowers, entrypoint or not. `ir.main` is
+/// `None` for a library.
+pub fn lower(program: &HirProgram) -> IrProgram {
     let mut ir = IrProgram {
         functions: Vec::with_capacity(program.functions.len()),
         types: program.types.clone(),
-        main: main.0,
+        main: program.main.map(|main| main.0),
         exprs: la_arena::Arena::new(),
     };
     let mut lowerer = Lowerer {
@@ -31,7 +38,7 @@ pub fn lower(program: &HirProgram) -> Option<IrProgram> {
         .map(|function| lowerer.lower_function(function))
         .collect();
     ir.functions = functions;
-    Some(ir)
+    ir
 }
 
 struct Lowerer<'a> {

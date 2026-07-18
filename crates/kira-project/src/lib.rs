@@ -7,8 +7,9 @@ pub mod project;
 pub mod workspace;
 
 pub use package_discovery::{
-    DECLARATION_MANIFEST_FILE_NAME, ENTRYPOINT_REL_PATH, LEGACY_MANIFEST_FILE_NAME,
-    MANIFEST_FILE_NAME, MANIFEST_FILE_NAMES, PREFERRED_MANIFEST_FILE_NAME, REPO_MANIFEST_FILE_NAME,
+    DECLARATION_MANIFEST_FILE_NAME, DiscoveryError, ENTRYPOINT_REL_PATH, LEGACY_MANIFEST_FILE_NAME,
+    MANIFEST_FILE_NAME, MANIFEST_FILE_NAMES, Manifest, PREFERRED_MANIFEST_FILE_NAME,
+    REPO_MANIFEST_FILE_NAME, manifest_for,
 };
 pub use project::{
     CommandMode, Project, ResolvedPackageRoot, ResolvedProject, ResolvedTarget, TargetKind,

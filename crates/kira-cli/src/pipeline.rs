@@ -45,16 +45,19 @@ use crate::native;
 use crate::options::{CompileOptions, Device};
 use crate::wasm;
 
-/// Analyzes and lowers the source program to IR, or `None` when it does not
-/// type-check to a runnable program (no valid `@Main`).
+/// Analyzes and lowers the source program to IR.
 ///
 /// This query lives in the CLI (the embedder), not in `kira-ir`: the IR crate
 /// sits in the VM's dependency cone, and the portable core must stay
 /// salsa-free. It depends on the analyzer query, so all lexer/parser/semantic
 /// diagnostics accumulate under it and are gathered with
 /// `lowered::accumulated::<DiagnosticAccumulator>`.
+///
+/// Total, because lowering is: a library lowers to IR with `main: None`, and
+/// whether that is acceptable was already decided by the frontend from the
+/// package's [`kira_semantics::BuildKind`].
 #[salsa::tracked(returns(clone))]
-fn lowered(db: &dyn salsa::Database, source: SourceProgram) -> Option<IrProgram> {
+fn lowered(db: &dyn salsa::Database, source: SourceProgram) -> IrProgram {
     let program = kira_semantics::analyzed(db, source);
     kira_ir::lower(&program)
 }
@@ -96,7 +99,7 @@ pub fn run(args: &[String]) -> i32 {
         Ok(options) => options,
         Err(code) => return code,
     };
-    let ir = match verified_ir("run", &options.path) {
+    let ir = match runnable_ir("run", &options.path) {
         Ok(ir) => ir,
         Err(code) => return code,
     };
@@ -137,7 +140,7 @@ pub fn live(args: &[String]) -> i32 {
     // compile yields `None` rather than an error, so the session keeps the app
     // that is already running.
     let rebuild = || -> Result<Option<kira_live::Bundle>, crate::live::LiveError> {
-        match verified_ir("live", &options.path) {
+        match runnable_ir("live", &options.path) {
             Ok(ir) => {
                 crate::live::build_bundle(&ir, source, options.runner, options.backend).map(Some)
             }
@@ -208,10 +211,13 @@ pub fn build(args: &[String]) -> i32 {
         Ok(options) => options,
         Err(code) => return code,
     };
-    let ir = match verified_ir("build", &options.path) {
+    let ir = match verified_ir(&options.path) {
         Ok(ir) => ir,
         Err(code) => return code,
     };
+    // A library and a program are built by different paths on every backend:
+    // one produces a linkable artifact, the other something the OS can start.
+    let is_library = ir.main.is_none();
 
     if let Device::Web(device) = options.device {
         if let Err(code) = web_backend_is_built("build", options.backend, device) {
@@ -246,16 +252,23 @@ pub fn build(args: &[String]) -> i32 {
                 }
             }
         }
-        BackendMode::LlvmNative => match build_native(&ir, &options) {
-            Some(_) => {
-                println!("Successfully built");
-                EXIT_OK
+        BackendMode::LlvmNative => {
+            let built = if is_library {
+                build_native_library(&ir, &options)
+            } else {
+                build_native(&ir, &options)
+            };
+            match built {
+                Some(_) => {
+                    println!("Successfully built");
+                    EXIT_OK
+                }
+                None => {
+                    println!("Failed to build");
+                    EXIT_FAILURE
+                }
             }
-            None => {
-                println!("Failed to build");
-                EXIT_FAILURE
-            }
-        },
+        }
         BackendMode::Hybrid => match hybrid::build(
             &ir,
             std::path::Path::new(&options.path),
@@ -329,6 +342,24 @@ fn run_native(ir: &IrProgram, options: &CompileOptions) -> i32 {
     }
 }
 
+/// Builds a native shared library, reporting any backend failure.
+fn build_native_library(
+    ir: &IrProgram,
+    options: &CompileOptions,
+) -> Option<kira_llvm_backend::NativeArtifacts> {
+    match native::build_library(
+        ir,
+        std::path::Path::new(&options.path),
+        options.emit_llvm_ir,
+    ) {
+        Ok(artifacts) => Some(artifacts),
+        Err(error) => {
+            eprintln!("kirac: {error}");
+            None
+        }
+    }
+}
+
 /// Builds native artifacts, reporting any backend failure.
 fn build_native(
     ir: &IrProgram,
@@ -358,26 +389,67 @@ fn parse_options(verb: &str, args: &[String]) -> Result<CompileOptions, i32> {
 /// Compiles `path` and returns its IR, or the exit code to report.
 ///
 /// Diagnostics are rendered here, so callers only decide what to do with a
-/// program that is known good.
-fn verified_ir(verb: &str, path: &str) -> Result<IrProgram, i32> {
+/// program that is known good. The IR may be a library's — it carries no
+/// entrypoint then, and the caller decides whether that is usable.
+fn verified_ir(path: &str) -> Result<IrProgram, i32> {
     let compiled = compile(path)?;
     emit_diagnostics(&compiled.diagnostics, &compiled.sources);
     if has_errors(&compiled.diagnostics) {
         return Err(EXIT_FAILURE);
     }
-    compiled.ir.ok_or_else(|| {
-        // No IR without errors should be impossible, but never build or
-        // execute nothing.
-        eprintln!("kirac {verb}: program has nothing to execute");
-        EXIT_FAILURE
-    })
+    Ok(compiled.ir)
+}
+
+/// Compiles `path` and returns its IR, refusing a library by name.
+///
+/// The refusal for every verb that *starts* a program. A library has no
+/// entrypoint by construction, so there is nothing to start — said plainly,
+/// with the reason, rather than by failing somewhere further down where the
+/// missing entrypoint looks like a compiler fault.
+fn runnable_ir(verb: &str, path: &str) -> Result<IrProgram, i32> {
+    let ir = verified_ir(path)?;
+    if ir.main.is_none() {
+        eprintln!(
+            "kirac {verb}: cannot {verb} a library: a library has no `@Main` \
+             entrypoint, because it is entered by whatever consumes it\n\
+             note: `kirac build` compiles a library to an artifact a consumer links"
+        );
+        // stderr only, matching how `run` reports every other refusal: stdout
+        // is the program's, and a program that never started wrote nothing.
+        return Err(EXIT_FAILURE);
+    }
+    Ok(ir)
 }
 
 /// A compiled program plus everything needed to report on it.
 struct Compiled {
     sources: SourceMap,
     diagnostics: Vec<Diagnostic>,
-    ir: Option<IrProgram>,
+    ir: IrProgram,
+}
+
+/// What kind of thing the package containing `source` builds.
+///
+/// The manifest is discovered by walking up from the source file, which is what
+/// makes `kirac build lib/thing.kira` inside a library package build a library
+/// without a flag: the package already said so, and a flag that could disagree
+/// with it would be a second source of truth.
+///
+/// No manifest means an application — a bare `.kira` file handed to `kirac` is
+/// a program. A manifest that exists and cannot be read is an error, because
+/// building the wrong kind of artifact silently is worse than not building.
+fn build_kind_of(source: &std::path::Path) -> Result<kira_semantics::BuildKind, i32> {
+    match kira_project::manifest_for(source) {
+        Ok(Some(found)) => Ok(match found.kind() {
+            kira_manifest::PackageKind::Library => kira_semantics::BuildKind::Library,
+            kira_manifest::PackageKind::App => kira_semantics::BuildKind::Application,
+        }),
+        Ok(None) => Ok(kira_semantics::BuildKind::Application),
+        Err(error) => {
+            eprintln!("kirac: {error}");
+            Err(EXIT_FAILURE)
+        }
+    }
 }
 
 /// Reads and compiles `path` through the salsa frontend and IR lowering.
@@ -419,8 +491,10 @@ fn compile(path: &str) -> Result<Compiled, i32> {
         debug_assert_eq!(id, kira_semantics::module_source_id(index));
     }
 
+    let build_kind = build_kind_of(std::path::Path::new(path))?;
+
     let db = salsa::DatabaseImpl::new();
-    let source = SourceProgram::new(&db, text, path.to_owned(), modules);
+    let source = SourceProgram::new(&db, text, path.to_owned(), modules, build_kind);
     let ir = lowered(&db, source);
     let diagnostics = lowered::accumulated::<DiagnosticAccumulator>(&db, source)
         .into_iter()
@@ -449,36 +523,53 @@ mod tests {
     #[test]
     fn lowers_a_clean_program() {
         let db = salsa::DatabaseImpl::new();
-        let source = SourceProgram::new(
+        let source = SourceProgram::application(
             &db,
             "@Main function main() { print(1) return }".to_owned(),
             "test.kira".to_owned(),
             Vec::new(),
         );
-        let ir = lowered(&db, source).expect("a runnable program");
+        let ir = lowered(&db, source);
         assert_eq!(ir.functions.len(), 1);
-        assert_eq!(ir.main, 0);
+        assert_eq!(ir.main, Some(0));
     }
 
     #[test]
-    fn a_program_without_main_does_not_lower() {
+    fn an_application_without_main_still_reports_ksem011() {
+        let db = salsa::DatabaseImpl::new();
+        let source = SourceProgram::application(
+            &db,
+            "function f() { return }".to_owned(),
+            "t.kira".to_owned(),
+            Vec::new(),
+        );
+        // Lowering is total now, so the refusal is the diagnostic, not the
+        // absence of IR.
+        let diags = lowered::accumulated::<DiagnosticAccumulator>(&db, source);
+        assert!(diags.iter().any(|d| d.0.code == Some("KSEM011")));
+    }
+
+    #[test]
+    fn a_library_lowers_with_no_entrypoint_and_no_diagnostics() {
         let db = salsa::DatabaseImpl::new();
         let source = SourceProgram::new(
             &db,
             "function f() { return }".to_owned(),
             "t.kira".to_owned(),
             Vec::new(),
+            kira_semantics::BuildKind::Library,
         );
-        assert!(lowered(&db, source).is_none());
-        // The missing-main diagnostic still surfaces through the accumulator.
+        let ir = lowered(&db, source);
+        assert_eq!(ir.main, None);
+        assert_eq!(ir.functions.len(), 1);
         let diags = lowered::accumulated::<DiagnosticAccumulator>(&db, source);
-        assert!(diags.iter().any(|d| d.0.code == Some("KSEM011")));
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
     fn diagnostics_propagate_through_lowering() {
         let db = salsa::DatabaseImpl::new();
-        let source = SourceProgram::new(
+        let source = SourceProgram::application(
             &db,
             "@Main function main() { print(missing) return }".to_owned(),
             "t.kira".to_owned(),

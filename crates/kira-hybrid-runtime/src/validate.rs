@@ -15,6 +15,17 @@ use kira_runtime_abi::{BridgeValueTag, Execution, Ownership};
 
 use crate::error::HybridError;
 
+/// Names an entrypoint slot for a mismatch message.
+///
+/// A library's absent entrypoint reads as a phrase rather than a missing
+/// number, so the two halves disagreeing about being a library says so.
+fn describe_entry(entry: Option<u32>) -> String {
+    match entry {
+        Some(index) => format!("function {index}"),
+        None => "absent (a library)".to_owned(),
+    }
+}
+
 /// Proves `manifest` and `module` describe the same program.
 pub fn bundle(manifest: &HybridManifest, module: &Module) -> Result<(), HybridError> {
     if manifest.functions.len() != module.functions.len() {
@@ -26,8 +37,9 @@ pub fn bundle(manifest: &HybridManifest, module: &Module) -> Result<(), HybridEr
     }
     if manifest.entry != module.main {
         return Err(HybridError::Mismatch(format!(
-            "the manifest's entrypoint is function {} and the bytecode half's is {}",
-            manifest.entry, module.main,
+            "the manifest's entrypoint is {} and the bytecode half's is {}",
+            describe_entry(manifest.entry),
+            describe_entry(module.main),
         )));
     }
 
@@ -85,8 +97,13 @@ fn ownership(function: &HybridFunction) -> Result<(), HybridError> {
 }
 
 /// Proves the entrypoint is one this host can start.
+///
+/// A library has none to check. That is not a defect in the bundle: the two
+/// halves already agreed about it above, and `run` is what refuses to start it.
 fn entry(manifest: &HybridManifest) -> Result<(), HybridError> {
-    let entry = manifest.entry_function();
+    let Some(entry) = manifest.entry_function() else {
+        return Ok(());
+    };
     if !entry.params.is_empty() {
         return Err(HybridError::Mismatch(format!(
             "the entrypoint `{}` takes {} parameters; an entrypoint takes none",
@@ -118,7 +135,7 @@ mod tests {
             module_name: "demo".to_owned(),
             bytecode_path: "demo.kbc".to_owned(),
             native_library_path: "libdemo.dylib".to_owned(),
-            entry: 0,
+            entry: Some(0),
             functions: vec![
                 HybridFunction {
                     id: 0,
@@ -158,7 +175,7 @@ mod tests {
                     code: Vec::new(),
                 },
             ],
-            main: 0,
+            main: Some(0),
             strings: Vec::new(),
         }
     }

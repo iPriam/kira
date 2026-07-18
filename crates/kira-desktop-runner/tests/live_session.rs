@@ -28,7 +28,7 @@ const APP_OUTPUT: &str = "kira-live-e2e-marker";
 /// A module that prints [`APP_OUTPUT`] and returns.
 fn printing_module() -> Module {
     Module {
-        main: 0,
+        main: Some(0),
         strings: vec![APP_OUTPUT.to_owned()],
         functions: vec![FuncProto {
             name: "main".to_owned(),
@@ -265,7 +265,7 @@ fn a_session_whose_app_never_starts_is_not_ready() {
     // A module whose entry calls a function that does not exist: it decodes, so
     // it loads, and fails at link — after the bundle was served in full.
     let module = Module {
-        main: 0,
+        main: Some(0),
         strings: Vec::new(),
         functions: vec![FuncProto {
             name: "main".to_owned(),

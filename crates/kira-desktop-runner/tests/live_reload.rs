@@ -26,7 +26,7 @@ use kira_runtime_abi::Execution;
 /// A module that prints `text` and returns.
 fn printing_module(text: &str) -> Module {
     Module {
-        main: 0,
+        main: Some(0),
         strings: vec![text.to_owned()],
         functions: vec![FuncProto {
             name: "main".to_owned(),

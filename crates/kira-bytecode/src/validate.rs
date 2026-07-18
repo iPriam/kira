@@ -69,9 +69,14 @@ impl Module {
     /// Verifies every structural invariant the interpreter relies on.
     pub fn validate(&self) -> Result<(), ModuleValidateError> {
         let function_count = self.functions.len() as u32;
-        if self.main >= function_count {
+        // A library carries no entrypoint, so there is no index to range-check.
+        // Everything below still applies: a library's functions are validated
+        // exactly as an application's are.
+        if let Some(main) = self.main
+            && main >= function_count
+        {
             return Err(ModuleValidateError::MainOutOfRange {
-                main: self.main,
+                main,
                 function_count,
             });
         }
@@ -178,7 +183,7 @@ mod tests {
     fn module_of(functions: Vec<FuncProto>, main: u32, strings: Vec<String>) -> Module {
         Module {
             functions,
-            main,
+            main: Some(main),
             strings,
         }
     }
@@ -203,6 +208,30 @@ mod tests {
             vec!["hi".to_owned()],
         );
         assert_eq!(module.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_library_module_validates_with_no_entrypoint() {
+        let module = Module {
+            functions: vec![func("add", 2, 2, vec![Instruction::ReturnVoid])],
+            main: None,
+            strings: vec![],
+        };
+        assert_eq!(module.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_library_module_still_validates_its_function_bodies() {
+        // No entrypoint relaxes the entrypoint check and nothing else.
+        let module = Module {
+            functions: vec![func("add", 0, 0, vec![])],
+            main: None,
+            strings: vec![],
+        };
+        assert!(matches!(
+            module.validate(),
+            Err(ModuleValidateError::EmptyCode { .. })
+        ));
     }
 
     #[test]

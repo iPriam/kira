@@ -11,13 +11,26 @@ use kira_runtime_abi::Execution;
 /// The magic bytes that open a serialized module: "KBC1".
 pub const MAGIC: [u8; 4] = *b"KBC1";
 
+/// The entrypoint slot's value when a module has no entrypoint (a library).
+///
+/// A sentinel in the existing `u32` rather than a new field, which keeps the
+/// format append-only in the strictest sense — the byte layout does not move at
+/// all. `u32::MAX` is safe to claim because [`crate::validate`] has always
+/// rejected an entrypoint index at or past the function count, so no module
+/// that ever decoded cleanly carries this value, and a decoder from before
+/// libraries existed rejects a library loudly instead of calling function
+/// 4294967295.
+pub const NO_ENTRYPOINT: u32 = u32::MAX;
+
 /// A compiled program: a set of functions plus a shared string pool.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Module {
     /// The functions; [`Module::main`] indexes into this list.
     pub functions: Vec<FuncProto>,
-    /// Index of the entrypoint function.
-    pub main: u32,
+    /// Index of the entrypoint function, or `None` for a library.
+    ///
+    /// Serialized as [`NO_ENTRYPOINT`] when absent.
+    pub main: Option<u32>,
     /// Deduplicated string constants referenced by `ConstStr`.
     pub strings: Vec<String>,
 }
@@ -81,7 +94,7 @@ impl Module {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&MAGIC);
-        out.extend_from_slice(&self.main.to_le_bytes());
+        out.extend_from_slice(&self.main.unwrap_or(NO_ENTRYPOINT).to_le_bytes());
         write_u32(&mut out, self.strings.len() as u32);
         for string in &self.strings {
             write_bytes(&mut out, string.as_bytes());
@@ -104,7 +117,10 @@ impl Module {
         if reader.take(4)? != MAGIC {
             return Err(ModuleDecodeError::BadMagic);
         }
-        let main = reader.read_u32()?;
+        let main = match reader.read_u32()? {
+            NO_ENTRYPOINT => None,
+            index => Some(index),
+        };
         let string_count = reader.read_u32()?;
         let mut strings = Vec::with_capacity(string_count as usize);
         for _ in 0..string_count {
@@ -192,7 +208,7 @@ mod tests {
     #[test]
     fn module_round_trips_through_bytes() {
         let module = Module {
-            main: 1,
+            main: Some(1),
             strings: vec!["hello".to_owned(), "world".to_owned()],
             functions: vec![
                 FuncProto {
@@ -224,6 +240,67 @@ mod tests {
         assert_eq!(
             Module::from_bytes(b"XXXX").unwrap_err(),
             ModuleDecodeError::BadMagic
+        );
+    }
+
+    /// A library module: no entrypoint, and the functions a consumer calls.
+    fn library_module() -> Module {
+        Module {
+            main: None,
+            strings: Vec::new(),
+            functions: vec![FuncProto {
+                name: "add".to_owned(),
+                param_count: 2,
+                local_count: 2,
+                execution: Execution::Runtime,
+                code: vec![Instruction::LoadLocal(0), Instruction::Return],
+            }],
+        }
+    }
+
+    #[test]
+    fn a_library_module_round_trips_with_no_entrypoint() {
+        let module = library_module();
+        let bytes = module.to_bytes();
+        let decoded = Module::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded, module);
+        assert_eq!(decoded.main, None);
+    }
+
+    #[test]
+    fn the_no_entrypoint_sentinel_is_pinned_in_the_bytes() {
+        // The wire value is part of the format, so it is spelled out here
+        // rather than only round-tripped: a change to it is a format change and
+        // must fail this test.
+        let bytes = library_module().to_bytes();
+        assert_eq!(&bytes[0..4], &MAGIC);
+        assert_eq!(&bytes[4..8], &[0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(NO_ENTRYPOINT, u32::MAX);
+    }
+
+    #[test]
+    fn an_entrypoint_index_is_never_the_sentinel() {
+        // The two states are distinguishable in both directions: a real index
+        // decodes as `Some`, never as a library.
+        let bytes = Module {
+            main: Some(0),
+            ..library_module()
+        }
+        .to_bytes();
+        assert_eq!(&bytes[4..8], &[0, 0, 0, 0]);
+        assert_eq!(Module::from_bytes(&bytes).unwrap().main, Some(0));
+    }
+
+    #[test]
+    fn a_truncated_library_module_is_a_typed_error() {
+        let bytes = library_module().to_bytes();
+        for cut in 0..bytes.len() {
+            // Every prefix is rejected, never panicked on.
+            let _ = Module::from_bytes(&bytes[..cut]);
+        }
+        assert_eq!(
+            Module::from_bytes(&bytes[..6]).unwrap_err(),
+            ModuleDecodeError::Truncated
         );
     }
 }

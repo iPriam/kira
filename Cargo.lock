@@ -258,6 +258,7 @@ dependencies = [
  "kira-manifest",
  "kira-native-bridge",
  "kira-program-graph",
+ "kira-project",
  "kira-runtime-abi",
  "kira-semantics",
  "kira-semantics-model",
@@ -433,6 +434,9 @@ version = "0.1.0"
 [[package]]
 name = "kira-manifest"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "kira-msl-backend"
@@ -482,6 +486,7 @@ dependencies = [
  "kira-core",
  "kira-diagnostics",
  "kira-manifest",
+ "thiserror",
 ]
 
 [[package]]

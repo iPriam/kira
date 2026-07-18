@@ -7,3 +7,8 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# The declaration loader returns a typed error, which is this workspace's rule
+# for any fallible function crossing a crate boundary.
+thiserror.workspace = true

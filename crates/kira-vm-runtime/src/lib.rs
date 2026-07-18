@@ -96,7 +96,7 @@ mod tests {
         shout.execution = kira_runtime_abi::Execution::Native;
         let module = Module {
             functions: vec![main, shout],
-            main: 0,
+            main: Some(0),
             strings: vec!["hi".to_owned()],
         };
 
@@ -124,7 +124,7 @@ mod tests {
         );
         let module = Module {
             functions: vec![func("main", 0, 0, vec![I::ReturnVoid]), greet],
-            main: 0,
+            main: Some(0),
             strings: vec!["hi, ".to_owned()],
         };
 
@@ -154,7 +154,7 @@ mod tests {
                 func("main", 0, 0, vec![I::ReturnVoid]),
                 func("takes_one", 1, 1, vec![I::ReturnVoid]),
             ],
-            main: 0,
+            main: Some(0),
             strings: Vec::new(),
         };
         let program = Program::load(module).expect("a valid module");
@@ -182,7 +182,7 @@ mod tests {
         native.execution = kira_runtime_abi::Execution::Native;
         let module = Module {
             functions: vec![main, native],
-            main: 0,
+            main: Some(0),
             strings: vec![],
         };
         let mut host = CapturingHost::new();
@@ -202,7 +202,7 @@ mod tests {
         native.execution = kira_runtime_abi::Execution::Native;
         let module = Module {
             functions: vec![main, native],
-            main: 0,
+            main: Some(0),
             strings: vec![],
         };
         let mut host = CapturingHost::new();
@@ -239,7 +239,7 @@ mod tests {
         );
         let module = Module {
             functions: vec![main],
-            main: 0,
+            main: Some(0),
             strings: vec![],
         };
         let (lines, outcome) = run(&module);
@@ -282,7 +282,7 @@ mod tests {
         );
         let module = Module {
             functions: vec![main],
-            main: 0,
+            main: Some(0),
             strings: vec![],
         };
         let (lines, outcome) = run(&module);
@@ -325,7 +325,7 @@ mod tests {
         );
         Module {
             functions: vec![main, fib],
-            main: 0,
+            main: Some(0),
             strings: vec![],
         }
     }
@@ -359,7 +359,7 @@ mod tests {
         );
         let module = Module {
             functions: vec![main],
-            main: 0,
+            main: Some(0),
             strings: vec!["foo".to_owned(), "bar".to_owned()],
         };
         let (lines, outcome) = run(&module);
@@ -388,7 +388,7 @@ mod tests {
         );
         let module = Module {
             functions: vec![main],
-            main: 0,
+            main: Some(0),
             strings: vec![],
         };
         let mut host = CapturingHost::new();
@@ -404,37 +404,37 @@ mod tests {
             // Empty code.
             Module {
                 functions: vec![func("main", 0, 0, vec![])],
-                main: 0,
+                main: Some(0),
                 strings: vec![],
             },
             // Falls off the end (not return-terminated).
             Module {
                 functions: vec![func("main", 0, 0, vec![I::ConstInt(1)])],
-                main: 0,
+                main: Some(0),
                 strings: vec![],
             },
             // ConstStr into an empty pool.
             Module {
                 functions: vec![func("main", 0, 0, vec![I::ConstStr(3), I::ReturnVoid])],
-                main: 0,
+                main: Some(0),
                 strings: vec![],
             },
             // LoadLocal beyond local_count.
             Module {
                 functions: vec![func("main", 0, 1, vec![I::LoadLocal(9), I::ReturnVoid])],
-                main: 0,
+                main: Some(0),
                 strings: vec![],
             },
             // More parameters than locals (fill_params would underflow slots).
             Module {
                 functions: vec![func("main", 2, 0, vec![I::ReturnVoid])],
-                main: 0,
+                main: Some(0),
                 strings: vec![],
             },
             // Entrypoint out of range.
             Module {
                 functions: vec![func("main", 0, 0, vec![I::ReturnVoid])],
-                main: 7,
+                main: Some(7),
                 strings: vec![],
             },
         ];
@@ -468,7 +468,7 @@ mod tests {
         );
         let module = Module {
             functions: vec![main],
-            main: 0,
+            main: Some(0),
             strings: vec!["a".to_owned(), "bb".to_owned()],
         };
         let (lines, outcome) = run(&module);

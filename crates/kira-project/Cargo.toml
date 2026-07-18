@@ -12,3 +12,6 @@ workspace = true
 kira-core.workspace = true
 kira-diagnostics.workspace = true
 kira-manifest.workspace = true
+# Manifest discovery returns a typed error, this workspace's rule for any
+# fallible function crossing a crate boundary.
+thiserror.workspace = true

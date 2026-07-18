@@ -67,10 +67,14 @@ fn lower_modules(source: &str, modules: &[(&str, &str)]) -> kira_ir::IrProgram {
             text: text.to_owned(),
         })
         .collect();
-    let program =
-        kira_semantics::SourceProgram::new(&db, source.to_owned(), "test.kira".to_owned(), modules);
+    let program = kira_semantics::SourceProgram::application(
+        &db,
+        source.to_owned(),
+        "test.kira".to_owned(),
+        modules,
+    );
     let analyzed = kira_semantics::analyzed(&db, program);
-    kira_ir::lower(&analyzed).expect("a runnable program")
+    kira_ir::lower(&analyzed)
 }
 
 /// Runs `source` on the VM, returning its output lines.
@@ -330,6 +334,7 @@ mod control_flow;
 mod enums;
 mod floats;
 mod imports;
+mod libraries;
 mod matches;
 mod memory;
 mod ownership;

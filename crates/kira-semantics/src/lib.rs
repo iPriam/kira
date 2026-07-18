@@ -23,6 +23,7 @@
 mod aliases;
 mod analyze;
 mod arrays;
+mod build_kind;
 mod classes;
 mod closures;
 mod decl;
@@ -36,6 +37,7 @@ mod typeck;
 mod types;
 
 pub use analyze::{Analysis, analyze};
+pub use build_kind::BuildKind;
 pub use imports::{FileImports, ImportTable};
 
 use kira_core::Interner;
@@ -94,12 +96,35 @@ pub struct SourceProgram {
     /// the tree, so a module may name a struct declared in a module it imports.
     #[returns(clone)]
     pub modules: Vec<ModuleSource>,
+    /// Whether this program is being analyzed as an application or a library.
+    ///
+    /// A salsa *input* rather than a parameter threaded through the queries:
+    /// changing it must invalidate analysis exactly as changing the text does,
+    /// and an input field is what makes that automatic. The caller that read
+    /// the manifest sets it; a caller with no manifest leaves it at
+    /// [`BuildKind::Application`].
+    pub build_kind: BuildKind,
 }
 
 impl SourceProgram {
-    /// Creates a single-file program: an entry file that imports nothing.
+    /// Creates a single-file application: an entry file that imports nothing.
     pub fn single(db: &dyn salsa::Database, text: String, path: String) -> Self {
-        Self::new(db, text, path, Vec::new())
+        Self::new(db, text, path, Vec::new(), BuildKind::Application)
+    }
+
+    /// Creates a program from an entry file and its modules, analyzed as an
+    /// application.
+    ///
+    /// The overwhelmingly common case, and the one every caller with no
+    /// manifest in hand wants; a library caller spells the kind out with
+    /// [`SourceProgram::new`].
+    pub fn application(
+        db: &dyn salsa::Database,
+        text: String,
+        path: String,
+        modules: Vec<ModuleSource>,
+    ) -> Self {
+        Self::new(db, text, path, modules, BuildKind::Application)
     }
 }
 
@@ -159,7 +184,12 @@ pub fn analyzed(db: &dyn salsa::Database, source: SourceProgram) -> HirProgram {
         .enumerate()
         .map(|(index, module)| (module.module.clone(), module_source_id(index)))
         .collect();
-    let analysis = analyze(&parsed.tree, &parsed.interner, &known);
+    let analysis = analyze(
+        &parsed.tree,
+        &parsed.interner,
+        &known,
+        *source.build_kind(db),
+    );
     for diagnostic in analysis.diagnostics {
         DiagnosticAccumulator(diagnostic).accumulate(db);
     }

@@ -41,7 +41,7 @@ mod tests {
                 body,
             }],
             types: Default::default(),
-            main: 0,
+            main: Some(0),
             exprs,
         }
     }

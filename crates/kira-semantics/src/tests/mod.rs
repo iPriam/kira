@@ -8,6 +8,7 @@ mod classes;
 mod closures;
 mod enums;
 mod imports;
+mod libraries;
 mod matches;
 mod operators;
 mod widths;
@@ -34,10 +35,35 @@ fn module_diagnostics(text: &str, modules: &[(&str, &str)]) -> Vec<Diagnostic> {
             text: text.to_owned(),
         })
         .collect();
-    let source = SourceProgram::new(&db, text.to_owned(), "test.kira".to_owned(), modules);
+    let source = SourceProgram::application(&db, text.to_owned(), "test.kira".to_owned(), modules);
     analyzed::accumulated::<DiagnosticAccumulator>(&db, source)
         .into_iter()
         .map(|accumulator| accumulator.0.clone())
+        .collect()
+}
+
+/// The diagnostics of a program analyzed as a library rather than an
+/// application.
+fn library_diagnostics(text: &str) -> Vec<Diagnostic> {
+    let db = salsa::DatabaseImpl::new();
+    let source = SourceProgram::new(
+        &db,
+        text.to_owned(),
+        "test.kira".to_owned(),
+        Vec::new(),
+        BuildKind::Library,
+    );
+    analyzed::accumulated::<DiagnosticAccumulator>(&db, source)
+        .into_iter()
+        .map(|accumulator| accumulator.0.clone())
+        .collect()
+}
+
+/// The diagnostic codes of a library, in order.
+fn library_codes(text: &str) -> Vec<&'static str> {
+    library_diagnostics(text)
+        .into_iter()
+        .filter_map(|diagnostic| diagnostic.code)
         .collect()
 }
 
@@ -515,7 +541,7 @@ fn a_method_call_does_not_consume_its_receiver() {
 #[test]
 fn analyzed_program_records_types_and_main() {
     let db = salsa::DatabaseImpl::new();
-    let source = SourceProgram::new(
+    let source = SourceProgram::application(
         &db,
         "@Main function main() { let x = 3 print(x) return }".to_owned(),
         "test.kira".to_owned(),

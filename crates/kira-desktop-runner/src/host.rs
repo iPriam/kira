@@ -320,7 +320,7 @@ mod tests {
     /// A module that prints one string and returns.
     fn printing_module() -> Module {
         Module {
-            main: 0,
+            main: Some(0),
             strings: vec!["from the bundle".to_owned()],
             functions: vec![FuncProto {
                 name: "main".to_owned(),
@@ -665,7 +665,7 @@ mod tests {
         let dir = TempDir::new("bad-link");
         let mut host = DesktopHost::new(dir.0.clone());
         let module = Module {
-            main: 0,
+            main: Some(0),
             strings: Vec::new(),
             functions: vec![FuncProto {
                 name: "main".to_owned(),

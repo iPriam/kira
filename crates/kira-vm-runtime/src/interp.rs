@@ -55,7 +55,8 @@ fn run_entry(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOutc
         stack: Vec::new(),
         steps: Vec::new(),
     };
-    let result = vm.enter(module, module.main, &[])?;
+    let main = module.main.ok_or(VmError::NoEntrypoint)?;
+    let result = vm.enter(module, main, &[])?;
     // The program's result is no longer referenced by anything; drop it so
     // heap accounting reflects a fully reclaimed program.
     vm.heap.drop_value(result);

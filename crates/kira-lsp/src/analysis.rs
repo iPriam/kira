@@ -53,7 +53,12 @@ pub const DOCUMENT_SOURCE: SourceId = FILE_SOURCE_ID;
 pub fn analyze(path: &str, text: &str) -> Analysis {
     let modules = kira_program_graph::load_modules(std::path::Path::new(path), text);
     let db = salsa::DatabaseImpl::new();
-    let source = SourceProgram::new(&db, text.to_owned(), path.to_owned(), modules);
+    // Analyzed as an application: the server sees one document and no manifest,
+    // and the alternative default would silence the missing-`@Main` error for
+    // every program in the editor. A library author sees one spurious `KSEM011`
+    // until the server learns manifest discovery, which is the smaller wrong
+    // answer of the two.
+    let source = SourceProgram::application(&db, text.to_owned(), path.to_owned(), modules);
     let _ = kira_semantics::analyzed(&db, source);
     let diagnostics = kira_semantics::analyzed::accumulated::<DiagnosticAccumulator>(&db, source)
         .into_iter()

@@ -177,6 +177,7 @@ mod control_flow;
 mod enums;
 mod examples;
 mod imports;
+mod libraries;
 mod logic;
 mod matches;
 mod ownership;

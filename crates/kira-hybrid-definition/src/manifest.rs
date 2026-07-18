@@ -27,6 +27,15 @@ use kira_runtime_abi::{BridgeValueTag, Execution, Ownership};
 /// The magic bytes that open a serialized manifest: "KHM1".
 pub const MAGIC: [u8; 4] = *b"KHM1";
 
+/// The entrypoint slot's value when a hybrid module has no entrypoint (a
+/// library).
+///
+/// The same sentinel discipline as `kira_bytecode`'s `NO_ENTRYPOINT`,
+/// for the same reason: the byte layout does not move, and decoding has always
+/// rejected an entry index at or past the function count, so no manifest that
+/// ever decoded cleanly carries this value.
+pub const NO_ENTRYPOINT: u32 = u32::MAX;
+
 /// One parameter's type and how it takes its argument.
 ///
 /// Within one engine the borrow checker settles ownership at compile time and
@@ -60,8 +69,11 @@ pub struct HybridManifest {
     pub bytecode_path: String,
     /// Path to the shared library the native half lives in.
     pub native_library_path: String,
-    /// Index of the entrypoint within [`HybridManifest::functions`].
-    pub entry: u32,
+    /// Index of the entrypoint within [`HybridManifest::functions`], or `None`
+    /// for a library.
+    ///
+    /// Serialized as [`NO_ENTRYPOINT`] when absent.
+    pub entry: Option<u32>,
     /// Every function in the program, in the program's own function order.
     ///
     /// The order matches the bytecode module's function table, so an id is one
@@ -127,11 +139,13 @@ pub enum ManifestDecodeError {
 }
 
 impl HybridManifest {
-    /// The entrypoint function.
-    pub fn entry_function(&self) -> &HybridFunction {
-        // Decoding rejects an out-of-range entry, and every constructor here
-        // goes through it, so this index is always live.
-        &self.functions[self.entry as usize]
+    /// The entrypoint function, or `None` for a library.
+    ///
+    /// Decoding rejects an out-of-range entry, so a `Some` entry always names a
+    /// live row; the option here is a library's genuine absence of one, not a
+    /// bounds concern.
+    pub fn entry_function(&self) -> Option<&HybridFunction> {
+        self.functions.get(self.entry? as usize)
     }
 
     /// Serializes the manifest to its byte format.
@@ -141,7 +155,7 @@ impl HybridManifest {
         write_string(&mut out, &self.module_name);
         write_string(&mut out, &self.bytecode_path);
         write_string(&mut out, &self.native_library_path);
-        out.extend_from_slice(&self.entry.to_le_bytes());
+        out.extend_from_slice(&self.entry.unwrap_or(NO_ENTRYPOINT).to_le_bytes());
         write_u32(&mut out, self.functions.len() as u32);
         for function in &self.functions {
             out.extend_from_slice(&function.id.to_le_bytes());
@@ -205,9 +219,17 @@ impl HybridManifest {
             });
         }
 
-        if entry >= count {
-            return Err(ManifestDecodeError::EntryOutOfRange { entry, count });
-        }
+        // A library carries no entrypoint, so there is no index to bound.
+        let entry = match entry {
+            NO_ENTRYPOINT => None,
+            index if index >= count => {
+                return Err(ManifestDecodeError::EntryOutOfRange {
+                    entry: index,
+                    count,
+                });
+            }
+            index => Some(index),
+        };
         Ok(HybridManifest {
             module_name,
             bytecode_path,
@@ -274,7 +296,7 @@ mod tests {
             module_name: "demo".to_owned(),
             bytecode_path: ".kira-build/demo.kbc".to_owned(),
             native_library_path: ".kira-build/libdemo.dylib".to_owned(),
-            entry: 0,
+            entry: Some(0),
             functions: vec![
                 HybridFunction {
                     id: 0,
@@ -307,7 +329,10 @@ mod tests {
         let original = manifest();
         let decoded = HybridManifest::from_bytes(&original.to_bytes()).expect("decodes");
         assert_eq!(decoded, original);
-        assert_eq!(decoded.entry_function().name, "main");
+        assert_eq!(
+            decoded.entry_function().expect("an entrypoint").name,
+            "main"
+        );
     }
 
     #[test]
@@ -360,9 +385,35 @@ mod tests {
     }
 
     #[test]
+    fn a_library_manifest_round_trips_with_no_entrypoint() {
+        let mut library = manifest();
+        library.entry = None;
+        let decoded = HybridManifest::from_bytes(&library.to_bytes()).expect("a valid manifest");
+        assert_eq!(decoded, library);
+        assert_eq!(decoded.entry, None);
+        assert!(decoded.entry_function().is_none());
+    }
+
+    #[test]
+    fn the_no_entrypoint_sentinel_is_pinned_in_the_bytes() {
+        // The wire value is part of the format; a change to it must fail here
+        // rather than only somewhere that happens to round-trip.
+        let mut library = manifest();
+        library.entry = None;
+        let bytes = library.to_bytes();
+        let at = bytes
+            .windows(4)
+            .position(|window| window == [0xff, 0xff, 0xff, 0xff])
+            .expect("the sentinel appears in the encoding");
+        assert_eq!(NO_ENTRYPOINT, u32::MAX);
+        // It sits where the entry field is: right after the three strings.
+        assert!(at > 4, "the sentinel follows the magic and the paths");
+    }
+
+    #[test]
     fn an_entrypoint_naming_no_function_is_rejected() {
         let mut broken = manifest();
-        broken.entry = 7;
+        broken.entry = Some(7);
         assert_eq!(
             HybridManifest::from_bytes(&broken.to_bytes()),
             Err(ManifestDecodeError::EntryOutOfRange { entry: 7, count: 2 })

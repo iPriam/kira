@@ -65,6 +65,15 @@ pub(crate) enum ModuleKind {
     /// bodies, each also gets a trampoline the host can call, and there is no
     /// `main` — the host is the program.
     HybridLibrary,
+    /// A whole Kira library: every function is native, exactly as in an
+    /// [`ModuleKind::Executable`], and no C `main` is emitted because a library
+    /// is entered by its consumer rather than started by the operating system.
+    ///
+    /// No trampolines yet either. Which functions a consumer may call, and
+    /// under what symbol, is what `@Export` decides, and that is a later step;
+    /// a library today is a linkable artifact carrying every function's code
+    /// and no entry point.
+    Library,
 }
 
 /// An LLVM module holding a lowered Kira program.
@@ -88,6 +97,16 @@ impl Module {
     pub(crate) fn build(program: &IrProgram, module_name: &str) -> Result<Self, LlvmError> {
         let engines = vec![Execution::Native; program.functions.len()];
         Self::lower(program, module_name, ModuleKind::Executable, engines)
+    }
+
+    /// Lowers a whole Kira library into an LLVM module with no entry point.
+    ///
+    /// Every function is native, exactly as in [`Module::build`]: the two
+    /// differ only in whether a C `main` is emitted, which keeps a library and
+    /// a program compiling their shared code through one path.
+    pub(crate) fn build_library(program: &IrProgram, module_name: &str) -> Result<Self, LlvmError> {
+        let engines = vec![Execution::Native; program.functions.len()];
+        Self::lower(program, module_name, ModuleKind::Library, engines)
     }
 
     /// Lowers the native half of a hybrid program into a shared library.
@@ -359,6 +378,11 @@ impl<'a> Codegen<'a> {
         match self.kind {
             // A whole program is entered through C `main`.
             ModuleKind::Executable => self.lower_entry_point(),
+            // A library is entered by its consumer, so nothing starts it here.
+            // Emitting a C `main` would make the artifact an executable that
+            // happens to be a library, which is exactly the confusion the two
+            // kinds exist to prevent.
+            ModuleKind::Library => Ok(()),
             // A hybrid library is entered by its host, one call at a time.
             ModuleKind::HybridLibrary => {
                 for (index, function) in program.functions.iter().enumerate() {

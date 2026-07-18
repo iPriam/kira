@@ -350,3 +350,143 @@ fn a_siblings_import_does_not_carry_into_a_module() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("KSEM027"), "{stderr}");
 }
+
+// ---------------------------------------------------------------------------
+// Library packages
+//
+// `kind = .Library` in `package.kira` is what makes a package a library, and
+// these prove the three things that follow from it end to end, through the real
+// binary: a library with no `@Main` checks clean, running one is refused by
+// name, and building one produces an artifact on each backend the CI machine
+// has.
+// ---------------------------------------------------------------------------
+
+/// Writes a package directory with a `package.kira` and one source file, and
+/// returns the source path.
+fn write_package(kind: &str, source: &str) -> PathBuf {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let directory = std::env::temp_dir().join(format!("kirac_e2e_pkg_{pid}_{unique}"));
+    std::fs::create_dir_all(&directory).expect("temp dir");
+    std::fs::write(
+        directory.join("package.kira"),
+        format!(
+            "Package uifoundation {{\n    let version = \"0.1.0\"\n    let kind = {kind}\n}}\n"
+        ),
+    )
+    .expect("write package.kira");
+    let path = directory.join("uifoundation.kira");
+    std::fs::write(&path, source).expect("write source");
+    path
+}
+
+/// A library with no entrypoint: the thing that could not be written before.
+const LIBRARY_SOURCE: &str = "function add(a: Int, b: Int) -> Int { return a + b }\n\
+     function greeting(name: String) -> String { return \"hello \" + name }";
+
+#[test]
+fn a_library_without_main_checks_clean() {
+    let path = write_package(".Library", LIBRARY_SOURCE);
+    let output = kirac(&["check", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        !stderr.contains("KSEM011"),
+        "a library needs no `@Main`: {stderr}"
+    );
+}
+
+#[test]
+fn the_same_source_in_an_app_package_is_still_ksem011() {
+    // The exemption comes from the manifest and nowhere else. Same bytes, same
+    // command, different `kind` — and the entrypoint requirement comes back.
+    let path = write_package(".App", LIBRARY_SOURCE);
+    let output = kirac(&["check", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("KSEM011"), "{stderr}");
+}
+
+#[test]
+fn a_library_declaring_main_is_refused() {
+    let path = write_package(".Library", "@Main function main() { print(1) return }");
+    let output = kirac(&["check", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("KSEM158"), "{stderr}");
+}
+
+#[test]
+fn running_a_library_is_refused_by_name_with_a_reason() {
+    let path = write_package(".Library", LIBRARY_SOURCE);
+    let output = kirac(&["run", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot run a library"), "{stderr}");
+    // The reason, not just the refusal: a user who is told "no" and not "why"
+    // has to guess.
+    assert!(stderr.contains("no `@Main` entrypoint"), "{stderr}");
+}
+
+#[test]
+fn a_library_builds_on_the_vm_backend() {
+    // The VM backend is the one CI has, so this is the artifact proof that runs
+    // everywhere. It compiles to a real KBC1 module with no entrypoint.
+    let path = write_package(".Library", LIBRARY_SOURCE);
+    let output = kirac(&["build", "--backend", "vm", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("Successfully built"),
+        "{:?}",
+        output.stdout
+    );
+}
+
+#[test]
+fn a_library_cannot_be_built_for_the_web_and_says_why() {
+    // The recorded wasm refusal: a library artifact for a JS host needs a
+    // string/allocator contract across the module boundary that is undesigned.
+    let path = write_package(".Library", LIBRARY_SOURCE);
+    let output = kirac(&[
+        "build",
+        "--backend",
+        "llvm",
+        "--device",
+        "wasm32",
+        path.to_str().unwrap(),
+    ]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("a library cannot be built as a wasm module yet"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_package_with_no_manifest_is_still_an_application() {
+    // The default has to hold: a bare `.kira` file is a program, so a missing
+    // `@Main` is still an error with no manifest anywhere above it.
+    let output = check_source("function add(a: Int, b: Int) -> Int { return a + b }");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("KSEM011"), "{stderr}");
+}
+
+#[test]
+fn a_malformed_package_manifest_is_reported_not_ignored() {
+    let path = write_package(".Plugin", LIBRARY_SOURCE);
+    let output = kirac(&["check", path.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("is not a package kind"), "{stderr}");
+}
