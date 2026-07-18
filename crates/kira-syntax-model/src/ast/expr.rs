@@ -1,0 +1,272 @@
+//! Expressions, their field-initializer helper, and the operator enums.
+
+use super::ExprId;
+use crate::ownership::OwnershipOp;
+use kira_core::Symbol;
+use kira_source::Span;
+
+/// An expression.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Expr {
+    /// An integer literal.
+    Int {
+        /// The parsed value.
+        value: i64,
+        /// Span of the literal.
+        span: Span,
+    },
+    /// A floating-point literal.
+    Float {
+        /// The parsed value.
+        value: f64,
+        /// Span of the literal.
+        span: Span,
+    },
+    /// A boolean literal.
+    Bool {
+        /// The parsed value.
+        value: bool,
+        /// Span of the literal.
+        span: Span,
+    },
+    /// A string literal (decoded contents, escapes resolved).
+    Str {
+        /// The decoded text.
+        value: String,
+        /// Span of the literal including quotes.
+        span: Span,
+    },
+    /// A reference to a name (variable, parameter, or function).
+    Name {
+        /// The referenced symbol.
+        symbol: Symbol,
+        /// Span of the reference.
+        span: Span,
+    },
+    /// A unary operation.
+    Unary {
+        /// The operator.
+        op: UnaryOp,
+        /// The operand.
+        operand: ExprId,
+        /// Span covering operator and operand.
+        span: Span,
+    },
+    /// A binary operation.
+    Binary {
+        /// The operator.
+        op: BinaryOp,
+        /// Left-hand operand.
+        lhs: ExprId,
+        /// Right-hand operand.
+        rhs: ExprId,
+        /// Span covering both operands.
+        span: Span,
+    },
+    /// A call to a named function (or the `print` builtin).
+    Call {
+        /// The callee name.
+        callee: Symbol,
+        /// Span of the callee name.
+        callee_span: Span,
+        /// The argument expressions, in order.
+        args: Vec<ExprId>,
+        /// Span covering the whole call.
+        span: Span,
+    },
+    /// A struct literal (`Point { x = 1, y = 2 }`).
+    StructLit {
+        /// The struct's name.
+        name: Symbol,
+        /// Span of the name.
+        name_span: Span,
+        /// The written field initializers, in source order.
+        fields: Vec<FieldInit>,
+        /// Span covering the whole literal.
+        span: Span,
+    },
+    /// A method call (`p.sum()`).
+    MethodCall {
+        /// The expression the method is called on.
+        receiver: ExprId,
+        /// The method's name.
+        method: Symbol,
+        /// Span of the method name.
+        method_span: Span,
+        /// The argument expressions, in order, not counting the receiver.
+        args: Vec<ExprId>,
+        /// Span covering the whole call.
+        span: Span,
+    },
+    /// A field read (`p.x`).
+    Field {
+        /// The expression the field is read from.
+        base: ExprId,
+        /// The field's name.
+        field: Symbol,
+        /// Span of the field name.
+        field_span: Span,
+        /// Span covering base and field.
+        span: Span,
+    },
+    /// An array literal (`[1, 2, 3]`, `[]`).
+    ///
+    /// Commas are *optional* separators: `[1 2 3]` and one element per line are
+    /// both legal, so the parser ends an element where an element ends rather
+    /// than at a comma.
+    ArrayLit {
+        /// The written elements, in order.
+        elements: Vec<ExprId>,
+        /// Span covering the brackets and their contents.
+        span: Span,
+    },
+    /// An index read (`xs[0]`).
+    Index {
+        /// The indexed expression.
+        base: ExprId,
+        /// The index expression.
+        index: ExprId,
+        /// Span covering base and brackets.
+        span: Span,
+    },
+    /// A leading-dot member (`.Green`, `.Ok(12)`).
+    ///
+    /// The base is left implicit: what it resolves against is the *expected
+    /// type* at this position, which only analysis knows. In the v0 subset the
+    /// expected type must be an enum, so this is how a variant is written —
+    /// `.Red` for a payload-less one, `.Ok(12)` for one with a payload.
+    DotMember {
+        /// The member name, as written after the `.`.
+        name: Symbol,
+        /// Span of the member name.
+        name_span: Span,
+        /// The parenthesized arguments, or `None` when no `(` followed the
+        /// name. `Some(vec)` distinguishes `.Red()` from `.Red`; analysis
+        /// checks the count against the variant's payload.
+        args: Option<Vec<ExprId>>,
+        /// Span covering the whole member expression.
+        span: Span,
+    },
+    /// An ownership transfer written on an expression (`move mesh`,
+    /// `copy count`).
+    ///
+    /// `move` and `copy` are *contextual* identifiers, not reserved keywords:
+    /// this node exists only where the token is followed by something that
+    /// starts an operand, so `let move = 1` still declares a local named
+    /// `move`.
+    Ownership {
+        /// Which operator was written.
+        op: OwnershipOp,
+        /// The operand the transfer applies to.
+        operand: ExprId,
+        /// Span covering operator and operand.
+        span: Span,
+    },
+    /// An expression the parser could not parse; recovery inserts this.
+    Error {
+        /// Span of the malformed expression.
+        span: Span,
+    },
+}
+
+/// One field initializer inside a [`Expr::StructLit`].
+///
+/// Both binders are accepted: `=` is canonical and `:` stays valid for the
+/// transition window. They normalize to this one node, so nothing downstream
+/// can tell which was written.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldInit {
+    /// The initialized field's name.
+    pub name: Symbol,
+    /// Span of the field name.
+    pub name_span: Span,
+    /// The value bound to the field.
+    pub value: ExprId,
+    /// Span covering the whole initializer.
+    pub span: Span,
+}
+
+impl Expr {
+    /// The span covering this expression.
+    pub fn span(&self) -> Span {
+        match self {
+            Expr::Int { span, .. }
+            | Expr::Float { span, .. }
+            | Expr::Bool { span, .. }
+            | Expr::Str { span, .. }
+            | Expr::Name { span, .. }
+            | Expr::Unary { span, .. }
+            | Expr::Binary { span, .. }
+            | Expr::Call { span, .. }
+            | Expr::StructLit { span, .. }
+            | Expr::MethodCall { span, .. }
+            | Expr::Field { span, .. }
+            | Expr::ArrayLit { span, .. }
+            | Expr::Index { span, .. }
+            | Expr::DotMember { span, .. }
+            | Expr::Ownership { span, .. }
+            | Expr::Error { span } => *span,
+        }
+    }
+}
+
+/// A unary operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp {
+    /// Arithmetic negation (`-x`).
+    Neg,
+    /// Logical negation (`!x`).
+    Not,
+}
+
+/// A binary operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOp {
+    /// `+`
+    Add,
+    /// `-`
+    Sub,
+    /// `*`
+    Mul,
+    /// `/`
+    Div,
+    /// `%`
+    Rem,
+    /// `==`
+    Eq,
+    /// `!=`
+    Ne,
+    /// `<`
+    Lt,
+    /// `<=`
+    Le,
+    /// `>`
+    Gt,
+    /// `>=`
+    Ge,
+    /// `&&`
+    And,
+    /// `||`
+    Or,
+}
+
+impl BinaryOp {
+    /// A short symbolic spelling of the operator, for diagnostics.
+    pub fn spelling(self) -> &'static str {
+        match self {
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Rem => "%",
+            BinaryOp::Eq => "==",
+            BinaryOp::Ne => "!=",
+            BinaryOp::Lt => "<",
+            BinaryOp::Le => "<=",
+            BinaryOp::Gt => ">",
+            BinaryOp::Ge => ">=",
+            BinaryOp::And => "&&",
+            BinaryOp::Or => "||",
+        }
+    }
+}
