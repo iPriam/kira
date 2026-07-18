@@ -235,6 +235,7 @@ mod calls;
 mod control_flow;
 mod enums;
 mod floats;
+mod matches;
 mod memory;
 mod ownership;
 mod scalars;

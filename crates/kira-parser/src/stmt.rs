@@ -3,13 +3,20 @@
 //! Recovery boundary: a statement that cannot be parsed becomes a
 //! [`Stmt::Error`] and the cursor resynchronizes at the next `;`, `}`, or
 //! statement-starting keyword, so one bad statement never derails the block.
+//!
+//! The two multi-arm branch statements, `switch` and `match`, live in
+//! [`branches`] — they are long enough together to crowd everything else, and
+//! they share the struct-literal suppression rule that makes `subject {` open a
+//! body rather than a literal.
 
 use kira_core::Symbol;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
-use kira_syntax_model::ast::{Block, ForIterable, Stmt, StmtId, SwitchCase};
+use kira_syntax_model::ast::{Block, ForIterable, Stmt, StmtId};
 
 use crate::Parser;
+
+mod branches;
 
 impl Parser<'_> {
     /// Parses one statement, returning its arena handle, or `None` when the
@@ -25,7 +32,7 @@ impl Parser<'_> {
             TokenKind::Break => Some(self.parse_break()),
             TokenKind::Continue => Some(self.parse_continue()),
             TokenKind::Switch => Some(self.parse_switch()),
-            TokenKind::Match => Some(self.parse_unsupported_stmt()),
+            TokenKind::Match => Some(self.parse_match()),
             _ => Some(self.parse_expr_or_assign()),
         }
     }
@@ -191,73 +198,6 @@ impl Parser<'_> {
         })
     }
 
-    /// Parses `switch <subject> { case <label> { … } … default { … } }`.
-    ///
-    /// Both the subject and each `case` label suppress struct literals, for the
-    /// same reason a `while` condition does: the brace that follows either one
-    /// opens a block — the switch body, or the arm's — so a literal read there
-    /// would swallow it. `case Shape { … }` is the arm, not a `Shape` literal.
-    ///
-    /// `default` is optional and is not required to come last; a repeated one
-    /// replaces the previous rather than being diagnosed, matching the language.
-    fn parse_switch(&mut self) -> StmtId {
-        let start = self.current().span;
-        self.bump(); // `switch`
-        let subject = self.without_struct_literals(|parser| parser.parse_expr());
-        self.expect(TokenKind::LBrace);
-
-        let mut cases = Vec::new();
-        let mut default_block = None;
-        while !self.at(TokenKind::RBrace) && !self.at_eof() {
-            match self.current_kind() {
-                TokenKind::Case => {
-                    let case_start = self.current().span;
-                    self.bump(); // `case`
-                    let label = self.without_struct_literals(|parser| parser.parse_expr());
-                    // The binder is optional: `case 1 { … }` and
-                    // `case 1: { … }` are the same arm.
-                    self.eat(TokenKind::Colon);
-                    let body = self.parse_block();
-                    let span = Span::from_bounds(case_start.start, self.previous_end());
-                    cases.push(SwitchCase { label, body, span });
-                }
-                TokenKind::Default => {
-                    self.bump(); // `default`
-                    self.eat(TokenKind::Colon);
-                    default_block = Some(self.parse_block());
-                }
-                _ => {
-                    self.error(
-                        self.current().span,
-                        "KPAR013",
-                        "expected `case` or `default` in a switch body",
-                    );
-                    // Resynchronize: skip to the next arm or the closing brace,
-                    // so one bad arm does not cost the rest of the switch.
-                    while !self.at_eof()
-                        && !self.at(TokenKind::Case)
-                        && !self.at(TokenKind::Default)
-                        && !self.at(TokenKind::RBrace)
-                    {
-                        if self.at(TokenKind::LBrace) {
-                            self.skip_balanced(TokenKind::LBrace, TokenKind::RBrace);
-                        } else {
-                            self.bump();
-                        }
-                    }
-                }
-            }
-        }
-        self.expect(TokenKind::RBrace);
-        let span = Span::from_bounds(start.start, self.previous_end());
-        self.tree.add_stmt(Stmt::Switch {
-            subject,
-            cases,
-            default_block,
-            span,
-        })
-    }
-
     fn parse_break(&mut self) -> StmtId {
         let span = self.current().span;
         self.bump(); // `break`
@@ -268,32 +208,6 @@ impl Parser<'_> {
         let span = self.current().span;
         self.bump(); // `continue`
         self.tree.add_stmt(Stmt::Continue { span })
-    }
-
-    /// A statement-level construct outside the v0 subset: diagnose and skip a
-    /// following balanced block if present, leaving a `Stmt::Error`.
-    fn parse_unsupported_stmt(&mut self) -> StmtId {
-        let start = self.current().span;
-        let keyword = self.current_kind().describe();
-        self.error(
-            start,
-            "KSEM901",
-            format!("{keyword} statements are not supported yet"),
-        );
-        self.bump();
-        // Skip up to and including a `{...}` body when the construct has one.
-        while !self.at_eof()
-            && !self.at(TokenKind::RBrace)
-            && !self.at(TokenKind::Semicolon)
-            && !self.at(TokenKind::LBrace)
-        {
-            self.bump();
-        }
-        if self.at(TokenKind::LBrace) {
-            self.skip_balanced(TokenKind::LBrace, TokenKind::RBrace);
-        }
-        let span = Span::from_bounds(start.start, self.previous_end());
-        self.tree.add_stmt(Stmt::Error { span })
     }
 
     /// Whether the current token can begin an expression (used to decide
@@ -432,110 +346,6 @@ mod tests {
             }
             other => panic!("expected a `for`, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn a_switch_parses_its_arms_and_optional_default() {
-        let (_, stmts) = body("function f() { switch n { case 0 { } case 1 { } default { } } }");
-        match &stmts[0] {
-            Stmt::Switch {
-                cases,
-                default_block,
-                ..
-            } => {
-                assert_eq!(cases.len(), 2);
-                assert!(default_block.is_some());
-            }
-            other => panic!("expected a `switch`, got {other:?}"),
-        }
-
-        // `default` is optional.
-        let (_, stmts) = body("function f() { switch n { case 0 { } } }");
-        match &stmts[0] {
-            Stmt::Switch { default_block, .. } => assert!(default_block.is_none()),
-            other => panic!("expected a `switch`, got {other:?}"),
-        }
-    }
-
-    /// The binder after a label is optional: `case 0 { … }` and `case 0: { … }`
-    /// are the same arm. Only the spans differ, since the `:` moves what
-    /// follows it, so the shape is what is compared.
-    #[test]
-    fn a_case_label_accepts_an_optional_colon() {
-        for source in [
-            "function f() { switch n { case 0 { let x = 1 } } }",
-            "function f() { switch n { case 0: { let x = 1 } } }",
-        ] {
-            let (tree, stmts) = body(source);
-            match &stmts[0] {
-                Stmt::Switch {
-                    cases,
-                    default_block,
-                    ..
-                } => {
-                    assert_eq!(cases.len(), 1, "{source}");
-                    assert!(default_block.is_none(), "{source}");
-                    assert_eq!(cases[0].body.stmts.len(), 1, "{source}");
-                    assert!(
-                        matches!(
-                            tree.expr(cases[0].label),
-                            kira_syntax_model::ast::Expr::Int { value: 0, .. }
-                        ),
-                        "{source}"
-                    );
-                }
-                other => panic!("expected a `switch`, got {other:?}"),
-            }
-        }
-    }
-
-    /// The brace after a subject or a label opens a block, so neither may read
-    /// as a struct literal — otherwise the arm's body is swallowed.
-    #[test]
-    fn a_switch_subject_and_label_do_not_swallow_their_braces() {
-        let (_, stmts) = body("function f() { switch subject { case label { let x = 1 } } }");
-        match &stmts[0] {
-            Stmt::Switch { cases, .. } => {
-                assert_eq!(cases.len(), 1);
-                assert_eq!(cases[0].body.stmts.len(), 1, "the brace is the arm body");
-            }
-            other => panic!("expected a `switch`, got {other:?}"),
-        }
-    }
-
-    /// `default` is not required to come last, and a repeated one replaces the
-    /// previous rather than being diagnosed.
-    #[test]
-    fn a_switch_accepts_default_in_any_position() {
-        let (_, stmts) = body("function f() { switch n { default { } case 0 { } } }");
-        match &stmts[0] {
-            Stmt::Switch {
-                cases,
-                default_block,
-                ..
-            } => {
-                assert_eq!(cases.len(), 1);
-                assert!(default_block.is_some());
-            }
-            other => panic!("expected a `switch`, got {other:?}"),
-        }
-    }
-
-    /// A statement where an arm belongs is reported, and the arms around it
-    /// still parse.
-    #[test]
-    fn a_switch_body_without_an_arm_keyword_is_reported_and_recovers() {
-        let result = parse(
-            SourceId::new(0),
-            "function f() { switch n { print(1) case 0 { } } }",
-        );
-        assert!(
-            result
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == Some("KPAR013"))
-        );
-        assert_eq!(result.tree.items.len(), 1, "the function still parses");
     }
 
     #[test]

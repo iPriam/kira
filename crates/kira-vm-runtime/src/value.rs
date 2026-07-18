@@ -222,6 +222,20 @@ impl Heap {
         }
     }
 
+    /// An owned copy of the payload of the enum behind a handle.
+    ///
+    /// `None` when the handle does not name an enum, or when the variant it
+    /// holds carries no payload. The copy is deep, exactly as
+    /// [`Heap::copy_value`] is: the caller owns what it gets back and the box
+    /// keeps owning its own, so freeing either leaves the other valid.
+    pub fn enum_payload(&mut self, id: EnumId) -> Option<Value> {
+        let payload = match self.slots.get(id.0 as usize) {
+            Some(Some(Object::Enum { payload, .. })) => (*payload)?,
+            _ => return None,
+        };
+        Some(self.copy_value(payload))
+    }
+
     /// Frees the enum behind a handle, dropping its payload.
     ///
     /// Bounded by the program's nesting depth: a payload is a value analysis

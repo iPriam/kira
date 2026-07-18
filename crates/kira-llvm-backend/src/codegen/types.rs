@@ -84,6 +84,8 @@ pub(crate) struct Runtime {
     pub(super) array_free: Callable,
     pub(super) enum_new: Callable,
     pub(super) enum_tag: Callable,
+    /// Reads an enum's payload as an owned word (`match` arm bindings).
+    pub(super) enum_payload: Callable,
     pub(super) enum_clone: Callable,
     pub(super) enum_free: Callable,
     pub(super) trap_div_zero: Callable,
@@ -177,6 +179,7 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 &mut [types.i64, types.i64, types.i64],
             ),
             enum_tag: declare(c"kira_rt_enum_tag", types.i64, &mut [types.ptr]),
+            enum_payload: declare(c"kira_rt_enum_payload", types.i64, &mut [types.ptr]),
             enum_clone: declare(c"kira_rt_enum_clone", types.ptr, &mut [types.ptr]),
             enum_free: declare(c"kira_rt_enum_free", types.void, &mut [types.ptr]),
             trap_div_zero: declare(c"kira_rt_trap_div_zero", types.void, &mut []),

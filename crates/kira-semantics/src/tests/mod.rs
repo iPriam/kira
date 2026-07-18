@@ -3,6 +3,7 @@
 
 mod arrays;
 mod enums;
+mod matches;
 
 use super::*;
 use kira_semantics_model::Type;

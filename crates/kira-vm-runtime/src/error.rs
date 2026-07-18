@@ -141,6 +141,14 @@ pub enum VmError {
     /// A tag instruction found something other than an enum.
     #[error("read a tag from a value that is not an enum")]
     NotAnEnum,
+    /// A payload projection found a variant carrying no payload.
+    ///
+    /// A `match` only projects inside the arm its tag test selected, so the
+    /// variant is always the one whose payload the binding was typed against —
+    /// reaching this is a compiler that emitted the projection under the wrong
+    /// tag test, never a program that merely type-checked.
+    #[error("read a payload from an enum variant that carries none")]
+    MissingEnumPayload,
     /// An enum reached the native seam, which has no layout for one.
     ///
     /// Like a struct, an enum has no representation in the hybrid ABI, and the

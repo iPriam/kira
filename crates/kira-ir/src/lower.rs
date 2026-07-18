@@ -153,6 +153,10 @@ impl Lowerer<'_> {
             HirExpr::EnumTag { value } => IrExpr::EnumTag {
                 value: self.lower_expr(value),
             },
+            HirExpr::EnumPayload { value, ty } => IrExpr::EnumPayload {
+                value: self.lower_expr(value),
+                ty,
+            },
             HirExpr::ArrayLen { array } => IrExpr::ArrayLen {
                 array: self.lower_expr(array),
             },

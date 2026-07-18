@@ -90,6 +90,36 @@ pub unsafe extern "C" fn kira_rt_enum_tag(value: KEnum) -> i64 {
     unsafe { (*value).tag }
 }
 
+/// Reads an enum's payload as an *owned* word, leaving the enum untouched.
+///
+/// This is what a `match` arm's binding reads. A `String` payload is cloned, so
+/// the returned handle is the caller's to free and the box still owns its own —
+/// the same affine discipline [`kira_rt_enum_clone`] follows. A scalar payload
+/// is returned by bits and owns nothing. A null handle reads as 0, mirroring
+/// [`kira_rt_enum_tag`].
+///
+/// The caller knows from the variant's declared payload type whether the word
+/// is a `KStr` to free, which is why the flag does not have to come back with
+/// it.
+///
+/// # Safety
+/// `value` must be null or a live handle from this runtime; it is left
+/// untouched.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_enum_payload(value: KEnum) -> u64 {
+    if value.is_null() {
+        return 0;
+    }
+    // SAFETY: a non-null handle is a live `KiraEnum` that outlives this read.
+    let source = unsafe { &*value };
+    if source.owns_str != 0 {
+        // SAFETY: `owns_str` promises `payload` is a live `KStr`; cloning it
+        // reads it and leaves it in place.
+        return unsafe { kira_rt_str_clone(source.payload as KStr) } as u64;
+    }
+    source.payload
+}
+
 /// Produces an independent copy of an enum (clone-on-read for locals).
 ///
 /// A `String` payload is cloned so the copy shares no storage with the source;
@@ -180,6 +210,29 @@ mod tests {
             );
             kira_rt_enum_free(value);
             kira_rt_enum_free(copy);
+        }
+    }
+
+    #[test]
+    fn a_payload_read_is_owned_and_leaves_the_enum_intact() {
+        // What a `match` binding does: read the payload, then free the enum.
+        // The read string must survive that, and freeing it must not double-free
+        // the box's own — the affine guarantee the VM proves with heap counters.
+        // SAFETY: every handle below is live and freed exactly once.
+        unsafe {
+            let value = kira_rt_enum_new(1, 1, str_handle("bound") as u64);
+            let read = kira_rt_enum_payload(value) as KStr;
+            assert_ne!(
+                read as u64,
+                (*value).payload,
+                "the read owns its own string"
+            );
+            kira_rt_enum_free(value);
+            kira_rt_str_free(read);
+
+            let scalar = kira_rt_enum_new(0, 0, 77);
+            assert_eq!(kira_rt_enum_payload(scalar), 77);
+            kira_rt_enum_free(scalar);
         }
     }
 

@@ -1,13 +1,18 @@
 # Control flow: one shape below analysis
 
-Two constructs land entirely in the analyzer. `for` becomes a `while`, and
-`switch` becomes an `if`/`else` chain. Neither exists below the HIR, so no
-backend implements either, and neither can disagree with the construct it
-desugars to — by the time a backend sees one, it *is* that construct.
+Three constructs land entirely in the analyzer. `for` becomes a `while`, and
+`switch` and `match` both become an `if`/`else` chain. None exists below the
+HIR, so no backend implements any of them, and none can disagree with the
+construct it desugars to — by the time a backend sees one, it *is* that
+construct.
 
 That is the pattern to reach for first when adding syntax here: check whether
 the construct is expressible in what the HIR already has before paying the
 fourteen-file cost of a new IR node.
+
+`match` is the instructive one, because it is only *almost* free — its arms
+desugar but its payload binding needed a new expression node. See
+[match.md](match.md) for why one node beat one statement form in every layer.
 
 ## `switch`
 

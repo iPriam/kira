@@ -72,9 +72,10 @@ impl IrProgram {
             IrExpr::Call { result, .. } => *result,
             IrExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
             IrExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),
-            IrExpr::Field { ty, .. } | IrExpr::ArrayNew { ty, .. } | IrExpr::Index { ty, .. } => {
-                *ty
-            }
+            IrExpr::Field { ty, .. }
+            | IrExpr::ArrayNew { ty, .. }
+            | IrExpr::EnumPayload { ty, .. }
+            | IrExpr::Index { ty, .. } => *ty,
             IrExpr::ArrayLen { .. } | IrExpr::EnumTag { .. } => Type::Int,
             IrExpr::ArrayAppend { .. } => Type::Void,
         }
@@ -346,6 +347,17 @@ pub enum IrExpr {
     EnumTag {
         /// The enum-typed expression whose tag is read.
         value: IrExprId,
+    },
+    /// An enum value's payload, as an owned value of the variant's payload type.
+    ///
+    /// Emitted only inside a `match` arm the tag test already selected, so the
+    /// payload is known to have type `ty`. A backend reads the payload out and
+    /// hands back an owned copy.
+    EnumPayload {
+        /// The enum-typed expression whose payload is read.
+        value: IrExprId,
+        /// The selected variant's declared payload type.
+        ty: Type,
     },
     /// A read of one field of a struct value.
     Field {

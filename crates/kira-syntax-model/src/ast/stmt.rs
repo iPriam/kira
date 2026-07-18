@@ -20,6 +20,39 @@ pub struct SwitchCase {
     pub span: Span,
 }
 
+/// One arm of a [`Stmt::Match`].
+///
+/// Unlike a [`SwitchCase`], the head is a *pattern*, not an expression: a bare
+/// variant name with an optional binding for its payload. The name is
+/// unqualified — a `match` already knows the subject's enum, so `Red` names
+/// that enum's variant and `EmxColor.Red` is not the spelling.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    /// The variant this arm selects, unqualified.
+    pub variant: Symbol,
+    /// Span of the variant's name token.
+    pub variant_span: Span,
+    /// The name bound to the variant's payload, when the arm wrote one.
+    pub binding: Option<MatchBinding>,
+    /// The statements run when the subject holds this variant.
+    ///
+    /// An arrow arm (`Red -> return 1`) is a one-statement block; an
+    /// arrow-block arm (`Red -> { … }`) is the block as written. They are the
+    /// same thing by the time they are here.
+    pub body: Block,
+    /// Span covering the whole arm.
+    pub span: Span,
+}
+
+/// A `match` arm's payload binding: `Label(text)` binds `text`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MatchBinding {
+    /// The name bound to the payload, immutable for the arm's body.
+    pub name: Symbol,
+    /// Span of the binding's name token.
+    pub span: Span,
+}
+
 /// What a [`Stmt::For`] iterates.
 ///
 /// The two forms are told apart by the `..`, and they are separate variants
@@ -145,6 +178,23 @@ pub enum Stmt {
         /// Span covering the whole statement.
         span: Span,
     },
+    /// A `match`: the arm naming the subject's variant runs.
+    ///
+    /// A different construct from [`Stmt::Switch`] despite the family
+    /// resemblance. A `match` selects on an enum's *variant* rather than on
+    /// `==`, which is what lets an arm bind the variant's payload — and what
+    /// makes coverage a question worth asking, so a `match` is checked
+    /// exhaustive and checked for a variant matched twice. A `switch` is
+    /// neither, and deliberately: its labels are arbitrary expressions, so
+    /// there is no set of them to be exhaustive over.
+    Match {
+        /// The value being matched, evaluated once.
+        subject: ExprId,
+        /// The arms, in source order.
+        arms: Vec<MatchArm>,
+        /// Span covering the whole statement.
+        span: Span,
+    },
     /// A `break`: leave the innermost enclosing loop.
     Break {
         /// Span covering the statement.
@@ -174,6 +224,7 @@ impl Stmt {
             | Stmt::While { span, .. }
             | Stmt::For { span, .. }
             | Stmt::Switch { span, .. }
+            | Stmt::Match { span, .. }
             | Stmt::Break { span }
             | Stmt::Continue { span }
             | Stmt::Error { span } => *span,

@@ -123,6 +123,7 @@ mod control_flow;
 mod enums;
 mod examples;
 mod logic;
+mod matches;
 mod ownership;
 mod seam;
 mod strings;

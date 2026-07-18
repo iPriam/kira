@@ -326,6 +326,9 @@ impl Lowering<'_> {
             // level like one.
             IrExpr::EnumNew { payload, .. } => 1 + payload.map_or(0, |p| self.expr_depth(p)),
             IrExpr::EnumTag { value } => self.expr_depth(*value),
+            // A payload read is a load off the box address, using no scratch of
+            // its own — the same level as a tag read.
+            IrExpr::EnumPayload { value, .. } => self.expr_depth(*value),
             IrExpr::Unary { operand, .. } => self.expr_depth(*operand),
             IrExpr::Binary { lhs, rhs, .. } => self.expr_depth(*lhs).max(self.expr_depth(*rhs)),
             IrExpr::Call { args, .. } => args
