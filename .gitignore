@@ -5,9 +5,4 @@
 # Agent scratch. Nothing here is tracked, which is what lets scratch tooling
 # (including Python) exist without ever reaching a commit.
 .codex/tmp/
-
-# Every lock file: `kira.lock`, `Cargo.lock`, and the harness's
-# `.codex/scheduled_tasks.lock`. Each is regenerated from what is tracked, so
-# none is a source of truth. Note that ignoring `Cargo.lock` does not untrack
-# it — it stays versioned until it is removed from the index.
 *.lock
