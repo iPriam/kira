@@ -89,21 +89,21 @@ fn the_crate_is_made_of_the_three_files_a_crate_needs() {
 fn every_export_becomes_one_method_with_the_rust_types_of_its_signature() {
     let source = lib_rs(&uifoundation());
     assert!(
-        source.contains("pub fn make_button(&self, arg0: &str) -> Result<Button, Error> {"),
+        source.contains("pub fn make_button(&self, arg0: &str) -> Result<Button<H>, Error> {"),
         "{source}"
     );
     assert!(
-        source.contains("pub fn button_width(&self, arg0: &Button) -> Result<i64, Error> {"),
+        source.contains("pub fn button_width(&self, arg0: &Button<H>) -> Result<i64, Error> {"),
         "{source}"
     );
     // A string result is owned by the caller, so it is `String` and not `&str`.
     assert!(
-        source.contains("pub fn button_label(&self, arg0: &Button) -> Result<String, Error> {"),
+        source.contains("pub fn button_label(&self, arg0: &Button<H>) -> Result<String, Error> {"),
         "{source}"
     );
     assert!(
         source.contains(
-            "pub fn click_at(&self, arg0: &Button, arg1: i64, arg2: i64) -> Result<bool, Error> {"
+            "pub fn click_at(&self, arg0: &Button<H>, arg1: i64, arg2: i64) -> Result<bool, Error> {"
         ),
         "{source}"
     );
@@ -112,8 +112,14 @@ fn every_export_becomes_one_method_with_the_rust_types_of_its_signature() {
 #[test]
 fn an_exported_class_becomes_a_newtype_that_releases_on_drop() {
     let source = lib_rs(&uifoundation());
-    assert!(source.contains("pub struct Button {"), "{source}");
-    assert!(source.contains("impl Drop for Button {"), "{source}");
+    assert!(
+        source.contains("pub struct Button<H: HostCapabilities = StdoutHost> {"),
+        "{source}"
+    );
+    assert!(
+        source.contains("impl<H: HostCapabilities> Drop for Button<H> {"),
+        "{source}"
+    );
     assert!(
         source.contains("let _ = self.instance.borrow_mut().release(self.handle);"),
         "{source}"
@@ -181,7 +187,10 @@ fn a_library_with_no_exports_imports_nothing_it_does_not_use() {
     assert!(!source.contains("ExpectedExport"), "{source}");
     assert!(!source.contains("ExportType"), "{source}");
     assert!(!source.contains("Handle"), "{source}");
-    assert!(source.contains("pub struct Uifoundation {"), "{source}");
+    assert!(
+        source.contains("pub struct Uifoundation<H: HostCapabilities = StdoutHost> {"),
+        "{source}"
+    );
 }
 
 #[test]
@@ -199,7 +208,7 @@ fn a_library_whose_exports_take_no_arguments_does_not_import_nativearg() {
     let source = lib_rs(&table);
     assert!(!source.contains("NativeArg"), "{source}");
     assert!(
-        source.contains("use kira_runtime_abi::NativeResult;"),
+        source.contains("use kira_runtime_abi::{HostCapabilities, NativeResult};"),
         "{source}"
     );
     assert!(source.contains("NativeResult::Void => Ok(()),"), "{source}");
@@ -222,6 +231,59 @@ fn a_class_that_collides_with_the_library_type_is_refused_by_name() {
     assert_eq!(
         error.to_string(),
         "`uifoundation` and `Uifoundation` both become the Rust name `Uifoundation`"
+    );
+}
+
+#[test]
+fn the_library_takes_a_custom_host_and_defaults_to_stdout() {
+    // The VM is a portable core and the embedder supplies the effects: a
+    // wrapper that only ever built a `StdoutHost` would decide for them where a
+    // library's `print` goes, which is exactly what an embedder embedding it in
+    // a log or a browser console cannot live with.
+    let source = lib_rs(&uifoundation());
+    assert!(
+        source.contains("pub fn load() -> Result<Uifoundation<StdoutHost>, Error> {"),
+        "{source}"
+    );
+    assert!(
+        source.contains("pub fn load_with(host: H) -> Result<Uifoundation<H>, Error> {"),
+        "{source}"
+    );
+    assert!(
+        source.contains("library.instantiate_with(host)?"),
+        "{source}"
+    );
+    // And the host is readable back, or a capturing host would be write-only.
+    assert!(
+        source.contains("pub fn with_host<R>(&self, read: impl FnOnce(&H) -> R) -> R {"),
+        "{source}"
+    );
+    assert!(
+        source.contains("pub fn with_host_mut<R>(&self, take: impl FnOnce(&mut H) -> R) -> R {"),
+        "{source}"
+    );
+}
+
+#[test]
+fn a_class_named_after_the_host_parameter_is_refused_by_name() {
+    // `impl<H> Drop for H<H>` does not compile. Saying so here beats saying it
+    // in the consumer's build.
+    let table = ExportTable {
+        classes: vec!["H".to_owned()],
+        functions: Vec::new(),
+    };
+    let error = generate(&WrapperSpec {
+        library: "uifoundation",
+        version: "0.1.0",
+        exports: &table,
+        content_hash: 0,
+        toolchain_root: Path::new("/kira"),
+    })
+    .expect_err("a reserved name");
+    assert_eq!(
+        error.to_string(),
+        "an exported class may not be named `H`: the generated wrapper spells its host \
+         type parameter `H`"
     );
 }
 
