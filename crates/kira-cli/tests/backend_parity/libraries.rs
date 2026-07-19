@@ -321,6 +321,110 @@ fn every_engine_generates_the_same_public_surface_over_different_internals() {
     assert!(!hybrid_code.contains("unsafe"), "{hybrid_code}");
 }
 
+// ---------------------------------------------------------------------------
+// `@Native` in a library, and the one-library-per-process rule
+//
+// One agreement and one refusal. The agreement is that no engine refuses a
+// `@Native` library; the refusal is the linker's, and it is proven to be real
+// rather than only documented.
+// ---------------------------------------------------------------------------
+
+/// A library with a `@Native` helper among ordinary exports.
+///
+/// The helper is unexported and calls nothing, so it clears both of the hybrid
+/// engine's rules — which is what isolates this case to the VM engine's own
+/// answer rather than re-testing the hybrid ones.
+const NATIVE_LIBRARY: &str = "\
+@Export\n\
+function add(a: Int, b: Int) -> Int { return a + b }\n\
+@Native\n\
+function fast(value: Int) -> Int { return value * 2 }";
+
+#[test]
+fn every_engine_builds_a_native_library() {
+    // `@Native` is not a refusal on any engine, and this is where that is
+    // pinned. Each engine reaches the same yes by a different route: the VM
+    // engine compiles every function to bytecode, the native engine compiles
+    // every function to machine code, and the hybrid engine is the one that
+    // honors the split and puts this body in the native half.
+    //
+    // Asserted as one test rather than three because the agreement *is* the
+    // claim. An engine that refused here would be a parity hole in a feature
+    // whose whole premise is one API over three engines.
+    let path = write_library(NATIVE_LIBRARY);
+    let package = path.parent().expect("package directory").to_path_buf();
+    let runs: Vec<(&str, Output)> = BACKENDS
+        .iter()
+        .map(|backend| (*backend, build_on(&path, backend)))
+        .collect();
+    let _ = std::fs::remove_dir_all(&package);
+
+    for (backend, run) in &runs {
+        assert!(
+            run.status.success(),
+            "the {backend} engine refused a `@Native` library:\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+}
+
+#[test]
+fn two_native_libraries_really_do_collide_on_the_runtime() {
+    // The one-library-per-process rule, proven rather than asserted. It is a
+    // rule about the *linker*, so what has to be true is that two independently
+    // built archives define the same `kira_rt_*` symbols — that is the whole
+    // mechanism, and a documented rule with no mechanism under it is the kind
+    // of claim this repo has been bitten by.
+    //
+    // Read out of the archive bytes rather than through `nm`, so the test needs
+    // no tool the machine might not have: an ar archive carries member names
+    // and its symbol index as plain bytes.
+    //
+    // The recorded fix is per-library runtime prefixing — `kira_rt_*` becoming
+    // `kira_rt_<library>_*`, at which point two archives stop naming the same
+    // thing. Until then this fails at link, loudly and by symbol name, which is
+    // the acceptable v1 answer precisely *because* it cannot be missed.
+    let first = write_library(LIBRARY);
+    let second = write_library(LIBRARY);
+    let built_first = build_on(&first, "llvm");
+    let built_second = build_on(&second, "llvm");
+    let archive_of = |source: &std::path::Path| {
+        source
+            .parent()
+            .expect("package directory")
+            .join(".kira-build")
+            .join("lib")
+            .join("libparity.a")
+    };
+    let bytes_first = std::fs::read(archive_of(&first)).unwrap_or_default();
+    let bytes_second = std::fs::read(archive_of(&second)).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(first.parent().expect("package directory"));
+    let _ = std::fs::remove_dir_all(second.parent().expect("package directory"));
+
+    assert!(
+        built_first.status.success() && built_second.status.success(),
+        "a library failed to build:\n{}\n{}",
+        String::from_utf8_lossy(&built_first.stderr),
+        String::from_utf8_lossy(&built_second.stderr),
+    );
+
+    // The runtime's own ABI marker: one symbol, defined by every Kira native
+    // runtime, and therefore by both archives. Two definitions of it in one
+    // link is the collision.
+    let marker = kira_runtime_abi::RUNTIME_ABI_MARKER.as_bytes();
+    let defines = |bytes: &[u8]| bytes.windows(marker.len()).any(|window| window == marker);
+    assert!(
+        defines(&bytes_first),
+        "the first archive carries no `{}`",
+        kira_runtime_abi::RUNTIME_ABI_MARKER,
+    );
+    assert!(
+        defines(&bytes_second),
+        "the second archive carries no `{}`",
+        kira_runtime_abi::RUNTIME_ABI_MARKER,
+    );
+}
+
 #[test]
 fn checking_an_exporting_library_stops_at_a_clean_frontend() {
     // `check` stops at the frontend, and the frontend is where an export's rules

@@ -195,7 +195,31 @@ relaxed for libraries); two exports whose names collide after snake_case
 mapping (`buttonLabel` / `button_label`) are a bind-time refusal, KSEM167; an
 `@Native` function in a library built for the VM engine is a build-time
 refusal by function name (oracle-pinned: `@Native` cannot execute on the pure
-VM). v1 exports **top-level functions only** — `@Export` on a class marks
+VM).
+
+*Landed as:* **no such refusal — this part of the design is wrong, and the
+reason is in the code.** Nothing native executes on that engine to begin with:
+`kira_bytecode::compile` compiles every function to bytecode whatever it was
+annotated with (`compile.rs:29-32`), so a `@Native` body never becomes machine
+code there and the oracle's pin is not in play. That ignore-the-annotation rule
+is load-bearing rather than incidental — it is what makes `--backend vm` and
+`--backend llvm` comparable on *any* program, the premise the entire
+differential parity suite rests on (`backend_parity/main.rs:9-22`), and § 4
+already grants its mirror for the native engine.
+
+Implementing the refusal made the cost concrete at once: it broke
+`kira-export-consumer`, whose fixture carries a `@Native` helper precisely to
+prove all three engines agree on it, and which § 4 makes the feature's central
+claim. A package that built on the native and hybrid engines and failed on the
+VM would be a parity hole — the exact failure the hybrid-mandatory decision
+rejected, in the other direction. The refusal was written, tested, seen to
+break the proof, and removed. What is pinned instead is that every engine
+builds a `@Native` library
+(`backend_parity/libraries.rs::every_engine_builds_a_native_library`), with the
+reasoning recorded in `kira-build/src/library.rs`'s header so the next reader
+of this paragraph finds it.
+
+v1 exports **top-level functions only** — `@Export` on a class marks
 handle-eligibility and mints the Rust newtype + destructor, it does not export
 methods; the author wraps methods in exported functions, as `buttonLabel`
 does.
@@ -408,6 +432,18 @@ the string/allocator contract across a wasm module boundary is undesigned`.
 The yes-path is recorded: the module builder supports arbitrary named exports
 (today it exports only `MAIN_EXPORT`).
 
+*Landed as:* `WasmError::LibraryUnsupported` in `kira-wasm-runtime/src/error.rs`,
+carrying the reason and the yes-path in its doc comment, raised from
+`kira_wasm_runtime::compile` before any module is assembled. It refuses a
+library whether or not it declares exports, because the missing contract is the
+artifact's rather than the export surface's; `kirac` names the export half of it
+separately so a user who asked for `--device wasm32` learns which functions were
+in question. Checked at three levels: the backend
+(`kira-wasm-runtime/tests/execution/libraries.rs`, both wasm32 and wasm64, with
+a program-with-an-entrypoint control), and the real binary
+(`end_to_end.rs::a_library_cannot_be_built_for_the_web_and_says_why` and
+`::the_web_refuses_to_build_an_export_too`), all on the CI path with no LLVM.
+
 ## 5. The boundary contract: who allocates, who frees
 
 The seam's 3-mode `Ownership` (Owned/Borrow/BorrowMut) is untouched — it
@@ -484,6 +520,14 @@ the generated crate's README.
 error — loud, at link, by name, which is acceptable for v1 and documented.
 Per-library runtime prefixing is the recorded v2 fix; `RTLD_LOCAL` already
 isolates the dylib form for hosts that dlopen.
+
+*Landed as:* documented in the repo README and in every generated crate's
+README, both stating the prefixing fix rather than only the symptom. The
+mechanism is proven rather than asserted:
+`backend_parity/libraries.rs::two_native_libraries_really_do_collide_on_the_runtime`
+builds two independent libraries and reads `RUNTIME_ABI_MARKER` out of both
+archives' bytes, so the claim rests on the symbol really being in both rather
+than on a sentence in a README.
 
 ## 7. Oracle-pinned versus new design
 
@@ -578,7 +622,12 @@ native engine is step 6, not "later".
    test against a third engine. The remaining refusal by name is the wasm
    library artifact alone. *Landed.*
 8. **Docs** — refresh README crate table (`kira-main`), toolchain docs, a
-   worked example package; cross-link the two direction documents. *Cheap.*
+   worked example package; cross-link the two direction documents. *Landed.*
+   The worked example is `examples/library/`, and it is parity-checked rather
+   than only written: `backend_parity/examples.rs` builds any example package
+   declaring `kind = .Library` on all three engines and checks that running one
+   is refused, so a README that stopped being true fails a test. Its Rust
+   snippet was run against the generated crate before being written down.
 
 ## 10. What v1 deliberately does not do
 
