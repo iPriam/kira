@@ -1,0 +1,18 @@
+[package]
+name = "kira-hybrid-main"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kira-bytecode.workspace = true
+kira-hybrid-definition.workspace = true
+kira-hybrid-runtime.workspace = true
+kira-main.workspace = true
+kira-runtime-abi.workspace = true
+kira-vm-runtime.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

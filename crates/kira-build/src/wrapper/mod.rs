@@ -162,9 +162,37 @@ pub enum WrapperError {
     },
 }
 
-/// Generates the wrapper crate for one library.
+/// Generates the VM-engine wrapper crate for one library.
 pub fn generate(spec: &WrapperSpec<'_>) -> Result<GeneratedCrate, WrapperError> {
-    let model = render::Model::build(spec)?;
+    generate_for(spec, render::EngineBinding::Vm)
+}
+
+/// Generates the hybrid-engine wrapper crate for one library.
+///
+/// The same files, from the same renderer, with the engine binding swapped —
+/// see [`render::EngineBinding`] for why that is one function rather than two.
+/// `native_half` is the absolute path the build wrote the shared library to,
+/// which the generated `load()` treats as the *last* place to look.
+pub fn generate_hybrid(
+    spec: &WrapperSpec<'_>,
+    manifest_file: &str,
+    native_half: &Path,
+) -> Result<GeneratedCrate, WrapperError> {
+    generate_for(
+        spec,
+        render::EngineBinding::Hybrid {
+            manifest: manifest_file.to_owned(),
+            native_half: native_half.display().to_string(),
+        },
+    )
+}
+
+/// The generator both VM-family engines share.
+fn generate_for(
+    spec: &WrapperSpec<'_>,
+    engine: render::EngineBinding,
+) -> Result<GeneratedCrate, WrapperError> {
+    let model = render::Model::build(spec, engine)?;
     Ok(GeneratedCrate {
         name: model.library.clone(),
         files: vec![
@@ -182,6 +210,14 @@ pub fn generate(spec: &WrapperSpec<'_>) -> Result<GeneratedCrate, WrapperError> 
             },
         ],
     })
+}
+
+/// The file name the generated hybrid crate embeds its manifest under.
+///
+/// Beside the `.kbc` at the crate root, for the same relocatability reason
+/// [`artifact_file_name`] gives.
+pub fn manifest_file_name(library: &str) -> String {
+    format!("{library}.khm")
 }
 
 /// What a native wrapper crate is generated from.
@@ -260,6 +296,9 @@ pub enum Engine {
     Vm,
     /// A static archive the crate links.
     Native,
+    /// Bytecode and a manifest embedded in the crate, plus a shared library
+    /// found at load.
+    Hybrid,
 }
 
 /// The files the *other* engine leaves behind in a generated crate's directory.
@@ -275,9 +314,17 @@ pub enum Engine {
 /// Returned as data rather than deleted here: this module touches no filesystem,
 /// so the two callers that write the crate are the two that remove them.
 pub fn foreign_engine_files(engine: Engine, library: &str) -> Vec<PathBuf> {
+    let bytecode = PathBuf::from(artifact_file_name(library));
+    let manifest = PathBuf::from(manifest_file_name(library));
+    let build_script = PathBuf::from("build.rs");
     match engine {
-        Engine::Vm => vec![PathBuf::from("build.rs")],
-        Engine::Native => vec![PathBuf::from(artifact_file_name(library))],
+        // Two of the three engines embed the bytecode, so it is never stale
+        // clutter for the VM engine — but the hybrid engine's manifest is, and
+        // a `.khm` describing a split beside a `.kbc` that has none would be a
+        // confusing thing to find.
+        Engine::Vm => vec![build_script, manifest],
+        Engine::Native => vec![bytecode, manifest],
+        Engine::Hybrid => vec![build_script],
     }
 }
 
