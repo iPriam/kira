@@ -561,6 +561,9 @@ fn the_vm_engine_builds_an_export_into_an_artifact_and_a_rust_crate() {
         .iter()
         .map(|file| generated.join(file).is_file())
         .collect();
+    // Read before the directory goes, like `present` above: an `is_file` after
+    // the removal is a check of nothing.
+    let artifact_present = artifact.is_file();
     let wrapper = std::fs::read_to_string(generated.join("src").join("lib.rs")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&directory);
 
@@ -568,10 +571,7 @@ fn the_vm_engine_builds_an_export_into_an_artifact_and_a_rust_crate() {
     assert!(stdout.contains("Successfully built"), "{stdout}");
     assert!(stdout.contains("uifoundation.kbc"), "{stdout}");
     assert!(stdout.contains("3 exports"), "{stdout}");
-    assert!(
-        artifact.is_file() || stdout.contains("uifoundation.kbc"),
-        "{stdout}"
-    );
+    assert!(artifact_present, "no artifact at {artifact:?}");
     assert_eq!(present, [true, true, true, true], "{generated:?}");
     // One safe method per export, with the consumer-facing names the frontend
     // derived — the same list the other engines' refusal prints.
@@ -581,8 +581,13 @@ fn the_vm_engine_builds_an_export_into_an_artifact_and_a_rust_crate() {
             "the wrapper has no `{method}`: {wrapper}"
         );
     }
-    // And one newtype for the exported class, so a handle is more than a word.
-    assert!(wrapper.contains("pub struct Button {"), "{wrapper}");
+    // And one newtype for the exported class, so a handle is more than a word —
+    // generic over the host, so the embedder still chooses where `print` goes.
+    assert!(
+        wrapper.contains("pub struct Button<H: HostCapabilities = StdoutHost> {"),
+        "{wrapper}"
+    );
+    assert!(wrapper.contains("pub fn load_with(host: H)"), "{wrapper}");
 }
 
 #[test]

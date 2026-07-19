@@ -98,6 +98,21 @@ pub(crate) fn readme(model: &Model) -> String {
          generated from and names the first export that disagrees, so a stale\n\
          wrapper fails at load rather than by calling the wrong function.\n\
          \n\
+         ### Where the library's output goes\n\
+         \n\
+         `load()` sends the library's `print` to this process's stdout. To send it\n\
+         somewhere else — a log, a test buffer, a browser console — supply a host:\n\
+         \n\
+         ```rust,ignore\n\
+         let library = {ty}::load_with(my_host)?;\n\
+         library.with_host(|host| /* read what it collected */);\n\
+         ```\n\
+         \n\
+         A host is anything implementing `kira_runtime_abi::HostCapabilities`;\n\
+         `CapturingHost` in that crate records every line and is what the tests use.\n\
+         `{ty}` and each handle type are generic over it, defaulting to\n\
+         `StdoutHost`, so nothing needs a type annotation until you supply one.\n\
+         \n\
          ## What it promises\n\
          \n\
          - **One thread.** `{ty}` is neither `Send` nor `Sync`. One instance belongs\n\

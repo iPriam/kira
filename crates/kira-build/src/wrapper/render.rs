@@ -13,11 +13,39 @@
 //! actually uses. That is not a nicety: an unused import in generated code is a
 //! build failure in somebody else's crate, reported against a file they did not
 //! write.
+//!
+//! # Why every generated type carries a host parameter
+//!
+//! The VM is a portable core: it formats `print` into finished lines and hands
+//! them to a `HostCapabilities` the embedder supplies. A wrapper that only ever
+//! built a `StdoutHost` would make that choice for the consumer — a Rust program
+//! embedding a UI library could not put the library's output in a log, a test
+//! buffer, or a browser console. So the library type and every handle newtype
+//! are generic over the host, with `StdoutHost` as the default type parameter:
+//! `load()` reads exactly as it did and `load_with(host)` is the door. Generic
+//! rather than boxed, matching `kira-main`, so an embedder reads its own host
+//! back afterwards.
+//!
+//! The parameter is spelled `H`, which is therefore a name no exported class may
+//! take: [`Model::build`] refuses one by name rather than emitting a file whose
+//! `impl<H> Drop for H<H>` does not compile.
 
 use kira_bytecode::{ExportTable, ExportType};
 
 use crate::wrapper::naming::{library_ident, library_type_ident, type_ident, value_ident};
 use crate::wrapper::{WrapperError, WrapperSpec, artifact_file_name};
+
+/// The name the generated code gives its host type parameter.
+///
+/// Public to this module only: it appears in the rendered signatures and in the
+/// one refusal that keeps a class from claiming it.
+pub(crate) const HOST_PARAM: &str = "H";
+
+/// The host parameter as it is applied to a generated type: `Button<H>`.
+const HOST_ARG: &str = "<H>";
+
+/// The generic header the generated types and impls are written under.
+const HOST_BOUND: &str = "H: HostCapabilities";
 
 /// One exported class, as Rust sees it.
 #[derive(Debug, Clone)]
@@ -82,6 +110,9 @@ impl Model {
         let mut classes = Vec::with_capacity(spec.exports.classes.len());
         for class in &spec.exports.classes {
             let rust = type_ident(class)?;
+            if rust == HOST_PARAM {
+                return Err(WrapperError::Reserved { name: rust });
+            }
             if let Some((_, first)) = taken.iter().find(|(name, _)| *name == rust) {
                 return Err(WrapperError::Collision {
                     rust,
@@ -153,26 +184,32 @@ fn check_class(ty: ExportType, table: &ExportTable) -> Result<(), WrapperError> 
 ///
 /// Strings and handles are borrowed: the boundary contract lends an argument
 /// and moves a result, and this is that sentence in Rust's type system.
-fn param_type(model: &Model, ty: ExportType) -> String {
+///
+/// `host` is what a handle type carries after its name — [`HOST_ARG`] where the
+/// spelling has to compile, and empty in a doc comment, where the parameter is
+/// noise in front of the Kira signature a reader came for.
+fn param_type(model: &Model, ty: ExportType, host: &str) -> String {
     match ty {
         ExportType::Void => "()".to_owned(),
         ExportType::Int => "i64".to_owned(),
         ExportType::Float => "f64".to_owned(),
         ExportType::Bool => "bool".to_owned(),
         ExportType::String => "&str".to_owned(),
-        ExportType::Handle { class } => format!("&{}", class_name(model, class)),
+        ExportType::Handle { class } => format!("&{}{host}", class_name(model, class)),
     }
 }
 
 /// The Rust type a value of `ty` has when it comes *out* of the library.
-fn result_type(model: &Model, ty: ExportType) -> String {
+///
+/// `host` reads as it does for [`param_type`].
+fn result_type(model: &Model, ty: ExportType, host: &str) -> String {
     match ty {
         ExportType::Void => "()".to_owned(),
         ExportType::Int => "i64".to_owned(),
         ExportType::Float => "f64".to_owned(),
         ExportType::Bool => "bool".to_owned(),
         ExportType::String => "String".to_owned(),
-        ExportType::Handle { class } => class_name(model, class),
+        ExportType::Handle { class } => format!("{}{host}", class_name(model, class)),
     }
 }
 
@@ -245,17 +282,27 @@ fn header(model: &Model) -> String {
     }
     main_items.push("Instance");
     main_items.push("Library");
+    main_items.push("StdoutHost");
     main_items.sort_unstable();
     uses.push(format!("use kira_main::{{{}}};", main_items.join(", ")));
-    let takes_arguments = model
+    // `HostCapabilities` is unconditional: it is the bound on every generated
+    // type, so even a library that exports nothing names it.
+    let mut abi_items = vec!["HostCapabilities"];
+    if !model.functions.is_empty() {
+        abi_items.push("NativeResult");
+    }
+    if model
         .functions
         .iter()
-        .any(|function| !function.params.is_empty());
-    match (takes_arguments, model.functions.is_empty()) {
-        (true, _) => uses.push("use kira_runtime_abi::{NativeArg, NativeResult};".to_owned()),
-        (false, false) => uses.push("use kira_runtime_abi::NativeResult;".to_owned()),
-        (false, true) => {}
+        .any(|function| !function.params.is_empty())
+    {
+        abi_items.push("NativeArg");
     }
+    abi_items.sort_unstable();
+    uses.push(match abi_items.as_slice() {
+        [one] => format!("use kira_runtime_abi::{one};"),
+        many => format!("use kira_runtime_abi::{{{}}};", many.join(", ")),
+    });
 
     format!(
         "// Generated by `kirac build` from the Kira library `{library}`.\n\
@@ -342,24 +389,74 @@ fn library_struct(model: &Model) -> String {
          /// handle still mean something between two calls. Neither `Send` nor\n\
          /// `Sync`: one instance belongs to one thread, and the `Rc` inside says so\n\
          /// to the compiler rather than to a comment.\n\
-         #[derive(Debug, Clone)]\n\
-         pub struct {ty} {{\n\
+         ///\n\
+         /// `{param}` is the host the library's effects go to — `print` and nothing\n\
+         /// else in v1. It defaults to `StdoutHost`, so `load()` needs no type\n\
+         /// annotation; supply your own with `load_with`.\n\
+         pub struct {ty}<{bound} = StdoutHost> {{\n\
          \x20   /// The running instance, shared with every handle into it so that\n\
          \x20   /// dropping a handle can release the object it names.\n\
-         \x20   instance: Rc<RefCell<Instance>>,\n\
+         \x20   instance: Rc<RefCell<Instance<{param}>>>,\n\
          }}\n\
          \n\
-         impl {ty} {{\n\
-         \x20   /// Loads the embedded library and starts an instance of it.\n\
+         /// Written out rather than derived: a derived impl would demand\n\
+         /// `{param}: Debug`, and a host has no reason to have one.\n\
+         impl<{bound}> core::fmt::Debug for {ty}<{param}> {{\n\
+         \x20   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{\n\
+         \x20       f.debug_struct(\"{ty}\").field(\"instance\", &self.instance).finish()\n\
+         \x20   }}\n\
+         }}\n\
+         \n\
+         /// Cloning shares the one running instance, so every clone sees one heap.\n\
+         ///\n\
+         /// Written out for the same reason `Debug` is: `Rc` clones whatever it\n\
+         /// points at, and a derived impl would ask the host to be `Clone` anyway.\n\
+         impl<{bound}> Clone for {ty}<{param}> {{\n\
+         \x20   fn clone(&self) -> {ty}<{param}> {{\n\
+         \x20       {ty} {{\n\
+         \x20           instance: Rc::clone(&self.instance),\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         }}\n\
+         \n\
+         impl {ty}<StdoutHost> {{\n\
+         \x20   /// Loads the embedded library and starts an instance of it, with the\n\
+         \x20   /// library's output going to this process's stdout.\n\
          \x20   ///\n\
          \x20   /// Fails when the embedded artifact is not the one this file was\n\
          \x20   /// generated from, naming the first export that disagrees.\n\
-         \x20   pub fn load() -> Result<{ty}, Error> {{\n\
+         \x20   pub fn load() -> Result<{ty}<StdoutHost>, Error> {{\n\
+         \x20       {ty}::load_with(StdoutHost)\n\
+         \x20   }}\n\
+         }}\n\
+         \n\
+         impl<{bound}> {ty}<{param}> {{\n\
+         \x20   /// Loads the embedded library and starts an instance against `host`.\n\
+         \x20   ///\n\
+         \x20   /// The instance owns the host for its whole life, so a host that\n\
+         \x20   /// accumulates — a capture buffer, a log, a browser console — is\n\
+         \x20   /// readable afterwards through `with_host`.\n\
+         \x20   pub fn load_with(host: {param}) -> Result<{ty}<{param}>, Error> {{\n\
          \x20       let library = Library::from_bytes(BYTECODE)?;\n\
          \x20       library.verify(&CONTRACT)?;\n\
          \x20       Ok({ty} {{\n\
-         \x20           instance: Rc::new(RefCell::new(library.instantiate()?)),\n\
+         \x20           instance: Rc::new(RefCell::new(library.instantiate_with(host)?)),\n\
          \x20       }})\n\
+         \x20   }}\n\
+         \n\
+         \x20   /// Reads the host this library runs against.\n\
+         \x20   ///\n\
+         \x20   /// A closure rather than a reference, because the instance lives behind\n\
+         \x20   /// a `RefCell` shared with every handle: handing out a borrow would\n\
+         \x20   /// hand out the `RefCell` guard's lifetime with it.\n\
+         \x20   pub fn with_host<R>(&self, read: impl FnOnce(&{param}) -> R) -> R {{\n\
+         \x20       read(self.instance.borrow().host())\n\
+         \x20   }}\n\
+         \n\
+         \x20   /// Reaches the host mutably, for an embedder that drains it between\n\
+         \x20   /// calls.\n\
+         \x20   pub fn with_host_mut<R>(&self, take: impl FnOnce(&mut {param}) -> R) -> R {{\n\
+         \x20       take(self.instance.borrow_mut().host_mut())\n\
          \x20   }}\n\
          \n\
          \x20   /// How many handles into this library are still live.\n\
@@ -368,6 +465,8 @@ fn library_struct(model: &Model) -> String {
          \x20   }}\n",
         library = model.library,
         ty = model.library_type,
+        param = HOST_PARAM,
+        bound = HOST_BOUND,
     );
     for function in &model.functions {
         out.push('\n');
@@ -382,7 +481,7 @@ fn method(model: &Model, function: &FnModel) -> String {
     let signature: Vec<String> = function
         .params
         .iter()
-        .map(|param| format!("{}: {}", param.name, param_type(model, param.ty)))
+        .map(|param| format!("{}: {}", param.name, param_type(model, param.ty, HOST_ARG)))
         .collect();
     let arguments: Vec<String> = function
         .params
@@ -398,10 +497,12 @@ fn method(model: &Model, function: &FnModel) -> String {
             }
         })
         .collect();
+    // The doc comment restates the Kira signature, so the host parameter is left
+    // off there: it is Rust's bookkeeping and not something the author wrote.
     let kira_signature: Vec<String> = function
         .params
         .iter()
-        .map(|param| result_type(model, param.ty))
+        .map(|param| result_type(model, param.ty, ""))
         .collect();
 
     let call = if arguments.is_empty() {
@@ -449,11 +550,11 @@ fn method(model: &Model, function: &FnModel) -> String {
          \x20   }}\n",
         kira_name = function.kira_name,
         kira_params = kira_signature.join(", "),
-        kira_result = result_type(model, function.result),
+        kira_result = result_type(model, function.result, ""),
         method = function.method,
         comma = if signature.is_empty() { "" } else { ", " },
         signature = signature.join(", "),
-        returns = result_type(model, function.result),
+        returns = result_type(model, function.result, HOST_ARG),
         call = call,
         lift = lift,
         export = function.export,
@@ -471,24 +572,33 @@ fn class_struct(model: &Model, class: &ClassModel) -> String {
          /// ever does. Use-after-free is not expressible — every method borrows the\n\
          /// handle and `Drop` consumes it — and a handle is a ticket rather than an\n\
          /// address, so there is nothing in it to compute with.\n\
-         #[derive(Debug)]\n\
-         pub struct {rust} {{\n\
+         ///\n\
+         /// Carries the host parameter of the library it came from, so a handle and\n\
+         /// the instance that made it can never be mismatched at a call site.\n\
+         pub struct {rust}<{bound} = StdoutHost> {{\n\
          \x20   /// The word the seam carries; opaque to this side.\n\
          \x20   handle: Handle,\n\
          \x20   /// The instance that owns the object, kept alive by this handle.\n\
-         \x20   instance: Rc<RefCell<Instance>>,\n\
+         \x20   instance: Rc<RefCell<Instance<{param}>>>,\n\
          }}\n\
          \n\
-         impl {rust} {{\n\
+         /// Written out rather than derived, so the host need not be `Debug`.\n\
+         impl<{bound}> core::fmt::Debug for {rust}<{param}> {{\n\
+         \x20   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{\n\
+         \x20       f.debug_struct(\"{rust}\").field(\"handle\", &self.handle).finish()\n\
+         \x20   }}\n\
+         }}\n\
+         \n\
+         impl<{bound}> {rust}<{param}> {{\n\
          \x20   /// The library instance this handle belongs to.\n\
-         \x20   pub fn library(&self) -> {library_ty} {{\n\
+         \x20   pub fn library(&self) -> {library_ty}<{param}> {{\n\
          \x20       {library_ty} {{\n\
          \x20           instance: Rc::clone(&self.instance),\n\
          \x20       }}\n\
          \x20   }}\n\
          }}\n\
          \n\
-         impl Drop for {rust} {{\n\
+         impl<{bound}> Drop for {rust}<{param}> {{\n\
          \x20   /// Releases the Kira object this handle names.\n\
          \x20   ///\n\
          \x20   /// A release that fails means the object is already gone, which is the\n\
@@ -500,5 +610,7 @@ fn class_struct(model: &Model, class: &ClassModel) -> String {
          }}\n",
         rust = class.rust,
         library_ty = model.library_type,
+        param = HOST_PARAM,
+        bound = HOST_BOUND,
     )
 }

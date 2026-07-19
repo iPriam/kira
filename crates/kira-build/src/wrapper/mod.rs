@@ -122,6 +122,21 @@ pub enum WrapperError {
         /// The second thing that claimed it.
         second: String,
     },
+    /// A class claims the name the generated code needs for its host parameter.
+    ///
+    /// The library type and every handle newtype are generic over the host the
+    /// embedder supplies, and that parameter has to be called something. A class
+    /// of the same name would make the generated file name a type parameter
+    /// where a type belongs, so it is refused here with the reason rather than
+    /// in the consumer's build with a borrow-checker-shaped message.
+    #[error(
+        "an exported class may not be named `{name}`: the generated wrapper spells its host \
+         type parameter `{name}`"
+    )]
+    Reserved {
+        /// The Rust name the class landed on.
+        name: String,
+    },
     /// A handle type names a class the export table does not have.
     ///
     /// Unreachable through a module this compiler wrote and validated, and

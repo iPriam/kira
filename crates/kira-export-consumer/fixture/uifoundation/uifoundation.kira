@@ -58,6 +58,14 @@ function aspectRatio(button: Button) -> Float {
     return 0.5
 }
 
+// The library's own output. `print` is an effect, and the VM hands it to the
+// host the embedder supplied rather than to a stream it picked itself — so this
+// export is what proves `load_with` reaches a consumer's host at all.
+@Export
+function announce(button: Button) {
+    print("showing " + button.title)
+}
+
 // Not exported. A library may hold whatever it likes behind the boundary; only
 // what is marked crosses.
 function hidden() -> Int {

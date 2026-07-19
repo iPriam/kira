@@ -283,6 +283,14 @@ provides a default host (print → stdout) and accepts a custom one.
 (`kira-vm-runtime/src/lib.rs:114-146`); the delta is the persistent
 `Instance` (§ 8). CI-provable end to end with no LLVM.
 
+*Landed as:* the generated library type and every handle newtype are generic
+over `H: HostCapabilities`, defaulting to `StdoutHost`. `load()` is the default
+host, `load_with(host)` is the custom one, and `with_host`/`with_host_mut` read
+it back — a capturing host that could not be read afterwards would be
+write-only. Generic rather than boxed, matching `kira-main`. The parameter is
+spelled `H`, so an exported class of that name is refused by name
+(`WrapperError::Reserved`).
+
 **LLVM/native (`kirac build --backend llvm`) — works.** Product:
 `libuifoundation.a` and `libuifoundation.dylib`/`.so`, self-contained (the
 `kira-native-bridge` runtime archive baked in, exactly as
