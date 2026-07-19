@@ -16,6 +16,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 mod exports;
+mod foundation;
 mod modules;
 mod natives;
 mod packages;

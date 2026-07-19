@@ -1,0 +1,12 @@
+// Foundation ships with the toolchain, so this import names no path and needs
+// no dependency entry: the compiler finds the package installed beside itself.
+import Foundation
+
+@Main
+function main() {
+    // A Foundation declaration is callable bare in a file that imported it,
+    // and through the namespace root the import binds.
+    printLine("hello from Foundation")
+    Foundation.printLine("and again, qualified")
+    return
+}
