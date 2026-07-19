@@ -230,6 +230,7 @@ dependencies = [
  "kira-bytecode",
  "kira-diagnostics",
  "kira-ir",
+ "kira-llvm-backend",
  "kira-main",
  "kira-manifest",
  "kira-program-graph",
@@ -346,6 +347,7 @@ version = "0.1.0"
 dependencies = [
  "kira-build",
  "kira-bytecode",
+ "kira-ir",
  "kira-main",
  "kira-runtime-abi",
  "thiserror",

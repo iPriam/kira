@@ -42,6 +42,7 @@ use kira_wasm_runtime::WasmDevice;
 use crate::hybrid;
 use crate::library;
 use crate::native;
+use crate::native_library;
 use crate::options::{CompileOptions, Device};
 use crate::wasm;
 use kira_main::StdoutHost;
@@ -232,10 +233,10 @@ fn export_engine_is_built(
         }
         Device::Host => match backend {
             BackendMode::VmBytecode => return Ok(()),
-            BackendMode::LlvmNative => {
-                "the native engine emits no stable `kira_lib_*` trampoline per \
-                 export and no per-library ABI marker yet"
-            }
+            // The native engine builds this surface: stable `kira_lib_*`
+            // trampolines, a destructor per exported class, and the
+            // per-library ABI marker.
+            BackendMode::LlvmNative => return Ok(()),
             BackendMode::Hybrid => {
                 "the hybrid engine serves neither half's export surface yet: \
                  the bytecode half needs the native half's trampolines to agree \
@@ -328,23 +329,37 @@ pub fn build(args: &[String]) -> i32 {
                 }
             }
         }
-        BackendMode::LlvmNative => {
-            let built = if is_library {
-                build_native_library(ir, &options)
-            } else {
-                build_native(ir, &options)
-            };
-            match built {
-                Some(_) => {
-                    println!("Successfully built");
+        BackendMode::LlvmNative if is_library => {
+            // The native engine's artifact is the archive *plus* the Rust crate
+            // that links and calls it, for the same reason the VM engine's is
+            // the bytecode plus the crate that embeds it: an archive on its own
+            // is nothing a Rust program can depend on.
+            match native_library::build(
+                &compiled,
+                std::path::Path::new(&options.path),
+                options.emit_llvm_ir,
+            ) {
+                Ok(artifacts) => {
+                    native_library::report(&artifacts);
                     EXIT_OK
                 }
-                None => {
+                Err(error) => {
+                    eprintln!("kirac: {error}");
                     println!("Failed to build");
                     EXIT_FAILURE
                 }
             }
         }
+        BackendMode::LlvmNative => match build_native(ir, &options) {
+            Some(_) => {
+                println!("Successfully built");
+                EXIT_OK
+            }
+            None => {
+                println!("Failed to build");
+                EXIT_FAILURE
+            }
+        },
         BackendMode::Hybrid => match hybrid::build(
             ir,
             std::path::Path::new(&options.path),
@@ -414,24 +429,6 @@ fn run_native(ir: &IrProgram, options: &CompileOptions) -> i32 {
         Err(error) => {
             eprintln!("kirac: {error}");
             EXIT_FAILURE
-        }
-    }
-}
-
-/// Builds a native shared library, reporting any backend failure.
-fn build_native_library(
-    ir: &IrProgram,
-    options: &CompileOptions,
-) -> Option<kira_llvm_backend::NativeArtifacts> {
-    match native::build_library(
-        ir,
-        std::path::Path::new(&options.path),
-        options.emit_llvm_ir,
-    ) {
-        Ok(artifacts) => Some(artifacts),
-        Err(error) => {
-            eprintln!("kirac: {error}");
-            None
         }
     }
 }

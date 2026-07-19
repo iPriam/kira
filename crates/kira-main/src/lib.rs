@@ -87,7 +87,7 @@ pub mod library;
 pub use abi::{
     EXPORT_ABI_VERSION, EXPORT_SYMBOL_PREFIX, class_drop_symbol, export_abi_marker, export_symbol,
 };
-pub use error::{ContractError, Error, describe_result};
+pub use error::{ContractError, Error, describe_result, describe_tag};
 pub use host::StdoutHost;
 pub use instance::{Handle, Instance};
 pub use library::{ExpectedExport, ExportContract, Library, content_hash};

@@ -115,15 +115,10 @@ fn a_library_artifact_is_not_an_executable() {
     let artifacts = directory.join(".kira-build");
     let executable = artifacts.join("program");
     let is_executable = executable.is_file();
-    let library_exists = std::fs::read_dir(&artifacts)
-        .map(|entries| {
-            entries.filter_map(Result::ok).any(|entry| {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                name.ends_with(".dylib") || name.ends_with(".so") || name.ends_with(".dll")
-            })
-        })
-        .unwrap_or(false);
+    // What a Rust consumer links: one self-contained static archive under
+    // `lib/`, beside where the VM engine writes its `.kbc`.
+    let archive = artifacts.join("lib").join("libparity.a");
+    let archive_exists = archive.is_file();
     let _ = std::fs::remove_dir_all(&directory);
 
     assert!(
@@ -137,9 +132,9 @@ fn a_library_artifact_is_not_an_executable() {
         executable.display(),
     );
     assert!(
-        library_exists,
-        "a library build emitted no shared library into {}",
-        artifacts.display(),
+        archive_exists,
+        "a library build emitted no static archive at {}",
+        archive.display(),
     );
 }
 
@@ -171,43 +166,58 @@ function clickAt(b: Button, x: Int) -> Bool { return x >= 0 && x < b.width }";
 
 #[test]
 fn every_backend_sees_the_same_export_surface() {
-    // The one thing that must not differ. The VM builds it and the other two
-    // refuse it, but all three read the identical derived consumer names — a
-    // backend that disagreed here would have grown its own opinion about what
-    // an export is, which is exactly what putting the checks in the frontend
-    // prevents.
+    // The one thing that must not differ. Two engines build this surface and
+    // one still refuses it, but all three read the identical derived consumer
+    // names — a backend that disagreed here would have grown its own opinion
+    // about what an export is, which is exactly what putting the checks in the
+    // frontend prevents.
+    //
+    // The wrapper is read *after each build* rather than once at the end,
+    // because both engines write their crate to the same path: reading once
+    // would only ever check whichever ran last.
     let path = write_library(EXPORTING_LIBRARY);
-    let runs: Vec<(&str, Output)> = BACKENDS
-        .iter()
-        .map(|backend| (*backend, build_on(&path, backend)))
-        .collect();
-    let generated = path
-        .parent()
-        .expect("package directory")
+    let package = path.parent().expect("package directory").to_path_buf();
+    let generated = package
         .join(".kira-build")
         .join("rust")
         .join("parity")
         .join("src")
         .join("lib.rs");
-    let wrapper = std::fs::read_to_string(&generated).unwrap_or_default();
-    let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
 
-    for (backend, run) in &runs {
+    let runs: Vec<(&str, Output, String)> = BACKENDS
+        .iter()
+        .map(|backend| {
+            let run = build_on(&path, backend);
+            let wrapper = std::fs::read_to_string(&generated).unwrap_or_default();
+            (*backend, run, wrapper)
+        })
+        .collect();
+    let _ = std::fs::remove_dir_all(&package);
+
+    for (backend, run, wrapper) in &runs {
         let stderr = String::from_utf8_lossy(&run.stderr);
         let stdout = String::from_utf8_lossy(&run.stdout);
         match *backend {
-            "vm" => {
+            // Both engines build the surface, and build the *same* surface:
+            // same three methods, same newtype, from one generator over one
+            // frontend. That identity is the whole parity claim — a consumer's
+            // code does not change when the engine does.
+            "vm" | "llvm" => {
                 assert!(
                     run.status.success(),
-                    "the vm engine failed to build an export:\nstderr: {stderr}",
+                    "the {backend} engine failed to build an export:\nstderr: {stderr}",
                 );
                 assert!(stdout.contains("3 exports"), "stdout: {stdout}");
                 for method in ["make_button", "button_width", "click_at"] {
                     assert!(
                         wrapper.contains(&format!("pub fn {method}(")),
-                        "the generated wrapper has no `{method}`:\n{wrapper}",
+                        "the {backend} engine's wrapper has no `{method}`:\n{wrapper}",
                     );
                 }
+                assert!(
+                    wrapper.contains("pub struct Button"),
+                    "the {backend} engine's wrapper has no handle type:\n{wrapper}",
+                );
             }
             _ => {
                 assert_eq!(
@@ -230,6 +240,67 @@ fn every_backend_sees_the_same_export_surface() {
             }
         }
     }
+}
+
+#[test]
+fn the_two_engines_generate_the_same_public_surface_over_different_internals() {
+    // Stated as its own test because it is the feature's central claim, and a
+    // claim checked only as a side effect of another test is a claim nobody
+    // notices breaking. The two crates share every public item and share none
+    // of their internals: one embeds bytecode, the other declares C symbols.
+    let path = write_library(EXPORTING_LIBRARY);
+    let package = path.parent().expect("package directory").to_path_buf();
+    let generated = package
+        .join(".kira-build")
+        .join("rust")
+        .join("parity")
+        .join("src")
+        .join("lib.rs");
+
+    let vm_built = build_on(&path, "vm");
+    let vm_wrapper = std::fs::read_to_string(&generated).unwrap_or_default();
+    let native_built = build_on(&path, "llvm");
+    let native_wrapper = std::fs::read_to_string(&generated).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&package);
+
+    assert!(vm_built.status.success(), "the vm engine failed");
+    assert!(native_built.status.success(), "the native engine failed");
+
+    for item in [
+        "pub struct Parity",
+        "pub struct Button",
+        "pub fn load()",
+        "pub fn make_button(",
+        "pub fn button_width(",
+        "pub fn click_at(",
+        "pub type Error = kira_main::Error;",
+    ] {
+        assert!(vm_wrapper.contains(item), "the vm crate has no `{item}`");
+        assert!(
+            native_wrapper.contains(item),
+            "the native crate has no `{item}`"
+        );
+    }
+
+    // And the internals really are different, so the agreement above is two
+    // engines agreeing rather than one engine generated twice.
+    assert!(vm_wrapper.contains("include_bytes!"), "{vm_wrapper}");
+    // Comments stripped: the VM crate's prose says it contains no `unsafe`,
+    // and matching on that sentence would make the claim check itself.
+    let vm_code: String = vm_wrapper
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!vm_code.contains("unsafe"), "{vm_code}");
+    assert!(
+        native_wrapper.contains("kira_lib_parity_abi_1"),
+        "{native_wrapper}"
+    );
+    assert!(
+        !native_wrapper.contains("include_bytes!"),
+        "{native_wrapper}"
+    );
 }
 
 #[test]

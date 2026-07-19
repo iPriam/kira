@@ -95,6 +95,10 @@ pub fn build(
         // the executable, and this half is a library it loads.
         executable_path: None,
         shared_library_path: Some(artifacts.shared_library()),
+        // A hybrid half is entered through its per-function trampolines, not
+        // through an export surface, and it is a dylib rather than an archive.
+        archive_path: None,
+        exports: kira_llvm_backend::NativeExportSurface::default(),
         ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
         runtime_archive: native::runtime_archive()?,
     };
