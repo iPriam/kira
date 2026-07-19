@@ -8,6 +8,7 @@ mod classes;
 mod closures;
 mod enums;
 mod exports;
+mod generics;
 mod imports;
 mod libraries;
 mod matches;

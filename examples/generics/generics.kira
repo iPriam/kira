@@ -1,0 +1,105 @@
+// Generic enums: one declaration that becomes a real enum per set of type
+// arguments you write.
+//
+// `enum Result<Value, Failure>` declares no type on its own — it is a
+// template. What names a type is a written instantiation: `Result<Int, AppError>`
+// substitutes the arguments into the variants and produces an ordinary enum,
+// with `Ok` carrying an `Int` and `Error` carrying an `AppError`. Two writings
+// of the same arguments name the same type; different arguments name different
+// types, and they do not assign to each other.
+//
+// Because instantiation happens during analysis, nothing below it knows generics
+// exist. `Result<Int, AppError>` behaves exactly like the enum you would have
+// written by hand — same leading-dot construction, same `match`, same move
+// semantics, same `try`.
+//
+// The enum is the *only* declaration that takes type parameters. A generic
+// struct, class, or function is refused by name, because nothing in the language
+// needs one yet.
+
+enum AppError {
+    NotFound
+    Denied
+}
+
+// The declaration below is the standard library's `Result`, verbatim.
+enum Result<Value, Failure> {
+    Ok(Value)
+    Error(Failure)
+}
+
+// A return type is a use site, so this function's `Result<Int, AppError>` is
+// what mints the enum. `.Ok(n)` and `.Error(.NotFound)` resolve against it.
+function find(n: Int) -> Result<Int, AppError> {
+    if n < 0 {
+        return .Error(.NotFound)
+    }
+    if n > 100 {
+        return .Error(.Denied)
+    }
+    return .Ok(n * 2)
+}
+
+// A different `Value` is a different type: `Result<String, AppError>` is its own
+// enum, and its `Ok` carries a `String`.
+function name(n: Int) -> Result<String, AppError> {
+    if n == 1 {
+        return .Ok("one")
+    }
+    return .Error(.NotFound)
+}
+
+// `match` reads a payload back out, exactly as it does for a hand-written enum.
+function describe(n: Int) -> Int {
+    match find(n) {
+        Ok(value) -> { return value }
+        Error(why) -> {
+            if why == .NotFound { return 0 - 1 }
+            return 0 - 2
+        }
+    }
+}
+
+// A monomorphized `Result` is `Result`-shaped, so `try` unwraps it and `handle`
+// takes the failure enum's variants — no annotation needed.
+function doubled(n: Int) -> Int {
+    attempt {
+        let value = try find(n)
+        return value + 1
+    } handle {
+        NotFound { return 0 - 10 }
+        Denied { return 0 - 20 }
+    }
+}
+
+@Main
+function main() {
+    print(describe(21))
+    print(describe(0 - 5))
+    print(describe(500))
+
+    match name(1) {
+        Ok(text) -> { print(text) }
+        Error -> { print("unnamed") }
+    }
+    match name(2) {
+        Ok(text) -> { print(text) }
+        Error -> { print("unnamed") }
+    }
+
+    print(doubled(10))
+    print(doubled(0 - 1))
+
+    // Instantiations nest: the `>>` closing this one is split by the parser.
+    let nested: Result<Result<Int, AppError>, AppError> = .Ok(find(4))
+    match nested {
+        Ok(held) -> {
+            match held {
+                Ok(value) -> { print(value) }
+                Error -> { print(0) }
+            }
+        }
+        Error -> { print(0 - 1) }
+    }
+    return
+}

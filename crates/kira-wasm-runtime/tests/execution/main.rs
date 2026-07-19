@@ -333,6 +333,7 @@ mod closures;
 mod control_flow;
 mod enums;
 mod floats;
+mod generics;
 mod imports;
 mod libraries;
 mod matches;

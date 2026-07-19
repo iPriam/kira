@@ -62,6 +62,14 @@ impl Analyzer<'_> {
     pub(crate) fn resolve_type_in(&mut self, id: TypeRefId, context: &NameContext) -> Type {
         match self.tree.type_ref(id).clone() {
             TypeRef::Named { name, span } => self.resolve_named_type(name, span, context),
+            // A generic instantiation resolves to the enum it monomorphizes
+            // into — an ordinary declared type by the time anyone else looks.
+            TypeRef::Generic {
+                name,
+                name_span,
+                args,
+                span,
+            } => self.resolve_generic_instantiation(name, name_span, &args, span, context),
             TypeRef::Array { element, .. } => {
                 let element_ty = self.resolve_type_in(element, context);
                 // An array of a type that did not resolve is itself an error.
@@ -93,20 +101,18 @@ impl Analyzer<'_> {
         }
     }
 
-    /// Resolves one written type *name* to a builtin or a declared struct.
-    fn resolve_named_type(
-        &mut self,
-        name: kira_core::Symbol,
-        span: Span,
-        context: &NameContext,
-    ) -> Type {
-        let written = self.interner.resolve(name).to_owned();
-        // A module-qualified spelling (`Support.Point`) names the same type the
-        // module declares bare. Stripping the qualifier is the whole of it:
-        // top-level names are unique across a package, so `Support.Point` and
-        // `Point` cannot be two different types — what the qualifier buys is
-        // the file-scope check that this file actually imported `Support`.
-        let text = match written.split_once('.') {
+    /// Strips a module qualifier off a written type name, or reports why the
+    /// qualifier does not resolve.
+    ///
+    /// A module-qualified spelling (`Support.Point`) names the same type the
+    /// module declares bare. Stripping the qualifier is the whole of it:
+    /// top-level names are unique across a package, so `Support.Point` and
+    /// `Point` cannot be two different types — what the qualifier buys is the
+    /// file-scope check that this file actually imported `Support`.
+    ///
+    /// Returns `None` once that check has failed and been reported.
+    pub(crate) fn strip_module_qualifier(&mut self, written: &str, span: Span) -> Option<String> {
+        match written.split_once('.') {
             Some((root, member)) => {
                 if self.module_for_root(root).is_none() {
                     if !self.report_unimported_root(root, span) {
@@ -116,12 +122,32 @@ impl Analyzer<'_> {
                             format!("unknown type `{written}`: `{root}` is not an imported module"),
                         );
                     }
-                    return Type::Error;
+                    return None;
                 }
-                member.to_owned()
+                Some(member.to_owned())
             }
-            None => written.clone(),
+            None => Some(written.to_owned()),
+        }
+    }
+
+    /// Resolves one written type *name* to a builtin or a declared struct.
+    fn resolve_named_type(
+        &mut self,
+        name: kira_core::Symbol,
+        span: Span,
+        context: &NameContext,
+    ) -> Type {
+        let written = self.interner.resolve(name).to_owned();
+        let Some(text) = self.strip_module_qualifier(&written, span) else {
+            return Type::Error;
         };
+        // A type parameter binding beats everything: inside `Result`'s body,
+        // `Value` is whatever the instantiation said it is. A parameter may not
+        // shadow a builtin (`KSEM170` refuses that at the declaration), so this
+        // order takes nothing away from a name that already means something.
+        if let Some(ty) = self.bound_type_param(&text) {
+            return ty;
+        }
         if let Some(ty) = Type::from_name(&text) {
             return ty;
         }
@@ -137,6 +163,19 @@ impl Analyzer<'_> {
         }
         if let Some(id) = self.program.types.enums().lookup(&text) {
             return Type::Enum(id);
+        }
+        // A generic enum written bare is a different mistake from an unknown
+        // name, and it has a different fix: write the type arguments.
+        if self.is_generic_enum(&text) {
+            self.emit(
+                span,
+                "KSEM172",
+                format!(
+                    "generic enum `{text}` needs its type arguments here (write \
+                     `{text}<...>`)"
+                ),
+            );
+            return Type::Error;
         }
         match context {
             NameContext::Field { owner_kind, owner } => {

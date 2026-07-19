@@ -35,8 +35,13 @@ impl Analyzer<'_> {
             };
             // Payload types resolve against the imports of the declaring file.
             self.source = source;
-            let (def, defaults) = self.resolve_enum_def(declaration);
-            let name = def.name.clone();
+            // A generic declaration names no type — it is registered as a
+            // template and waits for a written instantiation to mint one.
+            if self.register_generic_enum(declaration, source) {
+                continue;
+            }
+            let name = self.interner.resolve(declaration.name).to_owned();
+            let (def, defaults) = self.resolve_enum_def(declaration, name.clone());
             match self.program.types.enums_mut().declare(def) {
                 // Pushed only on success, which keeps `enum_defaults` indexed by
                 // the same ids the table mints.
@@ -54,8 +59,17 @@ impl Analyzer<'_> {
     /// payload types the subset cannot carry.
     ///
     /// Returns the definition and its per-variant defaults, index-aligned.
-    fn resolve_enum_def(&mut self, declaration: &EnumDecl) -> (EnumDef, Vec<Option<ExprId>>) {
-        let name = self.interner.resolve(declaration.name).to_owned();
+    ///
+    /// `name` is passed in rather than read off the declaration because a
+    /// generic instantiation declares the same body under its mangled name
+    /// (`Result<Int, AppError>`), with
+    /// [`Analyzer::bound_type_param`](crate::analyze::Analyzer) supplying the
+    /// substitution as the payload types resolve.
+    pub(crate) fn resolve_enum_def(
+        &mut self,
+        declaration: &EnumDecl,
+        name: String,
+    ) -> (EnumDef, Vec<Option<ExprId>>) {
         let mut variants: Vec<VariantDef> = Vec::with_capacity(declaration.variants.len());
         let mut defaults: Vec<Option<ExprId>> = Vec::with_capacity(declaration.variants.len());
         for variant in &declaration.variants {
@@ -73,7 +87,18 @@ impl Analyzer<'_> {
             }
             let payload = variant.payload.map(|type_ref| {
                 let ty = self.resolve_type_in(type_ref, &NameContext::Ordinary);
-                self.check_payload_type(ty, self.tree.type_ref(type_ref).span())
+                // Inside an instantiation the payload type is whatever the
+                // arguments said, so the refusal belongs to the use site.
+                match self.payload_blame {
+                    Some((source, span)) => {
+                        let written_in = self.source;
+                        self.source = source;
+                        let checked = self.check_payload_type(ty, span);
+                        self.source = written_in;
+                        checked
+                    }
+                    None => self.check_payload_type(ty, self.tree.type_ref(type_ref).span()),
+                }
             });
             variants.push(VariantDef {
                 name: variant_name,

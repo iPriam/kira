@@ -169,3 +169,53 @@ fn newline_continuation_matches_the_reference_at_runtime() {
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
 }
+
+#[test]
+fn a_generic_enum_declaration_compiles_and_runs() {
+    // The standard library's `Result`, verbatim, through the real binary: the
+    // declaration names no type, the two written instantiations each mint one,
+    // and `match` reads their differently-typed payloads back out.
+    let output = run_source(
+        "enum AppError { NotFound }\n\
+         enum Result<Value, Failure> { Ok(Value) Error(Failure) }\n\
+         function number(flag: Bool) -> Result<Int, AppError> {\n\
+             if flag { return .Ok(7) }\n\
+             return .Error(.NotFound)\n\
+         }\n\
+         function text() -> Result<String, AppError> { return .Ok(\"seven\") }\n\
+         @Main function main() {\n\
+             match number(true) { Ok(n) -> { print(n) } Error -> { print(0) } }\n\
+             match number(false) { Ok(n) -> { print(n) } Error -> { print(0) } }\n\
+             match text() { Ok(s) -> { print(s) } Error -> { print(\"none\") } }\n\
+             return\n\
+         }",
+    );
+    assert!(
+        output.status.success(),
+        "stderr was: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n0\nseven\n");
+}
+
+#[test]
+fn a_generic_arity_mismatch_is_rejected_with_a_rendered_diagnostic() {
+    let output = run_source(
+        "enum Result<Value, Failure> { Ok(Value) Error(Failure) }\n\
+         @Main function main() { let x: Result<Int> = .Ok(1) print(1) return }",
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("KSEM174"));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn a_generic_struct_is_refused_by_name() {
+    // Only an `enum` takes type parameters. A generic struct, class, or
+    // function has no call site in the corpus, so it is refused rather than
+    // guessed at.
+    let output =
+        run_source("struct Box<T> { let v: Int }\n@Main function main() { print(1) return }");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("KPAR047"));
+}
