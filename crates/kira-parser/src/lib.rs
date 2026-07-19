@@ -11,6 +11,7 @@
 
 mod aggregate;
 mod expr;
+mod generics;
 mod item;
 mod stmt;
 #[cfg(test)]

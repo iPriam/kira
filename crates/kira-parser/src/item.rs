@@ -245,6 +245,7 @@ impl Parser<'_> {
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
+        self.refuse_type_params("function");
         let params = self.parse_params();
         let return_type = self.parse_return_type();
         let body = self.parse_block();
@@ -485,6 +486,11 @@ impl Parser<'_> {
             }
             let span = Span::from_bounds(start.start, self.previous_end());
             let name = self.intern_text(&text, span);
+            // `Name<...>` is a generic instantiation. A type position has no
+            // comparison operator, so a `<` here is never ambiguous.
+            if self.at_type_params() {
+                return self.parse_generic_args(name, span, start);
+            }
             return self.tree.add_type(TypeRef::Named { name, span });
         }
         let span = self.current().span;

@@ -176,6 +176,7 @@ mod closures;
 mod control_flow;
 mod enums;
 mod examples;
+mod generics;
 mod imports;
 mod libraries;
 mod logic;

@@ -72,6 +72,18 @@ pub struct TypeAliasDecl {
     pub span: Span,
 }
 
+/// One declared type parameter: `Value` in `enum Result<Value, Failure>`.
+///
+/// A type parameter is a *name only* — this language has no bounds, no
+/// defaults, and no variance annotations, so there is nothing else to record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeParamDecl {
+    /// The parameter's name.
+    pub name: Symbol,
+    /// Span of the name token, for diagnostics.
+    pub span: Span,
+}
+
 /// An `enum` declaration: a named set of variants, each optionally carrying a
 /// single payload value.
 ///
@@ -79,12 +91,20 @@ pub struct TypeAliasDecl {
 /// name is what starts each one. A variant may carry a payload written either
 /// `Name(Type)` or `Name: Type = default`; the second form supplies a default
 /// used when the variant is constructed with no explicit payload.
+///
+/// A declaration may be *generic* (`enum Result<Value, Failure>`), in which
+/// case `type_params` is non-empty and the declaration names no type by itself:
+/// each written instantiation is what mints one. The enum is the only
+/// declaration form that takes type parameters — a generic struct, class, or
+/// function is refused at the parse, because nothing in the corpus writes one.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDecl {
     /// The enum's name.
     pub name: Symbol,
     /// Span of the name token, for diagnostics.
     pub name_span: Span,
+    /// The declared type parameters, in order; empty for an ordinary enum.
+    pub type_params: Vec<TypeParamDecl>,
     /// The variants, in declaration order.
     pub variants: Vec<VariantDecl>,
     /// Span covering the whole declaration.
@@ -303,6 +323,23 @@ pub enum TypeRef {
         /// Where the type name appears.
         span: Span,
     },
+    /// A generic instantiation: `Result<Int, AppError>`.
+    ///
+    /// Written only where a generic declaration is in scope. Semantics
+    /// monomorphizes it — the arguments are substituted into the declaration's
+    /// body and the result is declared as an ordinary nominal type — so nothing
+    /// below semantics ever sees this node or learns that generics exist.
+    Generic {
+        /// The generic declaration's name.
+        name: Symbol,
+        /// Span of the name alone, for a diagnostic about the declaration.
+        name_span: Span,
+        /// The written type arguments, in order. Never empty: `Name<>` does not
+        /// parse.
+        args: Vec<TypeRefId>,
+        /// Span covering the name through the closing `>`.
+        span: Span,
+    },
     /// An array type: `[Int]`.
     Array {
         /// The written element type.
@@ -339,6 +376,7 @@ impl TypeRef {
     pub fn span(&self) -> Span {
         match self {
             TypeRef::Named { span, .. }
+            | TypeRef::Generic { span, .. }
             | TypeRef::Array { span, .. }
             | TypeRef::Function { span, .. }
             | TypeRef::Error { span } => *span,
