@@ -24,10 +24,25 @@ fn every_example_agrees_on_every_backend() {
         // identical refusals. What parity means for one is that every backend
         // produces an artifact from the same package — checked below, then
         // skipped here.
-        if directory.join("package.kira").is_file() {
-            check_library_example(&directory);
-            checked += 1;
-            continue;
+        //
+        // The manifest's declared `kind` is what decides, not its mere
+        // existence: an example package that declares an application kind is a
+        // program like any other, and must be run rather than quietly held to a
+        // library's rules. An unrecognized kind fails by name instead of
+        // falling through to whichever branch happens to be next.
+        let manifest = directory.join("package.kira");
+        if manifest.is_file() {
+            let text = std::fs::read_to_string(&manifest).expect("read package.kira");
+            if text.contains("kind = .Library") {
+                check_library_example(&directory);
+                checked += 1;
+                continue;
+            }
+            assert!(
+                text.contains("kind = .App"),
+                "example package `{}` declares a kind this test does not classify: {text}",
+                directory.display(),
+            );
         }
         // An example directory is a *program*, not a bag of files: once one of
         // them declares `@Main` and imports the others, running a module on its

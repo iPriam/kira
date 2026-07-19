@@ -441,8 +441,9 @@ separately so a user who asked for `--device wasm32` learns which functions were
 in question. Checked at three levels: the backend
 (`kira-wasm-runtime/tests/execution/libraries.rs`, both wasm32 and wasm64, with
 a program-with-an-entrypoint control), and the real binary
-(`end_to_end.rs::a_library_cannot_be_built_for_the_web_and_says_why` and
-`::the_web_refuses_to_build_an_export_too`), all on the CI path with no LLVM.
+(`end_to_end/packages.rs::a_library_cannot_be_built_for_the_web_and_says_why`
+and `end_to_end/exports.rs::the_web_refuses_to_build_an_export_too`), all on the
+CI path with no LLVM.
 
 ## 5. The boundary contract: who allocates, who frees
 
