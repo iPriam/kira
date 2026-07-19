@@ -139,6 +139,32 @@ impl NativeModel {
         })
     }
 
+    /// Whether any export takes a string, so a string is lent *into* the
+    /// library.
+    fn lends_strings(&self) -> bool {
+        self.functions.iter().any(|(function, _)| {
+            function
+                .params
+                .iter()
+                .any(|param| param.ty == ExportType::String)
+        })
+    }
+
+    /// Whether any export returns a string, so a string is taken *out* of it.
+    fn takes_strings(&self) -> bool {
+        self.functions
+            .iter()
+            .any(|(function, _)| function.result == ExportType::String)
+    }
+
+    /// Whether any export takes no arguments, so the empty argument array is
+    /// used.
+    fn calls_without_arguments(&self) -> bool {
+        self.functions
+            .iter()
+            .any(|(function, _)| function.params.is_empty())
+    }
+
     /// The Rust type name of class `index`.
     fn class(&self, index: u32) -> String {
         class_name_of(
@@ -199,7 +225,7 @@ pub(crate) fn lib_rs(model: &NativeModel) -> String {
     let mut out = String::new();
     out.push_str(&header(model));
     out.push_str(&externs(model));
-    out.push_str(&marshalling());
+    out.push_str(&marshalling(model));
     out.push_str(&library_struct(model));
     for (class, symbol) in &model.classes {
         out.push_str(&class_struct(model, class, symbol));
@@ -228,14 +254,18 @@ fn header(model: &NativeModel) -> String {
          /// What can go wrong loading or calling this library.\n\
          pub type Error = kira_main::Error;\n\
          \n\
-         /// The number of `BridgeValue`s a call with no arguments passes.\n\
-         ///\n\
-         /// A trampoline never reads past its signature, so an empty argument\n\
-         /// array is a valid pointer to zero elements — which is what a reference\n\
-         /// to an empty array gives.\n\
-         const NO_ARGS: [BridgeValue; 0] = [];\n\
-         \n",
+         {no_args}",
         library = model.library,
+        no_args = if model.calls_without_arguments() {
+            "/// The number of `BridgeValue`s a call with no arguments passes.\n\
+             ///\n\
+             /// A trampoline never reads past its signature, so an empty argument\n\
+             /// array is a valid pointer to zero elements — which is what a reference\n\
+             /// to an empty array gives.\n\
+             const NO_ARGS: [BridgeValue; 0] = [];\n\n"
+        } else {
+            ""
+        },
     )
 }
 
@@ -270,25 +300,41 @@ fn externs(model: &NativeModel) -> String {
             symbol = symbol,
         ));
     }
-    out.push_str(
-        "    /// Allocates a string in the library's own heap, from borrowed bytes.\n\
-         \x20   fn kira_rt_str_new(data: *const u8, len: usize) -> *mut core::ffi::c_void;\n\
-         \x20   /// Releases a string the library allocated.\n\
-         \x20   fn kira_rt_str_free(value: *mut core::ffi::c_void);\n\
-         \x20   /// Borrows a string's bytes.\n\
-         \x20   fn kira_rt_str_data(value: *mut core::ffi::c_void) -> *const u8;\n\
-         \x20   /// How many bytes a string has.\n\
-         \x20   fn kira_rt_str_len(value: *mut core::ffi::c_void) -> usize;\n\
-         }\n\
-         \n",
-    );
+    // Declared only where used. An `extern` declaration nobody calls is a
+    // `dead_code` warning in the consumer's build, against a file they did not
+    // write — and a library whose surface never mentions a string has no reason
+    // to name the string allocator at all.
+    if model.lends_strings() {
+        out.push_str(
+            "    /// Allocates a string in the library's own heap, from borrowed bytes.\n\
+             \x20   fn kira_rt_str_new(data: *const u8, len: usize) -> *mut core::ffi::c_void;\n",
+        );
+    }
+    if model.takes_strings() {
+        out.push_str(
+            "    /// Releases a string the library allocated.\n\
+             \x20   fn kira_rt_str_free(value: *mut core::ffi::c_void);\n\
+             \x20   /// Borrows a string's bytes.\n\
+             \x20   fn kira_rt_str_data(value: *mut core::ffi::c_void) -> *const u8;\n\
+             \x20   /// How many bytes a string has.\n\
+             \x20   fn kira_rt_str_len(value: *mut core::ffi::c_void) -> usize;\n",
+        );
+    }
+    out.push_str("}\n\n");
     out
 }
 
-/// The three marshalling helpers every generated method shares.
-fn marshalling() -> String {
-    String::from(
-        "/// Lends `text` to the library for the duration of one call.\n\
+/// The marshalling helpers the generated methods share.
+///
+/// Each is emitted only if this library's surface reaches it: a helper nobody
+/// calls is a `dead_code` warning in the consumer's build, against a file they
+/// did not write. `result_slot` is unconditional — every call has a result slot,
+/// including a `Void` one.
+fn marshalling(model: &NativeModel) -> String {
+    let mut out = String::new();
+    if model.lends_strings() {
+        out.push_str(
+            "/// Lends `text` to the library for the duration of one call.\n\
          ///\n\
          /// The handle is allocated from the *library's* allocator and is not freed\n\
          /// here: the callee frees its string arguments at return. Freeing it on\n\
@@ -299,8 +345,12 @@ fn marshalling() -> String {
          \x20   let handle = unsafe { kira_rt_str_new(text.as_ptr(), text.len()) };\n\
          \x20   BridgeValue::new(BridgeValueTag::STRING, handle as u64)\n\
          }\n\
-         \n\
-         /// Takes ownership of a string the library returned.\n\
+         \n",
+        );
+    }
+    if model.takes_strings() {
+        out.push_str(
+            "/// Takes ownership of a string the library returned.\n\
          ///\n\
          /// Read the bytes, copy them into a Rust `String`, then free the library's\n\
          /// handle from the same library. The library's heap is balanced before this\n\
@@ -326,8 +376,11 @@ fn marshalling() -> String {
          \x20   };\n\
          \x20   owned\n\
          }\n\
-         \n\
-         /// The slot a trampoline writes its result into.\n\
+         \n",
+        );
+    }
+    out.push_str(
+        "/// The slot a trampoline writes its result into.\n\
          ///\n\
          /// Starts as `Void`, so a trampoline that took the allocation-failure path\n\
          /// and wrote nothing is read as a result the caller refuses by name rather\n\
@@ -336,7 +389,8 @@ fn marshalling() -> String {
          \x20   BridgeValue::new(BridgeValueTag::VOID, 0)\n\
          }\n\
          \n",
-    )
+    );
+    out
 }
 
 /// The library type, its `load`, and one method per export.
@@ -543,9 +597,11 @@ fn class_struct(model: &NativeModel, class: &ClassModel, symbol: &str) -> String
 /// Renders the generated crate's `build.rs`.
 ///
 /// Two lines of cargo directives and the platform libraries the Rust
-/// `staticlib` inside the archive needs. The list is the one
-/// `kira-llvm-backend`'s linker path already enumerates for a native
-/// executable — the same archive, so the same dependencies.
+/// `staticlib` inside the archive needs. The list is not written here: it is
+/// rendered from [`kira_llvm_backend::PLATFORM_LINK_LISTS`], the same data this
+/// compiler's own linker path uses for a native executable. The same archive
+/// needs the same libraries, and a second copy of the list would drift from the
+/// first the day one of them gains a library.
 pub(crate) fn build_rs(model: &NativeModel, archive_directory: &str) -> String {
     format!(
         "//! Points the linker at the Kira library `{library}`.\n\
@@ -572,24 +628,47 @@ pub(crate) fn build_rs(model: &NativeModel, archive_directory: &str) -> String {
          \n\
          /// The system libraries the Rust `staticlib` inside the archive needs.\n\
          fn platform_libraries() -> &'static [&'static str] {{\n\
-         \x20   if cfg!(target_os = \"macos\") {{\n\
-         \x20       &[\"resolv\", \"c++\"]\n\
-         \x20   }} else if cfg!(target_os = \"linux\") {{\n\
-         \x20       &[\"pthread\", \"dl\", \"m\", \"rt\", \"gcc_s\", \"util\"]\n\
-         \x20   }} else {{\n\
-         \x20       &[]\n\
-         \x20   }}\n\
+         {libraries}\
          }}\n\
          \n\
          /// The frameworks it needs, which only Apple platforms have.\n\
          fn platform_frameworks() -> &'static [&'static str] {{\n\
-         \x20   if cfg!(target_os = \"macos\") {{\n\
-         \x20       &[\"CoreFoundation\"]\n\
-         \x20   }} else {{\n\
-         \x20       &[]\n\
-         \x20   }}\n\
+         {frameworks}\
          }}\n",
         library = model.library,
         directory = archive_directory,
+        libraries = platform_branches(|list| list.libraries),
+        frameworks = platform_branches(|list| list.frameworks),
     )
+}
+
+/// Renders the `cfg!(target_os = ...)` chain one of the generated `build.rs`
+/// list functions is made of.
+///
+/// A chain rather than the host's own list, because the generated crate decides
+/// at *its* compile time what it is building for, exactly as the hand-written
+/// version it replaces did.
+fn platform_branches(
+    select: impl Fn(&kira_llvm_backend::PlatformLinkList) -> &'static [&'static str],
+) -> String {
+    let mut out = String::new();
+    for list in kira_llvm_backend::PLATFORM_LINK_LISTS {
+        let names = select(list);
+        if names.is_empty() {
+            continue;
+        }
+        let keyword = if out.is_empty() { "if" } else { "} else if" };
+        let entries: Vec<String> = names.iter().map(|name| format!("\"{name}\"")).collect();
+        out.push_str(&format!(
+            "    {keyword} cfg!(target_os = \"{os}\") {{\n        &[{entries}]\n",
+            os = list.target_os,
+            entries = entries.join(", "),
+        ));
+    }
+    if out.is_empty() {
+        out.push_str("    &[]\n");
+    } else {
+        out.push_str("    } else {\n        &[]\n    }\n");
+    }
+    out
 }

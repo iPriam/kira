@@ -35,6 +35,13 @@ pub(crate) fn cargo_toml(spec: &WrapperSpec<'_>, model: &Model) -> String {
          # Path dependencies cannot be published, and this crate is a build\n\
          # artifact rather than something to release.\n\
          publish = false\n\
+         # Stated rather than left to cargo's auto-detection. The native engine\n\
+         # writes a `build.rs` into this same directory, and the library build\n\
+         # deletes it when it switches back to the VM — but cargo decides whether\n\
+         # to run a build script by looking for the file, so saying `false` here\n\
+         # is what makes \"this engine has no build script\" a fact of the manifest\n\
+         # rather than a fact about what happens to be on disk.\n\
+         build = false\n\
          \n\
          [dependencies]\n\
          kira-bytecode = {{ path = \"{root}/crates/kira-bytecode\" }}\n\

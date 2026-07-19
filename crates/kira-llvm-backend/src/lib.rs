@@ -44,10 +44,14 @@ mod exports;
 // object to link, so the driver would be unreachable rather than merely unused.
 #[cfg(feature = "llvm")]
 mod link;
+// Not gated: the platform link list is data about a host rather than something
+// LLVM answers, and a consumer's build script reads it on a machine with none.
+mod platform;
 
 pub use exports::{NativeClass, NativeExport, NativeExportSurface};
 #[cfg(feature = "llvm")]
 pub use link::LinkError;
+pub use platform::{PLATFORM_LINK_LISTS, PlatformLinkList, host_link_list, link_list_for};
 
 /// What went wrong producing native code.
 #[derive(Debug, thiserror::Error)]
