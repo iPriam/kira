@@ -69,6 +69,20 @@ pub enum NativeLibraryError {
         #[source]
         source: std::io::Error,
     },
+    /// The archive directory has no absolute spelling.
+    ///
+    /// The generated `build.rs` runs from the generated crate's own directory,
+    /// wherever a consumer put it, so a relative link-search path in it would
+    /// resolve against the wrong directory and fail the consumer's link on a
+    /// library that is right where it was left.
+    #[error("cannot resolve `{path}` to an absolute path: {source}")]
+    Unresolvable {
+        /// The path that could not be resolved.
+        path: String,
+        /// The underlying I/O failure.
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 /// The `kira_lib_*` surface a library of this name and shape exports.
@@ -154,17 +168,47 @@ pub fn build_native_library(
         },
     )?;
 
+    // Absolute, always. `kirac` is run from wherever the author happens to be,
+    // so `build_directory` can perfectly well be relative — and the path baked
+    // into the generated `build.rs` is read by cargo from the *generated
+    // crate's* directory, which is somewhere else entirely. Resolved after the
+    // archive is built, so the directory exists and the answer is real rather
+    // than lexical.
+    let archive_directory = std::fs::canonicalize(&lib_directory).map_err(|source| {
+        NativeLibraryError::Unresolvable {
+            path: lib_directory.display().to_string(),
+            source,
+        }
+    })?;
+
     let generated = crate::wrapper::generate_native(&crate::wrapper::NativeWrapperSpec {
         library: &options.name,
         version: &options.version,
         exports: &module.exports,
         symbols: &surface,
         toolchain_root: &options.toolchain_root,
-        archive_directory: &lib_directory,
+        archive_directory: &archive_directory,
     })?;
     let wrapper_crate = options.build_directory.join("rust").join(&generated.name);
     for file in &generated.files {
         write(&wrapper_crate.join(&file.path), file.contents.as_bytes())?;
+    }
+    // The VM engine's embedded bytecode, if this package was built that way
+    // before. Nothing in the native crate reads it, and a `.kbc` sitting beside
+    // an archive is an invitation to believe the wrong engine is linked.
+    for file in crate::wrapper::foreign_engine_files(crate::wrapper::Engine::Native, &options.name)
+    {
+        let path = wrapper_crate.join(file);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(NativeLibraryError::Write {
+                    path: path.display().to_string(),
+                    source,
+                });
+            }
+        }
     }
 
     Ok(NativeLibraryArtifacts {

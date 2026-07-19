@@ -325,6 +325,32 @@ fn the_manifest_points_its_dependencies_at_the_toolchain_that_generated_it() {
 }
 
 #[test]
+fn the_vm_manifest_says_it_has_no_build_script() {
+    // Cargo auto-detects a build script by finding `build.rs` in the package
+    // root, and the native engine writes one into this same directory. Saying
+    // `build = false` makes "no build script" a fact of the manifest rather than
+    // a fact about what a previous build happened to leave behind.
+    let table = uifoundation();
+    let generated = generated(&table);
+    let manifest = generated.file("Cargo.toml").expect("Cargo.toml");
+    assert!(manifest.contains("\nbuild = false\n"), "{manifest}");
+}
+
+#[test]
+fn each_engine_knows_which_file_the_other_one_leaves_behind() {
+    // The two lists are disjoint and neither is empty: an engine that claimed to
+    // leave nothing behind would let the switch flow keep a stale file.
+    assert_eq!(
+        foreign_engine_files(Engine::Vm, "uifoundation"),
+        [Path::new("build.rs")]
+    );
+    assert_eq!(
+        foreign_engine_files(Engine::Native, "uifoundation"),
+        [Path::new("uifoundation.kbc")]
+    );
+}
+
+#[test]
 fn the_readme_says_not_to_commit_it_and_lists_the_surface() {
     let table = uifoundation();
     let generated = generated(&table);
@@ -477,6 +503,107 @@ mod native {
             script.contains("cargo:rustc-link-lib=static=uifoundation"),
             "{script}"
         );
+    }
+
+    #[test]
+    fn a_surface_that_never_mentions_a_string_declares_no_string_helper() {
+        // A declaration nobody calls is a `dead_code` warning in the consumer's
+        // build, reported against a file they did not write — and a consumer
+        // whose own gate is `-D warnings` gets a build failure. The VM engine's
+        // renderer already holds this line; this is the native one's.
+        let table = ExportTable {
+            classes: Vec::new(),
+            functions: vec![ModuleExport {
+                name: "add".to_owned(),
+                kira_name: "add".to_owned(),
+                function: 0,
+                params: vec![ExportType::Int, ExportType::Int],
+                result: ExportType::Int,
+            }],
+        };
+        let symbols = NativeExportSurface {
+            abi_marker: Some("kira_lib_uifoundation_abi_1".to_owned()),
+            functions: vec![kira_llvm_backend::NativeExport {
+                symbol: "kira_lib_uifoundation_add".to_owned(),
+                function: 0,
+            }],
+            classes: Vec::new(),
+        };
+        let model = NativeModel::build("uifoundation", &table, &symbols).expect("model");
+        let source = native_lib_rs(&model);
+        for unused in [
+            "kira_rt_str_new",
+            "kira_rt_str_free",
+            "kira_rt_str_data",
+            "kira_rt_str_len",
+            "lend_str",
+            "take_str",
+            "NO_ARGS",
+        ] {
+            assert!(
+                !source.contains(unused),
+                "the wrapper declares `{unused}` and never calls it: {source}"
+            );
+        }
+        // What it does need is still there.
+        assert!(source.contains("fn result_slot()"), "{source}");
+        assert!(source.contains("pub fn add("), "{source}");
+    }
+
+    #[test]
+    fn an_export_taking_no_arguments_gets_the_empty_argument_array() {
+        // The other side of the same rule: emitted when it is reached.
+        let table = ExportTable {
+            classes: Vec::new(),
+            functions: vec![ModuleExport {
+                name: "default_width".to_owned(),
+                kira_name: "defaultWidth".to_owned(),
+                function: 0,
+                params: Vec::new(),
+                result: ExportType::Int,
+            }],
+        };
+        let symbols = NativeExportSurface {
+            abi_marker: Some("kira_lib_uifoundation_abi_1".to_owned()),
+            functions: vec![kira_llvm_backend::NativeExport {
+                symbol: "kira_lib_uifoundation_default_width".to_owned(),
+                function: 0,
+            }],
+            classes: Vec::new(),
+        };
+        let model = NativeModel::build("uifoundation", &table, &symbols).expect("model");
+        let source = native_lib_rs(&model);
+        assert!(
+            source.contains("const NO_ARGS: [BridgeValue; 0] = [];"),
+            "{source}"
+        );
+        assert!(source.contains("let args = NO_ARGS;"), "{source}");
+    }
+
+    #[test]
+    fn the_build_script_names_exactly_the_platform_libraries_the_backend_owns() {
+        // The list has one home (`kira_llvm_backend::PLATFORM_LINK_LISTS`) and
+        // three readers: this compiler's linker, this generated script, and a
+        // consumer reaching the wrapper another way. This is the check that the
+        // generated one is rendered from the home rather than copied beside it —
+        // a library added there and not here fails a consumer's link naming
+        // nothing.
+        let script = build_rs(&model(), "/pkg/.kira-build/lib");
+        for list in kira_llvm_backend::PLATFORM_LINK_LISTS {
+            for name in list.libraries.iter().chain(list.frameworks) {
+                assert!(
+                    script.contains(&format!("\"{name}\"")),
+                    "the build script does not name `{name}`: {script}"
+                );
+            }
+            if !list.libraries.is_empty() || !list.frameworks.is_empty() {
+                assert!(
+                    script.contains(&format!("cfg!(target_os = \"{}\")", list.target_os)),
+                    "the build script has no branch for {}: {script}",
+                    list.target_os
+                );
+            }
+        }
     }
 
     #[test]

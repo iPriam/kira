@@ -35,6 +35,10 @@ pub mod native;
 pub mod wrapper;
 
 pub use frontend::{Compiled, FrontendError, compile};
+// Re-exported rather than restated: a consumer's `build.rs` that reaches the
+// generated wrapper without running the generated `build.rs` still has to name
+// the same platform libraries, and there is one list.
+pub use kira_llvm_backend::{PLATFORM_LINK_LISTS, PlatformLinkList, host_link_list, link_list_for};
 pub use library::{
     LibraryArtifacts, LibraryBuildError, LibraryBuildOptions, build_library, toolchain_root,
 };

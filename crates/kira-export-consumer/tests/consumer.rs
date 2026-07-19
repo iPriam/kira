@@ -82,6 +82,24 @@ fn an_export_with_no_arguments_and_one_returning_a_float_both_work() {
 }
 
 #[test]
+fn an_export_that_returns_nothing_runs_on_either_engine() {
+    // The `Void` result is its own lift path in both generated wrappers, and
+    // *where* the effect goes is the one thing the engines differ on: the VM
+    // hands `print` to the host the embedder supplied, the native engine writes
+    // this process's stdout. So what the output was belongs in `vm_engine.rs`,
+    // where a host can read it, and what belongs here is that the call runs and
+    // returns — which is the half that was compiled but never executed against
+    // the native engine.
+    let ui = load();
+    let button = ui.make_button("ok").expect("make_button");
+    ui.announce(&button).expect("announce");
+    // Twice, because a `Void` lift that corrupted the result slot would be
+    // survivable once and not twice, and the library is still usable after.
+    ui.announce(&button).expect("announce");
+    assert_eq!(ui.button_label(&button).expect("label"), "ok");
+}
+
+#[test]
 fn only_exported_functions_appear_on_the_surface() {
     // `hidden()` is in the library and is not marked `@Export`. Nothing about
     // it reaches Rust — there is no method for it, which the compiler already

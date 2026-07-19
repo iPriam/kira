@@ -213,6 +213,20 @@ $ kirac build --backend llvm                      # native engine, same API
    -> .kira-build/rust/uifoundation/              # regenerated, native internals
 ```
 
+*Landed as:* the archive only. Nothing on this path reads the dylib — a Rust
+consumer links `lib<name>.a` — and building an artifact nobody opens is how a
+build gets slower for nothing. The dylib remains one option away rather than
+removed: `NativeBuildOptions::shared_library_path` and `link_shared_library` are
+both intact, so a `dlopen`-ing host is a caller change, not a backend change.
+
+Both engines write the *same* `.kira-build/rust/<name>/`, because a consumer's
+`path` dependency names that directory and must survive a rebuild for the other
+engine. Each engine therefore deletes the other's leftover on the way through —
+the native engine's `build.rs`, the VM engine's embedded `.kbc` — and the VM
+engine's manifest states `build = false`. Cargo decides whether a crate has a
+build script by *finding the file*, so a surviving `build.rs` would have kept a
+VM-engine crate linking a stale archive.
+
 Consumer `Cargo.toml`:
 
 ```toml
@@ -378,7 +392,9 @@ checks) → per backend:
   per-class drop trampolines; marker) → object → `link.rs` grows an archive
   step (combine the object with the runtime archive via the discovered
   install's `llvm-ar`) and reuses `link_shared_library` for the dylib form;
-  artifacts `.kira-build/lib/lib<name>.a` and `.dylib`/`.so`.
+  artifacts `.kira-build/lib/lib<name>.a` and `.dylib`/`.so`. *Landed as:* the
+  archive alone, for the reason § 3 records; the dylib path is preserved and
+  unbuilt.
 - **Both**: `kira-build` (whose header already claims bindings generation as
   in-scope) emits the wrapper crate to `.kira-build/rust/<name>/` from the
   program it has in hand — **no new metadata artifact format is needed**; the
@@ -446,6 +462,13 @@ All appends; **no `RUNTIME_ABI_VERSION` bump** — no existing `kira_rt_*`
 signature, ownership rule, or representation changes, and no new `kira_rt_*`
 helper is anticipated (drop trampolines are generated code, not runtime
 helpers).
+
+*Landed as:* two new helpers after all, `kira_rt_box_new` and `kira_rt_box_free`.
+A handle on the native engine is a boxed object, and boxing needs the library's
+own allocator rather than the generated code's — so the pair is runtime surface,
+not generated code, and the anticipation above was simply wrong. The version
+still does not move: both are additions, no existing signature or ownership rule
+changed, and the adding-versus-changing rule is what decides a bump.
 
 - **KBC1**: an appended exports section — per export: name, function id,
   param tags, result tag; plus an exported-class table (class name → the type
