@@ -720,7 +720,7 @@ Package uifoundation {
 ```sh
 kirac check uifoundation.kira                      # clean with no @Main
 kirac build --backend vm uifoundation.kira         # a .kbc plus a Rust crate
-kirac build --backend llvm uifoundation.kira       # a shared library, no C main
+kirac build --backend llvm uifoundation.kira       # a static archive, no C main
 kirac build --backend hybrid uifoundation.kira     # both halves plus a manifest
 kirac run uifoundation.kira                        # refused: no entrypoint
 ```
@@ -736,10 +736,42 @@ rule rather than three: an application must declare exactly one `@Main`
 refused identically on all three backends, because there is nothing backend-
 specific about a package having no way in.
 
-Building a library as a *wasm* module is refused by name: the wasm backend emits
-one self-contained module entered at a single export, and the string and
-allocator contract across a wasm module boundary is undesigned. Compiling the VM
-into a wasm consumer is the supported Web path.
+### What a library build refuses, and what would lift it
+
+Three things, each refused by name with its reason and the change that would
+build it. None is a silent gap, and none is discovered at run time.
+
+**A library as a wasm module artifact.** The wasm backend emits one
+self-contained module entered at a single export and links no foreign code, and
+the string and allocator contract across a wasm module boundary is undesigned —
+so there is no answer yet to who allocated a string a JS host is holding. The
+yes-path is already half-built: the module builder supports arbitrary named
+exports and today emits only `MAIN_EXPORT`, so one wasm export per Kira export
+is the shape this grows into once the allocator contract is decided. What works
+today instead is the other wasm consumer — a Rust program that embeds the
+library and is *itself* compiled to `wasm32-unknown-unknown`, which the VM
+engine's generated crate supports because everything under it does.
+
+**An `@Export` that is also `@Native`, and a `@Native` function that calls a
+`@Runtime` one** — both on the hybrid engine, both by function name. A consumer
+always enters the bytecode half, and a handle is a root into that half's heap,
+so machine code cannot mint one; and a library instance owns a heap and is
+entered through a mutable borrow, so it cannot be re-entered from inside a call.
+Neither is a missing feature: an *application* built with `--backend hybrid`
+calls in both directions, and giving that up is the whole of what a library
+gives up.
+
+`@Native` on its own is refused by no engine. `--backend vm` compiles every
+function to bytecode whatever it was annotated with — which is what makes `vm`
+and `llvm` comparable on any program — so nothing native executes on a pure VM
+and there is nothing to prevent.
+
+**Two Kira native libraries in one binary.** Both archives carry the `kira_rt_*`
+runtime, so linking both fails with a duplicate-symbol error — loud, at link, by
+symbol name, which is what makes it an acceptable v1 answer rather than a trap.
+The fix is per-library runtime prefixing (`kira_rt_*` becoming
+`kira_rt_<library>_*`), and a host that `dlopen`s the shared form is already
+isolated by `RTLD_LOCAL`.
 
 ### `@Export`: the consumer-facing surface
 
@@ -821,9 +853,8 @@ drop(button);                           // releases the Kira object
 The generated crate `include_bytes!`s the `.kbc` and runs it on a persistent VM
 instance inside the consumer's process. **No linker, no LLVM, no `unsafe`** —
 which is why this engine is the one provable on a machine that has none of them,
-and why the crate also builds for `wasm32-unknown-unknown`. A Rust wasm
-application embedding a Kira library is this feature's Web answer; a wasm *C-ABI
-library artifact* stays refused, for the reason above.
+and why the crate also builds for `wasm32-unknown-unknown` — the Web answer
+above.
 
 A wrapper and the library it was generated from are built separately, so they can
 disagree. The VM engine has no link step to fail, so the guard is data:
@@ -897,8 +928,7 @@ code runs rather than a gap. `print` goes to stdout, with no host to redirect it
 because giving native code one would be an ABI rather than a parameter. A trap
 ends the process, exactly as a `kira build` binary does — `attempt`/`try`/`handle`
 inside the library is the portable way to keep one away from the boundary. And
-two Kira native libraries cannot share a binary: both carry the `kira_rt_*`
-runtime, so linking two fails with a duplicate-symbol error, loud and at link.
+two Kira native libraries cannot share a binary, for the reason above.
 
 `--backend hybrid` is the third engine, and the only one that keeps the library
 author's own `@Runtime`/`@Native` split meaningful. The other two ignore it — the
@@ -933,6 +963,12 @@ See [.codex/work/kira-export-design.md](.codex/work/kira-export-design.md).
 library in `fixture/uifoundation/`, generates the wrapper through the same
 generator `kirac` drives, compiles it under this workspace's lint gate, and calls
 it.
+
+[examples/library/](examples/library/) is the same thing written to be read
+rather than run by CI: a small Kira library, and the Rust that calls it. Its
+README's snippet was run against the generated crate before it was written down,
+and `backend_parity/examples.rs` builds the package on all three engines, so a
+claim there that stopped being true fails a test rather than going stale.
 
 `tests/consumer.rs` is the parity proof, and its force comes from being one file
 rather than three: it is compiled and run **unchanged** against every engine.

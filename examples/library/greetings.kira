@@ -1,0 +1,65 @@
+// A Kira library, and the Rust program that calls it.
+//
+// `kind = .Library` in `package.kira` is what makes this a library: it needs no
+// `@Main`, `kirac run` refuses it by name, and `kirac build` produces an
+// artifact plus the Rust crate a consumer depends on. `README.md` beside this
+// file is the consumer half.
+
+// An exported class is handle-eligible: its instances cross to Rust as opaque
+// handles, and the Rust newtype's `Drop` is the only thing that releases one.
+// Marking it `@Export` exports no method — functions are the exported surface,
+// so a method a consumer needs is wrapped in one, as `greeting` wraps `line`.
+@Export
+class Greeter {
+    var name: String = "world"
+    var width: Int = 40
+
+    function line() -> String {
+        return "hello, " + self.name
+    }
+}
+
+// Handle out: the constructor-shaped export.
+@Export
+function makeGreeter(name: String) -> Greeter {
+    var greeter = Greeter()
+    greeter.name = name
+    return greeter
+}
+
+// Handle in, owned String out. Rust owns what comes back; the library's own
+// copy is freed before the call returns.
+@Export
+function greeting(greeter: Greeter) -> String {
+    return greeter.line()
+}
+
+// Handle in, scalar out.
+@Export
+function greeterWidth(greeter: Greeter) -> Int {
+    return greeter.width
+}
+
+// Handle in and out. An exported parameter is lent rather than moved, so this
+// returns a new greeter instead of widening the one it was given.
+@Export
+function widen(greeter: Greeter, by: Int) -> Greeter {
+    var wider = Greeter()
+    wider.name = greeter.name
+    wider.width = greeter.width + by
+    return wider
+}
+
+// `print` is an effect, and the VM hands each finished line to the host the
+// embedder supplied rather than to a stream it picked itself — so a consumer
+// can capture this with `load_with` instead of losing it to stdout.
+@Export
+function announce(greeter: Greeter) {
+    print(greeter.line())
+}
+
+// Not exported. A library keeps whatever it likes behind the boundary; only
+// what is marked crosses.
+function unused() -> Int {
+    return 7
+}
