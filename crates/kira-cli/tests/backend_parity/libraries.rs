@@ -411,18 +411,80 @@ fn two_native_libraries_really_do_collide_on_the_runtime() {
     // The runtime's own ABI marker: one symbol, defined by every Kira native
     // runtime, and therefore by both archives. Two definitions of it in one
     // link is the collision.
+    //
+    // The search is confined to the archive's symbol index, because a plain
+    // scan of the whole file cannot tell a definition from a reference to one.
+    // Both are present here — `nm` on a freshly built archive shows
+    // `T _kira_rt_abi_version_2` in the runtime member and
+    // `U _kira_rt_abi_version_2` in the member that calls it — so a scan of the
+    // bytes would stay green on exactly the regression this test exists to
+    // catch: `link.rs` no longer baking the runtime archive in leaves the
+    // undefined reference, and its name, behind. The index lists defined
+    // symbols only.
     let marker = kira_runtime_abi::RUNTIME_ABI_MARKER.as_bytes();
-    let defines = |bytes: &[u8]| bytes.windows(marker.len()).any(|window| window == marker);
+    let defines = |bytes: &[u8]| {
+        symbol_index(bytes)
+            .windows(marker.len())
+            .any(|window| window == marker)
+    };
     assert!(
         defines(&bytes_first),
-        "the first archive carries no `{}`",
+        "the first archive does not define `{}`",
         kira_runtime_abi::RUNTIME_ABI_MARKER,
     );
     assert!(
         defines(&bytes_second),
-        "the second archive carries no `{}`",
+        "the second archive does not define `{}`",
         kira_runtime_abi::RUNTIME_ABI_MARKER,
     );
+}
+
+/// Returns the bytes of an `ar` archive's symbol-index member.
+///
+/// The index is the archive's own table of *defined* symbols — the thing a
+/// linker consults to decide which members to pull in — so a name found here is
+/// one this archive supplies, not one it asks for. It is the first member, and
+/// plain bytes, so reading it needs no tool the machine might not have.
+///
+/// Layout: the `!<arch>\n` magic, then a 60-byte member header whose last
+/// fields are an ASCII decimal size at 48..58 and a `` `\n `` terminator. macOS
+/// spells a long member name as `#1/<len>` in the name field, with the name
+/// itself occupying the first `<len>` bytes of the member's data — which is how
+/// `__.SYMDEF` is stored.
+fn symbol_index(archive: &[u8]) -> &[u8] {
+    const MAGIC: &[u8] = b"!<arch>\n";
+    const HEADER: usize = 60;
+    assert!(
+        archive.starts_with(MAGIC),
+        "not an ar archive: {:?}",
+        &archive[..archive.len().min(8)],
+    );
+    let header = &archive[MAGIC.len()..MAGIC.len() + HEADER];
+    let size: usize = std::str::from_utf8(&header[48..58])
+        .expect("ar size field")
+        .trim()
+        .parse()
+        .expect("ar size is a decimal");
+    let start = MAGIC.len() + HEADER;
+    let member = &archive[start..start + size];
+
+    // Step over the extended name, and check it really is the symbol index: a
+    // first member that is an object file would make every lookup below a
+    // lookup of nothing, and pass silently.
+    let name_field = std::str::from_utf8(&header[..16]).expect("ar name field");
+    let name_length: usize = name_field
+        .trim_end()
+        .strip_prefix("#1/")
+        .expect("the first member has an extended name")
+        .parse()
+        .expect("an extended name length");
+    let (name, data) = member.split_at(name_length);
+    let name = String::from_utf8_lossy(name);
+    assert!(
+        name.trim_end_matches('\0').starts_with("__.SYMDEF"),
+        "the archive's first member is not the symbol index: {name}",
+    );
+    data
 }
 
 #[test]
