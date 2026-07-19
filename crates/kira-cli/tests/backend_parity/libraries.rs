@@ -141,11 +141,10 @@ fn a_library_artifact_is_not_an_executable() {
 // ---------------------------------------------------------------------------
 // The `@Export` surface
 //
-// The VM engine serves it and the other two do not yet, so parity here is not
-// "all three agree" — it is that all three see the *same* export surface, and
-// each says what it does with it. The surface is frontend work above the
-// backend split, so the names must be identical on all three; the verdicts
-// differ, by name, with a reason and a redirection.
+// All three engines serve it, over three different engines, behind one
+// generated Rust API — which is where this feature's parity is measured. The
+// surface itself is frontend work above the backend split, so the derived names
+// must be identical on all three; what differs is only what runs underneath.
 // ---------------------------------------------------------------------------
 
 /// The motivating library, in the shapes v1 supports: a handle-eligible class,
@@ -166,14 +165,14 @@ function clickAt(b: Button, x: Int) -> Bool { return x >= 0 && x < b.width }";
 
 #[test]
 fn every_backend_sees_the_same_export_surface() {
-    // The one thing that must not differ. Two engines build this surface and
-    // one still refuses it, but all three read the identical derived consumer
-    // names — a backend that disagreed here would have grown its own opinion
-    // about what an export is, which is exactly what putting the checks in the
-    // frontend prevents.
+    // The one thing that must not differ. All three engines build this surface
+    // now, and they must build the *same* one: same three derived consumer
+    // names, same handle type, from one generator over one frontend. A backend
+    // that disagreed here would have grown its own opinion about what an export
+    // is, which is exactly what putting the checks in the frontend prevents.
     //
     // The wrapper is read *after each build* rather than once at the end,
-    // because both engines write their crate to the same path: reading once
+    // because all three engines write their crate to the same path: reading once
     // would only ever check whichever ran last.
     let path = write_library(EXPORTING_LIBRARY);
     let package = path.parent().expect("package directory").to_path_buf();
@@ -197,57 +196,32 @@ fn every_backend_sees_the_same_export_surface() {
     for (backend, run, wrapper) in &runs {
         let stderr = String::from_utf8_lossy(&run.stderr);
         let stdout = String::from_utf8_lossy(&run.stdout);
-        match *backend {
-            // Both engines build the surface, and build the *same* surface:
-            // same three methods, same newtype, from one generator over one
-            // frontend. That identity is the whole parity claim — a consumer's
-            // code does not change when the engine does.
-            "vm" | "llvm" => {
-                assert!(
-                    run.status.success(),
-                    "the {backend} engine failed to build an export:\nstderr: {stderr}",
-                );
-                assert!(stdout.contains("3 exports"), "stdout: {stdout}");
-                for method in ["make_button", "button_width", "click_at"] {
-                    assert!(
-                        wrapper.contains(&format!("pub fn {method}(")),
-                        "the {backend} engine's wrapper has no `{method}`:\n{wrapper}",
-                    );
-                }
-                assert!(
-                    wrapper.contains("pub struct Button"),
-                    "the {backend} engine's wrapper has no handle type:\n{wrapper}",
-                );
-            }
-            _ => {
-                assert_eq!(
-                    run.status.code(),
-                    Some(1),
-                    "the {backend} backend did not refuse to build an export:\nstderr: {stderr}",
-                );
-                assert!(
-                    stdout.contains("Failed to build") && !stdout.contains("Successfully built"),
-                    "the {backend} backend claimed a build it refused:\nstdout: {stdout}",
-                );
-                assert!(
-                    stderr.contains("library export is not built yet"),
-                    "the {backend} backend refused for a different reason: {stderr}",
-                );
-                assert!(
-                    stderr.contains("make_button, button_width, click_at"),
-                    "the {backend} backend named a different surface: {stderr}",
-                );
-            }
+        assert!(
+            run.status.success(),
+            "the {backend} engine failed to build an export:\nstderr: {stderr}",
+        );
+        assert!(stdout.contains("3 exports"), "stdout: {stdout}");
+        for method in ["make_button", "button_width", "click_at"] {
+            assert!(
+                wrapper.contains(&format!("pub fn {method}(")),
+                "the {backend} engine's wrapper has no `{method}`:\n{wrapper}",
+            );
         }
+        assert!(
+            wrapper.contains("pub struct Button"),
+            "the {backend} engine's wrapper has no handle type:\n{wrapper}",
+        );
     }
 }
 
 #[test]
-fn the_two_engines_generate_the_same_public_surface_over_different_internals() {
+fn every_engine_generates_the_same_public_surface_over_different_internals() {
     // Stated as its own test because it is the feature's central claim, and a
     // claim checked only as a side effect of another test is a claim nobody
-    // notices breaking. The two crates share every public item and share none
-    // of their internals: one embeds bytecode, the other declares C symbols.
+    // notices breaking. The three crates share every public item and share
+    // almost none of their internals: the VM engine embeds bytecode, the native
+    // engine declares C symbols, the hybrid engine embeds bytecode *and* a
+    // split and opens a shared library at load.
     let path = write_library(EXPORTING_LIBRARY);
     let package = path.parent().expect("package directory").to_path_buf();
     let generated = package
@@ -261,10 +235,13 @@ fn the_two_engines_generate_the_same_public_surface_over_different_internals() {
     let vm_wrapper = std::fs::read_to_string(&generated).unwrap_or_default();
     let native_built = build_on(&path, "llvm");
     let native_wrapper = std::fs::read_to_string(&generated).unwrap_or_default();
+    let hybrid_built = build_on(&path, "hybrid");
+    let hybrid_wrapper = std::fs::read_to_string(&generated).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&package);
 
     assert!(vm_built.status.success(), "the vm engine failed");
     assert!(native_built.status.success(), "the native engine failed");
+    assert!(hybrid_built.status.success(), "the hybrid engine failed");
 
     for item in [
         "pub struct Parity",
@@ -273,14 +250,34 @@ fn the_two_engines_generate_the_same_public_surface_over_different_internals() {
         "pub fn make_button(",
         "pub fn button_width(",
         "pub fn click_at(",
-        "pub type Error = kira_main::Error;",
     ] {
         assert!(vm_wrapper.contains(item), "the vm crate has no `{item}`");
         assert!(
             native_wrapper.contains(item),
             "the native crate has no `{item}`"
         );
+        assert!(
+            hybrid_wrapper.contains(item),
+            "the hybrid crate has no `{item}`"
+        );
     }
+    // The error type is the one public name that is *not* shared, and it is
+    // named rather than skipped: the hybrid engine can fail two ways the other
+    // two cannot — a native half that is missing, and two halves that disagree —
+    // so it has its own enum. A consumer's `?` is unaffected, which is what the
+    // shared shape above is for.
+    assert!(
+        vm_wrapper.contains("pub type Error = kira_main::Error;"),
+        "{vm_wrapper}"
+    );
+    assert!(
+        native_wrapper.contains("pub type Error = kira_main::Error;"),
+        "{native_wrapper}"
+    );
+    assert!(
+        hybrid_wrapper.contains("pub type Error = kira_hybrid_main::HybridMainError;"),
+        "{hybrid_wrapper}"
+    );
 
     // And the internals really are different, so the agreement above is two
     // engines agreeing rather than one engine generated twice.
@@ -301,13 +298,34 @@ fn the_two_engines_generate_the_same_public_surface_over_different_internals() {
         !native_wrapper.contains("include_bytes!"),
         "{native_wrapper}"
     );
+    // The hybrid crate embeds *two* payloads and points at a third file, which
+    // is the shape no other engine has.
+    assert!(
+        hybrid_wrapper.contains("include_bytes!(\"../parity.kbc\")"),
+        "{hybrid_wrapper}"
+    );
+    assert!(
+        hybrid_wrapper.contains("include_bytes!(\"../parity.khm\")"),
+        "{hybrid_wrapper}"
+    );
+    assert!(
+        hybrid_wrapper.contains("const NATIVE_HALF"),
+        "{hybrid_wrapper}"
+    );
+    // And it needs no `unsafe` either: the loading lives in `kira-hybrid-main`.
+    let hybrid_code: String = hybrid_wrapper
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!hybrid_code.contains("unsafe"), "{hybrid_code}");
 }
 
 #[test]
 fn checking_an_exporting_library_stops_at_a_clean_frontend() {
-    // The refusal the test above proves is the *engine's*, not the frontend's:
-    // the same package no backend will build passes `check`, because `check`
-    // stops at the frontend and the frontend is where this step is finished.
+    // `check` stops at the frontend, and the frontend is where an export's rules
+    // live — so an exporting library checks clean without any engine being
+    // consulted at all.
     //
     // Deliberately one run, not one per backend: `kirac check` takes no
     // `--backend` (pipeline.rs::check reads only a path), so looping the

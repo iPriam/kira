@@ -7,29 +7,28 @@
 //!   `@Native` function,
 //! - `<stem>.khm` — the manifest tying them together, which a run loads first.
 //!
-//! # Why the manifest is built here
+//! # Where the manifest is built, and why not here
 //!
-//! The manifest describes a program in the seam's own vocabulary
-//! ([`BridgeValueTag`], [`Execution`]), and building one means reading the IR.
-//! `kira-hybrid-definition` sits below `kira-ir` and must not learn about it, so
-//! the composition happens in the CLI — which already depends on both — rather
-//! than by giving a lower layer a dependency it should not have.
+//! In `kira-build`, alongside the hybrid *library* build, which needs the
+//! identical description of the identical program. Two spellings of "describe
+//! this program as a `.khm`" would be one too many — the manifest is what every
+//! crossing marshals against, and a disagreement between an application's and a
+//! library's is precisely the class of bug the runtime's bundle validation
+//! exists to catch. So this module composes artifacts and paths, and asks
+//! [`kira_build::hybrid_manifest`] what the program is.
 //!
 //! # Agreeing with both halves
 //!
-//! Every engine assignment here resolves `Inherited` against
-//! [`Execution::Runtime`], exactly as `kira_bytecode::compile_hybrid` and the
-//! LLVM backend's `build_hybrid` do. The three must agree function for function:
-//! the manifest is what the host marshals against, and a disagreement is what
-//! the runtime's own bundle validation exists to catch.
+//! Every engine assignment resolves `Inherited` against
+//! [`Execution::Runtime`](kira_runtime_abi::Execution::Runtime), exactly as
+//! `kira_bytecode::compile_hybrid` and the LLVM backend's `build_hybrid` do. The
+//! three must agree function for function.
 
 use std::path::{Path, PathBuf};
 
-use kira_hybrid_definition::{HybridFunction, HybridManifest, HybridParam};
+use kira_hybrid_definition::HybridManifest;
 use kira_ir::IrProgram;
 use kira_llvm_backend::NativeBuildOptions;
-use kira_runtime_abi::{BridgeValueTag, Execution};
-use kira_semantics_model::Type;
 
 use crate::native::{self, Artifacts, NativeError};
 
@@ -60,14 +59,9 @@ pub enum HybridError {
         #[source]
         source: std::io::Error,
     },
-    /// A function's signature uses a type the seam cannot carry.
-    #[error("function `{function}` has a type the hybrid boundary cannot carry: {ty:?}")]
-    UnsupportedType {
-        /// The function whose signature cannot be described.
-        function: String,
-        /// The type that has no bridge tag.
-        ty: Type,
-    },
+    /// The program could not be described as a manifest.
+    #[error(transparent)]
+    Describe(#[from] kira_build::HybridLibraryError),
     /// Loading or running the bundle failed.
     #[error(transparent)]
     Runtime(#[from] kira_hybrid_runtime::HybridError),
@@ -124,94 +118,21 @@ pub fn run(program: &IrProgram, source: &Path, emit_llvm_ir: bool) -> Result<i32
 
 /// Describes `program` as a manifest, given the trampolines the backend
 /// exported.
+///
+/// Delegated rather than derived: `kira-build` describes a hybrid program for
+/// the library build too, and one program must not have two descriptions.
 fn manifest(
     program: &IrProgram,
     artifacts: &Artifacts,
     exports: &[(u32, String)],
 ) -> Result<HybridManifest, HybridError> {
-    let functions = program
-        .functions
-        .iter()
-        .enumerate()
-        .map(|(index, function)| {
-            let id = index as u32;
-            let execution = function.execution.resolve(Execution::Runtime);
-            let params = function
-                .locals
-                .iter()
-                .take(function.param_count as usize)
-                .map(|ty| {
-                    // v0's IR carries no per-parameter mode — there is no borrow
-                    // syntax yet — and the codegen frees every string parameter
-                    // at return. `Owned` is what that is.
-                    tag(*ty, &function.name).map(HybridParam::owned)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(HybridFunction {
-                id,
-                name: function.name.clone(),
-                execution,
-                params,
-                returns: tag(function.return_type, &function.name)?,
-                // Looked up rather than re-derived: the backend is what named
-                // the symbol it emitted, so the manifest records that name
-                // rather than a second guess at it.
-                exported_name: exports
-                    .iter()
-                    .find(|(exported, _)| *exported == id)
-                    .map(|(_, symbol)| symbol.clone()),
-            })
-        })
-        .collect::<Result<Vec<_>, HybridError>>()?;
-
-    Ok(HybridManifest {
-        module_name: artifacts.stem().to_owned(),
-        bytecode_path: file_name(&artifacts.bytecode()),
-        native_library_path: file_name(&artifacts.shared_library()),
-        entry: program.main,
-        functions,
-    })
-}
-
-/// The bridge tag for an IR type, or why it cannot cross.
-fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridError> {
-    Ok(match ty {
-        // Every integer width crosses the seam as one tag, because every
-        // integer width *is* one 64-bit representation. The written width is a
-        // front-end distinction; the bridge carries values, not spellings.
-        Type::Int(_) => BridgeValueTag::INT,
-        Type::Float(_) => BridgeValueTag::FLOAT,
-        Type::Bool => BridgeValueTag::BOOL,
-        Type::String => BridgeValueTag::STRING,
-        Type::Void => BridgeValueTag::VOID,
-        // Described, not carried. A manifest has a row for every function in
-        // the program, and most of them never cross: rejecting a struct here
-        // would reject a `@Runtime` function that merely *has* one in its
-        // signature and is only ever called from other `@Runtime` code. What a
-        // struct cannot do is travel, and that is enforced where a crossing is
-        // actually emitted — the backend refuses to build one whose signature
-        // mentions a struct.
-        Type::Struct(_) => BridgeValueTag::STRUCT,
-        // Described, not carried, for the same reason a struct is — though not
-        // on the same grounds. See `BridgeValueTag::ARRAY`: the language lets
-        // an array cross, and what is missing is the ownership answer at the
-        // boundary, not a place to put it.
-        Type::Array(_) => BridgeValueTag::ARRAY,
-        // Described, not carried, for the same reason a struct is: an enum is a
-        // tagged value that does not fit one tag and one word, and how it would
-        // cross is a language decision nobody has made. A `@Runtime` function
-        // may merely mention one in its signature.
-        Type::Enum(_) => BridgeValueTag::ENUM,
-        // A verified IR carries no `Error` type — reaching one means the
-        // frontend let a broken program through, which is a compiler bug, not
-        // something to encode into an artifact.
-        Type::Error => {
-            return Err(HybridError::UnsupportedType {
-                function: function.to_owned(),
-                ty,
-            });
-        }
-    })
+    Ok(kira_build::hybrid_manifest(
+        program,
+        artifacts.stem(),
+        &file_name(&artifacts.bytecode()),
+        &file_name(&artifacts.shared_library()),
+        exports,
+    )?)
 }
 
 /// The file name of `path`, which is how a manifest records a payload.
@@ -237,33 +158,6 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), HybridError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn every_v0_type_has_a_bridge_tag() {
-        assert_eq!(tag(Type::INT, "f").expect("int"), BridgeValueTag::INT);
-        assert_eq!(tag(Type::FLOAT, "f").expect("float"), BridgeValueTag::FLOAT);
-        assert_eq!(tag(Type::Bool, "f").expect("bool"), BridgeValueTag::BOOL);
-        assert_eq!(
-            tag(Type::String, "f").expect("string"),
-            BridgeValueTag::STRING
-        );
-        assert_eq!(tag(Type::Void, "f").expect("void"), BridgeValueTag::VOID);
-    }
-
-    #[test]
-    fn the_error_type_is_refused_rather_than_encoded() {
-        let error = tag(Type::Error, "broken").expect_err("the error type cannot cross");
-        assert!(
-            matches!(
-                error,
-                HybridError::UnsupportedType {
-                    ty: Type::Error,
-                    ..
-                }
-            ),
-            "{error:?}",
-        );
-    }
 
     #[test]
     fn a_payload_is_recorded_by_file_name_so_a_bundle_can_move() {

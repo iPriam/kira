@@ -19,6 +19,22 @@ path = "src/lib.rs"
 # invoke the LLVM backend, which needs `llvm` with it — so the native engine is
 # `--features native-engine,llvm`.
 native-engine = []
+# Build and link the library for the **hybrid engine**: the bytecode half runs
+# on the VM in this process, the `@Native` half is a shared library this process
+# opens at load. Off by default for the same reason `native-engine` is — it needs
+# LLVM to compile the native half, so the hybrid engine is
+# `--features hybrid-engine,llvm`.
+#
+# Mutually exclusive with `native-engine` in practice: both replace the same
+# generated wrapper, and `build.rs` refuses the pair by name rather than letting
+# cargo's feature unification silently pick one.
+#
+# It also brings in `kira-hybrid-main`, and *only* it does: that crate loads code
+# dynamically, so it does not build for `wasm32-unknown-unknown`. Depending on it
+# unconditionally would break the wasm check of the default configuration, which
+# is this feature's whole wasm answer — a Rust wasm program embeds the **VM**
+# engine's crate, and that must keep compiling.
+hybrid-engine = ["dep:kira-hybrid-main"]
 llvm = ["kira-build/llvm"]
 
 [build-dependencies]
@@ -35,6 +51,9 @@ thiserror.workspace = true
 kira-bytecode.workspace = true
 kira-main.workspace = true
 kira-runtime-abi.workspace = true
+# The hybrid engine only, and optional for the reason that feature states: it
+# dynamically loads code and so has no `wasm32-unknown-unknown` build.
+kira-hybrid-main = { workspace = true, optional = true }
 
 [lints]
 workspace = true

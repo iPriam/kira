@@ -40,6 +40,7 @@ use kira_source::SourceMap;
 use kira_wasm_runtime::WasmDevice;
 
 use crate::hybrid;
+use crate::hybrid_library;
 use crate::library;
 use crate::native;
 use crate::native_library;
@@ -191,15 +192,17 @@ fn web_backend_is_built(verb: &str, backend: BackendMode, device: WasmDevice) ->
 /// Whether the engine `backend` selects can build a library's `@Export`
 /// surface, reporting it by name when it cannot.
 ///
-/// **The VM engine can**, and is the default: it writes the KBC1 exports
-/// section, embeds the artifact in a generated Rust crate, and runs it on a
-/// persistent instance. That is the product a consumer gets today.
+/// **All three host engines can**, and each produces the same generated Rust
+/// API over a different engine underneath — which is where this feature's parity
+/// is measured. The VM engine is the default and embeds a `.kbc`; the native
+/// engine emits `kira_lib_*` trampolines into an archive; the hybrid engine
+/// embeds a `.kbc` plus the `.khm` describing the `@Runtime`/`@Native` split and
+/// loads a shared library beside it.
 ///
-/// The other two cannot yet, and are refused rather than allowed to write an
-/// artifact with an invisible surface — which would look complete and be
-/// unreachable. Refused per backend rather than once above them because the
-/// work each one owes is different, and a user told "not built yet" deserves to
-/// know which engine they are waiting on.
+/// What remains refused is the **wasm library artifact**, and it is refused for
+/// the artifact rather than for any engine: see the arm below. A Rust program
+/// that embeds a Kira library and is *itself* compiled to wasm is a different
+/// thing and works.
 fn export_engine_is_built(
     verb: &str,
     backend: BackendMode,
@@ -231,17 +234,20 @@ fn export_engine_is_built(
              to wasm needs none of that — build with `--backend vm` and depend on \
              the generated crate"
         }
+        // Every host engine builds this surface. Matched exhaustively rather
+        // than waved through with a wildcard, so a fourth backend has to decide
+        // what it does here instead of inheriting a yes.
         Device::Host => match backend {
+            // Embeds the `.kbc` and runs it on a persistent instance.
             BackendMode::VmBytecode => return Ok(()),
-            // The native engine builds this surface: stable `kira_lib_*`
-            // trampolines, a destructor per exported class, and the
-            // per-library ABI marker.
+            // Stable `kira_lib_*` trampolines, a destructor per exported class,
+            // and the per-library ABI marker, in an archive the consumer links.
             BackendMode::LlvmNative => return Ok(()),
-            BackendMode::Hybrid => {
-                "the hybrid engine serves neither half's export surface yet: \
-                 the bytecode half needs the native half's trampolines to agree \
-                 with it, and the trampolines do not exist"
-            }
+            // The consumer enters the bytecode half, which calls into the native
+            // half through the seam an application already uses — so this is the
+            // one engine where a library's own `@Runtime`/`@Native` annotations
+            // still mean something.
+            BackendMode::Hybrid => return Ok(()),
         },
     };
     eprintln!(
@@ -360,6 +366,27 @@ pub fn build(args: &[String]) -> i32 {
                 EXIT_FAILURE
             }
         },
+        BackendMode::Hybrid if is_library => {
+            // Three artifacts plus the crate, and the only engine that keeps the
+            // author's `@Runtime`/`@Native` split meaningful in a library: the
+            // consumer enters the bytecode half, which calls into the native
+            // half through the seam an application already uses.
+            match hybrid_library::build(
+                &compiled,
+                std::path::Path::new(&options.path),
+                options.emit_llvm_ir,
+            ) {
+                Ok(artifacts) => {
+                    hybrid_library::report(&artifacts);
+                    EXIT_OK
+                }
+                Err(error) => {
+                    eprintln!("kirac: {error}");
+                    println!("Failed to build");
+                    EXIT_FAILURE
+                }
+            }
+        }
         BackendMode::Hybrid => match hybrid::build(
             ir,
             std::path::Path::new(&options.path),

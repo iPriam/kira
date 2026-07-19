@@ -229,14 +229,19 @@ version = "0.1.0"
 dependencies = [
  "kira-bytecode",
  "kira-diagnostics",
+ "kira-hybrid-definition",
+ "kira-hybrid-main",
  "kira-ir",
  "kira-llvm-backend",
  "kira-main",
  "kira-manifest",
  "kira-program-graph",
  "kira-project",
+ "kira-runtime-abi",
  "kira-semantics",
+ "kira-semantics-model",
  "kira-source",
+ "la-arena",
  "salsa",
  "thiserror",
 ]
@@ -347,6 +352,7 @@ version = "0.1.0"
 dependencies = [
  "kira-build",
  "kira-bytecode",
+ "kira-hybrid-main",
  "kira-ir",
  "kira-main",
  "kira-runtime-abi",
@@ -366,6 +372,19 @@ name = "kira-hybrid-definition"
 version = "0.1.0"
 dependencies = [
  "kira-runtime-abi",
+ "thiserror",
+]
+
+[[package]]
+name = "kira-hybrid-main"
+version = "0.1.0"
+dependencies = [
+ "kira-bytecode",
+ "kira-hybrid-definition",
+ "kira-hybrid-runtime",
+ "kira-main",
+ "kira-runtime-abi",
+ "kira-vm-runtime",
  "thiserror",
 ]
 
