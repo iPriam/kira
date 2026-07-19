@@ -215,13 +215,7 @@ fn result_type(model: &Model, ty: ExportType, host: &str) -> String {
 
 /// The Rust name of class `index`, which [`Model::build`] proved exists.
 fn class_name(model: &Model, index: u32) -> String {
-    match model.classes.get(index as usize) {
-        Some(class) => class.rust.clone(),
-        // Unreachable: `check_class` refused every out-of-range index before
-        // anything was rendered. Named rather than unwrapped, because a
-        // generator never gets to end its caller's process.
-        None => format!("UnknownClass{index}"),
-    }
+    crate::wrapper::class_name_of(model.classes.get(index as usize), index)
 }
 
 /// How `ty` is spelled inside the `const CONTRACT`.

@@ -88,6 +88,12 @@ pub(crate) struct Runtime {
     pub(super) enum_payload: Callable,
     pub(super) enum_clone: Callable,
     pub(super) enum_free: Callable,
+    /// Allocates the storage one exported class instance lives in when it
+    /// crosses to a consumer as a handle.
+    pub(super) box_new: Callable,
+    /// Releases a box, after the generated drop trampoline has released
+    /// whatever the instance inside it owned.
+    pub(super) box_free: Callable,
     pub(super) trap_div_zero: Callable,
     /// The version marker every emitted program references; see
     /// [`kira_runtime_abi::RUNTIME_ABI_MARKER`].
@@ -182,6 +188,11 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             enum_payload: declare(c"kira_rt_enum_payload", types.i64, &mut [types.ptr]),
             enum_clone: declare(c"kira_rt_enum_clone", types.ptr, &mut [types.ptr]),
             enum_free: declare(c"kira_rt_enum_free", types.void, &mut [types.ptr]),
+            // The box helpers hold an exported class instance for as long as a
+            // consumer holds its handle. Appended after the enum helpers, which
+            // is what makes them not an ABI change.
+            box_new: declare(c"kira_rt_box_new", types.ptr, &mut [types.i64]),
+            box_free: declare(c"kira_rt_box_free", types.void, &mut [types.ptr, types.i64]),
             trap_div_zero: declare(c"kira_rt_trap_div_zero", types.void, &mut []),
             abi_marker: declare(&abi_marker_symbol(), types.void, &mut []),
             call_runtime: declare(

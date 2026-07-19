@@ -32,11 +32,13 @@
 
 mod manifest;
 mod naming;
-mod render;
+pub(crate) mod render;
+mod render_native;
 
 use std::path::{Path, PathBuf};
 
 use kira_bytecode::ExportTable;
+use kira_llvm_backend::NativeExportSurface;
 
 /// What a wrapper crate is generated from.
 ///
@@ -137,6 +139,17 @@ pub enum WrapperError {
         /// The Rust name the class landed on.
         name: String,
     },
+    /// The backend's export surface is missing a symbol the wrapper needs.
+    ///
+    /// Unreachable when the surface and the export table came from the same
+    /// build, which is the only way this crate produces them — and checked
+    /// anyway, because emitting an `extern` block with a hole in it would be a
+    /// link failure in the consumer's crate against a symbol nobody named.
+    #[error("the native build produced no symbol for {what}")]
+    MissingSymbol {
+        /// What had no symbol, for the message.
+        what: &'static str,
+    },
     /// A handle type names a class the export table does not have.
     ///
     /// Unreachable through a module this compiler wrote and validated, and
@@ -169,6 +182,70 @@ pub fn generate(spec: &WrapperSpec<'_>) -> Result<GeneratedCrate, WrapperError> 
             },
         ],
     })
+}
+
+/// What a native wrapper crate is generated from.
+///
+/// The native counterpart of [`WrapperSpec`]. It carries no content hash: the
+/// native engine's stale-build guard is a *symbol*, checked at the consumer's
+/// link, rather than data checked at load. See [`render_native`].
+#[derive(Debug, Clone, Copy)]
+pub struct NativeWrapperSpec<'a> {
+    /// The library's package name, which is also the crate and module name.
+    pub library: &'a str,
+    /// The version to give the generated crate, from the library's manifest.
+    pub version: &'a str,
+    /// The export surface the wrapper offers methods for.
+    pub exports: &'a ExportTable,
+    /// The symbols the backend emitted that surface under.
+    pub symbols: &'a NativeExportSurface,
+    /// The Kira checkout the generated crate takes its path dependencies from.
+    pub toolchain_root: &'a Path,
+    /// The directory holding the static archive the generated `build.rs` links.
+    pub archive_directory: &'a Path,
+}
+
+/// Generates the native-engine wrapper crate for one library.
+pub fn generate_native(spec: &NativeWrapperSpec<'_>) -> Result<GeneratedCrate, WrapperError> {
+    let model = render_native::NativeModel::build(spec.library, spec.exports, spec.symbols)?;
+    Ok(GeneratedCrate {
+        name: model.library.clone(),
+        files: vec![
+            GeneratedFile {
+                path: PathBuf::from("Cargo.toml"),
+                contents: manifest::native_cargo_toml(spec, &model),
+            },
+            GeneratedFile {
+                path: PathBuf::from("README.md"),
+                contents: manifest::native_readme(&model),
+            },
+            GeneratedFile {
+                path: PathBuf::from("build.rs"),
+                contents: render_native::build_rs(
+                    &model,
+                    &spec.archive_directory.display().to_string(),
+                ),
+            },
+            GeneratedFile {
+                path: PathBuf::from("src").join("lib.rs"),
+                contents: render_native::lib_rs(&model),
+            },
+        ],
+    })
+}
+
+/// The Rust name of an exported class, or a named placeholder when the index
+/// points at nothing.
+///
+/// Unreachable: every renderer refuses an out-of-range class index before
+/// anything is rendered. Named rather than unwrapped, because a generator never
+/// gets to end its caller's process — and shared by both engines' renderers so
+/// there is one answer to what a broken index produces.
+pub(crate) fn class_name_of(class: Option<&render::ClassModel>, index: u32) -> String {
+    match class {
+        Some(class) => class.rust.clone(),
+        None => format!("UnknownClass{index}"),
+    }
 }
 
 /// The file name the generated crate embeds its artifact under.
