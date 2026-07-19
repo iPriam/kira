@@ -23,6 +23,28 @@
 //!
 //! The duplication costs a few kilobytes and buys the property outright, which
 //! is the trade every embedded-artifact scheme makes.
+//!
+//! # Why `@Native` is not refused here
+//!
+//! The export design proposed refusing a `@Native` function in a library built
+//! for this engine, on the ground that `@Native` cannot execute on a pure VM.
+//! That refusal is not implemented, and the reason is in the code rather than
+//! in a preference.
+//!
+//! Nothing native executes here. [`kira_bytecode::compile`] compiles every
+//! function to bytecode whatever it was annotated with, so a `@Native` body
+//! never becomes machine code on this engine and there is no pure-VM execution
+//! of native code to prevent. That rule is repo-wide and load-bearing — it is
+//! what makes `--backend vm` and `--backend llvm` comparable on *any* program,
+//! which is the premise the whole differential parity suite rests on.
+//!
+//! Refusing here would also open a parity hole rather than close one: the same
+//! package would build on the native and hybrid engines and fail on this one,
+//! and the consumer-facing claim this feature is measured on is one API over
+//! three engines. The hybrid engine's own refusals
+//! ([`crate::hybrid::check_library`]) are a different thing — they name what
+//! that engine cannot represent (a handle minted by machine code, a re-entered
+//! instance), not an annotation it dislikes.
 
 use std::path::{Path, PathBuf};
 

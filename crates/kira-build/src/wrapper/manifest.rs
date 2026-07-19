@@ -207,7 +207,11 @@ pub(crate) fn native_readme(model: &crate::wrapper::render_native::NativeModel) 
            engines.\n\
          - **One Kira native library per binary.** Two of them both define the\n\
            `kira_rt_*` runtime, so linking two fails with a duplicate-symbol error\n\
-           — loud, at link, by name.\n\
+           — loud, at link, by name. That is the v1 answer *because* it cannot be\n\
+           missed; the fix is per-library runtime prefixing (`kira_rt_*` becoming\n\
+           `kira_rt_<library>_*`), at which point two archives stop naming the same\n\
+           symbols. A host that `dlopen`s the shared form instead is already\n\
+           isolated by `RTLD_LOCAL`.\n\
          \n",
         library = model.library,
         ty = model.library_type,
