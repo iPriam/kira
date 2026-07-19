@@ -45,6 +45,14 @@ pub const DOCUMENT_SOURCE: SourceId = FILE_SOURCE_ID;
 /// owning a document store keyed by module path, and a wrong answer from a
 /// stale buffer is worse than a right answer from a saved file.
 ///
+/// `import Foundation` needs nothing here. The loader resolves a bundled
+/// package the same way for the server as for the compiler — relative to the
+/// running executable, so an installed `kira-lsp` sitting in a toolchain's
+/// `bin/` reads that toolchain's Foundation — and the editor gets completion
+/// and diagnostics over the standard library without this crate knowing it
+/// exists. A server that could not find a bundle simply reports the import
+/// unresolved, which is what an editor should say about a broken install.
+///
 /// A fresh database per call: salsa's incrementality is wasted here, because a
 /// new `SourceProgram` input on each keystroke invalidates everything
 /// downstream of it anyway. Reusing one database across edits is the

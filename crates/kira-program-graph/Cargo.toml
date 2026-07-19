@@ -6,10 +6,15 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Reads a bundled package's `package.kira` for the module root it owns.
+kira-manifest.workspace = true
 kira-parser.workspace = true
 kira-semantics.workspace = true
 kira-source.workspace = true
 kira-syntax-model.workspace = true
+# Finds the packages installed beside the compiler — how `import Foundation`
+# resolves with no path. Path discovery is defined once, there.
+kira-toolchain.workspace = true
 
 [lints]
 workspace = true

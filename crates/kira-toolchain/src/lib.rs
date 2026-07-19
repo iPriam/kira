@@ -1,13 +1,18 @@
 //! Toolchain installation layout and discovery: KIRA_HOME, channels,
-//! current-toolchain state, the pinned LLVM metadata, and the managed LLVM
-//! bundle directory layout.
+//! current-toolchain state, the packages bundled with an install, the pinned
+//! LLVM metadata, and the managed LLVM bundle directory layout.
 //!
 //! Layer 0 of the Kira package graph.
 
+pub mod bundled_discovery;
 pub mod llvm_discovery;
 pub mod llvm_layout;
 pub mod llvm_metadata;
 
+pub use bundled_discovery::{
+    BundledDiscoveryError, BundledPackage, BundledSource, discover_foundation,
+    discover_foundation_from,
+};
 pub use llvm_discovery::{DiscoverySource, LlvmDiscoveryError, LlvmInstallation, discover};
 pub use llvm_metadata::{LlvmMetadata, MalformedMetadata, pinned, pinned_version};
 
