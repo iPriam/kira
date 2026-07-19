@@ -33,6 +33,18 @@ pub enum LibraryError {
         /// The source file that was handed to `kirac`.
         path: String,
     },
+    /// The package names itself but declares no version.
+    #[error(
+        "cannot build a library from `{path}`: the package `{name}` declares no version, and \
+         the generated crate's `Cargo.toml` needs one\n\
+         note: add `let version = \"0.1.0\"` to the package declaration"
+    )]
+    Unversioned {
+        /// The source file that was handed to `kirac`.
+        path: String,
+        /// The package that gave a name but no version.
+        name: String,
+    },
     /// The build itself failed.
     #[error(transparent)]
     Build(#[from] LibraryBuildError),
@@ -40,21 +52,24 @@ pub enum LibraryError {
 
 /// Builds `compiled` as a VM-engine library beside its source.
 pub fn build(compiled: &Compiled, source: &Path) -> Result<LibraryArtifacts, LibraryError> {
-    let name = compiled
-        .package_name
-        .clone()
-        .ok_or_else(|| LibraryError::Unnamed {
+    // Name and version are taken together, because a library needs both and a
+    // default for either would be a wrong answer rather than a missing one: a
+    // crate silently called `main`, or one silently stamped `0.0.0`, is worse
+    // than a build that says what the manifest still owes.
+    let Some(name) = compiled.package_name.clone() else {
+        return Err(LibraryError::Unnamed {
             path: source.display().to_string(),
-        })?;
+        });
+    };
+    let Some(version) = compiled.package_version.clone() else {
+        return Err(LibraryError::Unversioned {
+            path: source.display().to_string(),
+            name,
+        });
+    };
     let options = LibraryBuildOptions {
         name,
-        // A package with a name always has a version: the manifest loader
-        // requires one. The fallback keeps the type total rather than asserting
-        // that.
-        version: compiled
-            .package_version
-            .clone()
-            .unwrap_or_else(|| "0.0.0".to_owned()),
+        version,
         build_directory: build_directory(source),
         toolchain_root: kira_build::toolchain_root(),
     };
@@ -98,5 +113,16 @@ mod tests {
             path: "thing.kira".to_owned(),
         };
         assert!(error.to_string().contains("it is not inside a package"));
+    }
+
+    #[test]
+    fn a_package_with_no_version_is_refused_rather_than_stamped_with_one() {
+        let error = LibraryError::Unversioned {
+            path: "uifoundation.kira".to_owned(),
+            name: "uifoundation".to_owned(),
+        };
+        let message = error.to_string();
+        assert!(message.contains("declares no version"), "{message}");
+        assert!(message.contains("uifoundation"), "{message}");
     }
 }
