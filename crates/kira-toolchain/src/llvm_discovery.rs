@@ -44,6 +44,17 @@ impl LlvmInstallation {
     pub fn clang(&self) -> PathBuf {
         self.bin_dir.join(crate::executable_name("clang"))
     }
+
+    /// The `llvm-ar` archiver in this installation.
+    ///
+    /// Used to build the static archive a Rust consumer of a Kira library links
+    /// against. From the discovered install rather than `PATH` for the same
+    /// reason [`LlvmInstallation::clang`] is: a host's `ar` may not understand
+    /// the MRI script that merges the runtime archive in, and a toolchain that
+    /// picked its tools up off `PATH` would work on one machine.
+    pub fn llvm_ar(&self) -> PathBuf {
+        self.bin_dir.join(crate::executable_name("llvm-ar"))
+    }
 }
 
 /// Which discovery rule produced an [`LlvmInstallation`].

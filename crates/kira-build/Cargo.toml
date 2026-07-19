@@ -9,6 +9,10 @@ repository.workspace = true
 kira-bytecode.workspace = true
 kira-diagnostics.workspace = true
 kira-ir.workspace = true
+# The native engine. A library built for it is compiled machine code, and this
+# is the crate that produces it; the LLVM dependency itself is feature-gated
+# inside it, so a build without LLVM still compiles this one.
+kira-llvm-backend.workspace = true
 # The embedding surface the generated crate is written against: the content
 # hash, the contract types, and `Library`/`Instance` are defined once, there.
 kira-main.workspace = true
@@ -19,6 +23,12 @@ kira-semantics.workspace = true
 kira-source.workspace = true
 salsa.workspace = true
 thiserror.workspace = true
+
+[features]
+# Forwards the native backend's LLVM feature, so a consumer's `build.rs` can ask
+# this crate for a native library build without naming `kira-llvm-backend`
+# itself. Off by default: everything else here builds on a machine with no LLVM.
+llvm = ["kira-llvm-backend/llvm"]
 
 [lints]
 workspace = true

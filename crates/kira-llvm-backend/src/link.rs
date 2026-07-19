@@ -24,6 +24,32 @@ pub enum LinkError {
         /// Where `clang` was expected.
         path: PathBuf,
     },
+    /// The discovered LLVM install has no `llvm-ar` archiver.
+    #[error("no `llvm-ar` archiver at `{path}` in the discovered LLVM install")]
+    ArchiverMissing {
+        /// Where `llvm-ar` was expected.
+        path: PathBuf,
+    },
+    /// The archive's directory could not be prepared, or a stale archive could
+    /// not be removed.
+    #[error("cannot write the static archive `{path}`: {source}")]
+    ArchiveUnwritable {
+        /// The archive that could not be written.
+        path: PathBuf,
+        /// The underlying I/O failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The archiver reported success and wrote nothing.
+    ///
+    /// Worth its own name: a consumer that linked against a path with no file
+    /// there gets a diagnostic about a missing library rather than about the
+    /// build step that was supposed to produce it.
+    #[error("the archiver reported success but wrote no archive at `{path}`")]
+    ArchiveMissing {
+        /// Where the archive was expected.
+        path: PathBuf,
+    },
     /// The native runtime archive is missing.
     #[error(
         "the native runtime archive `{path}` is missing; build it with \
@@ -90,6 +116,110 @@ pub fn link_shared_library(
     let mut arguments = vec![shared_flag.to_owned()];
     arguments.extend(force_host_symbols());
     link(llvm, object, runtime_archive, library, &arguments)
+}
+
+/// Combines `object` and the native runtime archive into one static archive.
+///
+/// This is what a Rust consumer of a Kira library links: one file carrying the
+/// library's own code and every runtime member it needs. A consumer linking two
+/// files — the library and the toolchain's runtime archive — would have to know
+/// where the second one lives, which is exactly the arrangement with the Kira
+/// toolchain a generated crate must not require.
+///
+/// # Why an MRI script
+///
+/// `ar` cannot merge an archive into another by naming it: `ar rcs out.a in.a`
+/// adds `in.a` as a *member*, producing an archive containing an archive, which
+/// no linker unpacks. `llvm-ar`'s MRI mode is the one portable way to say "take
+/// that archive's members": `ADDLIB` splices them in, `ADDMOD` adds the object,
+/// and `SAVE` writes the result — no extract-to-a-temporary-directory dance, and
+/// no member name colliding with another on the way through.
+///
+/// Existing output is removed first. `CREATE` truncates, but only after the tool
+/// has decided it can write there, and a stale archive left behind by a failed
+/// run is worse than no archive: it links, and it is wrong.
+pub fn archive_static_library(
+    llvm: &LlvmInstallation,
+    object: &Path,
+    runtime_archive: &Path,
+    archive: &Path,
+) -> Result<(), LinkError> {
+    let archiver = llvm.llvm_ar();
+    if !archiver.is_file() {
+        return Err(LinkError::ArchiverMissing { path: archiver });
+    }
+    if !runtime_archive.is_file() {
+        return Err(LinkError::RuntimeArchiveMissing {
+            path: runtime_archive.to_path_buf(),
+        });
+    }
+    if let Some(parent) = archive.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| LinkError::ArchiveUnwritable {
+            path: archive.to_path_buf(),
+            source,
+        })?;
+    }
+    if archive.exists() {
+        std::fs::remove_file(archive).map_err(|source| LinkError::ArchiveUnwritable {
+            path: archive.to_path_buf(),
+            source,
+        })?;
+    }
+
+    let script = mri_script(object, runtime_archive, archive);
+    let mut command = Command::new(&archiver);
+    command
+        .arg("-M")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|source| LinkError::DriverUnusable {
+            driver: archiver.clone(),
+            source,
+        })?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        stdin
+            .write_all(script.as_bytes())
+            .map_err(|source| LinkError::DriverUnusable {
+                driver: archiver.clone(),
+                source,
+            })?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|source| LinkError::DriverUnusable {
+            driver: archiver.clone(),
+            source,
+        })?;
+    if !output.status.success() {
+        return Err(LinkError::Failed {
+            output: archive.to_path_buf(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+    if !archive.is_file() {
+        return Err(LinkError::ArchiveMissing {
+            path: archive.to_path_buf(),
+        });
+    }
+    Ok(())
+}
+
+/// The MRI script that merges the runtime archive and the library's object.
+///
+/// Built as its own function so the exact commands are assertable without
+/// running an archiver, which is the only part of this that a machine with no
+/// LLVM can check.
+fn mri_script(object: &Path, runtime_archive: &Path, archive: &Path) -> String {
+    format!(
+        "CREATE {}\nADDLIB {}\nADDMOD {}\nSAVE\nEND\n",
+        archive.display(),
+        runtime_archive.display(),
+        object.display(),
+    )
 }
 
 /// Links `object` against the native runtime archive into `executable`.
@@ -256,6 +386,35 @@ mod tests {
         let text = error.to_string();
         assert!(text.contains("libkira_native_bridge.a"));
         assert!(text.contains("cargo build -p kira-native-bridge"));
+    }
+
+    #[test]
+    fn the_archive_script_splices_the_runtime_in_rather_than_nesting_it() {
+        // `ADDLIB` takes the runtime archive's *members*; `ADDMOD` would nest
+        // the archive inside the result, which links as nothing.
+        let script = mri_script(
+            Path::new("/build/uifoundation.o"),
+            Path::new("/build/libkira_native_bridge.a"),
+            Path::new("/build/lib/libuifoundation.a"),
+        );
+        assert_eq!(
+            script,
+            "CREATE /build/lib/libuifoundation.a\n\
+             ADDLIB /build/libkira_native_bridge.a\n\
+             ADDMOD /build/uifoundation.o\n\
+             SAVE\n\
+             END\n"
+        );
+    }
+
+    #[test]
+    fn a_missing_archiver_names_the_tool_and_where_it_was_looked_for() {
+        let error = LinkError::ArchiverMissing {
+            path: PathBuf::from("/llvm/bin/llvm-ar"),
+        };
+        let text = error.to_string();
+        assert!(text.contains("llvm-ar"), "{text}");
+        assert!(text.contains("/llvm/bin/llvm-ar"), "{text}");
     }
 
     #[test]

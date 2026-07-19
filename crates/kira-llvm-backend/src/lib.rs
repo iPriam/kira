@@ -39,11 +39,13 @@ use kira_toolchain::LlvmDiscoveryError;
 
 #[cfg(feature = "llvm")]
 mod codegen;
+mod exports;
 // Linking only exists where codegen does: a build without LLVM produces no
 // object to link, so the driver would be unreachable rather than merely unused.
 #[cfg(feature = "llvm")]
 mod link;
 
+pub use exports::{NativeClass, NativeExport, NativeExportSurface};
 #[cfg(feature = "llvm")]
 pub use link::LinkError;
 
@@ -136,6 +138,18 @@ pub struct NativeBuildOptions {
     pub executable_path: Option<PathBuf>,
     /// Where the shared library is written, for a hybrid build.
     pub shared_library_path: Option<PathBuf>,
+    /// Where the static archive is written, for a library build.
+    ///
+    /// A Rust consumer links the archive rather than the dylib: it needs no
+    /// deployment story — no question of where the library lives at load time or
+    /// how it is found — because the code ends up inside the consumer's own
+    /// binary.
+    pub archive_path: Option<PathBuf>,
+    /// What this library exports, for a library build.
+    ///
+    /// Empty for a program and for a hybrid half, which are entered another way
+    /// entirely.
+    pub exports: NativeExportSurface,
     /// Where the textual LLVM IR is written, when requested. A debugging aid:
     /// it is never an input to the codegen path.
     pub ir_path: Option<PathBuf>,
@@ -150,6 +164,12 @@ pub struct NativeArtifacts {
     pub object: PathBuf,
     /// The linked executable, when one was requested.
     pub executable: Option<PathBuf>,
+    /// The linked static archive, for a library build.
+    ///
+    /// Self-contained: the runtime archive's members are inside it, so a
+    /// consumer links one file and needs no arrangement with the Kira
+    /// toolchain.
+    pub archive: Option<PathBuf>,
     /// The linked shared library, for a library build.
     ///
     /// Exclusive with [`NativeArtifacts::executable`] in practice: a program
@@ -188,53 +208,70 @@ pub fn build_native(
         // A program build produces an executable, never a library; the two are
         // exclusive, which is what makes "this build produced a library"
         // checkable.
+        archive: None,
         library: None,
         ir: options.ir_path.clone(),
     })
 }
 
-/// Compiles a Kira library to a native object and links it into a shared
-/// library.
+/// Compiles a Kira library to a native object and links it for a consumer.
 ///
 /// The artifact is a library, not an executable: no C `main` is emitted, so
-/// there is nothing for an operating system to start. It is self-contained in
-/// the same way a hybrid native half is — the runtime archive is linked in — so
-/// whatever loads it needs no arrangement with the Kira toolchain.
+/// there is nothing for an operating system to start. What a consumer reaches
+/// it through instead is [`NativeBuildOptions::exports`] — one stable
+/// trampoline per export, one synthesized destructor per exported class, and
+/// the per-library ABI marker that makes a stale build fail the consumer's
+/// link by name.
 ///
-/// A static archive (`lib<name>.a`) is the other form a Rust consumer wants and
-/// is not built here yet; that arrives with `@Export`, together with the stable
-/// per-export trampolines that make an archive worth linking against.
+/// Two forms come out, and a Rust consumer wants the first:
+///
+/// - a **static archive** (`lib<name>.a`) carrying this library's code *and*
+///   the runtime archive's members, so the consumer links one file;
+/// - a **shared library** (`lib<name>.dylib`/`.so`), for a host that would
+///   rather `dlopen` than link.
+///
+/// Both are self-contained in the same way a hybrid native half is.
 #[cfg(feature = "llvm")]
 pub fn build_native_library(
     program: &IrProgram,
     options: &NativeBuildOptions,
 ) -> Result<NativeArtifacts, LlvmError> {
-    let module = codegen::Module::build_library(program, &options.module_name)?;
+    let module = codegen::Module::build_library(program, &options.module_name, &options.exports)?;
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
     module.emit_object(&options.object_path)?;
 
-    let library = options
-        .shared_library_path
-        .clone()
-        .ok_or(LlvmError::Unsupported(
-            "a library build with no library path",
-        ))?;
+    if options.archive_path.is_none() && options.shared_library_path.is_none() {
+        return Err(LlvmError::Unsupported(
+            "a library build with nowhere to put the library",
+        ));
+    }
     let llvm = kira_toolchain::discover(None)?;
-    link::link_shared_library(
-        &llvm,
-        &options.object_path,
-        &options.runtime_archive,
-        &library,
-    )?;
+    if let Some(archive) = &options.archive_path {
+        link::archive_static_library(
+            &llvm,
+            &options.object_path,
+            &options.runtime_archive,
+            archive,
+        )?;
+    }
+    if let Some(library) = &options.shared_library_path {
+        link::link_shared_library(
+            &llvm,
+            &options.object_path,
+            &options.runtime_archive,
+            library,
+        )?;
+    }
 
     Ok(NativeArtifacts {
         object: options.object_path.clone(),
-        // A library has no executable by construction; the artifact is the
-        // shared library.
+        // A library has no executable by construction; the artifacts are the
+        // archive and the shared library.
         executable: None,
-        library: Some(library),
+        archive: options.archive_path.clone(),
+        library: options.shared_library_path.clone(),
         ir: options.ir_path.clone(),
     })
 }

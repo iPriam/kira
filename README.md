@@ -839,15 +839,90 @@ are neither `Send` nor `Sync`: one instance belongs to one thread.
 The generated crate is a build artifact — regenerated on every build, never
 committed, its dependency paths true only of the checkout that produced it.
 
-`--backend llvm` and `--backend hybrid` do not serve an export yet and are
-refused by name, each saying what its own engine still owes and pointing at
-`--backend vm`. See
+### The native engine: the same crate over compiled machine code
+
+`--backend llvm` in a library package produces the other engine's version of the
+same product — a static archive, and a Rust crate that links it:
+
+```sh
+$ kirac build --backend llvm uifoundation.kira
+Successfully built .kira-build/lib/libuifoundation.a
+  3 exports -> .kira-build/rust/uifoundation
+```
+
+**The consumer's code does not change.** `Uifoundation::load()`,
+`ui.make_button("ok")`, `drop(button)` — the five lines above compile and run
+against either engine, which is the property the whole feature is measured on.
+What changes is entirely underneath.
+
+The archive exports one **stable trampoline per export**, all sharing the uniform
+C-ABI shape the hybrid seam already load-tests:
+
+```c
+void kira_lib_uifoundation_make_button(
+    const BridgeValue *args, uint32_t count, BridgeValue *out);
+```
+
+One shape for every Kira signature, never a typed C symbol per export: a typed
+symbol would re-open ABI drift — two separately compiled sides agreeing on a
+struct-passing convention per signature, with nothing but a name to catch a
+disagreement — to buy nothing the generated crate does not already hide. The
+names are `kira_lib_<library>_<export>`, disjoint by prefix from the `kira_x_*`
+namespace the opposite direction claims, so both can live in one process.
+
+A handle is a **box**. Inside native code a class instance is a struct value that
+dies with its frame, and a handle outlives the call by definition, so an export
+returning one moves it into an allocation and hands back the address. Each
+exported class gets a synthesized destructor, `kira_lib_<lib>_drop_<class>`,
+which releases whatever the instance owned and then frees the box — and the Rust
+newtype's `Drop` is the only thing that calls it. A handle *argument* is lent, so
+the trampoline deep-copies before the call rather than letting the callee drop
+the consumer's object.
+
+The stale-build guard is a **symbol**, not data, because this engine has a link
+step to fail: the library defines `kira_lib_<library>_abi_1` and the generated
+`load()` calls it. An archive built under a different export contract does not
+define it, so the consumer's **link** fails naming the marker — the exact lesson
+`RUNTIME_ABI_VERSION` encodes, applied one level up. The marker's body also
+references the runtime marker, so a library carries both guards; an executable
+gets that one from its C `main`, and a library has no `main`.
+
+The archive is self-contained: `llvm-ar` splices the Kira native runtime's
+members in beside the library's object, so a consumer links one file and needs no
+arrangement with the Kira toolchain. **The consumer's build needs no LLVM** —
+LLVM compiled the library; linking an archive does not.
+
+Three things differ from the VM engine, and each is a consequence of where the
+code runs rather than a gap. `print` goes to stdout, with no host to redirect it,
+because giving native code one would be an ABI rather than a parameter. A trap
+ends the process, exactly as a `kira build` binary does — `attempt`/`try`/`handle`
+inside the library is the portable way to keep one away from the boundary. And
+two Kira native libraries cannot share a binary: both carry the `kira_rt_*`
+runtime, so linking two fails with a duplicate-symbol error, loud and at link.
+
+`--backend hybrid` does not serve an export yet and is refused by name, saying
+what that engine still owes and pointing at one that works. See
 [.codex/work/kira-export-design.md](.codex/work/kira-export-design.md).
 
-`crates/kira-export-consumer` is the proof: a Rust crate whose `build.rs`
-compiles the Kira library in `fixture/uifoundation/`, generates the wrapper
-through the same generator `kirac` drives, compiles it under this workspace's
-lint gate, and calls it.
+### The proof
+
+`crates/kira-export-consumer` is a Rust crate whose `build.rs` compiles the Kira
+library in `fixture/uifoundation/`, generates the wrapper through the same
+generator `kirac` drives, compiles it under this workspace's lint gate, and calls
+it.
+
+`tests/consumer.rs` is the parity proof, and its force comes from being one file
+rather than two: it is compiled and run **unchanged** against both engines.
+
+```sh
+cargo test -p kira-export-consumer                             # VM, no LLVM
+cargo test -p kira-export-consumer --features native-engine,llvm
+```
+
+A test that had to be edited to run against the second engine would have
+disproved the claim it was written to check. What one engine has and the other
+does not — custom hosts, live-handle accounting — sits in `tests/vm_engine.rs`,
+stated rather than quietly weakening the shared file.
 
 ## Live sessions
 

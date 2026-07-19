@@ -8,7 +8,7 @@
 use kira_bytecode::exports::{ExportTable, ExportType};
 use kira_bytecode::module::ModuleDecodeError;
 use kira_bytecode::validate::ModuleValidateError;
-use kira_runtime_abi::NativeResult;
+use kira_runtime_abi::{BridgeValueTag, NativeResult};
 use kira_vm_runtime::VmError;
 
 /// A failure loading, checking, or calling an embedded Kira library.
@@ -93,6 +93,37 @@ impl Error {
             expected,
             found: describe_result(found),
         }
+    }
+
+    /// Names a result the *native* engine wrote under a tag the export's
+    /// declared signature rules out.
+    ///
+    /// The native engine's wrapper reads a raw [`BridgeValueTag`] rather than a
+    /// [`NativeResult`], so it needs its own door to the same error. The one
+    /// case that genuinely reaches it is a trampoline whose box allocation
+    /// failed: it writes `Void` where a handle was promised, and this is what
+    /// turns that into a typed error instead of undefined behavior.
+    pub fn unexpected_tag(export: &str, expected: &'static str, found: BridgeValueTag) -> Error {
+        Error::UnexpectedResult {
+            export: export.to_owned(),
+            expected,
+            found: describe_tag(found),
+        }
+    }
+}
+
+/// A one-phrase name for what a tag says a value is.
+pub fn describe_tag(tag: BridgeValueTag) -> &'static str {
+    match tag {
+        BridgeValueTag::VOID => "nothing",
+        BridgeValueTag::INT => "an integer",
+        BridgeValueTag::FLOAT => "a float",
+        BridgeValueTag::BOOL => "a boolean",
+        BridgeValueTag::STRING => "a string",
+        BridgeValueTag::HANDLE => "a handle",
+        // A tag this build does not know is data a consumer was handed, never a
+        // reason to panic — the decoder rule, applied to a diagnostic.
+        _ => "a value of an unknown kind",
     }
 }
 

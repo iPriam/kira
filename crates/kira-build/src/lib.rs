@@ -31,10 +31,17 @@
 
 pub mod frontend;
 pub mod library;
+pub mod native;
 pub mod wrapper;
 
 pub use frontend::{Compiled, FrontendError, compile};
 pub use library::{
     LibraryArtifacts, LibraryBuildError, LibraryBuildOptions, build_library, toolchain_root,
 };
-pub use wrapper::{GeneratedCrate, GeneratedFile, WrapperSpec, generate};
+pub use native::{
+    NativeLibraryArtifacts, NativeLibraryError, NativeLibraryOptions, archive_file_name,
+    build_native_library, export_surface,
+};
+pub use wrapper::{
+    GeneratedCrate, GeneratedFile, NativeWrapperSpec, WrapperSpec, generate, generate_native,
+};

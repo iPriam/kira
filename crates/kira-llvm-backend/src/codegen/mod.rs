@@ -23,6 +23,7 @@ mod bridge;
 mod elements;
 mod entry;
 mod ffi;
+mod library;
 mod lower;
 mod symbols;
 mod target;
@@ -48,6 +49,7 @@ use self::symbols::symbol_name;
 use self::target::TargetMachine;
 use self::types::{Runtime, Types, declare_runtime};
 use crate::LlvmError;
+use crate::exports::NativeExportSurface;
 
 pub(crate) use self::symbols::trampoline_name;
 pub(crate) use self::types::Callable;
@@ -69,10 +71,9 @@ pub(crate) enum ModuleKind {
     /// [`ModuleKind::Executable`], and no C `main` is emitted because a library
     /// is entered by its consumer rather than started by the operating system.
     ///
-    /// No trampolines yet either. Which functions a consumer may call, and
-    /// under what symbol, is what `@Export` decides, and that is a later step;
-    /// a library today is a linkable artifact carrying every function's code
-    /// and no entry point.
+    /// What it is entered *through* is its `@Export` surface: one stable
+    /// trampoline per export, one synthesized destructor per exported class, and
+    /// the per-library ABI marker. See [`library`].
     Library,
 }
 
@@ -96,7 +97,13 @@ impl Module {
     /// any program.
     pub(crate) fn build(program: &IrProgram, module_name: &str) -> Result<Self, LlvmError> {
         let engines = vec![Execution::Native; program.functions.len()];
-        Self::lower(program, module_name, ModuleKind::Executable, engines)
+        Self::lower(
+            program,
+            module_name,
+            ModuleKind::Executable,
+            engines,
+            &NativeExportSurface::default(),
+        )
     }
 
     /// Lowers a whole Kira library into an LLVM module with no entry point.
@@ -104,9 +111,13 @@ impl Module {
     /// Every function is native, exactly as in [`Module::build`]: the two
     /// differ only in whether a C `main` is emitted, which keeps a library and
     /// a program compiling their shared code through one path.
-    pub(crate) fn build_library(program: &IrProgram, module_name: &str) -> Result<Self, LlvmError> {
+    pub(crate) fn build_library(
+        program: &IrProgram,
+        module_name: &str,
+        exports: &NativeExportSurface,
+    ) -> Result<Self, LlvmError> {
         let engines = vec![Execution::Native; program.functions.len()];
-        Self::lower(program, module_name, ModuleKind::Library, engines)
+        Self::lower(program, module_name, ModuleKind::Library, engines, exports)
     }
 
     /// Lowers the native half of a hybrid program into a shared library.
@@ -116,7 +127,13 @@ impl Module {
             .iter()
             .map(|function| function.execution.resolve(Execution::Runtime))
             .collect();
-        Self::lower(program, module_name, ModuleKind::HybridLibrary, engines)
+        Self::lower(
+            program,
+            module_name,
+            ModuleKind::HybridLibrary,
+            engines,
+            &NativeExportSurface::default(),
+        )
     }
 
     /// Builds the module.
@@ -125,6 +142,7 @@ impl Module {
         module_name: &str,
         kind: ModuleKind,
         engines: Vec<Execution>,
+        exports: &NativeExportSurface,
     ) -> Result<Self, LlvmError> {
         let name = c_string(module_name);
         // SAFETY: the context, module, and builder are created together and
@@ -141,7 +159,7 @@ impl Module {
             }
         };
 
-        let mut codegen = Codegen::new(&owned, program, kind, engines)?;
+        let mut codegen = Codegen::new(&owned, program, kind, engines, exports)?;
         codegen.lower_program()?;
         owned.verify()?;
         Ok(owned)
@@ -215,6 +233,8 @@ pub(crate) struct Codegen<'a> {
     runtime: Runtime,
     /// What this module is being built as.
     kind: ModuleKind,
+    /// What this library exports, empty for anything that is not one.
+    exports: NativeExportSurface,
     /// Which engine owns each function, in [`IrProgram::functions`] order.
     ///
     /// Resolved: no `Inherited` survives here, because a backend has to know
@@ -256,6 +276,7 @@ impl<'a> Codegen<'a> {
         program: &'a IrProgram,
         kind: ModuleKind,
         engines: Vec<Execution>,
+        exports: &NativeExportSurface,
     ) -> Result<Self, LlvmError> {
         let types = Types::new(owned.context);
         let runtime = declare_runtime(owned.module, &types);
@@ -276,6 +297,7 @@ impl<'a> Codegen<'a> {
             types,
             runtime,
             kind,
+            exports: exports.clone(),
             engines,
             functions: Vec::with_capacity(program.functions.len()),
             struct_types: Vec::with_capacity(program.types.structs().len()),
@@ -381,8 +403,9 @@ impl<'a> Codegen<'a> {
             // A library is entered by its consumer, so nothing starts it here.
             // Emitting a C `main` would make the artifact an executable that
             // happens to be a library, which is exactly the confusion the two
-            // kinds exist to prevent.
-            ModuleKind::Library => Ok(()),
+            // kinds exist to prevent. What a consumer reaches it through is the
+            // export surface.
+            ModuleKind::Library => self.lower_export_surface(),
             // A hybrid library is entered by its host, one call at a time.
             ModuleKind::HybridLibrary => {
                 for (index, function) in program.functions.iter().enumerate() {

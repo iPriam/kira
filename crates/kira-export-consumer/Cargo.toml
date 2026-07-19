@@ -12,15 +12,26 @@ publish = false
 # content is the generated library plus the tests that call it.
 path = "src/lib.rs"
 
+[features]
+# Build and link the library as **native machine code** instead of running it on
+# the VM. Off by default, and deliberately: the default configuration is the one
+# CI can prove, on a machine with no LLVM. Turning this on makes `build.rs`
+# invoke the LLVM backend, which needs `llvm` with it — so the native engine is
+# `--features native-engine,llvm`.
+native-engine = []
+llvm = ["kira-build/llvm"]
+
 [build-dependencies]
 # The compiler itself. A consumer builds the Kira library it embeds, through the
 # same frontend and the same generator `kirac` drives — not a second copy.
 kira-build.workspace = true
+kira-ir.workspace = true
 thiserror.workspace = true
 
 [dependencies]
-# What the generated wrapper is written against. These are the three lines a
-# real consumer's `Cargo.toml` carries, and they are here for the same reason.
+# What the generated wrapper is written against. These are the lines a real
+# consumer's `Cargo.toml` carries, and they are here for the same reason. The VM
+# engine's crate uses all three; the native engine's uses the last two.
 kira-bytecode.workspace = true
 kira-main.workspace = true
 kira-runtime-abi.workspace = true

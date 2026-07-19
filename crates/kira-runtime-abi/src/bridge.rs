@@ -163,6 +163,25 @@ impl BridgeValue {
         payload: 0,
     };
 
+    /// Builds a value from a tag and a payload, with the reserved bytes zeroed.
+    ///
+    /// The unchecked door, for a caller that already knows the tag it means:
+    /// generated wrapper code packing one argument whose type it was generated
+    /// from. [`BridgeValue::encode`] is the door for a caller holding *data*,
+    /// and is the one to prefer — it cannot pair a tag with a payload the tag
+    /// does not describe.
+    ///
+    /// The reserved bytes are zeroed here rather than left to the caller,
+    /// because "must be zero" written on a public field is a rule somebody
+    /// eventually does not read.
+    pub fn new(tag: BridgeValueTag, payload: u64) -> BridgeValue {
+        BridgeValue {
+            tag,
+            reserved: [0; 7],
+            payload,
+        }
+    }
+
     /// Builds a value from decoded data.
     pub fn encode(data: BridgeData) -> BridgeValue {
         let (tag, payload) = match data {

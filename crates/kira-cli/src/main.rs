@@ -8,6 +8,7 @@ mod hybrid;
 mod library;
 mod live;
 mod native;
+mod native_library;
 mod options;
 mod pipeline;
 mod serve;
