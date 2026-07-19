@@ -57,6 +57,7 @@ kira-live = { path = "crates/kira-live" }
 kira-desktop-runner = { path = "crates/kira-desktop-runner" }
 kira-cli = { path = "crates/kira-cli" }
 kira-main = { path = "crates/kira-main" }
+kira-hybrid-main = { path = "crates/kira-hybrid-main" }
 kira-bootstrapper = { path = "crates/kira-bootstrapper" }
 kira-devflow = { path = "crates/kira-devflow" }
 kira-lsp = { path = "crates/kira-lsp" }

@@ -13,13 +13,23 @@ kira-ir.workspace = true
 # is the crate that produces it; the LLVM dependency itself is feature-gated
 # inside it, so a build without LLVM still compiles this one.
 kira-llvm-backend.workspace = true
+# The hybrid engine. Its library build writes a `.khm` describing the split
+# (`kira-hybrid-definition`), and its generated crate is written against
+# `kira-hybrid-main` — which is also where the native half's search order is
+# defined, so the generator names it rather than restating it.
+kira-hybrid-definition.workspace = true
+kira-hybrid-main.workspace = true
 # The embedding surface the generated crate is written against: the content
 # hash, the contract types, and `Library`/`Instance` are defined once, there.
 kira-main.workspace = true
 kira-manifest.workspace = true
 kira-program-graph.workspace = true
 kira-project.workspace = true
+# The seam's own vocabulary (`Execution`, `BridgeValueTag`) and the type lattice
+# a hybrid manifest describes each function's signature in.
+kira-runtime-abi.workspace = true
 kira-semantics.workspace = true
+kira-semantics-model.workspace = true
 kira-source.workspace = true
 salsa.workspace = true
 thiserror.workspace = true
@@ -32,3 +42,9 @@ llvm = ["kira-llvm-backend/llvm"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Building an `IrProgram` by hand for the hybrid build's refusal tests: the
+# expression arena is part of the IR's public shape, so a test that constructs
+# one names the arena crate the same way `kira-ir` does.
+la-arena.workspace = true

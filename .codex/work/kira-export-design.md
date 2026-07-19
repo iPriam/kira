@@ -338,11 +338,63 @@ The objections stand as real costs to be paid rather than reasons to refuse:
 story (where the native half lives, how it is found at load time) must be
 designed rather than assumed. Both belong in the implementation plan.
 
-Open, and to be settled during implementation: whether a hybrid-engine library
-keeps the `@Runtime`/`@Native` split *meaningful* for a consumer — that split
-exists to serve live-reload of applications, and what it means for a library
-with no `@Main` is a genuine question, not a settled one. Refusing hybrid is
-not an acceptable answer to it.
+*Landed as:* a `kira-hybrid-main` crate (layer 6) holding a `HybridInstance`
+over `kira_main::Instance`, with a host that routes `call_native` into the
+`dlopen`ed native half — reusing `kira-hybrid-runtime`'s `NativeLibrary` and
+`marshal` unchanged. The generated crate comes out of the **same renderer** as
+the VM engine's, with the engine named in one `EngineBinding` enum, so the two
+APIs cannot drift; `tests/consumer.rs` runs unchanged against all three.
+
+**The open question, answered: `@Runtime`/`@Native` mean exactly what they
+always meant — which engine runs a function's body.** What a library changes is
+not the split but the *entry*. An application is entered at its `@Main`, on
+whichever engine owns it; a library is entered by its consumer, and the consumer
+always enters the **bytecode half**.
+
+That is also the answer to why this engine is worth building rather than a parity
+checkbox. The other two ignore the annotation and are not wrong to — the VM
+engine compiles everything to bytecode, the native engine everything to machine
+code. Hybrid is the only engine that *honors* it, so it is the only one where a
+library's hot inner function is machine code while its surface, its handles, and
+its strings stay on the VM.
+
+Two rules follow from "the consumer enters the bytecode half", both refused at
+build time by function name rather than discovered at run time:
+
+- **An `@Export` may not also be `@Native`.** A handle is a root into the
+  instance's VM heap; machine code cannot mint one. A `@Native` export returning
+  a class would allocate in a second heap and the consumer would hold two
+  different things behind one newtype with one destructor. Refused for the whole
+  surface rather than only for exports that mention a class, because "this export
+  may be `@Native` and that one may not" is a rule nobody can hold in their head.
+- **A `@Native` function may not call a `@Runtime` one.** `Instance::call` takes
+  `&mut self` — it owns a heap, which is what lets a handle outlive a call — so a
+  callback from inside an exported call would need a second mutable borrow of the
+  same instance. An application's session has no such problem: it runs on a
+  `Program`, which holds no heap and calls through `&self`. So this direction of
+  the seam is the one thing a hybrid *library* gives up, and it gives it up by
+  name at build time. (No runtime invoker is installed either; with none, the
+  C-level `kira_hybrid_call_runtime` already names the function and aborts rather
+  than calling a null pointer, so the build-time refusal is belt and braces.)
+
+*The two costs, paid rather than argued away:*
+
+- **`libloading` enters the consumer's dependency graph.** Stated in the
+  generated crate's `Cargo.toml` comment and its README, so it does not arrive
+  unannounced in a `cargo tree`. The VM engine needs none, which is why it stays
+  the default.
+- **The dylib deployment story, designed rather than assumed.** Three artifacts;
+  the `.kbc` and the `.khm` are data and are embedded in the generated crate, so
+  **deployment is exactly one file**. The native half is found by: the
+  `KIRA_<LIBRARY>_NATIVE` environment variable if set — which **overrides rather
+  than leads** the search, so an operator who names a file gets that one or an
+  error and never a different one — otherwise beside the consumer's executable
+  (the shipping layout), then the absolute path the build recorded (the
+  development layout, last because it stops being true the moment anything is
+  copied). Exhausting the list is a typed error naming every path tried, because
+  "not found" without the list is the least useful thing a loader can say.
+  `kira-hybrid-main`'s `locate` module is the whole of it, and the generated
+  README states it where the consumer reads it.
 
 **wasm — two consumers, one yes and one refusal.** (1) A Rust wasm
 application embedding the library **works**: the VM-engine wrapper crate
@@ -521,8 +573,10 @@ native engine is step 6, not "later".
    native variant with `build.rs` + extern block + marshalling. LLVM-gated
    parity tests running the same consumer test against the native crate.
    *Large; touches kira-llvm-backend + kira-build.*
-7. **Refusals by name** — hybrid library build, wasm library artifact,
-   `@Native`-on-VM-engine, one-library-per-process documentation. *Cheap.*
+7. **Hybrid engine** — `kira-hybrid-main`, the hybrid library build and its two
+   build-time refusals, the generator's hybrid binding, and the same consumer
+   test against a third engine. The remaining refusal by name is the wasm
+   library artifact alone. *Landed.*
 8. **Docs** — refresh README crate table (`kira-main`), toolchain docs, a
    worked example package; cross-link the two direction documents. *Cheap.*
 

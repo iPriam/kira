@@ -29,12 +29,18 @@
 //! FFI autobind — generating *Kira* bindings for a native library, the opposite
 //! direction — is designed in here too, and is not built yet.
 
+pub mod callgraph;
 pub mod frontend;
+pub mod hybrid;
 pub mod library;
 pub mod native;
 pub mod wrapper;
 
 pub use frontend::{Compiled, FrontendError, compile};
+pub use hybrid::{
+    HybridLibraryArtifacts, HybridLibraryError, HybridLibraryOptions, build_hybrid_library,
+    check_library as check_hybrid_library, manifest as hybrid_manifest,
+};
 // Re-exported rather than restated: a consumer's `build.rs` that reaches the
 // generated wrapper without running the generated `build.rs` still has to name
 // the same platform libraries, and there is one list.
@@ -47,5 +53,12 @@ pub use native::{
     build_native_library, export_surface,
 };
 pub use wrapper::{
-    GeneratedCrate, GeneratedFile, NativeWrapperSpec, WrapperSpec, generate, generate_native,
+    GeneratedCrate, GeneratedFile, NativeWrapperSpec, WrapperSpec, generate, generate_hybrid,
+    generate_native,
 };
+
+/// The consumer-facing name one Kira export is called by.
+///
+/// Re-exported from the frontend, which derives it once, so a test or a build
+/// script never spells the snake_case mapping a second time.
+pub use kira_semantics::exported_name as wrapper_export_name;

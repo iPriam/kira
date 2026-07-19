@@ -36,13 +36,35 @@ function clickAt(button: Button, x: Int, y: Int) -> Bool {
     return x >= 0 && x < button.width && y >= 0
 }
 
+// The one function in this library that is not on the VM by default.
+//
+// On the **hybrid** engine this body is compiled machine code in a shared
+// library, and `widen` below reaches it across the seam. On the other two
+// engines the annotation is ignored — the VM engine compiles everything to
+// bytecode, the native engine compiles everything to machine code — and all
+// three must produce the same number, which is what makes this a parity case
+// rather than a demonstration.
+//
+// It calls nothing. A `@Native` function that called a `@Runtime` one would be
+// refused by the hybrid library build, by name: a library instance owns a heap
+// and is entered through a mutable borrow, so it cannot be re-entered from
+// inside a call.
+@Native
+function widenedWidth(width: Int, by: Int) -> Int {
+    return width + by
+}
+
 // Handle in, handle out. An exported parameter is lent, so this returns a new
 // button rather than widening the one it was given.
+//
+// `@Runtime` by default, and it must be: it takes and returns handles, which are
+// roots into the VM instance's heap. An `@Export` that were also `@Native` is
+// refused by the hybrid build for exactly that reason.
 @Export
 function widen(button: Button, by: Int) -> Button {
     var wider = Button()
     wider.title = button.title
-    wider.width = button.width + by
+    wider.width = widenedWidth(button.width, by)
     return wider
 }
 

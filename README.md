@@ -21,11 +21,11 @@ Crates live in `crates/`, organized into layers with no upward dependencies.
 | 3 | `kira-ir`, `kira-shader-ir`, `kira-hybrid-definition`, `kira-backend-api`, `kira-native-lib-definition` |
 | 4 | `kira-glsl-backend`, `kira-wgsl-backend`, `kira-hlsl-backend`, `kira-msl-backend`, `kira-spirv-backend`, `kira-bytecode`, `kira-vm-runtime`, `kira-native-bridge`, `kira-hybrid-runtime`, `kira-debug`, `kira-llvm-backend`, `kira-wasm-runtime` |
 | 5 | `kira-manifest`, `kira-project`, `kira-package-manager`, `kira-build-definition`, `kira-main` (Rust embedding surface: staticlib/cdylib/rlib) |
-| 6 | `kira-program-graph` |
+| 6 | `kira-program-graph`, `kira-hybrid-main` (hybrid embedding surface: bytecode half plus a loaded native half) |
 | 7 | `kira-build` (frontend driver, library builds, generated Rust wrapper crates) |
 | 8 | `kira-instruments`, `kira-linter`, `kira-doc`, `kira-app-generation`, `kira-live` |
 | 9 | `kira-cli` (binary `kirac`) |
-| tests | `kira-export-consumer` (a Rust program consuming a Kira library, end to end) |
+| tests | `kira-export-consumer` (a Rust program consuming a Kira library, end to end, on each of the three engines) |
 | runners | `kira-desktop-runner` (binary `kira-desktop-runner`) |
 | tools | `kira-bootstrapper` (binary `kira`), `kira-devflow` (binary `devflow`) |
 
@@ -900,9 +900,32 @@ inside the library is the portable way to keep one away from the boundary. And
 two Kira native libraries cannot share a binary: both carry the `kira_rt_*`
 runtime, so linking two fails with a duplicate-symbol error, loud and at link.
 
-`--backend hybrid` does not serve an export yet and is refused by name, saying
-what that engine still owes and pointing at one that works. See
-[.codex/work/kira-export-design.md](.codex/work/kira-export-design.md).
+`--backend hybrid` is the third engine, and the only one that keeps the library
+author's own `@Runtime`/`@Native` split meaningful. The other two ignore it — the
+VM engine compiles everything to bytecode, the native engine compiles everything
+to machine code — so hybrid is where a library's hot inner function is machine
+code while its surface, its handles, and its strings stay on the VM.
+
+A consumer enters through the **bytecode half**, always: a handle is a root into
+that half's heap, and machine code cannot mint one. Two rules follow, both
+refused at build time by function name — an `@Export` may not also be `@Native`,
+and a `@Native` function may not call a `@Runtime` one, because a library
+instance owns a heap and cannot be re-entered mid-call. An *application* built
+with `--backend hybrid` may still call in both directions; a library gives that
+up, and that is the whole of what it gives up.
+
+It builds three artifacts. Two are data and are embedded in the generated crate
+(`<name>.kbc`, `<name>.khm`); the third is a shared library the consumer's
+process opens at load, so **deployment is one file**. It is looked for beside the
+consumer's executable and then at the path the build recorded, or at
+`KIRA_<LIBRARY>_NATIVE` if that is set — which overrides rather than leads the
+search, so an operator who names a file gets that one or an error, never a
+different one. A load that finds nothing names every path it tried. The costs are
+real and stated in the generated crate's README: `libloading` enters the
+consumer's dependency graph, and that crate does not build for
+`wasm32-unknown-unknown` (the VM engine's does, and is the wasm answer).
+
+See [.codex/work/kira-export-design.md](.codex/work/kira-export-design.md).
 
 ### The proof
 
@@ -912,17 +935,20 @@ generator `kirac` drives, compiles it under this workspace's lint gate, and call
 it.
 
 `tests/consumer.rs` is the parity proof, and its force comes from being one file
-rather than two: it is compiled and run **unchanged** against both engines.
+rather than three: it is compiled and run **unchanged** against every engine.
 
 ```sh
 cargo test -p kira-export-consumer                             # VM, no LLVM
 cargo test -p kira-export-consumer --features native-engine,llvm
+cargo test -p kira-export-consumer --features hybrid-engine,llvm
 ```
 
-A test that had to be edited to run against the second engine would have
-disproved the claim it was written to check. What one engine has and the other
-does not — custom hosts, live-handle accounting — sits in `tests/vm_engine.rs`,
-stated rather than quietly weakening the shared file.
+A test that had to be edited to run against another engine would have disproved
+the claim it was written to check. What an engine has that another does not is
+stated rather than quietly weakening the shared file: `tests/vm_engine.rs` holds
+what the two VM-family engines share (a custom host, live-handle accounting), and
+`tests/hybrid_engine.rs` holds what only the hybrid engine has — a bytecode
+export calling into machine code, and a native half that can be missing.
 
 ## Live sessions
 

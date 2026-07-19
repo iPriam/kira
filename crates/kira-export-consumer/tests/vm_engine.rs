@@ -13,9 +13,19 @@
 //!   would mean the runtime keeping a registry that exists only to be asserted
 //!   on.
 //!
-//! Everything a consumer does against *both* engines is in `consumer.rs`, which
+//! Everything a consumer does against *every* engine is in `consumer.rs`, which
 //! is compiled unchanged against each. This file is the remainder, stated
 //! rather than hidden.
+//!
+//! # Why the hybrid engine is included here
+//!
+//! Both of those things are properties of *where the bytecode runs*, and on the
+//! hybrid engine the exported surface runs in exactly the same place: on a VM
+//! instance in this process, against a host the embedder supplied. The hybrid
+//! engine adds a native half beside that instance rather than replacing it, so
+//! it keeps the host and it keeps the countable heap. The one thing here that is
+//! genuinely VM-only is the last test — the VM engine's `.kbc`-in-the-crate
+//! artifact — and it says so.
 
 #![cfg(not(feature = "native-engine"))]
 
@@ -133,8 +143,21 @@ fn the_generated_code_contains_no_unsafe() {
 
 #[test]
 fn the_generated_crate_carries_the_bytecode_it_embeds() {
-    // The VM engine's artifact is data inside the crate, which is what makes its
-    // stale-build guard a content hash rather than a symbol.
+    // Both engines reaching this file embed their bytecode as data inside the
+    // crate, which is what makes their stale-build guard a content hash rather
+    // than a symbol.
     let root = std::path::Path::new(GENERATED_CRATE);
     assert!(root.join("uifoundation.kbc").is_file(), "{root:?}");
+}
+
+#[test]
+#[cfg(not(feature = "hybrid-engine"))]
+fn the_vm_engines_crate_carries_no_manifest_and_no_build_script() {
+    // The VM engine's whole artifact is the one `.kbc`. A `.khm` here would mean
+    // a hybrid build's leftovers survived the switch back, and a `build.rs`
+    // would mean the native engine's did — and cargo runs a build script it
+    // finds, so that second one would link a stale archive silently.
+    let root = std::path::Path::new(GENERATED_CRATE);
+    assert!(!root.join("uifoundation.khm").exists(), "{root:?}");
+    assert!(!root.join("build.rs").exists(), "{root:?}");
 }

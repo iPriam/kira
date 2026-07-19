@@ -62,6 +62,15 @@ enum BuildError {
     /// The library or its wrapper could not be built for the native engine.
     #[error("the fixture library could not be built as native code: {0}")]
     NativeLibrary(#[from] kira_build::NativeLibraryError),
+    /// The library or its wrapper could not be built for the hybrid engine.
+    #[error("the fixture library could not be built for the hybrid engine: {0}")]
+    HybridLibrary(#[from] kira_build::HybridLibraryError),
+    /// Two engine features are on at once.
+    #[error(
+        "`native-engine` and `hybrid-engine` are both enabled, and they generate the same \
+         wrapper: pick one, so a test run says which engine it exercised"
+    )]
+    TwoEngines,
     /// The Kira native runtime archive is not where a workspace build puts it.
     #[error(
         "cannot find `libkira_native_bridge.a` above `{from}`; build it with \
@@ -106,8 +115,17 @@ fn generate() -> Result<(), BuildError> {
         return Err(BuildError::Unnamed);
     };
 
+    // Refused rather than resolved by precedence: both features replace the same
+    // generated wrapper, so a silent winner would mean a test run reporting an
+    // engine it did not exercise — the exact lie the parity suite exists to
+    // prevent.
+    if cfg!(feature = "native-engine") && cfg!(feature = "hybrid-engine") {
+        return Err(BuildError::TwoEngines);
+    }
     let wrapper_crate = if cfg!(feature = "native-engine") {
         native(&compiled.ir, name, version, &out)?
+    } else if cfg!(feature = "hybrid-engine") {
+        hybrid(&compiled.ir, name, version, &out)?
     } else {
         vm(&compiled.ir, name, version, &out)?
     };
@@ -189,6 +207,35 @@ fn native(
     for framework in platform.frameworks {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
+    Ok(artifacts.wrapper_crate)
+}
+
+/// Builds the fixture for the hybrid engine: bytecode plus a loaded native half.
+///
+/// Nothing is emitted for the linker here, and that is the shape of this engine
+/// rather than an omission — the native half is `dlopen`ed at run time, not
+/// linked at build time. The generated wrapper records where this build put it,
+/// as the last entry of a three-place search order, so `cargo test` finds it
+/// with no further arrangement. Deployment beyond this directory is the other
+/// two entries' job; see `kira_hybrid_main::locate`.
+fn hybrid(
+    ir: &kira_ir::IrProgram,
+    name: String,
+    version: String,
+    out: &Path,
+) -> Result<PathBuf, BuildError> {
+    let runtime_archive = find_runtime_archive(out)?;
+    let artifacts = kira_build::build_hybrid_library(
+        ir,
+        &kira_build::HybridLibraryOptions {
+            name,
+            version,
+            build_directory: out.to_path_buf(),
+            toolchain_root: kira_build::toolchain_root(),
+            runtime_archive,
+            emit_llvm_ir: false,
+        },
+    )?;
     Ok(artifacts.wrapper_crate)
 }
 

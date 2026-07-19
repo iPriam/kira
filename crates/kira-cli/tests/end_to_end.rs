@@ -591,40 +591,30 @@ fn the_vm_engine_builds_an_export_into_an_artifact_and_a_rust_crate() {
 }
 
 #[test]
-fn the_hybrid_engine_refuses_an_export_by_name_with_its_own_reason() {
-    // The refusal names the backend and says what *that* engine still owes, so
-    // a user knows which one they are waiting on rather than being told a bare
-    // "not supported" — and it points at an engine that does work today.
+fn the_hybrid_engine_no_longer_refuses_an_export_on_export_grounds() {
+    // The hybrid engine builds this surface now, so nothing is left refusing on
+    // *host* engine grounds — the only export refusal that remains is the wasm
+    // library artifact, which is about the artifact rather than an engine.
     //
-    // Hybrid is the only engine left refusing here: the VM engine and the
-    // native engine both build this surface.
+    // Same two legitimate outcomes as the native engine's test above, and for
+    // the same reason: the hybrid engine's native half needs LLVM, so a `kirac`
+    // built without the feature — which is the CI configuration — refuses for
+    // the missing backend rather than for exports. What would be a regression is
+    // the export refusal coming back, and that is what this pins.
     let path = write_package(".Library", EXPORTING_LIBRARY);
     let output = kirac(&["build", "--backend", "hybrid", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "the hybrid backend built an export"
-    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("library export is not built yet"),
-        "the hybrid backend refused for a different reason: {stderr}"
+        !stderr.contains("library export is not built yet"),
+        "the hybrid engine still refuses an export: {stderr}"
     );
-    assert!(stderr.contains("`--backend hybrid`"), "{stderr}");
-    assert!(stderr.contains("the trampolines"), "{stderr}");
-    // The derived consumer names are listed, so the author can see what surface
-    // the engine will eventually have to serve.
-    assert!(
-        stderr.contains("make_button, button_width, click_at"),
-        "{stderr}"
-    );
-    // And an engine that works today is named, so the refusal is a redirection
-    // rather than a dead end.
-    assert!(
-        stderr.contains("`--backend vm` builds this library"),
-        "{stderr}"
-    );
+    if output.status.code() != Some(0) {
+        assert!(
+            stderr.contains("built without the LLVM backend"),
+            "the hybrid engine failed for an unexpected reason: {stderr}"
+        );
+    }
 }
 
 #[test]
