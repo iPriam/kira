@@ -18,6 +18,9 @@ la-arena.workspace = true
 kira-semantics.workspace = true
 kira-bytecode.workspace = true
 kira-vm-runtime.workspace = true
+# Test-only, upward: reading the Foundation the toolchain ships, so these cases
+# run the source that is committed rather than a copy of it.
+kira-program-graph.workspace = true
 salsa.workspace = true
 wasmi.workspace = true
 

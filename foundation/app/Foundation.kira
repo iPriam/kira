@@ -1,0 +1,17 @@
+// Foundation — the standard library every Kira program may import by name.
+//
+// This is the module `import Foundation` binds. It ships with the toolchain
+// rather than with any project, so a program reaches it without a path and
+// without a dependency entry.
+//
+// It is deliberately small. Foundation's remaining files in the reference
+// implementation — Printable, Test, Derive, DeriveSerde, FileSystem, Web —
+// each wait on a language subsystem this compiler has not built yet
+// (constructs, comptime, macros, FFI). They are named as refusals in
+// `docs/foundation.md` rather than stubbed here: a stub that compiles and does
+// nothing is worse than an import that says what is missing.
+
+function printLine(text: borrow String) {
+    print(text)
+    return
+}

@@ -25,10 +25,20 @@
 //! turn a working program into a compile error. A cycle is the one shape with
 //! no dependencies-first order to return; the walk still terminates and still
 //! returns every module once, which is all a cyclic program can be given.
+//!
+//! # Bundled packages
+//!
+//! A module the program's own directory does not hold may still be found in a
+//! package that ships with the toolchain — that is how `import Foundation`
+//! resolves with no path and no dependency entry. See [`bundled`] for which
+//! names a bundle owns and why the project's own files always win.
+
+pub mod bundled;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use bundled::BundledRoot;
 use kira_semantics::ModuleSource;
 use kira_source::SourceId;
 use kira_syntax_model::ast::Item;
@@ -72,6 +82,20 @@ enum Step {
 /// it as an unresolved import, where the import's span is.
 #[must_use]
 pub fn load_modules(entry_path: &Path, entry_text: &str) -> Vec<ModuleSource> {
+    load_modules_with(entry_path, entry_text, &bundled::bundled_roots())
+}
+
+/// [`load_modules`], against an explicit set of bundled packages.
+///
+/// Split out so a test can hand the walk a bundle it built itself rather than
+/// whichever toolchain the machine happens to have installed. Callers compiling
+/// a real program want [`load_modules`], which discovers the bundles.
+#[must_use]
+pub fn load_modules_with(
+    entry_path: &Path,
+    entry_text: &str,
+    bundles: &[BundledRoot],
+) -> Vec<ModuleSource> {
     // The module root is the entry file's directory. A module path is a
     // sequence of identifiers, so it can name nothing above the root: there is
     // no `..` an import could spell, which is what keeps a program's modules
@@ -96,8 +120,7 @@ pub fn load_modules(entry_path: &Path, entry_text: &str) -> Vec<ModuleSource> {
         if seen.len() > MAX_MODULES {
             break;
         }
-        let path = module_path(root, &module);
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Some((path, text)) = read_module(root, &module, bundles) else {
             // Absent, or unreadable. Either way the frontend says so, with the
             // span of the import that wanted it; reporting here as well would
             // be the same problem twice under two different spans.
@@ -154,12 +177,42 @@ fn imports_of(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Where a dotted module path lives on disk, relative to the module root.
+/// Reads `module`, from the program's own directory first and from a bundled
+/// package only if the program does not hold it.
+///
+/// The order is the rule: a file the author wrote beside their program always
+/// wins over one that came with the toolchain, so installing a new Foundation
+/// can never change the meaning of a program that shipped its own module by
+/// that name. The bundle is a fallback, never an override.
+///
+/// Returns the path it read from together with the text, because the path is
+/// what a diagnostic renders against — a span in Foundation must point at
+/// Foundation's file, not at something under the user's directory.
+fn read_module(root: &Path, module: &str, bundles: &[BundledRoot]) -> Option<(PathBuf, String)> {
+    let own = module_path(root, module);
+    if let Ok(text) = std::fs::read_to_string(&own) {
+        return Some((own, text));
+    }
+    for bundle in bundles {
+        if !bundle.owns(module) {
+            continue;
+        }
+        let path = module_path(bundle.source_dir(), module);
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            return Some((path, text));
+        }
+    }
+    None
+}
+
+/// Where a dotted module path lives on disk, relative to a search root.
 ///
 /// `support` is `support.kira`; `Foundation.Web` is `Foundation/Web.kira`. A
 /// dot is a directory separator, which is what makes the module path a *name*
 /// rather than a path — the source never spells a slash, an extension, or a
-/// parent directory.
+/// parent directory. The same mapping is used inside a bundled package, with
+/// that package's `app/` as the root; nothing about a bundle's layout is
+/// special-cased.
 fn module_path(root: &Path, module: &str) -> PathBuf {
     let mut path = root.to_path_buf();
     for segment in module.split('.') {
@@ -244,6 +297,114 @@ mod tests {
         order.sort_unstable();
         let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
         assert_eq!(order, vec!["alpha", "beta"]);
+    }
+
+    /// Builds a bundled package on disk and returns the root that names it.
+    fn write_bundle(name: &str, module_root: &str, modules: &[(&str, &str)]) -> BundledRoot {
+        let app = std::env::temp_dir()
+            .join(format!("kira-bundle-{name}"))
+            .join("app");
+        let _ = std::fs::remove_dir_all(app.parent().expect("bundle root"));
+        std::fs::create_dir_all(&app).expect("create bundle app directory");
+        for (module, text) in modules {
+            let path = module_path(&app, module);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("module directory");
+            }
+            std::fs::write(path, text).expect("write bundled module");
+        }
+        BundledRoot::new(module_root, app)
+    }
+
+    /// The mechanism: a module the program's directory does not hold is read
+    /// out of a package that ships with the toolchain.
+    #[test]
+    fn a_bundled_module_resolves_without_a_path() {
+        let bundle = write_bundle(
+            "resolves",
+            "Foundation",
+            &[(
+                "Foundation",
+                "function printLine(text: borrow String) { print(text) return }",
+            )],
+        );
+        let entry = write_modules("bundled-resolves", &[]);
+        let loaded = load_modules_with(&entry, "import Foundation\n", &[bundle]);
+        let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
+        assert_eq!(loaded.len(), 1, "{loaded:?}");
+        assert_eq!(loaded[0].module, "Foundation");
+        assert!(loaded[0].text.contains("printLine"), "{:?}", loaded[0].text);
+        // The path is the bundle's, so a diagnostic in Foundation renders
+        // against Foundation's own file.
+        assert!(
+            loaded[0].path.contains("kira-bundle-resolves"),
+            "{}",
+            loaded[0].path
+        );
+    }
+
+    /// A dotted name inside a bundle is a directory under the bundle's `app/`,
+    /// the same mapping the program's own directory uses.
+    #[test]
+    fn a_dotted_bundled_module_is_a_directory_under_the_bundle() {
+        let bundle = write_bundle(
+            "dotted",
+            "Foundation",
+            &[(
+                "Foundation/Web",
+                "function createElement() -> Int { return 1 }",
+            )],
+        );
+        let entry = write_modules("bundled-dotted", &[]);
+        let loaded = load_modules_with(&entry, "import Foundation.Web as Web\n", &[bundle]);
+        let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
+        assert_eq!(loaded.len(), 1, "{loaded:?}");
+        assert_eq!(loaded[0].module, "Foundation.Web");
+    }
+
+    /// The project always wins: a file the author wrote beside their program
+    /// is the one that is loaded, even when the bundle has that name too.
+    #[test]
+    fn the_programs_own_file_beats_the_bundle() {
+        let bundle = write_bundle(
+            "shadowed",
+            "Foundation",
+            &[("Foundation", "function which() -> Int { return 1 }")],
+        );
+        let entry = write_modules(
+            "bundled-shadowed",
+            &[("Foundation", "function which() -> Int { return 2 }")],
+        );
+        let loaded = load_modules_with(&entry, "import Foundation\n", &[bundle]);
+        let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
+        assert_eq!(loaded.len(), 1, "{loaded:?}");
+        assert!(loaded[0].text.contains("return 2"), "{:?}", loaded[0].text);
+    }
+
+    /// A bundle answers only the namespace its manifest declares. A toolchain
+    /// that could satisfy any import would make a program's meaning depend on
+    /// what happened to be installed.
+    #[test]
+    fn a_bundle_does_not_answer_a_module_outside_its_root() {
+        let bundle = write_bundle(
+            "outside",
+            "Foundation",
+            &[("support", "function sneak() -> Int { return 1 }")],
+        );
+        let entry = write_modules("bundled-outside", &[]);
+        let loaded = load_modules_with(&entry, "import support\n", &[bundle]);
+        let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
+        assert!(loaded.is_empty(), "{loaded:?}");
+    }
+
+    /// With no bundle installed, `import Foundation` finds nothing and the walk
+    /// returns nothing — the frontend reports it, against the import's span.
+    #[test]
+    fn no_bundle_leaves_the_import_unresolved_rather_than_failing() {
+        let entry = write_modules("bundled-absent", &[]);
+        let loaded = load_modules_with(&entry, "import Foundation\n", &[]);
+        let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
+        assert!(loaded.is_empty(), "{loaded:?}");
     }
 
     /// A word that merely looks like an import is not one: the reader is the
