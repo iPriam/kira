@@ -103,6 +103,7 @@ pub fn build_library(
     }
     // The embedded copy: `include_bytes!("../<name>.kbc")` from `src/lib.rs`.
     write(&wrapper_crate.join(&artifact_name), &bytes)?;
+    remove_foreign_engine_files(&wrapper_crate, &options.name)?;
 
     Ok(LibraryArtifacts {
         bytecode,
@@ -110,6 +111,34 @@ pub fn build_library(
         content_hash,
         exports: module.exports.functions.len(),
     })
+}
+
+/// Removes what the native engine left in this crate directory.
+///
+/// Building the same package for the other engine writes into the same
+/// directory, and the native engine's `build.rs` would otherwise survive the
+/// switch — cargo runs a build script it *finds*, so the VM-engine crate would
+/// go on linking a stale archive. `build = false` in the generated manifest says
+/// the same thing a second way; this is the half that also stops the file being
+/// read by anything else looking at the directory.
+fn remove_foreign_engine_files(
+    wrapper_crate: &Path,
+    library: &str,
+) -> Result<(), LibraryBuildError> {
+    for file in wrapper::foreign_engine_files(wrapper::Engine::Vm, library) {
+        let path = wrapper_crate.join(file);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(LibraryBuildError::Write {
+                    path: path.display().to_string(),
+                    source,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Writes `contents` to `path`, creating the directories above it.
@@ -260,6 +289,38 @@ mod tests {
         let built = build_library(&ir, &options(&dir)).expect("build");
         assert_eq!(built.exports, 0);
         assert!(built.wrapper_crate.join("src/lib.rs").is_file());
+    }
+
+    #[test]
+    fn a_vm_build_removes_the_native_engines_build_script() {
+        // The switch flow: `kirac build --backend llvm` then `kirac build`, in
+        // one package. Both engines write the same directory, and cargo decides
+        // whether a crate has a build script by looking for the file — so a
+        // surviving `build.rs` would make the VM-engine crate go on linking the
+        // native engine's stale archive, silently.
+        //
+        // The native half is stood in for by writing the file, because building
+        // it needs LLVM and this property is not about LLVM.
+        let dir = TempDir::new("switch");
+        let ir = library_ir(
+            &dir,
+            "@Export\nfunction add(a: Int, b: Int) -> Int { return a + b }\n",
+        );
+        let built = build_library(&ir, &options(&dir)).expect("build");
+        let script = built.wrapper_crate.join("build.rs");
+        std::fs::write(&script, "fn main() { /* the native engine's */ }\n").expect("plant");
+
+        let built = build_library(&ir, &options(&dir)).expect("rebuild");
+        assert!(
+            !script.exists(),
+            "the native engine's build script survived a VM build: {}",
+            script.display()
+        );
+        // And the manifest says so too, so the answer does not depend on the
+        // directory having been cleaned.
+        let manifest =
+            std::fs::read_to_string(built.wrapper_crate.join("Cargo.toml")).expect("read manifest");
+        assert!(manifest.contains("\nbuild = false\n"), "{manifest}");
     }
 
     #[test]

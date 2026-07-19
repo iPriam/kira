@@ -178,33 +178,18 @@ fn native(
     let directory = out.join("lib");
     println!("cargo:rustc-link-search=native={}", directory.display());
     println!("cargo:rustc-link-lib=static={name}");
-    for library in platform_libraries() {
+    // The same list the generated `build.rs` renders and the same list the
+    // compiler's own linker path uses, read from the crate that owns it. A hand
+    // copy here would be a third spelling, and the first library added to one of
+    // the other two would fail this crate's link naming nothing.
+    let platform = kira_build::host_link_list();
+    for library in platform.libraries {
         println!("cargo:rustc-link-lib={library}");
     }
-    for framework in platform_frameworks() {
+    for framework in platform.frameworks {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
     Ok(artifacts.wrapper_crate)
-}
-
-/// The system libraries the Rust `staticlib` inside the archive needs.
-fn platform_libraries() -> &'static [&'static str] {
-    if cfg!(target_os = "macos") {
-        &["resolv", "c++"]
-    } else if cfg!(target_os = "linux") {
-        &["pthread", "dl", "m", "rt", "gcc_s", "util"]
-    } else {
-        &[]
-    }
-}
-
-/// The frameworks it needs, which only Apple platforms have.
-fn platform_frameworks() -> &'static [&'static str] {
-    if cfg!(target_os = "macos") {
-        &["CoreFoundation"]
-    } else {
-        &[]
-    }
 }
 
 /// Finds `libkira_native_bridge.a` in the cargo profile directory above

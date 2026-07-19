@@ -657,6 +657,81 @@ fn the_native_engine_no_longer_refuses_an_export_on_export_grounds() {
 }
 
 #[test]
+fn switching_engines_in_one_package_leaves_nothing_of_the_other_behind() {
+    // Both engines write `.kira-build/rust/<name>/`, because a consumer's `path`
+    // dependency names that directory and must not move when the library is
+    // rebuilt. The hazard is each engine's own extra file: cargo runs a build
+    // script it *finds*, so the native engine's `build.rs` surviving a VM build
+    // would keep linking a stale archive into the consumer's binary — silently,
+    // in the exact two-build flow the toolchain documents.
+    //
+    // The native build is attempted for real. On a `kirac` with no LLVM it
+    // cannot run, so the file it would have written is planted instead: the
+    // property under test is about the VM build, not about LLVM.
+    let path = write_package(".Library", EXPORTING_LIBRARY);
+    let directory = path.parent().expect("package directory").to_path_buf();
+    let generated = directory
+        .join(".kira-build")
+        .join("rust")
+        .join("uifoundation");
+    let script = generated.join("build.rs");
+    let bytecode = generated.join("uifoundation.kbc");
+
+    let vm = kirac(&["build", "--backend", "vm", path.to_str().unwrap()]);
+    let first = (vm.status.success(), bytecode.is_file(), script.is_file());
+
+    let native = kirac(&["build", "--backend", "llvm", path.to_str().unwrap()]);
+    if native.status.success() {
+        // The native engine took over the directory: its script is there and the
+        // VM engine's embedded bytecode is gone.
+        assert!(script.is_file(), "the native build wrote no build script");
+        assert!(
+            !bytecode.is_file(),
+            "the VM engine's bytecode survived a native build"
+        );
+        // And the archive it points at is named absolutely. Cargo reads this
+        // script from the generated crate's directory, wherever a consumer put
+        // it, so a relative path resolves somewhere else entirely and fails the
+        // link on an archive sitting exactly where it was left.
+        let text = std::fs::read_to_string(&script).expect("read build.rs");
+        let search = text
+            .lines()
+            .find_map(|line| line.split_once("cargo:rustc-link-search=native="))
+            .map(|(_, rest)| rest.trim_end_matches("\");").to_owned())
+            .unwrap_or_default();
+        assert!(
+            search.starts_with('/'),
+            "the generated build script's link search path is relative: {search}"
+        );
+    } else {
+        std::fs::write(&script, "fn main() { /* the native engine's */ }\n").expect("plant");
+    }
+
+    let vm_again = kirac(&["build", "--backend", "vm", path.to_str().unwrap()]);
+    let back = (
+        vm_again.status.success(),
+        bytecode.is_file(),
+        script.is_file(),
+    );
+    let manifest = std::fs::read_to_string(generated.join("Cargo.toml")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&directory);
+
+    assert_eq!(
+        first,
+        (true, true, false),
+        "the first VM build: {}",
+        String::from_utf8_lossy(&vm.stderr)
+    );
+    assert_eq!(
+        back,
+        (true, true, false),
+        "the build script survived the switch back to the VM: {}",
+        String::from_utf8_lossy(&vm_again.stderr)
+    );
+    assert!(manifest.contains("\nbuild = false\n"), "{manifest}");
+}
+
+#[test]
 fn the_web_refuses_to_build_an_export_too() {
     let path = write_package(".Library", EXPORTING_LIBRARY);
     let output = kirac(&[

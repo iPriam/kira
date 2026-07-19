@@ -326,28 +326,24 @@ fn link(
     Ok(())
 }
 
-/// The system libraries the Rust `staticlib` runtime needs on this host.
+/// The system libraries the Rust `staticlib` runtime needs on this host, spelled
+/// as driver arguments.
 ///
-/// A Rust static archive bundles the standard library but not the platform
-/// libraries it calls into; these are the libraries `rustc --print
-/// native-static-libs` reports for each host, minus the ones the clang driver
-/// already links by default (`-lSystem`, `-lc`).
+/// The names come from [`crate::platform`], which is the one place they are
+/// written down — the generated `build.rs` a consumer links through reads the
+/// same list, so a library added for one is added for both.
 fn platform_link_arguments() -> Vec<String> {
-    if cfg!(target_os = "macos") {
-        // Rust's std on Apple platforms resolves names and unwinds through
-        // these; the driver supplies libSystem itself.
-        ["-lresolv", "-lc++", "-framework", "CoreFoundation"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-    } else if cfg!(target_os = "linux") {
-        ["-lpthread", "-ldl", "-lm", "-lrt", "-lgcc_s", "-lutil"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-    } else {
-        Vec::new()
+    let list = crate::platform::host_link_list();
+    let mut arguments: Vec<String> = list
+        .libraries
+        .iter()
+        .map(|library| format!("-l{library}"))
+        .collect();
+    for framework in list.frameworks {
+        arguments.push("-framework".to_owned());
+        arguments.push((*framework).to_owned());
     }
+    arguments
 }
 
 /// The macOS SDK to link against, or `None` off macOS.
@@ -421,9 +417,10 @@ mod tests {
     fn every_host_link_argument_is_a_library_or_framework_flag() {
         // Guards against a stray path or empty string sneaking into the link
         // line, which the driver would silently treat as an input file.
+        let frameworks = crate::platform::host_link_list().frameworks;
         for argument in platform_link_arguments() {
             assert!(
-                argument.starts_with('-') || argument == "CoreFoundation",
+                argument.starts_with('-') || frameworks.contains(&argument.as_str()),
                 "unexpected link argument `{argument}`",
             );
         }

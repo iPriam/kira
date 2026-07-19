@@ -248,6 +248,39 @@ pub(crate) fn class_name_of(class: Option<&render::ClassModel>, index: u32) -> S
     }
 }
 
+/// Which engine a generated crate was written for.
+///
+/// The two engines write into the same directory — `.kira-build/rust/<name>/` —
+/// because a consumer's `path` dependency names that directory and must not move
+/// when the library is rebuilt for the other engine. That makes leftovers a real
+/// hazard, which is what [`foreign_engine_files`] exists to answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    /// Bytecode embedded in the crate and run on the VM.
+    Vm,
+    /// A static archive the crate links.
+    Native,
+}
+
+/// The files the *other* engine leaves behind in a generated crate's directory.
+///
+/// Both engines overwrite `Cargo.toml`, `README.md`, and `src/lib.rs`, so those
+/// take care of themselves. What does not is each engine's own extra file: the
+/// native engine's `build.rs` and the VM engine's embedded `.kbc`. Left in
+/// place, the `build.rs` is worse than clutter — cargo auto-detects a build
+/// script by its presence, so a crate rebuilt for the VM would still run the
+/// native engine's script and link a stale archive into the consumer's binary,
+/// silently and against code nobody rebuilt.
+///
+/// Returned as data rather than deleted here: this module touches no filesystem,
+/// so the two callers that write the crate are the two that remove them.
+pub fn foreign_engine_files(engine: Engine, library: &str) -> Vec<PathBuf> {
+    match engine {
+        Engine::Vm => vec![PathBuf::from("build.rs")],
+        Engine::Native => vec![PathBuf::from(artifact_file_name(library))],
+    }
+}
+
 /// The file name the generated crate embeds its artifact under.
 ///
 /// At the crate root rather than beside `lib.rs`, so `include_bytes!` reads
