@@ -36,6 +36,7 @@ impl Parser<'_> {
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
+        self.refuse_type_params("struct");
         let mut fields = Vec::new();
         let mut methods = Vec::new();
         if !self.expect(TokenKind::LBrace) {
@@ -148,12 +149,19 @@ impl Parser<'_> {
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
+        // An enum is the one declaration form that takes type parameters.
+        let type_params = if self.at_type_params() {
+            self.parse_type_params()
+        } else {
+            Vec::new()
+        };
         let mut variants = Vec::new();
         if !self.expect(TokenKind::LBrace) {
             let span = Span::from_bounds(start.start, self.previous_end());
             return Some(EnumDecl {
                 name,
                 name_span,
+                type_params,
                 variants,
                 span,
             });
@@ -190,6 +198,7 @@ impl Parser<'_> {
         Some(EnumDecl {
             name,
             name_span,
+            type_params,
             variants,
             span,
         })
@@ -239,6 +248,7 @@ impl Parser<'_> {
         let start = self.current().span;
         self.expect(TokenKind::Class);
         let (name, name_span) = self.parse_declaration_name("KPAR033", "expected a class name");
+        self.refuse_type_params("class");
         let parents = self.parse_extends_list();
         let mut fields = Vec::new();
         let mut overrides = Vec::new();

@@ -118,6 +118,25 @@ pub(crate) struct Analyzer<'a> {
     /// is unanalyzed syntax, and the table is a model type that carries none. A
     /// construction site analyzes only the default it needs.
     pub(crate) enum_defaults: Vec<Vec<Option<ExprId>>>,
+    /// Every generic enum declaration, keyed by name.
+    ///
+    /// A generic declaration names no type: it waits here until a written
+    /// instantiation substitutes its arguments and declares the result in the
+    /// ordinary enum table. See [`crate::generics`].
+    pub(crate) generic_enums: crate::generics::GenericEnumTable<'a>,
+    /// The type-parameter substitution in force right now, empty outside a
+    /// generic enum's body.
+    pub(crate) type_bindings: crate::generics::TypeBindings,
+    /// How many generic instantiations are open, which is what bounds a
+    /// template that grows its own argument.
+    pub(crate) instantiation_depth: u32,
+    /// Where to blame an unsupported enum payload, when a generic
+    /// instantiation is what produced it.
+    ///
+    /// A payload type written inside a template resolves to whatever the
+    /// *arguments* say, so the mistake belongs to the instantiation site, not
+    /// to the template's own `Ok(Value)`. `None` outside an instantiation.
+    pub(crate) payload_blame: Option<(SourceId, Span)>,
     /// Every `type Name = Target` alias, keyed by name.
     ///
     /// Registered before anything is resolved and consulted from
@@ -182,6 +201,10 @@ impl<'a> Analyzer<'a> {
             sig_index: HashMap::new(),
             struct_defaults: Vec::new(),
             enum_defaults: Vec::new(),
+            generic_enums: crate::generics::GenericEnumTable::new(),
+            type_bindings: crate::generics::TypeBindings::new(),
+            instantiation_depth: 0,
+            payload_blame: None,
             aliases: AliasTable::new(),
             classes: HashMap::new(),
             own_methods: HashMap::new(),

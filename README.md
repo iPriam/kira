@@ -242,6 +242,42 @@ struct/array ones:
 See [.codex/work/enums.md](.codex/work/enums.md) for the design, and
 [examples/enums/enums.kira](examples/enums/enums.kira) for a tour.
 
+### Generic enums
+
+An enum may take **type parameters**, which is what lets the standard library
+declare `Result` once:
+
+```kira
+enum Result<Value, Failure> {
+    Ok(Value)
+    Error(Failure)
+}
+```
+
+That declaration names no type. Each written instantiation does:
+`Result<Int, AppError>` substitutes the arguments into the variants and produces
+an ordinary enum whose `Ok` carries an `Int` and whose `Error` carries an
+`AppError`. Two writings of the same arguments name the same type; different
+arguments name different types and do not assign to each other.
+
+Substitution happens during analysis, so nothing below semantics learns that
+generics exist — no opcode, no IR node, no wire format. A generic instantiation
+behaves exactly like the enum you would have written by hand: same leading-dot
+construction, same `match`, same move semantics. A monomorphized `Result` is
+`Result`-shaped, so [`attempt`/`try`](#attempt-try-and-handle) unwrap it with
+nothing added.
+
+The **enum is the only declaration that takes type parameters**. A generic
+`struct`, `class`, or `function` is refused by name (`KPAR047`): the reference
+corpus contains exactly one generic declaration, and it is `Result`, so anything
+else would be invented surface. The other edges are typed diagnostics too — an
+arity mismatch is `KSEM174`, a generic enum written bare is `KSEM172`, type
+arguments on a non-generic type are `KSEM173`, and a template that grows its own
+argument without end is `KSEM175` rather than a stack overflow.
+
+See [examples/generics/generics.kira](examples/generics/generics.kira) for a
+tour.
+
 ## Ownership
 
 Kira owns by default, and says so at the call site. A plain parameter

@@ -12,6 +12,7 @@ mod classes;
 mod closures;
 mod enums;
 mod exports;
+mod generics;
 
 use crate::*;
 use kira_runtime_abi::Execution;
@@ -35,6 +36,10 @@ fn only_function(result: &ParseResult) -> &Function {
 fn type_spelling(result: &ParseResult, id: TypeRefId) -> String {
     match result.tree.type_ref(id) {
         TypeRef::Named { name, .. } => result.interner.resolve(*name).to_owned(),
+        TypeRef::Generic { name, args, .. } => {
+            let written: Vec<String> = args.iter().map(|&arg| type_spelling(result, arg)).collect();
+            format!("{}<{}>", result.interner.resolve(*name), written.join(", "))
+        }
         TypeRef::Array { element, .. } => format!("[{}]", type_spelling(result, *element)),
         TypeRef::Function {
             params,

@@ -29,6 +29,7 @@ mod closures;
 mod decl;
 mod enums;
 mod exports;
+mod generics;
 mod imports;
 mod operators;
 mod ownership;
