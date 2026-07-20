@@ -69,7 +69,15 @@ impl Analyzer<'_> {
                 name_span,
                 args,
                 span,
-            } => self.resolve_generic_instantiation(name, name_span, &args, span, context),
+            } => {
+                // The written name resolves to the generic declaration whether
+                // or not the instantiation itself goes through, so the link is
+                // recorded first: a jump from `Result<Int, E>` lands on
+                // `enum Result` even while the arguments are still wrong.
+                let written = self.interner.resolve(name).to_owned();
+                self.link_type_name(&written, name_span);
+                self.resolve_generic_instantiation(name, name_span, &args, span, context)
+            }
             TypeRef::Array { element, .. } => {
                 let element_ty = self.resolve_type_in(element, context);
                 // An array of a type that did not resolve is itself an error.
@@ -156,12 +164,15 @@ impl Analyzer<'_> {
         // that), and an alias name can collide with no struct or enum, so the
         // order decides nothing except how fast the common case is found.
         if let Some(ty) = self.resolve_alias_name(&text, context) {
+            self.link_type_name(&text, span);
             return ty;
         }
         if let Some(id) = self.program.types.structs().lookup(&text) {
+            self.link_type_name(&text, span);
             return Type::Struct(id);
         }
         if let Some(id) = self.program.types.enums().lookup(&text) {
+            self.link_type_name(&text, span);
             return Type::Enum(id);
         }
         // A generic enum written bare is a different mistake from an unknown

@@ -5,6 +5,16 @@
 //! selected primary binary, forwarding every argument and the whole environment
 //! untouched.
 //!
+//! # Multi-call: one binary, two names
+//!
+//! Installed as `kira`, it dispatches to the selected toolchain's primary
+//! binary. Installed as `kira-language-server` (a second copy `sinstall`
+//! lands beside it), it dispatches to the selected toolchain's language
+//! server instead. That is what puts a *version-following* server on PATH:
+//! an editor spawns `kira-language-server`, and what runs is always the
+//! server of the toolchain `knvm` has selected — never a copy frozen at
+//! whatever the language looked like on install day.
+//!
 //! Exit code 2 means exactly one thing: the launcher itself could not dispatch.
 //! Once dispatch succeeds the exit status belongs to the toolchain binary — on
 //! unix by construction, because the process image is replaced.
@@ -92,20 +102,42 @@ fn main() {
 /// Resolves the selected toolchain and hands the process over to it.
 fn run() -> Result<std::convert::Infallible, LaunchError> {
     let selected = read_selection()?;
-    let binary = kira_toolchain::managed_primary_binary_path(
-        selected.channel,
-        &selected.version,
-        &selected.primary,
-    )?;
+    let target = dispatch_target(&selected);
+    let binary =
+        kira_toolchain::managed_primary_binary_path(selected.channel, &selected.version, &target)?;
     if !binary.is_file() {
         return Err(LaunchError::MissingPrimaryBinary {
             channel: selected.channel.dir_name(),
             version: selected.version,
-            primary: selected.primary,
+            primary: target,
             path: binary,
         });
     }
     dispatch(binary)
+}
+
+/// The file stem `argv[0]` was invoked under (`.exe` stripped on Windows).
+fn invoked_stem() -> Option<String> {
+    let invoked_as = std::env::args_os().next().map(PathBuf::from)?;
+    invoked_as
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::to_owned)
+}
+
+/// The toolchain binary this invocation dispatches to, chosen by `argv[0]`.
+///
+/// Invoked under the language server's name, the launcher is the language
+/// server's proxy; under any other name — `kira`, a renamed copy, an argv[0]
+/// a caller made up — it dispatches to the selected primary, which is the
+/// launcher's one job and the only safe reading of an unrecognized name.
+fn dispatch_target(selected: &CurrentToolchain) -> String {
+    match invoked_stem().as_deref() {
+        Some(kira_toolchain::LANGUAGE_SERVER_BINARY) => {
+            kira_toolchain::LANGUAGE_SERVER_BINARY.to_string()
+        }
+        _ => selected.primary.clone(),
+    }
 }
 
 /// Reads and parses `current.toml`, distinguishing "absent" from "broken".

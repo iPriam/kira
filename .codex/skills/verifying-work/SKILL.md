@@ -12,17 +12,17 @@ host-rendered content, or "the app launched so it works" as proof.
 ## The gates, and the LLVM they stand on
 
 The LLVM backend is a hard dependency: nothing in this workspace builds
-without the managed LLVM, and there is no feature flag to fall back to. Every
-builder — a dev shell, CI, a release job, `knvm binstall` — points `llvm-sys`
-at the bundle the repo-root `llvm-metadata.toml` pins:
+without the managed LLVM, and there is no feature flag to fall back to. The
+backend's own build script discovers the bundle the repo-root
+`llvm-metadata.toml` pins — `KIRA_LLVM_HOME` override first, then
+`~/.kira/toolchains/llvm/<version>/<host>` — so every builder (a dev shell,
+CI, a release job, `knvm binstall`) runs the gates with no environment setup:
 
 ```sh
-export LLVM_SYS_221_PREFIX=~/.kira/toolchains/llvm/22.1.4/aarch64-macos
-
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace
-cargo test --workspace
+cargo nextest run --workspace   # cargo test --workspace works, serially
 ```
 
 CI provisions that same bundle from the release `llvm-metadata.toml` names

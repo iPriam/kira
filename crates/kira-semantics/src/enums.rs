@@ -216,6 +216,15 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         };
 
+        if let Some(owner) = self
+            .program
+            .types
+            .enums()
+            .get(id)
+            .map(|def| def.name.clone())
+        {
+            self.link_variant_name(&owner, &member, name_span);
+        }
         let payload = self.analyze_variant_payload(ctx, id, tag, &member, args, span);
         self.program.exprs.alloc(HirExpr::EnumNew {
             enum_id: id,

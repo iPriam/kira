@@ -21,8 +21,11 @@ use command::Command;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(verb) = args.first() else {
+        // A bare `kirac` is a request for orientation, not a mistake: it
+        // prints the same screen `kirac help` does and succeeds the same way.
+        // Only an *unknown* verb below is a usage error.
         dispatch::print_usage();
-        std::process::exit(dispatch::EXIT_UNAVAILABLE);
+        std::process::exit(0);
     };
     let Some(parsed) = Command::parse(verb) else {
         eprintln!("kirac: unknown command '{verb}'");

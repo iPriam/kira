@@ -267,6 +267,104 @@ fn the_channel_recorded_in_current_toml_selects_which_toolchain_runs() {
     );
 }
 
+/// Installs a fixture `bin/kira-language-server` beside the fixture `kirac`.
+#[cfg(unix)]
+fn write_fixture_language_server(
+    tree: &TempTree,
+    channel: &str,
+    version: &str,
+    marker: &str,
+) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin = tree.toolchains().join(channel).join(version).join("bin");
+    std::fs::create_dir_all(&bin).expect("create fixture bin dir");
+    let server = bin.join("kira-language-server");
+    std::fs::write(&server, format!("#!/bin/sh\necho \"{marker}\"\nexit 0\n"))
+        .expect("write fixture language server");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755))
+        .expect("mark fixture language server executable");
+    server
+}
+
+/// The launcher, invoked under the language server's name: a copy of the built
+/// binary named `kira-language-server`, which is exactly what `sinstall` and
+/// the tools archive put on PATH.
+#[cfg(unix)]
+#[test]
+fn invoked_as_the_language_server_it_dispatches_to_the_toolchains_server() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tree = TempTree::create("multicall");
+    write_fixture_toolchain(&tree, "release", "5.0.0", "wrong-binary-kirac", 0);
+    write_fixture_language_server(&tree, "release", "5.0.0", "fixture-server-5.0.0");
+    write_current(
+        &tree,
+        &current_toml(kira_toolchain::Channel::Release, "5.0.0"),
+    );
+
+    let alias_dir = TempTree::create("multicall_alias");
+    let alias = alias_dir.home().join("kira-language-server");
+    std::fs::copy(env!("CARGO_BIN_EXE_kira"), &alias).expect("copy launcher under alias name");
+    std::fs::set_permissions(&alias, std::fs::Permissions::from_mode(0o755))
+        .expect("mark alias executable");
+
+    let output = std::process::Command::new(&alias)
+        .env("KIRA_HOME", tree.home())
+        .output()
+        .expect("run launcher under its alias");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+    assert_eq!(
+        stdout_of(&output),
+        "fixture-server-5.0.0\n",
+        "the alias must dispatch to the server, not the primary"
+    );
+}
+
+/// A toolchain with no server is a dispatch error under the alias, while the
+/// same tree still dispatches fine under the primary name.
+#[cfg(unix)]
+#[test]
+fn the_alias_reports_a_toolchain_without_a_server_and_exits_two() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tree = TempTree::create("multicall_missing");
+    write_fixture_toolchain(&tree, "release", "6.0.0", "fixture-kirac-6.0.0", 0);
+    write_current(
+        &tree,
+        &current_toml(kira_toolchain::Channel::Release, "6.0.0"),
+    );
+
+    let alias_dir = TempTree::create("multicall_missing_alias");
+    let alias = alias_dir.home().join("kira-language-server");
+    std::fs::copy(env!("CARGO_BIN_EXE_kira"), &alias).expect("copy launcher under alias name");
+    std::fs::set_permissions(&alias, std::fs::Permissions::from_mode(0o755))
+        .expect("mark alias executable");
+
+    let output = std::process::Command::new(&alias)
+        .env("KIRA_HOME", tree.home())
+        .output()
+        .expect("run launcher under its alias");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr_of(&output).contains("kira-language-server"),
+        "stderr was: {}",
+        stderr_of(&output)
+    );
+
+    let primary = launcher(tree.home(), &[]);
+    assert_eq!(
+        stdout_of(&primary),
+        "fixture-kirac-6.0.0\n",
+        "the primary dispatch must be untouched by the missing server"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_non_executable_primary_binary_is_reported_rather_than_dispatched() {

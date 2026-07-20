@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use kira_toolchain::{Channel, CurrentToolchain, executable_name};
+use kira_toolchain::{Channel, CurrentToolchain, LANGUAGE_SERVER_BINARY, executable_name};
 
 use crate::cli::VersionSpec;
 use crate::source::{ReleaseSource, ReleaseSourceError};
@@ -76,6 +76,16 @@ pub enum InstallError {
     PrimaryNotExecutable {
         /// The binary that lacks an executable bit.
         path: PathBuf,
+    },
+    /// The unpacked tree ships no language server beside its primary binary.
+    #[error(
+        "the unpacked toolchain has no executable `{}` — a toolchain ships its \
+         editor server so the two cannot drift apart",
+        .expected.display()
+    )]
+    MissingLanguageServer {
+        /// Where the language server was expected.
+        expected: PathBuf,
     },
     /// The unpacked tree ships no Foundation beside its binaries.
     #[error(
@@ -342,9 +352,11 @@ fn locate_payload(unpacked: &Path, archive: &Path) -> Result<PathBuf, InstallErr
 
 /// Refuses an unpacked tree that is not a usable toolchain.
 ///
-/// The two things checked are the two things that make the tree work at all:
-/// the launcher dispatches to `bin/kirac`, and `import Foundation` resolves to
-/// `foundation/` beside it.
+/// The things checked are the things that make the tree work: the launcher
+/// dispatches to `bin/kirac` and to `bin/kira-language-server`, and
+/// `import Foundation` resolves to `foundation/` beside them. The language
+/// server is a hard requirement on purpose — an install without one leaves an
+/// editor silently running whatever stale server it finds elsewhere.
 pub(crate) fn validate(payload: &Path) -> Result<(), InstallError> {
     let primary = payload.join("bin").join(executable_name(PRIMARY_BINARY));
     if !primary.is_file() {
@@ -352,6 +364,13 @@ pub(crate) fn validate(payload: &Path) -> Result<(), InstallError> {
     }
     if !is_executable(&primary)? {
         return Err(InstallError::PrimaryNotExecutable { path: primary });
+    }
+
+    let server = payload
+        .join("bin")
+        .join(executable_name(LANGUAGE_SERVER_BINARY));
+    if !server.is_file() || !is_executable(&server)? {
+        return Err(InstallError::MissingLanguageServer { expected: server });
     }
 
     let manifest = payload

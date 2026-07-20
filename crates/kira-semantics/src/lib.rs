@@ -27,6 +27,7 @@ mod build_kind;
 mod classes;
 mod closures;
 mod decl;
+mod definitions;
 mod enums;
 mod exports;
 mod generics;
@@ -40,6 +41,7 @@ mod types;
 
 pub use analyze::{Analysis, analyze};
 pub use build_kind::BuildKind;
+pub use definitions::DefinitionLink;
 pub use exports::exported_name;
 pub use imports::{FileImports, ImportTable};
 
@@ -140,6 +142,15 @@ impl SourceProgram {
 #[derive(Debug, Clone)]
 pub struct DiagnosticAccumulator(pub Diagnostic);
 
+/// A reference→definition link recorded while [`analyzed`] resolved names.
+///
+/// The language server's go-to-definition reads these; they ride the same
+/// accumulator mechanism diagnostics do, so an editor jump is served by the
+/// resolution the compiler actually performed rather than a second one.
+#[salsa::accumulator]
+#[derive(Debug, Clone)]
+pub struct DefinitionAccumulator(pub DefinitionLink);
+
 /// A parsed program: the syntax tree and the interner backing its symbols.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedProgram {
@@ -195,6 +206,9 @@ pub fn analyzed(db: &dyn salsa::Database, source: SourceProgram) -> HirProgram {
     );
     for diagnostic in analysis.diagnostics {
         DiagnosticAccumulator(diagnostic).accumulate(db);
+    }
+    for link in analysis.definitions {
+        DefinitionAccumulator(link).accumulate(db);
     }
     analysis.program
 }

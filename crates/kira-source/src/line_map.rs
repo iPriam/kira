@@ -38,6 +38,11 @@ impl LineMap {
         }
     }
 
+    /// How many lines the file has; at least one, even for empty text.
+    pub fn line_count(&self) -> usize {
+        self.line_starts.len()
+    }
+
     /// Returns the 0-based index of the line containing a byte offset.
     pub fn line_index(&self, offset: u32) -> usize {
         self.line_starts.partition_point(|&start| start <= offset) - 1
