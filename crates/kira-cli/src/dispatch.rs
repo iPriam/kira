@@ -19,7 +19,8 @@ pub fn dispatch(command: Command, args: &[String]) -> i32 {
         Command::Check => pipeline::check(args),
         Command::Live => pipeline::live(args),
         Command::Help => {
-            print_usage();
+            let all = args.iter().any(|arg| arg == "all" || arg == "--all");
+            print_usage_with(all);
             0
         }
         Command::Version => {
@@ -35,13 +36,89 @@ fn unavailable(command: Command) -> i32 {
     EXIT_UNAVAILABLE
 }
 
-/// Print top-level usage.
+/// Whether a verb has a real handler, or still hits the stub above.
+///
+/// Lives beside the `dispatch` match so the two cannot drift apart silently;
+/// the usage screen dims what is not yet real rather than advertising every
+/// verb as equally alive.
+fn implemented(command: Command) -> bool {
+    matches!(
+        command,
+        Command::Run
+            | Command::Build
+            | Command::Check
+            | Command::Live
+            | Command::Help
+            | Command::Version
+    )
+}
+
+/// Print top-level usage: the commands that work.
 pub fn print_usage() {
-    eprintln!("kirac — the Kira compiler CLI");
+    print_usage_with(false);
+}
+
+/// Print usage; `all` includes the verbs that are parsed but not yet real.
+///
+/// The default screen lists only what runs — a front door advertising sixteen
+/// stubs reads as sixteen broken promises. The planned set stays reachable
+/// (`kirac help all`) and stays honest: every hidden verb is labeled
+/// unimplemented.
+fn print_usage_with(all: bool) {
+    let paint = kira_toolchain::Paint::auto_stderr();
+    // The note column is aligned by the visible width of `kirac <verb><args>` —
+    // padding is computed before color is applied, because ANSI escapes
+    // inflate `len()`, and from the rows this screen actually shows, so hiding
+    // the planned set does not pad the short list to the longest hidden name.
+    let visible = |kind: &Command| "kirac ".len() + kind.label().len() + kind.arguments().len();
+    let width = ALL
+        .iter()
+        .filter(|kind| all || implemented(**kind))
+        .map(visible)
+        .max()
+        .unwrap_or(0)
+        .max("kirac --version".len());
+
+    eprintln!("{} — the Kira compiler CLI", paint.bold("kirac"));
     eprintln!();
-    eprintln!("usage: kirac <command> [args]");
-    eprintln!();
-    for kind in ALL {
-        eprintln!("  {}", kind.label());
+    for kind in ALL.into_iter().filter(|kind| implemented(*kind)) {
+        let pad = " ".repeat(width - visible(&kind));
+        eprintln!(
+            "  {}{}{pad}   {}",
+            paint.cyan(&format!("kirac {}", kind.label())),
+            kind.arguments(),
+            paint.dim(kind.description())
+        );
+    }
+    {
+        let pad = " ".repeat(width - "kirac --version".len());
+        eprintln!(
+            "  {}{pad}   {}",
+            paint.cyan("kirac --version"),
+            paint.dim("print the version")
+        );
+    }
+
+    let planned = ALL.into_iter().filter(|kind| !implemented(*kind));
+    if all {
+        eprintln!();
+        for kind in planned {
+            let pad = " ".repeat(width - visible(&kind));
+            eprintln!(
+                "  {}{}{pad}   {}",
+                paint.dim(&format!("kirac {}", kind.label())),
+                kind.arguments(),
+                paint.dim(&format!("{} (not yet implemented)", kind.description()))
+            );
+        }
+    } else {
+        let count = planned.count();
+        eprintln!();
+        eprintln!(
+            "{}",
+            paint.dim(&format!(
+                "{count} more commands are planned; `kirac help all` lists them."
+            ))
+        );
     }
 }

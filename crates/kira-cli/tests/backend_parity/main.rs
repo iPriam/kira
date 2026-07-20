@@ -23,7 +23,6 @@
 //!
 //! These only run when `kirac` was built with its `llvm` feature; without it
 //! there is no native backend to compare against.
-#![cfg(feature = "llvm")]
 
 use std::path::PathBuf;
 use std::process::{Command, Output};

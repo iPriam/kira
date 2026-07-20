@@ -11,7 +11,6 @@
 //! here, hashed into a bundle, sent over a socket, staged on the far side, and
 //! `dlopen`ed by a runner that then calls into it. The app's output is the
 //! evidence, and the value it prints is one only the native half computes.
-#![cfg(feature = "llvm")]
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};

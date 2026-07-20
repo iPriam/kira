@@ -1,0 +1,25 @@
+[package]
+name = "kira-knvm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "kira_knvm"
+path = "src/lib.rs"
+
+[[bin]]
+name = "knvm"
+path = "src/main.rs"
+
+[dependencies]
+kira-toolchain = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# `binstall` reads the checkout's `[workspace.package] version` to name the
+# dev toolchain it installs.
+toml = { workspace = true }
+
+[lints]
+workspace = true

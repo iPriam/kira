@@ -30,7 +30,7 @@ pub enum Command {
 }
 
 /// All verbs, in the order they appear in help output.
-pub const ALL: [Command; 22] = [
+pub const ALL: [Command; 21] = [
     Command::Run,
     Command::Debug,
     Command::FetchLlvm,
@@ -52,12 +52,17 @@ pub const ALL: [Command; 22] = [
     Command::Live,
     Command::Export,
     Command::Help,
-    Command::Version,
 ];
 
 impl Command {
     /// Parses a verb string into a [`Command`], if it names one.
+    ///
+    /// The version report is a flag, not a verb: `--version` (or `-V`), the
+    /// spelling every tool teaches a caller's fingers.
     pub fn parse(command: &str) -> Option<Self> {
+        if command == "--version" || command == "-V" {
+            return Some(Self::Version);
+        }
         ALL.iter().copied().find(|kind| kind.label() == command)
     }
 
@@ -88,6 +93,50 @@ impl Command {
             Self::Version => "version",
         }
     }
+
+    /// The verb's argument shape for the usage screen, `""` when it takes none.
+    ///
+    /// Kept honest against the real parsers: `run`/`build` go through
+    /// `CompileOptions::parse`, `live` through `LiveOptions::parse`, `check`
+    /// takes one path, `help` one optional word. A verb with no handler yet
+    /// has no argument shape to advertise.
+    pub fn arguments(self) -> &'static str {
+        match self {
+            Self::Run | Self::Build => " <file> [--backend vm|llvm|hybrid] [--device]",
+            Self::Check => " <file>",
+            Self::Live => " [runner] <file> [--backend vm|hybrid] [--watch]",
+            Self::Help => " [all]",
+            _ => "",
+        }
+    }
+
+    /// One line for the usage screen: what the verb does.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Run => "compile and run a program on the VM",
+            Self::Debug => "run a program under the debugger",
+            Self::FetchLlvm => "provision the managed LLVM toolchain",
+            Self::Tokens => "print a file's tokens",
+            Self::Ast => "print a file's syntax tree",
+            Self::Check => "analyze a program without running it",
+            Self::Test => "build and run a program's tests",
+            Self::Build => "compile to a native binary via LLVM",
+            Self::Ffi => "inspect and bind native libraries",
+            Self::Instruments => "profile a running program",
+            Self::Shader => "compile KSL shaders",
+            Self::New => "scaffold a new project",
+            Self::Sync => "sync dependencies with the manifest",
+            Self::Add => "add a dependency",
+            Self::Remove => "remove a dependency",
+            Self::Update => "update dependencies",
+            Self::Package => "package a library for distribution",
+            Self::MigrateManifest => "upgrade a manifest to the current format",
+            Self::Live => "run with live reload",
+            Self::Export => "export a library for embedding",
+            Self::Help => "print this message",
+            Self::Version => "print the version",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -100,5 +149,12 @@ mod tests {
             assert_eq!(Some(kind), Command::parse(kind.label()));
         }
         assert_eq!(None, Command::parse("frobnicate"));
+    }
+
+    #[test]
+    fn version_is_a_flag_not_a_verb() {
+        assert_eq!(Some(Command::Version), Command::parse("--version"));
+        assert_eq!(Some(Command::Version), Command::parse("-V"));
+        assert_eq!(None, Command::parse("version"));
     }
 }
