@@ -33,12 +33,16 @@ impl Device {
 /// A parsed `run`/`build`/`check` invocation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompileOptions {
-    /// The `.kira` file to compile.
+    /// The `.kira` file or package directory to compile.
     pub path: String,
     /// Which backend compiles the program, on whatever device it targets.
     pub backend: BackendMode,
+    /// Whether the user explicitly supplied `--backend`.
+    pub backend_explicit: bool,
     /// What the program is being compiled to run on.
     pub device: Device,
+    /// Whether the user explicitly supplied `--device`.
+    pub device_explicit: bool,
     /// Whether to also write the textual LLVM IR beside the other artifacts.
     pub emit_llvm_ir: bool,
 }
@@ -47,7 +51,7 @@ pub struct CompileOptions {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum OptionsError {
     /// No path was given.
-    #[error("expected a path to a .kira file")]
+    #[error("expected a path to a .kira file or package directory")]
     MissingPath,
     /// `--backend` was given without a value.
     #[error("`--backend` expects one of: vm, llvm, hybrid")]
@@ -84,6 +88,7 @@ impl CompileOptions {
         // overriding a choice.
         let mut backend: Option<BackendMode> = None;
         let mut device = Device::Host;
+        let mut device_explicit = false;
         let mut emit_llvm_ir = false;
 
         let mut index = 0;
@@ -102,6 +107,7 @@ impl CompileOptions {
                         .get(index + 1)
                         .ok_or(OptionsError::DeviceMissingValue)?;
                     device = parse_device(value)?;
+                    device_explicit = true;
                     index += 1;
                 }
                 "--emit-llvm-ir" => emit_llvm_ir = true,
@@ -123,6 +129,7 @@ impl CompileOptions {
             index += 1;
         }
 
+        let backend_explicit = backend.is_some();
         // `--device` is an override: a Web device has exactly one code
         // generator, so naming the device decides the backend, and a
         // `--backend` beside it is noted aloud rather than served or refused.
@@ -147,7 +154,9 @@ impl CompileOptions {
         Ok(CompileOptions {
             path: path.ok_or(OptionsError::MissingPath)?,
             backend,
+            backend_explicit,
             device,
+            device_explicit,
             emit_llvm_ir,
         })
     }

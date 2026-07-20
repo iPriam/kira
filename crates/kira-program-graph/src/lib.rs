@@ -34,6 +34,7 @@
 //! names a bundle owns and why the project's own files always win.
 
 pub mod bundled;
+pub mod package_roots;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -42,6 +43,7 @@ use bundled::BundledRoot;
 use kira_semantics::ModuleSource;
 use kira_source::SourceId;
 use kira_syntax_model::ast::Item;
+pub use package_roots::PackageRoot;
 
 /// The maximum number of modules one program may be built from.
 ///
@@ -51,17 +53,36 @@ use kira_syntax_model::ast::Item;
 /// stops the walk instead of growing without limit.
 const MAX_MODULES: usize = 1024;
 
-/// One unit of the depth-first walk: a module still to be visited, or one whose
-/// imports have all been visited and which is therefore ready to be recorded.
-///
-/// Making the emission an explicit step is what turns the walk from pre-order
-/// into post-order without recursion — a module's `Emit` is pushed under the
-/// `Visit`s of everything it imports, so it comes back off the stack after all
-/// of them.
+/// The identity used to stop a module-loading cycle.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ModuleKey {
+    /// Project and bundled modules retain the established name-based identity.
+    Name(String),
+    /// Dependency-package modules are distinct files, even when names repeat.
+    PackagePath(PathBuf),
+    /// An entryless package's import namespace, anchored to its source directory.
+    PackageNamespace(String, PathBuf),
+}
+
+/// One source unit selected for the walk, including a package namespace marker.
+struct ReadModule {
+    module: String,
+    path: PathBuf,
+    text: String,
+    key: ModuleKey,
+    package: Option<PackageRoot>,
+}
+
+/// One unit of the iterative depth-first post-order walk.
 enum Step {
-    /// Load this module and schedule its imports.
-    Visit(String),
-    /// Record this module; everything it imports is already recorded.
+    /// Resolve an import through the available roots.
+    Resolve {
+        module: String,
+        package: Option<PackageRoot>,
+    },
+    /// Visit one already-resolved source file.
+    Visit(Box<ReadModule>),
+    /// Record this module after everything it imports.
     Emit(Box<ModuleSource>),
 }
 
@@ -82,69 +103,98 @@ enum Step {
 /// it as an unresolved import, where the import's span is.
 #[must_use]
 pub fn load_modules(entry_path: &Path, entry_text: &str) -> Vec<ModuleSource> {
-    load_modules_with(entry_path, entry_text, &bundled::bundled_roots())
+    load_modules_with_packages(entry_path, entry_text, &bundled::bundled_roots(), &[])
 }
 
 /// [`load_modules`], against an explicit set of bundled packages.
 ///
 /// Split out so a test can hand the walk a bundle it built itself rather than
-/// whichever toolchain the machine happens to have installed. Callers compiling
-/// a real program want [`load_modules`], which discovers the bundles.
+/// whichever toolchain the machine happens to have installed. Dependency
+/// packages are omitted; callers that resolved them use
+/// [`load_modules_with_packages`].
 #[must_use]
 pub fn load_modules_with(
     entry_path: &Path,
     entry_text: &str,
     bundles: &[BundledRoot],
 ) -> Vec<ModuleSource> {
+    load_modules_with_packages(entry_path, entry_text, bundles, &[])
+}
+
+/// Reads every transitively imported module with explicit bundled and resolved
+/// dependency-package roots.
+///
+/// Imports written by the project prefer project files, while imports written
+/// inside a dependency prefer that dependency's own files. Resolved packages
+/// are consulted next and bundled roots remain the final fallback. A root
+/// package import with no package entry file aggregates every `.kira` file below
+/// that package's source directory.
+#[must_use]
+pub fn load_modules_with_packages(
+    entry_path: &Path,
+    entry_text: &str,
+    bundles: &[BundledRoot],
+    packages: &[PackageRoot],
+) -> Vec<ModuleSource> {
     // The module root is the entry file's directory. A module path is a
-    // sequence of identifiers, so it can name nothing above the root: there is
-    // no `..` an import could spell, which is what keeps a program's modules
-    // inside the program without a separate containment check.
+    // sequence of identifiers, so it can name nothing above the root.
     let root = entry_path.parent().unwrap_or_else(|| Path::new("."));
     let mut loaded: Vec<ModuleSource> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<ModuleKey> = HashSet::new();
     let mut stack: Vec<Step> = Vec::new();
-    push_visits(&mut stack, imports_of(entry_text));
+    push_resolves(&mut stack, imports_of(entry_text), None);
 
     while let Some(step) = stack.pop() {
-        let module = match step {
-            Step::Emit(source) => {
-                loaded.push(*source);
-                continue;
+        match step {
+            Step::Emit(source) => loaded.push(*source),
+            Step::Resolve { module, package } => {
+                let sources = read_module(root, &module, package.as_ref(), bundles, packages);
+                push_modules(&mut stack, sources);
             }
-            Step::Visit(module) => module,
-        };
-        if !seen.insert(module.clone()) {
-            continue;
+            Step::Visit(source) => {
+                let ReadModule {
+                    module,
+                    path,
+                    text,
+                    key,
+                    package,
+                } = *source;
+                if !seen.insert(key) {
+                    continue;
+                }
+                if seen.len() > MAX_MODULES {
+                    break;
+                }
+                let nested = imports_of(&text);
+                stack.push(Step::Emit(Box::new(ModuleSource {
+                    module,
+                    path: path.to_string_lossy().into_owned(),
+                    text,
+                })));
+                push_resolves(&mut stack, nested, package);
+            }
         }
-        if seen.len() > MAX_MODULES {
-            break;
-        }
-        let Some((path, text)) = read_module(root, &module, bundles) else {
-            // Absent, or unreadable. Either way the frontend says so, with the
-            // span of the import that wanted it; reporting here as well would
-            // be the same problem twice under two different spans.
-            continue;
-        };
-        let nested = imports_of(&text);
-        stack.push(Step::Emit(Box::new(ModuleSource {
-            module,
-            path: path.to_string_lossy().into_owned(),
-            text,
-        })));
-        push_visits(&mut stack, nested);
     }
 
     loaded
 }
 
-/// Schedules `modules` to be visited, first one first.
-///
-/// The stack pops in reverse, so the list goes on reversed: source order is
-/// what decides which of two independent modules is loaded first, and a
-/// program's module list should not depend on a stack's direction.
-fn push_visits(stack: &mut Vec<Step>, modules: Vec<String>) {
-    stack.extend(modules.into_iter().rev().map(Step::Visit));
+/// Schedules imports to resolve in source order, first one first.
+fn push_resolves(stack: &mut Vec<Step>, modules: Vec<String>, package: Option<PackageRoot>) {
+    stack.extend(modules.into_iter().rev().map(|module| Step::Resolve {
+        module,
+        package: package.clone(),
+    }));
+}
+
+/// Schedules resolved source files in deterministic order, first one first.
+fn push_modules(stack: &mut Vec<Step>, modules: Vec<ReadModule>) {
+    stack.extend(
+        modules
+            .into_iter()
+            .rev()
+            .map(|module| Step::Visit(Box::new(module))),
+    );
 }
 
 /// The dotted module paths a source file imports, in source order.
@@ -177,32 +227,132 @@ fn imports_of(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Reads `module`, from the program's own directory first and from a bundled
-/// package only if the program does not hold it.
-///
-/// The order is the rule: a file the author wrote beside their program always
-/// wins over one that came with the toolchain, so installing a new Foundation
-/// can never change the meaning of a program that shipped its own module by
-/// that name. The bundle is a fallback, never an override.
-///
-/// Returns the path it read from together with the text, because the path is
-/// what a diagnostic renders against — a span in Foundation must point at
-/// Foundation's file, not at something under the user's directory.
-fn read_module(root: &Path, module: &str, bundles: &[BundledRoot]) -> Option<(PathBuf, String)> {
-    let own = module_path(root, module);
-    if let Ok(text) = std::fs::read_to_string(&own) {
-        return Some((own, text));
+/// Reads every source file selected by `module` in resolution-tier order.
+fn read_module(
+    root: &Path,
+    module: &str,
+    package: Option<&PackageRoot>,
+    bundles: &[BundledRoot],
+    packages: &[PackageRoot],
+) -> Vec<ReadModule> {
+    // A dependency source resolves inside its own package before it may see a
+    // same-named file in the consumer project.
+    if let Some(package) = package {
+        let relative = package.relative_module(module).unwrap_or(module);
+        let sibling = module_path(&package.source_dir, relative);
+        if let Some(source) = read_package_module(relative.to_owned(), sibling, package) {
+            return vec![source];
+        }
     }
+
+    let own = module_path(root, module);
+    if let Some(source) = read_named_module(module, own) {
+        return vec![source];
+    }
+
+    for package in packages {
+        let Some(relative) = package.relative_module(module) else {
+            continue;
+        };
+        if module == package.name {
+            let entry = package.source_dir.join(format!("{}.kira", package.name));
+            if entry.is_file() {
+                return read_package_module(relative.to_owned(), entry, package)
+                    .into_iter()
+                    .collect();
+            }
+            return read_aggregate_modules(package);
+        }
+        let path = module_path(&package.source_dir, relative);
+        if let Some(source) = read_package_module(relative.to_owned(), path, package) {
+            return vec![source];
+        }
+    }
+
     for bundle in bundles {
         if !bundle.owns(module) {
             continue;
         }
         let path = module_path(bundle.source_dir(), module);
         if let Ok(text) = std::fs::read_to_string(&path) {
-            return Some((path, text));
+            return vec![ReadModule {
+                module: module.to_owned(),
+                path,
+                text,
+                key: ModuleKey::Name(module.to_owned()),
+                package: None,
+            }];
         }
     }
-    None
+    Vec::new()
+}
+
+/// Reads a project-owned module, which retains name-based cycle identity.
+fn read_named_module(module: &str, path: PathBuf) -> Option<ReadModule> {
+    let text = std::fs::read_to_string(&path).ok()?;
+    Some(ReadModule {
+        module: module.to_owned(),
+        path,
+        text,
+        key: ModuleKey::Name(module.to_owned()),
+        package: None,
+    })
+}
+
+/// Reads a dependency-package module with absolute-path cycle identity.
+fn read_package_module(module: String, path: PathBuf, package: &PackageRoot) -> Option<ReadModule> {
+    let text = std::fs::read_to_string(&path).ok()?;
+    let absolute = std::fs::canonicalize(&path)
+        .or_else(|_| std::path::absolute(&path))
+        .ok()?;
+    Some(ReadModule {
+        module: kira_semantics::ImportTable::package_module_identity(&package.name, &module),
+        path,
+        text,
+        key: ModuleKey::PackagePath(absolute),
+        package: Some(package.clone()),
+    })
+}
+
+/// Reads an entryless package's source files and adds its import namespace.
+fn read_aggregate_modules(package: &PackageRoot) -> Vec<ReadModule> {
+    let mut modules: Vec<ReadModule> = package
+        .source_files()
+        .into_iter()
+        .filter_map(|path| {
+            let module = package_module_name(&package.source_dir, &path)?;
+            read_package_module(module, path, package)
+        })
+        .collect();
+    if modules.is_empty() {
+        return modules;
+    }
+    let Some(absolute) = std::fs::canonicalize(&package.source_dir)
+        .or_else(|_| std::path::absolute(&package.source_dir))
+        .ok()
+    else {
+        return modules;
+    };
+    // The namespace has no entry file. Emit its empty semantic alias after the
+    // real files so package declarations retain dependency-first order.
+    modules.push(ReadModule {
+        module: kira_semantics::ImportTable::package_module_identity(&package.name, &package.name),
+        path: package.source_dir.clone(),
+        text: String::new(),
+        key: ModuleKey::PackageNamespace(package.name.clone(), absolute),
+        package: Some(package.clone()),
+    });
+    modules
+}
+
+/// Converts a package-relative source path back to its dotted module name.
+fn package_module_name(source_dir: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(source_dir).ok()?;
+    let mut module_path = relative.to_path_buf();
+    module_path.set_extension("");
+    let segments: Option<Vec<&str>> = module_path.iter().map(|segment| segment.to_str()).collect();
+    let module = segments?.join(".");
+    (!module.is_empty()).then_some(module)
 }
 
 /// Where a dotted module path lives on disk, relative to a search root.
@@ -223,195 +373,4 @@ fn module_path(root: &Path, module: &str) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_dotted_module_is_a_directory_path() {
-        let path = module_path(Path::new("/app"), "Foundation.Web");
-        assert_eq!(path, PathBuf::from("/app/Foundation/Web.kira"));
-    }
-
-    #[test]
-    fn a_single_segment_module_is_a_sibling_file() {
-        let path = module_path(Path::new("/app"), "support");
-        assert_eq!(path, PathBuf::from("/app/support.kira"));
-    }
-
-    #[test]
-    fn imports_are_read_in_source_order() {
-        let names = imports_of(
-            "import support\nimport Foundation.Web as Web\n@Main function main() { return }",
-        );
-        assert_eq!(names, vec!["support", "Foundation.Web"]);
-    }
-
-    /// Writes a throwaway module tree and returns the entry path.
-    fn write_modules(name: &str, modules: &[(&str, &str)]) -> PathBuf {
-        let directory = std::env::temp_dir().join(format!("kira-graph-{name}"));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).expect("create program directory");
-        for (module, text) in modules {
-            std::fs::write(directory.join(format!("{module}.kira")), text).expect("write module");
-        }
-        directory.join("main.kira")
-    }
-
-    /// The order is the graph's, not the entry file's: `main` lists `a` before
-    /// `b`, and `a` must still come back first because `b` imports it.
-    ///
-    /// This is the order a pre-order walk gets wrong. It pops `a` and records
-    /// it, then pops `b` and records it, giving `[a, b]` — which the final
-    /// reverse then turns into `[b, a]`, putting `b` ahead of the module it
-    /// depends on. Listing `b` first happens to come out right under both
-    /// walks, so only this direction is a regression test.
-    #[test]
-    fn a_diamond_comes_back_dependencies_first() {
-        let entry = write_modules(
-            "diamond",
-            &[
-                ("a", "function aValue() -> Int { return 1 }"),
-                ("b", "import a\nfunction bValue() -> Int { return 2 }"),
-            ],
-        );
-        let loaded = load_modules(&entry, "import a\nimport b\n");
-        let order: Vec<&str> = loaded.iter().map(|m| m.module.as_str()).collect();
-        let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
-        assert_eq!(order, vec!["a", "b"]);
-    }
-
-    /// Two modules that import each other still terminate and still appear
-    /// once each. A cycle is the one graph with no dependencies-first order, so
-    /// this pins termination and completeness, not a particular sequence.
-    #[test]
-    fn a_cycle_terminates_with_each_module_once() {
-        let entry = write_modules(
-            "cycle",
-            &[
-                ("alpha", "import beta\nfunction a() -> Int { return 1 }"),
-                ("beta", "import alpha\nfunction b() -> Int { return 2 }"),
-            ],
-        );
-        let loaded = load_modules(&entry, "import alpha\n");
-        let mut order: Vec<&str> = loaded.iter().map(|m| m.module.as_str()).collect();
-        order.sort_unstable();
-        let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
-        assert_eq!(order, vec!["alpha", "beta"]);
-    }
-
-    /// Builds a bundled package on disk and returns the root that names it.
-    fn write_bundle(name: &str, module_root: &str, modules: &[(&str, &str)]) -> BundledRoot {
-        let app = std::env::temp_dir()
-            .join(format!("kira-bundle-{name}"))
-            .join("app");
-        let _ = std::fs::remove_dir_all(app.parent().expect("bundle root"));
-        std::fs::create_dir_all(&app).expect("create bundle app directory");
-        for (module, text) in modules {
-            let path = module_path(&app, module);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).expect("module directory");
-            }
-            std::fs::write(path, text).expect("write bundled module");
-        }
-        BundledRoot::new(module_root, app)
-    }
-
-    /// The mechanism: a module the program's directory does not hold is read
-    /// out of a package that ships with the toolchain.
-    #[test]
-    fn a_bundled_module_resolves_without_a_path() {
-        let bundle = write_bundle(
-            "resolves",
-            "Foundation",
-            &[(
-                "Foundation",
-                "function printLine(text: borrow String) { print(text) return }",
-            )],
-        );
-        let entry = write_modules("bundled-resolves", &[]);
-        let loaded = load_modules_with(&entry, "import Foundation\n", &[bundle]);
-        let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
-        assert_eq!(loaded.len(), 1, "{loaded:?}");
-        assert_eq!(loaded[0].module, "Foundation");
-        assert!(loaded[0].text.contains("printLine"), "{:?}", loaded[0].text);
-        // The path is the bundle's, so a diagnostic in Foundation renders
-        // against Foundation's own file.
-        assert!(
-            loaded[0].path.contains("kira-bundle-resolves"),
-            "{}",
-            loaded[0].path
-        );
-    }
-
-    /// A dotted name inside a bundle is a directory under the bundle's `app/`,
-    /// the same mapping the program's own directory uses.
-    #[test]
-    fn a_dotted_bundled_module_is_a_directory_under_the_bundle() {
-        let bundle = write_bundle(
-            "dotted",
-            "Foundation",
-            &[(
-                "Foundation/Web",
-                "function createElement() -> Int { return 1 }",
-            )],
-        );
-        let entry = write_modules("bundled-dotted", &[]);
-        let loaded = load_modules_with(&entry, "import Foundation.Web as Web\n", &[bundle]);
-        let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
-        assert_eq!(loaded.len(), 1, "{loaded:?}");
-        assert_eq!(loaded[0].module, "Foundation.Web");
-    }
-
-    /// The project always wins: a file the author wrote beside their program
-    /// is the one that is loaded, even when the bundle has that name too.
-    #[test]
-    fn the_programs_own_file_beats_the_bundle() {
-        let bundle = write_bundle(
-            "shadowed",
-            "Foundation",
-            &[("Foundation", "function which() -> Int { return 1 }")],
-        );
-        let entry = write_modules(
-            "bundled-shadowed",
-            &[("Foundation", "function which() -> Int { return 2 }")],
-        );
-        let loaded = load_modules_with(&entry, "import Foundation\n", &[bundle]);
-        let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
-        assert_eq!(loaded.len(), 1, "{loaded:?}");
-        assert!(loaded[0].text.contains("return 2"), "{:?}", loaded[0].text);
-    }
-
-    /// A bundle answers only the namespace its manifest declares. A toolchain
-    /// that could satisfy any import would make a program's meaning depend on
-    /// what happened to be installed.
-    #[test]
-    fn a_bundle_does_not_answer_a_module_outside_its_root() {
-        let bundle = write_bundle(
-            "outside",
-            "Foundation",
-            &[("support", "function sneak() -> Int { return 1 }")],
-        );
-        let entry = write_modules("bundled-outside", &[]);
-        let loaded = load_modules_with(&entry, "import support\n", &[bundle]);
-        let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
-        assert!(loaded.is_empty(), "{loaded:?}");
-    }
-
-    /// With no bundle installed, `import Foundation` finds nothing and the walk
-    /// returns nothing — the frontend reports it, against the import's span.
-    #[test]
-    fn no_bundle_leaves_the_import_unresolved_rather_than_failing() {
-        let entry = write_modules("bundled-absent", &[]);
-        let loaded = load_modules_with(&entry, "import Foundation\n", &[]);
-        let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
-        assert!(loaded.is_empty(), "{loaded:?}");
-    }
-
-    /// A word that merely looks like an import is not one: the reader is the
-    /// real parser, so only a real `import` item counts.
-    #[test]
-    fn a_string_containing_the_word_import_is_not_an_import() {
-        let names = imports_of("@Main function main() { print(\"import support\") return }");
-        assert!(names.is_empty(), "{names:?}");
-    }
-}
+mod tests;

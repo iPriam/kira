@@ -7,11 +7,14 @@
 //! Two things, and they are the same thing seen from either end:
 //!
 //! - [`frontend`] turns a path to a `.kira` file into an
-//!   [`IrProgram`](kira_ir::IrProgram) plus the diagnostics that came out on the
-//!   way. It is a *library* function rather than CLI code because `kirac` is not
-//!   the only thing that compiles Kira: a consumer crate's `build.rs` builds the
-//!   library it embeds, and it must reach the identical pipeline rather than a
-//!   second one that drifts from it.
+//!   [`IrProgram`](kira_ir::IrProgram) plus package-resolution and frontend
+//!   diagnostics. For package-owned files it resolves transitive path
+//!   dependencies and loads their modules before semantics; library packages
+//!   additionally compile every source below `app/`, while a bare source file
+//!   keeps the standalone behavior. It is a *library* function rather than CLI
+//!   code because `kirac` is not the only thing that compiles Kira: a consumer
+//!   crate's `build.rs` builds the library it embeds, and it must reach the
+//!   identical pipeline rather than a second one that drifts from it.
 //! - [`library`] takes that program and produces what a Rust consumer actually
 //!   depends on: the `.kbc` artifact, and a generated wrapper crate around it
 //!   ([`wrapper`]).

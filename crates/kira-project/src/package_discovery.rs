@@ -5,6 +5,8 @@
 
 use kira_manifest::{DeclarationError, PackageKind, ProjectManifest};
 
+use crate::project::{Project, ResolvedTarget, TargetKind};
+
 /// The declaration manifest. It takes precedence over `kira.toml` when both
 /// are present in a package directory (it is first in
 /// [`MANIFEST_FILE_NAMES`]).
@@ -50,6 +52,28 @@ pub enum DiscoveryError {
         #[source]
         source: DeclarationError,
     },
+    /// A directory target did not contain a declaration manifest.
+    #[error("`{path}` is not a Kira package directory: expected `package.kira`")]
+    NotPackageDirectory {
+        /// The directory supplied by the user.
+        path: String,
+    },
+    /// An application package did not contain its conventional entrypoint.
+    #[error("application package `{package}` has no entrypoint at `{path}`")]
+    MissingEntrypoint {
+        /// The package declared by the manifest.
+        package: String,
+        /// The conventional entrypoint path.
+        path: String,
+    },
+    /// A library package had no source file that could seed compilation.
+    #[error("library package `{package}` has no `.kira` sources under `{path}`")]
+    NoLibrarySources {
+        /// The package declared by the manifest.
+        package: String,
+        /// The package's application source directory.
+        path: String,
+    },
 }
 
 /// The manifest governing `source`, found by walking up from its directory.
@@ -92,6 +116,221 @@ pub fn manifest_for(source: &std::path::Path) -> Result<Option<Manifest>, Discov
         dir = current.parent();
     }
     Ok(None)
+}
+
+/// Resolves a source-file or package-directory argument to the file that seeds compilation.
+///
+/// Non-directory paths are returned unchanged so standalone `.kira` files keep
+/// their historical behavior, including error reporting for a missing path. A
+/// package directory is governed by its own `package.kira`: applications use
+/// [`ENTRYPOINT_REL_PATH`], while libraries choose the entry from their complete
+/// [`LibrarySources`] set so the frontend can aggregate the rest of `app/`.
+pub fn resolve_target(path: &std::path::Path) -> Result<ResolvedTarget, DiscoveryError> {
+    if !path.is_dir() {
+        return Ok(ResolvedTarget {
+            root_path: None,
+            manifest_path: None,
+            source_path: Some(path.display().to_string()),
+            source_root: path.parent().map(|parent| parent.display().to_string()),
+            project_name: None,
+            project: None,
+            package_kind: None,
+            target_kind: TargetKind::SourceFile,
+        });
+    }
+
+    let declaration = path.join(DECLARATION_MANIFEST_FILE_NAME);
+    if !declaration.is_file() {
+        return Err(DiscoveryError::NotPackageDirectory {
+            path: path.display().to_string(),
+        });
+    }
+    let Some(found) = manifest_for(path)? else {
+        return Err(DiscoveryError::NotPackageDirectory {
+            path: path.display().to_string(),
+        });
+    };
+    let source_root = path.join("app");
+    let (source_path, target_kind) = match found.kind() {
+        PackageKind::App => {
+            let entrypoint = path.join(ENTRYPOINT_REL_PATH);
+            if !entrypoint.is_file() {
+                return Err(DiscoveryError::MissingEntrypoint {
+                    package: found.manifest.name.clone(),
+                    path: entrypoint.display().to_string(),
+                });
+            }
+            (entrypoint, TargetKind::Executable)
+        }
+        PackageKind::Library => {
+            let sources = library_sources(&found)?;
+            (sources.entry().path().to_path_buf(), TargetKind::Library)
+        }
+    };
+    let manifest_path = found.path.clone();
+    let project_name = found.manifest.name.clone();
+    let package_kind = found.manifest.kind;
+    let project = Project {
+        manifest: found.manifest,
+    };
+
+    Ok(ResolvedTarget {
+        root_path: Some(path.display().to_string()),
+        manifest_path: Some(manifest_path),
+        source_path: Some(source_path.display().to_string()),
+        source_root: Some(source_root.display().to_string()),
+        project_name: Some(project_name),
+        project: Some(project),
+        package_kind: Some(package_kind),
+        target_kind,
+    })
+}
+
+/// One source owned by a library package, with its import-visible module name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibrarySource {
+    path: std::path::PathBuf,
+    module: String,
+}
+
+impl LibrarySource {
+    /// The source path exactly as discovered below the package's `app/` directory.
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// The dotted module name corresponding to the source's path below `app/`.
+    pub fn module(&self) -> &str {
+        &self.module
+    }
+}
+
+/// Every source owned by a library, with the deterministic compilation entry separated out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibrarySources {
+    entry: LibrarySource,
+    remaining: Vec<LibrarySource>,
+}
+
+impl LibrarySources {
+    /// The conventional module-root source, or the first sorted source when it is absent.
+    pub fn entry(&self) -> &LibrarySource {
+        &self.entry
+    }
+
+    /// Every library source exactly once, with the compilation entry first.
+    pub fn iter(&self) -> impl Iterator<Item = &LibrarySource> {
+        std::iter::once(&self.entry).chain(self.remaining.iter())
+    }
+}
+
+/// Discovers every `.kira` source below a library package's `app/` directory.
+///
+/// Paths retain the spelling derived from the manifest path so diagnostics keep
+/// pointing at the same source names the package resolver found. The returned
+/// order is deterministic, with the conventional module-root file first when it
+/// exists and all remaining files sorted by path.
+pub fn library_sources(manifest: &Manifest) -> Result<LibrarySources, DiscoveryError> {
+    let source_root = library_source_root(manifest);
+    let mut paths = Vec::new();
+    collect_kira_sources(&source_root, &mut paths)?;
+    paths.sort();
+    if paths.is_empty() {
+        return Err(DiscoveryError::NoLibrarySources {
+            package: manifest.manifest.name.clone(),
+            path: source_root.display().to_string(),
+        });
+    }
+
+    let module_root = manifest
+        .manifest
+        .module_root
+        .as_deref()
+        .unwrap_or(&manifest.manifest.name);
+    let conventional = source_root.join(format!("{module_root}.kira"));
+    let entry_index = paths
+        .iter()
+        .position(|path| path == &conventional)
+        .unwrap_or(0);
+    let entry_path = paths.remove(entry_index);
+    let entry = library_source(&source_root, entry_path);
+    let remaining = paths
+        .into_iter()
+        .map(|path| library_source(&source_root, path))
+        .collect();
+    Ok(LibrarySources { entry, remaining })
+}
+
+/// Discovers all library sources when `entry` is inside the package's `app/` tree.
+///
+/// `Ok(None)` preserves explicit compilation of a package-adjacent source file:
+/// only the conventional package source tree has aggregate library semantics.
+pub fn library_sources_for_entry(
+    manifest: &Manifest,
+    entry: &std::path::Path,
+) -> Result<Option<LibrarySources>, DiscoveryError> {
+    let source_root = library_source_root(manifest);
+    if !path_identity(entry).starts_with(path_identity(&source_root)) {
+        return Ok(None);
+    }
+    library_sources(manifest).map(Some)
+}
+
+/// Returns the conventional application source root beside a manifest.
+fn library_source_root(manifest: &Manifest) -> std::path::PathBuf {
+    let manifest_path = std::path::Path::new(&manifest.path);
+    let package_root = match manifest_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => std::path::Path::new("."),
+    };
+    package_root.join("app")
+}
+
+/// Produces a stable identity for package-boundary comparisons.
+fn path_identity(path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Gives one path from the package-owned walk its dotted module name.
+fn library_source(source_root: &std::path::Path, path: std::path::PathBuf) -> LibrarySource {
+    let relative = path.strip_prefix(source_root).unwrap_or(&path);
+    let mut module_path = relative.to_path_buf();
+    module_path.set_extension("");
+    let module = module_path
+        .iter()
+        .map(|segment| segment.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(".");
+    LibrarySource { path, module }
+}
+
+/// Collects every Kira source below a library's application source root.
+fn collect_kira_sources(
+    directory: &std::path::Path,
+    sources: &mut Vec<std::path::PathBuf>,
+) -> Result<(), DiscoveryError> {
+    let entries = std::fs::read_dir(directory).map_err(|error| DiscoveryError::Unreadable {
+        path: directory.display().to_string(),
+        message: error.to_string(),
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| DiscoveryError::Unreadable {
+            path: directory.display().to_string(),
+            message: error.to_string(),
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_kira_sources(&path, sources)?;
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "kira")
+        {
+            sources.push(path);
+        }
+    }
+    Ok(())
 }
 
 /// A manifest found on disk, with the path it was read from.
@@ -213,6 +452,75 @@ mod tests {
             manifest_for(&source).unwrap().expect("a manifest").kind(),
             PackageKind::App
         );
+    }
+
+    #[test]
+    fn a_source_file_target_is_returned_without_rewriting_its_path() {
+        let path = std::path::Path::new("relative/missing.kira");
+        let target = resolve_target(path).expect("source paths are unchanged");
+        assert_eq!(target.source_path.as_deref(), Some("relative/missing.kira"));
+        assert_eq!(target.target_kind, TargetKind::SourceFile);
+    }
+
+    #[test]
+    fn an_app_directory_resolves_to_its_conventional_entrypoint() {
+        let dir = TempDir::new("app-target");
+        std::fs::write(
+            dir.path().join(DECLARATION_MANIFEST_FILE_NAME),
+            "Package demo {\n let kind = .App\n}",
+        )
+        .unwrap();
+        let entrypoint = dir.path().join(ENTRYPOINT_REL_PATH);
+        std::fs::create_dir_all(entrypoint.parent().expect("entrypoint parent")).unwrap();
+        std::fs::write(&entrypoint, "@Main function main() { return }").unwrap();
+
+        let target = resolve_target(dir.path()).expect("resolve app directory");
+        assert_eq!(target.source_path.as_deref(), entrypoint.to_str());
+        assert_eq!(target.target_kind, TargetKind::Executable);
+        assert_eq!(target.package_kind, Some(PackageKind::App));
+    }
+
+    #[test]
+    fn a_library_directory_uses_a_deterministic_app_source() {
+        let dir = TempDir::new("library-target");
+        std::fs::write(
+            dir.path().join(DECLARATION_MANIFEST_FILE_NAME),
+            "Package Core {\n let kind = .Library\n let moduleRoot = \"Core\"\n}",
+        )
+        .unwrap();
+        let source = dir.path().join("app/Core.kira");
+        std::fs::create_dir_all(source.parent().expect("source parent")).unwrap();
+        std::fs::write(&source, "function value() -> Int { return 1 }").unwrap();
+        let nested = dir.path().join("app/Detail/Value.kira");
+        std::fs::create_dir_all(nested.parent().expect("nested source parent")).unwrap();
+        std::fs::write(&nested, "function detail() -> Int { return 2 }").unwrap();
+        let other = dir.path().join("app/Another.kira");
+        std::fs::write(&other, "function another() -> Int { return 3 }").unwrap();
+
+        let target = resolve_target(dir.path()).expect("resolve library directory");
+        assert_eq!(target.source_path.as_deref(), source.to_str());
+        assert_eq!(target.target_kind, TargetKind::Library);
+        assert!(!target.can_run());
+
+        let manifest = manifest_for(dir.path())
+            .expect("discover manifest")
+            .expect("library manifest");
+        let sources = library_sources(&manifest).expect("discover all library sources");
+        let discovered = sources
+            .iter()
+            .map(|source| (source.module(), source.path()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            discovered,
+            vec![
+                ("Core", source.as_path()),
+                ("Another", other.as_path()),
+                ("Detail.Value", nested.as_path()),
+            ]
+        );
+        let adjacent = dir.path().join("Standalone.kira");
+        std::fs::write(&adjacent, "function standalone() { return }").unwrap();
+        assert_eq!(library_sources_for_entry(&manifest, &adjacent), Ok(None));
     }
 
     #[test]

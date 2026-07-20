@@ -2,6 +2,11 @@
 //! does not, and what it refuses.
 
 use super::{module_codes, module_diagnostics};
+use crate::{
+    DefinitionAccumulator, DiagnosticAccumulator, ImportTable, ModuleSource, SourceProgram,
+    analyzed, module_source_id,
+};
+use kira_source::{FileSpan, Span};
 
 /// The module `support.kira` most cases here import.
 const SUPPORT: &str = "function supportValue() -> Int { return 42 }\n\
@@ -169,6 +174,64 @@ fn mutually_importing_modules_are_accepted() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
 
+/// Equal relative module names retain their package identity for both imports.
+#[test]
+fn same_named_modules_in_two_packages_link_to_their_own_sources() {
+    let db = salsa::DatabaseImpl::new();
+    let first_root = "import Services\nfunction firstRoot() -> Int { return firstService() }";
+    let second_root = "import Services\nfunction secondRoot() -> Int { return secondService() }";
+    let modules = vec![
+        ModuleSource {
+            module: ImportTable::package_module_identity("First", "Services"),
+            path: "First/Services.kira".to_owned(),
+            text: "function firstService() -> Int { return 1 }".to_owned(),
+        },
+        ModuleSource {
+            module: ImportTable::package_module_identity("First", "First"),
+            path: "First/First.kira".to_owned(),
+            text: first_root.to_owned(),
+        },
+        ModuleSource {
+            module: ImportTable::package_module_identity("Second", "Services"),
+            path: "Second/Services.kira".to_owned(),
+            text: "function secondService() -> Int { return 2 }".to_owned(),
+        },
+        ModuleSource {
+            module: ImportTable::package_module_identity("Second", "Second"),
+            path: "Second/Second.kira".to_owned(),
+            text: second_root.to_owned(),
+        },
+    ];
+    let source = SourceProgram::application(
+        &db,
+        "import First\nimport Second\n@Main function main() { return }".to_owned(),
+        "main.kira".to_owned(),
+        modules,
+    );
+
+    let diagnostics = analyzed::accumulated::<DiagnosticAccumulator>(&db, source);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let links = analyzed::accumulated::<DefinitionAccumulator>(&db, source);
+    let services_span = Span::new(7, "Services".len() as u32);
+    let first_link = links
+        .iter()
+        .find(|link| link.0.reference == FileSpan::new(module_source_id(1), services_span))
+        .expect("the first package import records a link");
+    let second_link = links
+        .iter()
+        .find(|link| link.0.reference == FileSpan::new(module_source_id(3), services_span))
+        .expect("the second package import records a link");
+
+    assert_eq!(
+        first_link.0.definition,
+        FileSpan::new(module_source_id(0), Span::new(0, 0))
+    );
+    assert_eq!(
+        second_link.0.definition,
+        FileSpan::new(module_source_id(2), Span::new(0, 0))
+    );
+}
+
 /// A module's declarations are visible bare across the package: an import puts
 /// the file in the program and binds a namespace root, and gates nothing.
 #[test]
@@ -194,5 +257,5 @@ fn a_modules_diagnostic_points_into_the_module() {
         .find(|diagnostic| diagnostic.code == Some("KSEM060"))
         .expect("the module's undefined name is reported");
     let label = diagnostic.labels.first().expect("a span to point at");
-    assert_eq!(label.span.source, crate::module_source_id(0));
+    assert_eq!(label.span.source, module_source_id(0));
 }
