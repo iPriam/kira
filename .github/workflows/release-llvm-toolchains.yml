@@ -1,0 +1,218 @@
+name: Release LLVM Toolchains
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Create or update the GitHub release after the build succeeds"
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "llvm-v*-kira.*"
+  pull_request:
+    paths:
+      - ".github/workflows/release-llvm-toolchains.yml"
+      - "llvm-metadata.toml"
+      - "scripts/llvm/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.metadata.outputs.matrix }}
+      llvm_version: ${{ steps.metadata.outputs.llvm_version }}
+      llvm_source_tag: ${{ steps.metadata.outputs.llvm_source_tag }}
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
+      build_type: ${{ steps.metadata.outputs.build_type }}
+      cmake_generator: ${{ steps.metadata.outputs.cmake_generator }}
+      targets_to_build: ${{ steps.metadata.outputs.targets_to_build }}
+      publish: ${{ steps.metadata.outputs.publish }}
+    steps:
+      - name: Check out Kira
+        uses: actions/checkout@v4
+
+      - name: Validate and export workflow metadata
+        id: metadata
+        shell: bash
+        run: |
+          field() { sed -n "s/^$1 = \"\(.*\)\"/\1/p" llvm-metadata.toml | head -1; }
+          version="$(field version)"
+          source_tag="$(field source_tag)"
+          release_tag="$(field release_tag)"
+          build_type="$(field build_type)"
+          generator="$(field cmake_generator)"
+          targets="$(field targets_to_build)"
+          for pair in "version=$version" "source_tag=$source_tag" \
+                      "release_tag=$release_tag" "build_type=$build_type" \
+                      "cmake_generator=$generator" "targets_to_build=$targets"; do
+            [ -n "${pair#*=}" ] || { echo "llvm-metadata.toml is missing ${pair%%=*}" >&2; exit 1; }
+          done
+          if [ "${{ github.event_name }}" = "push" ] \
+             && [ "${{ github.ref_name }}" != "$release_tag" ]; then
+            echo "tag ${{ github.ref_name }} does not match release_tag $release_tag" >&2
+            exit 1
+          fi
+
+          # One matrix entry per [target.<key>] block, fields read per block.
+          matrix='{"include":['
+          first=1
+          for key in $(sed -n 's/^\[target\.\(.*\)\]/\1/p' llvm-metadata.toml); do
+            block() { sed -n "/^\[target.$key\]/,/^\[/s/^$1 = \"\(.*\)\"/\1/p" llvm-metadata.toml | head -1; }
+            platform="$(block platform)"
+            archive="$(block archive)"
+            asset="$(block asset)"
+            for pair in "platform=$platform" "archive=$archive" "asset=$asset"; do
+              [ -n "${pair#*=}" ] || { echo "[target.$key] is missing ${pair%%=*}" >&2; exit 1; }
+            done
+            [ $first = 1 ] || matrix="$matrix,"
+            first=0
+            matrix="$matrix{\"target_key\":\"$key\",\"platform\":\"$platform\",\"archive\":\"$archive\",\"asset\":\"$asset\"}"
+          done
+          matrix="$matrix]}"
+
+          publish=false
+          if [ "${{ github.event_name }}" = "push" ]; then
+            publish=true
+          elif [ "${{ inputs.publish || 'false' }}" = "true" ]; then
+            publish=true
+          fi
+
+          {
+            echo "matrix=$matrix"
+            echo "llvm_version=$version"
+            echo "llvm_source_tag=$source_tag"
+            echo "release_tag=$release_tag"
+            echo "build_type=$build_type"
+            echo "cmake_generator=$generator"
+            echo "targets_to_build=$targets"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.target_key }}
+    needs: validate
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
+    runs-on: ${{ matrix.platform == 'windows' && 'windows-2025' || matrix.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.validate.outputs.matrix) }}
+    steps:
+      - name: Check out Kira
+        uses: actions/checkout@v4
+
+      - name: Check out llvm-project
+        uses: actions/checkout@v4
+        with:
+          repository: llvm/llvm-project
+          ref: ${{ needs.validate.outputs.llvm_source_tag }}
+          path: llvm-project
+          fetch-depth: 1
+
+      - name: Set up MSVC
+        if: ${{ matrix.platform == 'windows' }}
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build LLVM install tree (Unix)
+        if: ${{ matrix.platform != 'windows' }}
+        shell: bash
+        run: |
+          bash scripts/llvm/build-llvm.sh \
+            --source-dir "$GITHUB_WORKSPACE/llvm-project" \
+            --build-dir "$RUNNER_TEMP/llvm-build" \
+            --install-dir "$RUNNER_TEMP/llvm-install" \
+            --target-key "${{ matrix.target_key }}" \
+            --build-type "${{ needs.validate.outputs.build_type }}" \
+            --cmake-generator "${{ needs.validate.outputs.cmake_generator }}" \
+            --targets-to-build "${{ needs.validate.outputs.targets_to_build }}"
+
+      - name: Build LLVM install tree (Windows)
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        run: |
+          ./scripts/llvm/build-llvm.ps1 `
+            -SourceDir "$env:GITHUB_WORKSPACE\llvm-project" `
+            -BuildDir "$env:RUNNER_TEMP\llvm-build" `
+            -InstallDir "$env:RUNNER_TEMP\llvm-install" `
+            -TargetKey "${{ matrix.target_key }}" `
+            -BuildType "${{ needs.validate.outputs.build_type }}" `
+            -CmakeGenerator "${{ needs.validate.outputs.cmake_generator }}" `
+            -TargetsToBuild "${{ needs.validate.outputs.targets_to_build }}"
+
+      - name: Package LLVM install tree (Unix)
+        if: ${{ matrix.platform != 'windows' }}
+        shell: bash
+        run: |
+          archive_path="$(bash scripts/llvm/package-llvm.sh \
+            --install-dir "$RUNNER_TEMP/llvm-install" \
+            --output-dir "$RUNNER_TEMP/llvm-dist" \
+            --asset-name "${{ matrix.asset }}" \
+            --archive-format "${{ matrix.archive }}")"
+          printf 'ARCHIVE_PATH=%s\n' "$archive_path" >> "$GITHUB_ENV"
+
+      - name: Package LLVM install tree (Windows)
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        run: |
+          $archivePath = ./scripts/llvm/package-llvm.ps1 `
+            -InstallDir "$env:RUNNER_TEMP\llvm-install" `
+            -OutputDir "$env:RUNNER_TEMP\llvm-dist" `
+            -AssetName "${{ matrix.asset }}" `
+            -ArchiveFormat "${{ matrix.archive }}"
+          "ARCHIVE_PATH=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8NoBOM -Append
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-bundle-${{ matrix.target_key }}
+          path: |
+            ${{ env.ARCHIVE_PATH }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish release assets
+    needs:
+      - validate
+      - build
+    if: ${{ needs.validate.outputs.publish == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out Kira
+        uses: actions/checkout@v4
+
+      - name: Download packaged bundles
+        uses: actions/download-artifact@v4
+        with:
+          pattern: llvm-bundle-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+          LLVM_VERSION: ${{ needs.validate.outputs.llvm_version }}
+          RELEASE_TARGET: ${{ github.sha }}
+        run: |
+          cat > release-notes.txt <<EOF
+          Pinned LLVM ${LLVM_VERSION} toolchain bundles for Kira contributors.
+
+          Source of truth: llvm-metadata.toml in the tagged Kira commit.
+          Each archive name matches the metadata exactly.
+          EOF
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file release-notes.txt
+          else
+            gh release create "$RELEASE_TAG" --target "$RELEASE_TARGET" --title "$RELEASE_TAG" --notes-file release-notes.txt
+          fi
+
+          gh release upload "$RELEASE_TAG" dist/* --clobber

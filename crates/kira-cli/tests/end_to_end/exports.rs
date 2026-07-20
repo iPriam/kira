@@ -127,16 +127,8 @@ fn the_hybrid_engine_no_longer_refuses_an_export_on_export_grounds() {
 #[test]
 fn the_native_engine_no_longer_refuses_an_export_on_export_grounds() {
     // The native engine builds this surface now, so whatever it says, it must
-    // not be "library export is not built yet". Two outcomes are legitimate and
-    // this test accepts both, because a `kirac` built without the LLVM feature
-    // is the *CI* configuration and its refusal is about the missing backend
-    // rather than about exports:
-    //
-    // - built with `--features llvm`: the build succeeds;
-    // - built without it: it says this kirac has no LLVM backend.
-    //
-    // What would be a regression is the export refusal coming back, and that is
-    // what this pins.
+    // not be "library export is not built yet" — and with the LLVM backend a
+    // hard part of every kirac, the build itself must succeed.
     let path = write_package(".Library", EXPORTING_LIBRARY);
     let output = kirac(&["build", "--backend", "llvm", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
@@ -145,12 +137,11 @@ fn the_native_engine_no_longer_refuses_an_export_on_export_grounds() {
         !stderr.contains("library export is not built yet"),
         "the native engine still refuses an export: {stderr}"
     );
-    if output.status.code() != Some(0) {
-        assert!(
-            stderr.contains("built without the LLVM backend"),
-            "the native engine failed for an unexpected reason: {stderr}"
-        );
-    }
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the native engine must build an exporting library: {stderr}"
+    );
 }
 
 #[test]
@@ -162,9 +153,9 @@ fn switching_engines_in_one_package_leaves_nothing_of_the_other_behind() {
     // would keep linking a stale archive into the consumer's binary — silently,
     // in the exact two-build flow the toolchain documents.
     //
-    // The native build is attempted for real. On a `kirac` with no LLVM it
-    // cannot run, so the file it would have written is planted instead: the
-    // property under test is about the VM build, not about LLVM.
+    // The native build runs for real — the LLVM backend is part of every
+    // kirac — and its failure would fail this test rather than being papered
+    // over with a planted file.
     let path = write_package(".Library", EXPORTING_LIBRARY);
     let directory = path.parent().expect("package directory").to_path_buf();
     let generated = directory
@@ -178,31 +169,32 @@ fn switching_engines_in_one_package_leaves_nothing_of_the_other_behind() {
     let first = (vm.status.success(), bytecode.is_file(), script.is_file());
 
     let native = kirac(&["build", "--backend", "llvm", path.to_str().unwrap()]);
-    if native.status.success() {
-        // The native engine took over the directory: its script is there and the
-        // VM engine's embedded bytecode is gone.
-        assert!(script.is_file(), "the native build wrote no build script");
-        assert!(
-            !bytecode.is_file(),
-            "the VM engine's bytecode survived a native build"
-        );
-        // And the archive it points at is named absolutely. Cargo reads this
-        // script from the generated crate's directory, wherever a consumer put
-        // it, so a relative path resolves somewhere else entirely and fails the
-        // link on an archive sitting exactly where it was left.
-        let text = std::fs::read_to_string(&script).expect("read build.rs");
-        let search = text
-            .lines()
-            .find_map(|line| line.split_once("cargo:rustc-link-search=native="))
-            .map(|(_, rest)| rest.trim_end_matches("\");").to_owned())
-            .unwrap_or_default();
-        assert!(
-            search.starts_with('/'),
-            "the generated build script's link search path is relative: {search}"
-        );
-    } else {
-        std::fs::write(&script, "fn main() { /* the native engine's */ }\n").expect("plant");
-    }
+    assert!(
+        native.status.success(),
+        "the native build must succeed: {}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    // The native engine took over the directory: its script is there and the
+    // VM engine's embedded bytecode is gone.
+    assert!(script.is_file(), "the native build wrote no build script");
+    assert!(
+        !bytecode.is_file(),
+        "the VM engine's bytecode survived a native build"
+    );
+    // And the archive it points at is named absolutely. Cargo reads this
+    // script from the generated crate's directory, wherever a consumer put
+    // it, so a relative path resolves somewhere else entirely and fails the
+    // link on an archive sitting exactly where it was left.
+    let text = std::fs::read_to_string(&script).expect("read build.rs");
+    let search = text
+        .lines()
+        .find_map(|line| line.split_once("cargo:rustc-link-search=native="))
+        .map(|(_, rest)| rest.trim_end_matches("\");").to_owned())
+        .unwrap_or_default();
+    assert!(
+        search.starts_with('/'),
+        "the generated build script's link search path is relative: {search}"
+    );
 
     let vm_again = kirac(&["build", "--backend", "vm", path.to_str().unwrap()]);
     let back = (

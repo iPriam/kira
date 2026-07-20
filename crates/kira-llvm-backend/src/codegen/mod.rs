@@ -208,6 +208,20 @@ impl Module {
         let machine = TargetMachine::host()?;
         machine.emit_object(self.module, path)
     }
+
+    /// Emits a WebAssembly object file for `device` into `path`.
+    ///
+    /// The same in-process emission as the host's — the target machine sets
+    /// the module's wasm triple and data layout before emitting, so the object
+    /// carries the Web device's pointer width, not this machine's.
+    pub(crate) fn emit_wasm_object(
+        &self,
+        path: &Path,
+        device: kira_backend_api::WasmDevice,
+    ) -> Result<(), LlvmError> {
+        let machine = TargetMachine::wasm(device)?;
+        machine.emit_object(self.module, path)
+    }
 }
 
 impl Drop for Module {

@@ -24,7 +24,9 @@ release_tag = "llvm-v22.1.4-kira.1"
 [build]
 build_type = "Release"
 cmake_generator = "Ninja"
-targets_to_build = "host"
+# `host` is the bundle's own machine; WebAssembly is the Web device's code
+# generator, emitted in-process by the same backend (never via textual IR).
+targets_to_build = "host;WebAssembly"
 
 [target.x86_64-windows-msvc]
 runner = "windows-2022"

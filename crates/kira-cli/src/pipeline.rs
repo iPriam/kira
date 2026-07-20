@@ -5,12 +5,10 @@
 //! stops there. `run` and `build` continue into the backend `--backend`
 //! selects, on the device `--device` selects.
 //!
-//! The two are independent axes, and `--backend` is never overridden: a device
-//! decides only which backend a command that named none gets — the VM on this
-//! machine, the module's own code generator on the Web. A pair that is not
-//! built yet is refused by name rather than quietly served by another backend,
-//! because a user who asked for one engine and measured another has been lied
-//! to.
+//! `--device` is an override. On the host, `--backend` picks the engine; a
+//! Web device has exactly one code generator, so naming the device decides
+//! the backend, and a differing `--backend` beside it is overridden aloud —
+//! never served, never silently swapped.
 //!
 //! The backends:
 //!
@@ -22,11 +20,10 @@
 //!   emits both halves plus a manifest; `run` loads the bundle and runs it in
 //!   this process, which is the host.
 //!
-//! On a `wasm32`/`wasm64` device, `llvm` is the backend that serves it: the
-//! wasm backend turns a whole program into machine code for that device exactly
-//! as LLVM does for this one, emitting a module plus the page that runs it, and
-//! `run` serves them and opens a browser. `vm` and `hybrid` on the Web are not
-//! built yet and say so.
+//! On a `wasm32`/`wasm64` device, the wasm backend turns the whole program
+//! into machine code for that device exactly as LLVM does for this one,
+//! emitting a module plus the page that runs it; `run` serves them and opens a
+//! browser.
 //!
 //! Every backend consumes the same [`IrProgram`], which is what makes their
 //! observable behavior comparable — and what the parity tests check.
@@ -37,7 +34,7 @@ use kira_diagnostics::{Diagnostic, renderer};
 use kira_ir::IrProgram;
 use kira_source::SourceMap;
 
-use kira_wasm_runtime::WasmDevice;
+use kira_backend_api::WasmDevice;
 
 use crate::hybrid;
 use crate::hybrid_library;
@@ -91,9 +88,6 @@ pub fn run(args: &[String]) -> i32 {
     };
 
     if let Device::Web(device) = options.device {
-        if let Err(code) = web_backend_is_built("run", options.backend, device) {
-            return code;
-        }
         return run_web(&ir, &options, device);
     }
 
@@ -152,41 +146,6 @@ fn run_web(ir: &IrProgram, options: &CompileOptions, device: WasmDevice) -> i32 
             EXIT_FAILURE
         }
     }
-}
-
-/// Whether `backend` is built for a Web device, reporting it if not.
-///
-/// `--backend` is never overridden: a device decides the default for a command
-/// that named no backend, and nothing else. So a backend the Web does not serve
-/// yet is refused by name — the alternative is compiling something other than
-/// what was asked for and saying nothing, which is how a user comes to believe
-/// they measured a VM they never ran.
-///
-/// `llvm` is the Web's code generator: the wasm backend is what turns a whole
-/// program into machine code for that device, exactly as LLVM does for this one.
-/// The other two need a VM that runs *in* the module — `kira-vm-runtime` already
-/// compiles to `wasm32-unknown-unknown`, so this is wiring rather than a new
-/// engine — and, for `hybrid`, a split that reaches a Web device at all.
-fn web_backend_is_built(verb: &str, backend: BackendMode, device: WasmDevice) -> Result<(), i32> {
-    let missing = match backend {
-        BackendMode::LlvmNative => return Ok(()),
-        BackendMode::VmBytecode => {
-            "the VM on the Web needs the interpreter compiled into the module, \
-             which is not wired up yet"
-        }
-        BackendMode::Hybrid => {
-            "a hybrid split does not reach a Web device yet; the whole program \
-             compiles to one module"
-        }
-    };
-    eprintln!(
-        "kirac {verb}: `--backend {}` is not available for `--device {}` yet: {missing}\n\
-         note: `--backend llvm` compiles the program to a WebAssembly module",
-        backend.label(),
-        device.label(),
-    );
-    println!("Failed to {verb}");
-    Err(EXIT_FAILURE)
 }
 
 /// Whether the engine `backend` selects can build a library's `@Export`
@@ -286,9 +245,6 @@ pub fn build(args: &[String]) -> i32 {
     let is_library = ir.main.is_none();
 
     if let Device::Web(device) = options.device {
-        if let Err(code) = web_backend_is_built("build", options.backend, device) {
-            return code;
-        }
         return match wasm::build(ir, std::path::Path::new(&options.path), device) {
             Ok(artifacts) => {
                 println!("Successfully built {}", artifacts.wasm.display());

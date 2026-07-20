@@ -17,10 +17,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 mod exports;
 mod foundation;
+mod installed_toolchain;
 mod modules;
 mod natives;
 mod packages;
 mod programs;
+mod web;
 
 /// Writes `source` to a uniquely-named temp `.kira` file and returns its path.
 fn write_source(source: &str) -> PathBuf {

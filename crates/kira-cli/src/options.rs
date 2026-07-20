@@ -4,17 +4,14 @@
 //! structured enums, resolved once here, so no handler branches on a string.
 
 use kira_backend_api::BackendMode;
-use kira_wasm_runtime::WasmDevice;
+use kira_backend_api::WasmDevice;
 
 /// What a program is being compiled to run on.
 ///
-/// The device is a separate axis from the backend, and they are independent:
-/// `--backend` chooses which engine compiles a program, `--device` chooses what
-/// machine it runs on, and every pair means something. A device never overrides
-/// a backend; it only decides which backend a command that named none gets.
-///
-/// Not every pair is built yet. An unbuilt one is refused by name, so a
-/// `--backend` a user wrote is never quietly replaced by another.
+/// `--device` is an override. On the host, `--backend` picks among the three
+/// engines; a Web device has exactly one code generator, so naming the device
+/// decides the backend, and a differing `--backend` beside it is overridden
+/// aloud — never served, never silently swapped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Device {
     /// This machine.
@@ -126,18 +123,30 @@ impl CompileOptions {
             index += 1;
         }
 
+        // `--device` is an override: a Web device has exactly one code
+        // generator, so naming the device decides the backend, and a
+        // `--backend` beside it is noted aloud rather than served or refused.
+        // On the host, `--backend` picks among the three engines as ever.
+        let backend = match device {
+            Device::Host => backend.unwrap_or(BackendMode::VmBytecode),
+            Device::Web(_) => {
+                if let Some(named) = backend
+                    && named != BackendMode::LlvmNative
+                {
+                    eprintln!(
+                        "kirac: `--device {}` overrides `--backend {}`: the Web \
+                         device has one code generator",
+                        device.label(),
+                        named.label(),
+                    );
+                }
+                BackendMode::LlvmNative
+            }
+        };
+
         Ok(CompileOptions {
             path: path.ok_or(OptionsError::MissingPath)?,
-            // `--backend` is honored on every device. What a device changes is
-            // only the *default*, for a command that named no backend: on this
-            // machine the VM, and on the Web the device's own code generator.
-            // A default is not an override — an explicit `--backend` always
-            // survives to the pipeline, which either serves it or says it is
-            // not built yet.
-            backend: backend.unwrap_or(match device {
-                Device::Host => BackendMode::VmBytecode,
-                Device::Web(_) => BackendMode::LlvmNative,
-            }),
+            backend,
             device,
             emit_llvm_ir,
         })
@@ -196,16 +205,28 @@ mod tests {
     }
 
     #[test]
-    fn a_backend_survives_every_device() {
-        // `--backend` is never overridden. A device that served a backend other
-        // than the one on the command line would compile one thing while the
-        // user read another off their own shell history.
-        for device in ["host", "wasm32", "wasm64"] {
-            for (flag, expected) in [
-                ("vm", BackendMode::VmBytecode),
-                ("llvm", BackendMode::LlvmNative),
-                ("hybrid", BackendMode::Hybrid),
-            ] {
+    fn a_backend_survives_every_host_invocation() {
+        // On the host, `--backend` picks the engine and nothing second-guesses
+        // it.
+        for (flag, expected) in [
+            ("vm", BackendMode::VmBytecode),
+            ("llvm", BackendMode::LlvmNative),
+            ("hybrid", BackendMode::Hybrid),
+        ] {
+            let parsed =
+                CompileOptions::parse(&args(&["--device", "host", "--backend", flag, "m.kira"]))
+                    .expect("parses");
+            assert_eq!(parsed.backend, expected);
+        }
+    }
+
+    #[test]
+    fn a_web_device_overrides_every_backend() {
+        // `--device` is an override: a Web device has exactly one code
+        // generator, so whatever backend is named beside it, the Web build is
+        // what runs — announced on stderr, not silently.
+        for device in ["wasm32", "wasm64"] {
+            for flag in ["vm", "llvm", "hybrid"] {
                 let parsed = CompileOptions::parse(&args(&[
                     "--device",
                     device,
@@ -213,24 +234,21 @@ mod tests {
                     flag,
                     "m.kira",
                 ]))
-                .expect("a backend and a device are independent axes");
+                .expect("a Web device serves every invocation");
                 assert_eq!(
-                    parsed.backend, expected,
-                    "`--backend {flag}` did not survive `--device {device}`",
+                    parsed.backend,
+                    BackendMode::LlvmNative,
+                    "`--device {device}` must override `--backend {flag}`",
                 );
             }
         }
     }
 
     #[test]
-    fn a_device_only_decides_the_backend_nobody_named() {
-        // A default is not an override: it applies when `--backend` is absent,
-        // and never otherwise.
+    fn a_device_decides_the_backend_nobody_named() {
         let host = CompileOptions::parse(&args(&["m.kira"])).expect("parses");
         assert_eq!(host.backend, BackendMode::VmBytecode);
 
-        // On the Web the default is the device's own code generator, which is
-        // what makes `kirac build --device wasm32` mean what it always did.
         let web = CompileOptions::parse(&args(&["--device", "wasm32", "m.kira"])).expect("parses");
         assert_eq!(web.backend, BackendMode::LlvmNative);
     }

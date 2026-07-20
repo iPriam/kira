@@ -1,6 +1,6 @@
 ---
 name: verifying-work
-description: "The done-bar for this workspace: the four CI gates, both LLVM feature paths, the wasm32 portable-core check, the backend parity suite, and why a locally-green LLVM build proves less than it looks. Read before claiming any change is done, and before committing."
+description: "The done-bar for this workspace: the four CI gates run with the managed LLVM, the wasm32 portable-core check, the backend parity suite, and the provisioning contract every builder depends on. Read before claiming any change is done, and before committing."
 ---
 
 # Verifying work
@@ -9,29 +9,28 @@ Reject fake success — only Kira-owned code paths emit Kira success markers.
 Never accept smoke surfaces, placeholders, hardcoded `return true`,
 host-rendered content, or "the app launched so it works" as proof.
 
-## Trust the local build least
+## The gates, and the LLVM they stand on
 
-CI runs on a machine with **no LLVM**. A dev machine here carries a managed
-LLVM at `~/.kira/toolchains/llvm/<version>/<host>`, so a build that passes
-locally may be passing *because of the machine* rather than because of the
-change. Weigh that against what it already cost the sibling repo: a local
-build went green, the release was tagged, and CI failed on all three platforms
-— the workflow never provisioned LLVM at all.
-
-So run **both** feature paths, and count only the one CI has:
+The LLVM backend is a hard dependency: nothing in this workspace builds
+without the managed LLVM, and there is no feature flag to fall back to. Every
+builder — a dev shell, CI, a release job, `knvm binstall` — points `llvm-sys`
+at the bundle the repo-root `llvm-metadata.toml` pins:
 
 ```sh
-# The path CI has. This is the gate.
+export LLVM_SYS_221_PREFIX=~/.kira/toolchains/llvm/22.1.4/aarch64-macos
+
+cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace
 cargo test --workspace
-cargo fmt --check
-
-# The path only this machine has. Extra, never a substitute.
-export LLVM_SYS_221_PREFIX=~/.kira/toolchains/llvm/22.1.4/aarch64-macos
-cargo clippy --workspace --all-targets --features kira-cli/llvm -- -D warnings
-cargo test --workspace --features kira-cli/llvm
 ```
+
+CI provisions that same bundle from the release `llvm-metadata.toml` names
+before building, so its gates and a local run prove the same configuration.
+The bundles themselves are published by the `llvm-bundles` workflow, run once
+per pin move — until it has run for the current pin, no release exists and
+every CI provisioning step fails by name. That failure means "publish the
+bundles", never "work around the pin".
 
 Treat anything touching toolchain provisioning, dynamic linking, or a thing a
 fresh checkout would not have as unverified until it is confirmed somewhere

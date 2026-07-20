@@ -55,6 +55,17 @@ judgement call at the moment of typing is a rule that loses to the reflex. Keep
 this one needing none: **no destructive git, ever — whatever the tree looks
 like, whatever the undo is.**
 
+The same reflex has fired on `checkout -- <file>`, batched. An agent needed to
+undo a mechanical mistake it had made across ~30 files in one pass, built the
+file list itself, and ran `git checkout -- <that list>` without checking each
+path first. Two of those files carried pre-existing uncommitted work from
+before the session started, never staged, so git had nothing to recover them
+from — gone. The rule that would have stopped it was already loaded that
+session. "I built this list, so it's mine to revert" is the same shortcut as
+"the tree looked clean": a claim about the paths that substitutes for actually
+checking them. Check every targeted path's status individually before any
+discard, every time, batch or not.
+
 ## Reach the goal another way
 
 Recognize the goal behind the banned command and take the route that keeps the

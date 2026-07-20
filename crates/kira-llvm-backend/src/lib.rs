@@ -26,9 +26,9 @@
 //! # Standing decisions
 //!
 //! - LLVM is reached through `llvm-sys`, never `inkwell`.
-//! - The backend is feature-gated (`llvm`) so the workspace builds and lints on
-//!   a machine with no LLVM install; with the feature off the API is unchanged
-//!   and reports [`LlvmError::NotCompiledIn`] rather than degrading silently.
+//! - LLVM is a hard dependency: every build of this crate carries the backend,
+//!   and a machine without a managed LLVM does not build the workspace. The
+//!   `verifying-work` provisioning notes name the fix.
 //! - `unsafe` is fenced to this crate's binding layer, with a `// SAFETY:`
 //!   comment on every block.
 
@@ -37,31 +37,20 @@ use std::path::PathBuf;
 use kira_ir::IrProgram;
 use kira_toolchain::LlvmDiscoveryError;
 
-#[cfg(feature = "llvm")]
 mod codegen;
 mod exports;
-// Linking only exists where codegen does: a build without LLVM produces no
-// object to link, so the driver would be unreachable rather than merely unused.
-#[cfg(feature = "llvm")]
 mod link;
 // Not gated: the platform link list is data about a host rather than something
 // LLVM answers, and a consumer's build script reads it on a machine with none.
 mod platform;
 
 pub use exports::{NativeClass, NativeExport, NativeExportSurface};
-#[cfg(feature = "llvm")]
 pub use link::LinkError;
 pub use platform::{PLATFORM_LINK_LISTS, PlatformLinkList, host_link_list, link_list_for};
 
 /// What went wrong producing native code.
 #[derive(Debug, thiserror::Error)]
 pub enum LlvmError {
-    /// The backend was compiled without its `llvm` feature.
-    #[error(
-        "this kirac was built without the LLVM backend; rebuild with \
-         `--features llvm` and a managed LLVM present to use `--backend llvm`"
-    )]
-    NotCompiledIn,
     /// A `break`/`continue` reached codegen with no enclosing loop, which
     /// analysis is supposed to have rejected.
     #[error(
@@ -110,6 +99,12 @@ pub enum LlvmError {
          keep both sides on one engine"
     )]
     EnumAtSeam,
+    /// The managed LLVM was built without the WebAssembly code generator.
+    #[error(
+        "the managed LLVM has no WebAssembly code generator; re-provision the \
+         bundle (`llvm-metadata.toml` now pins `host;WebAssembly` targets)"
+    )]
+    WasmTargetMissing,
     /// Lowering produced a module LLVM rejected — always a backend bug.
     #[error("LLVM rejected the generated module (this is a compiler bug): {0}")]
     InvalidModule(String),
@@ -117,7 +112,6 @@ pub enum LlvmError {
     #[error("LLVM could not emit an object file: {0}")]
     Emit(String),
     /// Linking the native executable failed.
-    #[cfg(feature = "llvm")]
     #[error(transparent)]
     Link(#[from] LinkError),
     /// An artifact path could not be written.
@@ -186,7 +180,6 @@ pub struct NativeArtifacts {
 
 /// Compiles `program` to a native object, and links an executable when
 /// [`NativeBuildOptions::executable_path`] asks for one.
-#[cfg(feature = "llvm")]
 pub fn build_native(
     program: &IrProgram,
     options: &NativeBuildOptions,
@@ -218,6 +211,22 @@ pub fn build_native(
     })
 }
 
+/// Compiles `program` to a WebAssembly object for `device`.
+///
+/// Codegen is the same in-process C-API path as the host's — the lowering is
+/// shared, only the target machine differs — and linking is not done here: the
+/// caller drives the Web linker (emscripten) over the object exactly as the
+/// host path drives `clang`, so no textual IR exists anywhere in either.
+pub fn build_wasm_object(
+    program: &IrProgram,
+    module_name: &str,
+    object_path: &std::path::Path,
+    device: kira_backend_api::WasmDevice,
+) -> Result<(), LlvmError> {
+    let module = codegen::Module::build(program, module_name)?;
+    module.emit_wasm_object(object_path, device)
+}
+
 /// Compiles a Kira library to a native object and links it for a consumer.
 ///
 /// The artifact is a library, not an executable: no C `main` is emitted, so
@@ -235,7 +244,6 @@ pub fn build_native(
 ///   rather `dlopen` than link.
 ///
 /// Both are self-contained in the same way a hybrid native half is.
-#[cfg(feature = "llvm")]
 pub fn build_native_library(
     program: &IrProgram,
     options: &NativeBuildOptions,
@@ -286,7 +294,6 @@ pub fn build_native_library(
 /// `kira_native_fn_<id>` trampoline the host calls; everything else stays in
 /// the bytecode half. Returns the exported trampoline symbol for each native
 /// function, which the hybrid manifest records so the host knows what to bind.
-#[cfg(feature = "llvm")]
 pub fn build_hybrid_library(
     program: &IrProgram,
     options: &NativeBuildOptions,
@@ -319,7 +326,6 @@ pub fn build_hybrid_library(
 }
 
 /// The trampoline symbol exported for each `@Native` function, by function id.
-#[cfg(feature = "llvm")]
 fn exported_trampolines(program: &IrProgram) -> Vec<(u32, String)> {
     program
         .functions
@@ -344,41 +350,4 @@ pub struct HybridArtifacts {
     pub library: PathBuf,
     /// The trampoline symbol exported for each native function, by id.
     pub exports: Vec<(u32, String)>,
-}
-
-/// Compiles the native half of a hybrid program — unavailable in this build.
-#[cfg(not(feature = "llvm"))]
-pub fn build_hybrid_library(
-    _program: &IrProgram,
-    _options: &NativeBuildOptions,
-) -> Result<HybridArtifacts, LlvmError> {
-    Err(LlvmError::NotCompiledIn)
-}
-
-/// Compiles a Kira library to a native shared library — unavailable in this
-/// build.
-#[cfg(not(feature = "llvm"))]
-pub fn build_native_library(
-    _program: &IrProgram,
-    _options: &NativeBuildOptions,
-) -> Result<NativeArtifacts, LlvmError> {
-    Err(LlvmError::NotCompiledIn)
-}
-
-/// Compiles `program` to a native object — unavailable in this build.
-///
-/// Without the `llvm` feature the backend reports [`LlvmError::NotCompiledIn`],
-/// so a caller fails loudly and actionably instead of silently producing
-/// nothing or falling back to another backend.
-#[cfg(not(feature = "llvm"))]
-pub fn build_native(
-    _program: &IrProgram,
-    _options: &NativeBuildOptions,
-) -> Result<NativeArtifacts, LlvmError> {
-    Err(LlvmError::NotCompiledIn)
-}
-
-/// Whether this build carries a working LLVM backend.
-pub fn is_available() -> bool {
-    cfg!(feature = "llvm")
 }

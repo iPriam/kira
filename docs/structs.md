@@ -111,10 +111,10 @@ invisible for anything a program cannot mutate — which is why a `String` is
 shared and costs nothing to "copy". A struct is not: `p.x = 1` writes through
 the address, so it is deep-copied wherever the VM copies one, through a helper
 generated per struct. Only the mutable spine is duplicated; the strings inside
-are still shared. Both address widths run the same lowering, and
-`crates/kira-wasm-runtime/tests/execution/` compares each case against the VM
-on `wasm32` and `wasm64` — a struct's field offsets differ between them, so a
-layout mistake shows up as a wrong value rather than hiding.
+are still shared. The Web target runs the same LLVM lowering the host does,
+and `crates/kira-cli/tests/end_to_end/web.rs` compares a built module's output
+against the VM's under node — a layout mistake shows up as a wrong value
+rather than hiding.
 
 ## Still open
 
