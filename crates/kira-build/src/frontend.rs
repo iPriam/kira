@@ -3,9 +3,14 @@
 //! This used to live in `kira-cli`, and moving it here is what makes the CLI a
 //! driver rather than the compiler. The reason is a second consumer, not tidiness:
 //! a Rust crate embedding a Kira library builds that library from its own
-//! `build.rs`, and a `build.rs` that reimplemented module loading, source
-//! mapping, or build-kind discovery would drift from `kirac` in exactly the ways
-//! that make a bug reproduce on one path and not the other.
+//! `build.rs`, and a `build.rs` that reimplemented package resolution, module
+//! loading, source mapping, or build-kind discovery would drift from `kirac` in
+//! exactly the ways that make a bug reproduce on one path and not the other.
+//!
+//! When an entry belongs to a package, this pipeline resolves its transitive path
+//! dependencies from `package.kira` before walking imports. A library package
+//! contributes every `.kira` file below `app/`, including files no import reaches;
+//! bare `.kira` files keep the same bundled-module-only behavior and need no manifest.
 //!
 //! # What it does not do
 //!
@@ -16,11 +21,14 @@
 //! question a caller asks; what to print, and what exit code to use, stays with
 //! whoever owns the terminal.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use kira_diagnostics::Diagnostic;
 use kira_ir::IrProgram;
-use kira_semantics::{BuildKind, DiagnosticAccumulator, FILE_SOURCE_ID, SourceProgram};
+use kira_semantics::{
+    BuildKind, DiagnosticAccumulator, FILE_SOURCE_ID, ModuleSource, SourceProgram,
+};
 use kira_source::SourceMap;
 
 /// Analyzes and lowers the source program to IR.
@@ -45,7 +53,7 @@ fn lowered(db: &dyn salsa::Database, source: SourceProgram) -> IrProgram {
 pub struct Compiled {
     /// Every file that took part, indexed so a span renders against its own.
     pub sources: SourceMap,
-    /// Everything the frontend had to say, in source order.
+    /// Package-resolution diagnostics followed by frontend diagnostics in source order.
     pub diagnostics: Vec<Diagnostic>,
     /// The lowered program. Present even when `diagnostics` holds errors.
     pub ir: IrProgram,
@@ -62,6 +70,10 @@ pub struct Compiled {
     /// The generated wrapper crate takes its version from the library's, so the
     /// two never drift apart in a consumer's lockfile.
     pub package_version: Option<String>,
+    /// The governing manifest's default execution mode, when there is one.
+    pub default_execution_mode: Option<String>,
+    /// The governing manifest's default build target, when there is one.
+    pub default_build_target: Option<String>,
 }
 
 impl Compiled {
@@ -77,7 +89,7 @@ impl Compiled {
 /// *reach* the frontend, and none of them has a span to point at.
 #[derive(Debug, thiserror::Error)]
 pub enum FrontendError {
-    /// The entry file could not be read.
+    /// A source file selected for compilation could not be read.
     #[error("cannot read `{path}`: {source}")]
     Read {
         /// The path that could not be read.
@@ -95,6 +107,9 @@ pub enum FrontendError {
     /// A `package.kira` was found above the source and could not be used.
     #[error(transparent)]
     Discovery(#[from] kira_project::DiscoveryError),
+    /// The governing package's dependency graph could not be started.
+    #[error(transparent)]
+    Resolution(#[from] kira_package_manager::ResolveError),
 }
 
 /// Reads and compiles `path` through the salsa frontend and IR lowering.
@@ -107,11 +122,29 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
         path: display.clone(),
         source,
     })?;
+    let package = package_of(path)?;
+    let (package_roots, mut diagnostics) = resolve_package_roots(package.as_ref())?;
 
     // Everything the entry file imports, transitively, dependencies first. An
     // import that names no readable file comes back as nothing here and is
-    // reported by the frontend, which has the span to point at.
-    let modules = kira_program_graph::load_modules(path, &text);
+    // reported by the frontend, which has the span to point at. Resolved package
+    // roots sit between project-local modules and toolchain bundles.
+    let bundled_roots = kira_program_graph::bundled::bundled_roots();
+    let mut modules =
+        kira_program_graph::load_modules_with_packages(path, &text, &bundled_roots, &package_roots);
+    if let Some(found) = package
+        .as_ref()
+        .filter(|found| found.kind() == kira_manifest::PackageKind::Library)
+        && let Some(library_sources) = kira_project::library_sources_for_entry(found, path)?
+    {
+        aggregate_library_modules(
+            path,
+            &library_sources,
+            &bundled_roots,
+            &package_roots,
+            &mut modules,
+        )?;
+    }
 
     // The SourceMap mirrors the salsa input file for file and in the same order,
     // so diagnostic spans render against the file they were written in: the
@@ -132,7 +165,6 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
         debug_assert_eq!(id, kira_semantics::module_source_id(index));
     }
 
-    let package = package_of(path)?;
     let build_kind = match package.as_ref().map(|found| found.kind()) {
         Some(kira_manifest::PackageKind::Library) => BuildKind::Library,
         Some(kira_manifest::PackageKind::App) | None => BuildKind::Application,
@@ -141,10 +173,11 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
     let db = salsa::DatabaseImpl::new();
     let source = SourceProgram::new(&db, text, display, modules, build_kind);
     let ir = lowered(&db, source);
-    let diagnostics = lowered::accumulated::<DiagnosticAccumulator>(&db, source)
-        .into_iter()
-        .map(|accumulated| accumulated.0.clone())
-        .collect();
+    diagnostics.extend(
+        lowered::accumulated::<DiagnosticAccumulator>(&db, source)
+            .into_iter()
+            .map(|accumulated| accumulated.0.clone()),
+    );
 
     Ok(Compiled {
         sources,
@@ -152,8 +185,89 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
         ir,
         build_kind,
         package_name: package.as_ref().map(|found| found.manifest.name.clone()),
-        package_version: package.map(|found| found.manifest.version),
+        package_version: package.as_ref().map(|found| found.manifest.version.clone()),
+        default_execution_mode: package
+            .as_ref()
+            .map(|found| found.manifest.execution_mode.clone()),
+        default_build_target: package.map(|found| found.manifest.build_target),
     })
+}
+
+/// Adds every unreferenced library source and each source's import closure.
+fn aggregate_library_modules(
+    entry_path: &Path,
+    library_sources: &kira_project::LibrarySources,
+    bundled_roots: &[kira_program_graph::bundled::BundledRoot],
+    package_roots: &[kira_program_graph::PackageRoot],
+    modules: &mut Vec<ModuleSource>,
+) -> Result<(), FrontendError> {
+    let entry_identity = source_identity(entry_path);
+    let mut seen = modules
+        .iter()
+        .map(|module| source_identity(Path::new(&module.path)))
+        .collect::<HashSet<_>>();
+    seen.insert(entry_identity.clone());
+
+    for source in library_sources.iter() {
+        let identity = source_identity(source.path());
+        if identity == entry_identity || seen.contains(&identity) {
+            continue;
+        }
+
+        let display = source.path().display().to_string();
+        let text =
+            std::fs::read_to_string(source.path()).map_err(|read_error| FrontendError::Read {
+                path: display.clone(),
+                source: read_error,
+            })?;
+        let imported = kira_program_graph::load_modules_with_packages(
+            source.path(),
+            &text,
+            bundled_roots,
+            package_roots,
+        );
+        for module in imported {
+            if seen.insert(source_identity(Path::new(&module.path))) {
+                modules.push(module);
+            }
+        }
+        if seen.insert(identity) {
+            modules.push(ModuleSource {
+                module: source.module().to_owned(),
+                path: display,
+                text,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Produces a stable filesystem identity without changing diagnostic path spelling.
+fn source_identity(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Resolves the dependency package roots and preserves every non-fatal package diagnostic.
+fn resolve_package_roots(
+    package: Option<&kira_project::Manifest>,
+) -> Result<(Vec<kira_program_graph::PackageRoot>, Vec<Diagnostic>), FrontendError> {
+    let Some(package) = package else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let manifest_path = Path::new(&package.path);
+    let root_dir = match manifest_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    let graph = kira_package_manager::resolve(root_dir)?;
+    let roots = graph
+        .packages
+        .into_iter()
+        .map(|package| kira_program_graph::PackageRoot::new(package.name, package.source_dir))
+        .collect();
+    Ok((roots, graph.diagnostics))
 }
 
 /// The manifest governing `source`, if a `package.kira` sits above it.
@@ -191,6 +305,9 @@ mod tests {
 
         fn write(&self, name: &str, text: &str) -> std::path::PathBuf {
             let path = self.0.join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create fixture directories");
+            }
             std::fs::write(&path, text).expect("write a fixture");
             path
         }
@@ -227,6 +344,201 @@ mod tests {
         // No `@Main`, and no KSEM011: the manifest relaxed it.
         assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
         assert_eq!(compiled.ir.main, None);
+    }
+
+    #[test]
+    fn a_library_directory_compiles_every_source_under_app() {
+        let dir = TempDir::new("aggregate-library");
+        dir.write(
+            "package.kira",
+            "Package Core {\n    let kind = .Library\n    let moduleRoot = \"Core\"\n}\n",
+        );
+        let entry = dir.write("app/Core.kira", "function value() -> Int { return 1 }");
+        let broken = dir.write("app/Broken.kira", "function broken(");
+
+        let target = kira_project::resolve_target(&dir.0).expect("resolve library directory");
+        assert_eq!(target.source_path.as_deref(), entry.to_str());
+        let compiled = compile(Path::new(
+            target
+                .source_path
+                .as_deref()
+                .expect("library target compilation entry"),
+        ))
+        .expect("reach the frontend");
+
+        assert!(compiled.has_errors(), "{:?}", compiled.diagnostics);
+        assert!(
+            compiled
+                .sources
+                .iter()
+                .any(|source| source.path == broken.display().to_string()),
+            "{:?}",
+            compiled.sources
+        );
+        let rendered = compiled
+            .diagnostics
+            .iter()
+            .map(|diagnostic| kira_diagnostics::renderer::render(diagnostic, &compiled.sources))
+            .collect::<String>();
+        assert!(
+            rendered.contains(&broken.display().to_string()),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn a_relative_entry_path_resolves_its_boundary_manifest() {
+        const CHILD_PROCESS: &str = "KIRA_BUILD_RELATIVE_ENTRY_CHILD";
+
+        if std::env::var_os(CHILD_PROCESS).is_some() {
+            let compiled =
+                compile(Path::new("app/main.kira")).expect("compile the relative package entry");
+            assert_eq!(compiled.build_kind, BuildKind::Application);
+            assert_eq!(compiled.package_name.as_deref(), Some("RelativeApp"));
+            assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
+            return;
+        }
+
+        let dir = TempDir::new("relative-entry");
+        dir.write(
+            "package.kira",
+            "Package RelativeApp {\n    let kind = .App\n}\n",
+        );
+        dir.write("app/main.kira", "@Main function main() { return }");
+
+        let current_thread = std::thread::current();
+        let test_name = current_thread.name().expect("the libtest test name");
+        let output = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .env(CHILD_PROCESS, "1")
+            .current_dir(&dir.0)
+            .output()
+            .expect("run the relative-path test in its package directory");
+        assert!(
+            output.status.success(),
+            "child test failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn a_package_compiles_with_resolver_fed_dependency_modules() {
+        let dir = TempDir::new("resolved-package");
+        dir.write(
+            "editor/package.kira",
+            r#"Package EditorApp {
+    let version = "0.1.0"
+    let kind = .App
+    let dependencies = [Dependency { name: "Core", path: "../core" }]
+    let defaults = Defaults { executionMode: Backend.Llvm, buildTarget: BuildTarget.Host }
+}
+"#,
+        );
+        dir.write(
+            "core/package.kira",
+            r#"Package Core {
+    let version = "0.1.0"
+    let kind = .Library
+    let moduleRoot = "Core"
+}
+"#,
+        );
+        let values = std::fs::canonicalize(dir.write(
+            "core/app/Values.kira",
+            "function coreValue() -> Int { return 41 }",
+        ))
+        .expect("canonical values path");
+        let broken = std::fs::canonicalize(dir.write(
+            "core/app/Broken.kira",
+            "function brokenValue() -> Int { return missingFromCore }",
+        ))
+        .expect("canonical broken path");
+        let entry = dir.write(
+            "editor/app/main.kira",
+            "import Core\n@Main function main() { print(coreValue() + 1) return }",
+        );
+
+        let compiled = compile(&entry).expect("compile a resolved package graph");
+        let source_paths = compiled
+            .sources
+            .iter()
+            .map(|source| source.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            source_paths.contains(&values.to_string_lossy().as_ref()),
+            "{source_paths:?}"
+        );
+        assert!(
+            source_paths.contains(&broken.to_string_lossy().as_ref()),
+            "{source_paths:?}"
+        );
+        assert!(
+            !compiled
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == Some("KSEM032")),
+            "{:?}",
+            compiled.diagnostics
+        );
+        assert!(
+            !compiled.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == Some("KSEM060") && diagnostic.message.contains("coreValue")
+            }),
+            "{:?}",
+            compiled.diagnostics
+        );
+        assert!(
+            !compiled
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.code.is_some_and(|code| code.starts_with("KPK")) }),
+            "{:?}",
+            compiled.diagnostics
+        );
+
+        let library_diagnostic = compiled
+            .diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == Some("KSEM060") && diagnostic.message.contains("missingFromCore")
+            })
+            .expect("the dependency module diagnostic");
+        let rendered = kira_diagnostics::renderer::render(library_diagnostic, &compiled.sources);
+        assert!(
+            rendered.contains(&broken.display().to_string()),
+            "{rendered}"
+        );
+        assert_eq!(compiled.default_execution_mode.as_deref(), Some("llvm"));
+        assert_eq!(compiled.default_build_target.as_deref(), Some("host"));
+    }
+
+    #[test]
+    fn package_resolution_diagnostics_are_returned_with_frontend_diagnostics() {
+        let dir = TempDir::new("resolution-diagnostic");
+        dir.write(
+            "app/package.kira",
+            r#"Package BrokenApp {
+    let dependencies = [Dependency { name: "Missing", path: "../missing" }]
+}
+"#,
+        );
+        let entry = dir.write(
+            "app/app/main.kira",
+            "import Missing\n@Main function main() { return }",
+        );
+
+        let compiled = compile(&entry).expect("resolution remains total below the root");
+        let diagnostic = compiled
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == Some("KPK020"))
+            .expect("the missing dependency package diagnostic");
+        assert!(diagnostic.primary_label().is_none());
+        let rendered = kira_diagnostics::renderer::render(diagnostic, &compiled.sources);
+        assert!(rendered.contains("error[KPK020]"), "{rendered}");
     }
 
     #[test]
