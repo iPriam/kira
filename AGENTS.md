@@ -16,12 +16,17 @@ prove parity by differential runs instead of asserting it.
 
 ## Non-negotiable
 
-1. **Git.** Refuse destructive git — every command that can discard, set aside,
-   or rewrite work, reversible ones included: `reset` (any mode), `restore`,
-   `checkout -- <file>`, `clean`, `stash` in every form, `commit --amend`,
-   `rebase`, force-push. Assume the working tree always holds uncommitted work
-   that exists nowhere else. Load the `working-with-git` skill before running
-   or suggesting any git command other than `git diff` and `git status`.
+1. **Git.** STOP before typing `reset`, `restore`, `checkout -- <file>`,
+   `clean`, `stash`, `commit --amend`, `rebase`, or force-push — load the
+   `working-with-git` skill first, with no exception, before the command is
+   typed, not after. Refuse destructive git — every command that can discard,
+   set aside, or rewrite work, reversible ones included. Assume the working
+   tree always holds uncommitted work that exists nowhere else. Refuse a
+   destructive command across a batch of paths even when most of the batch
+   checks out clean — verify every single targeted path, not the majority; "I
+   built this list myself" is not verification. Load the `working-with-git`
+   skill before running or suggesting any git command other than `git diff`
+   and `git status`.
 2. **Success.** Reject fake success — only Kira-owned code paths emit Kira
    success markers. Never accept smoke surfaces, placeholders, hardcoded
    `return true`, host-rendered content, or "the app launched so it works" as
@@ -42,6 +47,18 @@ frontmatter `description` names what it covers and when to read it. Scan those
 descriptions when a task starts and load every skill whose trigger matches
 what the task touches — before writing code, never after a review.
 
+| Skill | Load it when |
+|---|---|
+| `owning-the-rules` | a rule already states what to do, a violation turns up off-task, or before asking permission |
+| `verifying-work` | claiming any change is done, and before committing |
+| `where-to-change` | it is unclear which crate a change belongs in, or before adding a crate dependency |
+| `wire-formats` | touching an opcode, a tag, a `#[repr(C)]` type, a serialized field, or a `kira_rt_*` signature |
+| `working-with-agents-instructions` | before typing a single character into `AGENTS.md`, `CLAUDE.md`, or any `.codex/skills/*/SKILL.md` |
+| `working-with-git` | running or suggesting any git command other than `git diff` and `git status` |
+| `working-with-markdown` | writing or editing any `.md` file |
+| `working-with-workflows` | calling the `Workflow` tool, or spawning more than one `Agent` |
+| `writing-rust` | writing, editing, or judging any `.rs` file |
+
 ## Standing rules
 
 - **Tooling.** Keep Python out of anything git tracks — no `*.py`, no `python3`
@@ -51,7 +68,8 @@ what the task touches — before writing code, never after a review.
 - **This host is macOS, and has no `timeout`.** Neither `timeout` nor `gtimeout`
   exists here (they are GNU coreutils; macOS ships BSD). Reaching for one costs
   a round trip and returns `command not found`. To bound a command that may
-  hang, wrap it: `perl -e 'alarm shift; exec @ARGV' 60 <command>`. Better, make
+  hang, wrap it: `perl -e 'alarm shift; exec @ARGV or die "exec: $!"' 60
+  <command>` — the `or die` matters, or a missing binary exits 0. Better, make
   the hang impossible — a test that spawns a process kills it on drop, so it
   fails instead of hanging. Assume BSD flags generally (`sed -i ''`, no `-r`).
 - **Ownership.** Apply every rule here to every file you touch, open, or
@@ -93,7 +111,9 @@ what the task touches — before writing code, never after a review.
 
 ## Commands (from repo root)
 
-- `cargo build --workspace` — build everything.
+- `cargo build --workspace` — build everything. The LLVM backend is a hard
+  dependency: export `LLVM_SYS_221_PREFIX` pointing at the managed bundle
+  (`~/.kira/toolchains/llvm/<version>/<host>`) or nothing builds.
 - `cargo test --workspace` — full tests.
 - `cargo clippy --workspace --all-targets -- -D warnings` — lint gate
   (CI-enforced, warnings are errors).
@@ -101,17 +121,23 @@ what the task touches — before writing code, never after a review.
 - `cargo run -p kira-cli -- <verb>` — iterate on the `kirac` CLI.
 - Bins: `kirac` (kira-cli), `kira` (kira-bootstrapper), `devflow`
   (kira-devflow).
-- CI runs on a machine with **no LLVM**: a local build is not proof. Consult
-  the `verifying-work` skill for the done-bar.
+- CI provisions the managed LLVM before building, so its gates prove the same
+  configuration a dev machine builds. Consult the `verifying-work` skill for
+  the done-bar.
 
 ## Non-negotiable, including at completion
 
-1. **Git.** Refuse destructive git — every command that can discard, set aside,
-   or rewrite work, reversible ones included: `reset` (any mode), `restore`,
-   `checkout -- <file>`, `clean`, `stash` in every form, `commit --amend`,
-   `rebase`, force-push. Assume the working tree always holds uncommitted work
-   that exists nowhere else. Load the `working-with-git` skill before running
-   or suggesting any git command other than `git diff` and `git status`.
+1. **Git.** STOP before typing `reset`, `restore`, `checkout -- <file>`,
+   `clean`, `stash`, `commit --amend`, `rebase`, or force-push — load the
+   `working-with-git` skill first, with no exception, before the command is
+   typed, not after. Refuse destructive git — every command that can discard,
+   set aside, or rewrite work, reversible ones included. Assume the working
+   tree always holds uncommitted work that exists nowhere else. Refuse a
+   destructive command across a batch of paths even when most of the batch
+   checks out clean — verify every single targeted path, not the majority; "I
+   built this list myself" is not verification. Load the `working-with-git`
+   skill before running or suggesting any git command other than `git diff`
+   and `git status`.
 2. **Success.** Reject fake success — only Kira-owned code paths emit Kira
    success markers. Never accept smoke surfaces, placeholders, hardcoded
    `return true`, host-rendered content, or "the app launched so it works" as

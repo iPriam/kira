@@ -14,9 +14,9 @@
 //! By the time anything below semantics looks, a generic enum has become a
 //! plain [`kira_semantics_model::EnumDef`]: a name and a list of variants with
 //! resolved payload types. Every backend reads a variant's tag and payload
-//! *by id*, never by name — `kira-llvm-backend`'s `enum_payload_type` and
-//! `kira-wasm-runtime`'s enum lowering both index the same table the VM does —
-//! so no opcode, no IR node, no runtime tag, and no wire format learns that
+//! *by id*, never by name — `kira-llvm-backend`'s `enum_payload_type` indexes
+//! the same table the VM does, on the host and Web targets alike — so no
+//! opcode, no IR node, no runtime tag, and no wire format learns that
 //! generics exist. This module is the whole feature.
 //!
 //! # Why only an enum is generic

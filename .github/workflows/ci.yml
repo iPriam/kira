@@ -14,7 +14,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            host_key: x86_64-linux-gnu
+          - os: macos-latest
+            host_key: aarch64-macos
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +28,35 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+
+      # The LLVM backend is a hard dependency: llvm-sys needs the managed
+      # bundle to build at all. The pin lives in llvm-metadata.toml; the
+      # bundles are published by the llvm-bundles workflow, once per pin.
+      - name: Provision the managed LLVM
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' llvm-metadata.toml | head -1)"
+          release="$(sed -n 's/^release_tag = "\(.*\)"/\1/p' llvm-metadata.toml | head -1)"
+          home="$HOME/.kira/toolchains/llvm/$version/${{ matrix.host_key }}"
+          mkdir -p "$home"
+          gh release download "$release" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "llvm-$version-${{ matrix.host_key }}.tar.xz" \
+            --output - | tar -xJ -C "$home"
+          major_minor="$(echo "$version" | cut -d. -f1-2 | tr -d .)"
+          echo "LLVM_SYS_${major_minor}_PREFIX=$home" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # The Web pipeline: emcc links the modules the backend emits, node runs
+      # them in the end-to-end tests, and the bridge crate cross-builds the
+      # runtime archive those links consume.
+      - uses: mymindstorm/setup-emsdk@v14
+
+      - name: Build the Web runtime archive
+        run: |
+          rustup target add wasm32-unknown-emscripten
+          cargo build -p kira-native-bridge --target wasm32-unknown-emscripten
 
       - name: cargo fmt
         run: cargo fmt --check

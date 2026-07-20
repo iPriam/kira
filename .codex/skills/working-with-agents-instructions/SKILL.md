@@ -1,6 +1,6 @@
 ---
 name: working-with-agents-instructions
-description: "Style rules for writing or editing AGENTS.md, CLAUDE.md, or any .codex/skills/*/SKILL.md in this repo: no giant markdown files, no no-ops, no named persona, identity once then imperative voice, and how a skill gets found without a routing table. Read before adding to or rewriting any agent instruction file."
+description: "Style rules for writing or editing AGENTS.md, CLAUDE.md, or any .codex/skills/*/SKILL.md in this repo: no giant markdown files, no no-ops, no named persona, identity once then imperative voice, and how a skill gets found without a routing table. STOP and load this skill first, with no exception, before typing a single character into AGENTS.md, CLAUDE.md, or any .codex/skills/*/SKILL.md — editing one of these files without it first is itself the violation."
 ---
 
 # Working with agent instructions
@@ -14,6 +14,23 @@ into its own skill under `.codex/skills/`, loaded only when the task touches
 it. Treat a 200-line always-on file as a bug rather than thoroughness: the
 rules that matter drown in the rules that don't, and a reader gets through the
 whole thing and still misses the one that applied.
+
+## Cut every no-op
+
+Keep a skill to the smallest subset that changes behavior, and delete the
+rest. Test each line against one question: would a competent engineer who
+never read this line have done something different? Where the answer is no,
+the line is a no-op — cut it, however true it is.
+
+Four kinds of no-op recur. Delete general good practice that holds in any repo
+("write tests", "prefer clarity"). Delete anything a tool already states in
+its own description or error output — restating it wins nothing and rots the
+moment the tool changes. Delete background that explains rather than
+instructs; a skill is a set of commands, not a briefing. Delete the rule for a
+situation this workspace cannot reach.
+
+Judge a draft by what survives deletion, never by what it covers. A skill that
+earns twenty lines is finished at twenty lines.
 
 ## Let the description find the skill
 

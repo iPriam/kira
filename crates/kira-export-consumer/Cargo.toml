@@ -14,16 +14,14 @@ path = "src/lib.rs"
 
 [features]
 # Build and link the library as **native machine code** instead of running it on
-# the VM. Off by default, and deliberately: the default configuration is the one
-# CI can prove, on a machine with no LLVM. Turning this on makes `build.rs`
-# invoke the LLVM backend, which needs `llvm` with it — so the native engine is
-# `--features native-engine,llvm`.
+# the VM. Off by default: the default configuration is the VM engine, and this
+# flips `build.rs` to drive the LLVM backend — always compiled in now — so the
+# native engine is `--features native-engine`.
 native-engine = []
 # Build and link the library for the **hybrid engine**: the bytecode half runs
 # on the VM in this process, the `@Native` half is a shared library this process
-# opens at load. Off by default for the same reason `native-engine` is — it needs
-# LLVM to compile the native half, so the hybrid engine is
-# `--features hybrid-engine,llvm`.
+# opens at load. Off by default for the same reason `native-engine` is; the
+# hybrid engine is `--features hybrid-engine`.
 #
 # Mutually exclusive with `native-engine` in practice: both replace the same
 # generated wrapper, and `build.rs` refuses the pair by name rather than letting
@@ -35,7 +33,6 @@ native-engine = []
 # is this feature's whole wasm answer — a Rust wasm program embeds the **VM**
 # engine's crate, and that must keep compiling.
 hybrid-engine = ["dep:kira-hybrid-main"]
-llvm = ["kira-build/llvm"]
 
 [build-dependencies]
 # The compiler itself. A consumer builds the Kira library it embeds, through the

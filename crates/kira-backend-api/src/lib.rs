@@ -30,6 +30,37 @@ impl BackendMode {
     }
 }
 
+/// Which WebAssembly memory a Web build targets.
+///
+/// A Kira program does not change shape between the two — `Int` is 64-bit
+/// either way — so this widens what is addressable, not what is computable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WasmDevice {
+    /// `wasm32`: the baseline 32-bit memory, which every engine has.
+    Wasm32,
+    /// `wasm64`: the Memory64 proposal's 64-bit memory.
+    Wasm64,
+}
+
+impl WasmDevice {
+    /// The device's spelling on the command line.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Wasm32 => "wasm32",
+            Self::Wasm64 => "wasm64",
+        }
+    }
+
+    /// Resolves a `--device` value.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "wasm32" => Some(Self::Wasm32),
+            "wasm64" => Some(Self::Wasm64),
+            _ => None,
+        }
+    }
+}
+
 /// Output paths for native/LLVM emission.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct NativeEmitOptions {

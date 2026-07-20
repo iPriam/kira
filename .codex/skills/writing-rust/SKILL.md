@@ -1,6 +1,6 @@
 ---
 name: writing-rust
-description: "The Rust laws for this workspace: no lifetimes in model types, unsafe fenced with SAFETY comments, newtypes over primitives, interned strings, open C enums as transparent newtypes, typed thiserror errors, no unwrap/expect outside tests, no #[allow] escapes, no panicking stubs, docs on every pub item, and hot-path allocation rules. Read before writing or editing any .rs file."
+description: "The Rust laws for this workspace: no lifetimes in model types, unsafe fenced with SAFETY comments, newtypes over primitives, interned strings, open C enums as transparent newtypes, typed thiserror errors, no unwrap/expect outside tests, no #[allow] escapes, no panicking stubs, docs on every pub item, and hot-path allocation rules. Read before writing, editing or judging any .rs file."
 ---
 
 # Writing Rust here

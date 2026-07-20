@@ -24,7 +24,7 @@ upward reference in `[dev-dependencies]` (cargo's only legal cycle).
   `kira-backend-api`, `kira-hybrid-definition`, `kira-native-lib-definition`
 - **4 — engines and backends:** `kira-bytecode`, `kira-vm-runtime`,
   `kira-llvm-backend`, `kira-native-bridge`, `kira-hybrid-runtime`,
-  `kira-wasm-runtime`, `kira-debug`, and the shader backends
+  `kira-debug`, and the shader backends
   (`kira-msl-backend`, `kira-glsl-backend`, `kira-hlsl-backend`,
   `kira-wgsl-backend`, `kira-spirv-backend`)
 - **5–8 — project and tools:** `kira-manifest`, `kira-project`,

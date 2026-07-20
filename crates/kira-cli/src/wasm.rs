@@ -1,16 +1,34 @@
-//! The Web half of `build` and `run`: artifact layout, then serving the result.
+//! The Web half of `build` and `run`: object emission, the emscripten link,
+//! and serving the result.
 //!
-//! `build --device wasm32` writes a module and the page that runs it.
+//! The pipeline mirrors the native one exactly. The LLVM backend emits a
+//! WebAssembly object in process — the same C-API codegen, a different target
+//! machine, never a textual-IR round trip — and emscripten's `emcc` is the
+//! linker driver over that object plus the runtime archive, the same role
+//! `clang` plays for a host executable. What emscripten adds at link time is
+//! the Web glue the host gets from its OS: memory setup, stdio routed to the
+//! page, and the page itself.
+//!
+//! `build --device wasm32` writes the module and the page that runs it.
 //! `run --device wasm32` does the same and then serves them, because a Kira
 //! program on the Web runs in a browser and a browser needs an origin.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
+use kira_backend_api::WasmDevice;
 use kira_ir::IrProgram;
-use kira_wasm_runtime::{WasmArtifacts, WasmBuildOptions, WasmDevice, WasmError};
+use kira_llvm_backend::LlvmError;
 
 use crate::native::Artifacts;
 use crate::serve::{ServeError, Server, open_browser};
+
+/// The emscripten-target runtime archive's file name beside `kirac`.
+///
+/// The name carries the target so it can sit beside the host archive without
+/// either being mistaken for the other: linking a host runtime into a wasm
+/// module fails in the linker at best and at runtime at worst.
+const WASM_RUNTIME_ARCHIVE: &str = "libkira_native_bridge-wasm32-emscripten.a";
 
 /// Why a Web build or run could not be completed.
 #[derive(Debug, thiserror::Error)]
@@ -18,9 +36,45 @@ pub enum WebError {
     /// The artifact directory could not be prepared.
     #[error("cannot prepare the build directory: {0}")]
     Artifacts(#[source] std::io::Error),
-    /// The wasm backend failed.
+    /// The backend could not emit the module's object.
     #[error(transparent)]
-    Backend(#[from] WasmError),
+    Backend(#[from] LlvmError),
+    /// A library has no wasm artifact to be built into.
+    ///
+    /// The refusal is about the artifact, not any engine: one module, one
+    /// entrypoint, and the string/allocator contract across a wasm module
+    /// boundary is undesigned.
+    #[error(
+        "a library cannot be built as a wasm module yet: the string/allocator \
+         contract across a module boundary is undesigned. A Rust program that \
+         embeds the library and is itself compiled to wasm works today — build \
+         with `--backend vm` and depend on the generated crate"
+    )]
+    LibraryUnbuilt,
+    /// `wasm64` has no runtime to link yet.
+    ///
+    /// Rust has no `wasm64-unknown-emscripten` target to build the runtime
+    /// archive for, so a Memory64 module would have no `kira_rt_*` to call.
+    /// Refused by name rather than shipped half-linked.
+    #[error(
+        "`--device wasm64` is not buildable yet: the runtime archive has no \
+         Memory64 build. Use `--device wasm32`"
+    )]
+    Wasm64Unbuilt,
+    /// The runtime archive for the Web is not installed beside this compiler.
+    #[error(
+        "the Web runtime archive is missing (looked for `{name}` beside this \
+         executable and in the cargo target tree); rebuild the toolchain with \
+         `knvm binstall`",
+        name = WASM_RUNTIME_ARCHIVE
+    )]
+    RuntimeArchiveMissing,
+    /// `emcc` is required to link the module and is not on PATH.
+    #[error("`emcc` was not found on PATH; the Web link is driven by emscripten")]
+    EmccUnavailable,
+    /// `emcc` ran and failed.
+    #[error("`emcc` could not link the module; its output above names the error")]
+    LinkFailed,
     /// The development server failed.
     #[error(transparent)]
     Serve(#[from] ServeError),
@@ -59,22 +113,60 @@ impl WebArtifacts {
         self.directory.join(format!("{}.wasm", self.stem))
     }
 
+    /// The object the backend emits, which the link consumes.
+    fn object(&self) -> PathBuf {
+        self.directory.join(format!("{}.o", self.stem))
+    }
+
     /// The page path.
     pub fn page(&self) -> PathBuf {
-        self.directory.join("index.html")
+        self.directory.join(format!("{}.html", self.stem))
     }
 }
 
-/// Builds a program for `device`, writing the module and the page that runs it.
-pub fn build(ir: &IrProgram, source: &Path, device: WasmDevice) -> Result<WasmArtifacts, WebError> {
+/// What a Web build produced.
+pub struct BuiltWeb {
+    /// The linked module.
+    pub wasm: PathBuf,
+    /// The page that runs it.
+    pub page: PathBuf,
+}
+
+/// Builds a program for `device`: emit the object, link the module and page.
+pub fn build(ir: &IrProgram, source: &Path, device: WasmDevice) -> Result<BuiltWeb, WebError> {
+    if ir.main.is_none() {
+        return Err(WebError::LibraryUnbuilt);
+    }
+    if device == WasmDevice::Wasm64 {
+        return Err(WebError::Wasm64Unbuilt);
+    }
     let artifacts = WebArtifacts::for_source(source)?;
-    let options = WasmBuildOptions {
-        module_name: artifacts.stem.clone(),
-        device,
-        wasm_path: artifacts.wasm(),
-        page_path: Some(artifacts.page()),
-    };
-    Ok(kira_wasm_runtime::build(ir, &options)?)
+
+    kira_llvm_backend::build_wasm_object(ir, &artifacts.stem, &artifacts.object(), device)?;
+
+    let runtime = wasm_runtime_archive().ok_or(WebError::RuntimeArchiveMissing)?;
+    let status = Command::new("emcc")
+        .arg(artifacts.object())
+        .arg(&runtime)
+        .arg("-o")
+        .arg(artifacts.page())
+        // `main` returning ends the program, exactly as it does on the host;
+        // without this emscripten keeps the runtime alive for a page that
+        // might want callbacks later, which a Kira program has not asked for.
+        .arg("-sEXIT_RUNTIME=1")
+        .status()
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => WebError::EmccUnavailable,
+            _ => WebError::LinkFailed,
+        })?;
+    if !status.success() {
+        return Err(WebError::LinkFailed);
+    }
+
+    Ok(BuiltWeb {
+        wasm: artifacts.wasm(),
+        page: artifacts.page(),
+    })
 }
 
 /// Builds a program for `device`, then serves it and opens a browser at it.
@@ -86,7 +178,12 @@ pub fn run(ir: &IrProgram, source: &Path, device: WasmDevice) -> Result<(), WebE
     let built = build(ir, source, device)?;
 
     let server = Server::bind(artifacts.directory().to_path_buf())?;
-    let url = server.url();
+    let page = built
+        .page
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let url = format!("{}{page}", server.url());
 
     println!("Serving {} on {url}", built.wasm.display());
     if !open_browser(&url) {
@@ -96,4 +193,29 @@ pub fn run(ir: &IrProgram, source: &Path, device: WasmDevice) -> Result<(), WebE
 
     server.serve_forever()?;
     Ok(())
+}
+
+/// Locates the emscripten-target runtime archive.
+///
+/// Installed toolchains ship it beside `kirac` (knvm's installers put it
+/// there); a `kirac` running out of a cargo target tree finds the archive
+/// where `cargo build -p kira-native-bridge --target wasm32-unknown-emscripten`
+/// left it, two directories over.
+fn wasm_runtime_archive() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let directory = executable.parent()?;
+
+    let installed = directory.join(WASM_RUNTIME_ARCHIVE);
+    if installed.is_file() {
+        return Some(installed);
+    }
+
+    // target/<profile>/kirac -> target/wasm32-unknown-emscripten/<profile>/
+    let profile = directory.file_name()?.to_owned();
+    let dev = directory
+        .parent()?
+        .join("wasm32-unknown-emscripten")
+        .join(profile)
+        .join("libkira_native_bridge.a");
+    dev.is_file().then_some(dev)
 }

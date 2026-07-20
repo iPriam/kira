@@ -13,6 +13,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+kira-toolchain.workspace = true
 kira-source.workspace = true
 kira-diagnostics.workspace = true
 kira-program-graph.workspace = true
@@ -28,7 +29,6 @@ kira-vm-runtime.workspace = true
 kira-runtime-abi.workspace = true
 kira-backend-api.workspace = true
 kira-llvm-backend.workspace = true
-kira-wasm-runtime.workspace = true
 kira-hybrid-definition.workspace = true
 kira-hybrid-runtime.workspace = true
 kira-live.workspace = true
@@ -50,7 +50,9 @@ kira-desktop-runner.workspace = true
 salsa.workspace = true
 thiserror.workspace = true
 
-[features]
-# Forwards to the LLVM backend so `kirac --backend llvm` works. Off by default
-# so the workspace builds with no LLVM install present; see the backend crate.
-llvm = ["kira-llvm-backend/llvm"]
+[dev-dependencies]
+# Test-only upward reference (cargo's one legal cycle): the end-to-end proof
+# that a knvm-installed toolchain resolves its own Foundation has to install
+# with the real installer, not with a tree the test hand-shaped to match.
+kira-knvm.workspace = true
+

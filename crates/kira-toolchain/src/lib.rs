@@ -8,6 +8,7 @@ pub mod bundled_discovery;
 pub mod llvm_discovery;
 pub mod llvm_layout;
 pub mod llvm_metadata;
+pub mod paint;
 
 pub use bundled_discovery::{
     BundledDiscoveryError, BundledPackage, BundledSource, discover_foundation,
@@ -15,6 +16,7 @@ pub use bundled_discovery::{
 };
 pub use llvm_discovery::{DiscoverySource, LlvmDiscoveryError, LlvmInstallation, discover};
 pub use llvm_metadata::{LlvmMetadata, MalformedMetadata, pinned, pinned_version};
+pub use paint::Paint;
 
 use std::path::{Path, PathBuf};
 
@@ -26,6 +28,13 @@ pub enum Channel {
 }
 
 impl Channel {
+    /// Every channel, in the order a listing reports them.
+    ///
+    /// Stable rather than alphabetical: `release` is the default channel, so it
+    /// reads first. Owned here so adding a channel cannot leave a caller
+    /// walking a stale set.
+    pub const ALL: [Self; 2] = [Self::Release, Self::Dev];
+
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "release" => Some(Self::Release),
@@ -66,13 +75,25 @@ impl CurrentToolchain {
 
     /// Parse `current.toml` contents.
     pub fn parse_toml(contents: &str) -> Result<Self, InvalidCurrentToolchain> {
-        let channel_value = parse_quoted_field(contents, "channel")?;
+        let raw: RawCurrentToolchain =
+            toml::from_str(contents).map_err(|_| InvalidCurrentToolchain)?;
         Ok(Self {
-            channel: Channel::parse(&channel_value).ok_or(InvalidCurrentToolchain)?,
-            version: parse_quoted_field(contents, "version")?,
-            primary: parse_quoted_field(contents, "primary")?,
+            channel: Channel::parse(&raw.channel).ok_or(InvalidCurrentToolchain)?,
+            version: raw.version,
+            primary: raw.primary,
         })
     }
+}
+
+/// The on-disk shape of `current.toml`: three flat strings, nothing else.
+///
+/// Deserialized with the `toml` crate the crate already depends on rather than
+/// by slicing quoted fields out of the text by hand.
+#[derive(serde::Deserialize)]
+struct RawCurrentToolchain {
+    channel: String,
+    version: String,
+    primary: String,
 }
 
 /// Error returned when `current.toml` cannot be parsed.
@@ -86,18 +107,6 @@ impl std::fmt::Display for InvalidCurrentToolchain {
 }
 
 impl std::error::Error for InvalidCurrentToolchain {}
-
-fn parse_quoted_field(contents: &str, field_name: &str) -> Result<String, InvalidCurrentToolchain> {
-    let field_index = contents.find(field_name).ok_or(InvalidCurrentToolchain)?;
-    let after_field = &contents[field_index + field_name.len()..];
-    let equals_index = after_field.find('=').ok_or(InvalidCurrentToolchain)?;
-    let after_equals = after_field[equals_index + 1..].trim_start_matches([' ', '\t', '\r', '\n']);
-    let rest = after_equals
-        .strip_prefix('"')
-        .ok_or(InvalidCurrentToolchain)?;
-    let closing_quote = rest.find('"').ok_or(InvalidCurrentToolchain)?;
-    Ok(rest[..closing_quote].to_string())
-}
 
 /// Error returned when the user home directory cannot be determined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,8 +132,32 @@ pub fn home_dir() -> Result<PathBuf, HomeDirectoryUnavailable> {
     Err(HomeDirectoryUnavailable)
 }
 
+/// The environment variable that relocates the Kira home directory wholesale.
+pub const KIRA_HOME_VAR: &str = "KIRA_HOME";
+
 /// `~/.kira` — the root of all user-level Kira state.
+///
+/// `KIRA_HOME` overrides it and never falls through, following the
+/// `KIRA_FOUNDATION_HOME` / `KIRA_LLVM_HOME` precedent. That override is what
+/// lets an installer or a launcher be driven against a throwaway root: a test
+/// points a spawned child at a temp directory instead of the developer's real
+/// `~/.kira`. Because every managed path below is derived from this function,
+/// the override reaches the current-toolchain state and bundled-package
+/// discovery rule 3 without either of them knowing about it.
 pub fn kira_home() -> Result<PathBuf, HomeDirectoryUnavailable> {
+    kira_home_from(std::env::var_os(KIRA_HOME_VAR))
+}
+
+/// [`kira_home`] with the override supplied explicitly, so it is testable
+/// without mutating the process environment.
+fn kira_home_from(
+    explicit: Option<std::ffi::OsString>,
+) -> Result<PathBuf, HomeDirectoryUnavailable> {
+    if let Some(explicit) = explicit
+        && !explicit.is_empty()
+    {
+        return Ok(PathBuf::from(explicit));
+    }
     Ok(home_dir()?.join(".kira"))
 }
 
@@ -240,6 +273,33 @@ mod tests {
         let text = current.to_toml();
         let parsed = CurrentToolchain::parse_toml(&text).unwrap();
         assert_eq!(current, parsed);
+    }
+
+    #[test]
+    fn rejects_current_toolchain_toml_that_is_not_the_schema() {
+        assert!(CurrentToolchain::parse_toml("channel = \"release\"\n").is_err());
+        assert!(
+            CurrentToolchain::parse_toml(
+                "channel = \"nightly\"\nversion = \"1.0.0\"\nprimary = \"kirac\"\n"
+            )
+            .is_err()
+        );
+        assert!(CurrentToolchain::parse_toml("not toml at all {{{").is_err());
+    }
+
+    #[test]
+    fn kira_home_honors_the_explicit_override() {
+        let overridden = kira_home_from(Some(std::ffi::OsString::from("/tmp/knvm-fixture-home")))
+            .expect("override needs no home directory");
+        assert_eq!(overridden, PathBuf::from("/tmp/knvm-fixture-home"));
+
+        // An empty override is treated as unset rather than as the root.
+        let empty = kira_home_from(Some(std::ffi::OsString::new()));
+        match (empty, home_dir()) {
+            (Ok(path), Ok(home)) => assert_eq!(path, home.join(".kira")),
+            (Err(_), Err(_)) => {}
+            _ => panic!("empty override must behave exactly as an unset one"),
+        }
     }
 
     #[test]

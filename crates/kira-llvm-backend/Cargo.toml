@@ -7,20 +7,17 @@ repository.workspace = true
 
 [dependencies]
 kira-ir.workspace = true
+kira-backend-api.workspace = true
 kira-runtime-abi.workspace = true
 kira-semantics-model.workspace = true
 kira-toolchain.workspace = true
 thiserror.workspace = true
-llvm-sys = { workspace = true, optional = true }
-
-[features]
-# Off by default: the workspace must build (and CI must lint) on a machine with
-# no LLVM install. With the feature off the backend still exposes its full API
-# and reports `LlvmError::NotCompiledIn` rather than silently degrading. Turn it
-# on with a managed LLVM present:
-#   LLVM_SYS_221_PREFIX=~/.kira/toolchains/llvm/<version>/<host> \
-#     cargo build -p kira-cli --features llvm
-llvm = ["dep:llvm-sys"]
+# A hard dependency by decision: every kirac carries the LLVM backend, and a
+# machine without a managed LLVM does not build this workspace. Point the
+# build at one with:
+#   LLVM_SYS_221_PREFIX=~/.kira/toolchains/llvm/<version>/<host>
+# CI provisions the same bundle before building.
+llvm-sys = { workspace = true }
 
 [lints]
 workspace = true

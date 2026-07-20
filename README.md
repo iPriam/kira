@@ -19,7 +19,7 @@ Crates live in `crates/`, organized into layers with no upward dependencies.
 | 1 | `kira-syntax-model`, `kira-lexer`, `kira-parser`, `kira-ksl-syntax-model`, `kira-ksl-parser` |
 | 2 | `kira-semantics-model`, `kira-shader-model`, `kira-ksl-semantics`, `kira-semantics` |
 | 3 | `kira-ir`, `kira-shader-ir`, `kira-hybrid-definition`, `kira-backend-api`, `kira-native-lib-definition` |
-| 4 | `kira-glsl-backend`, `kira-wgsl-backend`, `kira-hlsl-backend`, `kira-msl-backend`, `kira-spirv-backend`, `kira-bytecode`, `kira-vm-runtime`, `kira-native-bridge`, `kira-hybrid-runtime`, `kira-debug`, `kira-llvm-backend`, `kira-wasm-runtime` |
+| 4 | `kira-glsl-backend`, `kira-wgsl-backend`, `kira-hlsl-backend`, `kira-msl-backend`, `kira-spirv-backend`, `kira-bytecode`, `kira-vm-runtime`, `kira-native-bridge`, `kira-hybrid-runtime`, `kira-debug`, `kira-llvm-backend` |
 | 5 | `kira-manifest`, `kira-project`, `kira-package-manager`, `kira-build-definition`, `kira-main` (Rust embedding surface: staticlib/cdylib/rlib) |
 | 6 | `kira-program-graph`, `kira-hybrid-main` (hybrid embedding surface: bytecode half plus a loaded native half) |
 | 7 | `kira-build` (frontend driver, library builds, generated Rust wrapper crates) |
@@ -27,7 +27,7 @@ Crates live in `crates/`, organized into layers with no upward dependencies.
 | 9 | `kira-cli` (binary `kirac`) |
 | tests | `kira-export-consumer` (a Rust program consuming a Kira library, end to end, on each of the three engines) |
 | runners | `kira-desktop-runner` (binary `kira-desktop-runner`) |
-| tools | `kira-bootstrapper` (binary `kira`), `kira-devflow` (binary `devflow`) |
+| tools | `kira-bootstrapper` (binary `kira`), `kira-knvm` (binary `knvm`), `kira-devflow` (binary `devflow`) |
 
 `kira-lsp` is the language-server surface over the salsa frontend.
 
@@ -777,16 +777,15 @@ specific about a package having no way in.
 Three things, each refused by name with its reason and the change that would
 build it. None is a silent gap, and none is discovered at run time.
 
-**A library as a wasm module artifact.** The wasm backend emits one
-self-contained module entered at a single export and links no foreign code, and
-the string and allocator contract across a wasm module boundary is undesigned —
-so there is no answer yet to who allocated a string a JS host is holding. The
-yes-path is already half-built: the module builder supports arbitrary named
-exports and today emits only `MAIN_EXPORT`, so one wasm export per Kira export
-is the shape this grows into once the allocator contract is decided. What works
-today instead is the other wasm consumer — a Rust program that embeds the
-library and is *itself* compiled to `wasm32-unknown-unknown`, which the VM
-engine's generated crate supports because everything under it does.
+**A library as a wasm module artifact.** A Web build emits one self-contained
+module entered at `main`, and the string and allocator contract across a wasm
+module boundary is undesigned — so there is no answer yet to who allocated a
+string a JS host is holding. Lifting it means deciding that contract and
+emitting one wasm export per Kira export through the same backend that emits
+`main` today. What works instead is the other wasm consumer — a Rust program
+that embeds the library and is *itself* compiled to `wasm32-unknown-unknown`,
+which the VM engine's generated crate supports because everything under it
+does.
 
 **An `@Export` that is also `@Native`, and a `@Native` function that calls a
 `@Runtime` one** — both on the hybrid engine, both by function name. A consumer
@@ -1010,9 +1009,9 @@ claim there that stopped being true fails a test rather than going stale.
 rather than three: it is compiled and run **unchanged** against every engine.
 
 ```sh
-cargo test -p kira-export-consumer                             # VM, no LLVM
-cargo test -p kira-export-consumer --features native-engine,llvm
-cargo test -p kira-export-consumer --features hybrid-engine,llvm
+cargo test -p kira-export-consumer                            # VM engine
+cargo test -p kira-export-consumer --features native-engine
+cargo test -p kira-export-consumer --features hybrid-engine
 ```
 
 A test that had to be edited to run against another engine would have disproved
@@ -1038,6 +1037,27 @@ kirac live --watch app.kira                     # reload on every save
 [docs/live.md](docs/live.md) covers the bundle format, the `live.*` event
 vocabulary, the two reload tiers and how one is chosen, what is watched, and
 what a hot patch does and does not preserve.
+
+## Installing a toolchain
+
+`knvm` provisions released toolchains into `~/.kira/toolchains` and selects
+which one the `kira` launcher dispatches to:
+
+```sh
+knvm install latest        # install the newest release and select it
+knvm binstall              # build this checkout and install it (dev channel)
+knvm sinstall              # build knvm + kira themselves and put them on PATH
+knvm list                  # what is installed; `*` marks the selected one
+knvm use 1.7.3             # select an installed version
+knvm uninstall 1.7.3       # remove one installed version
+```
+
+From a bare machine with this checkout: `cargo run -p kira-knvm -- sinstall`,
+then `knvm binstall`, and `kira run program.kira` works.
+
+[docs/knvm.md](docs/knvm.md) covers the tree an install produces, the install
+pipeline and its atomicity, channels, `binstall`, `sinstall`, the offline
+`KNVM_RELEASE_DIR` route, and `KIRA_HOME`.
 
 ## Editor support
 

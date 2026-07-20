@@ -1,0 +1,147 @@
+name: Release
+
+# Pushing a `v*` tag publishes a GitHub release with, per platform:
+#
+#   kira-<version>-<host-key>.tar.gz   the toolchain: bin/kirac + foundation/
+#   knvm-<version>-<host-key>.tar.gz   the tools: bin/knvm + bin/kira
+#
+# The toolchain archive's name and layout are knvm's install contract
+# (`archive_file_name`, `select_asset`, `validate` in kira-knvm); the tools
+# archive is the one manual download — unpack it, put it on PATH, and
+# `knvm install latest` provisions everything else. A `-dev` tag publishes as
+# a GitHub prerelease, which knvm reads as the `dev` channel.
+#
+# Nothing is uploaded until the same job has installed from the just-packed
+# archive with the just-built knvm and run the installed compiler. A tag that
+# would publish a broken toolchain fails here instead.
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: build + verify + package (${{ matrix.host_key }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            host_key: x86_64-linux-gnu
+          - os: macos-latest
+            host_key: aarch64-macos
+          - os: windows-latest
+            host_key: x86_64-windows-msvc
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Resolve the version from the tag
+        run: echo "KIRA_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      # The LLVM backend is a hard dependency of kirac; the managed bundle is
+      # published by the llvm-bundles workflow, once per pin.
+      - name: Provision the managed LLVM
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' llvm-metadata.toml | head -1)"
+          release="$(sed -n 's/^release_tag = "\(.*\)"/\1/p' llvm-metadata.toml | head -1)"
+          asset="$(sed -n "/^\[target.${{ matrix.host_key }}\]/,/^\[/s/^asset = \"\(.*\)\"/\1/p" llvm-metadata.toml | head -1)"
+          home="$HOME/.kira/toolchains/llvm/$version/${{ matrix.host_key }}"
+          mkdir -p "$home"
+          gh release download "$release" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$asset" --output "bundle-$asset"
+          tar -xf "bundle-$asset" -C "$home"
+          rm "bundle-$asset"
+          major_minor="$(echo "$version" | cut -d. -f1-2 | tr -d .)"
+          echo "LLVM_SYS_${major_minor}_PREFIX=$home" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build the release binaries
+        run: |
+          rustup target add wasm32-unknown-emscripten
+          cargo build --release -p kira-cli -p kira-knvm -p kira-bootstrapper
+          cargo build --release -p kira-native-bridge --target wasm32-unknown-emscripten
+
+      - name: Package the toolchain and tools archives
+        run: |
+          exe=""
+          if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
+
+          stage="stage/kira-$KIRA_VERSION"
+          mkdir -p "$stage/bin"
+          cp "target/release/kirac$exe" "$stage/bin/"
+          # The runtime archives ride beside the compiler, where its archive
+          # resolution looks; the Web one is target-suffixed.
+          cp target/release/libkira_native_bridge.a "$stage/bin/"
+          cp target/wasm32-unknown-emscripten/release/libkira_native_bridge.a \
+             "$stage/bin/libkira_native_bridge-wasm32-emscripten.a"
+          cp -R foundation "$stage/foundation"
+          mkdir -p dist
+          tar -czf "dist/kira-$KIRA_VERSION-${{ matrix.host_key }}.tar.gz" -C stage "kira-$KIRA_VERSION"
+
+          tools="stage/knvm-$KIRA_VERSION"
+          mkdir -p "$tools/bin"
+          cp "target/release/knvm$exe" "$tools/bin/"
+          cp "target/release/kira$exe" "$tools/bin/"
+          tar -czf "dist/knvm-$KIRA_VERSION-${{ matrix.host_key }}.tar.gz" -C stage "knvm-$KIRA_VERSION"
+
+      - name: Install from the packed archive and run the result
+        run: |
+          exe=""
+          if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
+
+          feed="$RUNNER_TEMP/feed"
+          mkdir -p "$feed/release/$KIRA_VERSION"
+          cp "dist/kira-$KIRA_VERSION-${{ matrix.host_key }}.tar.gz" "$feed/release/$KIRA_VERSION/"
+
+          home="$RUNNER_TEMP/kira-home"
+          export KIRA_HOME="$home"
+          export KNVM_RELEASE_DIR="$feed"
+          "target/release/knvm$exe" install "$KIRA_VERSION"
+          "target/release/knvm$exe" list
+
+          program="$RUNNER_TEMP/program"
+          mkdir -p "$program"
+          printf 'import Foundation\n@Main function main() { printLine("release verified") return }\n' > "$program/main.kira"
+
+          out="$("target/release/kira$exe" run "$program/main.kira")"
+          echo "launcher said: $out"
+          [ "$out" = "release verified" ]
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.host_key }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish the release
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          # knvm maps the GitHub prerelease flag to the `dev` channel.
+          prerelease: ${{ contains(github.ref_name, '-dev') }}
+          generate_release_notes: true

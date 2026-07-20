@@ -34,12 +34,6 @@ kira-source.workspace = true
 salsa.workspace = true
 thiserror.workspace = true
 
-[features]
-# Forwards the native backend's LLVM feature, so a consumer's `build.rs` can ask
-# this crate for a native library build without naming `kira-llvm-backend`
-# itself. Off by default: everything else here builds on a machine with no LLVM.
-llvm = ["kira-llvm-backend/llvm"]
-
 [lints]
 workspace = true
 
