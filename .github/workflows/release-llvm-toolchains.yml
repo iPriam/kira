@@ -23,7 +23,7 @@ permissions:
 jobs:
   validate:
     name: Validate metadata
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.metadata.outputs.matrix }}
       llvm_version: ${{ steps.metadata.outputs.llvm_version }}
@@ -98,7 +98,7 @@ jobs:
     name: Build ${{ matrix.target_key }}
     needs: validate
     if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
-    runs-on: ${{ matrix.platform == 'windows' && 'blacksmith-8vcpu-windows-2025' || matrix.platform == 'macos' && 'blacksmith-12vcpu-macos-15' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ matrix.platform == 'windows' && 'windows-2025' || matrix.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -181,7 +181,7 @@ jobs:
       - validate
       - build
     if: ${{ needs.validate.outputs.publish == 'true' }}
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
