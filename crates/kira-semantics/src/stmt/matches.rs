@@ -94,7 +94,8 @@ impl Analyzer<'_> {
                 ctx.push_scope();
                 if let Some(binding) = arm.binding {
                     let name = self.interner.resolve(binding.name).to_owned();
-                    ctx.declare(&name, Type::Error, false);
+                    let local = ctx.declare(&name, Type::Error, false);
+                    ctx.note_binding_span(local, binding.span);
                 }
                 let body = self.analyze_block(ctx, &arm.body);
                 ctx.pop_scope();
@@ -221,6 +222,7 @@ impl Analyzer<'_> {
                 // binding that could be written would raise a question the
                 // corpus does not answer — whether the write reaches the enum.
                 let local = ctx.declare(&name, ty, false);
+                ctx.note_binding_span(local, binding.span);
                 let stmt = self.program.stmts.alloc(HirStmt::Let {
                     local,
                     init: payload,

@@ -98,6 +98,10 @@ impl Analyzer<'_> {
                         if !self.check_local_live(ctx, local, span) {
                             return self.program.exprs.alloc(HirExpr::Error);
                         }
+                        if let Some(binding) = ctx.binding_span(local) {
+                            let definition = kira_source::FileSpan::new(self.source, binding);
+                            self.link(span, definition);
+                        }
                         let ty = ctx.local_type(local);
                         self.program.exprs.alloc(HirExpr::Local { local, ty })
                     }
@@ -105,7 +109,21 @@ impl Analyzer<'_> {
                     // binding is what a reader expects, and it is what lets a
                     // method take a parameter named like a field.
                     crate::closures::Captured::Absent => match self.implicit_field(ctx, &name) {
-                        Some(expr) => expr,
+                        Some(expr) => {
+                            // A bare field read inside a method resolves to
+                            // the receiver's field, so a jump from it lands on
+                            // that field's declaration.
+                            if let Some(owner) = ctx.receiver.and_then(|owner| {
+                                self.program
+                                    .types
+                                    .structs()
+                                    .get(owner)
+                                    .map(|def| def.name.clone())
+                            }) {
+                                self.link_field_name(&owner, &name, span);
+                            }
+                            expr
+                        }
                         None => {
                             // A name several parents declare is inherited but
                             // unresolvable, which is a different mistake from
@@ -173,6 +191,7 @@ impl Analyzer<'_> {
                 if let Some(id) = self.class_named(&name)
                     && ctx.resolve(&name).is_none()
                 {
+                    self.link_type_name(&name, callee_span);
                     return self.analyze_class_new(ctx, id, &args, callee_span);
                 }
                 // A bare call inside a method may name one of the receiver's
@@ -228,11 +247,23 @@ impl Analyzer<'_> {
                     return self.analyze_array_property(base_hir, &name, field_span);
                 }
                 match self.resolve_field(base_ty, &name, field_span) {
-                    Some((index, ty)) => self.program.exprs.alloc(HirExpr::Field {
-                        base: base_hir,
-                        index,
-                        ty,
-                    }),
+                    Some((index, ty)) => {
+                        if let Type::Struct(id) = base_ty
+                            && let Some(owner) = self
+                                .program
+                                .types
+                                .structs()
+                                .get(id)
+                                .map(|def| def.name.clone())
+                        {
+                            self.link_field_name(&owner, &name, field_span);
+                        }
+                        self.program.exprs.alloc(HirExpr::Field {
+                            base: base_hir,
+                            index,
+                            ty,
+                        })
+                    }
                     None => self.program.exprs.alloc(HirExpr::Error),
                 }
             }

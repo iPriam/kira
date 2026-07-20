@@ -1,0 +1,16 @@
+# Test-run scheduling. Two facts shape it:
+#
+# * Most of this workspace's slow tests block on subprocesses (kirac builds,
+#   cargo builds, watched live sessions), not on CPU — so running more of
+#   them than there are cores keeps the cores busy instead of idle.
+# * Wall time is set by the longest tests when they start late. The overrides
+#   below start the known long poles first, so the thousand fast tests fill
+#   in around them instead of queueing behind them.
+
+[profile.default]
+test-threads = 16
+
+# Higher priority starts earlier; the default is 0.
+[[profile.default.overrides]]
+filter = "binary_id(kira-cli::live_hybrid) | test(=every_example_agrees_on_every_backend) | test(/installed_toolchain/) | binary_id(kira-knvm::knvm_binstall)"
+priority = 50

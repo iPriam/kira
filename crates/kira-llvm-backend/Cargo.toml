@@ -13,11 +13,15 @@ kira-semantics-model.workspace = true
 kira-toolchain.workspace = true
 thiserror.workspace = true
 # A hard dependency by decision: every kirac carries the LLVM backend, and a
-# machine without a managed LLVM does not build this workspace. Point the
-# build at one with:
-#   LLVM_SYS_221_PREFIX=~/.kira/toolchains/llvm/<version>/<host>
-# CI provisions the same bundle before building.
-llvm-sys = { workspace = true }
+# machine without a managed LLVM does not build this workspace. The two
+# features turn off llvm-sys's own environment-driven LLVM search entirely —
+# it compiles as pure declarations — and this crate's build script links the
+# managed bundle instead, discovered through kira-toolchain (KIRA_LLVM_HOME
+# overrides; CI provisions the same bundle before building).
+llvm-sys = { workspace = true, features = ["no-llvm-linking", "disable-alltargets-init"] }
+
+[build-dependencies]
+kira-toolchain.workspace = true
 
 [lints]
 workspace = true

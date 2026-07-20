@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use kira_toolchain::{Channel, CurrentToolchain, executable_name};
+use kira_toolchain::{Channel, CurrentToolchain, LANGUAGE_SERVER_BINARY, executable_name};
 
 use crate::install::{
     InstallError, Installed, PRIMARY_BINARY, Staging, toolchain_root, validate, write_current,
@@ -84,16 +84,17 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
     })?;
     let version = workspace_version(&checkout)?;
 
-    // The LLVM backend is a hard dependency of kirac, so a managed LLVM is a
-    // hard requirement of building it: pointing `llvm-sys` at the bundle is
-    // this env var, and with no bundle the build is refused up front with the
-    // provisioning route named, rather than failing deep inside a build script.
-    let (llvm_variable, llvm_home) = llvm_build_env(&checkout).ok_or(BinstallError::LlvmMissing)?;
+    // The LLVM backend is a hard dependency of kirac, and its build script
+    // discovers the managed bundle itself; this check only refuses up front,
+    // with the provisioning route named, rather than three crates into a
+    // build that cannot finish.
+    if kira_toolchain::llvm_discovery::discover(Some(&checkout)).is_err() {
+        return Err(BinstallError::LlvmMissing);
+    }
     let mut build = Command::new("cargo");
     build
-        .args(["build", "-p", "kira-cli"])
-        .current_dir(&checkout)
-        .env(llvm_variable, llvm_home);
+        .args(["build", "-p", "kira-cli", "-p", "kira-lsp"])
+        .current_dir(&checkout);
     let built = build.status().map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => BinstallError::CargoUnavailable,
         _ => BinstallError::BuildFailed {
@@ -130,12 +131,13 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
 
     let debug_dir = target_dir(&checkout).join("debug");
     let compiler = debug_dir.join(executable_name(PRIMARY_BINARY));
+    let language_server = debug_dir.join(executable_name(LANGUAGE_SERVER_BINARY));
     let host_archive = debug_dir.join("libkira_native_bridge.a");
     let wasm_archive = target_dir(&checkout)
         .join("wasm32-unknown-emscripten")
         .join("debug")
         .join("libkira_native_bridge.a");
-    for artifact in [&compiler, &host_archive, &wasm_archive] {
+    for artifact in [&compiler, &language_server, &host_archive, &wasm_archive] {
         if !artifact.is_file() {
             return Err(BinstallError::MissingBuildArtifact {
                 expected: artifact.clone(),
@@ -153,6 +155,12 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
     let staged_compiler = bin.join(executable_name(PRIMARY_BINARY));
     std::fs::copy(&compiler, &staged_compiler)
         .map_err(|error| InstallError::io("copy the compiler to", &staged_compiler, error))?;
+    // The language server ships with the toolchain so an editor always runs
+    // the selected compiler's frontend — a server installed separately goes
+    // stale the moment the language moves.
+    let staged_server = bin.join(executable_name(LANGUAGE_SERVER_BINARY));
+    std::fs::copy(&language_server, &staged_server)
+        .map_err(|error| InstallError::io("copy the language server to", &staged_server, error))?;
     // The runtime archives ride beside the compiler, where its archive
     // resolution looks: the host's under its cargo name, the Web's under a
     // target-suffixed one so neither can be linked in the other's place.
@@ -195,22 +203,6 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
         root: destination,
         already_installed: replaced,
     })
-}
-
-/// The env var and LLVM home every kirac build needs, when one is present.
-///
-/// `llvm-sys` reads `LLVM_SYS_<major><minor>_PREFIX`; the digits come from the
-/// checkout's pinned LLVM version, so a version bump in the metadata moves the
-/// variable name with it rather than leaving a stale one hardcoded here.
-/// `None` — no discoverable LLVM, or unreadable metadata — is the caller's
-/// refusal: the backend is a hard dependency, so there is no build without it.
-fn llvm_build_env(checkout: &Path) -> Option<(String, PathBuf)> {
-    let installation = kira_toolchain::discover(Some(checkout)).ok()?;
-    let version = kira_toolchain::pinned_version().ok()?;
-    let mut parts = version.split('.');
-    let major = parts.next()?;
-    let minor = parts.next()?;
-    Some((format!("LLVM_SYS_{major}{minor}_PREFIX"), installation.home))
 }
 
 /// Walks up from `start` for the checkout markers.

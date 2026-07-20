@@ -152,6 +152,7 @@ impl Analyzer<'_> {
             }
             return self.program.exprs.alloc(HirExpr::Error);
         };
+        self.link_type_name(&struct_name, name_span);
         let field_count = self
             .program
             .types
@@ -167,6 +168,9 @@ impl Analyzer<'_> {
             // The field is resolved before its value, so the field's type is
             // the value's expected type: `H { values = [] }` needs it.
             let resolved = self.resolve_field(Type::Struct(id), &field_name, init.name_span);
+            if resolved.is_some() {
+                self.link_field_name(&struct_name, &field_name, init.name_span);
+            }
             let value = self.analyze_expr_expecting(ctx, init.value, resolved.map(|(_, ty)| ty));
             let value_ty = self.program.expr(value).type_of();
             let Some((index, field_ty)) = resolved else {
@@ -398,6 +402,7 @@ impl Analyzer<'_> {
             );
             return self.program.exprs.alloc(HirExpr::Error);
         };
+        self.link_function(id, span);
         if args.len() != params.len() {
             self.emit(
                 span,

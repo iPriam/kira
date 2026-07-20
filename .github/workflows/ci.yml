@@ -29,9 +29,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # The LLVM backend is a hard dependency: llvm-sys needs the managed
-      # bundle to build at all. The pin lives in llvm-metadata.toml; the
-      # bundles are published by the llvm-bundles workflow, once per pin.
+      # The LLVM backend is a hard dependency, and the backend's build script
+      # discovers the bundle at the managed path itself — unpacking it there
+      # is the whole setup; no environment variable is exported. The pin lives
+      # in llvm-metadata.toml; the bundles are published by the llvm-bundles
+      # workflow, once per pin.
       - name: Provision the managed LLVM
         shell: bash
         run: |
@@ -43,8 +45,6 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --pattern "llvm-$version-${{ matrix.host_key }}.tar.xz" \
             --output - | tar -xJ -C "$home"
-          major_minor="$(echo "$version" | cut -d. -f1-2 | tr -d .)"
-          echo "LLVM_SYS_${major_minor}_PREFIX=$home" >> "$GITHUB_ENV"
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -67,5 +67,10 @@ jobs:
       - name: cargo build
         run: cargo build --workspace
 
-      - name: cargo test
-        run: cargo test --workspace
+      # nextest runs the test binaries in parallel instead of one at a time,
+      # and spawns no empty doc-test pass per crate — the workspace has no
+      # doc-tests, and the stock runner pays for each of them anyway.
+      - uses: taiki-e/install-action@nextest
+
+      - name: cargo nextest
+        run: cargo nextest run --workspace

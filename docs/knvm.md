@@ -28,6 +28,12 @@ code 2 from `kira` therefore means exactly one thing - the launcher itself
 could not dispatch - and each such failure names `knvm install latest` as the
 remedy.
 
+The launcher is multi-call: installed under the name `kira-language-server`
+(a second copy `sinstall` lands beside `kira`), it dispatches to the selected
+toolchain's language server instead of its primary. That is what an editor
+finds on PATH, so the server an editor runs always matches the selected
+compiler and never goes stale when the language moves.
+
 ## The tree it produces
 
 ```
@@ -35,6 +41,7 @@ remedy.
  current.toml channel = "release", version = "1.10.0", primary = "kirac"
  release/1.10.0/
  bin/kirac
+ bin/kira-language-server the editor server, same frontend as its kirac
  foundation/ the standard library, a real Kira package
  package.kira
  app/*.kira
@@ -64,8 +71,10 @@ fetch entirely and is selected as it stands - `install` always implies `use`.
 
 Otherwise the archive is fetched into a staging directory belonging to this
 process alone, unpacked with the system `tar`, and validated: the tree must
-hold `bin/kirac`, that file must be executable on unix, and
-`foundation/package.kira` must exist. Only then is the validated tree moved
+hold `bin/kirac` and `bin/kira-language-server`, both executable on unix, and
+`foundation/package.kira` must exist. The language server is required on
+purpose: a toolchain without one leaves an editor silently running whatever
+stale server it finds elsewhere on PATH. Only then is the validated tree moved
 into place with a single `rename`, and `current.toml` written. Nothing appears
 under `<channel>/` until the toolchain is known-good, so a failed install
 leaves no half-toolchain a launcher could dispatch to. Staging is removed on
@@ -95,9 +104,9 @@ change which compiler a user runs.
 ## `binstall`: the checkout as a toolchain
 
 `knvm binstall` is the developer route: run inside a Kira checkout, it builds
-`kirac` with `cargo build -p kira-cli` (dev profile), shapes the result into
-the same tree a release unpacks to — the built compiler under `bin/`, the
-checkout's `foundation/` beside it — and installs it on the `dev` channel,
+`kirac` and `kira-language-server` with cargo (dev profile), shapes the result
+into the same tree a release unpacks to — the built binaries under `bin/`, the
+checkout's `foundation/` beside them — and installs it on the `dev` channel,
 named by the workspace's `[workspace.package] version`. The LLVM backend is a
 hard part of every kirac, so `binstall` discovers the managed LLVM, points
 `llvm-sys` at it, and refuses up front — naming the provisioning route — when
@@ -194,7 +203,8 @@ it.
 Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds each
 supported host and attaches two archives per platform to a GitHub release: the
 toolchain archive named exactly as `select_asset` expects, and
-`knvm-<version>-<host-key>.tar.gz` holding `bin/knvm` and `bin/kira` — the one
+`knvm-<version>-<host-key>.tar.gz` holding `bin/knvm`, `bin/kira`, and the
+launcher's `bin/kira-language-server` alias — the one
 manual download. Unpack that, put its `bin` on PATH, and `knvm install latest`
 provisions the rest. A `-dev` tag publishes as a GitHub prerelease, which is
 the `dev` channel.
