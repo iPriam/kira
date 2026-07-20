@@ -102,8 +102,8 @@ impl Command {
     /// has no argument shape to advertise.
     pub fn arguments(self) -> &'static str {
         match self {
-            Self::Run | Self::Build => " <file> [--backend vm|llvm|hybrid] [--device]",
-            Self::Check => " <file>",
+            Self::Run | Self::Build => " <file|dir> [--backend vm|llvm|hybrid] [--device]",
+            Self::Check => " <file|dir>",
             Self::Live => " [runner] <file> [--backend vm|hybrid] [--watch]",
             Self::Help => " [all]",
             _ => "",

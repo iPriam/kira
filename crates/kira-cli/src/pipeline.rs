@@ -1,7 +1,7 @@
 //! The `run`, `build`, and `check` command pipelines.
 //!
-//! All three read a single `.kira` file, drive the salsa frontend to collect
-//! diagnostics, and render any errors readably against the source. `check`
+//! All three resolve a `.kira` file or package directory, drive the salsa
+//! frontend to collect diagnostics, and render any errors readably against the source. `check`
 //! stops there. `run` and `build` continue into the backend `--backend`
 //! selects, on the device `--device` selects.
 //!
@@ -52,10 +52,10 @@ pub const EXIT_FAILURE: i32 = 1;
 /// Process exit code for usage errors (missing arguments, unreadable file).
 pub const EXIT_USAGE: i32 = 2;
 
-/// Runs `kirac check <file>`: report diagnostics, never execute.
+/// Runs `kirac check <file|dir>`: report diagnostics, never execute.
 pub fn check(args: &[String]) -> i32 {
     let Some(path) = args.first() else {
-        eprintln!("kirac check: expected a path to a .kira file");
+        eprintln!("kirac check: expected a path to a .kira file or package directory");
         return EXIT_USAGE;
     };
     match compile(path) {
@@ -73,16 +73,27 @@ pub fn check(args: &[String]) -> i32 {
 }
 
 /// Runs `kirac run [--backend vm|llvm|hybrid] [--device host|wasm32|wasm64]
-/// <file>`: report diagnostics, then execute a clean program.
+/// <file|dir>`: report diagnostics, then execute a clean program.
 ///
 /// A wasm device does not run on this machine: it builds a module and serves it
 /// to a browser, which is what running a Kira program on the Web means.
 pub fn run(args: &[String]) -> i32 {
-    let options = match parse_options("run", args) {
+    let mut options = match parse_options("run", args) {
         Ok(options) => options,
         Err(code) => return code,
     };
-    let ir = match runnable_ir("run", &options.path) {
+    options.path = match resolve_path(&options.path) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    let compiled = match verified(&options.path) {
+        Ok(compiled) => compiled,
+        Err(code) => return code,
+    };
+    if let Err(code) = apply_manifest_defaults("run", &mut options, &compiled) {
+        return code;
+    }
+    let ir = match runnable_ir("run", compiled) {
         Ok(ir) => ir,
         Err(code) => return code,
     };
@@ -120,7 +131,7 @@ pub fn live(args: &[String]) -> i32 {
     // compile yields `None` rather than an error, so the session keeps the app
     // that is already running.
     let rebuild = || -> Result<Option<kira_live::Bundle>, crate::live::LiveError> {
-        match runnable_ir("live", &options.path) {
+        match runnable_path_ir("live", &options.path) {
             Ok(ir) => {
                 crate::live::build_bundle(&ir, source, options.runner, options.backend).map(Some)
             }
@@ -224,17 +235,24 @@ fn export_engine_is_built(
 }
 
 /// Runs `kirac build [--backend vm|llvm|hybrid] [--device host|wasm32|wasm64]
-/// <file>`: compile to artifacts under `.kira-build/`, without executing
+/// <file|dir>`: compile to artifacts under `.kira-build/`, without executing
 /// anything.
 pub fn build(args: &[String]) -> i32 {
-    let options = match parse_options("build", args) {
+    let mut options = match parse_options("build", args) {
         Ok(options) => options,
+        Err(code) => return code,
+    };
+    options.path = match resolve_path(&options.path) {
+        Ok(path) => path,
         Err(code) => return code,
     };
     let compiled = match verified(&options.path) {
         Ok(compiled) => compiled,
         Err(code) => return code,
     };
+    if let Err(code) = apply_manifest_defaults("build", &mut options, &compiled) {
+        return code;
+    }
     let ir = &compiled.ir;
     if let Err(code) = export_engine_is_built("build", options.backend, options.device, ir) {
         return code;
@@ -442,6 +460,84 @@ fn parse_options(verb: &str, args: &[String]) -> Result<CompileOptions, i32> {
     })
 }
 
+/// Resolves a package directory to the source file that seeds compilation.
+fn resolve_path(path: &str) -> Result<String, i32> {
+    let target = kira_project::resolve_target(std::path::Path::new(path)).map_err(|error| {
+        eprintln!("kirac: {error}");
+        match error {
+            kira_project::DiscoveryError::NotPackageDirectory { .. }
+            | kira_project::DiscoveryError::MissingEntrypoint { .. }
+            | kira_project::DiscoveryError::NoLibrarySources { .. } => EXIT_USAGE,
+            kira_project::DiscoveryError::Unreadable { .. }
+            | kira_project::DiscoveryError::Malformed { .. } => EXIT_FAILURE,
+        }
+    })?;
+    target.source_path.ok_or_else(|| {
+        eprintln!("kirac: `{path}` did not resolve to a compilable Kira source");
+        EXIT_USAGE
+    })
+}
+
+/// Applies package defaults without replacing any command-line choice.
+fn apply_manifest_defaults(
+    verb: &str,
+    options: &mut CompileOptions,
+    compiled: &Compiled,
+) -> Result<(), i32> {
+    // A manifest target can choose the backend indirectly (Web has only LLVM),
+    // so any explicit backend must outrank it just as an explicit device does.
+    if !options.device_explicit
+        && !options.backend_explicit
+        && let Some(target) = compiled.default_build_target.as_deref()
+    {
+        options.device = manifest_device(target).ok_or_else(|| {
+            eprintln!("kirac {verb}: unknown manifest build target `{target}`");
+            EXIT_FAILURE
+        })?;
+    }
+
+    if matches!(options.device, Device::Host) {
+        if !options.backend_explicit
+            && let Some(mode) = compiled.default_execution_mode.as_deref()
+        {
+            options.backend = manifest_backend(mode).ok_or_else(|| {
+                eprintln!("kirac {verb}: unknown manifest execution mode `{mode}`");
+                EXIT_FAILURE
+            })?;
+        }
+    } else {
+        if options.backend_explicit && options.backend != BackendMode::LlvmNative {
+            eprintln!(
+                "kirac: `--device {}` overrides `--backend {}`: the Web device has one code generator",
+                options.device.label(),
+                options.backend.label(),
+            );
+        }
+        options.backend = BackendMode::LlvmNative;
+    }
+    Ok(())
+}
+
+/// Maps a manifest execution mode to the backend API.
+fn manifest_backend(mode: &str) -> Option<BackendMode> {
+    match mode {
+        "vm" => Some(BackendMode::VmBytecode),
+        "llvm" => Some(BackendMode::LlvmNative),
+        "hybrid" => Some(BackendMode::Hybrid),
+        _ => None,
+    }
+}
+
+/// Maps a manifest build target to the CLI device model.
+fn manifest_device(target: &str) -> Option<Device> {
+    match target {
+        "host" => Some(Device::Host),
+        "wasm32" => Some(Device::Web(WasmDevice::Wasm32)),
+        "wasm64" => Some(Device::Web(WasmDevice::Wasm64)),
+        _ => None,
+    }
+}
+
 /// Compiles `path` and returns everything about it, or the exit code to report.
 ///
 /// Diagnostics are rendered here, so callers only decide what to do with a
@@ -456,19 +552,19 @@ fn verified(path: &str) -> Result<Compiled, i32> {
     Ok(compiled)
 }
 
-/// Compiles `path` and returns its IR alone, for a caller that needs no more.
-fn verified_ir(path: &str) -> Result<IrProgram, i32> {
-    Ok(verified(path)?.ir)
+/// Compiles a path and returns runnable IR for callers without package defaults.
+fn runnable_path_ir(verb: &str, path: &str) -> Result<IrProgram, i32> {
+    runnable_ir(verb, verified(path)?)
 }
 
-/// Compiles `path` and returns its IR, refusing a library by name.
+/// Returns a compiled program's IR, refusing a library by name.
 ///
 /// The refusal for every verb that *starts* a program. A library has no
 /// entrypoint by construction, so there is nothing to start — said plainly,
 /// with the reason, rather than by failing somewhere further down where the
 /// missing entrypoint looks like a compiler fault.
-fn runnable_ir(verb: &str, path: &str) -> Result<IrProgram, i32> {
-    let ir = verified_ir(path)?;
+fn runnable_ir(verb: &str, compiled: Compiled) -> Result<IrProgram, i32> {
+    let ir = compiled.ir;
     if ir.main.is_none() {
         eprintln!(
             "kirac {verb}: cannot {verb} a library: a library has no `@Main` \
@@ -488,13 +584,16 @@ fn runnable_ir(verb: &str, path: &str) -> Result<IrProgram, i32> {
 /// (a missing or unreadable file, an unusable manifest); compile errors are
 /// carried as diagnostics, not as an error here.
 fn compile(path: &str) -> Result<Compiled, i32> {
-    kira_build::compile(std::path::Path::new(path)).map_err(|error| {
+    let resolved = resolve_path(path)?;
+    kira_build::compile(std::path::Path::new(&resolved)).map_err(|error| {
         eprintln!("kirac: {error}");
         // A path the user typed that is not there is a usage error; everything
         // else got far enough that the invocation itself was fine.
         match error {
             FrontendError::Read { .. } => EXIT_USAGE,
-            FrontendError::SourceMapFull { .. } | FrontendError::Discovery(_) => EXIT_FAILURE,
+            FrontendError::SourceMapFull { .. }
+            | FrontendError::Discovery(_)
+            | FrontendError::Resolution(_) => EXIT_FAILURE,
         }
     })
 }

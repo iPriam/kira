@@ -33,19 +33,90 @@ use kira_syntax_model::ast::Item;
 
 use crate::analyze::Analyzer;
 
+/// Separates a dependency package namespace from its package-relative module.
+const PACKAGE_MODULE_SEPARATOR: &str = "::";
+
+/// One resolved module binding in a file.
+#[derive(Debug, Clone)]
+struct ModuleBinding {
+    /// The import path as the source wrote it.
+    module: String,
+}
+
 /// What one file's imports bind.
 #[derive(Debug, Clone, Default)]
 pub struct FileImports {
     /// Namespace root spelling (the alias, or the path's last segment) to the
-    /// dotted module path it names.
-    roots: HashMap<String, String>,
+    /// resolved module binding.
+    roots: HashMap<String, ModuleBinding>,
 }
 
 impl FileImports {
     /// The module a namespace root names in this file, if the file imports one.
     #[must_use]
     pub fn module_for_root(&self, root: &str) -> Option<&str> {
-        self.roots.get(root).map(String::as_str)
+        self.roots.get(root).map(|binding| binding.module.as_str())
+    }
+}
+
+/// Module sources indexed without collapsing equal package-relative names.
+#[derive(Debug, Clone, Default)]
+struct ModuleIndex {
+    /// Project and bundled modules, keyed by their written dotted path.
+    plain: HashMap<String, SourceId>,
+    /// Dependency modules, first by package namespace and then relative path.
+    packages: HashMap<String, HashMap<String, SourceId>>,
+    /// The dependency package each source belongs to.
+    source_packages: HashMap<SourceId, String>,
+}
+
+impl ModuleIndex {
+    /// Builds the package-aware indexes from canonical module identities.
+    fn new(modules: &[(String, SourceId)]) -> Self {
+        let mut index = Self::default();
+        for (identity, source) in modules {
+            if let Some((package, module)) = package_identity(identity) {
+                index
+                    .packages
+                    .entry(package.to_owned())
+                    .or_default()
+                    .insert(module.to_owned(), *source);
+                index.source_packages.insert(*source, package.to_owned());
+            } else {
+                index.plain.insert(identity.clone(), *source);
+            }
+        }
+        index
+    }
+
+    /// Selects the source an import names from the importing file's context.
+    fn source_for(&self, source: SourceId, module: &str) -> Option<SourceId> {
+        if let Some(package) = self.source_packages.get(&source)
+            && let Some(module_source) = self
+                .packages
+                .get(package)
+                .and_then(|modules| modules.get(module))
+        {
+            return Some(*module_source);
+        }
+        if let Some(module_source) = self.plain.get(module) {
+            return Some(*module_source);
+        }
+        let (package, relative) = module.split_once('.').unwrap_or((module, module));
+        self.packages
+            .get(package)
+            .and_then(|modules| modules.get(relative))
+            .copied()
+    }
+
+    /// Whether any loaded module has this written or package-relative name.
+    fn contains(&self, module: &str) -> bool {
+        self.plain.contains_key(module)
+            || self.source_for(crate::FILE_SOURCE_ID, module).is_some()
+            || self
+                .packages
+                .values()
+                .any(|modules| modules.contains_key(module))
     }
 }
 
@@ -53,8 +124,8 @@ impl FileImports {
 #[derive(Debug, Clone, Default)]
 pub struct ImportTable {
     files: HashMap<SourceId, FileImports>,
-    /// Every module name the program was built from, and the file each is.
-    modules: HashMap<String, SourceId>,
+    /// Every loaded module, preserving dependency-package namespace identity.
+    modules: ModuleIndex,
 }
 
 /// One import as the analyzer needs it: where it was written and what it names.
@@ -71,6 +142,15 @@ pub(crate) struct ImportEntry {
 }
 
 impl ImportTable {
+    /// Encodes a dependency module with the package namespace that owns it.
+    ///
+    /// Loaders must use this for dependency sources so equal relative names in
+    /// separate packages remain distinct during semantic import resolution.
+    #[must_use]
+    pub fn package_module_identity(package: &str, module: &str) -> String {
+        format!("{package}{PACKAGE_MODULE_SEPARATOR}{module}")
+    }
+
     /// Builds the table from the modules the program was loaded with and the
     /// imports each file wrote.
     ///
@@ -79,17 +159,18 @@ impl ImportTable {
     /// `Missing.name()` report an unresolved *namespace root* rather than
     /// silently resolving through an import that never landed.
     pub(crate) fn build(modules: &[(String, SourceId)], imports: &[ImportEntry]) -> Self {
-        let modules: HashMap<String, SourceId> = modules.iter().cloned().collect();
+        let modules = ModuleIndex::new(modules);
         let mut files: HashMap<SourceId, FileImports> = HashMap::new();
         for import in imports {
-            if !modules.contains_key(&import.module) {
+            if modules.source_for(import.source, &import.module).is_none() {
                 continue;
             }
-            files
-                .entry(import.source)
-                .or_default()
-                .roots
-                .insert(import.root.clone(), import.module.clone());
+            files.entry(import.source).or_default().roots.insert(
+                import.root.clone(),
+                ModuleBinding {
+                    module: import.module.clone(),
+                },
+            );
         }
         Self { files, modules }
     }
@@ -107,14 +188,25 @@ impl ImportTable {
     /// separately.
     #[must_use]
     pub fn has_module(&self, module: &str) -> bool {
-        self.modules.contains_key(module)
+        self.modules.contains(module)
     }
 
-    /// The file a module name was loaded from, when the program has it.
+    /// The file a project import of this module name selects, when available.
     #[must_use]
     pub fn module_source(&self, module: &str) -> Option<SourceId> {
-        self.modules.get(module).copied()
+        self.modules.source_for(crate::FILE_SOURCE_ID, module)
     }
+
+    /// The file an import selects from the importing file's package context.
+    fn module_source_for(&self, source: SourceId, module: &str) -> Option<SourceId> {
+        self.modules.source_for(source, module)
+    }
+}
+
+/// Splits a canonical dependency module identity into package and relative path.
+fn package_identity(identity: &str) -> Option<(&str, &str)> {
+    let (package, module) = identity.split_once(PACKAGE_MODULE_SEPARATOR)?;
+    (!package.is_empty() && !module.is_empty()).then_some((package, module))
 }
 
 /// Reads every `import` item out of the tree, paired with the file that wrote
@@ -158,7 +250,11 @@ impl Analyzer<'_> {
     /// the user hears about it — with the span of the module path they wrote.
     pub(crate) fn report_unresolved_imports(&mut self, entries: &[ImportEntry]) {
         for entry in entries {
-            if self.imports.has_module(&entry.module) {
+            if self
+                .imports
+                .module_source_for(entry.source, &entry.module)
+                .is_some()
+            {
                 continue;
             }
             self.source = entry.source;
@@ -180,7 +276,8 @@ impl Analyzer<'_> {
     /// go-to-definition on `import support` opens `support.kira`.
     pub(crate) fn link_resolved_imports(&mut self, entries: &[ImportEntry]) {
         for entry in entries {
-            let Some(module_source) = self.imports.module_source(&entry.module) else {
+            let Some(module_source) = self.imports.module_source_for(entry.source, &entry.module)
+            else {
                 continue;
             };
             self.source = entry.source;
@@ -208,7 +305,7 @@ impl Analyzer<'_> {
     /// Returns whether it reported: a caller that gets `false` still owes the
     /// user its own diagnostic, because the root was not a module in any file.
     pub(crate) fn report_unimported_root(&mut self, root: &str, span: Span) -> bool {
-        if !self.imports.has_module(root) {
+        if self.imports.module_source_for(self.source, root).is_none() {
             return false;
         }
         self.emit(

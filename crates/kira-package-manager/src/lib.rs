@@ -1,6 +1,11 @@
 //! Dependency resolution and package sync over manifests.
 //!
 //! Layer 5 of the Kira package graph.
-//!
-//! Design pending. Resolves package dependencies from `package.kira` manifests
-//! and syncs them into the project.
+
+pub mod graph;
+pub mod resolver;
+
+mod lockfile_check;
+
+pub use graph::{ResolvedPackage, ResolvedPackageGraph};
+pub use resolver::{ResolveError, resolve};

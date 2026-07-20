@@ -23,6 +23,7 @@ kira-hybrid-main.workspace = true
 # hash, the contract types, and `Library`/`Instance` are defined once, there.
 kira-main.workspace = true
 kira-manifest.workspace = true
+kira-package-manager.workspace = true
 kira-program-graph.workspace = true
 kira-project.workspace = true
 # The seam's own vocabulary (`Execution`, `BridgeValueTag`) and the type lattice

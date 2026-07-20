@@ -17,15 +17,18 @@
 //!     let version = "0.1.0"
 //!     let kind = .Library
 //!     let moduleRoot = "DemoLibrary"
+//!     let dependencies = [Dependency { name: "Core", path: "../core" }]
 //!     let defaults = Defaults { executionMode: .Vm, buildTarget: .Host }
 //! }
 //! ```
 //!
-//! Unknown keys are ignored rather than rejected, because this crate's model
-//! covers a subset of the fields a manifest may carry and rejecting the rest
-//! would make every new field a breaking change. A key this reader *does* know
-//! but cannot make sense of is an error, never a guess.
+//! Version, Kira version, module root, kind, dependencies, and defaults are
+//! decoded. Unknown keys are ignored rather than rejected, because this crate's
+//! model covers a subset of the fields a manifest may carry and rejecting the
+//! rest would make every new field a breaking change. A key this reader *does*
+//! know but cannot make sense of is an error, never a guess.
 
+use crate::dependency::{DependencySource, DependencySpec, GitSource, PathSource, RegistrySource};
 use crate::project_manifest::{PackageKind, ProjectManifest};
 
 /// Why a `package.kira` declaration could not be read.
@@ -61,8 +64,18 @@ pub fn load(text: &str) -> Result<ProjectManifest, DeclarationError> {
             "kira" => manifest.kira_version = string_value(key, value)?,
             "moduleRoot" => manifest.module_root = Some(string_value(key, value)?),
             "kind" => manifest.kind = kind_value(value)?,
-            // Every other key belongs to a part of the model this reader does
-            // not fill in yet. Ignored, not rejected: see the module docs.
+            "dependencies" => manifest.dependencies = dependencies_value(value)?,
+            "defaults" => {
+                let (execution_mode, build_target) = defaults_value(value)?;
+                if let Some(mode) = execution_mode {
+                    manifest.execution_mode = mode;
+                }
+                if let Some(target) = build_target {
+                    manifest.build_target = target;
+                }
+            }
+            // Deferred and unknown keys are ignored, not rejected: see the
+            // module docs.
             _ => {}
         }
     }
@@ -157,13 +170,18 @@ fn find_let(text: &str) -> Option<usize> {
     None
 }
 
-/// The text of one value: to the end of a balanced brace group, or to the end
-/// of the line.
+/// The text of one value: to the end of a balanced brace or bracket group, or
+/// to the end of the line.
 fn value_of(text: &str) -> &str {
     let trimmed = text.trim_start();
     let lead = text.len() - trimmed.len();
-    if let Some(brace) = brace_group_end(trimmed) {
-        return &text[..lead + brace];
+    let grouped_end = if trimmed.starts_with('[') {
+        group_end(trimmed, 0)
+    } else {
+        brace_group_end(trimmed)
+    };
+    if let Some(end) = grouped_end {
+        return &text[..lead + end];
     }
     let end = trimmed.find('\n').unwrap_or(trimmed.len());
     &text[..lead + end]
@@ -177,18 +195,35 @@ fn brace_group_end(text: &str) -> Option<usize> {
     if text[..open].contains('\n') {
         return None;
     }
-    let mut depth = 0usize;
-    // Iterate the slice that starts *on* the brace. `open` is a byte offset, so
-    // using it as a `skip` count over characters would start past the brace
-    // whenever a multi-byte character precedes it, and the first `}` would then
-    // underflow `depth`. Starting on the `{` makes the increment come first, so
-    // `depth` can never go below zero.
+    group_end(text, open)
+}
+
+/// Finds the end of a balanced brace or bracket group, including nested groups
+/// and quoted strings that may contain delimiter characters.
+fn group_end(text: &str, open: usize) -> Option<usize> {
+    let mut closers = Vec::new();
+    let mut quoted = false;
+    let mut escaped = false;
     for (offset, ch) in text[open..].char_indices() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                quoted = false;
+            }
+            continue;
+        }
         match ch {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
+            '"' => quoted = true,
+            '{' => closers.push('}'),
+            '[' => closers.push(']'),
+            '}' | ']' => {
+                if closers.pop() != Some(ch) {
+                    return None;
+                }
+                if closers.is_empty() {
                     return Some(open + offset + 1);
                 }
             }
@@ -208,6 +243,199 @@ fn string_value(key: &str, value: &str) -> Result<String, DeclarationError> {
         .ok_or_else(|| DeclarationError::MalformedValue {
             key: key.to_owned(),
         })
+}
+
+/// Reads the dependency array from a declaration.
+fn dependencies_value(value: &str) -> Result<Vec<DependencySpec>, DeclarationError> {
+    let mut dependencies = Vec::new();
+    for item in array_items("dependencies", value)? {
+        dependencies.push(dependency_value(item)?);
+    }
+    Ok(dependencies)
+}
+
+/// Reads one `Dependency { ... }` entry while tolerating fields not modeled yet.
+fn dependency_value(value: &str) -> Result<DependencySpec, DeclarationError> {
+    let mut name = None;
+    let mut path = None;
+    let mut version = None;
+    let mut url = None;
+    let mut rev = None;
+    let mut tag = None;
+    for (field, value) in record_fields("dependencies", "Dependency", value)? {
+        let slot = match field {
+            "name" => Some(&mut name),
+            "path" => Some(&mut path),
+            "version" => Some(&mut version),
+            "url" => Some(&mut url),
+            "rev" => Some(&mut rev),
+            "tag" => Some(&mut tag),
+            _ => None,
+        };
+        if let Some(slot) = slot {
+            if slot.is_some() {
+                return Err(malformed("dependencies"));
+            }
+            *slot = Some(non_empty_string("dependencies", value)?);
+        }
+    }
+    let name = name.ok_or_else(|| malformed("dependencies"))?;
+    let source = match (path, version, url) {
+        (Some(path), None, None) if rev.is_none() && tag.is_none() => {
+            DependencySource::Path(PathSource { path })
+        }
+        (None, Some(version), None) if rev.is_none() && tag.is_none() => {
+            DependencySource::Registry(RegistrySource { version })
+        }
+        (None, None, Some(url)) => DependencySource::Git(GitSource { url, rev, tag }),
+        _ => return Err(malformed("dependencies")),
+    };
+    Ok(DependencySpec { name, source })
+}
+
+/// Reads execution and target defaults while leaving absent fields unchanged.
+fn defaults_value(value: &str) -> Result<(Option<String>, Option<String>), DeclarationError> {
+    let mut execution_mode = None;
+    let mut build_target = None;
+    for (field, value) in record_fields("defaults", "Defaults", value)? {
+        match field {
+            "executionMode" => {
+                if execution_mode.is_some() {
+                    return Err(malformed("defaults"));
+                }
+                execution_mode = Some(match qualified_case(value) {
+                    "Vm" => "vm".to_owned(),
+                    "Llvm" => "llvm".to_owned(),
+                    "Hybrid" => "hybrid".to_owned(),
+                    _ => return Err(malformed("defaults")),
+                });
+            }
+            "buildTarget" => {
+                if build_target.is_some() {
+                    return Err(malformed("defaults"));
+                }
+                build_target = Some(match qualified_case(value) {
+                    "Host" => "host".to_owned(),
+                    "Wasm32" => "wasm32".to_owned(),
+                    "Wasm64" => "wasm64".to_owned(),
+                    _ => return Err(malformed("defaults")),
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok((execution_mode, build_target))
+}
+
+/// Returns the comma-separated items inside a balanced array.
+fn array_items<'a>(key: &str, value: &'a str) -> Result<Vec<&'a str>, DeclarationError> {
+    let trimmed = value.trim();
+    if !trimmed.starts_with('[') || group_end(trimmed, 0) != Some(trimmed.len()) {
+        return Err(malformed(key));
+    }
+    comma_separated(key, &trimmed[1..trimmed.len() - 1])
+}
+
+/// Returns the fields of a named brace record.
+fn record_fields<'a>(
+    key: &str,
+    record: &str,
+    value: &'a str,
+) -> Result<Vec<(&'a str, &'a str)>, DeclarationError> {
+    let trimmed = value.trim();
+    let open = trimmed.find('{').ok_or_else(|| malformed(key))?;
+    if trimmed[..open].trim() != record || brace_group_end(trimmed) != Some(trimmed.len()) {
+        return Err(malformed(key));
+    }
+    let mut fields = Vec::new();
+    for item in comma_separated(key, &trimmed[open + 1..trimmed.len() - 1])? {
+        let colon = item.find(':').ok_or_else(|| malformed(key))?;
+        let field = item[..colon].trim();
+        let value = item[colon + 1..].trim();
+        if field.is_empty()
+            || !field.chars().all(|ch| ch.is_alphanumeric() || ch == '_')
+            || value.is_empty()
+        {
+            return Err(malformed(key));
+        }
+        fields.push((field, value));
+    }
+    Ok(fields)
+}
+
+/// Splits top-level comma-separated values, preserving nested records and arrays.
+fn comma_separated<'a>(key: &str, mut text: &'a str) -> Result<Vec<&'a str>, DeclarationError> {
+    let mut values = Vec::new();
+    while !text.trim().is_empty() {
+        text = text.trim_start();
+        let comma = top_level_comma(text).map_err(|()| malformed(key))?;
+        let end = comma.unwrap_or(text.len());
+        let value = text[..end].trim();
+        if value.is_empty() {
+            return Err(malformed(key));
+        }
+        values.push(value);
+        let Some(comma) = comma else {
+            break;
+        };
+        text = &text[comma + 1..];
+    }
+    Ok(values)
+}
+
+/// Finds a comma outside quoted strings and nested brace or bracket groups.
+fn top_level_comma(text: &str) -> Result<Option<usize>, ()> {
+    let mut closers = Vec::new();
+    let mut quoted = false;
+    let mut escaped = false;
+    for (offset, ch) in text.char_indices() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                quoted = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => quoted = true,
+            '{' => closers.push('}'),
+            '[' => closers.push(']'),
+            '}' | ']' if closers.pop() != Some(ch) => return Err(()),
+            ',' if closers.is_empty() => return Ok(Some(offset)),
+            _ => {}
+        }
+    }
+    if quoted || !closers.is_empty() {
+        Err(())
+    } else {
+        Ok(None)
+    }
+}
+
+/// Reads a non-empty quoted string.
+fn non_empty_string(key: &str, value: &str) -> Result<String, DeclarationError> {
+    let value = string_value(key, value)?;
+    if value.is_empty() {
+        Err(malformed(key))
+    } else {
+        Ok(value)
+    }
+}
+
+/// Constructs the uniform error for a known key with an unreadable value.
+fn malformed(key: &str) -> DeclarationError {
+    DeclarationError::MalformedValue {
+        key: key.to_owned(),
+    }
+}
+
+/// Returns the final case name from `.Case` or `Qualified.Case`.
+fn qualified_case(value: &str) -> &str {
+    let trimmed = value.trim();
+    trimmed.rsplit('.').next().unwrap_or(trimmed).trim()
 }
 
 /// Reads a `kind` value: `.App`, `.Library`, or a qualified `PackageKind.App`.
