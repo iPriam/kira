@@ -14,6 +14,16 @@ use kira_syntax_model::ast::{Block, ExprId};
 
 use crate::analyze::{Analyzer, FnCtx};
 
+/// The loop variable as written: its name and the name's span.
+///
+/// One value because the two travel together — the span is where a
+/// go-to-definition jump on a use of the variable lands.
+#[derive(Clone, Copy)]
+pub(super) struct ForCursor {
+    pub(super) name: Symbol,
+    pub(super) span: Span,
+}
+
 impl Analyzer<'_> {
     /// Desugars `for <name> in <start>..<end> { … }` into a `while`.
     ///
@@ -43,7 +53,7 @@ impl Analyzer<'_> {
     pub(super) fn analyze_for_range(
         &mut self,
         ctx: &mut FnCtx,
-        name: Symbol,
+        cursor_name: ForCursor,
         range: (ExprId, ExprId),
         body: &Block,
         out: &mut Vec<HirStmtId>,
@@ -81,8 +91,9 @@ impl Analyzer<'_> {
         // The user's variable lives in its own scope: it is visible to the
         // body and gone afterwards.
         ctx.push_scope();
-        let user_name = self.interner.resolve(name).to_owned();
+        let user_name = self.interner.resolve(cursor_name.name).to_owned();
         let variable = ctx.declare(&user_name, Type::INT, false);
+        ctx.note_binding_span(variable, cursor_name.span);
         let cursor_copy = self.read_int_local(cursor);
         let bind = self.program.stmts.alloc(HirStmt::Let {
             local: variable,
@@ -165,7 +176,7 @@ impl Analyzer<'_> {
     pub(super) fn analyze_for_each(
         &mut self,
         ctx: &mut FnCtx,
-        name: Symbol,
+        cursor_name: ForCursor,
         array: ExprId,
         body: &Block,
         span: Span,
@@ -239,8 +250,9 @@ impl Analyzer<'_> {
         // The user's variable lives in its own scope: visible to the body,
         // gone afterwards.
         ctx.push_scope();
-        let user_name = self.interner.resolve(name).to_owned();
+        let user_name = self.interner.resolve(cursor_name.name).to_owned();
         let variable = ctx.declare(&user_name, element, false);
+        ctx.note_binding_span(variable, cursor_name.span);
         let base = self.program.exprs.alloc(HirExpr::Local {
             local: array_slot,
             ty: array_ty,

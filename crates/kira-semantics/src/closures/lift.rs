@@ -362,6 +362,11 @@ impl Analyzer<'_> {
         // what makes a name usable before an inner `let` of the same name and
         // rebound after it.
         let inner = ctx.declare_capture(name, ty);
+        // The capture stands in for the outer binding, so a jump from a use
+        // inside the closure lands where that binding was written.
+        if let Some(binding) = outer.binding_span(outer_local) {
+            ctx.note_binding_span(inner, binding);
+        }
         if let Some(closure) = ctx.closure.as_mut() {
             closure.captures.push(Capture {
                 outer: outer_local,

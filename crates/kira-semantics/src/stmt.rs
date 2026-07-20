@@ -122,6 +122,7 @@ impl Analyzer<'_> {
                 };
                 let name = self.interner.resolve(name).to_owned();
                 let local = ctx.declare(&name, local_ty, mutable);
+                ctx.note_binding_span(local, name_span);
                 let hir = self
                     .program
                     .stmts
@@ -208,18 +209,25 @@ impl Analyzer<'_> {
             }
             Stmt::For {
                 name,
+                name_span,
                 iterable,
                 body,
                 span,
                 ..
-            } => match iterable {
-                ForIterable::Range { start, end } => {
-                    self.analyze_for_range(ctx, name, (start, end), &body, out)
+            } => {
+                let cursor = fors::ForCursor {
+                    name,
+                    span: name_span,
+                };
+                match iterable {
+                    ForIterable::Range { start, end } => {
+                        self.analyze_for_range(ctx, cursor, (start, end), &body, out)
+                    }
+                    ForIterable::Each { array } => {
+                        self.analyze_for_each(ctx, cursor, array, &body, span, out)
+                    }
                 }
-                ForIterable::Each { array } => {
-                    self.analyze_for_each(ctx, name, array, &body, span, out)
-                }
-            },
+            }
             Stmt::Switch {
                 subject,
                 cases,

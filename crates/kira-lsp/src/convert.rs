@@ -127,6 +127,29 @@ fn position(file: &SourceFile, offset: u32) -> Position {
     }
 }
 
+/// Converts a UTF-16 line/character position into a byte offset.
+///
+/// The inverse of [`range`]'s conversion, and total the same way: a line past
+/// the end clamps to the end of the text, and a character past the end of its
+/// line clamps to the end of that line — a client is entitled to send a
+/// position one keystroke stale, and the worst it may get back is the nearest
+/// boundary, never a panic.
+pub fn offset(file: &SourceFile, position: Position) -> u32 {
+    // `line_count` is at least one even for empty text, so the subtraction
+    // cannot wrap.
+    let line_index = (position.line as usize).min(file.line_map.line_count() - 1);
+    let (line_start, line_end) = file.line_map.line_bounds(line_index, &file.text);
+    let line = &file.text[line_start as usize..line_end as usize];
+    let mut units = 0u32;
+    for (byte, character) in line.char_indices() {
+        if units >= position.character {
+            return line_start + byte as u32;
+        }
+        units += character.len_utf16() as u32;
+    }
+    line_end
+}
+
 /// The largest char boundary at or before `offset`, clamped into `text`.
 fn boundary(text: &str, offset: usize) -> usize {
     let mut offset = offset.min(text.len());
@@ -219,6 +242,40 @@ mod tests {
         // Byte 1 is inside `é`; byte 99 is past the end.
         assert_eq!(position(&file, 1).character, 0);
         assert_eq!(position(&file, 99).character, 1);
+    }
+
+    /// `offset` inverts `position` on every boundary the protocol can send:
+    /// ASCII, multi-byte, line ends, and positions past the text.
+    #[test]
+    fn an_lsp_position_maps_back_to_the_byte_it_came_from() {
+        let file = file("let é = 1\nlet y = x\n");
+        // Round trip: the byte of `y` survives position → offset.
+        let y = 14u32;
+        assert_eq!(offset(&file, position(&file, y)), y);
+        // A character past the end of its line clamps to the line end, not
+        // into the next line.
+        assert_eq!(
+            offset(
+                &file,
+                Position {
+                    line: 0,
+                    character: 99
+                }
+            ),
+            10,
+            "line 0 ends at byte 10 (`é` is two bytes)"
+        );
+        // A line past the end clamps to the last line.
+        assert_eq!(
+            offset(
+                &file,
+                Position {
+                    line: 99,
+                    character: 0
+                }
+            ),
+            21
+        );
     }
 
     #[test]

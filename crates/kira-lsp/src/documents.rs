@@ -65,6 +65,66 @@ fn key(uri: &Uri) -> String {
     uri.as_str().to_owned()
 }
 
+/// The filesystem path a `file:` URI names, percent-decoded.
+///
+/// `None` for any other scheme (an untitled buffer, say) — such a document has
+/// no directory, so imports cannot resolve beside it and analysis falls back
+/// to its display name.
+pub fn file_path(uri: &Uri) -> Option<String> {
+    let text = uri.as_str();
+    let rest = text.strip_prefix("file://")?;
+    // `file:///a/b` has an empty authority; a non-empty one (`file://host/…`)
+    // names a remote file this server cannot read.
+    let path = match rest.find('/') {
+        Some(0) => rest,
+        _ => return None,
+    };
+    Some(percent_decode(path))
+}
+
+/// Decodes `%XX` escapes, leaving malformed ones as written.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && let Some(pair) = bytes.get(index + 1..index + 3)
+            && let Ok(hex) = std::str::from_utf8(pair)
+            && let Ok(value) = u8::from_str_radix(hex, 16)
+        {
+            out.push(value);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A `file:` URI for a filesystem path, percent-encoding what the grammar
+/// requires.
+///
+/// The inverse of [`file_path`] for the paths this server produces: module
+/// paths from its own loader, always absolute on the hosts it runs on.
+pub fn path_uri(path: &str) -> Option<Uri> {
+    use std::fmt::Write as _;
+    use std::str::FromStr as _;
+
+    let mut encoded = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' => encoded.push(byte as char),
+            b'/' | b'-' | b'.' | b'_' | b'~' => encoded.push(byte as char),
+            _ => {
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+    }
+    Uri::from_str(&format!("file://{encoded}")).ok()
+}
+
 /// A readable file name for a URI, for diagnostics that name their file.
 ///
 /// Best-effort and cosmetic: the URI's last path segment, or the whole URI when
@@ -129,6 +189,24 @@ mod tests {
         documents.set(&uri("file:///tmp/b.kira"), "b".to_owned(), 1);
         assert_eq!(documents.text(&uri("file:///tmp/a.kira")), Some("a"));
         assert_eq!(documents.text(&uri("file:///tmp/b.kira")), Some("b"));
+    }
+
+    #[test]
+    fn a_file_uri_round_trips_through_path_and_back() {
+        let original = uri("file:///tmp/with%20space/a.kira");
+        let path = file_path(&original).expect("a file uri names a path");
+        assert_eq!(path, "/tmp/with space/a.kira");
+        assert_eq!(path_uri(&path), Some(original));
+    }
+
+    #[test]
+    fn a_non_file_uri_names_no_path() {
+        assert_eq!(file_path(&uri("untitled:Untitled-1")), None);
+        assert_eq!(
+            file_path(&uri("file://host/a.kira")),
+            None,
+            "a non-empty authority is a remote file"
+        );
     }
 
     #[test]

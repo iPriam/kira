@@ -86,6 +86,10 @@ impl Analyzer<'_> {
                     self.emit(span, "KSEM021", purpose.immutable_root(&name));
                     return None;
                 }
+                if let Some(binding) = ctx.binding_span(local) {
+                    let definition = kira_source::FileSpan::new(self.source, binding);
+                    self.link(span, definition);
+                }
                 Some((
                     HirPlace {
                         local,

@@ -208,7 +208,8 @@ impl Analyzer<'_> {
             // analyzed, with the binding declared as `Type::Error`, so its own
             // mistakes surface instead of an avalanche of unknown-name reports.
             ctx.push_scope();
-            ctx.declare(&guarded.name, Type::Error, guarded.mutable);
+            let local = ctx.declare(&guarded.name, Type::Error, guarded.mutable);
+            ctx.note_binding_span(local, guarded.name_span);
             let tail = self.lower_guarded(ctx, rest, guard);
             ctx.pop_scope();
             out.extend(tail);
@@ -290,6 +291,7 @@ impl Analyzer<'_> {
         };
 
         let local = ctx.declare(&guarded.name, local_ty, guarded.mutable);
+        ctx.note_binding_span(local, guarded.name_span);
         let bind = self.program.stmts.alloc(HirStmt::Let {
             local,
             init: payload,

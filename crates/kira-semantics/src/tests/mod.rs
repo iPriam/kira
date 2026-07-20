@@ -6,6 +6,7 @@ mod arrays;
 mod attempts;
 mod classes;
 mod closures;
+mod definitions;
 mod enums;
 mod exports;
 mod generics;

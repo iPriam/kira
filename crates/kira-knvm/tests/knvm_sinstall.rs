@@ -64,12 +64,13 @@ fn sinstall_lands_both_tools_and_configures_the_shell() {
     .expect("sinstall from this checkout");
 
     assert_eq!(installed.bin_dir, kira_home.path().join("bin"));
-    for tool in ["knvm", "kira"] {
+    for tool in ["knvm", "kira", "kira-language-server"] {
         let binary = installed.bin_dir.join(tool);
         assert!(binary.is_file(), "`{tool}` must be installed");
-        // The installed knvm answers `help`; the installed launcher, with no
-        // toolchain selected under this home, must refuse with its own exit
-        // code 2 rather than something unrelated. Both prove the binaries run.
+        // The installed knvm answers `help`; the installed launcher — under
+        // either of its names — with no toolchain selected under this home,
+        // must refuse with its own exit code 2 rather than something
+        // unrelated. All three prove the binaries run.
         let (arguments, expected): (&[&str], i32) = match tool {
             "knvm" => (&["help"], 0),
             _ => (&[], 2),

@@ -5,11 +5,7 @@ use std::path::Path;
 use kira_backend_api::WasmDevice;
 use llvm_sys::core::{LLVMCreateMessage, LLVMDisposeMessage, LLVMSetTarget};
 use llvm_sys::prelude::*;
-use llvm_sys::target::{
-    LLVM_InitializeAllAsmPrinters, LLVM_InitializeAllTargetInfos, LLVM_InitializeAllTargetMCs,
-    LLVM_InitializeAllTargets, LLVM_InitializeNativeAsmPrinter, LLVM_InitializeNativeTarget,
-    LLVMDisposeTargetData, LLVMSetModuleDataLayout,
-};
+use llvm_sys::target::{LLVMDisposeTargetData, LLVMSetModuleDataLayout};
 use llvm_sys::target_machine::*;
 
 use super::ffi::{c_string, take_message};
@@ -21,6 +17,54 @@ pub(super) struct TargetMachine {
     triple: *mut std::os::raw::c_char,
 }
 
+/// Registers the code generators this backend emits with: the compiling
+/// host's and WebAssembly's.
+///
+/// Explicit per-target calls rather than `LLVM_InitializeAll*`: those are C
+/// wrapper functions `llvm-sys` only compiles when it owns the LLVM linking,
+/// which this backend does itself (see `build.rs`). The explicit initializers
+/// are real LLVM symbols, and naming the targets keeps the backend linkable
+/// against a bundle that was built with exactly these code generators.
+///
+/// # Safety
+///
+/// The initializers are idempotent and safe to call repeatedly.
+unsafe fn initialize_targets() {
+    // SAFETY: per the function contract — idempotent registration calls.
+    unsafe {
+        #[cfg(target_arch = "aarch64")]
+        {
+            use llvm_sys::target::{
+                LLVMInitializeAArch64AsmPrinter, LLVMInitializeAArch64Target,
+                LLVMInitializeAArch64TargetInfo, LLVMInitializeAArch64TargetMC,
+            };
+            LLVMInitializeAArch64TargetInfo();
+            LLVMInitializeAArch64Target();
+            LLVMInitializeAArch64TargetMC();
+            LLVMInitializeAArch64AsmPrinter();
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            use llvm_sys::target::{
+                LLVMInitializeX86AsmPrinter, LLVMInitializeX86Target, LLVMInitializeX86TargetInfo,
+                LLVMInitializeX86TargetMC,
+            };
+            LLVMInitializeX86TargetInfo();
+            LLVMInitializeX86Target();
+            LLVMInitializeX86TargetMC();
+            LLVMInitializeX86AsmPrinter();
+        }
+        use llvm_sys::target::{
+            LLVMInitializeWebAssemblyAsmPrinter, LLVMInitializeWebAssemblyTarget,
+            LLVMInitializeWebAssemblyTargetInfo, LLVMInitializeWebAssemblyTargetMC,
+        };
+        LLVMInitializeWebAssemblyTargetInfo();
+        LLVMInitializeWebAssemblyTarget();
+        LLVMInitializeWebAssemblyTargetMC();
+        LLVMInitializeWebAssemblyAsmPrinter();
+    }
+}
+
 impl TargetMachine {
     /// Builds a target machine for the compiling host.
     pub(super) fn host() -> Result<Self, LlvmError> {
@@ -28,11 +72,7 @@ impl TargetMachine {
         // every out-parameter below is a live local, and each LLVM-owned string
         // is disposed of before returning or stored in `Self` for its drop.
         unsafe {
-            if LLVM_InitializeNativeTarget() != 0 || LLVM_InitializeNativeAsmPrinter() != 0 {
-                return Err(LlvmError::Emit(
-                    "LLVM has no code generator for this host".to_owned(),
-                ));
-            }
+            initialize_targets();
 
             let triple = LLVMGetDefaultTargetTriple();
             let mut target: LLVMTargetRef = std::ptr::null_mut();
@@ -80,15 +120,11 @@ impl TargetMachine {
             WasmDevice::Wasm32 => "wasm32-unknown-emscripten",
             WasmDevice::Wasm64 => "wasm64-unknown-emscripten",
         };
-        // SAFETY: the all-target initializers register whatever code
-        // generators this LLVM was built with and are idempotent; the triple
-        // is an owned message this struct's drop disposes, and the failure
-        // path disposes everything it allocated.
+        // SAFETY: the target initializers are idempotent; the triple is an
+        // owned message this struct's drop disposes, and the failure path
+        // disposes everything it allocated.
         unsafe {
-            LLVM_InitializeAllTargetInfos();
-            LLVM_InitializeAllTargets();
-            LLVM_InitializeAllTargetMCs();
-            LLVM_InitializeAllAsmPrinters();
+            initialize_targets();
 
             let spelled = c_string(requested);
             let triple = LLVMCreateMessage(spelled.as_ptr());

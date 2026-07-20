@@ -135,7 +135,8 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
             match kira_knvm::sinstall(&kira_home, &shell_home, shell.as_deref(), &start) {
                 Ok(installed) => {
                     println!(
-                        "knvm: installed `knvm` and `kira` into {}",
+                        "knvm: installed `knvm`, `kira`, and the `kira-language-server` \
+                         alias into {}",
                         installed.bin_dir.display()
                     );
                     if installed.startup_file_updated {

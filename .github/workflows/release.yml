@@ -2,8 +2,10 @@ name: Release
 
 # Pushing a `v*` tag publishes a GitHub release with, per platform:
 #
-#   kira-<version>-<host-key>.tar.gz   the toolchain: bin/kirac + foundation/
-#   knvm-<version>-<host-key>.tar.gz   the tools: bin/knvm + bin/kira
+#   kira-<version>-<host-key>.tar.gz   the toolchain: bin/kirac +
+#                                      bin/kira-language-server + foundation/
+#   knvm-<version>-<host-key>.tar.gz   the tools: bin/knvm + bin/kira +
+#                                      bin/kira-language-server (launcher alias)
 #
 # The toolchain archive's name and layout are knvm's install contract
 # (`archive_file_name`, `select_asset`, `validate` in kira-knvm); the tools
@@ -66,15 +68,13 @@ jobs:
             --pattern "$asset" --output "bundle-$asset"
           tar -xf "bundle-$asset" -C "$home"
           rm "bundle-$asset"
-          major_minor="$(echo "$version" | cut -d. -f1-2 | tr -d .)"
-          echo "LLVM_SYS_${major_minor}_PREFIX=$home" >> "$GITHUB_ENV"
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Build the release binaries
         run: |
           rustup target add wasm32-unknown-emscripten
-          cargo build --release -p kira-cli -p kira-knvm -p kira-bootstrapper
+          cargo build --release -p kira-cli -p kira-lsp -p kira-knvm -p kira-bootstrapper
           cargo build --release -p kira-native-bridge --target wasm32-unknown-emscripten
 
       - name: Package the toolchain and tools archives
@@ -85,6 +85,9 @@ jobs:
           stage="stage/kira-$KIRA_VERSION"
           mkdir -p "$stage/bin"
           cp "target/release/kirac$exe" "$stage/bin/"
+          # The language server ships with its compiler so the two cannot
+          # drift; knvm's validate refuses an archive without it.
+          cp "target/release/kira-language-server$exe" "$stage/bin/"
           # The runtime archives ride beside the compiler, where its archive
           # resolution looks; the Web one is target-suffixed.
           cp target/release/libkira_native_bridge.a "$stage/bin/"
@@ -98,6 +101,9 @@ jobs:
           mkdir -p "$tools/bin"
           cp "target/release/knvm$exe" "$tools/bin/"
           cp "target/release/kira$exe" "$tools/bin/"
+          # The launcher under its language-server name: PATH resolves this
+          # copy, and it dispatches to the selected toolchain's real server.
+          cp "target/release/kira$exe" "$tools/bin/kira-language-server$exe"
           tar -czf "dist/knvm-$KIRA_VERSION-${{ matrix.host_key }}.tar.gz" -C stage "knvm-$KIRA_VERSION"
 
       - name: Install from the packed archive and run the result

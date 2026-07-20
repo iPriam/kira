@@ -109,6 +109,12 @@ impl ImportTable {
     pub fn has_module(&self, module: &str) -> bool {
         self.modules.contains_key(module)
     }
+
+    /// The file a module name was loaded from, when the program has it.
+    #[must_use]
+    pub fn module_source(&self, module: &str) -> Option<SourceId> {
+        self.modules.get(module).copied()
+    }
 }
 
 /// Reads every `import` item out of the tree, paired with the file that wrote
@@ -165,6 +171,22 @@ impl Analyzer<'_> {
                     "Kira could not find a module for import `{module}`; \
                      expected to find it at `{path}.kira` beside the program"
                 ),
+            );
+        }
+        self.source = crate::FILE_SOURCE_ID;
+    }
+
+    /// Links every resolved import's path to the top of the file it names, so
+    /// go-to-definition on `import support` opens `support.kira`.
+    pub(crate) fn link_resolved_imports(&mut self, entries: &[ImportEntry]) {
+        for entry in entries {
+            let Some(module_source) = self.imports.module_source(&entry.module) else {
+                continue;
+            };
+            self.source = entry.source;
+            self.link(
+                entry.span,
+                kira_source::FileSpan::new(module_source, Span::new(0, 0)),
             );
         }
         self.source = crate::FILE_SOURCE_ID;

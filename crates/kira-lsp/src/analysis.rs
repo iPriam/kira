@@ -14,7 +14,10 @@
 //! IR here would make the server depend on a backend crate to learn nothing.
 
 use kira_diagnostics::Diagnostic;
-use kira_semantics::{DiagnosticAccumulator, FILE_SOURCE_ID, SourceProgram};
+use kira_semantics::{
+    DefinitionAccumulator, DefinitionLink, DiagnosticAccumulator, FILE_SOURCE_ID, SourceProgram,
+    module_source_id,
+};
 use kira_source::{SourceFile, SourceId};
 
 /// One analyzed document: its diagnostics, and the file they point into.
@@ -23,6 +26,16 @@ pub struct Analysis {
     pub diagnostics: Vec<Diagnostic>,
     /// The analyzed text, with the line table for mapping spans to positions.
     pub file: SourceFile,
+    /// Every reference the analyzer resolved, linked to its definition.
+    pub definitions: Vec<DefinitionLink>,
+    /// Every file of the program — the document first, its modules after —
+    /// indexed so `files[source.value()]` is the file a [`SourceId`] names.
+    ///
+    /// That indexing is [`module_source_id`]'s rule, mirrored here the same
+    /// way the CLI's `SourceMap` mirrors it: the entry file owns id 0 and
+    /// module *i* owns id *i + 1*. It is what turns a definition's `FileSpan`
+    /// in an imported module into that module's path and line table.
+    pub files: Vec<SourceFile>,
 }
 
 /// The source id the document being edited is analyzed under.
@@ -60,6 +73,21 @@ pub const DOCUMENT_SOURCE: SourceId = FILE_SOURCE_ID;
 /// to notice.
 pub fn analyze(path: &str, text: &str) -> Analysis {
     let modules = kira_program_graph::load_modules(std::path::Path::new(path), text);
+    // The per-file mirror is built before the module list moves into salsa:
+    // it is what maps a definition's `SourceId` back to a path and a line
+    // table when a jump lands in an imported module.
+    let mut files = vec![SourceFile::new(
+        FILE_SOURCE_ID,
+        path.to_owned(),
+        text.to_owned(),
+    )];
+    files.extend(modules.iter().enumerate().map(|(index, module)| {
+        SourceFile::new(
+            module_source_id(index),
+            module.path.clone(),
+            module.text.clone(),
+        )
+    }));
     let db = salsa::DatabaseImpl::new();
     // Analyzed as an application: the server sees one document and no manifest,
     // and the alternative default would silence the missing-`@Main` error for
@@ -82,10 +110,16 @@ pub fn analyze(path: &str, text: &str) -> Analysis {
                 .any(|label| label.span.source == DOCUMENT_SOURCE)
         })
         .collect();
+    let definitions = kira_semantics::analyzed::accumulated::<DefinitionAccumulator>(&db, source)
+        .into_iter()
+        .map(|accumulated| accumulated.0)
+        .collect();
 
     Analysis {
         diagnostics,
         file: SourceFile::new(DOCUMENT_SOURCE, path.to_owned(), text.to_owned()),
+        definitions,
+        files,
     }
 }
 

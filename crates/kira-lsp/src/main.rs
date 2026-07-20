@@ -6,9 +6,10 @@
 //!
 //! # What it does today
 //!
-//! Diagnostics, on open and on every edit. That is the whole of it: v0 has no
-//! cross-file resolution, so hover, go-to-definition, and completion are the
-//! next things to build on this transport rather than things it stubs out.
+//! Diagnostics, on open and on every edit; go-to-definition and
+//! go-to-declaration, served from the reference→definition links the
+//! analyzer records as it resolves names — cross-file included. Hover and
+//! completion are the next things to build on this transport.
 //!
 //! # Shape
 //!
@@ -26,13 +27,15 @@ mod analysis;
 mod convert;
 mod documents;
 
-use lsp_server::{Connection, ExtractError, Message, Notification};
+use lsp_server::{Connection, ExtractError, Message, Notification, Request};
 use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification as _,
     PublishDiagnostics,
 };
+use lsp_types::request::{GotoDeclaration, GotoDefinition, Request as _};
 use lsp_types::{
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DeclarationCapability, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Location, OneOf,
     PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
     Uri,
 };
@@ -59,6 +62,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         // a v0 program is one small file, and reassembling ranges correctly is
         // a real source of bugs to take on for nothing.
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+        // Definition and declaration are one capability served two ways: Kira
+        // has no separate declarations (no headers, no forward declares), so
+        // both jumps land on the same name token.
+        definition_provider: Some(OneOf::Left(true)),
+        declaration_provider: Some(DeclarationCapability::Simple(true)),
         ..ServerCapabilities::default()
     })?;
 
@@ -95,20 +103,39 @@ fn serve(connection: Connection) -> Result<(), Box<dyn std::error::Error>> {
     for message in &connection.receiver {
         match message {
             Message::Request(request) => {
-                // The only request this server answers is `shutdown`, which
-                // `handle_shutdown` replies to itself.
+                // `shutdown` first: `handle_shutdown` replies to it itself.
                 if connection.handle_shutdown(&request)? {
                     return Ok(());
                 }
-                // Anything else is a capability this server never advertised.
-                // The protocol has an answer for that; inventing a reply would
-                // be worse than admitting the gap.
-                let response = lsp_server::Response::new_err(
-                    request.id,
-                    lsp_server::ErrorCode::MethodNotFound as i32,
-                    format!("kira-language-server does not handle `{}`", request.method),
-                );
-                connection.sender.send(Message::Response(response))?;
+                match request.method.as_str() {
+                    // Declaration and definition are the same jump here: Kira
+                    // declares nothing separately from where it defines it.
+                    GotoDefinition::METHOD | GotoDeclaration::METHOD => {
+                        let id = request.id.clone();
+                        let response = match extract_request::<GotoDefinitionParams>(request) {
+                            Ok(params) => {
+                                lsp_server::Response::new_ok(id, definition(&documents, &params))
+                            }
+                            Err(error) => lsp_server::Response::new_err(
+                                id,
+                                lsp_server::ErrorCode::InvalidParams as i32,
+                                error.to_string(),
+                            ),
+                        };
+                        connection.sender.send(Message::Response(response))?;
+                    }
+                    // Anything else is a capability this server never
+                    // advertised. The protocol has an answer for that;
+                    // inventing a reply would be worse than admitting the gap.
+                    _ => {
+                        let response = lsp_server::Response::new_err(
+                            request.id,
+                            lsp_server::ErrorCode::MethodNotFound as i32,
+                            format!("kira-language-server does not handle `{}`", request.method),
+                        );
+                        connection.sender.send(Message::Response(response))?;
+                    }
+                }
             }
             Message::Notification(notification) => {
                 notify(&connection, &mut documents, notification)?;
@@ -162,6 +189,13 @@ fn notify(
     Ok(())
 }
 
+/// The path a document is analyzed under: the real one when the URI names a
+/// file — which is what lets `import support` resolve beside it and lets a
+/// cross-file jump name the right file — or the display name when it does not.
+fn analysis_path(uri: &Uri) -> String {
+    documents::file_path(uri).unwrap_or_else(|| documents::display_name(uri))
+}
+
 /// Analyzes a document and publishes what the frontend said about it.
 fn publish(
     connection: &Connection,
@@ -174,7 +208,7 @@ fn publish(
         return Ok(());
     };
 
-    let analysis = analysis::analyze(&documents::display_name(uri), text);
+    let analysis = analysis::analyze(&analysis_path(uri), text);
     let diagnostics = analysis
         .diagnostics
         .iter()
@@ -211,6 +245,83 @@ fn send_diagnostics(
     Ok(())
 }
 
+/// Answers a definition (or declaration) request from a fresh analysis.
+///
+/// The cursor names a reference when it sits inside one of the identifier
+/// spans the analyzer linked; the answer is that link's definition, in
+/// whichever file it lives. `None` — a `null` reply — is the protocol's way
+/// of saying "nothing to jump to", and it is the honest answer for a
+/// position on whitespace, a keyword, or a name that never resolved.
+fn definition(documents: &Documents, params: &GotoDefinitionParams) -> GotoDefinitionResponse {
+    let uri = &params.text_document_position_params.text_document.uri;
+    let position = params.text_document_position_params.position;
+    let Some(text) = documents.text(uri) else {
+        return GotoDefinitionResponse::Array(Vec::new());
+    };
+
+    let analysis = analysis::analyze(&analysis_path(uri), text);
+    let offset = convert::offset(&analysis.file, position);
+    let Some(link) = reference_at(&analysis, offset) else {
+        return GotoDefinitionResponse::Array(Vec::new());
+    };
+
+    let target = &analysis.files[link.definition.source.value() as usize];
+    let target_uri = if link.definition.source == analysis::DOCUMENT_SOURCE {
+        Some(uri.clone())
+    } else {
+        documents::path_uri(&target.path)
+    };
+    match target_uri {
+        Some(target_uri) => GotoDefinitionResponse::Scalar(Location {
+            uri: target_uri,
+            range: convert::range(target, link.definition.span),
+        }),
+        None => GotoDefinitionResponse::Array(Vec::new()),
+    }
+}
+
+/// The most specific link whose reference span contains `offset` in the
+/// document.
+///
+/// The end is inclusive so a cursor sitting just after the last character of
+/// a name still jumps — that is where a double-click leaves it. Ties go to
+/// the shortest span, so a name inside a larger linked region answers for
+/// itself.
+fn reference_at(
+    analysis: &analysis::Analysis,
+    offset: u32,
+) -> Option<kira_semantics::DefinitionLink> {
+    analysis
+        .definitions
+        .iter()
+        .copied()
+        .filter(|link| {
+            link.reference.source == analysis::DOCUMENT_SOURCE
+                && link.reference.span.start <= offset
+                && offset <= link.reference.span.end()
+        })
+        .min_by_key(|link| link.reference.span.len)
+}
+
+/// Deserializes a request's parameters, naming the method on failure.
+fn extract_request<P: serde::de::DeserializeOwned>(
+    request: Request,
+) -> Result<P, Box<dyn std::error::Error>> {
+    let method = request.method.clone();
+    request
+        .extract::<P>(&method)
+        .map(|(_, params)| params)
+        .map_err(|error| -> Box<dyn std::error::Error> {
+            match error {
+                ExtractError::JsonError { method, error } => {
+                    format!("malformed `{method}` parameters: {error}").into()
+                }
+                ExtractError::MethodMismatch(request) => {
+                    format!("unexpected method `{}`", request.method).into()
+                }
+            }
+        })
+}
 /// Deserializes a notification's parameters, naming the method on failure.
 fn extract<P: serde::de::DeserializeOwned>(
     notification: Notification,
@@ -228,4 +339,98 @@ fn extract<P: serde::de::DeserializeOwned>(
                 }
             }
         })
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lsp_types::{
+        PartialResultParams, Position, TextDocumentIdentifier, WorkDoneProgressParams,
+    };
+    use std::str::FromStr as _;
+
+    fn request_at(uri: &Uri, position: Position) -> GotoDefinitionParams {
+        GotoDefinitionParams {
+            text_document_position_params: lsp_types::TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        }
+    }
+
+    /// The whole request path: a cursor on a local's read jumps to its `let`.
+    #[test]
+    fn a_definition_request_jumps_to_the_binding() {
+        let uri = Uri::from_str("file:///tmp/kira_lsp_def_test.kira").expect("valid uri");
+        let text = "@Main function main() { let value = 1 print(value) return }";
+        let mut documents = Documents::new();
+        documents.set(&uri, text.to_owned(), 1);
+
+        // The cursor sits on the `value` inside `print(...)`, column 44.
+        let read = text.rfind("value").expect("the read is there") as u32;
+        let response = definition(&documents, &request_at(&uri, Position::new(0, read)));
+        let GotoDefinitionResponse::Scalar(location) = response else {
+            panic!("a resolvable name answers with one location, got {response:?}");
+        };
+        assert_eq!(location.uri, uri);
+        let binding = text.find("value").expect("the binding is there") as u32;
+        assert_eq!(location.range.start, Position::new(0, binding));
+        assert_eq!(
+            location.range.end,
+            Position::new(0, binding + "value".len() as u32)
+        );
+    }
+
+    /// A jump across files: the definition names the module's own URI.
+    #[test]
+    fn a_definition_request_crosses_into_an_imported_module() {
+        let directory = std::env::temp_dir().join(format!(
+            "kira_lsp_def_module_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).expect("temp dir");
+        let module_path = directory.join("support.kira");
+        let module_text = "function supportValue() -> Int { return 42 }";
+        std::fs::write(&module_path, module_text).expect("write module");
+        let entry = directory.join("main.kira");
+        let text = "import support as Support\n\
+                    @Main function main() { print(Support.supportValue()) return }";
+        let uri = documents::path_uri(&entry.to_string_lossy()).expect("a file uri");
+        let mut documents = Documents::new();
+        documents.set(&uri, text.to_owned(), 1);
+
+        let line1 = text.lines().nth(1).expect("two lines");
+        let call = line1.find("supportValue").expect("the call is there") as u32;
+        let response = definition(&documents, &request_at(&uri, Position::new(1, call)));
+        let GotoDefinitionResponse::Scalar(location) = response else {
+            panic!("a cross-module name answers with one location, got {response:?}");
+        };
+        assert_eq!(
+            location.uri,
+            documents::path_uri(&module_path.to_string_lossy()).expect("a file uri"),
+            "the jump lands in the module's file"
+        );
+        let declaration = module_text.find("supportValue").expect("declared") as u32;
+        assert_eq!(location.range.start, Position::new(0, declaration));
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// Whitespace has nothing to jump to, and the reply says so rather than
+    /// erroring.
+    #[test]
+    fn a_position_on_nothing_answers_with_no_locations() {
+        let uri = Uri::from_str("file:///tmp/kira_lsp_def_none.kira").expect("valid uri");
+        let text = "@Main function main() { return }";
+        let mut documents = Documents::new();
+        documents.set(&uri, text.to_owned(), 1);
+
+        let response = definition(&documents, &request_at(&uri, Position::new(0, 22)));
+        assert!(
+            matches!(response, GotoDefinitionResponse::Array(ref locations) if locations.is_empty()),
+            "got {response:?}"
+        );
+    }
 }

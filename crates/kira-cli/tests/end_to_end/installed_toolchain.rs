@@ -100,6 +100,17 @@ fn publish_fixture_release(feed: &Path, staging: &Path) {
     let bin = payload.join("bin");
     std::fs::create_dir_all(&bin).expect("create bin");
     std::fs::copy(env!("CARGO_BIN_EXE_kirac"), bin.join("kirac")).expect("stage the compiler");
+    // Install validation requires a language server beside the compiler. What
+    // these tests prove is Foundation discovery, not the server, so a stub
+    // satisfies the tree contract without pretending to speak LSP.
+    let server = bin.join("kira-language-server");
+    std::fs::write(&server, "#!/bin/sh\nexit 0\n").expect("stage the language-server stub");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755))
+            .expect("mark the language-server stub executable");
+    }
     copy_tree(
         &repository_root().join("foundation"),
         &payload.join("foundation"),

@@ -21,17 +21,15 @@ that are a double free rather than a compile error when read wrong.
 
 ## Building it
 
-The backend is feature-gated so the workspace builds and lints with no LLVM
-installed. With a managed LLVM present:
+The backend is a hard dependency — no feature gate — and links the managed
+LLVM through its own `build.rs`: discovery is `KIRA_LLVM_HOME` first, then
+`~/.kira/toolchains/llvm/<pinned>/<host>`, so a plain `cargo build` needs no
+environment setup. `llvm-sys` is compiled with `no-llvm-linking` +
+`disable-alltargets-init` and consults nothing.
 
-```sh
-LLVM_SYS_221_PREFIX=~/.kira/toolchains/llvm/22.1.4/aarch64-macos \
-  cargo build -p kira-native-bridge -p kira-cli --features kira-cli/llvm
-```
-
-`-p kira-native-bridge` is not optional. `cargo build -p kira-cli` refreshes
-that crate's rlib but **not** its staticlib, so the archive next to `kirac` can
-be older than the compiler that links it. `cargo build --workspace` covers both.
+`cargo build -p kira-cli` refreshes that crate's rlib but **not**
+`kira-native-bridge`'s staticlib, so the archive next to `kirac` can be older
+than the compiler that links it. `cargo build --workspace` covers both.
 
 ## Contracts
 

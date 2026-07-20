@@ -112,9 +112,13 @@ what the task touches — before writing code, never after a review.
 ## Commands (from repo root)
 
 - `cargo build --workspace` — build everything. The LLVM backend is a hard
-  dependency: export `LLVM_SYS_221_PREFIX` pointing at the managed bundle
-  (`~/.kira/toolchains/llvm/<version>/<host>`) or nothing builds.
-- `cargo test --workspace` — full tests.
+  dependency: its build script discovers the managed bundle at
+  `~/.kira/toolchains/llvm/<version>/<host>` itself (`KIRA_LLVM_HOME`
+  overrides), so no environment setup is needed — with no bundle installed,
+  nothing builds.
+- `cargo nextest run --workspace` — full tests, binaries in parallel (install
+  once: `curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C
+  ~/.cargo/bin`). `cargo test --workspace` works too, one binary at a time.
 - `cargo clippy --workspace --all-targets -- -D warnings` — lint gate
   (CI-enforced, warnings are errors).
 - `cargo fmt` — format; CI runs `cargo fmt --check`.

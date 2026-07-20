@@ -1,8 +1,9 @@
 //! Installing knvm itself out of a checkout: `knvm sinstall`.
 //!
-//! `binstall` provisions a *toolchain*; this provisions the *tools* — `knvm`
-//! and the `kira` launcher — which live outside any toolchain version because
-//! they are what selects between versions. They are built with cargo from the
+//! `binstall` provisions a *toolchain*; this provisions the *tools* — `knvm`,
+//! the `kira` launcher, and the launcher's `kira-language-server` alias — which
+//! live outside any toolchain version because they are what selects between
+//! versions. They are built with cargo from the
 //! enclosing checkout and landed in `<kira-home>/bin`, and the user's shell is
 //! pointed at that directory the way rustup points one at `~/.cargo/bin`: an
 //! `env` script under the kira home, sourced by one line appended to the
@@ -19,8 +20,17 @@ use std::process::Command;
 use crate::binstall::{BinstallError, enclosing_checkout, target_dir};
 use crate::install::InstallError;
 
-/// The tools this installs: the version manager and the launcher it feeds.
-const TOOLS: [&str; 2] = ["knvm", "kira"];
+/// The tools this installs, as `(built binary, installed name)`.
+///
+/// The launcher lands twice: once as `kira`, and once under the language
+/// server's name, where it dispatches to the selected toolchain's server
+/// instead of its primary (see the multi-call note in `kira-bootstrapper`).
+/// PATH then always resolves the *selected* server, never a frozen copy.
+const TOOLS: [(&str, &str); 3] = [
+    ("knvm", "knvm"),
+    ("kira", "kira"),
+    ("kira", kira_toolchain::LANGUAGE_SERVER_BINARY),
+];
 
 /// What a self-install did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,9 +82,9 @@ pub fn sinstall(
         .map_err(|error| InstallError::io("create", &bin_dir, error))?;
 
     let debug_dir = target_dir(&checkout).join("debug");
-    for tool in TOOLS {
-        let name = kira_toolchain::executable_name(tool);
-        let built_binary = debug_dir.join(&name);
+    for (tool, installed) in TOOLS {
+        let name = kira_toolchain::executable_name(installed);
+        let built_binary = debug_dir.join(kira_toolchain::executable_name(tool));
         if !built_binary.is_file() {
             return Err(BinstallError::MissingBuildArtifact {
                 expected: built_binary,

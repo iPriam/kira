@@ -27,6 +27,15 @@ pub(crate) struct FnCtx {
     /// `declare_hidden` are the only ways to add a local and both push to
     /// both, so `ownership[i]` always describes `locals[i]`.
     ownership: Vec<LocalOwnership>,
+    /// Where each local's name was written, positionally aligned with
+    /// `locals`; `None` for a slot the source never named (hidden desugar
+    /// locals, the synthetic `self`).
+    ///
+    /// Kept in step the same way `ownership` is: every declare pushes to all
+    /// three vectors. Declaration sites that know their span record it with
+    /// [`FnCtx::note_binding_span`] right after declaring, which keeps the
+    /// declare signatures — and their many call sites — unchanged.
+    binding_spans: Vec<Option<Span>>,
     pub(crate) scopes: Vec<HashMap<String, LocalId>>,
     pub(crate) return_type: Type,
     /// The struct this body is a method of, when it is one.
@@ -57,6 +66,7 @@ impl FnCtx {
         Self {
             locals: Vec::new(),
             ownership: Vec::new(),
+            binding_spans: Vec::new(),
             scopes: vec![HashMap::new()],
             return_type,
             receiver: None,
@@ -101,10 +111,21 @@ impl FnCtx {
             mode: ownership,
             moved: None,
         });
+        self.binding_spans.push(None);
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.to_owned(), id);
         }
         id
+    }
+
+    /// Records where `local`'s name was written, for go-to-definition.
+    pub(crate) fn note_binding_span(&mut self, local: LocalId, span: Span) {
+        self.binding_spans[local.0 as usize] = Some(span);
+    }
+
+    /// Where `local`'s name was written, when the source named it.
+    pub(crate) fn binding_span(&self, local: LocalId) -> Option<Span> {
+        self.binding_spans[local.0 as usize]
     }
 
     /// The ownership state of a local slot.
@@ -156,6 +177,7 @@ impl FnCtx {
             ownership: OwnershipMode::Owned,
         });
         self.ownership.push(LocalOwnership::owned());
+        self.binding_spans.push(None);
         id
     }
 
@@ -173,6 +195,10 @@ impl FnCtx {
             ownership: OwnershipMode::Owned,
         });
         self.ownership.push(LocalOwnership::owned());
+        // A capture stands in for the binding it copies, so a jump from a use
+        // of the capture should land where that binding was written; the
+        // lifting site records it via `note_binding_span`.
+        self.binding_spans.push(None);
         if let Some(scope) = self.scopes.first_mut() {
             scope.insert(name.to_owned(), id);
         }

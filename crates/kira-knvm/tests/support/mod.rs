@@ -53,6 +53,8 @@ pub fn host_key() -> &'static str {
 pub struct FixtureToolchain {
     /// Whether `bin/kirac` is present and executable.
     pub with_primary_binary: bool,
+    /// Whether `bin/kira-language-server` is present and executable.
+    pub with_language_server: bool,
     /// Whether `foundation/package.kira` is present.
     pub with_foundation: bool,
 }
@@ -62,6 +64,7 @@ impl FixtureToolchain {
     pub fn complete() -> Self {
         Self {
             with_primary_binary: true,
+            with_language_server: true,
             with_foundation: true,
         }
     }
@@ -97,6 +100,23 @@ pub fn publish(releases: &Path, channel: Channel, version: &str, shape: &Fixture
         // A release with no binary at all still has a tree, so the failure under
         // test is the validation refusal and not an unpack failure.
         std::fs::create_dir_all(payload.join("bin")).expect("create bin");
+    }
+
+    if shape.with_language_server {
+        let bin = payload.join("bin");
+        std::fs::create_dir_all(&bin).expect("create bin");
+        let server = bin.join("kira-language-server");
+        std::fs::write(
+            &server,
+            format!("#!/bin/sh\necho \"kira-language-server {version} argv: $*\"\nexit 0\n"),
+        )
+        .expect("write fixture language server");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755))
+                .expect("mark fixture language server executable");
+        }
     }
 
     if shape.with_foundation {

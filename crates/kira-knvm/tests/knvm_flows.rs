@@ -193,6 +193,7 @@ fn an_archive_without_a_primary_binary_is_refused_and_leaves_nothing_behind() {
         "1.7.3",
         &FixtureToolchain {
             with_primary_binary: false,
+            with_language_server: true,
             with_foundation: true,
         },
     );
@@ -226,6 +227,36 @@ fn an_archive_without_a_primary_binary_is_refused_and_leaves_nothing_behind() {
 }
 
 #[test]
+fn an_archive_without_a_language_server_is_refused() {
+    let releases = TempTree::create("feed");
+    let home = TempTree::create("home");
+    publish(
+        releases.path(),
+        Channel::Release,
+        "1.7.3",
+        &FixtureToolchain {
+            with_primary_binary: true,
+            with_language_server: false,
+            with_foundation: true,
+        },
+    );
+
+    let source = DirectoryReleaseSource::new(releases.path()).expect("supported host");
+    let error = install(
+        home.path(),
+        &source,
+        &VersionSpec::Exact("1.7.3".to_string()),
+        Channel::Release,
+    )
+    .expect_err("a toolchain with no language server is not installable");
+    assert!(
+        matches!(error, InstallError::MissingLanguageServer { .. }),
+        "expected a typed validation refusal, got: {error}"
+    );
+    assert!(!home.path().join("release").join("1.7.3").exists());
+}
+
+#[test]
 fn an_archive_without_foundation_is_refused() {
     let releases = TempTree::create("feed");
     let home = TempTree::create("home");
@@ -235,6 +266,7 @@ fn an_archive_without_foundation_is_refused() {
         "1.7.3",
         &FixtureToolchain {
             with_primary_binary: true,
+            with_language_server: true,
             with_foundation: false,
         },
     );

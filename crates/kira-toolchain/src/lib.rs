@@ -187,6 +187,14 @@ pub fn managed_binary_dir(
     Ok(managed_toolchain_root(channel, version)?.join("bin"))
 }
 
+/// The language server binary a toolchain ships beside its primary.
+///
+/// One spelling shared by everything that speaks it: knvm stages and validates
+/// the binary under this name, the release workflow packages it, and the
+/// `kira` launcher dispatches to it when invoked under this name — so an
+/// editor finds the selected toolchain's server on PATH, never a stale copy.
+pub const LANGUAGE_SERVER_BINARY: &str = "kira-language-server";
+
 /// The full path of an installed toolchain's primary binary.
 pub fn managed_primary_binary_path(
     channel: Channel,
