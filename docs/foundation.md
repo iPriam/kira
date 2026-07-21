@@ -5,7 +5,9 @@ rather than beside the program. Nothing else in the language reaches outside a
 project's own directory, and this is the mechanism that lets a standard library
 exist at all.
 
-Foundation today declares one function:
+Foundation declares `printLine` and a small geometry and math vocabulary — the
+subset of the reference implementation's `Types/Maths` the migrated corpus
+constructs and reads:
 
 ```kira
 import Foundation
@@ -13,9 +15,27 @@ import Foundation
 @Main
 function main() {
     printLine("hello")
+    let frame = Rect(x: 0.0, y: 0.0, width: 640.0, height: 480.0)
+    let origin = Point { x: frame.x, y: frame.y }
+    let extent = Size(frame.width, frame.height)
     return
 }
 ```
+
+## The geometry vocabulary
+
+`Point`, `Size`, `Rect`, `Vec3`, and `Mat4` are data structs, matched to the
+reference implementation on field names and types so a construction written
+against it means the same thing here. `Mat4` defaults to the identity; the free
+function `mat4Identity()` returns it. `sqrtApprox`, `sinApprox`, and `cosApprox`
+are the series approximations the corpus's own math builds on.
+
+A data struct is constructed by naming it, its implicit memberwise constructor:
+`Point(1.0, 2.0)` fills the fields in declaration order and `Point(x: 1.0, y:
+2.0)` binds each by name, the two spellings the `Point { x: .., y: .. }` literal
+already had. A field the call does not reach takes its declared default, so
+`Mat4()` is the all-defaulted value. The constructor lowers to the same struct
+value a literal produces, so it runs identically on every backend.
 
 ## Where the compiler looks
 
@@ -79,10 +99,19 @@ separate rule for a bundled one.
 
 ## What Foundation does not have yet
 
-The reference implementation's Foundation carries seven more files. Each waits
-on a language subsystem this compiler has not built, and each is named here
-rather than stubbed — a file that compiles and does nothing is worse than an
-import that fails.
+The geometry structs are pure data here. The reference implementation also gives
+`Vec3`, `Mat4`, and `Quaternion` their vector and matrix algebra as methods —
+`add`, `dot`, `cross`, `normalize`, `multiply`, `translate`, and the rest — and
+the corpus does not call any of them (its own math is written out longhand). The
+matrix methods lean on struct operator overloading (`self * Mat4 { … }`), which
+this compiler has not built, so they wait on it rather than being ported in a
+form that would not compile. `Vec2`, `Vec4`, and `Quaternion` themselves are
+unported for the same reason: nothing in the corpus constructs them.
+
+The reference implementation's Foundation also carries seven more files. Each
+waits on a language subsystem this compiler has not built, and each is named
+here rather than stubbed — a file that compiles and does nothing is worse than
+an import that fails.
 
 | File | Waits on |
 |---|---|

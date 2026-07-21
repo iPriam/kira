@@ -48,6 +48,34 @@ fn calls_the_bundled_foundation_through_its_namespace_root() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "qualified\n");
 }
 
+/// The shipped Foundation carries more than `printLine`: its geometry types
+/// resolve and construct through the installed compiler, from a directory that
+/// holds nothing but the program. This is the bundled-Foundation *content*
+/// contract — an `import Foundation` that finds `Point`, `Size`, `Rect`, and
+/// `mat4Identity` without a path or a dependency entry.
+#[test]
+fn the_bundled_foundation_ships_the_geometry_vocabulary() {
+    let path = write_source(
+        "import Foundation\n\
+         @Main function main() {\n\
+             let r = Rect(0.0, 0.0, 640.0, 480.0)\n\
+             let origin = Point { x: r.x, y: r.y }\n\
+             let extent = Size(r.width, r.height)\n\
+             let m = mat4Identity()\n\
+             print(origin.x + extent.width + extent.height + m.m22)\n\
+             return\n\
+         }",
+    );
+    let output = kirac(&["run", path.to_str().expect("a utf-8 path")]);
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "1121\n");
+}
+
 /// Foundation is imported, never implicit. A file that does not import it does
 /// not get it — which is what makes the passing cases above statements about
 /// the import rather than about the compiler injecting a prelude.

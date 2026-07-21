@@ -19,6 +19,7 @@ use crate::operators::{resolve_binary, resolve_unary, unary_spelling, unify_bran
 
 mod calls;
 mod labels;
+mod memberwise;
 mod native_state;
 
 impl Analyzer<'_> {
@@ -258,6 +259,18 @@ impl Analyzer<'_> {
                         return self.program.exprs.alloc(HirExpr::Error);
                     }
                     return self.ffi_zero_filled_struct(id, callee_span);
+                }
+                // A data struct is constructed by naming it: `Point(x, y)` fills
+                // its fields in declaration order and `Point(x: .., y: ..)` binds
+                // each by name — the struct's implicit memberwise constructor,
+                // the two spellings the `Point { x: .., y: .. }` literal already
+                // has. Recognized before the undefined-function path so a
+                // construction is never reported as a missing function.
+                if let Some(id) = self.plain_struct_named(&name)
+                    && ctx.resolve(&name).is_none()
+                {
+                    self.link_type_name(&name, callee_span);
+                    return self.analyze_struct_memberwise_new(ctx, id, &args, callee_span);
                 }
                 // A bare call inside a method may name one of the receiver's
                 // own or inherited methods, the way a bare name may read one of

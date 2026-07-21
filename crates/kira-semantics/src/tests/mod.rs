@@ -18,6 +18,7 @@ mod generics;
 mod imports;
 mod libraries;
 mod matches;
+mod memberwise;
 mod mutation;
 mod native_state;
 mod operators;
