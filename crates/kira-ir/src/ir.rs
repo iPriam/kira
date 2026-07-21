@@ -11,6 +11,9 @@ use kira_runtime_abi::{Execution, ForeignImport};
 use kira_semantics_model::{EnumId, StructId, Type, TypeTable};
 use la_arena::{Arena, Idx};
 
+/// The scalar-conversion machine kinds, reused from the analyzer so the IR does
+/// not re-derive which conversion a `T(operand)` cast performs.
+pub use kira_semantics_model::hir::ConvertKind;
 /// The typed binary operators, reused from the analyzer's instruction
 /// selection so the IR does not re-derive types.
 pub use kira_semantics_model::hir::HirBinaryOp as IrBinOp;
@@ -126,6 +129,7 @@ impl IrProgram {
             IrExpr::Field { ty, .. }
             | IrExpr::ArrayNew { ty, .. }
             | IrExpr::EnumPayload { ty, .. }
+            | IrExpr::Convert { ty, .. }
             | IrExpr::Index { ty, .. } => *ty,
             IrExpr::Select { ty, .. } => *ty,
             IrExpr::ArrayLen { .. } | IrExpr::EnumTag { .. } => Type::INT,
@@ -488,6 +492,20 @@ pub enum IrExpr {
         place: IrPlace,
         /// The element to push.
         value: IrExprId,
+    },
+    /// A scalar type-conversion, `T(operand)`.
+    ///
+    /// The `kind` fixes the machine operation (see
+    /// [`ConvertKind`]); `ty` carries the target type. A backend that ignored
+    /// `kind` and read the operand's type would have to re-derive the same
+    /// choice analysis already made.
+    Convert {
+        /// The value being converted.
+        operand: IrExprId,
+        /// Which machine conversion this is.
+        kind: ConvertKind,
+        /// The target type, carrying its width spelling.
+        ty: Type,
     },
 }
 

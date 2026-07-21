@@ -122,6 +122,7 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
             walk_place(program, place, found);
             walk_expr(program, *value, found);
         }
+        IrExpr::Convert { operand, .. } => walk_expr(program, *operand, found),
         // Leaves: nothing inside can be a call.
         IrExpr::Int(_) | IrExpr::Float(_) | IrExpr::Bool(_) | IrExpr::Str(_) | IrExpr::Local(_) => {
         }

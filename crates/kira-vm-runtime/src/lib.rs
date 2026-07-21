@@ -126,6 +126,69 @@ mod tests {
         assert_eq!(outcome.heap.current, 0);
     }
 
+    /// The scalar conversion instructions, pinned at the instruction level: the
+    /// float-to-int cast truncates toward zero, saturates past `i64`'s range,
+    /// and maps NaN to zero, and the int-to-float cast is exact. These are the
+    /// endpoints the parity suite exercises through source, proven here directly
+    /// so a change to either instruction fails a small, fast test too.
+    #[test]
+    fn scalar_conversions_truncate_saturate_and_convert() {
+        // A magnitude past `i64::MAX` (~9.2e18), produced by a literal.
+        let far = 100_000_000_000_000_000_000.0_f64;
+        let main = func(
+            "main",
+            0,
+            0,
+            vec![
+                I::ConstFloat(2.9),
+                I::ConvertFloatToInt,
+                I::Print,
+                I::Pop,
+                I::ConstFloat(-2.9),
+                I::ConvertFloatToInt,
+                I::Print,
+                I::Pop,
+                I::ConstFloat(far),
+                I::ConvertFloatToInt,
+                I::Print,
+                I::Pop,
+                I::ConstFloat(-far),
+                I::ConvertFloatToInt,
+                I::Print,
+                I::Pop,
+                I::ConstFloat(f64::NAN),
+                I::ConvertFloatToInt,
+                I::Print,
+                I::Pop,
+                I::ConstInt(7),
+                I::ConvertIntToFloat,
+                I::Print,
+                I::Pop,
+                I::ReturnVoid,
+            ],
+        );
+        let module = Module {
+            exports: Default::default(),
+            foreign_imports: Vec::new(),
+            functions: vec![main],
+            main: Some(0),
+            strings: Vec::new(),
+        };
+        let (lines, outcome) = run(&module);
+        assert_eq!(
+            lines,
+            [
+                "2",
+                "-2",
+                "9223372036854775807",
+                "-9223372036854775808",
+                "0",
+                "7",
+            ]
+        );
+        assert_eq!(outcome.heap.current, 0);
+    }
+
     /// The other direction of the same seam: a host calls one function by id.
     /// This is what the native half of a hybrid program reaches back through.
     #[test]
