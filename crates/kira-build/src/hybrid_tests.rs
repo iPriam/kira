@@ -39,6 +39,7 @@ fn function(name: &str, execution: Execution, body: Vec<IrStmt>) -> IrFunction {
         locals: Vec::new(),
         return_type: Type::Void,
         execution,
+        mutates_self: false,
         body,
     }
 }
@@ -49,6 +50,7 @@ fn call(exprs: &mut Arena<IrExpr>, index: u32) -> IrStmt {
         callee: IrCallee::User(index),
         args: Vec::new(),
         result: Type::Void,
+        writeback: None,
     });
     IrStmt::Eval { expr }
 }
@@ -308,6 +310,7 @@ fn every_type_a_v1_signature_can_have_gets_a_bridge_tag() {
                 locals: vec![Type::INT, Type::FLOAT, Type::Bool, Type::String, Type::Void],
                 return_type: Type::Void,
                 execution: Execution::Runtime,
+                mutates_self: false,
                 body: Vec::new(),
             }],
             Arena::new(),
@@ -348,6 +351,7 @@ fn the_error_type_is_refused_rather_than_encoded() {
             locals: Vec::new(),
             return_type: Type::Error,
             execution: Execution::Runtime,
+            mutates_self: false,
             body: Vec::new(),
         }],
         Arena::new(),

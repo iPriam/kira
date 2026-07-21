@@ -137,6 +137,7 @@ impl Analyzer<'_> {
             callee: Callee::User(dispatcher),
             args: all,
             ty: result,
+            writeback: None,
         })
     }
 
@@ -188,6 +189,7 @@ impl Analyzer<'_> {
                     body: Vec::new(),
                     is_main: false,
                     execution: kira_semantics_model::Execution::Inherited,
+                    mutates_self: false,
                     name_span: Span::new(0, 0),
                 });
             }
@@ -247,6 +249,7 @@ impl Analyzer<'_> {
             callee: Callee::User(target),
             args,
             ty: result,
+            writeback: None,
         });
         if result == Type::Void {
             vec![
@@ -358,6 +361,7 @@ impl Analyzer<'_> {
                 body: Vec::new(),
                 is_main: false,
                 execution: kira_semantics_model::Execution::Inherited,
+                mutates_self: false,
                 name_span: Span::new(0, 0),
             };
         };
@@ -427,6 +431,7 @@ impl Analyzer<'_> {
             body,
             is_main: false,
             execution: kira_semantics_model::Execution::Inherited,
+            mutates_self: false,
             name_span: Span::new(0, 0),
         }
     }

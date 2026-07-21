@@ -78,6 +78,11 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.push(o::CALL_FOREIGN);
             out.extend_from_slice(&id.to_le_bytes());
         }
+        Instruction::CallMut { func, slot, path } => {
+            out.push(o::CALL_MUT);
+            out.extend_from_slice(&func.to_le_bytes());
+            encode_place(*slot, path, out);
+        }
         Instruction::NewStruct(fields) => {
             out.push(o::NEW_STRUCT);
             out.extend_from_slice(&fields.to_le_bytes());
@@ -266,6 +271,11 @@ impl Cursor<'_> {
             o::ARRAY_APPEND => {
                 let (slot, path) = self.next_place(opcode_offset)?;
                 Instruction::ArrayAppend { slot, path }
+            }
+            o::CALL_MUT => {
+                let func = u32::from_le_bytes(self.take()?);
+                let (slot, path) = self.next_place(opcode_offset)?;
+                Instruction::CallMut { func, slot, path }
             }
             o::NEW_ENUM => {
                 let tag = u16::from_le_bytes(self.take()?);

@@ -91,6 +91,10 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) interner: &'a Interner,
     sigs: Vec<FuncSig>,
     pub(crate) sig_index: HashMap<String, FuncId>,
+    /// Whether each callable, by [`FuncId`], is a method that mutates its
+    /// receiver. Computed to a fixpoint after signatures and before bodies (see
+    /// [`crate::mutation`]); empty until then.
+    pub(crate) mutating_methods: Vec<bool>,
     /// Every `@FFI.Extern` callable the program accepted, keyed by its Kira
     /// name, mapping to its row in [`HirProgram::foreign`].
     ///
@@ -217,6 +221,7 @@ impl<'a> Analyzer<'a> {
             interner,
             sigs: Vec::new(),
             sig_index: HashMap::new(),
+            mutating_methods: Vec::new(),
             foreign_index: HashMap::new(),
             in_foreign_signature: false,
             struct_defaults: Vec::new(),
@@ -269,6 +274,12 @@ impl<'a> Analyzer<'a> {
         // here, before any signature can reserve one.
         self.synth_base = callables.len() as u32;
         self.collect_signatures(&callables);
+        // Which methods mutate their receiver is decided once here, before any
+        // body is analyzed: a body analyzes `self` as mutable exactly when its
+        // method is marked mutating, and a call site writes the receiver back
+        // exactly when its callee is. The fixpoint reads the signatures the step
+        // above built, so it runs after them.
+        self.collect_mutating_methods(&callables);
         // `@Main` is a property of the program, not of any one file, and the
         // "no `@Main`" diagnostic has no span to point at — so it is attributed
         // to the entry file rather than to whichever module happened to declare
@@ -439,17 +450,19 @@ impl<'a> Analyzer<'a> {
         let sig_return = self.sigs[id.0 as usize].return_type;
         self.current_execution = function.execution;
         let mut ctx = FnCtx::new(sig_return);
-        // A method's receiver is local 0, named `self`. It is immutable: a
-        // method receives a copy like any other by-value parameter, so writing
-        // to it would change nothing the caller could see, and letting it look
-        // like it might would be worse than refusing.
+        // A method's receiver is local 0, named `self`. A non-mutating method
+        // receives it as an immutable copy — writing to it would change nothing
+        // the caller could see. A mutating method receives it as a mutable,
+        // owned value that the call site writes back afterwards, so `self.field
+        // = x` is a real write to the caller's storage rather than a lost one.
         if let Some(owner) = callable.receiver {
-            ctx.declare_param(
-                "self",
-                Type::Struct(owner),
-                false,
-                OwnershipMode::BorrowRead,
-            );
+            let mutates = self.mutates_self(id);
+            let (mutable, mode) = if mutates {
+                (true, OwnershipMode::Owned)
+            } else {
+                (false, OwnershipMode::BorrowRead)
+            };
+            ctx.declare_param("self", Type::Struct(owner), mutable, mode);
             ctx.receiver = Some(owner);
         }
         // Parameters become the next locals, each carrying the mode its
@@ -495,6 +508,7 @@ impl<'a> Analyzer<'a> {
             body,
             is_main: function.is_main,
             execution: function.execution,
+            mutates_self: self.mutates_self(id),
             name_span: function.name_span,
         }
     }

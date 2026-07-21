@@ -30,6 +30,22 @@ struct Frame {
     func: u32,
     pc: usize,
     locals: Vec<Value>,
+    /// Where this frame's final receiver (slot 0) is written back on return.
+    ///
+    /// `Some` only for a frame entered by [`Instruction::CallMut`] — a mutating
+    /// method. On return the callee's mutated receiver moves into the caller's
+    /// place before the callee's locals are dropped, which is the whole of
+    /// value-semantics writeback. `None` for every ordinary call.
+    writeback: Option<Writeback>,
+}
+
+/// A resolved receiver-writeback target on a callee frame.
+struct Writeback {
+    /// The caller-frame local slot the place is rooted at.
+    slot: u16,
+    /// The steps to walk into the caller's storage, indices already resolved;
+    /// empty writes the caller's local slot itself.
+    steps: Vec<ResolvedStep>,
 }
 
 /// The running interpreter: a host, a heap, an operand stack, and scratch.
@@ -141,6 +157,45 @@ impl<'h> Vm<'h> {
         }
     }
 
+    /// Writes a returning mutating method's final receiver back into the
+    /// caller's place — the whole of value-semantics writeback.
+    ///
+    /// The caller is the frame just beneath the one that returned, always
+    /// present because a mutating method is only ever entered by
+    /// [`Instruction::CallMut`] from a caller. An empty path overwrites the
+    /// caller's local itself (`g.mutate()`); a non-empty one walks into it,
+    /// exactly as [`Vm::store_place`] does. The value overwritten is dropped;
+    /// `receiver` is moved into the place, so it is not double-freed with the
+    /// callee's other locals. The `slot` was bounds-checked against the caller's
+    /// function by [`Module::validate`], so the direct index matches the
+    /// discipline every other place walk follows.
+    fn write_back(
+        &mut self,
+        frames: &mut [Frame],
+        writeback: &Writeback,
+        receiver: Value,
+    ) -> Result<(), VmError> {
+        let Some(caller) = frames.last_mut() else {
+            self.heap.drop_value(receiver);
+            return Err(VmError::FrameUnderflow);
+        };
+        if writeback.steps.is_empty() {
+            let previous = std::mem::replace(&mut caller.locals[writeback.slot as usize], receiver);
+            self.heap.drop_value(previous);
+            return Ok(());
+        }
+        match self.store_place(caller, writeback.slot, &writeback.steps, receiver) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // A malformed place — unreachable past validation and typing —
+                // leaves the receiver unstored, so it is freed rather than
+                // leaked into a heap whose accounting a trap still checks.
+                self.heap.drop_value(receiver);
+                Err(error)
+            }
+        }
+    }
+
     /// Runs to completion, reclaiming everything still live if it traps.
     ///
     /// A trap leaves live frames and a non-empty operand stack, and both hold
@@ -184,9 +239,24 @@ impl<'h> Vm<'h> {
                     } else {
                         Value::Void
                     };
-                    let Some(finished) = frames.pop() else {
+                    let Some(mut finished) = frames.pop() else {
                         return Err(VmError::FrameUnderflow);
                     };
+                    // A mutating method writes its final receiver — slot 0 —
+                    // back into the caller's place before its own locals are
+                    // dropped, so the receiver moves into the place rather than
+                    // being freed with the frame.
+                    if let Some(writeback) = finished.writeback.take()
+                        && let Some(receiver) = finished
+                            .locals
+                            .first_mut()
+                            .map(|slot| std::mem::replace(slot, Value::Void))
+                        && let Err(error) = self.write_back(frames, &writeback, receiver)
+                    {
+                        self.discard(finished.locals);
+                        self.heap.drop_value(result);
+                        return Err(error);
+                    }
                     for local in finished.locals {
                         self.heap.drop_value(local);
                     }
@@ -211,6 +281,26 @@ impl<'h> Vm<'h> {
                 }
                 Instruction::CallNative(id) => self.call_native(module, id)?,
                 Instruction::CallForeign(id) => self.call_foreign(module, id)?,
+                Instruction::CallMut { func, slot, path } => {
+                    if frames.len() >= MAX_CALL_DEPTH {
+                        return Err(VmError::CallDepthExceeded);
+                    }
+                    let mut callee = new_frame(module, func)?;
+                    // The writeback place's indices sit on top of the operand
+                    // stack, pushed after the arguments; resolve them first so
+                    // the arguments are exposed for `fill_params`.
+                    let mut steps = Vec::new();
+                    if let Err(error) = self.fill_steps(&path, &mut steps) {
+                        self.discard(callee.locals);
+                        return Err(error);
+                    }
+                    if let Err(error) = self.fill_params(module, func, &mut callee) {
+                        self.discard(callee.locals);
+                        return Err(error);
+                    }
+                    callee.writeback = Some(Writeback { slot, steps });
+                    frames.push(callee);
+                }
                 other => self.step(module, &mut frames[depth], other)?,
             }
         }
@@ -687,5 +777,6 @@ fn new_frame(module: &Module, index: u32) -> Result<Frame, VmError> {
         func: index,
         pc: 0,
         locals: vec![Value::Void; function.local_count as usize],
+        writeback: None,
     })
 }
