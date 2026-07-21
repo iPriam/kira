@@ -19,6 +19,7 @@
 //! is one `unsafe` fence: [`Module`] owns its context and disposes of it on
 //! drop, and no LLVM reference escapes that lifetime.
 
+mod adapter;
 mod bridge;
 mod elements;
 mod entry;
@@ -75,6 +76,10 @@ pub(crate) enum ModuleKind {
     /// trampoline per export, one synthesized destructor per exported class, and
     /// the per-library ABI marker. See [`library`].
     Library,
+    /// The VM's foreign-adapter sidecar: only the generated adapters, exported
+    /// for a host to `dlsym`. No Kira function body and no entry point — the VM
+    /// runs the bytecode and reaches C only through these adapters.
+    AdapterSidecar,
 }
 
 /// An LLVM module holding a lowered Kira program.
@@ -118,6 +123,26 @@ impl Module {
     ) -> Result<Self, LlvmError> {
         let engines = vec![Execution::Native; program.functions.len()];
         Self::lower(program, module_name, ModuleKind::Library, engines, exports)
+    }
+
+    /// Lowers only the program's foreign adapters into a module for the VM's
+    /// adapter sidecar.
+    ///
+    /// Every function is marked as running on the VM, so no Kira body is emitted
+    /// here; what the module carries is one exported adapter per foreign import,
+    /// which a native host loads and calls on the VM's behalf.
+    pub(crate) fn build_adapter_sidecar(
+        program: &IrProgram,
+        module_name: &str,
+    ) -> Result<Self, LlvmError> {
+        let engines = vec![Execution::Runtime; program.functions.len()];
+        Self::lower(
+            program,
+            module_name,
+            ModuleKind::AdapterSidecar,
+            engines,
+            &NativeExportSurface::default(),
+        )
     }
 
     /// Lowers the native half of a hybrid program into a shared library.
@@ -259,6 +284,10 @@ pub(crate) struct Codegen<'a> {
     /// Only functions this module defines have a real entry; a function that
     /// lives in the other half is reached through the bridge instead.
     functions: Vec<Option<Callable>>,
+    /// One generated adapter per foreign import, in
+    /// [`IrProgram::foreign_imports`] order. A foreign call site references the
+    /// adapter at its import's index; a sidecar exports every one.
+    foreign_adapters: Vec<Callable>,
     /// The LLVM type of each declared struct, indexed by `StructId`.
     ///
     /// A struct lowers to a real LLVM struct with real field layout, not to a
@@ -314,6 +343,7 @@ impl<'a> Codegen<'a> {
             exports: exports.clone(),
             engines,
             functions: Vec::with_capacity(program.functions.len()),
+            foreign_adapters: Vec::with_capacity(program.foreign_imports.len()),
             struct_types: Vec::with_capacity(program.types.structs().len()),
             string_counter: 0,
             target_data,
@@ -333,6 +363,9 @@ impl<'a> Codegen<'a> {
             };
             codegen.functions.push(declared);
         }
+        // Adapters are declared for every kind: an executable and a hybrid half
+        // reference them at call sites, and a sidecar exports them.
+        codegen.declare_foreign_adapters()?;
         Ok(codegen)
     }
 
@@ -411,6 +444,10 @@ impl<'a> Codegen<'a> {
             }
             self.lower_function(index, function)?;
         }
+        // Every module that declares adapters also defines them: an executable
+        // and a hybrid half so their call sites resolve, a sidecar so a host can
+        // load them.
+        self.emit_foreign_adapters()?;
         match self.kind {
             // A whole program is entered through C `main`.
             ModuleKind::Executable => self.lower_entry_point(),
@@ -420,6 +457,9 @@ impl<'a> Codegen<'a> {
             // kinds exist to prevent. What a consumer reaches it through is the
             // export surface.
             ModuleKind::Library => self.lower_export_surface(),
+            // A sidecar carries only its adapters, already emitted above; there
+            // is nothing to enter.
+            ModuleKind::AdapterSidecar => Ok(()),
             // A hybrid library is entered by its host, one call at a time.
             ModuleKind::HybridLibrary => {
                 for (index, function) in program.functions.iter().enumerate() {
@@ -444,6 +484,12 @@ impl<'a> Codegen<'a> {
             // their layout (an enum is a boxed tag plus its payload), and this
             // only ever passes the handle around.
             Type::String | Type::Array(_) | Type::Enum(_) => self.types.ptr,
+            // A `RawPtr` is an opaque target-width word Kira only stores and
+            // passes back; it is represented as an `i64` payload and never
+            // dereferenced, exactly as the VM keeps it in a `Value::RawPtr`.
+            // Foreign marshalling converts it to a real pointer at the C
+            // boundary inside the generated adapter.
+            Type::RawPtr => self.types.i64,
             Type::Void => self.types.void,
             Type::Struct(id) => *self
                 .struct_types
@@ -451,6 +497,16 @@ impl<'a> Codegen<'a> {
                 .ok_or(LlvmError::Unsupported("a struct the module never declared"))?,
             // Lowering only ever runs on a program that type-checked, so an
             // error type here means a broken frontend contract, not user input.
+            // `CString` is seam-only: it names a foreign parameter position and
+            // never becomes a first-class value, so it has no LLVM
+            // representation. A caller passes a `String` that the adapter copies
+            // to transient C storage; this type never reaches a local or a
+            // signature the backend lowers.
+            Type::CString => {
+                return Err(LlvmError::Unsupported(
+                    "a CString value (it is a foreign-parameter-only type)",
+                ));
+            }
             Type::Error => {
                 return Err(LlvmError::Unsupported(
                     "a program that failed to type-check",

@@ -49,6 +49,7 @@ pub(crate) const BUTTON: ExportType = ExportType::Handle { class: 0 };
 /// - 3 `greet(name: String)` — a void export that reaches the host
 pub(crate) fn library() -> Module {
     Module {
+        foreign_imports: Vec::new(),
         exports: ExportTable {
             classes: vec!["Button".to_owned()],
             functions: vec![

@@ -208,6 +208,11 @@ impl Analyzer<'_> {
                         .map(|&arg| self.analyze_expr(ctx, arg))
                         .collect();
                     self.analyze_print(&arg_hirs, callee_span)
+                } else if let Some(id) = self.foreign_named(&name) {
+                    // A bare call whose name is a recorded `@FFI.Extern`
+                    // callable is an ordinary Kira call — no `@Native`, no
+                    // ceremony — resolved to `Callee::Foreign`.
+                    self.analyze_foreign_call(ctx, id, &args, callee_span)
                 } else {
                     self.analyze_user_call_from_syntax(ctx, &name, &[], &args, callee_span)
                 }

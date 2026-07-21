@@ -157,6 +157,23 @@ impl Analyzer<'_> {
             return ty;
         }
         if let Some(ty) = Type::from_name(&text) {
+            // `CString` is the seam type: legal only as an `@FFI.Extern`
+            // parameter. Every other position resolves it here with
+            // `in_foreign_signature` false, so it is refused where it is
+            // written — a local, a field, an ordinary parameter or result — and
+            // becomes `Error` so nothing cascades on the invented value. A
+            // foreign result, resolved with the flag set, escapes this and is
+            // refused by the foreign pass with the ownership-specific message.
+            if ty == Type::CString && !self.in_foreign_signature {
+                self.emit(
+                    span,
+                    "KSEM176",
+                    "`CString` may only appear as an `@FFI.Extern` parameter: it is a \
+                     borrowed C string with no owned Kira representation. Use `String` \
+                     for owned text, or `RawPtr` for an opaque handle.",
+                );
+                return Type::Error;
+            }
             return ty;
         }
         // Aliases come before the nominal tables and after the builtins: a

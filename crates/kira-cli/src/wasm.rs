@@ -133,7 +133,18 @@ pub struct BuiltWeb {
 }
 
 /// Builds a program for `device`: emit the object, link the module and page.
-pub fn build(ir: &IrProgram, source: &Path, device: WasmDevice) -> Result<BuiltWeb, WebError> {
+///
+/// `foreign_archives` are the selected `wasm32-emscripten` C static libraries
+/// that satisfy the program's `@FFI.Extern` imports. They precede the runtime
+/// archive on the `emcc` line so an adapter's reference to a C symbol is
+/// satisfied by the archive that defines it. A program whose wasm target row is
+/// absent was already refused by the caller, before this runs.
+pub fn build(
+    ir: &IrProgram,
+    source: &Path,
+    device: WasmDevice,
+    foreign_archives: &[PathBuf],
+) -> Result<BuiltWeb, WebError> {
     if ir.main.is_none() {
         return Err(WebError::LibraryUnbuilt);
     }
@@ -145,8 +156,12 @@ pub fn build(ir: &IrProgram, source: &Path, device: WasmDevice) -> Result<BuiltW
     kira_llvm_backend::build_wasm_object(ir, &artifacts.stem, &artifacts.object(), device)?;
 
     let runtime = wasm_runtime_archive().ok_or(WebError::RuntimeArchiveMissing)?;
-    let status = Command::new("emcc")
-        .arg(artifacts.object())
+    let mut command = Command::new("emcc");
+    command.arg(artifacts.object());
+    for archive in foreign_archives {
+        command.arg(archive);
+    }
+    let status = command
         .arg(&runtime)
         .arg("-o")
         .arg(artifacts.page())
@@ -173,9 +188,14 @@ pub fn build(ir: &IrProgram, source: &Path, device: WasmDevice) -> Result<BuiltW
 ///
 /// Blocks until interrupted: the page is the program's output, so returning
 /// would tear down the server the moment the browser asked for the module.
-pub fn run(ir: &IrProgram, source: &Path, device: WasmDevice) -> Result<(), WebError> {
+pub fn run(
+    ir: &IrProgram,
+    source: &Path,
+    device: WasmDevice,
+    foreign_archives: &[PathBuf],
+) -> Result<(), WebError> {
     let artifacts = WebArtifacts::for_source(source)?;
-    let built = build(ir, source, device)?;
+    let built = build(ir, source, device, foreign_archives)?;
 
     let server = Server::bind(artifacts.directory().to_path_buf())?;
     let page = built

@@ -7,3 +7,10 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# Native-library names are interned as `kira_core::Symbol`, the workspace rule
+# for names in a model type.
+kira-core.workspace = true
+# Every fallible function returns a typed error the crate owns.
+thiserror.workspace = true

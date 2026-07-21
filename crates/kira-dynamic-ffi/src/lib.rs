@@ -1,9 +1,11 @@
 //! Dynamic library loading for native FFI.
 //!
-//! Layer 0 of the Kira package graph. The runtime call-signature model and the
-//! libffi calling path are designed fresh alongside the new VM; for now this
-//! crate provides the cross-platform shared-library handle.
+//! Layer 0 of the Kira package graph. This crate loads only Kira-generated,
+//! versioned uniform adapters; it does not construct arbitrary C signatures or
+//! expose function pointers to bytecode.
 
+pub mod adapter;
 pub mod dynamic_library;
 
+pub use adapter::{ForeignAdapterError, ForeignAdapterLibrary};
 pub use dynamic_library::{DynamicLibrary, FfiError};

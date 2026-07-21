@@ -242,6 +242,20 @@ pub extern "C" fn kira_rt_trap_div_zero() -> ! {
     std::process::exit(1);
 }
 
+/// Reports a foreign-call trap and exits with a failure code.
+///
+/// The native mirror of the VM surfacing a [`kira_runtime_abi::ForeignCallError`]:
+/// a generated adapter that returns a non-success status (an interior NUL in a
+/// `CString`, say) has no value to hand back, so native code that called it
+/// through the adapter reports the status and exits non-zero, exactly as
+/// [`kira_rt_trap_div_zero`] does for division by zero. `status` is the
+/// [`kira_runtime_abi::ForeignAdapterStatus`] word the adapter returned.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_trap_foreign(status: u32) -> ! {
+    eprintln!("kira: runtime trap: foreign call failed (adapter status {status})");
+    std::process::exit(1);
+}
+
 /// The ABI marker for this archive's version of the `kira_rt_*` contract.
 ///
 /// Does nothing and costs nothing; its *name* is the point. Generated code

@@ -90,7 +90,23 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) tree: &'a SyntaxTree,
     pub(crate) interner: &'a Interner,
     sigs: Vec<FuncSig>,
-    sig_index: HashMap<String, FuncId>,
+    pub(crate) sig_index: HashMap<String, FuncId>,
+    /// Every `@FFI.Extern` callable the program accepted, keyed by its Kira
+    /// name, mapping to its row in [`HirProgram::foreign`].
+    ///
+    /// A refused extern is never inserted, so a call name found here is one the
+    /// signature and annotation checks approved. A foreign name may not collide
+    /// with a user function's, which is what keeps a call resolving to exactly
+    /// one [`kira_semantics_model::hir::Callee`].
+    pub(crate) foreign_index: HashMap<String, kira_semantics_model::hir::ForeignId>,
+    /// Whether the type being resolved sits in an `@FFI.Extern` signature.
+    ///
+    /// `CString` is legal only as a foreign parameter, so its seam-only refusal
+    /// (`resolve_named_type`) is suppressed while this is set; the foreign pass
+    /// then decides, per position, whether the `CString` is a legal parameter or
+    /// an illegal result. Every other position resolves with this `false`, so a
+    /// written `CString` there is refused where it is resolved.
+    pub(crate) in_foreign_signature: bool,
     /// Each declared struct's field defaults, as written, indexed by
     /// [`kira_semantics_model::StructId`] and then by field index.
     ///
@@ -191,6 +207,8 @@ impl<'a> Analyzer<'a> {
             interner,
             sigs: Vec::new(),
             sig_index: HashMap::new(),
+            foreign_index: HashMap::new(),
+            in_foreign_signature: false,
             struct_defaults: Vec::new(),
             enum_defaults: Vec::new(),
             generic_enums: crate::generics::GenericEnumTable::new(),
@@ -244,6 +262,11 @@ impl<'a> Analyzer<'a> {
         // about a *resolved* parameter or result type, and once classes are
         // flattened, because handle-eligibility is a property of a struct row.
         self.check_exports(&callables);
+        // Foreign callables are collected once signatures exist — a foreign name
+        // may not collide with a user function's, and the collision check reads
+        // the signature index — and before any body, so a call in a body
+        // resolves to `Callee::Foreign`.
+        self.collect_foreign();
         // Bodies are analyzed in the same order the signatures were collected,
         // which is what makes a `FuncId` index both.
         for (index, callable) in callables.iter().enumerate() {
@@ -272,6 +295,11 @@ impl<'a> Analyzer<'a> {
         let mut callables = Vec::new();
         for (source, item) in self.tree.items_with_source() {
             match item {
+                // A bodyless `@FFI.Extern` function is never an ordinary
+                // callable: it becomes a row in `HirProgram::foreign`, not a
+                // `HirFunction`, so it is skipped here and handled by
+                // `collect_foreign`.
+                Item::Function(function) if function.foreign.is_some() => {}
                 Item::Function(function) => callables.push(Callable {
                     receiver: None,
                     origin: None,

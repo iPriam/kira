@@ -26,6 +26,7 @@ fn program(
         types: Default::default(),
         main: None,
         exports,
+        foreign_imports: Vec::new(),
         exprs,
     }
 }

@@ -12,6 +12,7 @@ mod classes;
 mod closures;
 mod enums;
 mod exports;
+mod foreign;
 mod generics;
 
 use crate::*;

@@ -12,6 +12,7 @@
 pub mod compile;
 pub mod exports;
 pub mod module;
+mod module_foreign;
 pub mod op;
 pub mod validate;
 
@@ -45,6 +46,7 @@ mod tests {
             types: Default::default(),
             main: Some(0),
             exports: Vec::new(),
+            foreign_imports: Vec::new(),
             exprs,
         }
     }
@@ -154,6 +156,7 @@ mod tests {
             types: Default::default(),
             main: None,
             exports: Vec::new(),
+            foreign_imports: Vec::new(),
             exprs: la_arena::Arena::new(),
         };
         let button = program

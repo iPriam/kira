@@ -7,7 +7,7 @@
 //! instead of panicking.
 
 use kira_bytecode::ModuleValidateError;
-use kira_runtime_abi::NativeCallError;
+use kira_runtime_abi::{ForeignCallError, ForeignType, NativeCallError};
 
 /// A trap raised while executing bytecode.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -69,6 +69,32 @@ pub enum VmError {
     /// reason verbatim rather than inventing one.
     #[error("native call failed: {0}")]
     NativeCall(NativeCallError),
+    /// A `CallForeign` named a foreign-import id outside the module's table.
+    ///
+    /// Validation bounds the id against the foreign-import table, so this is a
+    /// backstop for a module and interpreter that disagree, never a program that
+    /// type-checked.
+    #[error("call to unknown foreign import id {0}")]
+    UnknownForeign(u32),
+    /// A `CallForeign` could not be completed by the host.
+    ///
+    /// The VM never performs the foreign call itself, so it reports the host's
+    /// typed reason verbatim — including the default `NoForeignHost` refusal a
+    /// VM-only host gives.
+    #[error("foreign call failed: {0}")]
+    ForeignCall(ForeignCallError),
+    /// A foreign argument did not have the exact-width type its signature named.
+    ///
+    /// Analysis checks every foreign call's argument types, so this is a
+    /// backstop: it surfaces a module whose bytecode disagrees with its
+    /// foreign-import signatures, never a program that type-checked.
+    #[error("foreign import {foreign} expected an argument of type {expected:?}")]
+    ForeignArgMismatch {
+        /// The foreign-import id at the boundary.
+        foreign: u32,
+        /// The exact-width type the signature named.
+        expected: ForeignType,
+    },
     /// A jump target fell outside the current function's code.
     #[error("jump to out-of-range instruction {0}")]
     BadJump(u32),
@@ -92,6 +118,16 @@ pub enum VmError {
         "function {function} passes a struct across the native seam, which has no layout for one"
     )]
     StructAtSeam {
+        /// The function at the boundary.
+        function: u32,
+    },
+    /// A raw pointer reached the `@Native` seam, which does not carry one.
+    ///
+    /// A raw pointer travels the foreign seam (`call_foreign`), not the
+    /// `@Native` one. Reaching this means a signature the backend should have
+    /// refused, so the runtime restates the rule rather than guessing.
+    #[error("function {function} passes a raw pointer across the native seam, which has none")]
+    RawPtrAtSeam {
         /// The function at the boundary.
         function: u32,
     },

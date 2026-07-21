@@ -273,6 +273,22 @@ pub fn manifest(
         // sentinel for it, and this is the case it was added for.
         entry: program.main,
         functions,
+        // One row per `@FFI.Extern` import, paired with the adapter symbol the
+        // LLVM backend emits for that import index — the same symbol the hybrid
+        // session resolves out of the native half. The name comes from
+        // `kira_llvm_backend::adapter_name`, the one place that contract is
+        // spelled, so producer and consumer cannot disagree.
+        foreign: program
+            .foreign_imports
+            .iter()
+            .enumerate()
+            .map(|(index, import)| {
+                kira_hybrid_definition::HybridForeign::from_import(
+                    &import.import,
+                    kira_llvm_backend::adapter_name(index),
+                )
+            })
+            .collect(),
     })
 }
 
@@ -293,6 +309,17 @@ fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridLibraryError> {
         Type::Struct(_) => BridgeValueTag::STRUCT,
         Type::Array(_) => BridgeValueTag::ARRAY,
         Type::Enum(_) => BridgeValueTag::ENUM,
+        // A `RawPtr` is a first-class scalar a `@Native`/`@Runtime` signature may
+        // name, so the manifest describes it with its own tag.
+        Type::RawPtr => BridgeValueTag::RAW_PTR,
+        // `CString` is seam-only — legal only as a foreign parameter — so it
+        // never appears in a manifest row for an ordinary function.
+        Type::CString => {
+            return Err(HybridLibraryError::UnsupportedType {
+                function: function.to_owned(),
+                ty,
+            });
+        }
         // A verified IR carries no `Error` type: reaching one means the frontend
         // let a broken program through, which is a compiler bug rather than
         // something to encode into an artifact.
@@ -350,6 +377,9 @@ pub fn build_hybrid_library(
                 .emit_llvm_ir
                 .then(|| lib_directory.join(format!("{}.ll", options.name))),
             runtime_archive: options.runtime_archive.clone(),
+            // Foreign archives are linked into the hybrid native half through
+            // the hybrid build path, not this base options struct.
+            foreign_archives: Vec::new(),
         },
     )?;
 

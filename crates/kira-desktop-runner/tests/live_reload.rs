@@ -27,6 +27,7 @@ use kira_runtime_abi::Execution;
 fn printing_module(text: &str) -> Module {
     Module {
         exports: Default::default(),
+        foreign_imports: Vec::new(),
         main: Some(0),
         strings: vec![text.to_owned()],
         functions: vec![FuncProto {

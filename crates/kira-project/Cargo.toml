@@ -12,6 +12,9 @@ workspace = true
 kira-core.workspace = true
 kira-diagnostics.workspace = true
 kira-manifest.workspace = true
+# Native-library manifests are read from disk here and resolved into the model
+# catalog this crate threads onto a build target.
+kira-native-lib-definition.workspace = true
 # Manifest discovery returns a typed error, this workspace's rule for any
 # fallible function crossing a crate boundary.
 thiserror.workspace = true

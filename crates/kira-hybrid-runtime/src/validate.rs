@@ -70,7 +70,40 @@ pub fn bundle(manifest: &HybridManifest, module: &Module) -> Result<(), HybridEr
         ownership(function)?;
     }
 
+    foreign(manifest, module)?;
     entry(manifest)
+}
+
+/// Proves the manifest's foreign table matches the bytecode half's.
+///
+/// A `CallForeign(id)` in the bytecode indexes both the module's own import
+/// table and the manifest's; the host binds the adapter and marshals against the
+/// manifest row, so a drift between the two would call an adapter with the wrong
+/// argument shape. One build writes both, and this catches a stale pairing at
+/// load rather than at the first foreign call.
+fn foreign(manifest: &HybridManifest, module: &Module) -> Result<(), HybridError> {
+    if manifest.foreign.len() != module.foreign_imports.len() {
+        return Err(HybridError::Mismatch(format!(
+            "the manifest carries {} foreign imports and the bytecode half carries {}",
+            manifest.foreign.len(),
+            module.foreign_imports.len(),
+        )));
+    }
+    for (index, row) in manifest.foreign.iter().enumerate() {
+        let import = &module.foreign_imports[index];
+        if row.symbol != import.symbol()
+            || row.library != import.library()
+            || row.abi != import.abi()
+            || &row.signature != import.signature()
+        {
+            return Err(HybridError::Mismatch(format!(
+                "foreign import {index} (`{}`) has a different library, symbol, or signature in \
+                 the manifest than in the bytecode half",
+                row.symbol,
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Rejects a parameter mode no code path implements.
@@ -154,12 +187,14 @@ mod tests {
                     exported_name: Some("kira_native_fn_1".to_owned()),
                 },
             ],
+            foreign: Vec::new(),
         }
     }
 
     fn module() -> Module {
         Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![
                 FuncProto {
                     name: "main".to_owned(),

@@ -2,10 +2,14 @@
 //!
 //! Layer 5 of the Kira package graph.
 
+pub mod native_libraries;
 pub mod package_discovery;
 pub mod project;
 pub mod workspace;
 
+pub use native_libraries::{
+    NativeLibraryResolveError, NativeLinkResolution, resolve_native_libraries,
+};
 pub use package_discovery::{
     DECLARATION_MANIFEST_FILE_NAME, DiscoveryError, ENTRYPOINT_REL_PATH, LEGACY_MANIFEST_FILE_NAME,
     LibrarySource, LibrarySources, MANIFEST_FILE_NAME, MANIFEST_FILE_NAMES, Manifest,

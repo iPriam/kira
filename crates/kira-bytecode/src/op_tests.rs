@@ -107,6 +107,32 @@ fn the_bitwise_opcodes_are_appended_after_the_unsigned_ones() {
 }
 
 #[test]
+fn the_foreign_call_opcode_is_appended_after_bit_not() {
+    // `CALL_FOREIGN` is the first opcode after `BIT_NOT`, appended so that a
+    // module already on disk keeps its meaning. A renumber fails here.
+    assert_eq!(opcode::BIT_NOT, 0x44);
+    assert_eq!(opcode::CALL_FOREIGN, 0x45);
+}
+
+#[test]
+fn round_trips_a_foreign_call() {
+    let code = vec![
+        Instruction::CallForeign(0),
+        Instruction::CallForeign(4_294_967_295),
+        Instruction::ReturnVoid,
+    ];
+    let bytes = encode(&code);
+    assert_eq!(decode(&bytes).unwrap(), code);
+}
+
+#[test]
+fn a_truncated_foreign_call_operand_is_reported() {
+    // CALL_FOREIGN opcode with fewer than four operand bytes.
+    let err = decode(&[opcode::CALL_FOREIGN, 0x00, 0x00]).unwrap_err();
+    assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
+}
+
+#[test]
 fn unknown_opcode_is_reported() {
     let err = decode(&[0xff]).unwrap_err();
     assert!(matches!(

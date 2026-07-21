@@ -17,8 +17,8 @@
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
-use kira_hybrid_definition::HybridFunction;
-use kira_runtime_abi::BridgeValue;
+use kira_hybrid_definition::{HybridForeign, HybridFunction};
+use kira_runtime_abi::{BridgeValue, FOREIGN_ADAPTER_ABI_MARKER, ForeignAdapterFn};
 
 use crate::error::HybridError;
 
@@ -63,6 +63,10 @@ type StrFreeFn = unsafe extern "C" fn(value: *mut c_void);
 type StrDataFn = unsafe extern "C" fn(value: *mut c_void) -> *const u8;
 type StrLenFn = unsafe extern "C" fn(value: *mut c_void) -> usize;
 type InstallInvokerFn = unsafe extern "C" fn(invoker: Option<RuntimeInvoker>);
+/// The versioned foreign-adapter marker; resolving it proves the native half
+/// carries this build's adapter ABI, exactly as [`FOREIGN_ADAPTER_ABI_MARKER`]
+/// names. A no-argument function whose body is irrelevant — it is never called.
+type ForeignMarkerFn = unsafe extern "C" fn();
 
 /// The symbols every hybrid library must export, whatever the program does.
 const STR_NEW: &[u8] = b"kira_rt_str_new\0";
@@ -80,6 +84,13 @@ pub struct NativeLibrary {
     /// Indexed by id rather than searched, so reaching a trampoline is a total
     /// function of the id the VM hands over.
     trampolines: Vec<Option<TrampolineFn>>,
+    /// Each foreign import's generated adapter by import id.
+    ///
+    /// Bound out of this same library — never a second `dlopen` of the C library
+    /// or a separate sidecar — so a runtime-half foreign call and a native-half
+    /// one reach one copy of the C code. Indexed by import id, so reaching an
+    /// adapter is a total function of the id the bytecode's `CallForeign` names.
+    adapters: Vec<ForeignAdapterFn>,
     str_new: StrNewFn,
     str_free: StrFreeFn,
     str_data: StrDataFn,
@@ -91,9 +102,15 @@ pub struct NativeLibrary {
 }
 
 impl NativeLibrary {
-    /// Loads `path` and binds every symbol the host needs, including one
-    /// trampoline per native function in `functions`.
-    pub fn load(path: &Path, functions: &[HybridFunction]) -> Result<NativeLibrary, HybridError> {
+    /// Loads `path` and binds every symbol the host needs: the string helpers,
+    /// the runtime invoker, one trampoline per native function in `functions`,
+    /// and — when `foreign` is non-empty — the foreign-adapter marker and one
+    /// adapter per import.
+    pub fn load(
+        path: &Path,
+        functions: &[HybridFunction],
+        foreign: &[HybridForeign],
+    ) -> Result<NativeLibrary, HybridError> {
         // SAFETY: loading a library runs its initializers, which is why this is
         // unsafe. The library is one this toolchain built and named in a
         // manifest it also wrote; a host that cannot trust its own build has
@@ -129,9 +146,26 @@ impl NativeLibrary {
             *slot = Some(trampoline);
         }
 
+        // Foreign adapters live in this same library. Prove its adapter ABI
+        // before binding any: a marker that will not resolve means a stale or
+        // incompatible native half, caught here by name rather than by a wrong
+        // answer at the first foreign call.
+        let mut adapters = Vec::with_capacity(foreign.len());
+        if !foreign.is_empty() {
+            let mut marker = FOREIGN_ADAPTER_ABI_MARKER.as_bytes().to_vec();
+            marker.push(0);
+            let _: ForeignMarkerFn = bind(&library, path, &marker)?;
+            for import in foreign {
+                let mut name = import.adapter_symbol.clone().into_bytes();
+                name.push(0);
+                adapters.push(bind::<ForeignAdapterFn>(&library, path, &name)?);
+            }
+        }
+
         Ok(NativeLibrary {
             path: path.to_path_buf(),
             trampolines,
+            adapters,
             str_new,
             str_free,
             str_data,
@@ -153,6 +187,12 @@ impl NativeLibrary {
             .get(function_id as usize)
             .copied()
             .flatten()
+    }
+
+    /// The generated adapter for foreign import `foreign_id`, or `None` when the
+    /// id names no import this library bound.
+    pub fn adapter(&self, foreign_id: u32) -> Option<ForeignAdapterFn> {
+        self.adapters.get(foreign_id as usize).copied()
     }
 
     /// Installs the host's runtime invoker, or clears it with `None`.
