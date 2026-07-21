@@ -16,7 +16,7 @@
 use kira_semantics_model::hir::{HirBinaryOp, HirExpr, HirExprId};
 use kira_semantics_model::{EnumDef, EnumId, Type, VariantDef};
 use kira_source::Span;
-use kira_syntax_model::ast::{EnumDecl, ExprId, Item};
+use kira_syntax_model::ast::{EnumDecl, Expr, ExprId, Item};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::types::NameContext;
@@ -154,6 +154,57 @@ impl Analyzer<'_> {
             .and_then(|defaults| defaults.get(tag as usize))
             .copied()
             .flatten()
+    }
+
+    /// The enum a qualified spelling (`SizeMode`, `Foundation.SizeMode`) names
+    /// at `base`, when `base` is a pure name path that resolves to one.
+    ///
+    /// This is what makes `SizeMode.Hug` and `Foundation.SizeMode.Fill` write a
+    /// variant the way `.Hug` does with an expected type: the base names the
+    /// enum, and the member after it is the variant. It is deliberately quiet —
+    /// `None` when the base is not a qualified enum at all — so an ordinary
+    /// field read or an undefined name still reports on its own path.
+    ///
+    /// A local of the same name wins over the enum, mirroring every other
+    /// qualifier here. A generic enum is not resolved: a qualified spelling
+    /// carries no type arguments, and constructing one needs them.
+    pub(crate) fn qualified_enum_at(&self, ctx: &FnCtx, base: ExprId) -> Option<EnumId> {
+        let path = self.name_path_of(base)?;
+        let candidate = match path.split_once('.') {
+            None => {
+                if ctx.resolve(&path).is_some() {
+                    return None;
+                }
+                path
+            }
+            Some((root, member)) => {
+                // A module-qualified enum: strip the imported root. A local
+                // named like the root wins, and a further-dotted member is not
+                // a single enum name.
+                if ctx.resolve(root).is_some() || member.contains('.') {
+                    return None;
+                }
+                self.module_for_root(root)?;
+                member.to_owned()
+            }
+        };
+        if self.is_generic_enum(&candidate) {
+            return None;
+        }
+        self.program.types.enums().lookup(&candidate)
+    }
+
+    /// Reconstructs the dotted spelling of a pure name path (`A`, `A.B`), or
+    /// `None` when the expression is anything else.
+    fn name_path_of(&self, base: ExprId) -> Option<String> {
+        match self.tree.expr(base) {
+            Expr::Name { symbol, .. } => Some(self.interner.resolve(*symbol).to_owned()),
+            Expr::Field { base, field, .. } => {
+                let prefix = self.name_path_of(*base)?;
+                Some(format!("{prefix}.{}", self.interner.resolve(*field)))
+            }
+            _ => None,
+        }
     }
 
     /// Type-checks a leading-dot member (`.Red`, `.Ok(12)`) against the type
