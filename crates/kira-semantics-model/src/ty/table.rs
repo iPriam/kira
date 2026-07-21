@@ -109,9 +109,10 @@ impl TypeTable {
     /// always does: it *is* a heap object, whatever it holds, so `[Int]` owns
     /// storage even though `Int` does not.
     ///
-    /// The walk terminates: a struct's fields can only name structs declared
-    /// before it, and an array type's element always resolves to a type
-    /// interned before it.
+    /// The walk terminates: the frontend breaks any by-value struct cycle to
+    /// `Error` before this runs, so a struct can never reach itself through its
+    /// fields, and an array type's element always resolves to a type interned
+    /// before it.
     pub fn owns_heap(&self, ty: Type) -> bool {
         match ty {
             // An enum, like an array, always *is* a heap object — a boxed tag
