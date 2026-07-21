@@ -134,7 +134,7 @@ impl Parser<'_> {
                 mut args,
                 ..
             } => {
-                args.push(closure);
+                args.push(self.positional_arg(closure));
                 self.tree.add_expr(Expr::Call {
                     callee,
                     callee_span,
@@ -149,7 +149,7 @@ impl Parser<'_> {
                 mut args,
                 ..
             } => {
-                args.push(closure);
+                args.push(self.positional_arg(closure));
                 self.tree.add_expr(Expr::MethodCall {
                     receiver,
                     method,
@@ -161,7 +161,7 @@ impl Parser<'_> {
             Expr::Name { symbol, span: name } => self.tree.add_expr(Expr::Call {
                 callee: symbol,
                 callee_span: name,
-                args: vec![closure],
+                args: vec![self.positional_arg(closure)],
                 span,
             }),
             Expr::Field {
@@ -173,7 +173,7 @@ impl Parser<'_> {
                 receiver,
                 method: field,
                 method_span: field_span,
-                args: vec![closure],
+                args: vec![self.positional_arg(closure)],
                 span,
             }),
             // Anything else — a literal, an index, an operator result — is not

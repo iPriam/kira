@@ -11,7 +11,7 @@
 
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{Builtin, Callee, HirExpr, HirExprId};
-use kira_syntax_model::ast::{Expr, ExprId, FieldInit};
+use kira_syntax_model::ast::{CallArg, Expr, ExprId, FieldInit};
 
 use crate::analyze::{Analyzer, FnCtx};
 
@@ -27,7 +27,7 @@ impl Analyzer<'_> {
         receiver: ExprId,
         method: kira_core::Symbol,
         method_span: kira_source::Span,
-        args: &[ExprId],
+        args: &[CallArg],
     ) -> HirExprId {
         // `Support.hello()` is a *module-qualified free call*, not a method
         // call, and it is recognized here because the parser cannot tell the
@@ -63,8 +63,12 @@ impl Analyzer<'_> {
         if receiver_ty.is_array() {
             self.diagnostics.truncate(mark);
             ctx.restore_ownership(ownership);
+            // An array builtin binds its argument by shape, not by a parameter
+            // name, so a label on one is a mistake.
+            self.reject_argument_labels(args, "an array method");
             let name = self.interner.resolve(method).to_owned();
-            return self.analyze_array_method(ctx, receiver, &name, method_span, args);
+            let values = Self::argument_values(args);
+            return self.analyze_array_method(ctx, receiver, &name, method_span, &values);
         }
 
         // An error receiver already spoke; do not pile on.
@@ -88,17 +92,20 @@ impl Analyzer<'_> {
         // up. A method wins if both exist, because a method is what the
         // receiver's type declares and a field only what it stores.
         let qualified = format!("{}.{name}", self.type_name(receiver_ty));
-        if self.lookup_function(&qualified).is_none()
-            && let Some(call) = self.analyze_field_closure_call(
+        if self.lookup_function(&qualified).is_none() {
+            let values = Self::argument_values(args);
+            if let Some(call) = self.analyze_field_closure_call(
                 ctx,
                 receiver_hir,
                 receiver_ty,
                 &name,
-                args,
+                &values,
                 method_span,
-            )
-        {
-            return call;
+            ) {
+                // A closure stored in a field exposes no parameter names here.
+                self.reject_argument_labels(args, "a call through a function value");
+                return call;
+            }
         }
         if self.lookup_function(&qualified).is_none() {
             if let Type::Struct(owner) = receiver_ty
@@ -296,7 +303,7 @@ impl Analyzer<'_> {
         receiver: ExprId,
         method: kira_core::Symbol,
         method_span: kira_source::Span,
-        args: &[ExprId],
+        args: &[CallArg],
     ) -> Option<HirExprId> {
         let Expr::Name { symbol, span } = *self.tree.expr(receiver) else {
             return None;
@@ -316,8 +323,8 @@ impl Analyzer<'_> {
             // call: falling through would analyze the type name as a value and
             // report it undefined on top of whatever was already said.
             let Some(qualifier) = self.resolve_parent_qualifier(ctx, &root, span) else {
-                for &arg in args {
-                    self.analyze_expr(ctx, arg);
+                for arg in args {
+                    self.analyze_expr(ctx, arg.value);
                 }
                 return Some(self.program.exprs.alloc(HirExpr::Error));
             };
@@ -329,8 +336,8 @@ impl Analyzer<'_> {
             return Some(self.analyze_user_call_from_syntax(ctx, &name, &[], args, method_span));
         }
         if self.report_unimported_root(&root, span) {
-            for &arg in args {
-                self.analyze_expr(ctx, arg);
+            for arg in args {
+                self.analyze_expr(ctx, arg.value);
             }
             return Some(self.program.exprs.alloc(HirExpr::Error));
         }
@@ -354,7 +361,7 @@ impl Analyzer<'_> {
         ctx: &mut FnCtx,
         name: &str,
         leading: &[HirExprId],
-        args: &[ExprId],
+        args: &[CallArg],
         span: kira_source::Span,
     ) -> HirExprId {
         let sig = self
@@ -362,15 +369,30 @@ impl Analyzer<'_> {
             .map(|(id, params, _)| (id, params.to_vec()));
         let Some((id, params)) = sig else {
             // No signature to check against: still analyze every argument so
-            // the mistakes inside them are reported alongside the bad call.
+            // the mistakes inside them are reported alongside the bad call. A
+            // label cannot bind to a callee that does not exist, so it is
+            // dropped here and `analyze_user_call` reports the missing function.
             let mut all = leading.to_vec();
-            all.extend(args.iter().map(|&arg| self.analyze_expr(ctx, arg)));
+            all.extend(args.iter().map(|arg| self.analyze_expr(ctx, arg.value)));
             return self.analyze_user_call(name, &all, span);
         };
+        // A labeled call is resolved to declaration order first, so the
+        // ownership and type checks below see the same positional list an
+        // unlabeled call produces.
+        let param_names = self.param_names(id);
+        let positional = self.bind_call_arguments(args, leading.len(), &param_names, name, span);
         let ownership = self.param_ownership(id);
         let mut all = leading.to_vec();
-        for (index, &arg) in args.iter().enumerate() {
+        for (index, slot_value) in positional.into_iter().enumerate() {
             let slot = index + leading.len();
+            // A labeled call that named no argument for this parameter left it
+            // empty; the missing-argument diagnostic already spoke, so stand in
+            // with an error value that keeps the arity honest and cascades no
+            // further.
+            let Some(arg) = slot_value else {
+                all.push(self.program.exprs.alloc(HirExpr::Error));
+                continue;
+            };
             // An arity mismatch leaves some argument with no parameter to
             // check against. `analyze_user_call` reports the count; here the
             // argument just analyzes plainly rather than being checked against

@@ -258,6 +258,63 @@ fn parses_a_struct_literal_with_both_binders() {
     assert_eq!(fields.len(), 2, "both binders normalize to one node");
 }
 
+/// The call-argument analogue of the struct-literal binder: `f(label: v)` and
+/// `f(label = v)` both record the label, and a bare argument records none.
+fn call_args(result: &ParseResult) -> Vec<kira_syntax_model::ast::CallArg> {
+    let kira_syntax_model::ast::Stmt::Let { init, .. } = first_stmt(result) else {
+        panic!("expected let");
+    };
+    match result.tree.expr(*init) {
+        Expr::Call { args, .. } => args.clone(),
+        other => panic!("expected a call, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_call_records_argument_labels_with_either_binder() {
+    let result = parse_text("function f() { let v = measure(tree: a, index = b, c) }");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let args = call_args(&result);
+    assert_eq!(args.len(), 3);
+    assert_eq!(
+        result
+            .interner
+            .resolve(args[0].label.expect("first is labeled")),
+        "tree"
+    );
+    assert_eq!(
+        result
+            .interner
+            .resolve(args[1].label.expect("second is labeled")),
+        "index"
+    );
+    assert!(args[2].label.is_none(), "a bare argument carries no label");
+}
+
+#[test]
+fn a_bare_identifier_argument_is_not_a_label() {
+    // `f(x)` is a positional argument, not a label: the binder is what makes a
+    // leading identifier a label, and there is none here.
+    let result = parse_text("function f() { let v = g(x) }");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let args = call_args(&result);
+    assert_eq!(args.len(), 1);
+    assert!(args[0].label.is_none());
+}
+
+#[test]
+fn an_enum_payload_rejects_an_argument_label() {
+    // A variant payload binds by shape, not by name, so a label there is a
+    // parse error rather than a binder.
+    let result = parse_text("function f() { let v = .Ok(value: 1) }");
+    let codes: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter_map(|diagnostic| diagnostic.code)
+        .collect();
+    assert_eq!(codes, vec!["KPAR056"]);
+}
+
 #[test]
 fn struct_literal_fields_need_no_separator() {
     // Newlines are insignificant, so a comma cannot be required.
