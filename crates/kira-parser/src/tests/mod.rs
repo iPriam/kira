@@ -10,6 +10,7 @@ mod aliases;
 mod arrays;
 mod classes;
 mod closures;
+mod constructs;
 mod enums;
 mod exports;
 mod foreign;
@@ -145,13 +146,22 @@ fn colon_return_type_is_accepted() {
 
 #[test]
 fn unsupported_constructs_do_not_crash() {
-    // `construct` is still outside the subset (enums and classes now parse;
-    // see `tests::enums` and `tests::classes`).
-    let result = parse_text("construct C { }\n@Main function main() { return }");
+    // A still-unsupported top-level form (`Package`) parses-don't-crash; enums,
+    // classes, and constructs now parse (see `tests::enums`, `tests::classes`,
+    // `tests::constructs`).
+    let result = parse_text("Package { }\n@Main function main() { return }");
     assert_eq!(result.tree.items().len(), 2);
     assert!(matches!(result.tree.items()[0], Item::Unsupported(_)));
     assert!(matches!(result.tree.items()[1], Item::Function(_)));
     assert!(result.diagnostics.iter().any(|d| d.code == Some("KSEM900")));
+}
+
+#[test]
+fn a_construct_now_parses_rather_than_reporting_unsupported() {
+    let result = parse_text("construct C { }\n@Main function main() { return }");
+    assert_eq!(result.tree.items().len(), 2);
+    assert!(matches!(result.tree.items()[0], Item::Construct(_)));
+    assert!(matches!(result.tree.items()[1], Item::Function(_)));
 }
 
 // ----- structs -------------------------------------------------------

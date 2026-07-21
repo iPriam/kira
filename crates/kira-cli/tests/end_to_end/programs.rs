@@ -61,14 +61,21 @@ fn missing_main_is_rejected() {
 }
 
 #[test]
-fn unsupported_construct_is_rejected_cleanly() {
-    // A `construct` is outside the subset: it must not crash the compiler, and
-    // it must be reported as not-yet-supported rather than silently ignored.
-    let output = run_source("construct Mode { }\n@Main function main() { print(1) return }");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("KSEM900"), "stderr was: {stderr}");
-    assert!(stderr.contains("not supported yet"));
+fn a_construct_declaration_compiles_and_runs() {
+    // A `construct` used to be reported as unsupported; it is now ordinary
+    // language surface. A construct-backed declaration is a typed factory:
+    // constructing it and reading its computed bridge member runs the member.
+    let output = run_source(
+        "construct Shape { let area: Int { 0 } }\n\
+         Shape Square(side: Int) { let area: Int { side * side } }\n\
+         @Main function main() { print(Square(side: 6).area) return }",
+    );
+    assert!(
+        output.status.success(),
+        "stderr was: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "36\n");
 }
 
 #[test]
