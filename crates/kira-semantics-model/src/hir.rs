@@ -421,8 +421,48 @@ pub enum HirExpr {
         /// The selected variant's declared payload type.
         ty: Type,
     },
+    /// A scalar type-conversion call, `T(operand)` where `T` is a numeric
+    /// scalar type.
+    ///
+    /// This is a value conversion, not a function call: `Int(2.9)` is `2`,
+    /// `Float(7)` is `7.0`. The `kind` fixes the machine operation so no
+    /// backend re-derives it from the operand and target types — the same
+    /// split [`HirBinaryOp`] uses to bake signedness into the operator. The
+    /// integer-width spelling is carried in `ty`, not in a runtime narrowing:
+    /// every integer shares one 64-bit representation, so an int-to-int
+    /// conversion re-tags the type and copies the value unchanged.
+    Convert {
+        /// The value being converted.
+        operand: HirExprId,
+        /// Which machine conversion this is.
+        kind: ConvertKind,
+        /// The target type, carrying its width spelling.
+        ty: Type,
+    },
     /// A placeholder for an expression that failed to analyze.
     Error,
+}
+
+/// Which machine operation a scalar [`HirExpr::Convert`] performs.
+///
+/// The four kinds are the cross product of the two numeric runtime
+/// representations (`Int` is `i64`, `Float` is `f64`). Two are identity copies
+/// — an integer width is a type-level annotation over one representation, and
+/// float width likewise — and two do real work. The kind is fixed at analysis,
+/// so nothing below re-derives it: the VM and every backend read it directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConvertKind {
+    /// Integer to integer, any width to any width. An identity copy: widths
+    /// share one 64-bit representation, so nothing is truncated or extended.
+    IntToInt,
+    /// Float to float (`F32`/`F64`/`Float`). An identity copy: every float is
+    /// one 64-bit representation, and float arithmetic runs at that width.
+    FloatToFloat,
+    /// Integer to float, a signed conversion (round to nearest, ties to even).
+    IntToFloat,
+    /// Float to integer: truncate toward zero, saturating out-of-range inputs
+    /// to `i64::MIN`/`i64::MAX` and mapping NaN to zero. Never traps.
+    FloatToInt,
 }
 
 impl HirExpr {
@@ -445,6 +485,7 @@ impl HirExpr {
             | HirExpr::Field { ty, .. }
             | HirExpr::ArrayNew { ty, .. }
             | HirExpr::EnumPayload { ty, .. }
+            | HirExpr::Convert { ty, .. }
             | HirExpr::Index { ty, .. } => *ty,
             HirExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
             HirExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),

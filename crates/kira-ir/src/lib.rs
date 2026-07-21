@@ -17,8 +17,8 @@ pub mod ir;
 pub mod lower;
 
 pub use ir::{
-    IrBinOp, IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport, IrFunction, IrPlace,
-    IrPlaceStep, IrProgram, IrStmt, IrUnOp,
+    ConvertKind, IrBinOp, IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport, IrFunction,
+    IrPlace, IrPlaceStep, IrProgram, IrStmt, IrUnOp,
 };
 pub use lower::lower;
 

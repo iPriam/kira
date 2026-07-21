@@ -584,6 +584,20 @@ impl<'h> Vm<'h> {
                 let value = self.pop_float()?;
                 self.stack.push(Value::Float(-value));
             }
+            Instruction::ConvertIntToFloat => {
+                // Signed `i64` to `f64`, round to nearest ties even — Rust's
+                // `as` matches the native `sitofp`.
+                let value = self.pop_int()?;
+                self.stack.push(Value::Float(value as f64));
+            }
+            Instruction::ConvertFloatToInt => {
+                // Truncate toward zero, saturating out-of-range to
+                // `i64::MIN`/`i64::MAX` and mapping NaN to zero. Rust's saturating
+                // `f64 as i64` is exactly this, and the native backend mirrors it
+                // with a saturating select chain.
+                let value = self.pop_float()?;
+                self.stack.push(Value::Int(value as i64));
+            }
             arithmetic => self.binary(arithmetic)?,
         }
         Ok(())

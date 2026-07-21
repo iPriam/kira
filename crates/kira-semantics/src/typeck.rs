@@ -247,6 +247,13 @@ impl Analyzer<'_> {
                 if let Some(call) = self.implicit_method_call(ctx, &name, &args, callee_span) {
                     return call;
                 }
+                // `Int(x)` / `U32(x)` / `Float(x)` and the rest of the numeric
+                // scalar set is a value conversion, not a call — recognized here
+                // before the undefined-function path so a cast is never reported
+                // as a missing function.
+                if let Some(call) = self.analyze_scalar_conversion(ctx, &name, &args, callee_span) {
+                    return call;
+                }
                 if name == "print" {
                     // `print` borrows: it renders its argument and consumes
                     // nothing the caller could miss.
