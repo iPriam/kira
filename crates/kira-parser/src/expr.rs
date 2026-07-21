@@ -368,14 +368,21 @@ impl Parser<'_> {
     }
 
     fn parse_name_or_call(&mut self, name_span: Span) -> ExprId {
+        let name = self.text_of(name_span).to_owned();
         let symbol = self.intern_span(name_span);
         self.bump();
+        let type_args = if name == "nativeRecover" && self.at(TokenKind::Lt) {
+            self.parse_call_type_args()
+        } else {
+            Vec::new()
+        };
         if self.at(TokenKind::LParen) {
             let args = self.parse_call_args();
             let span = Span::from_bounds(name_span.start, self.previous_end());
             self.tree.add_expr(Expr::Call {
                 callee: symbol,
                 callee_span: name_span,
+                type_args,
                 args,
                 span,
             })

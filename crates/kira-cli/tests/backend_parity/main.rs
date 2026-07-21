@@ -187,6 +187,7 @@ mod libraries;
 mod logic;
 mod matches;
 mod mutation;
+mod native_state;
 mod ownership;
 mod seam;
 mod strings;

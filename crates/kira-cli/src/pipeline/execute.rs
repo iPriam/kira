@@ -9,6 +9,7 @@
 use kira_backend_api::WasmDevice;
 use kira_ir::IrProgram;
 use kira_main::StdoutHost;
+use kira_runtime_abi::NativeStateHost;
 
 use super::{EXIT_FAILURE, EXIT_OK};
 use crate::options::CompileOptions;
@@ -78,7 +79,7 @@ pub(super) fn run_on_vm(
     };
 
     if ir.foreign_imports.is_empty() {
-        let mut host = StdoutHost;
+        let mut host = NativeStateHost::new(StdoutHost);
         return match kira_vm_runtime::execute(&module, &mut host) {
             Ok(_) => EXIT_OK,
             Err(trap) => {
@@ -96,13 +97,14 @@ pub(super) fn run_on_vm(
         }
     };
     let bindings = foreign_bindings(ir);
-    let mut host = match kira_main::ForeignHost::load(&sidecar, bindings, StdoutHost) {
-        Ok(host) => host,
-        Err(error) => {
-            eprintln!("kirac: cannot load the foreign-adapter sidecar: {error}");
-            return EXIT_FAILURE;
-        }
-    };
+    let mut host =
+        match kira_main::ForeignHost::load(&sidecar, bindings, NativeStateHost::new(StdoutHost)) {
+            Ok(host) => host,
+            Err(error) => {
+                eprintln!("kirac: cannot load the foreign-adapter sidecar: {error}");
+                return EXIT_FAILURE;
+            }
+        };
     match kira_vm_runtime::execute(&module, &mut host) {
         Ok(_) => EXIT_OK,
         Err(trap) => {

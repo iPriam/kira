@@ -32,7 +32,8 @@ use kira_bytecode::module::Module;
 use kira_hybrid_definition::HybridManifest;
 use kira_runtime_abi::{
     BridgeValue, Execution, ForeignArg, ForeignCallError, ForeignResult, HostCapabilities,
-    NativeArg, NativeCallError, NativeResult,
+    NativeArg, NativeCallError, NativeResult, NativeStateError, NativeStateToken,
+    NativeStateTypeId, NativeStateValue,
 };
 use kira_vm_runtime::Program;
 
@@ -225,6 +226,35 @@ impl HostCapabilities for Host<'_> {
         args: &[ForeignArg<'_>],
     ) -> Result<ForeignResult, ForeignCallError> {
         self.session.call_foreign(foreign_id, args)
+    }
+
+    fn native_state_create(
+        &mut self,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+    ) -> Result<NativeStateToken, NativeStateError> {
+        self.session.library.native_state_create(ty, value)
+    }
+
+    fn native_state_recover(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+    ) -> Result<NativeStateValue, NativeStateError> {
+        self.session.library.native_state_recover(token, ty)
+    }
+
+    fn native_state_replace(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+    ) -> Result<(), NativeStateError> {
+        self.session.library.native_state_replace(token, ty, value)
+    }
+
+    fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        self.session.library.native_state_free(token)
     }
 }
 

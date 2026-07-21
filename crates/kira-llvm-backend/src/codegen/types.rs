@@ -117,6 +117,28 @@ pub(crate) struct Runtime {
     pub(super) cstring_free: Callable,
     /// `kira_hybrid_call_runtime`: how native code reaches the VM half.
     pub(super) call_runtime: Callable,
+    pub(super) native_value_int: Callable,
+    pub(super) native_value_raw_ptr: Callable,
+    pub(super) native_value_float: Callable,
+    pub(super) native_value_bool: Callable,
+    pub(super) native_value_string: Callable,
+    pub(super) native_value_aggregate: Callable,
+    pub(super) native_value_set_child: Callable,
+    pub(super) native_value_read_int: Callable,
+    pub(super) native_value_read_raw_ptr: Callable,
+    pub(super) native_value_read_float: Callable,
+    pub(super) native_value_read_bool: Callable,
+    pub(super) native_value_read_string: Callable,
+    pub(super) native_value_enum_tag: Callable,
+    pub(super) native_value_child: Callable,
+    pub(super) native_value_free: Callable,
+    pub(super) native_value_array_from: Callable,
+    pub(super) native_value_array_to: Callable,
+    pub(super) native_state_new: Callable,
+    pub(super) native_state_recover: Callable,
+    pub(super) native_state_replace: Callable,
+    pub(super) native_state_free: Callable,
+    pub(super) trap_native_state: Callable,
 }
 
 /// The LLVM form of `kira_runtime_abi::BridgeValue`.
@@ -225,6 +247,92 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 // (function_id, args, count, out)
                 &mut [types.i32, types.ptr, types.i32, types.ptr],
             ),
+            native_value_int: declare(c"kira_rt_native_value_int", types.ptr, &mut [types.i64]),
+            native_value_raw_ptr: declare(
+                c"kira_rt_native_value_raw_ptr",
+                types.ptr,
+                &mut [types.i64],
+            ),
+            native_value_float: declare(c"kira_rt_native_value_float", types.ptr, &mut [types.f64]),
+            native_value_bool: declare(c"kira_rt_native_value_bool", types.ptr, &mut [types.i8]),
+            native_value_string: declare(
+                c"kira_rt_native_value_string",
+                types.ptr,
+                &mut [types.ptr],
+            ),
+            native_value_aggregate: declare(
+                c"kira_rt_native_value_aggregate",
+                types.ptr,
+                &mut [types.i32, types.i32, types.i64],
+            ),
+            native_value_set_child: declare(
+                c"kira_rt_native_value_set_child",
+                types.i32,
+                &mut [types.ptr, types.i64, types.ptr],
+            ),
+            native_value_read_int: declare(
+                c"kira_rt_native_value_read_int",
+                types.i64,
+                &mut [types.ptr],
+            ),
+            native_value_read_raw_ptr: declare(
+                c"kira_rt_native_value_read_raw_ptr",
+                types.i64,
+                &mut [types.ptr],
+            ),
+            native_value_read_float: declare(
+                c"kira_rt_native_value_read_float",
+                types.f64,
+                &mut [types.ptr],
+            ),
+            native_value_read_bool: declare(
+                c"kira_rt_native_value_read_bool",
+                types.i8,
+                &mut [types.ptr],
+            ),
+            native_value_read_string: declare(
+                c"kira_rt_native_value_read_string",
+                types.ptr,
+                &mut [types.ptr],
+            ),
+            native_value_enum_tag: declare(
+                c"kira_rt_native_value_enum_tag",
+                types.i32,
+                &mut [types.ptr],
+            ),
+            native_value_child: declare(
+                c"kira_rt_native_value_child",
+                types.ptr,
+                &mut [types.ptr, types.i64],
+            ),
+            native_value_free: declare(c"kira_rt_native_value_free", types.void, &mut [types.ptr]),
+            native_value_array_from: declare(
+                c"kira_rt_native_value_array_from",
+                types.ptr,
+                &mut [types.ptr, types.i64, types.ptr],
+            ),
+            native_value_array_to: declare(
+                c"kira_rt_native_value_array_to",
+                types.ptr,
+                &mut [types.ptr, types.i64, types.ptr],
+            ),
+            native_state_new: declare(
+                c"kira_rt_native_state_new",
+                types.i32,
+                &mut [types.i64, types.ptr, types.ptr],
+            ),
+            native_state_recover: declare(
+                c"kira_rt_native_state_recover",
+                types.i32,
+                &mut [types.i64, types.i64, types.ptr],
+            ),
+            native_state_replace: declare(
+                c"kira_rt_native_state_replace",
+                types.i32,
+                &mut [types.i64, types.i64, types.ptr],
+            ),
+            native_state_free: declare(c"kira_rt_native_state_free", types.i32, &mut [types.i64]),
+            trap_native_state: declare(c"kira_rt_trap_native_state", types.void, &mut [types.i32]),
         }
     }
 }

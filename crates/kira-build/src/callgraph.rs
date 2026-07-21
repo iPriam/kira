@@ -123,6 +123,10 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
             walk_expr(program, *value, found);
         }
         IrExpr::Convert { operand, .. } => walk_expr(program, *operand, found),
+        IrExpr::NativeState { value, .. } => walk_expr(program, *value, found),
+        IrExpr::NativeUserData { state } => walk_expr(program, *state, found),
+        IrExpr::NativeRecover { raw, .. } => walk_expr(program, *raw, found),
+        IrExpr::NativeStateFree { token } => walk_expr(program, *token, found),
         // Leaves: nothing inside can be a call.
         IrExpr::Int(_) | IrExpr::Float(_) | IrExpr::Bool(_) | IrExpr::Str(_) | IrExpr::Local(_) => {
         }

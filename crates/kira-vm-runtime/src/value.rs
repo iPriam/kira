@@ -11,7 +11,7 @@
 //! never learns a struct's name or its field names. The compiler resolved those
 //! to indices, which is what lets the same heap serve both kinds of object.
 
-use kira_runtime_abi::{ForeignArg, ForeignResult, ForeignType, NativeArg, NativeResult};
+use kira_runtime_abi::{NativeStateToken, NativeStateTypeId};
 
 /// A handle to a heap-allocated string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +53,15 @@ pub enum Value {
     /// arrives from and returns to the foreign seam
     /// ([`kira_runtime_abi::HostCapabilities::call_foreign`]).
     RawPtr(u64),
+    /// An opaque owning handle to native callback state.
+    NativeState(NativeStateToken),
+    /// A typed mutable view through an opaque callback-state token.
+    NativeView {
+        /// The stable userdata token.
+        token: NativeStateToken,
+        /// The type identity recovery validated.
+        type_id: NativeStateTypeId,
+    },
     /// The unit value.
     Void,
 }
@@ -431,173 +440,10 @@ impl Heap {
             scalar => scalar,
         }
     }
-
-    /// Renders a value as the text `print` emits, consuming what it owns, or
-    /// `None` when the value has no pinned rendering.
-    ///
-    /// Float formatting matches the reference: whole floats print without a
-    /// decimal point (`2.0` -> `2`), matching Rust's default `f64` display.
-    ///
-    /// A struct is the `None` case, and deliberately so: what `print` renders
-    /// for a struct is not pinned anywhere in the language corpus, so any text
-    /// invented here would be inventing language surface. Analysis rejects
-    /// `print(someStruct)` before a program runs; this is the runtime saying
-    /// the same thing rather than printing something made up.
-    pub fn format_and_consume(&mut self, value: Value) -> Option<String> {
-        let rendered = match value {
-            Value::Int(n) => n.to_string(),
-            Value::Float(f) => f.to_string(),
-            Value::Bool(b) => b.to_string(),
-            Value::Str(id) => self.get(id).to_owned(),
-            Value::Void => String::new(),
-            // A struct and an array are both the `None` case, and for the same
-            // reason: neither has a rendering the language corpus pins, so any
-            // text invented here would be inventing language surface. Analysis
-            // rejects both before a program runs; this is the runtime saying
-            // the same thing rather than printing something made up. A `RawPtr`
-            // is the `None` case too: an opaque foreign word has no pinned
-            // rendering, and `print(RawPtr)` is refused in the frontend.
-            Value::Struct(_) | Value::Array(_) | Value::Enum(_) | Value::RawPtr(_) => {
-                self.drop_value(value);
-                return None;
-            }
-        };
-        self.drop_value(value);
-        Some(rendered)
-    }
-
-    /// Brings a seam argument into this heap as a runtime value.
-    ///
-    /// The seam's rule is that arguments borrow, so a string is copied in here
-    /// rather than aliased: the caller's storage stays the caller's, and the
-    /// value this returns is this heap's to drop like any other.
-    ///
-    /// A handle is the `None` case. Its word names an object in a heap that
-    /// outlives one call, and this heap does not have one: each call runs on a
-    /// fresh [`Heap`] that is dropped when the call ends, so there is nothing a
-    /// handle could denote. Saying so beats minting a value: a wrong answer
-    /// about a handle is a wrong answer about *which object*, which is a
-    /// use-after-free, not a bad print. The persistent instance is what gives
-    /// handles a home; until then the caller reports the refusal by name.
-    pub fn lower(&mut self, argument: NativeArg<'_>) -> Option<Value> {
-        Some(match argument {
-            NativeArg::Void => Value::Void,
-            NativeArg::Int(value) => Value::Int(value),
-            NativeArg::Float(value) => Value::Float(value),
-            NativeArg::Bool(value) => Value::Bool(value),
-            NativeArg::Str(text) => Value::Str(self.alloc(text.to_owned())),
-            // A raw pointer is the `None` case at the `@Native` seam for the
-            // same shape of reason a handle is: this per-call heap has no
-            // representation for an opaque foreign word. Raw pointers travel the
-            // *foreign* seam ([`HostCapabilities::call_foreign`]), not this one,
-            // so a value reaching here is a signature the backend should have
-            // refused before the crossing was emitted.
-            NativeArg::Handle(_) | NativeArg::RawPtr(_) => return None,
-        })
-    }
-
-    /// Takes an owned seam result into this heap as a runtime value.
-    ///
-    /// The seam's rule is that results own, so a returned string is *moved* in
-    /// rather than copied: nothing else holds it.
-    ///
-    /// A handle is the `None` case, for the reason [`Heap::lower`] gives: this
-    /// heap has no representation for an object it did not allocate.
-    pub fn absorb(&mut self, result: NativeResult) -> Option<Value> {
-        Some(match result {
-            NativeResult::Void => Value::Void,
-            NativeResult::Int(value) => Value::Int(value),
-            NativeResult::Float(value) => Value::Float(value),
-            NativeResult::Bool(value) => Value::Bool(value),
-            NativeResult::Str(text) => Value::Str(self.alloc(text)),
-            // A raw pointer has no home in this per-call heap, exactly as a
-            // handle does not: it belongs to the foreign seam, not the `@Native`
-            // one. See [`Heap::lower`] for the full reasoning.
-            NativeResult::Handle(_) | NativeResult::RawPtr(_) => return None,
-        })
-    }
-
-    /// Renders a runtime value as a seam result, leaving `value` untouched, or
-    /// `None` when the value has no representation at the seam.
-    ///
-    /// The seam's rule is that results own, so a string is copied out: the
-    /// result outlives this heap, and the caller drops `value` itself.
-    ///
-    /// A struct is the `None` case: [`NativeResult`] has no struct shape, and
-    /// the hybrid ABI has no layout for one yet. This says so rather than
-    /// substituting some other value — a wrong answer here is a wrong answer
-    /// about *ownership*, which is a double free or a leak at the boundary, not
-    /// a bad print. The signature split is checked before a hybrid program is
-    /// ever built, so a rejected value should never reach here.
-    pub fn lift(&self, value: Value) -> Option<NativeResult> {
-        Some(match value {
-            Value::Void => NativeResult::Void,
-            Value::Int(value) => NativeResult::Int(value),
-            Value::Float(value) => NativeResult::Float(value),
-            Value::Bool(value) => NativeResult::Bool(value),
-            Value::Str(id) => NativeResult::Str(self.get(id).to_owned()),
-            // A `RawPtr` belongs to the foreign seam, not the `@Native` one:
-            // this returns `None` so a raw pointer never leaves through the
-            // `@Native` boundary. See [`Heap::foreign_arg`] for the seam it does
-            // cross.
-            Value::Struct(_) | Value::Array(_) | Value::Enum(_) | Value::RawPtr(_) => return None,
-        })
-    }
-
-    /// Borrows a runtime value as a foreign-call argument of the expected
-    /// exact-width type, or `None` when the value cannot cross as that type.
-    ///
-    /// The borrow is the seam's contract: a `CString` argument borrows the
-    /// heap's string bytes for the duration of the one call (the caller keeps
-    /// its `String`, and the transient C copy the host makes is freed before the
-    /// call returns). Every other supported argument is a `Copy` scalar. A
-    /// mismatch returns `None` rather than guessing — analysis has already
-    /// checked the signature, so this is a backstop, not the primary check.
-    pub fn foreign_arg(&self, expected: ForeignType, value: Value) -> Option<ForeignArg<'_>> {
-        Some(match (expected, value) {
-            (ForeignType::Void, Value::Void) => ForeignArg::Void,
-            (ForeignType::I8, Value::Int(v)) => ForeignArg::I8(v as i8),
-            (ForeignType::I16, Value::Int(v)) => ForeignArg::I16(v as i16),
-            (ForeignType::I32, Value::Int(v)) => ForeignArg::I32(v as i32),
-            (ForeignType::I64, Value::Int(v)) => ForeignArg::I64(v),
-            (ForeignType::U8, Value::Int(v)) => ForeignArg::U8(v as u8),
-            (ForeignType::U16, Value::Int(v)) => ForeignArg::U16(v as u16),
-            (ForeignType::U32, Value::Int(v)) => ForeignArg::U32(v as u32),
-            (ForeignType::U64, Value::Int(v)) => ForeignArg::U64(v as u64),
-            (ForeignType::Bool, Value::Bool(v)) => ForeignArg::Bool(v),
-            (ForeignType::F32, Value::Float(v)) => ForeignArg::F32(v as f32),
-            (ForeignType::F64, Value::Float(v)) => ForeignArg::F64(v),
-            (ForeignType::RawPtr, Value::RawPtr(w)) => ForeignArg::RawPtr(w),
-            (ForeignType::CString, Value::Str(id)) => ForeignArg::CString(self.get(id)),
-            _ => return None,
-        })
-    }
-
-    /// Takes an owned foreign-call result into this heap as a runtime value.
-    ///
-    /// Integer results are stored in the VM's 64-bit `Int`, sign- or
-    /// zero-extended by their declared width, exactly as the generated adapter
-    /// narrows them. `RawPtr` stays an opaque word. `CString` never appears —
-    /// returned C-string ownership is not part of the adapter ABI, so a
-    /// [`ForeignResult`] can never carry one.
-    pub fn absorb_foreign(&mut self, result: ForeignResult) -> Value {
-        match result {
-            ForeignResult::Void => Value::Void,
-            ForeignResult::I8(v) => Value::Int(i64::from(v)),
-            ForeignResult::I16(v) => Value::Int(i64::from(v)),
-            ForeignResult::I32(v) => Value::Int(i64::from(v)),
-            ForeignResult::I64(v) => Value::Int(v),
-            ForeignResult::U8(v) => Value::Int(i64::from(v)),
-            ForeignResult::U16(v) => Value::Int(i64::from(v)),
-            ForeignResult::U32(v) => Value::Int(i64::from(v)),
-            ForeignResult::U64(v) => Value::Int(v as i64),
-            ForeignResult::Bool(v) => Value::Bool(v),
-            ForeignResult::F32(v) => Value::Float(f64::from(v)),
-            ForeignResult::F64(v) => Value::Float(v),
-            ForeignResult::RawPtr(w) => Value::RawPtr(w),
-        }
-    }
 }
+
+mod native_state;
+mod seam;
 
 #[cfg(test)]
 #[path = "value_tests.rs"]

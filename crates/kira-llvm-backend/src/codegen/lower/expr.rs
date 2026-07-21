@@ -16,7 +16,10 @@ use crate::LlvmError;
 
 impl FunctionLowering<'_, '_> {
     /// Lowers an expression to a value.
-    pub(super) fn lower_expr(&mut self, id: IrExprId) -> Result<LLVMValueRef, LlvmError> {
+    pub(in crate::codegen) fn lower_expr(
+        &mut self,
+        id: IrExprId,
+    ) -> Result<LLVMValueRef, LlvmError> {
         match self.codegen.program.expr(id).clone() {
             IrExpr::Int(value) => Ok(self.codegen.const_int(value)),
             IrExpr::Float(value) => Ok(self.codegen.const_float(value)),
@@ -57,6 +60,14 @@ impl FunctionLowering<'_, '_> {
             IrExpr::Index { base, index, ty } => self.lower_index(base, index, ty),
             IrExpr::ArrayLen { array } => self.lower_array_len(array),
             IrExpr::ArrayAppend { place, value } => self.lower_array_append(&place, value),
+            IrExpr::NativeState { value, type_id, .. } => {
+                self.lower_native_state_new(value, type_id)
+            }
+            IrExpr::NativeUserData { state } => self.lower_expr(state),
+            IrExpr::NativeRecover { raw, type_id, ty } => {
+                self.lower_native_recover_value(raw, type_id, ty)
+            }
+            IrExpr::NativeStateFree { token } => self.lower_native_state_free(token),
             IrExpr::Convert { operand, kind, .. } => {
                 let value = self.lower_expr(operand)?;
                 Ok(self.lower_convert(kind, value))
@@ -165,6 +176,52 @@ impl FunctionLowering<'_, '_> {
         place: &IrPlace,
         value: IrExprId,
     ) -> Result<LLVMValueRef, LlvmError> {
+        if let Some(type_id) = self
+            .function
+            .native_state_locals
+            .get(place.local as usize)
+            .copied()
+            .flatten()
+        {
+            let root_ty = self.local_type(place.local)?;
+            let (root, _) = self.recover_native_state_alloca(place.local, type_id, root_ty)?;
+            let mut slot = root;
+            let mut ty = root_ty;
+            for step in &place.path {
+                (slot, ty) = self.walk_place_step(slot, ty, step)?;
+            }
+            let element = self.codegen.element_of(ty)?;
+            // SAFETY: `slot` holds an array handle.
+            let handle = unsafe {
+                LLVMBuildLoad2(
+                    self.codegen.builder,
+                    self.codegen.types.ptr,
+                    slot,
+                    c"array".as_ptr(),
+                )
+            };
+            let lowered = self.lower_expr(value)?;
+            let esize = self.codegen.abi_size(element)?;
+            let element_slot = self.call(
+                self.codegen.runtime.array_push_slot,
+                &mut [handle, esize],
+                c"push",
+            );
+            // SAFETY: `element_slot` is one fresh element slot.
+            unsafe { LLVMBuildStore(self.codegen.builder, lowered, element_slot) };
+            let llvm_type = self.codegen.llvm_type(root_ty)?;
+            // SAFETY: `root` is a live alloca of the recovered value.
+            let updated = unsafe {
+                LLVMBuildLoad2(
+                    self.codegen.builder,
+                    llvm_type,
+                    root,
+                    c"native.updated".as_ptr(),
+                )
+            };
+            self.replace_native_state_local(place.local, type_id, root_ty, updated)?;
+            return Ok(self.codegen.const_bool(false));
+        }
         // Every step is a walk: the place names the array itself, and the walk
         // lands on the slot that *holds* its handle.
         let (slot, ty) = self.walk_place(place.local, &place.path)?;
@@ -196,6 +253,15 @@ impl FunctionLowering<'_, '_> {
     /// its own storage and the reader owns an independent copy.
     fn load_local(&mut self, slot: u32) -> Result<LLVMValueRef, LlvmError> {
         let ty = self.local_type(slot)?;
+        if let Some(type_id) = self
+            .function
+            .native_state_locals
+            .get(slot as usize)
+            .copied()
+            .flatten()
+        {
+            return self.load_native_state_local(slot, type_id, ty);
+        }
         let llvm_type = self.codegen.llvm_type(ty)?;
         let pointer = self.local_pointer(slot)?;
         let name = c_string(&format!("local.{slot}.read"));

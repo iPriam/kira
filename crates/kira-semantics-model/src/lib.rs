@@ -22,5 +22,5 @@ pub use kira_runtime_abi::Execution;
 pub use kira_syntax_model::ownership::{OwnershipMode, OwnershipOp};
 pub use ty::{
     ArrayId, ArrayTable, EnumDef, EnumId, EnumTable, FieldDef, FloatSpelling, IntSpelling,
-    StructDef, StructId, StructTable, Type, TypeTable, VariantDef,
+    NativeStateId, NativeStateTable, StructDef, StructId, StructTable, Type, TypeTable, VariantDef,
 };

@@ -20,6 +20,7 @@ pub mod bridge;
 pub mod enum_payload;
 pub mod execution;
 pub mod foreign;
+pub mod native_state;
 pub mod ownership;
 
 pub use bridge::{BridgeData, BridgeValue, BridgeValueTag};
@@ -30,6 +31,10 @@ pub use foreign::{
     FOREIGN_STRING_FREE_SYMBOL, FOREIGN_STRING_LEN_SYMBOL, FOREIGN_STRING_NEW_SYMBOL, ForeignAbi,
     ForeignAdapterFn, ForeignAdapterStatus, ForeignArg, ForeignCallError, ForeignImport,
     ForeignResult, ForeignSignature, ForeignType,
+};
+pub use native_state::{
+    NativeStateError, NativeStateHost, NativeStateStatus, NativeStateStore, NativeStateToken,
+    NativeStateTypeId, NativeStateValue, NativeStateValueTag,
 };
 pub use ownership::Ownership;
 
@@ -81,6 +86,27 @@ pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
     "kira_rt_str_data",
     "kira_rt_str_len",
     "kira_hybrid_install_runtime_invoker",
+    "kira_rt_native_value_int",
+    "kira_rt_native_value_raw_ptr",
+    "kira_rt_native_value_float",
+    "kira_rt_native_value_bool",
+    "kira_rt_native_value_string",
+    "kira_rt_native_value_aggregate",
+    "kira_rt_native_value_set_child",
+    "kira_rt_native_value_tag",
+    "kira_rt_native_value_read_int",
+    "kira_rt_native_value_read_raw_ptr",
+    "kira_rt_native_value_read_float",
+    "kira_rt_native_value_read_bool",
+    "kira_rt_native_value_read_string",
+    "kira_rt_native_value_len",
+    "kira_rt_native_value_enum_tag",
+    "kira_rt_native_value_child",
+    "kira_rt_native_value_free",
+    "kira_rt_native_state_new",
+    "kira_rt_native_state_recover",
+    "kira_rt_native_state_replace",
+    "kira_rt_native_state_free",
 ];
 
 /// An argument the VM hands to a native function.
@@ -222,6 +248,43 @@ pub trait HostCapabilities {
     ) -> Result<ForeignResult, ForeignCallError> {
         let _ = (foreign_id, args);
         Err(ForeignCallError::NoForeignHost)
+    }
+
+    /// Boxes a backend-neutral Kira value in stable callback-state storage.
+    fn native_state_create(
+        &mut self,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+    ) -> Result<NativeStateToken, NativeStateError> {
+        let _ = (ty, value);
+        Err(NativeStateError::NoStateHost)
+    }
+
+    /// Recovers an owned copy of callback state after validating its type.
+    fn native_state_recover(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+    ) -> Result<NativeStateValue, NativeStateError> {
+        let _ = (token, ty);
+        Err(NativeStateError::NoStateHost)
+    }
+
+    /// Replaces callback state after validating its token and type.
+    fn native_state_replace(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+    ) -> Result<(), NativeStateError> {
+        let _ = (token, ty, value);
+        Err(NativeStateError::NoStateHost)
+    }
+
+    /// Releases callback state exactly once.
+    fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        let _ = token;
+        Err(NativeStateError::NoStateHost)
     }
 }
 

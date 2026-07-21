@@ -107,6 +107,38 @@ impl Parser<'_> {
         );
     }
 
+    /// Parses `<A, B>` as a call's explicit type arguments.
+    pub(crate) fn parse_call_type_args(&mut self) -> Vec<TypeRefId> {
+        let start = self.current().span;
+        self.bump(); // `<`
+        let mut args = Vec::new();
+        while !self.at_generic_close() && !self.at_eof() {
+            let before = self.pos;
+            args.push(self.parse_type_ref());
+            self.eat(TokenKind::Comma);
+            if self.pos == before {
+                self.bump();
+            }
+        }
+        if !self.eat_generic_close() {
+            let span = Span::from_bounds(start.start, self.previous_end());
+            self.error(
+                span,
+                "KPAR045",
+                "expected `>` to close a type argument list",
+            );
+        }
+        if args.is_empty() {
+            let span = Span::from_bounds(start.start, self.previous_end());
+            self.error(
+                span,
+                "KPAR046",
+                "a type argument list names at least one type",
+            );
+        }
+        args
+    }
+
     /// Parses `<A, B>` after a type name in a type position, with the cursor on
     /// `<`.
     ///

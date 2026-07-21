@@ -34,6 +34,7 @@ fn bridge_tag_of(ty: Type) -> Result<(u8, Option<PayloadForm>), LlvmError> {
         Type::Float(_) => (BridgeValueTag::FLOAT.0, Some(PayloadForm::FloatBits)),
         Type::Bool => (BridgeValueTag::BOOL.0, Some(PayloadForm::Widen)),
         Type::String => (BridgeValueTag::STRING.0, Some(PayloadForm::PointerBits)),
+        Type::RawPtr => (BridgeValueTag::RAW_PTR.0, Some(PayloadForm::AsIs)),
         // A `BridgeValue` is 16 bytes with a one-word payload; a struct does
         // not fit and has no tag. Crossing the seam with one needs an ABI
         // decision (by value? by pointer? who frees the strings inside?) that
@@ -49,14 +50,12 @@ fn bridge_tag_of(ty: Type) -> Result<(u8, Option<PayloadForm>), LlvmError> {
         // is a tagged value with no one-word form, and how it would cross is
         // undecided. See `BridgeValueTag::ENUM`.
         Type::Enum(_) => return Err(LlvmError::EnumAtSeam),
-        // A `RawPtr` and a `CString` are foreign-seam values, not `@Native`-seam
-        // ones: the VM refuses both here (`Heap::lower`/`lift` return `None`), so
-        // native code refuses them too, keeping the two engines in agreement. A
-        // raw pointer crosses the *foreign* seam through a generated adapter, and
-        // a `CString` is a foreign parameter position that never becomes a value.
-        Type::RawPtr | Type::CString => {
+        // `RawPtr` crosses this seam for opaque callback userdata. `CString`
+        // remains foreign-parameter-only, and a state handle itself stays in the
+        // engine that owns the intrinsic; only its raw token crosses.
+        Type::CString | Type::NativeState(_) => {
             return Err(LlvmError::Unsupported(
-                "a raw pointer or C string crossing the @Native boundary",
+                "a C string or callback-state handle crossing the @Native boundary",
             ));
         }
         Type::Error => return Err(LlvmError::Unsupported("a value with no type")),
@@ -103,9 +102,10 @@ impl Codegen<'_> {
                 Type::Struct(_) => return Err(LlvmError::StructAtSeam),
                 Type::Array(_) => return Err(LlvmError::ArrayAtSeam),
                 Type::Enum(_) => return Err(LlvmError::EnumAtSeam),
-                Type::RawPtr | Type::CString => {
+                Type::RawPtr => payload,
+                Type::CString | Type::NativeState(_) => {
                     return Err(LlvmError::Unsupported(
-                        "a raw pointer or C string crossing the @Native boundary",
+                        "a C string or callback-state handle crossing the @Native boundary",
                     ));
                 }
                 Type::Void | Type::Error => {

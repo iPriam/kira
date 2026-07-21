@@ -225,6 +225,32 @@ fn a_mutating_call_with_an_unknown_place_step_is_reported() {
 }
 
 #[test]
+fn native_state_opcodes_are_appended_and_round_trip() {
+    assert_eq!(opcode::CALL_MUT, 0x48);
+    assert_eq!(opcode::NATIVE_STATE, 0x49);
+    assert_eq!(opcode::NATIVE_USER_DATA, 0x4a);
+    assert_eq!(opcode::NATIVE_RECOVER, 0x4b);
+    assert_eq!(opcode::NATIVE_STATE_FREE, 0x4c);
+
+    let code = vec![
+        Instruction::NativeState(u64::MAX),
+        Instruction::NativeUserData,
+        Instruction::NativeRecover(0x0102_0304_0506_0708),
+        Instruction::NativeStateFree,
+    ];
+    let bytes = encode(&code);
+    assert_eq!(decode(&bytes).unwrap(), code);
+}
+
+#[test]
+fn truncated_native_state_type_ids_are_reported() {
+    for opcode in [opcode::NATIVE_STATE, opcode::NATIVE_RECOVER] {
+        let err = decode(&[opcode, 1, 2, 3]).unwrap_err();
+        assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
+    }
+}
+
+#[test]
 fn unknown_opcode_is_reported() {
     let err = decode(&[0xff]).unwrap_err();
     assert!(matches!(

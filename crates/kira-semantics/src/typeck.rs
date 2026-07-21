@@ -19,6 +19,7 @@ use crate::operators::{resolve_binary, resolve_unary, unary_spelling, unify_bran
 
 mod calls;
 mod labels;
+mod native_state;
 
 impl Analyzer<'_> {
     /// Type-checks an AST expression, returning its HIR handle.
@@ -180,10 +181,23 @@ impl Analyzer<'_> {
             Expr::Call {
                 callee,
                 callee_span,
+                type_args,
                 args,
                 ..
             } => {
                 let name = self.interner.resolve(callee).to_owned();
+                if let Some(intrinsic) =
+                    self.analyze_native_state_intrinsic(ctx, &name, &type_args, &args, callee_span)
+                {
+                    return intrinsic;
+                }
+                if !type_args.is_empty() {
+                    self.emit(
+                        callee_span,
+                        "KSEM222",
+                        format!("function `{name}` does not take explicit type arguments"),
+                    );
+                }
                 // The value paths below bind by position, not by parameter
                 // name; only a user function or method exposes names to bind a
                 // label against. Each of those paths keeps the written values

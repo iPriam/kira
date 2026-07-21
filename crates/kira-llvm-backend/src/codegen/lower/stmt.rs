@@ -89,8 +89,25 @@ impl FunctionLowering<'_, '_> {
     /// VM's evaluate-then-StoreLocal order — which is what makes `s = s + "x"`
     /// work: the read clones `s` before the store frees the original.
     fn store_local(&mut self, slot: u32, expr: IrExprId) -> Result<(), LlvmError> {
-        let value = self.lower_expr(expr)?;
         let ty = self.local_type(slot)?;
+        if let Some(type_id) = self
+            .function
+            .native_state_locals
+            .get(slot as usize)
+            .copied()
+            .flatten()
+        {
+            if let kira_ir::IrExpr::NativeRecover { raw, .. } = self.codegen.program.expr(expr) {
+                let token = self.lower_native_recover_token(*raw, type_id)?;
+                let pointer = self.local_pointer(slot)?;
+                // SAFETY: a recovered-view local is an i64 token slot.
+                unsafe { LLVMBuildStore(self.codegen.builder, token, pointer) };
+                return Ok(());
+            }
+            let value = self.lower_expr(expr)?;
+            return self.replace_native_state_local(slot, type_id, ty, value);
+        }
+        let value = self.lower_expr(expr)?;
         let pointer = self.local_pointer(slot)?;
         self.store_through(pointer, ty, value)
     }
@@ -105,6 +122,38 @@ impl FunctionLowering<'_, '_> {
     /// path's index expressions left to right, and only then is the value
     /// lowered — so `xs[next()] = next()` agrees across backends.
     fn store_place(&mut self, place: &IrPlace, expr: IrExprId) -> Result<(), LlvmError> {
+        if let Some(type_id) = self
+            .function
+            .native_state_locals
+            .get(place.local as usize)
+            .copied()
+            .flatten()
+        {
+            let root_ty = self.local_type(place.local)?;
+            if place.path.is_empty() {
+                let value = self.lower_expr(expr)?;
+                return self.replace_native_state_local(place.local, type_id, root_ty, value);
+            }
+            let (root, _) = self.recover_native_state_alloca(place.local, type_id, root_ty)?;
+            let mut pointer = root;
+            let mut ty = root_ty;
+            for step in &place.path {
+                (pointer, ty) = self.walk_place_step(pointer, ty, step)?;
+            }
+            let value = self.lower_expr(expr)?;
+            self.store_through(pointer, ty, value)?;
+            let llvm_type = self.codegen.llvm_type(root_ty)?;
+            // SAFETY: `root` is a live alloca of `llvm_type`.
+            let updated = unsafe {
+                LLVMBuildLoad2(
+                    self.codegen.builder,
+                    llvm_type,
+                    root,
+                    c"native.updated".as_ptr(),
+                )
+            };
+            return self.replace_native_state_local(place.local, type_id, root_ty, updated);
+        }
         if place.path.is_empty() {
             let value = self.lower_expr(expr)?;
             let ty = self.local_type(place.local)?;
@@ -140,7 +189,7 @@ impl FunctionLowering<'_, '_> {
     /// Walks one step: `pointer` is where the current value is stored, `ty` its
     /// type; returns the storage address of the value the step reaches and its
     /// type.
-    fn walk_place_step(
+    pub(super) fn walk_place_step(
         &mut self,
         pointer: LLVMValueRef,
         ty: Type,
@@ -234,7 +283,15 @@ impl FunctionLowering<'_, '_> {
             // A mutating method's slot 0 is the caller's storage, borrowed
             // through a pointer; freeing it here would release a value the
             // caller still owns and will free itself.
-            if self.function.mutates_self && slot == 0 {
+            if (self.function.mutates_self && slot == 0)
+                || self
+                    .function
+                    .native_state_locals
+                    .get(slot as usize)
+                    .copied()
+                    .flatten()
+                    .is_some()
+            {
                 continue;
             }
             let ty = self.local_type(slot)?;

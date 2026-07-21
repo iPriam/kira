@@ -18,6 +18,7 @@ pub mod boxes;
 pub mod enums;
 pub mod foreign;
 pub mod hybrid;
+pub mod native_state;
 pub mod runtime;
 
 pub use array::{KArray, KiraArray};

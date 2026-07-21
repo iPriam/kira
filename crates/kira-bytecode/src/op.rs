@@ -166,6 +166,14 @@ pub enum Instruction {
         /// Steps to walk to the writeback location; may be empty.
         path: PlacePath,
     },
+    /// Pop a value, box it as opaque callback state, and push its state handle.
+    NativeState(u64),
+    /// Pop a callback-state handle and push its stable raw userdata token.
+    NativeUserData,
+    /// Pop a raw userdata token and push a typed mutable callback-state view.
+    NativeRecover(u64),
+    /// Pop a callback-state handle or raw token, release it, and push unit.
+    NativeStateFree,
     /// Pop a value, format it, emit one output line, and push unit.
     Print,
     /// Return the stack top from the current function.
@@ -490,6 +498,14 @@ mod opcode {
     // carries a `u32` function index plus a place operand (slot and path), so it
     // is decoded in `Cursor::next_instruction` rather than as a nullary opcode.
     pub const CALL_MUT: u8 = 0x48;
+
+    // Opaque native callback-state operations. Appended after `CALL_MUT`; the
+    // create/recover forms carry one `u64` type identity, while userdata/free are
+    // nullary.
+    pub const NATIVE_STATE: u8 = 0x49;
+    pub const NATIVE_USER_DATA: u8 = 0x4a;
+    pub const NATIVE_RECOVER: u8 = 0x4b;
+    pub const NATIVE_STATE_FREE: u8 = 0x4c;
 }
 
 #[cfg(test)]

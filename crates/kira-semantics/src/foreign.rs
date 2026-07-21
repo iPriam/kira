@@ -427,7 +427,7 @@ impl<'a> Analyzer<'a> {
                 self.emit_ffi_not_executable(kind, id, span);
                 None
             }
-            Type::Struct(_) | Type::Array(_) | Type::Enum(_) => {
+            Type::Struct(_) | Type::Array(_) | Type::Enum(_) | Type::NativeState(_) => {
                 self.emit(
                     span,
                     "KSEM182",

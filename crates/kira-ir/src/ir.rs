@@ -7,7 +7,7 @@
 //! [`IrProgram`] is the contract that the program type-checked and has a valid
 //! entrypoint.
 
-use kira_runtime_abi::{Execution, ForeignImport};
+use kira_runtime_abi::{Execution, ForeignImport, NativeStateTypeId};
 use kira_semantics_model::{EnumId, StructId, Type, TypeTable};
 use la_arena::{Arena, Idx};
 
@@ -129,11 +129,14 @@ impl IrProgram {
             IrExpr::Field { ty, .. }
             | IrExpr::ArrayNew { ty, .. }
             | IrExpr::EnumPayload { ty, .. }
+            | IrExpr::NativeState { ty, .. }
+            | IrExpr::NativeRecover { ty, .. }
             | IrExpr::Convert { ty, .. }
             | IrExpr::Index { ty, .. } => *ty,
             IrExpr::Select { ty, .. } => *ty,
             IrExpr::ArrayLen { .. } | IrExpr::EnumTag { .. } => Type::INT,
-            IrExpr::ArrayAppend { .. } => Type::Void,
+            IrExpr::NativeUserData { .. } => Type::RawPtr,
+            IrExpr::ArrayAppend { .. } | IrExpr::NativeStateFree { .. } => Type::Void,
         }
     }
 
@@ -227,6 +230,12 @@ pub struct IrFunction {
     /// statically-typed backend (LLVM/native) needs each slot's type to pick
     /// its storage and its load/store shape. `locals.len()` is the slot count.
     pub locals: Vec<Type>,
+    /// Callback-state type ids for locals that are mutable recovered views.
+    ///
+    /// Positionally aligned with [`IrFunction::locals`]; `None` is an ordinary
+    /// value slot, while `Some` stores only the opaque token and materializes the
+    /// Kira value on reads.
+    pub native_state_locals: Vec<Option<NativeStateTypeId>>,
     /// The function's return type.
     pub return_type: Type,
     /// The engine this function's body runs on, as written in the source.
@@ -508,6 +517,34 @@ pub enum IrExpr {
         place: IrPlace,
         /// The element to push.
         value: IrExprId,
+    },
+    /// Boxes a copy of a Kira-owned value in opaque callback-state storage.
+    NativeState {
+        /// The value copied into the box.
+        value: IrExprId,
+        /// The stable runtime identity of the boxed type.
+        type_id: NativeStateTypeId,
+        /// The opaque handle type returned to Kira.
+        ty: Type,
+    },
+    /// Exports a callback-state handle's stable opaque userdata token.
+    NativeUserData {
+        /// The state handle.
+        state: IrExprId,
+    },
+    /// Recovers typed mutable access through a returned userdata token.
+    NativeRecover {
+        /// The opaque raw userdata token.
+        raw: IrExprId,
+        /// The stable runtime identity recovery validates.
+        type_id: NativeStateTypeId,
+        /// The Kira value type exposed by the mutable view.
+        ty: Type,
+    },
+    /// Releases a callback-state handle or userdata token exactly once.
+    NativeStateFree {
+        /// The state handle or raw token.
+        token: IrExprId,
     },
     /// A scalar type-conversion, `T(operand)`.
     ///

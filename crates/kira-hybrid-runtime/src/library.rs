@@ -18,7 +18,10 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
 use kira_hybrid_definition::{HybridForeign, HybridFunction};
-use kira_runtime_abi::{BridgeValue, FOREIGN_ADAPTER_ABI_MARKER, ForeignAdapterFn};
+use kira_runtime_abi::{
+    BridgeValue, FOREIGN_ADAPTER_ABI_MARKER, ForeignAdapterFn, NativeStateError, NativeStateStatus,
+    NativeStateToken, NativeStateTypeId, NativeStateValue, NativeStateValueTag,
+};
 
 use crate::error::HybridError;
 
@@ -63,6 +66,28 @@ type StrFreeFn = unsafe extern "C" fn(value: *mut c_void);
 type StrDataFn = unsafe extern "C" fn(value: *mut c_void) -> *const u8;
 type StrLenFn = unsafe extern "C" fn(value: *mut c_void) -> usize;
 type InstallInvokerFn = unsafe extern "C" fn(invoker: Option<RuntimeInvoker>);
+type StateNode = *mut c_void;
+type StateIntFn = unsafe extern "C" fn(i64) -> StateNode;
+type StateRawPtrFn = unsafe extern "C" fn(u64) -> StateNode;
+type StateFloatFn = unsafe extern "C" fn(f64) -> StateNode;
+type StateBoolFn = unsafe extern "C" fn(u8) -> StateNode;
+type StateStringFn = unsafe extern "C" fn(*mut c_void) -> StateNode;
+type StateAggregateFn = unsafe extern "C" fn(u32, u32, usize) -> StateNode;
+type StateSetChildFn = unsafe extern "C" fn(StateNode, usize, StateNode) -> u32;
+type StateTagFn = unsafe extern "C" fn(StateNode) -> u32;
+type StateReadIntFn = unsafe extern "C" fn(StateNode) -> i64;
+type StateReadRawPtrFn = unsafe extern "C" fn(StateNode) -> u64;
+type StateReadFloatFn = unsafe extern "C" fn(StateNode) -> f64;
+type StateReadBoolFn = unsafe extern "C" fn(StateNode) -> u8;
+type StateReadStringFn = unsafe extern "C" fn(StateNode) -> *mut c_void;
+type StateLenFn = unsafe extern "C" fn(StateNode) -> usize;
+type StateEnumTagFn = unsafe extern "C" fn(StateNode) -> u32;
+type StateChildFn = unsafe extern "C" fn(StateNode, usize) -> StateNode;
+type StateNodeFreeFn = unsafe extern "C" fn(StateNode);
+type StateNewFn = unsafe extern "C" fn(u64, StateNode, *mut u64) -> u32;
+type StateRecoverFn = unsafe extern "C" fn(u64, u64, *mut StateNode) -> u32;
+type StateReplaceFn = unsafe extern "C" fn(u64, u64, StateNode) -> u32;
+type StateFreeFn = unsafe extern "C" fn(u64) -> u32;
 /// The versioned foreign-adapter marker; resolving it proves the native half
 /// carries this build's adapter ABI, exactly as [`FOREIGN_ADAPTER_ABI_MARKER`]
 /// names. A no-argument function whose body is irrelevant — it is never called.
@@ -74,6 +99,27 @@ const STR_FREE: &[u8] = b"kira_rt_str_free\0";
 const STR_DATA: &[u8] = b"kira_rt_str_data\0";
 const STR_LEN: &[u8] = b"kira_rt_str_len\0";
 const INSTALL_INVOKER: &[u8] = b"kira_hybrid_install_runtime_invoker\0";
+const STATE_VALUE_INT: &[u8] = b"kira_rt_native_value_int\0";
+const STATE_VALUE_RAW_PTR: &[u8] = b"kira_rt_native_value_raw_ptr\0";
+const STATE_VALUE_FLOAT: &[u8] = b"kira_rt_native_value_float\0";
+const STATE_VALUE_BOOL: &[u8] = b"kira_rt_native_value_bool\0";
+const STATE_VALUE_STRING: &[u8] = b"kira_rt_native_value_string\0";
+const STATE_VALUE_AGGREGATE: &[u8] = b"kira_rt_native_value_aggregate\0";
+const STATE_VALUE_SET_CHILD: &[u8] = b"kira_rt_native_value_set_child\0";
+const STATE_VALUE_TAG: &[u8] = b"kira_rt_native_value_tag\0";
+const STATE_VALUE_READ_INT: &[u8] = b"kira_rt_native_value_read_int\0";
+const STATE_VALUE_READ_RAW_PTR: &[u8] = b"kira_rt_native_value_read_raw_ptr\0";
+const STATE_VALUE_READ_FLOAT: &[u8] = b"kira_rt_native_value_read_float\0";
+const STATE_VALUE_READ_BOOL: &[u8] = b"kira_rt_native_value_read_bool\0";
+const STATE_VALUE_READ_STRING: &[u8] = b"kira_rt_native_value_read_string\0";
+const STATE_VALUE_LEN: &[u8] = b"kira_rt_native_value_len\0";
+const STATE_VALUE_ENUM_TAG: &[u8] = b"kira_rt_native_value_enum_tag\0";
+const STATE_VALUE_CHILD: &[u8] = b"kira_rt_native_value_child\0";
+const STATE_VALUE_FREE: &[u8] = b"kira_rt_native_value_free\0";
+const STATE_NEW: &[u8] = b"kira_rt_native_state_new\0";
+const STATE_RECOVER: &[u8] = b"kira_rt_native_state_recover\0";
+const STATE_REPLACE: &[u8] = b"kira_rt_native_state_replace\0";
+const STATE_FREE: &[u8] = b"kira_rt_native_state_free\0";
 
 /// The native half of a hybrid program, loaded and bound.
 pub struct NativeLibrary {
@@ -96,6 +142,27 @@ pub struct NativeLibrary {
     str_data: StrDataFn,
     str_len: StrLenFn,
     install_invoker: InstallInvokerFn,
+    state_value_int: StateIntFn,
+    state_value_raw_ptr: StateRawPtrFn,
+    state_value_float: StateFloatFn,
+    state_value_bool: StateBoolFn,
+    state_value_string: StateStringFn,
+    state_value_aggregate: StateAggregateFn,
+    state_value_set_child: StateSetChildFn,
+    state_value_tag: StateTagFn,
+    state_value_read_int: StateReadIntFn,
+    state_value_read_raw_ptr: StateReadRawPtrFn,
+    state_value_read_float: StateReadFloatFn,
+    state_value_read_bool: StateReadBoolFn,
+    state_value_read_string: StateReadStringFn,
+    state_value_len: StateLenFn,
+    state_value_enum_tag: StateEnumTagFn,
+    state_value_child: StateChildFn,
+    state_value_free: StateNodeFreeFn,
+    state_new: StateNewFn,
+    state_recover: StateRecoverFn,
+    state_replace: StateReplaceFn,
+    state_free: StateFreeFn,
     /// The open library. Declared last so it is dropped last: every function
     /// pointer above points into its image and dangles once it is unloaded.
     _library: libloading::Library,
@@ -126,6 +193,27 @@ impl NativeLibrary {
         let str_data = bind(&library, path, STR_DATA)?;
         let str_len = bind(&library, path, STR_LEN)?;
         let install_invoker = bind(&library, path, INSTALL_INVOKER)?;
+        let state_value_int = bind(&library, path, STATE_VALUE_INT)?;
+        let state_value_raw_ptr = bind(&library, path, STATE_VALUE_RAW_PTR)?;
+        let state_value_float = bind(&library, path, STATE_VALUE_FLOAT)?;
+        let state_value_bool = bind(&library, path, STATE_VALUE_BOOL)?;
+        let state_value_string = bind(&library, path, STATE_VALUE_STRING)?;
+        let state_value_aggregate = bind(&library, path, STATE_VALUE_AGGREGATE)?;
+        let state_value_set_child = bind(&library, path, STATE_VALUE_SET_CHILD)?;
+        let state_value_tag = bind(&library, path, STATE_VALUE_TAG)?;
+        let state_value_read_int = bind(&library, path, STATE_VALUE_READ_INT)?;
+        let state_value_read_raw_ptr = bind(&library, path, STATE_VALUE_READ_RAW_PTR)?;
+        let state_value_read_float = bind(&library, path, STATE_VALUE_READ_FLOAT)?;
+        let state_value_read_bool = bind(&library, path, STATE_VALUE_READ_BOOL)?;
+        let state_value_read_string = bind(&library, path, STATE_VALUE_READ_STRING)?;
+        let state_value_len = bind(&library, path, STATE_VALUE_LEN)?;
+        let state_value_enum_tag = bind(&library, path, STATE_VALUE_ENUM_TAG)?;
+        let state_value_child = bind(&library, path, STATE_VALUE_CHILD)?;
+        let state_value_free = bind(&library, path, STATE_VALUE_FREE)?;
+        let state_new = bind(&library, path, STATE_NEW)?;
+        let state_recover = bind(&library, path, STATE_RECOVER)?;
+        let state_replace = bind(&library, path, STATE_REPLACE)?;
+        let state_free = bind(&library, path, STATE_FREE)?;
 
         let mut trampolines = vec![None; functions.len()];
         for function in functions {
@@ -171,6 +259,27 @@ impl NativeLibrary {
             str_data,
             str_len,
             install_invoker,
+            state_value_int,
+            state_value_raw_ptr,
+            state_value_float,
+            state_value_bool,
+            state_value_string,
+            state_value_aggregate,
+            state_value_set_child,
+            state_value_tag,
+            state_value_read_int,
+            state_value_read_raw_ptr,
+            state_value_read_float,
+            state_value_read_bool,
+            state_value_read_string,
+            state_value_len,
+            state_value_enum_tag,
+            state_value_child,
+            state_value_free,
+            state_new,
+            state_recover,
+            state_replace,
+            state_free,
             _library: library,
         })
     }
@@ -277,6 +386,210 @@ impl NativeLibrary {
         // again — the bytes were copied out above, including on the error path.
         unsafe { self.free_string(handle) };
         text
+    }
+
+    /// Boxes callback state in the loaded native half's process-lifetime store.
+    pub fn native_state_create(
+        &self,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+    ) -> Result<NativeStateToken, NativeStateError> {
+        // SAFETY: every node is allocated and consumed by this same loaded library.
+        let node = unsafe { self.encode_state_value(value)? };
+        let mut token = 0;
+        // SAFETY: `node` is live and `token` is one writable word.
+        let status = unsafe { (self.state_new)(ty.as_word(), node, &mut token) };
+        self.check_state_status(status, token)?;
+        Ok(NativeStateToken::from_word(token))
+    }
+
+    /// Recovers an owned callback-state copy from the loaded native half.
+    pub fn native_state_recover(
+        &self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+    ) -> Result<NativeStateValue, NativeStateError> {
+        let mut node = std::ptr::null_mut();
+        // SAFETY: `node` is one writable pointer slot.
+        let status = unsafe { (self.state_recover)(token.as_word(), ty.as_word(), &mut node) };
+        self.check_state_status(status, token.as_word())?;
+        // SAFETY: success initializes one live node from this library.
+        unsafe { self.decode_state_value(node) }
+    }
+
+    /// Replaces callback state in the loaded native half.
+    pub fn native_state_replace(
+        &self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+    ) -> Result<(), NativeStateError> {
+        // SAFETY: every node is allocated and consumed by this same loaded library.
+        let node = unsafe { self.encode_state_value(value)? };
+        // SAFETY: `node` is live and consumed by the runtime call.
+        let status = unsafe { (self.state_replace)(token.as_word(), ty.as_word(), node) };
+        self.check_state_status(status, token.as_word())
+    }
+
+    /// Releases callback state in the loaded native half exactly once.
+    pub fn native_state_free(&self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        // SAFETY: this function pointer accepts any token word and validates it.
+        let status = unsafe { (self.state_free)(token.as_word()) };
+        self.check_state_status(status, token.as_word())
+    }
+
+    unsafe fn encode_state_value(
+        &self,
+        value: NativeStateValue,
+    ) -> Result<StateNode, NativeStateError> {
+        Ok(match value {
+            // SAFETY: the constructor accepts its scalar by value.
+            NativeStateValue::Int(value) => unsafe { (self.state_value_int)(value) },
+            // SAFETY: the constructor accepts its opaque word by value.
+            NativeStateValue::RawPtr(value) => unsafe { (self.state_value_raw_ptr)(value) },
+            // SAFETY: the constructor accepts its scalar by value.
+            NativeStateValue::Float(value) => unsafe { (self.state_value_float)(value) },
+            // SAFETY: the constructor accepts its scalar by value.
+            NativeStateValue::Bool(value) => unsafe { (self.state_value_bool)(u8::from(value)) },
+            NativeStateValue::String(value) => {
+                let string = self.new_string(&value) as *mut c_void;
+                // SAFETY: the constructor consumes this live string handle.
+                unsafe { (self.state_value_string)(string) }
+            }
+            // SAFETY: the aggregate owns every child this builds.
+            NativeStateValue::Struct(values) => unsafe {
+                self.encode_aggregate(NativeStateValueTag::STRUCT, 0, values)?
+            },
+            // SAFETY: the aggregate owns every child this builds.
+            NativeStateValue::Array(values) => unsafe {
+                self.encode_aggregate(NativeStateValueTag::ARRAY, 0, values)?
+            },
+            NativeStateValue::Enum { tag, payload } => {
+                let values = payload.into_iter().map(|value| *value).collect();
+                // SAFETY: the aggregate owns every child this builds.
+                unsafe { self.encode_aggregate(NativeStateValueTag::ENUM, tag, values)? }
+            }
+        })
+    }
+
+    unsafe fn encode_aggregate(
+        &self,
+        tag: NativeStateValueTag,
+        enum_tag: u32,
+        values: Vec<NativeStateValue>,
+    ) -> Result<StateNode, NativeStateError> {
+        // SAFETY: constructor takes plain scalar metadata.
+        let node = unsafe { (self.state_value_aggregate)(tag.0, enum_tag, values.len()) };
+        for (index, value) in values.into_iter().enumerate() {
+            // SAFETY: recursion allocates a child in this same library.
+            let child = unsafe { self.encode_state_value(value)? };
+            // SAFETY: node and child are live; each in-range slot is set once.
+            let status = unsafe { (self.state_value_set_child)(node, index, child) };
+            if status != NativeStateStatus::OK.0 {
+                // SAFETY: the parent remains live after a refused child store.
+                unsafe { (self.state_value_free)(node) };
+                return Err(NativeStateError::MalformedValue);
+            }
+        }
+        Ok(node)
+    }
+
+    unsafe fn decode_state_value(
+        &self,
+        node: StateNode,
+    ) -> Result<NativeStateValue, NativeStateError> {
+        if node.is_null() {
+            return Err(NativeStateError::MalformedValue);
+        }
+        // SAFETY: `node` is live and belongs to this library.
+        let tag = NativeStateValueTag(unsafe { (self.state_value_tag)(node) });
+        let value = match tag {
+            NativeStateValueTag::INT => {
+                // SAFETY: tag validation established the node shape.
+                NativeStateValue::Int(unsafe { (self.state_value_read_int)(node) })
+            }
+            NativeStateValueTag::RAW_PTR => {
+                // SAFETY: tag validation established the node shape.
+                NativeStateValue::RawPtr(unsafe { (self.state_value_read_raw_ptr)(node) })
+            }
+            NativeStateValueTag::FLOAT => {
+                // SAFETY: tag validation established the node shape.
+                NativeStateValue::Float(unsafe { (self.state_value_read_float)(node) })
+            }
+            NativeStateValueTag::BOOL => {
+                // SAFETY: tag validation established the node shape.
+                NativeStateValue::Bool(unsafe { (self.state_value_read_bool)(node) } != 0)
+            }
+            NativeStateValueTag::STRING => {
+                // SAFETY: tag validation established the node shape.
+                let handle = unsafe { (self.state_value_read_string)(node) } as StrHandle;
+                // SAFETY: the reader returned one owned handle from this library.
+                let text = unsafe { self.take_string(handle) }
+                    .map_err(|_| NativeStateError::MalformedValue)?;
+                NativeStateValue::String(text)
+            }
+            NativeStateValueTag::STRUCT | NativeStateValueTag::ARRAY => {
+                // SAFETY: aggregate accessors accept this live node.
+                let len = unsafe { (self.state_value_len)(node) };
+                let mut values = Vec::with_capacity(len);
+                for index in 0..len {
+                    // SAFETY: `index < len`; the returned child is owned.
+                    let child = unsafe { (self.state_value_child)(node, index) };
+                    // SAFETY: recursion consumes that owned child.
+                    values.push(unsafe { self.decode_state_value(child)? });
+                }
+                if tag == NativeStateValueTag::STRUCT {
+                    NativeStateValue::Struct(values)
+                } else {
+                    NativeStateValue::Array(values)
+                }
+            }
+            NativeStateValueTag::ENUM => {
+                // SAFETY: enum accessors accept this live node.
+                let enum_tag = unsafe { (self.state_value_enum_tag)(node) };
+                // SAFETY: same live aggregate node.
+                let len = unsafe { (self.state_value_len)(node) };
+                let payload = if len == 0 {
+                    None
+                } else if len == 1 {
+                    // SAFETY: child zero exists and is returned owned.
+                    let child = unsafe { (self.state_value_child)(node, 0) };
+                    // SAFETY: recursion consumes the child.
+                    Some(Box::new(unsafe { self.decode_state_value(child)? }))
+                } else {
+                    // SAFETY: `node` is still live and uniquely owned.
+                    unsafe { (self.state_value_free)(node) };
+                    return Err(NativeStateError::MalformedValue);
+                };
+                NativeStateValue::Enum {
+                    tag: enum_tag,
+                    payload,
+                }
+            }
+            _ => {
+                // SAFETY: `node` is still live and uniquely owned.
+                unsafe { (self.state_value_free)(node) };
+                return Err(NativeStateError::MalformedValue);
+            }
+        };
+        // SAFETY: decoding copied or cloned every value out; release the node.
+        unsafe { (self.state_value_free)(node) };
+        Ok(value)
+    }
+
+    fn check_state_status(&self, status: u32, token: u64) -> Result<(), NativeStateError> {
+        match NativeStateStatus(status) {
+            NativeStateStatus::OK => Ok(()),
+            NativeStateStatus::NO_HOST => Err(NativeStateError::NoStateHost),
+            NativeStateStatus::NULL_TOKEN => Err(NativeStateError::NullToken),
+            NativeStateStatus::UNKNOWN_TOKEN => Err(NativeStateError::UnknownToken(token)),
+            NativeStateStatus::WRONG_TYPE => Err(NativeStateError::WrongType {
+                actual: 0,
+                requested: 0,
+            }),
+            NativeStateStatus::TOKEN_EXHAUSTED => Err(NativeStateError::TokenExhausted),
+            _ => Err(NativeStateError::MalformedValue),
+        }
     }
 }
 

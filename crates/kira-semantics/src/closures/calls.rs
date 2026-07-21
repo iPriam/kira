@@ -322,9 +322,12 @@ impl Analyzer<'_> {
             // subset — a foreign value does not flow into a closure — so they
             // fall to the same zero-word placeholder rather than growing a HIR
             // node nothing constructs.
-            Type::Int(_) | Type::Void | Type::Error | Type::RawPtr | Type::CString => {
-                HirExpr::Int(0)
-            }
+            Type::Int(_)
+            | Type::Void
+            | Type::Error
+            | Type::RawPtr
+            | Type::CString
+            | Type::NativeState(_) => HirExpr::Int(0),
         };
         self.program.exprs.alloc(node)
     }

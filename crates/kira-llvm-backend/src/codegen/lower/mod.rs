@@ -87,7 +87,17 @@ impl<'a> Codegen<'a> {
                 locals.push(unsafe { LLVMGetParam(value, 0) });
                 continue;
             }
-            let llvm_type = self.llvm_type(ty)?;
+            let llvm_type = if function
+                .native_state_locals
+                .get(slot)
+                .copied()
+                .flatten()
+                .is_some()
+            {
+                self.types.i64
+            } else {
+                self.llvm_type(ty)?
+            };
             let name = c_string(&format!("local.{slot}"));
             // SAFETY: the builder sits on the function's entry block, and every
             // type and value below comes from this module's context.
@@ -97,6 +107,14 @@ impl<'a> Codegen<'a> {
                     // Parameters take ownership of the caller's argument, just
                     // as the VM moves arguments into the callee's slots.
                     LLVMGetParam(value, slot as u32)
+                } else if function
+                    .native_state_locals
+                    .get(slot)
+                    .copied()
+                    .flatten()
+                    .is_some()
+                {
+                    LLVMConstInt(self.types.i64, 0, 0)
                 } else {
                     self.zero_value(ty)?
                 };
@@ -146,7 +164,7 @@ impl<'a> Codegen<'a> {
                 // A fresh `RawPtr` slot holds the null pointer word (zero), the
                 // same value the VM initializes a `Value::RawPtr` slot to. It
                 // owns nothing, so no first-store special case is needed.
-                Type::RawPtr => LLVMConstInt(llvm_type, 0, 0),
+                Type::RawPtr | Type::NativeState(_) => LLVMConstInt(llvm_type, 0, 0),
                 // `CString` is seam-only and never names a local slot.
                 Type::CString => {
                     return Err(LlvmError::Unsupported(
@@ -198,9 +216,9 @@ impl<'a> Codegen<'a> {
 }
 
 /// Lowering state for one function body.
-struct FunctionLowering<'a, 'p> {
-    codegen: &'a mut Codegen<'p>,
-    function: &'p IrFunction,
+pub(super) struct FunctionLowering<'a, 'p> {
+    pub(super) codegen: &'a mut Codegen<'p>,
+    pub(super) function: &'p IrFunction,
     /// One `alloca` per local slot, in slot order.
     locals: Vec<LLVMValueRef>,
     /// The loops enclosing the statement being lowered, innermost last.
@@ -277,7 +295,7 @@ impl FunctionLowering<'_, '_> {
     }
 
     /// Emits a call to `callable`.
-    fn call(
+    pub(in crate::codegen) fn call(
         &mut self,
         callable: Callable,
         args: &mut [LLVMValueRef],
@@ -289,12 +307,12 @@ impl FunctionLowering<'_, '_> {
     }
 
     /// The static type of an expression in this function's scope.
-    fn type_of(&self, id: IrExprId) -> Type {
+    pub(super) fn type_of(&self, id: IrExprId) -> Type {
         self.codegen.program.expr_type(self.function, id)
     }
 
     /// The declared type of a local slot.
-    fn local_type(&self, slot: u32) -> Result<Type, LlvmError> {
+    pub(super) fn local_type(&self, slot: u32) -> Result<Type, LlvmError> {
         self.function
             .locals
             .get(slot as usize)
@@ -303,7 +321,7 @@ impl FunctionLowering<'_, '_> {
     }
 
     /// The `alloca` backing a local slot.
-    fn local_pointer(&self, slot: u32) -> Result<LLVMValueRef, LlvmError> {
+    pub(super) fn local_pointer(&self, slot: u32) -> Result<LLVMValueRef, LlvmError> {
         self.locals
             .get(slot as usize)
             .copied()

@@ -35,6 +35,10 @@ pub use value::{Heap, HeapStats, StrId, Value};
 mod foreign_tests;
 
 #[cfg(test)]
+#[path = "native_state_tests.rs"]
+mod native_state_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use kira_bytecode::module::{FuncProto, Module};
