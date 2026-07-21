@@ -9,7 +9,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use kira_core::Interner;
 use kira_diagnostics::{Diagnostic, Label, Severity};
-use kira_semantics_model::hir::{FuncId, HirFunction, HirProgram};
+use kira_semantics_model::hir::{FuncId, HirExprId, HirFunction, HirProgram};
 use kira_semantics_model::{OwnershipMode, StructId, Type};
 use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::SyntaxTree;
@@ -55,6 +55,28 @@ pub(crate) struct Callable<'a> {
     /// and so its body resolves qualified names against *that* file's imports —
     /// which is the whole of file scoping.
     pub(crate) source: SourceId,
+}
+
+/// One struct field default, bound to the file where it was declared.
+#[derive(Clone, Copy)]
+pub(crate) struct FieldDefault {
+    /// The default expression as written.
+    pub(crate) syntax: ExprId,
+    /// The declaring file whose imports and package scope resolve its names.
+    pub(crate) source: SourceId,
+    /// The name-resolved, typed expression shared by every construction site.
+    pub(crate) resolved: Option<HirExprId>,
+}
+
+impl FieldDefault {
+    /// Records an unresolved default in its declaring file.
+    pub(crate) fn new(syntax: ExprId, source: SourceId) -> Self {
+        Self {
+            syntax,
+            source,
+            resolved: None,
+        }
+    }
 }
 
 /// Analyzes a parsed program.
@@ -111,14 +133,16 @@ pub(crate) struct Analyzer<'a> {
     /// an illegal result. Every other position resolves with this `false`, so a
     /// written `CString` there is refused where it is resolved.
     pub(crate) in_foreign_signature: bool,
-    /// Each declared struct's field defaults, as written, indexed by
+    /// Each declared struct's field defaults, indexed by
     /// [`kira_semantics_model::StructId`] and then by field index.
     ///
-    /// Kept beside the table rather than in it: a default is unanalyzed syntax,
-    /// and the table is a *model* type that carries no syntax. A construction
-    /// site analyzes the default it needs, so a default that is never needed is
-    /// never analyzed, and each use gets its own diagnostics.
-    pub(crate) struct_defaults: Vec<Vec<Option<ExprId>>>,
+    /// Kept beside the table rather than in it because the type table is a model
+    /// with no syntax or HIR. Each row remembers the declaring file and is
+    /// resolved once after signatures exist; every construction site then reuses
+    /// the same name-resolved expression.
+    pub(crate) struct_defaults: Vec<Vec<Option<FieldDefault>>>,
+    /// Defaults currently being resolved, guarding recursive default expansion.
+    pub(crate) resolving_struct_defaults: BTreeSet<(u32, u32)>,
     /// Each declared enum's per-variant payload defaults, as written, indexed
     /// by [`kira_semantics_model::EnumId`] and then by variant index.
     ///
@@ -225,6 +249,7 @@ impl<'a> Analyzer<'a> {
             foreign_index: HashMap::new(),
             in_foreign_signature: false,
             struct_defaults: Vec::new(),
+            resolving_struct_defaults: BTreeSet::new(),
             enum_defaults: Vec::new(),
             generic_enums: crate::generics::GenericEnumTable::new(),
             type_bindings: crate::generics::TypeBindings::new(),
@@ -295,6 +320,11 @@ impl<'a> Analyzer<'a> {
         // the signature index — and before any body, so a call in a body
         // resolves to `Callee::Foreign`.
         self.collect_foreign();
+        // A field default belongs to its declaration. Resolve every one now, with
+        // signatures and foreign callables available but before a construction
+        // site can supply some unrelated file scope, and reuse that HIR at every
+        // site that omits the field.
+        self.resolve_struct_defaults();
         // Bodies are analyzed in the same order the signatures were collected,
         // which is what makes a `FuncId` index both.
         for (index, callable) in callables.iter().enumerate() {

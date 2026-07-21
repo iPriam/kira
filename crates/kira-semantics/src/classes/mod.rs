@@ -21,9 +21,9 @@ use std::collections::{BTreeSet, HashMap};
 
 use kira_semantics_model::{FieldDef, StructDef, StructId, Type};
 use kira_source::SourceId;
-use kira_syntax_model::ast::{ClassDecl, ExprId, Item};
+use kira_syntax_model::ast::{ClassDecl, Item};
 
-use crate::analyze::Analyzer;
+use crate::analyze::{Analyzer, FieldDefault};
 use crate::types::{AggregateKind, NameContext};
 
 /// How a member name resolved against one class's inherited members.
@@ -99,7 +99,7 @@ struct FlatField {
     storage: String,
     ty: Type,
     mutable: bool,
-    default: Option<ExprId>,
+    default: Option<FieldDefault>,
 }
 
 impl<'a> Analyzer<'a> {
@@ -229,7 +229,7 @@ impl Analyzer<'_> {
         let flat = self.flatten_fields(declaration, &name, &parents);
         let mut fields = Vec::with_capacity(flat.len());
         let mut defaults = Vec::with_capacity(flat.len());
-        let mut pending: Vec<(Option<StructId>, String, Option<ExprId>)> =
+        let mut pending: Vec<(Option<StructId>, String, Option<FieldDefault>)> =
             Vec::with_capacity(flat.len());
         for field in flat {
             pending.push((field.owner, field.plain, field.default));
@@ -367,7 +367,9 @@ impl Analyzer<'_> {
                 storage: plain,
                 ty,
                 mutable: field.mutable,
-                default: field.default,
+                default: field
+                    .default
+                    .map(|syntax| FieldDefault::new(syntax, self.source)),
             });
         }
         self.apply_overrides(declaration, &mut flat);
@@ -437,7 +439,9 @@ impl Analyzer<'_> {
                     "KSEM072",
                     format!("`{name}` overrides no inherited field"),
                 ),
-                [only] => flat[*only].default = Some(entry.default),
+                [only] => {
+                    flat[*only].default = Some(FieldDefault::new(entry.default, self.source));
+                }
                 _ => self.emit(
                     entry.name_span,
                     "KSEM068",

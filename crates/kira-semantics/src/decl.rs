@@ -27,12 +27,13 @@
 
 use std::collections::HashMap;
 
+use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_semantics_model::{FieldDef, StructDef, StructId, Type};
 use kira_source::{SourceId, Span};
 use kira_syntax_model::SyntaxTree;
-use kira_syntax_model::ast::{ExprId, Item, StructDecl};
+use kira_syntax_model::ast::{Item, StructDecl};
 
-use crate::analyze::Analyzer;
+use crate::analyze::{Analyzer, FieldDefault};
 use crate::classes::OwnMethod;
 use crate::types::{AggregateKind, NameContext};
 
@@ -50,7 +51,7 @@ struct ResolvedStruct {
     /// The resolved fields, index-aligned with `defaults`.
     fields: Vec<FieldDef>,
     /// The per-field defaults, as written, index-aligned with `fields`.
-    defaults: Vec<Option<ExprId>>,
+    defaults: Vec<Option<FieldDefault>>,
     /// The methods this struct declares itself, recorded for inheritance.
     methods: Vec<OwnMethod>,
 }
@@ -263,10 +264,13 @@ impl<'a> Analyzer<'a> {
     ///
     /// Returns the definition and its per-field defaults, index-aligned: a
     /// field dropped as a duplicate is dropped from both.
-    fn resolve_struct_def(&mut self, declaration: &StructDecl) -> (StructDef, Vec<Option<ExprId>>) {
+    fn resolve_struct_def(
+        &mut self,
+        declaration: &StructDecl,
+    ) -> (StructDef, Vec<Option<FieldDefault>>) {
         let name = self.interner.resolve(declaration.name).to_owned();
         let mut fields: Vec<FieldDef> = Vec::with_capacity(declaration.fields.len());
-        let mut defaults: Vec<Option<ExprId>> = Vec::with_capacity(declaration.fields.len());
+        let mut defaults: Vec<Option<FieldDefault>> = Vec::with_capacity(declaration.fields.len());
         for field in &declaration.fields {
             let field_name = self.interner.resolve(field.name).to_owned();
             if fields.iter().any(|existing| existing.name == field_name) {
@@ -287,17 +291,86 @@ impl<'a> Analyzer<'a> {
                 ty,
                 mutable: field.mutable,
             });
-            defaults.push(field.default);
+            defaults.push(
+                field
+                    .default
+                    .map(|syntax| FieldDefault::new(syntax, self.source)),
+            );
         }
         (StructDef { name, fields }, defaults)
     }
 
-    /// The default initializer written for field `index` of `id`, if any.
-    pub(crate) fn field_default(&self, id: StructId, index: u32) -> Option<ExprId> {
+    /// The default initializer recorded for field `index` of `id`, if any.
+    pub(crate) fn field_default(&self, id: StructId, index: u32) -> Option<FieldDefault> {
         self.struct_defaults
             .get(id.index() as usize)
             .and_then(|defaults| defaults.get(index as usize))
             .copied()
             .flatten()
+    }
+
+    /// Resolves every declared field default once, in its declaring file.
+    pub(crate) fn resolve_struct_defaults(&mut self) {
+        let ids: Vec<StructId> = self
+            .program
+            .types
+            .structs()
+            .defs()
+            .iter()
+            .filter_map(|def| self.program.types.structs().lookup(&def.name))
+            .collect();
+        for id in ids {
+            let field_count = self
+                .struct_defaults
+                .get(id.index() as usize)
+                .map_or(0, Vec::len);
+            for field_index in 0..field_count as u32 {
+                self.resolve_field_default(id, field_index);
+            }
+        }
+    }
+
+    /// Returns one resolved field default, resolving it in declaration scope on
+    /// first use when recursive aggregate defaults reach it before the outer pass.
+    pub(crate) fn resolve_field_default(&mut self, id: StructId, index: u32) -> Option<HirExprId> {
+        let default = self.field_default(id, index)?;
+        if let Some(resolved) = default.resolved {
+            return Some(resolved);
+        }
+
+        let key = (id.index(), index);
+        if !self.resolving_struct_defaults.insert(key) {
+            let previous_source = self.source;
+            self.source = default.source;
+            self.emit(
+                self.tree.expr(default.syntax).span(),
+                "KSEM213",
+                "field defaults recursively construct each other and have no finite value",
+            );
+            self.source = previous_source;
+            return Some(self.program.exprs.alloc(HirExpr::Error));
+        }
+
+        let declared = self
+            .program
+            .types
+            .structs()
+            .get(id)
+            .and_then(|def| def.field(index))
+            .map(|field| field.ty);
+        let previous_source = self.source;
+        self.source = default.source;
+        let resolved = self.analyze_default(default.syntax, declared);
+        self.source = previous_source;
+        self.resolving_struct_defaults.remove(&key);
+        if let Some(slot) = self
+            .struct_defaults
+            .get_mut(id.index() as usize)
+            .and_then(|defaults| defaults.get_mut(index as usize))
+            .and_then(Option::as_mut)
+        {
+            slot.resolved = Some(resolved);
+        }
+        Some(resolved)
     }
 }
