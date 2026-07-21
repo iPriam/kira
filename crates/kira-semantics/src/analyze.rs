@@ -182,6 +182,12 @@ pub(crate) struct Analyzer<'a> {
     /// The engine the function being analyzed runs on, so a closure lifted out
     /// of its body runs on the same one.
     pub(crate) current_execution: kira_semantics_model::Execution,
+    /// Which declared struct ids came from a `@FFI.*` type annotation, and
+    /// which form. Only `@FFI.Struct`/`Array`/`Callback` mint a struct id;
+    /// `@FFI.Alias`/`Pointer` become aliases and never appear here. This is
+    /// where a C-layout struct's zero-fill construction and an array's or
+    /// callback's typed "not yet executable" refusals read their answer.
+    pub(crate) ffi_structs: HashMap<StructId, crate::ffi_types::FfiStructKind>,
     pub(crate) program: HirProgram,
     pub(crate) diagnostics: Vec<Diagnostic>,
     /// Reference→definition links, recorded as names resolve.
@@ -224,6 +230,7 @@ impl<'a> Analyzer<'a> {
             synth: Vec::new(),
             closure_sites: Vec::new(),
             current_execution: kira_semantics_model::Execution::Inherited,
+            ffi_structs: HashMap::new(),
             program: HirProgram::default(),
             diagnostics: Vec::new(),
             definitions: Vec::new(),
