@@ -209,6 +209,11 @@ impl Lowerer<'_> {
                 place: self.lower_place(&place),
                 value: self.lower_expr(value),
             },
+            HirExpr::Convert { operand, kind, ty } => IrExpr::Convert {
+                operand: self.lower_expr(operand),
+                kind,
+                ty,
+            },
             // An error node can only be reached when analysis already reported
             // diagnostics and the program is never run; lower it to a harmless
             // constant so lowering stays total.

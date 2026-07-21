@@ -237,6 +237,19 @@ pub enum Instruction {
     /// independent of the box — a `String` payload is cloned — which is what
     /// lets the arm's binding outlive the enum.
     EnumPayload,
+    /// Pop an `Int`, push it as a `Float` (signed, round to nearest ties even).
+    ///
+    /// Emitted for a scalar conversion `Float(intValue)`. The integer-to-integer
+    /// and float-to-float conversions emit *no* instruction — they are identity
+    /// copies over one representation — so only the two cross-representation
+    /// conversions have an opcode.
+    ConvertIntToFloat,
+    /// Pop a `Float`, push it as an `Int`: truncate toward zero, saturating an
+    /// out-of-range value to `i64::MIN`/`i64::MAX` and mapping NaN to zero.
+    ///
+    /// Emitted for a scalar conversion `Int(floatValue)`. Never traps — the
+    /// conversion is total over every float input.
+    ConvertFloatToInt,
 }
 
 /// One step of a [`PlacePath`].
@@ -445,6 +458,14 @@ mod opcode {
     // foreign-import id, so it is decoded in `Cursor::next_instruction` rather
     // than as a nullary opcode.
     pub const CALL_FOREIGN: u8 = 0x45;
+
+    // The scalar numeric conversions. Appended after `CALL_FOREIGN`, which was
+    // the last opcode before them; adding an opcode is not an ABI change. Only
+    // the two cross-representation conversions (`Int`<->`Float`) get an opcode:
+    // an integer-width or float-width conversion is an identity copy over one
+    // runtime representation, so it emits no instruction at all.
+    pub const CONVERT_INT_TO_FLOAT: u8 = 0x46;
+    pub const CONVERT_FLOAT_TO_INT: u8 = 0x47;
 }
 
 #[cfg(test)]

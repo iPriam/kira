@@ -12,7 +12,8 @@
 use std::collections::HashMap;
 
 use kira_ir::{
-    IrBinOp, IrCallee, IrExpr, IrExprId, IrPlace, IrPlaceStep, IrProgram, IrStmt, IrUnOp,
+    ConvertKind, IrBinOp, IrCallee, IrExpr, IrExprId, IrPlace, IrPlaceStep, IrProgram, IrStmt,
+    IrUnOp,
 };
 
 mod error;
@@ -352,6 +353,18 @@ impl FnCompiler<'_> {
                 let array = *array;
                 self.compile_expr(array)?;
                 self.code.push(Instruction::ArrayLen);
+            }
+            IrExpr::Convert { operand, kind, .. } => {
+                let (operand, kind) = (*operand, *kind);
+                self.compile_expr(operand)?;
+                // An integer-width or float-width conversion is an identity copy
+                // over one runtime representation, so it emits nothing; only the
+                // two cross-representation conversions have an instruction.
+                match kind {
+                    ConvertKind::IntToInt | ConvertKind::FloatToFloat => {}
+                    ConvertKind::IntToFloat => self.code.push(Instruction::ConvertIntToFloat),
+                    ConvertKind::FloatToInt => self.code.push(Instruction::ConvertFloatToInt),
+                }
             }
             IrExpr::ArrayAppend { place, value } => {
                 let (place, value) = (place.clone(), *value);

@@ -6,7 +6,7 @@
 //! operators that are control flow rather than instructions all live here, so
 //! the rules the VM fixes have one place to be mirrored.
 
-use kira_ir::{IrBinOp, IrExprId, IrUnOp};
+use kira_ir::{ConvertKind, IrBinOp, IrExprId, IrUnOp};
 use kira_semantics_model::Type;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
@@ -31,6 +31,68 @@ impl FunctionLowering<'_, '_> {
                 // given, which for a one-bit boolean is logical negation.
                 IrUnOp::Not | IrUnOp::BitNot => LLVMBuildNot(builder, value, c"not".as_ptr()),
             }
+        }
+    }
+
+    /// Lowers a scalar numeric conversion with the VM's exact semantics.
+    ///
+    /// Two of the four kinds are identity copies — an integer width and a float
+    /// width are annotations over one runtime representation — so the value is
+    /// returned unchanged. `IntToFloat` is a signed `sitofp`. `FloatToInt` must
+    /// **saturate**: a bare `fptosi` is poison on an out-of-range or NaN input,
+    /// while the VM's `f64 as i64` is total. The select chain mirrors the VM
+    /// exactly — clamp at or above `(f64)i64::MAX`, clamp at or below
+    /// `(f64)i64::MIN`, and map NaN to zero — each with a pure `fcmp` and
+    /// constant, so no branch and no poison reaches the result.
+    pub(super) fn lower_convert(&mut self, kind: ConvertKind, value: LLVMValueRef) -> LLVMValueRef {
+        let builder = self.codegen.builder;
+        let types = self.codegen.types;
+        match kind {
+            ConvertKind::IntToInt | ConvertKind::FloatToFloat => value,
+            // SAFETY: `value` is the `i64` the typed conversion fixes and the
+            // builder is on a live block; the call builds a pure value.
+            ConvertKind::IntToFloat => unsafe {
+                LLVMBuildSIToFP(builder, value, types.f64, c"conv.sitofp".as_ptr())
+            },
+            // SAFETY: `value` is the `f64` the typed conversion fixes and the
+            // builder is on a live block; every call below builds a pure value,
+            // and the selected operand is never the poison `fptosi` for an input
+            // outside the in-range interval where `fptosi` is defined.
+            ConvertKind::FloatToInt => unsafe {
+                let raw = LLVMBuildFPToSI(builder, value, types.i64, c"conv.fptosi".as_ptr());
+                let max_f = LLVMConstReal(types.f64, i64::MAX as f64);
+                let min_f = LLVMConstReal(types.f64, i64::MIN as f64);
+                let max_i = LLVMConstInt(types.i64, i64::MAX as u64, 0);
+                let min_i = LLVMConstInt(types.i64, i64::MIN as u64, 0);
+                let zero_i = LLVMConstInt(types.i64, 0, 0);
+                let ge_max = LLVMBuildFCmp(
+                    builder,
+                    LLVMRealPredicate::LLVMRealOGE,
+                    value,
+                    max_f,
+                    c"conv.ge.max".as_ptr(),
+                );
+                let clamped_hi = LLVMBuildSelect(builder, ge_max, max_i, raw, c"conv.hi".as_ptr());
+                let le_min = LLVMBuildFCmp(
+                    builder,
+                    LLVMRealPredicate::LLVMRealOLE,
+                    value,
+                    min_f,
+                    c"conv.le.min".as_ptr(),
+                );
+                let clamped_lo =
+                    LLVMBuildSelect(builder, le_min, min_i, clamped_hi, c"conv.lo".as_ptr());
+                // An unordered compare of a value with itself is true iff it is
+                // NaN.
+                let is_nan = LLVMBuildFCmp(
+                    builder,
+                    LLVMRealPredicate::LLVMRealUNO,
+                    value,
+                    value,
+                    c"conv.nan".as_ptr(),
+                );
+                LLVMBuildSelect(builder, is_nan, zero_i, clamped_lo, c"conv.int".as_ptr())
+            },
         }
     }
 

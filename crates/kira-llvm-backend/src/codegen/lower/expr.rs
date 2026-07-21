@@ -52,6 +52,10 @@ impl FunctionLowering<'_, '_> {
             IrExpr::Index { base, index, ty } => self.lower_index(base, index, ty),
             IrExpr::ArrayLen { array } => self.lower_array_len(array),
             IrExpr::ArrayAppend { place, value } => self.lower_array_append(&place, value),
+            IrExpr::Convert { operand, kind, .. } => {
+                let value = self.lower_expr(operand)?;
+                Ok(self.lower_convert(kind, value))
+            }
         }
     }
 

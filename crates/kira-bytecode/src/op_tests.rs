@@ -133,6 +133,31 @@ fn a_truncated_foreign_call_operand_is_reported() {
 }
 
 #[test]
+fn round_trips_the_scalar_conversion_opcodes() {
+    // The two cross-representation numeric conversions. Round-tripping them
+    // together keeps a decoder that swapped the two directions from passing:
+    // `ConvertFloatToInt` must never come back as `ConvertIntToFloat`, because
+    // they disagree on every input.
+    let code = vec![
+        Instruction::ConvertIntToFloat,
+        Instruction::ConvertFloatToInt,
+    ];
+    let bytes = encode(&code);
+    assert_eq!(decode(&bytes).unwrap(), code);
+}
+
+#[test]
+fn the_conversion_opcodes_are_appended_after_the_foreign_call() {
+    // Append-only, spelled literally: the conversion opcodes start one past
+    // `CALL_FOREIGN`, which was the last opcode before them, and nothing
+    // earlier moved. A renumber fails here rather than silently redirecting a
+    // module already on disk.
+    assert_eq!(opcode::CALL_FOREIGN, 0x45);
+    assert_eq!(opcode::CONVERT_INT_TO_FLOAT, 0x46);
+    assert_eq!(opcode::CONVERT_FLOAT_TO_INT, 0x47);
+}
+
+#[test]
 fn unknown_opcode_is_reported() {
     let err = decode(&[0xff]).unwrap_err();
     assert!(matches!(
