@@ -30,13 +30,11 @@ path makes the write illegal.
 
 ## What is deliberate, not pending
 
-**A field may only name a struct declared earlier in the file.** This is not an
-arbitrary scoping rule: a struct is a value type, so a struct that could reach
-itself through its fields would have no finite size. Resolving in declaration
-order makes the cycle unrepresentable rather than something to detect after the
-fact — which is also what lets `StructTable::owns_heap` and the VM's recursive
-free walk terminate without a visited set. A forward reference gets `KSEM051`,
-which says to move the declaration rather than reporting an unknown type.
+**Field type order does not matter.** Struct collection declares every name
+before resolving any field, so a field may name a struct declared later in the
+file or in another file of the same package. A by-value cycle still has no finite
+size; analysis detects it, reports `KSEM052`, and breaks the closing field to
+`Error` so recursive layout, copy, and drop walks remain total.
 
 **`print(someStruct)` is rejected** (`KSEM081`). What `print` renders for a
 struct is pinned nowhere in the language corpus — no call site, no golden file —
@@ -46,10 +44,10 @@ already refused.
 
 **A method is a function with a receiver.** A struct's methods are collected
 into the same flat function table free functions live in, so nothing below
-analysis learns one was written inside a struct. The receiver is passed by
-value like any other parameter — writing to `self` in a method leaves the
-caller's value untouched — and a body may name a member bare, so `self.step`
-and `step` are the same read.
+analysis learns one was written inside a struct. Non-mutating methods borrow the
+receiver for reads. A method that writes `self` is marked mutating and the call
+site writes its final receiver value back to the original mutable place. A body
+may name a member bare, so `self.step` and `step` are the same read.
 
 ## The native seam
 
@@ -99,11 +97,17 @@ the parity tests compare. A local read copies; a field read copies the field out
 store drops what the location held after computing the new value, which is what
 makes `s = s + "x"` work.
 
-Defaults are a frontend concern only. Analysis fills every omitted field with
-its declared default, so `StructNew` always receives every field in declaration
-order and nothing downstream knows defaults exist. A default is analyzed in an
-empty scope, not the construction site's: it belongs to the declaration and must
-not see whatever locals happen to be in scope where the struct is built.
+Defaults are a frontend concern only. After function signatures exist, analysis
+resolves every field default once in the file where the field was declared. Its
+qualified names therefore use that file's imports, a bare named function becomes
+a typed function value there, and a genuinely undefined name is reported even
+when no construction omits the field. Local scope stays empty, so a default
+cannot capture a construction site's bindings. Every construction reuses the
+resolved HIR expression, and `StructNew` still reaches lower layers with one
+initializer per field in declaration order.
+
+Defaults that recursively construct each other have no finite value and are
+refused with `KSEM213` rather than recursing during analysis.
 
 The wasm backend gives a struct an address in linear memory, with fields laid
 out consecutively at natural alignment. Its heap never frees, so aliasing is
@@ -116,8 +120,11 @@ and `crates/kira-cli/tests/end_to_end/web.rs` compares a built module's output
 against the VM's under node — a layout mistake shows up as a wrong value
 rather than hiding.
 
-## Still open
+## FFI boundary
 
-`@FFI.Struct { layout: c; }` is not implemented. The native representation was
-chosen with it in mind, but the annotation, its zero-fill construction rule,
-and the C layout it promises are not built.
+`@FFI.Struct { layout: c; }` is recognized and uses the native backend's C
+layout. `Type()` produces a zeroed value, while a struct literal initializes the
+fields it names and zero-fills omitted fields that have no Kira default. Passing
+aggregate values through every foreign signature remains a separate ABI surface;
+unsupported positions are refused before code generation rather than assigned a
+layout by guesswork.

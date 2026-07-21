@@ -59,8 +59,10 @@ pub(crate) struct FnTypeInfo {
     /// The dispatcher's id, minted on the first call *through* a value of this
     /// type. A type that is only ever constructed and never called needs none.
     pub(crate) dispatcher: Option<FuncId>,
-    /// One entry per closure literal of this type, indexed by tag.
+    /// One entry per closure literal or named function of this type, indexed by tag.
     pub(crate) impls: Vec<ClosureImpl>,
+    /// The tag already assigned to each named function reference of this type.
+    pub(crate) named_functions: HashMap<FuncId, u32>,
 }
 
 /// One closure literal, lifted to a top-level function.

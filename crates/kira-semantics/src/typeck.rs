@@ -126,6 +126,11 @@ impl Analyzer<'_> {
                             expr
                         }
                         None => {
+                            if let Some(reference) =
+                                self.analyze_named_function_reference(&name, span, expected)
+                            {
+                                return reference;
+                            }
                             // A name several parents declare is inherited but
                             // unresolvable, which is a different mistake from
                             // one nobody declared — and a different fix.

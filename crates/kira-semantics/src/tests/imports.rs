@@ -1,16 +1,32 @@
 //! File-scoped import resolution: what an import brings into scope, what it
 //! does not, and what it refuses.
 
-use super::{module_codes, module_diagnostics};
+use super::{codes, module_codes, module_diagnostics};
 use crate::{
     DefinitionAccumulator, DiagnosticAccumulator, ImportTable, ModuleSource, SourceProgram,
     analyzed, module_source_id,
 };
+use kira_semantics_model::{Callee, HirExpr, HirProgram, HirStmt};
 use kira_source::{FileSpan, Span};
 
 /// The module `support.kira` most cases here import.
 const SUPPORT: &str = "function supportValue() -> Int { return 42 }\n\
                        struct SupportPoint { let x: Int  let y: Int }\n";
+
+/// The analyzed HIR of a program built from an entry file plus named modules.
+fn module_program(text: &str, modules: &[(&str, &str)]) -> HirProgram {
+    let db = salsa::DatabaseImpl::new();
+    let modules: Vec<ModuleSource> = modules
+        .iter()
+        .map(|&(module, text)| ModuleSource {
+            module: module.to_owned(),
+            path: format!("{module}.kira"),
+            text: text.to_owned(),
+        })
+        .collect();
+    let source = SourceProgram::application(&db, text.to_owned(), "test.kira".to_owned(), modules);
+    analyzed(&db, source)
+}
 
 #[test]
 fn an_imported_module_is_part_of_the_program() {
@@ -203,6 +219,90 @@ fn a_struct_field_may_name_a_struct_in_a_later_sibling_file() {
         &[("bvh", "struct SpatialBvh { var depth: Int }")],
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+/// Field defaults resolve once in their declaring file, not in each file that
+/// constructs the struct. The entry imports neither `helper` nor the local
+/// callback function, but omitting both fields still resolves cleanly.
+#[test]
+fn struct_defaults_resolve_in_the_defining_module() {
+    let diagnostics = module_diagnostics(
+        "import definitions\n\
+         @Main function main() { let h = CallbackHolder {} print(h.seed) \
+         print(h.callback()) return }",
+        &[
+            ("helper", "function helperValue() -> Int { return 41 }"),
+            (
+                "definitions",
+                "import helper as H\n\
+                 function moduleDefault() -> Int { return H.helperValue() + 1 }\n\
+                 struct CallbackHolder {\n\
+                     let seed: Int = H.helperValue()\n\
+                     let callback: () -> Int = moduleDefault\n\
+                 }",
+            ),
+        ],
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn a_resolved_struct_default_reuses_the_declaring_modules_callee() {
+    let program = module_program(
+        "import definitions\n\
+         @Main function main() { let h = Holder {} print(h.value) return }",
+        &[
+            ("helper", "function helperValue() -> Int { return 41 }"),
+            (
+                "definitions",
+                "import helper as H\nstruct Holder { let value: Int = H.helperValue() }",
+            ),
+        ],
+    );
+    let main = program.main.expect("main is recorded");
+    let statement = program.functions[main.0 as usize]
+        .body
+        .first()
+        .expect("main constructs the holder");
+    let HirStmt::Let { init, .. } = program.stmt(*statement) else {
+        panic!("main's first statement is the holder binding");
+    };
+    let HirExpr::StructNew { fields, .. } = program.expr(*init) else {
+        panic!("the holder binding constructs the struct");
+    };
+    let HirExpr::Call {
+        callee: Callee::User(callee),
+        ..
+    } = program.expr(fields[0])
+    else {
+        panic!("the omitted field reuses its resolved call default");
+    };
+    assert_eq!(program.functions[callee.0 as usize].name, "helperValue");
+}
+
+/// Resolving defaults at declaration time must not turn a genuinely missing
+/// name into a delayed or construction-dependent error.
+#[test]
+fn an_undefined_name_in_an_unused_struct_default_is_refused() {
+    assert_eq!(
+        module_codes(
+            "import broken\n@Main function main() { return }",
+            &[("broken", "struct Broken { let value: Int = missing }")],
+        ),
+        vec!["KSEM060"]
+    );
+}
+
+#[test]
+fn recursively_constructing_struct_defaults_are_refused() {
+    assert_eq!(
+        codes(
+            "struct A { let values: [B] = [B {}] }\n\
+             struct B { let values: [A] = [A {}] }\n\
+             @Main function main() { return }"
+        ),
+        vec!["KSEM213"]
+    );
 }
 
 /// A root that is not a module at all keeps its old diagnostic: this is a

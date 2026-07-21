@@ -1,6 +1,6 @@
 //! Parity for struct construction, copying, fields, and methods.
 
-use crate::{assert_parity, run_on, write_source};
+use crate::{assert_module_parity, assert_parity, run_on, write_source};
 
 #[test]
 fn struct_fields_and_defaults_agree() {
@@ -26,6 +26,34 @@ function main() {
 "#,
     );
     assert_eq!(output, "30\n3\n6\n");
+}
+
+/// An omitted field is the value its declaring module resolved, even when the
+/// construction site has none of that module's helper imports in scope.
+#[test]
+fn a_cross_module_field_default_agrees() {
+    let output = assert_module_parity(
+        "import definitions\n\
+         @Main function main() {\n\
+             let holder = CallbackHolder {}\n\
+             print(holder.seed)\n\
+             print(holder.callback())\n\
+             return\n\
+         }",
+        &[
+            ("helper", "function helperValue() -> Int { return 41 }"),
+            (
+                "definitions",
+                "import helper as H\n\
+                 function moduleDefault() -> Int { return H.helperValue() + 1 }\n\
+                 struct CallbackHolder {\n\
+                     let seed: Int = H.helperValue()\n\
+                     let callback: () -> Int = moduleDefault\n\
+                 }",
+            ),
+        ],
+    );
+    assert_eq!(output.as_bytes(), b"41\n42\n");
 }
 
 /// A struct field may name a struct declared later in the file: struct
