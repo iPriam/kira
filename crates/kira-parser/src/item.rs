@@ -11,8 +11,8 @@ use kira_runtime_abi::Execution;
 use kira_source::{FileSpan, Span};
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
-    Block, ExportMark, Function, ImportDecl, Item, Param, TypeAliasDecl, TypeRef, TypeRefId,
-    UnsupportedItem,
+    Block, ExportMark, ForeignField, ForeignMark, Function, ImportDecl, Item, Param, TypeAliasDecl,
+    TypeRef, TypeRefId, UnsupportedItem,
 };
 use kira_syntax_model::ownership::OwnershipMode;
 
@@ -27,6 +27,8 @@ pub(crate) struct Annotations {
     pub(crate) execution: Execution,
     /// The `@Export` marker, when one was written.
     pub(crate) export: Option<ExportMark>,
+    /// The `@FFI.Extern { ... }` marker, when one was written.
+    pub(crate) foreign: Option<ForeignMark>,
 }
 
 impl Default for Annotations {
@@ -35,6 +37,7 @@ impl Default for Annotations {
             is_main: false,
             execution: Execution::Inherited,
             export: None,
+            foreign: None,
         }
     }
 }
@@ -44,7 +47,7 @@ impl Parser<'_> {
         match self.current_kind() {
             TokenKind::At => self.parse_annotated_item(),
             TokenKind::Function => {
-                if let Some(function) = self.parse_function(false, Execution::Inherited) {
+                if let Some(function) = self.parse_function(false, Execution::Inherited, false) {
                     self.tree.push_item(self.source, Item::Function(function));
                 }
             }
@@ -164,6 +167,13 @@ impl Parser<'_> {
                 );
                 break;
             }
+            // A qualified annotation — `@FFI.Extern { ... }` — is the one whose
+            // name is `identifier . identifier`. It is recognized before the
+            // bare-name arm so `FFI` is never read as a plain annotation.
+            if self.peek(1).kind == TokenKind::Dot && self.peek(2).kind == TokenKind::Identifier {
+                self.parse_qualified_annotation(&mut annotations);
+                continue;
+            }
             let name_span = self.current().span;
             let is_export = match self.text_of(name_span) {
                 "Main" => {
@@ -223,15 +233,28 @@ impl Parser<'_> {
         &mut self,
         annotations: &Annotations,
     ) -> Option<Function> {
-        let mut function = self.parse_function(annotations.is_main, annotations.execution)?;
+        let mut function = self.parse_function(
+            annotations.is_main,
+            annotations.execution,
+            annotations.foreign.is_some(),
+        )?;
         function.export = annotations.export;
+        function.foreign = annotations.foreign.clone();
         Some(function)
     }
 
+    /// Parses a function declaration.
+    ///
+    /// `is_foreign` says whether an `@FFI.Extern` marker preceded it: a foreign
+    /// function is **bodyless** (it ends with `;` and its stored body is an
+    /// empty block spanned at that `;`), and an ordinary function requires a
+    /// `{ ... }` body. Threading the flag here is what keeps the two apart at
+    /// the one place a body would be read.
     pub(crate) fn parse_function(
         &mut self,
         is_main: bool,
         execution: Execution,
+        is_foreign: bool,
     ) -> Option<Function> {
         let start = self.current().span;
         self.expect(TokenKind::Function);
@@ -248,7 +271,7 @@ impl Parser<'_> {
         self.refuse_type_params("function");
         let params = self.parse_params();
         let return_type = self.parse_return_type();
-        let body = self.parse_block();
+        let body = self.parse_function_body(is_foreign);
         let span = Span::from_bounds(start.start, self.previous_end());
         Some(Function {
             name,
@@ -257,11 +280,182 @@ impl Parser<'_> {
             // Set by `parse_function_annotated` when annotations preceded the
             // declaration; a bare `function` carries none.
             export: None,
+            foreign: None,
             execution,
             params,
             return_type,
             body,
             span,
+        })
+    }
+
+    /// Parses the body of a function, or the `;` of a bodyless extern.
+    ///
+    /// A foreign function has no body: it ends with `;`, so a `{` there is a
+    /// mistake, and the stored body is an empty block spanned at the `;`. An
+    /// ordinary function requires a body, so a `;` there is the mistake.
+    fn parse_function_body(&mut self, is_foreign: bool) -> Block {
+        if is_foreign {
+            if self.at(TokenKind::LBrace) {
+                self.error(
+                    self.current().span,
+                    "KPAR054",
+                    "an `@FFI.Extern` function has no body; end its declaration with `;`",
+                );
+                return self.parse_block();
+            }
+            let semi = self.current().span;
+            self.expect(TokenKind::Semicolon);
+            return Block {
+                stmts: Vec::new(),
+                span: semi,
+            };
+        }
+        if self.at(TokenKind::Semicolon) {
+            let semi = self.current().span;
+            self.error(
+                semi,
+                "KPAR055",
+                "expected a function body; only an `@FFI.Extern` function is bodyless",
+            );
+            self.bump();
+            return Block {
+                stmts: Vec::new(),
+                span: semi,
+            };
+        }
+        self.parse_block()
+    }
+
+    /// Parses a qualified annotation — the cursor is on its first identifier and
+    /// a `. identifier` follows. Only `@FFI.Extern { ... }` is known.
+    fn parse_qualified_annotation(&mut self, annotations: &mut Annotations) {
+        let root_span = self.current().span;
+        let root = self.text_of(root_span).to_owned();
+        let member_span = self.peek(2).span;
+        let member = self.text_of(member_span).to_owned();
+        let name_span = Span::from_bounds(root_span.start, member_span.end());
+        self.bump(); // root identifier
+        self.bump(); // `.`
+        self.bump(); // member identifier
+        if root != "FFI" || member != "Extern" {
+            self.error(
+                name_span,
+                "KPAR053",
+                format!(
+                    "unknown qualified annotation `@{root}.{member}`; only `@FFI.Extern` exists"
+                ),
+            );
+            // Skip a `{ ... }` payload so recovery lands on the declaration.
+            if self.at(TokenKind::LBrace) {
+                self.skip_balanced(TokenKind::LBrace, TokenKind::RBrace);
+            }
+            return;
+        }
+        let block_start = self.current().span.start;
+        let fields = self.parse_foreign_block();
+        let block_end = self.previous_end();
+        // When no `{` was there to consume, nothing advanced, so the block has
+        // no span of its own; the annotation name is what a diagnostic points
+        // at instead.
+        let block_span = if block_end >= block_start {
+            Span::from_bounds(block_start, block_end)
+        } else {
+            name_span
+        };
+        annotations.foreign = Some(ForeignMark {
+            span: name_span,
+            block_span,
+            fields,
+        });
+    }
+
+    /// Parses the `{ key: value; ... }` block of an `@FFI.Extern` annotation.
+    ///
+    /// Each field is `identifier : identifier ;`. Every structural mistake — a
+    /// missing brace, a non-identifier key, a missing colon, a non-identifier
+    /// value, a missing terminator — is reported with its own code, and recovery
+    /// advances to the next field so one bad field does not swallow the rest.
+    /// Field *meaning* (required, duplicate, unknown, the `abi` value) is the
+    /// analyzer's, not the parser's.
+    fn parse_foreign_block(&mut self) -> Vec<ForeignField> {
+        let mut fields = Vec::new();
+        if !self.at(TokenKind::LBrace) {
+            self.error(
+                self.current().span,
+                "KPAR048",
+                "expected `{` to open the `@FFI.Extern` block",
+            );
+            return fields;
+        }
+        self.bump(); // `{`
+        while !self.at(TokenKind::RBrace) && !self.at_eof() {
+            let before = self.pos;
+            if let Some(field) = self.parse_foreign_field() {
+                fields.push(field);
+            }
+            // Force progress: a field that consumed nothing would spin.
+            if self.pos == before {
+                self.bump();
+            }
+        }
+        self.expect(TokenKind::RBrace);
+        fields
+    }
+
+    /// Parses one `identifier : identifier ;` field, or reports why it could
+    /// not and returns `None`.
+    fn parse_foreign_field(&mut self) -> Option<ForeignField> {
+        if !self.at(TokenKind::Identifier) {
+            self.error(
+                self.current().span,
+                "KPAR049",
+                "expected a field name in the `@FFI.Extern` block",
+            );
+            return None;
+        }
+        let key_span = self.current().span;
+        let key = self.intern_span(key_span);
+        self.bump();
+        if !self.at(TokenKind::Colon) {
+            self.error(
+                self.current().span,
+                "KPAR050",
+                "expected `:` after an `@FFI.Extern` field name",
+            );
+            return None;
+        }
+        self.bump(); // `:`
+        if !self.at(TokenKind::Identifier) {
+            self.error(
+                self.current().span,
+                "KPAR051",
+                "expected a field value in the `@FFI.Extern` block",
+            );
+            return None;
+        }
+        let value_span = self.current().span;
+        let value = self.intern_span(value_span);
+        self.bump();
+        if !self.at(TokenKind::Semicolon) {
+            self.error(
+                self.current().span,
+                "KPAR052",
+                "expected `;` after an `@FFI.Extern` field",
+            );
+            return Some(ForeignField {
+                key,
+                key_span,
+                value,
+                value_span,
+            });
+        }
+        self.bump(); // `;`
+        Some(ForeignField {
+            key,
+            key_span,
+            value,
+            value_span,
         })
     }
 

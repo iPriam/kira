@@ -136,6 +136,7 @@ pub fn describe_result(result: &NativeResult) -> &'static str {
         NativeResult::Bool(_) => "a boolean",
         NativeResult::Str(_) => "a string",
         NativeResult::Handle(_) => "a handle",
+        NativeResult::RawPtr(_) => "a raw pointer",
     }
 }
 

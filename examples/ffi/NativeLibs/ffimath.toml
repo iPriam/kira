@@ -1,0 +1,28 @@
+name = "ffimath"
+
+# One row per target this library ships an archive for. Selection is exact:
+# `kirac build --device wasm32` picks the wasm row, a host run picks the row
+# whose triple matches this machine. Paths resolve relative to this file.
+#
+# The archives are not checked in — build them from ffimath.c with the commands
+# in README.md, into NativeLibs/lib/.
+
+[[target]]
+triple = "aarch64-macos-none"
+staticLib = "lib/libffimath.a"
+
+[[target]]
+triple = "x86_64-macos-none"
+staticLib = "lib/libffimath.a"
+
+[[target]]
+triple = "x86_64-linux-gnu"
+staticLib = "lib/libffimath.a"
+
+[[target]]
+triple = "aarch64-linux-gnu"
+staticLib = "lib/libffimath.a"
+
+[[target]]
+triple = "wasm32-emscripten-unknown"
+staticLib = "lib/libffimath-wasm.a"

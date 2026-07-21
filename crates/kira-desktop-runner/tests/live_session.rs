@@ -29,6 +29,7 @@ const APP_OUTPUT: &str = "kira-live-e2e-marker";
 fn printing_module() -> Module {
     Module {
         exports: Default::default(),
+        foreign_imports: Vec::new(),
         main: Some(0),
         strings: vec![APP_OUTPUT.to_owned()],
         functions: vec![FuncProto {
@@ -267,6 +268,7 @@ fn a_session_whose_app_never_starts_is_not_ready() {
     // it loads, and fails at link — after the bundle was served in full.
     let module = Module {
         exports: Default::default(),
+        foreign_imports: Vec::new(),
         main: Some(0),
         strings: Vec::new(),
         functions: vec![FuncProto {

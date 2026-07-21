@@ -255,6 +255,42 @@ pub struct FieldDecl {
     pub span: Span,
 }
 
+/// One `key: value;` field inside an `@FFI.Extern { ... }` block.
+///
+/// Both the key (`library`, `symbol`, `abi`) and the value are written as bare
+/// identifiers, so both are interned symbols. What each key means — and which
+/// values a key accepts — is the analyzer's to decide; the parser only records
+/// the `identifier : identifier ;` shape and the spans, so a later refusal can
+/// point at the exact token the author wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignField {
+    /// The field's key (`library`, `symbol`, `abi`).
+    pub key: Symbol,
+    /// Span of the key token, for diagnostics.
+    pub key_span: Span,
+    /// The field's value, written as a bare identifier (`kira_ffi_add`, `c`).
+    pub value: Symbol,
+    /// Span of the value token, for diagnostics.
+    pub value_span: Span,
+}
+
+/// The parsed `@FFI.Extern { ... }` annotation on a bodyless function.
+///
+/// New Kira design: the oracle has no seamless C-FFI. The mark records the
+/// annotation name's span, the block's span, and the `key: value;` fields as
+/// written — nothing is validated here. The analyzer reads the fields, checks
+/// the signature, and either mints a foreign callable or refuses the whole
+/// declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignMark {
+    /// Span of the qualified annotation name (`FFI.Extern`).
+    pub span: Span,
+    /// Span covering the whole `{ ... }` block.
+    pub block_span: Span,
+    /// The fields the block wrote, in source order.
+    pub fields: Vec<ForeignField>,
+}
+
 /// A function declaration: signature plus body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
@@ -264,6 +300,13 @@ pub struct Function {
     pub name_span: Span,
     /// Whether the declaration carried the `@Main` annotation.
     pub is_main: bool,
+    /// The `@FFI.Extern` marker, when the declaration carried one.
+    ///
+    /// A function carrying this is bodyless (its [`body`](Function::body) is an
+    /// empty block spanned at the terminating `;`) and names a foreign C symbol.
+    /// The analyzer validates it and records a foreign callable; a caller
+    /// invokes it as an ordinary Kira function.
+    pub foreign: Option<ForeignMark>,
     /// The `@Export` marker, when the declaration carried one.
     ///
     /// On a top-level function this is the export itself: the function joins

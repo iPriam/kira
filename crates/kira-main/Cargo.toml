@@ -14,5 +14,12 @@ kira-runtime-abi.workspace = true
 kira-vm-runtime.workspace = true
 thiserror.workspace = true
 
+# Dynamic loading of a generated foreign-adapter sidecar is native-only: it
+# `dlopen`s a shared library, which wasm has no notion of. Target-gated so the
+# embedding surface still builds for `wasm32-unknown-unknown` (a Rust app that
+# embeds a Kira library and is itself compiled to wasm needs no foreign host).
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+kira-dynamic-ffi.workspace = true
+
 [lints]
 workspace = true

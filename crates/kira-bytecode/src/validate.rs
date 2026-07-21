@@ -172,6 +172,10 @@ impl Module {
                     // an index into this module's table, so there is nothing
                     // here to bound it against.
                     Instruction::CallNative(_) => true,
+                    // A `CallForeign` id indexes this module's foreign-import
+                    // table, so unlike a native id it is bounded here: an id
+                    // past the table would have no signature to marshal against.
+                    Instruction::CallForeign(id) => (*id as usize) < self.foreign_imports.len(),
                     Instruction::Jump(target) | Instruction::JumpIfFalse(target) => {
                         *target < code_len
                     }
@@ -276,6 +280,7 @@ mod tests {
     fn module_of(functions: Vec<FuncProto>, main: u32, strings: Vec<String>) -> Module {
         Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions,
             main: Some(main),
             strings,
@@ -287,6 +292,7 @@ mod tests {
     fn exporting_library(exports: ExportTable) -> Module {
         Module {
             exports,
+            foreign_imports: Vec::new(),
             functions: vec![func(
                 "makeButton",
                 1,
@@ -414,6 +420,7 @@ mod tests {
     fn a_library_module_validates_with_no_entrypoint() {
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![func("add", 2, 2, vec![Instruction::ReturnVoid])],
             main: None,
             strings: vec![],
@@ -426,6 +433,7 @@ mod tests {
         // No entrypoint relaxes the entrypoint check and nothing else.
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![func("add", 0, 0, vec![])],
             main: None,
             strings: vec![],
@@ -495,6 +503,8 @@ mod tests {
             vec![Instruction::StoreLocal(5), Instruction::ReturnVoid],
             // Call to a function index that does not exist.
             vec![Instruction::Call(9), Instruction::ReturnVoid],
+            // Foreign call to an id past the (empty) foreign-import table.
+            vec![Instruction::CallForeign(0), Instruction::ReturnVoid],
             // Jump past the end of the code.
             vec![Instruction::Jump(99), Instruction::ReturnVoid],
             // Conditional jump past the end of the code.

@@ -84,6 +84,8 @@ impl TypeTable {
             Type::Bool => "Bool".to_owned(),
             Type::String => "String".to_owned(),
             Type::Void => "Void".to_owned(),
+            Type::RawPtr => "RawPtr".to_owned(),
+            Type::CString => "CString".to_owned(),
             Type::Error => "<error>".to_owned(),
             Type::Struct(id) => match self.structs.get(id) {
                 Some(def) => def.name.clone(),

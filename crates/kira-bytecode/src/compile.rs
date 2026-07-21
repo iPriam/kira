@@ -103,6 +103,11 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
         main: program.main,
         strings: strings.into_vec(),
         exports: build_export_table(program)?,
+        foreign_imports: program
+            .foreign_imports
+            .iter()
+            .map(|foreign| foreign.import.clone())
+            .collect(),
     })
 }
 
@@ -410,6 +415,10 @@ impl FnCompiler<'_> {
                             Instruction::Call(index)
                         });
                     }
+                    // A foreign call names a foreign-import id; arguments are
+                    // already on the stack, and the VM marshals them to the
+                    // import's signature before asking the host.
+                    IrCallee::Foreign(id) => self.code.push(Instruction::CallForeign(id)),
                 }
             }
         }

@@ -313,8 +313,14 @@ impl Analyzer<'_> {
                 }
             }
             // `Void` never reaches here (its callers return without a value)
-            // and `Error` means the program is already rejected.
-            Type::Int(_) | Type::Void | Type::Error => HirExpr::Int(0),
+            // and `Error` means the program is already rejected. `RawPtr` and
+            // `CString` are C-seam types that never reach a closure slot in this
+            // subset — a foreign value does not flow into a closure — so they
+            // fall to the same zero-word placeholder rather than growing a HIR
+            // node nothing constructs.
+            Type::Int(_) | Type::Void | Type::Error | Type::RawPtr | Type::CString => {
+                HirExpr::Int(0)
+            }
         };
         self.program.exprs.alloc(node)
     }

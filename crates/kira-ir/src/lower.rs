@@ -16,7 +16,8 @@ use kira_semantics_model::hir::{
 };
 
 use crate::ir::{
-    IrCallee, IrExport, IrExpr, IrExprId, IrFunction, IrPlace, IrPlaceStep, IrProgram, IrStmt,
+    IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport, IrFunction, IrPlace, IrPlaceStep,
+    IrProgram, IrStmt,
 };
 
 /// Lowers an analyzed program to IR.
@@ -37,6 +38,19 @@ pub fn lower(program: &HirProgram) -> IrProgram {
                 function: export.function.0,
                 params: export.params.clone(),
                 result: export.result,
+            })
+            .collect(),
+        foreign_imports: program
+            .foreign
+            .iter()
+            .map(|foreign| IrForeignImport {
+                name: foreign.kira_name.clone(),
+                import: kira_runtime_abi::ForeignImport::new(
+                    foreign.library.clone(),
+                    foreign.symbol.clone(),
+                    foreign.abi,
+                    foreign.signature.clone(),
+                ),
             })
             .collect(),
         exprs: la_arena::Arena::new(),
@@ -227,5 +241,6 @@ fn lower_callee(callee: Callee) -> IrCallee {
     match callee {
         Callee::Builtin(kira_semantics_model::hir::Builtin::Print) => IrCallee::Print,
         Callee::User(id) => IrCallee::User(id.0),
+        Callee::Foreign(id) => IrCallee::Foreign(id.0),
     }
 }

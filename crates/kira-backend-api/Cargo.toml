@@ -10,3 +10,7 @@ workspace = true
 
 [dependencies]
 thiserror.workspace = true
+# Foreign imports are validated against a resolved native-library catalog for a
+# selected target before a backend links them.
+kira-native-lib-definition.workspace = true
+kira-runtime-abi.workspace = true

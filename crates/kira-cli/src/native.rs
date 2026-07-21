@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use kira_ir::IrProgram;
-use kira_llvm_backend::{LlvmError, NativeArtifacts, NativeBuildOptions};
+use kira_llvm_backend::{AdapterSidecarOptions, LlvmError, NativeArtifacts, NativeBuildOptions};
 
 /// Where a program's build artifacts live: `<source-dir>/.kira-build/`.
 ///
@@ -80,6 +80,20 @@ impl Artifacts {
     pub fn shared_library(&self) -> PathBuf {
         self.directory.join(shared_library_name(&self.stem))
     }
+
+    /// The object file for the VM's foreign-adapter sidecar.
+    fn foreign_object(&self) -> PathBuf {
+        self.directory.join(format!("{}_ffi.o", self.stem))
+    }
+
+    /// The VM's foreign-adapter sidecar shared library.
+    ///
+    /// A separate name from the hybrid dylib so a VM build and a hybrid build of
+    /// the same program never write to one path.
+    pub fn foreign_sidecar(&self) -> PathBuf {
+        self.directory
+            .join(shared_library_name(&format!("{}_ffi", self.stem)))
+    }
 }
 
 /// The platform's file name for a shared library called `stem`.
@@ -98,11 +112,16 @@ fn shared_library_name(stem: &str) -> String {
     }
 }
 
-/// Builds `program` into a native executable.
+/// Builds `program` into a native executable, linking `foreign_archives`.
+///
+/// The archives are the selected C static libraries that satisfy the program's
+/// `@FFI.Extern` imports; each generated adapter references its C symbol, so
+/// naming them on the link line pulls in exactly the members those symbols need.
 pub fn build(
     program: &IrProgram,
     source: &Path,
     emit_llvm_ir: bool,
+    foreign_archives: &[PathBuf],
 ) -> Result<NativeArtifacts, NativeError> {
     let artifacts =
         Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
@@ -117,8 +136,32 @@ pub fn build(
         exports: kira_llvm_backend::NativeExportSurface::default(),
         ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
         runtime_archive: runtime_archive()?,
+        foreign_archives: foreign_archives.to_vec(),
     };
     Ok(kira_llvm_backend::build_native(program, &options)?)
+}
+
+/// Builds the VM's foreign-adapter sidecar for `program`, returning its path.
+///
+/// The VM never links or `dlopen`s anything itself; this is what a VM build
+/// produces so a native-capable host can answer `call_foreign`. The sidecar
+/// carries one exported adapter per foreign import, the foreign-adapter marker,
+/// the string helpers, and the selected C archives — one self-contained file.
+pub fn build_adapter_sidecar(
+    program: &IrProgram,
+    source: &Path,
+    foreign_archives: &[PathBuf],
+) -> Result<PathBuf, NativeError> {
+    let artifacts =
+        Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
+    let options = AdapterSidecarOptions {
+        module_name: format!("{}_ffi", artifacts.stem),
+        object_path: artifacts.foreign_object(),
+        library_path: artifacts.foreign_sidecar(),
+        runtime_archive: runtime_archive()?,
+        foreign_archives: foreign_archives.to_vec(),
+    };
+    Ok(kira_llvm_backend::build_adapter_sidecar(program, &options)?)
 }
 
 /// Runs a built native executable, returning its exit code.

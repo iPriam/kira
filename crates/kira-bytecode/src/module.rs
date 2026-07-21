@@ -6,8 +6,9 @@
 //! just an in-memory structure. The format is append-only.
 
 use crate::exports::{ExportTable, ExportType, ModuleExport};
+use crate::module_foreign::{read_foreign, write_foreign};
 use crate::op::{DecodeError, Instruction, decode, encode};
-use kira_runtime_abi::{BridgeValueTag, Execution};
+use kira_runtime_abi::{BridgeValueTag, Execution, ForeignImport};
 
 /// The magic bytes that open a serialized module: "KBC1".
 pub const MAGIC: [u8; 4] = *b"KBC1";
@@ -39,6 +40,15 @@ pub struct Module {
     /// Empty for an application and for a library that exports nothing, which is
     /// also what a module written before the exports section existed decodes as.
     pub exports: ExportTable,
+    /// The foreign (`@FFI.Extern`) imports a `CallForeign` id indexes.
+    ///
+    /// Each row carries the C symbol's library, ABI, and exact-width signature.
+    /// Empty for a module that declares no extern, which is also what a module
+    /// written before the foreign section existed decodes as. When this is
+    /// non-empty but [`Module::exports`] is empty, the empty exports section is
+    /// still written first, so the appended foreign bytes are never misread as
+    /// an exports section.
+    pub foreign_imports: Vec<ForeignImport>,
 }
 
 /// One compiled function: its signature shape and its code.
@@ -107,6 +117,25 @@ pub enum ModuleDecodeError {
         /// The tag byte that named nothing crossable.
         tag: u8,
     },
+    /// A foreign import named an ABI byte this build does not know.
+    #[error("foreign import `{import}` names ABI tag `{tag}`, which this build does not know")]
+    UnknownForeignAbi {
+        /// The C symbol of the offending import.
+        import: String,
+        /// The unrecognized ABI tag byte.
+        tag: u8,
+    },
+    /// A foreign import's parameter or result named a type byte this build does
+    /// not know.
+    #[error(
+        "foreign import `{import}` names foreign type tag `{tag}`, which this build does not know"
+    )]
+    UnknownForeignType {
+        /// The C symbol of the offending import.
+        import: String,
+        /// The unrecognized foreign-type tag byte.
+        tag: u8,
+    },
     /// Bytes remained after the last section the format defines.
     ///
     /// Every section is self-delimiting, so leftovers mean the stream was
@@ -135,16 +164,26 @@ impl Module {
             let code = encode(&function.code);
             write_bytes(&mut out, &code);
         }
-        self.write_exports(&mut out);
+        // The foreign section follows the exports section. When there are
+        // foreign imports but no exports, the empty exports framing is written
+        // anyway (`force`), so `read_exports` consumes it as an empty section
+        // rather than mistaking the foreign bytes for class/export counts.
+        let has_foreign = !self.foreign_imports.is_empty();
+        self.write_exports(&mut out, has_foreign);
+        if has_foreign {
+            write_foreign(&mut out, &self.foreign_imports);
+        }
         out
     }
 
     /// Writes the appended exports section.
     ///
-    /// Omitted entirely when there is nothing to export, so an application's
-    /// bytes are byte-for-byte what they were before exports existed.
-    fn write_exports(&self, out: &mut Vec<u8>) {
-        if self.exports.is_empty() {
+    /// Omitted entirely when there is nothing to export *and* no later section
+    /// forces it, so an application's bytes are byte-for-byte what they were
+    /// before exports existed. `force` writes the empty framing so an appended
+    /// section after it decodes unambiguously.
+    fn write_exports(&self, out: &mut Vec<u8>, force: bool) {
+        if self.exports.is_empty() && !force {
             return;
         }
         write_u32(out, self.exports.classes.len() as u32);
@@ -199,6 +238,7 @@ impl Module {
             });
         }
         let exports = read_exports(&mut reader)?;
+        let foreign_imports = read_foreign(&mut reader)?;
         if reader.offset != bytes.len() {
             return Err(ModuleDecodeError::TrailingBytes(
                 bytes.len() - reader.offset,
@@ -209,6 +249,7 @@ impl Module {
             main,
             strings,
             exports,
+            foreign_imports,
         })
     }
 }
@@ -256,22 +297,23 @@ fn write_export_type(out: &mut Vec<u8>, ty: ExportType) {
     write_u32(out, ty.class_index());
 }
 
-fn write_u32(out: &mut Vec<u8>, value: u32) {
+pub(crate) fn write_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
-fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
+pub(crate) fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
     write_u32(out, bytes.len() as u32);
     out.extend_from_slice(bytes);
 }
 
-struct Reader<'a> {
+/// A cursor reading a serialized module, shared with the foreign section codec.
+pub(crate) struct Reader<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
 
 impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8], ModuleDecodeError> {
+    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8], ModuleDecodeError> {
         let end = self.offset + n;
         let slice = self
             .bytes
@@ -281,7 +323,7 @@ impl<'a> Reader<'a> {
         Ok(slice)
     }
 
-    fn is_at_end(&self) -> bool {
+    pub(crate) fn is_at_end(&self) -> bool {
         self.offset >= self.bytes.len()
     }
 
@@ -303,7 +345,7 @@ impl<'a> Reader<'a> {
         Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
     }
 
-    fn read_u32(&mut self) -> Result<u32, ModuleDecodeError> {
+    pub(crate) fn read_u32(&mut self) -> Result<u32, ModuleDecodeError> {
         let bytes = self.take(4)?;
         Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
@@ -313,7 +355,7 @@ impl<'a> Reader<'a> {
         self.take(len)
     }
 
-    fn read_string(&mut self) -> Result<String, ModuleDecodeError> {
+    pub(crate) fn read_string(&mut self) -> Result<String, ModuleDecodeError> {
         let bytes = self.read_len_prefixed()?;
         core::str::from_utf8(bytes)
             .map(str::to_owned)
@@ -329,6 +371,7 @@ mod tests {
     fn module_round_trips_through_bytes() {
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             main: Some(1),
             strings: vec!["hello".to_owned(), "world".to_owned()],
             functions: vec![
@@ -368,6 +411,7 @@ mod tests {
     fn library_module() -> Module {
         Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             main: None,
             strings: Vec::new(),
             functions: vec![FuncProto {
@@ -406,6 +450,7 @@ mod tests {
         // decodes as `Some`, never as a library.
         let bytes = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             main: Some(0),
             ..library_module()
         }
@@ -561,7 +606,13 @@ mod tests {
 
     #[test]
     fn bytes_after_the_last_section_are_rejected() {
+        // `exporting_module` has exports but no foreign imports, so its bytes
+        // end after the exports section. A complete (empty) foreign section is
+        // four zero bytes (a count of zero); appending three more bytes past it
+        // is trailing garbage the decoder must reject once both sections are
+        // read, rather than run half an artifact.
         let mut bytes = exporting_module().to_bytes();
+        bytes.extend_from_slice(&[0, 0, 0, 0]);
         bytes.extend_from_slice(&[0, 0, 0]);
         assert_eq!(
             Module::from_bytes(&bytes).unwrap_err(),

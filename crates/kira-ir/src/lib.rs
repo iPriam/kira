@@ -17,8 +17,8 @@ pub mod ir;
 pub mod lower;
 
 pub use ir::{
-    IrBinOp, IrCallee, IrExport, IrExpr, IrExprId, IrFunction, IrPlace, IrPlaceStep, IrProgram,
-    IrStmt, IrUnOp,
+    IrBinOp, IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport, IrFunction, IrPlace,
+    IrPlaceStep, IrProgram, IrStmt, IrUnOp,
 };
 pub use lower::lower;
 
@@ -81,5 +81,58 @@ mod tests {
         assert!(ir.main_function().is_none());
         assert_eq!(ir.functions.len(), 1);
         assert_eq!(ir.functions[0].name, "main");
+    }
+
+    #[test]
+    fn a_program_without_externs_lowers_to_an_empty_foreign_table() {
+        let ir = lower(&tiny_program());
+        assert!(ir.foreign_imports.is_empty());
+    }
+
+    #[test]
+    fn foreign_imports_and_a_foreign_call_lower_across() {
+        use kira_runtime_abi::{ForeignAbi, ForeignSignature, ForeignType};
+        use kira_semantics_model::hir::{ForeignId, HirForeign};
+
+        // A `main` that calls the extern `add`, plus the registry row for it.
+        let mut program = tiny_program();
+        program.foreign.push(HirForeign {
+            kira_name: "add".to_owned(),
+            library: "ffimath".to_owned(),
+            symbol: "kira_ffi_add".to_owned(),
+            abi: ForeignAbi::C,
+            signature: ForeignSignature::new(
+                [ForeignType::I32, ForeignType::I32],
+                ForeignType::I32,
+            ),
+            name_span: Span::new(0, 3),
+        });
+        let a = program.exprs.alloc(HirExpr::Int(20));
+        let b = program.exprs.alloc(HirExpr::Int(22));
+        let call = program.exprs.alloc(HirExpr::Call {
+            callee: Callee::Foreign(ForeignId(0)),
+            args: vec![a, b],
+            ty: Type::Int(kira_semantics_model::IntSpelling::I32),
+        });
+        let eval = program.stmts.alloc(HirStmt::Expr { expr: call });
+        program.functions[0].body = vec![eval];
+
+        let ir = lower(&program);
+        // The registry lowers row-for-row, carrying the runtime-abi import.
+        assert_eq!(ir.foreign_imports.len(), 1);
+        assert_eq!(ir.foreign_imports[0].name, "add");
+        assert_eq!(ir.foreign_imports[0].import.symbol(), "kira_ffi_add");
+        assert_eq!(
+            ir.foreign_imports[0].import.signature().parameters().len(),
+            2
+        );
+        // The call lowers to a `Foreign` callee indexing that table.
+        let IrStmt::Eval { expr } = ir.functions[0].body[0] else {
+            panic!("expected the foreign call to lower to an Eval");
+        };
+        let IrExpr::Call { callee, .. } = ir.expr(expr) else {
+            panic!("expected a call expression");
+        };
+        assert_eq!(*callee, IrCallee::Foreign(0));
     }
 }

@@ -68,10 +68,15 @@ pub enum HybridError {
 }
 
 /// Builds `program` into a hybrid bundle under `.kira-build/`.
+///
+/// `foreign_archives` are the selected C static libraries. They are linked into
+/// the one native half — alongside the adapters the backend emits there — so the
+/// session binds every foreign call out of a single dylib.
 pub fn build(
     program: &IrProgram,
     source: &Path,
     emit_llvm_ir: bool,
+    foreign_archives: &[PathBuf],
 ) -> Result<HybridBundle, HybridError> {
     let artifacts =
         Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
@@ -81,7 +86,8 @@ pub fn build(
     let bytecode_path = artifacts.bytecode();
     write(&bytecode_path, &module.to_bytes())?;
 
-    // The native half: one trampoline per `@Native` function.
+    // The native half: one trampoline per `@Native` function, plus one adapter
+    // per foreign import, with the selected C archives linked in.
     let options = NativeBuildOptions {
         module_name: artifacts.stem().to_owned(),
         object_path: artifacts.object(),
@@ -95,6 +101,7 @@ pub fn build(
         exports: kira_llvm_backend::NativeExportSurface::default(),
         ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
         runtime_archive: native::runtime_archive()?,
+        foreign_archives: foreign_archives.to_vec(),
     };
     let native = kira_llvm_backend::build_hybrid_library(program, &options)?;
 
@@ -109,8 +116,13 @@ pub fn build(
 }
 
 /// Builds a hybrid bundle and runs it, returning the program's exit code.
-pub fn run(program: &IrProgram, source: &Path, emit_llvm_ir: bool) -> Result<i32, HybridError> {
-    let bundle = build(program, source, emit_llvm_ir)?;
+pub fn run(
+    program: &IrProgram,
+    source: &Path,
+    emit_llvm_ir: bool,
+    foreign_archives: &[PathBuf],
+) -> Result<i32, HybridError> {
+    let bundle = build(program, source, emit_llvm_ir, foreign_archives)?;
     let session = kira_hybrid_runtime::Session::load(&bundle.manifest)?;
     session.run()?;
     Ok(0)

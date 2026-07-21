@@ -28,8 +28,7 @@
 //! written. Stating the split here keeps this layer from pretending to a
 //! guarantee it cannot make.
 
-use kira_bytecode::exports::ExportType;
-use kira_runtime_abi::{HostCapabilities, NativeArg, NativeResult};
+use kira_runtime_abi::{BridgeValueTag, HostCapabilities, NativeArg, NativeResult};
 use kira_vm_runtime::{HeapStats, Instance as VmInstance, RootId};
 
 use crate::error::{Error, describe_kind};
@@ -133,7 +132,7 @@ impl<H: HostCapabilities> Instance<H> {
             });
         }
         for (position, (declared, passed)) in export.params.iter().zip(args).enumerate() {
-            if declared.tag() != arg_kind(passed).tag() {
+            if declared.tag() != arg_tag(passed) {
                 return Err(Error::ArgumentType {
                     export: name.to_owned(),
                     position,
@@ -186,24 +185,35 @@ impl<H: HostCapabilities> Instance<H> {
     }
 }
 
-/// The crossing kind an argument carries.
+/// The bridge tag an argument crosses as.
 ///
-/// Handles collapse to class 0 because the seam cannot see a class; only the
-/// [`tag`](ExportType::tag) of the result is ever compared.
-fn arg_kind(arg: &NativeArg<'_>) -> ExportType {
+/// A raw pointer carries [`BridgeValueTag::RAW_PTR`], which no export parameter
+/// type ever declares — a raw pointer is a foreign-seam value, not an export one
+/// — so passing one to an export call mismatches every declared parameter and is
+/// reported as an argument-type error rather than misread as some other kind.
+fn arg_tag(arg: &NativeArg<'_>) -> BridgeValueTag {
     match arg {
-        NativeArg::Void => ExportType::Void,
-        NativeArg::Int(_) => ExportType::Int,
-        NativeArg::Float(_) => ExportType::Float,
-        NativeArg::Bool(_) => ExportType::Bool,
-        NativeArg::Str(_) => ExportType::String,
-        NativeArg::Handle(_) => ExportType::Handle { class: 0 },
+        NativeArg::Void => BridgeValueTag::VOID,
+        NativeArg::Int(_) => BridgeValueTag::INT,
+        NativeArg::Float(_) => BridgeValueTag::FLOAT,
+        NativeArg::Bool(_) => BridgeValueTag::BOOL,
+        NativeArg::Str(_) => BridgeValueTag::STRING,
+        NativeArg::Handle(_) => BridgeValueTag::HANDLE,
+        NativeArg::RawPtr(_) => BridgeValueTag::RAW_PTR,
     }
 }
 
 /// A one-word name for what an argument carries, for a message.
 fn describe_arg(arg: &NativeArg<'_>) -> &'static str {
-    describe_kind(arg_kind(arg))
+    match arg {
+        NativeArg::Void => "nothing",
+        NativeArg::Int(_) => "an integer",
+        NativeArg::Float(_) => "a float",
+        NativeArg::Bool(_) => "a boolean",
+        NativeArg::Str(_) => "a string",
+        NativeArg::Handle(_) => "a handle",
+        NativeArg::RawPtr(_) => "a raw pointer",
+    }
 }
 
 #[cfg(test)]

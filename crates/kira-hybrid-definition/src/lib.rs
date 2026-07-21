@@ -11,4 +11,6 @@
 
 pub mod manifest;
 
-pub use manifest::{HybridFunction, HybridManifest, HybridParam, MAGIC, ManifestDecodeError};
+pub use manifest::{
+    HybridForeign, HybridFunction, HybridManifest, HybridParam, MAGIC, ManifestDecodeError,
+};

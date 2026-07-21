@@ -23,5 +23,11 @@ llvm-sys = { workspace = true, features = ["no-llvm-linking", "disable-alltarget
 [build-dependencies]
 kira-toolchain.workspace = true
 
+[dev-dependencies]
+# Building HIR fixtures for the foreign-adapter compile-link-run test needs the
+# span type the HIR carries; the frontend crates that normally supply it are
+# above this layer, so it is a test-only dependency here.
+kira-source.workspace = true
+
 [lints]
 workspace = true

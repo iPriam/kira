@@ -57,6 +57,12 @@ impl FunctionLowering<'_, '_> {
                     Type::Struct(_) => {
                         return Err(LlvmError::Unsupported("a print of a struct"));
                     }
+                    // Analysis rejects `print` of a raw pointer (an opaque
+                    // foreign word has no pinned rendering) and `CString` is
+                    // seam-only, so neither reaches a type-checked program.
+                    Type::RawPtr | Type::CString => {
+                        return Err(LlvmError::Unsupported("a print of a raw pointer"));
+                    }
                     Type::Void | Type::Error => {
                         return Err(LlvmError::Unsupported("printing a value with no type"));
                     }
@@ -88,6 +94,9 @@ impl FunctionLowering<'_, '_> {
                     None => self.lower_runtime_call(index, args, &values),
                 }
             }
+            // A foreign C function: marshal the arguments to the import's
+            // exact-width signature and invoke the generated adapter directly.
+            IrCallee::Foreign(index) => self.lower_foreign_call(index, args),
         }
     }
 

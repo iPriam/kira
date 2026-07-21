@@ -138,6 +138,16 @@ pub enum Instruction {
     /// perform the call itself — it asks the embedder, which keeps the VM free
     /// of any FFI and still able to compile for wasm.
     CallNative(u32),
+    /// Call the foreign C function with the given foreign-import id; arguments
+    /// are already on the stack, and the result is pushed.
+    ///
+    /// The id indexes the module's foreign-import table, whose row carries the
+    /// exact-width signature the VM marshals arguments to. Like
+    /// [`Instruction::CallNative`], the VM performs no FFI itself: it converts
+    /// its values to borrowed foreign arguments and asks the embedder through
+    /// `HostCapabilities::call_foreign`, so the VM stays free of any
+    /// dynamic-loading dependency and still compiles for wasm.
+    CallForeign(u32),
     /// Pop a value, format it, emit one output line, and push unit.
     Print,
     /// Return the stack top from the current function.
@@ -429,6 +439,12 @@ mod opcode {
     pub const SHR_INT: u8 = 0x42;
     pub const SHR_UINT: u8 = 0x43;
     pub const BIT_NOT: u8 = 0x44;
+
+    // The foreign call. Appended after `BIT_NOT`, which is where the set ended
+    // before it; adding an opcode is not an ABI change. It carries a `u32`
+    // foreign-import id, so it is decoded in `Cursor::next_instruction` rather
+    // than as a nullary opcode.
+    pub const CALL_FOREIGN: u8 = 0x45;
 }
 
 #[cfg(test)]

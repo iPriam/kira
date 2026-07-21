@@ -46,6 +46,15 @@ fn every_example_agrees_on_every_backend() {
 /// Checks one example directory on every backend, returning how many programs
 /// it held.
 fn check_example_directory(directory: &std::path::Path) -> usize {
+    // An example that ships native libraries needs a prebuilt C archive this
+    // generic sweep does not compile — it would fail every backend for want of
+    // the archive. The dedicated FFI suite (`ffi`, `ffi_wasm`) builds the
+    // archive and proves that example for real, so the sweep skips it rather
+    // than holding it to a bar it cannot meet.
+    if directory.join("NativeLibs").is_dir() {
+        return 0;
+    }
+
     // A library example is *built*, never run: it has no entry point by
     // construction, so comparing stdout would only ever compare three
     // identical refusals. What parity means for one is that every backend

@@ -98,15 +98,42 @@ pub fn run(args: &[String]) -> i32 {
         Err(code) => return code,
     };
 
+    let foreign = match resolve_foreign(&options.path, &ir, options.device) {
+        Ok(foreign) => foreign,
+        Err(code) => return code,
+    };
+    let archives = foreign_archives(&foreign);
+
     if let Device::Web(device) = options.device {
-        return run_web(&ir, &options, device);
+        return run_web(&ir, &options, device, archives);
     }
 
     match options.backend {
-        BackendMode::VmBytecode => run_on_vm(&ir),
-        BackendMode::LlvmNative => run_native(&ir, &options),
-        BackendMode::Hybrid => run_hybrid(&ir, &options),
+        BackendMode::VmBytecode => run_on_vm(&ir, std::path::Path::new(&options.path), archives),
+        BackendMode::LlvmNative => run_native(&ir, &options, archives),
+        BackendMode::Hybrid => run_hybrid(&ir, &options, archives),
     }
+}
+
+/// Resolves the program's `@FFI.Extern` imports to archives for `device`'s
+/// target, reporting a resolution failure as an exit code.
+///
+/// `None` when the program declares no foreign imports.
+fn resolve_foreign(
+    source: &str,
+    ir: &IrProgram,
+    device: Device,
+) -> Result<Option<Vec<std::path::PathBuf>>, i32> {
+    let target = crate::foreign_libs::target_for_device(device);
+    crate::foreign_libs::resolve(std::path::Path::new(source), ir, target).map_err(|error| {
+        eprintln!("kirac: {error}");
+        EXIT_FAILURE
+    })
+}
+
+/// The archive slice a backend links, empty when there are no foreign imports.
+fn foreign_archives(foreign: &Option<Vec<std::path::PathBuf>>) -> &[std::path::PathBuf] {
+    foreign.as_ref().map(Vec::as_slice).unwrap_or(&[])
 }
 
 /// Runs `kirac live [runner] <file> [--backend vm|hybrid]`: build a bundle,
@@ -149,8 +176,18 @@ pub fn live(args: &[String]) -> i32 {
 }
 
 /// Builds a program for the Web and serves it, opening a browser at it.
-fn run_web(ir: &IrProgram, options: &CompileOptions, device: WasmDevice) -> i32 {
-    match wasm::run(ir, std::path::Path::new(&options.path), device) {
+fn run_web(
+    ir: &IrProgram,
+    options: &CompileOptions,
+    device: WasmDevice,
+    foreign_archives: &[std::path::PathBuf],
+) -> i32 {
+    match wasm::run(
+        ir,
+        std::path::Path::new(&options.path),
+        device,
+        foreign_archives,
+    ) {
         Ok(()) => EXIT_OK,
         Err(error) => {
             eprintln!("kirac: {error}");
@@ -262,8 +299,20 @@ pub fn build(args: &[String]) -> i32 {
     // can start.
     let is_library = ir.main.is_none();
 
+    // Resolve the program's foreign imports to archives for the selected target
+    // once, and thread them into whichever backend runs. A library's foreign
+    // surface is not built in this milestone, so only program arms link them.
+    let foreign = match resolve_foreign(&options.path, ir, options.device) {
+        Ok(foreign) => foreign,
+        Err(_) => {
+            println!("Failed to build");
+            return EXIT_FAILURE;
+        }
+    };
+    let archives = foreign_archives(&foreign);
+
     if let Device::Web(device) = options.device {
-        return match wasm::build(ir, std::path::Path::new(&options.path), device) {
+        return match wasm::build(ir, std::path::Path::new(&options.path), device, archives) {
             Ok(artifacts) => {
                 println!("Successfully built {}", artifacts.wasm.display());
                 EXIT_OK
@@ -296,9 +345,22 @@ pub fn build(args: &[String]) -> i32 {
         }
         BackendMode::VmBytecode => {
             // A program's VM artifact is the bytecode module itself; compiling
-            // it is the whole build.
+            // it is the whole build. A program with foreign imports also emits
+            // the adapter sidecar a VM run loads, so `build` and `run` produce
+            // the same artifacts.
             match kira_bytecode::compile(ir) {
                 Ok(_) => {
+                    if !ir.foreign_imports.is_empty()
+                        && let Err(error) = native::build_adapter_sidecar(
+                            ir,
+                            std::path::Path::new(&options.path),
+                            archives,
+                        )
+                    {
+                        eprintln!("kirac: {error}");
+                        println!("Failed to build");
+                        return EXIT_FAILURE;
+                    }
                     println!("Successfully built");
                     EXIT_OK
                 }
@@ -330,7 +392,7 @@ pub fn build(args: &[String]) -> i32 {
                 }
             }
         }
-        BackendMode::LlvmNative => match build_native(ir, &options) {
+        BackendMode::LlvmNative => match build_native(ir, &options, archives) {
             Some(_) => {
                 println!("Successfully built");
                 EXIT_OK
@@ -365,6 +427,7 @@ pub fn build(args: &[String]) -> i32 {
             ir,
             std::path::Path::new(&options.path),
             options.emit_llvm_ir,
+            archives,
         ) {
             Ok(_) => {
                 println!("Successfully built");
@@ -383,11 +446,16 @@ pub fn build(args: &[String]) -> i32 {
 ///
 /// The host runs in this process rather than as a child: the native half is a
 /// library, not an executable, and this process is what loads it.
-fn run_hybrid(ir: &IrProgram, options: &CompileOptions) -> i32 {
+fn run_hybrid(
+    ir: &IrProgram,
+    options: &CompileOptions,
+    foreign_archives: &[std::path::PathBuf],
+) -> i32 {
     match hybrid::run(
         ir,
         std::path::Path::new(&options.path),
         options.emit_llvm_ir,
+        foreign_archives,
     ) {
         Ok(code) => code,
         Err(error) => {
@@ -398,7 +466,16 @@ fn run_hybrid(ir: &IrProgram, options: &CompileOptions) -> i32 {
 }
 
 /// Compiles the IR to bytecode and runs it on the VM.
-fn run_on_vm(ir: &IrProgram) -> i32 {
+///
+/// A program with foreign imports first builds a foreign-adapter sidecar and
+/// runs against a native-capable host that resolves `call_foreign` through it;
+/// the VM itself still loads and links nothing. A program with no foreign
+/// imports runs against the plain stdout host.
+fn run_on_vm(
+    ir: &IrProgram,
+    source: &std::path::Path,
+    foreign_archives: &[std::path::PathBuf],
+) -> i32 {
     let module = match kira_bytecode::compile(ir) {
         Ok(module) => module,
         Err(error) => {
@@ -406,19 +483,70 @@ fn run_on_vm(ir: &IrProgram) -> i32 {
             return EXIT_FAILURE;
         }
     };
-    let mut host = StdoutHost;
+
+    if ir.foreign_imports.is_empty() {
+        let mut host = StdoutHost;
+        return match kira_vm_runtime::execute(&module, &mut host) {
+            Ok(_) => EXIT_OK,
+            Err(trap) => {
+                eprintln!("kirac: runtime trap: {trap}");
+                EXIT_FAILURE
+            }
+        };
+    }
+
+    let sidecar = match native::build_adapter_sidecar(ir, source, foreign_archives) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("kirac: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let bindings = foreign_bindings(ir);
+    let mut host = match kira_main::ForeignHost::load(&sidecar, bindings, StdoutHost) {
+        Ok(host) => host,
+        Err(error) => {
+            eprintln!("kirac: cannot load the foreign-adapter sidecar: {error}");
+            return EXIT_FAILURE;
+        }
+    };
     match kira_vm_runtime::execute(&module, &mut host) {
         Ok(_) => EXIT_OK,
         Err(trap) => {
+            if let Some(detail) = host.take_detail() {
+                eprintln!("kirac: {detail}");
+            }
             eprintln!("kirac: runtime trap: {trap}");
             EXIT_FAILURE
         }
     }
 }
 
+/// One adapter binding per foreign import, in import-id order.
+///
+/// The adapter symbol comes from `kira_llvm_backend::adapter_name`, the one
+/// place that contract is spelled, so the sidecar's exports and the host's
+/// lookups cannot disagree.
+fn foreign_bindings(ir: &IrProgram) -> Vec<kira_main::ForeignBinding> {
+    ir.foreign_imports
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            kira_main::ForeignBinding::new(
+                kira_llvm_backend::adapter_name(index),
+                entry.import.signature().clone(),
+            )
+        })
+        .collect()
+}
+
 /// Builds a native executable and runs it, forwarding its exit code.
-fn run_native(ir: &IrProgram, options: &CompileOptions) -> i32 {
-    let Some(artifacts) = build_native(ir, options) else {
+fn run_native(
+    ir: &IrProgram,
+    options: &CompileOptions,
+    foreign_archives: &[std::path::PathBuf],
+) -> i32 {
+    let Some(artifacts) = build_native(ir, options, foreign_archives) else {
         return EXIT_FAILURE;
     };
     let Some(executable) = artifacts.executable else {
@@ -438,11 +566,13 @@ fn run_native(ir: &IrProgram, options: &CompileOptions) -> i32 {
 fn build_native(
     ir: &IrProgram,
     options: &CompileOptions,
+    foreign_archives: &[std::path::PathBuf],
 ) -> Option<kira_llvm_backend::NativeArtifacts> {
     match native::build(
         ir,
         std::path::Path::new(&options.path),
         options.emit_llvm_ir,
+        foreign_archives,
     ) {
         Ok(artifacts) => Some(artifacts),
         Err(error) => {

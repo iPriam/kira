@@ -59,6 +59,16 @@ pub enum LinkError {
         /// Where the archive was expected.
         path: PathBuf,
     },
+    /// A selected foreign C static archive is missing.
+    ///
+    /// Named on its own so a package pointing `nativeLibraries` at an archive
+    /// that is not there gets a diagnostic about the missing library file rather
+    /// than an opaque linker error about undefined foreign symbols.
+    #[error("the foreign native archive `{path}` is missing")]
+    ForeignArchiveMissing {
+        /// Where the archive was expected.
+        path: PathBuf,
+    },
     /// The linker driver could not be run at all.
     #[error("cannot run the linker driver `{driver}`: {source}")]
     DriverUnusable {
@@ -115,7 +125,7 @@ pub fn link_shared_library(
     };
     let mut arguments = vec![shared_flag.to_owned()];
     arguments.extend(force_host_symbols());
-    link(llvm, object, runtime_archive, library, &arguments)
+    link_with(llvm, object, runtime_archive, &[], library, &arguments)
 }
 
 /// Combines `object` and the native runtime archive into one static archive.
@@ -223,13 +233,132 @@ fn mri_script(object: &Path, runtime_archive: &Path, archive: &Path) -> String {
 }
 
 /// Links `object` against the native runtime archive into `executable`.
+///
+/// `foreign_archives` are the selected C static archives that satisfy the
+/// program's `@FFI.Extern` imports. Each generated adapter references its C
+/// symbol, so naming the archives on the link line is enough for the linker to
+/// pull in exactly the members those symbols need — no force-loading, and a
+/// missing symbol becomes a named link error rather than a silent empty binary.
 pub fn link_executable(
     llvm: &LlvmInstallation,
     object: &Path,
     runtime_archive: &Path,
+    foreign_archives: &[PathBuf],
     executable: &Path,
 ) -> Result<(), LinkError> {
-    link(llvm, object, runtime_archive, executable, &[])
+    link_with(
+        llvm,
+        object,
+        runtime_archive,
+        foreign_archives,
+        executable,
+        &[],
+    )
+}
+
+/// Links the VM's foreign-adapter sidecar: the adapters-only object plus the
+/// selected C archives and the native runtime, into one shared library the host
+/// loads through `kira-dynamic-ffi`.
+///
+/// Every adapter, the foreign-adapter marker, and the string helpers the loader
+/// resolves are forced in by name: nothing inside the sidecar references them
+/// (the sidecar has no call sites), so without forcing the linker would drop
+/// them and the host's `dlsym` would fail on a library that is otherwise sound.
+pub fn link_adapter_sidecar(
+    llvm: &LlvmInstallation,
+    object: &Path,
+    runtime_archive: &Path,
+    foreign_archives: &[PathBuf],
+    adapter_symbols: &[String],
+    library: &Path,
+) -> Result<(), LinkError> {
+    let shared_flag = if cfg!(target_os = "macos") {
+        "-dynamiclib"
+    } else {
+        "-shared"
+    };
+    let mut arguments = vec![shared_flag.to_owned()];
+    arguments.extend(force_foreign_symbols(adapter_symbols));
+    link_with(
+        llvm,
+        object,
+        runtime_archive,
+        foreign_archives,
+        library,
+        &arguments,
+    )
+}
+
+/// Links the native half of a hybrid program: the hybrid object plus the
+/// selected C archives and the runtime, into one shared library.
+///
+/// The hybrid half carries both the `@Native` trampolines and one generated
+/// adapter per foreign import. Both symbol families need forcing in: the host
+/// resolves the trampoline-adjacent runtime symbols (see [`force_host_symbols`])
+/// and — when the program has foreign imports — the foreign-adapter marker, the
+/// string helpers, and every adapter by name (see [`force_foreign_symbols`]), so
+/// the hybrid session binds every foreign call out of this one dylib rather than
+/// opening a second sidecar. The C archives satisfy each adapter's reference to
+/// its real C symbol.
+pub fn link_hybrid_library(
+    llvm: &LlvmInstallation,
+    object: &Path,
+    runtime_archive: &Path,
+    foreign_archives: &[PathBuf],
+    adapter_symbols: &[String],
+    library: &Path,
+) -> Result<(), LinkError> {
+    let shared_flag = if cfg!(target_os = "macos") {
+        "-dynamiclib"
+    } else {
+        "-shared"
+    };
+    let mut arguments = vec![shared_flag.to_owned()];
+    arguments.extend(force_host_symbols());
+    // A program with no foreign imports emits no adapters and no foreign marker,
+    // so forcing either would fail the link on an undefined symbol.
+    if !adapter_symbols.is_empty() {
+        arguments.extend(force_foreign_symbols(adapter_symbols));
+    }
+    link_with(
+        llvm,
+        object,
+        runtime_archive,
+        foreign_archives,
+        library,
+        &arguments,
+    )
+}
+
+/// The `-Wl,-u` flags that force every foreign-sidecar symbol a host resolves.
+///
+/// The foreign-adapter marker and the string helpers the loader binds, plus one
+/// entry per generated adapter, so a host loading the sidecar finds each by
+/// `dlsym`. The marker and helper names come from the shared runtime-abi
+/// constants, so what is forced in and what the loader demands cannot drift.
+fn force_foreign_symbols(adapter_symbols: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = vec![kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER.to_owned()];
+    names.extend(
+        [
+            kira_runtime_abi::FOREIGN_STRING_NEW_SYMBOL,
+            kira_runtime_abi::FOREIGN_STRING_FREE_SYMBOL,
+            kira_runtime_abi::FOREIGN_STRING_DATA_SYMBOL,
+            kira_runtime_abi::FOREIGN_STRING_LEN_SYMBOL,
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
+    names.extend(adapter_symbols.iter().cloned());
+    names
+        .into_iter()
+        .map(|symbol| {
+            if cfg!(target_os = "macos") {
+                format!("-Wl,-u,_{symbol}")
+            } else {
+                format!("-Wl,--undefined={symbol}")
+            }
+        })
+        .collect()
 }
 
 /// Linker flags that pull the host-facing runtime symbols into a shared library.
@@ -264,11 +393,13 @@ fn force_host_symbols() -> Vec<String> {
         .collect()
 }
 
-/// Runs the linker driver over `object` plus the runtime archive.
-fn link(
+/// Runs the linker driver over `object` plus the runtime archive and any
+/// selected foreign C archives.
+fn link_with(
     llvm: &LlvmInstallation,
     object: &Path,
     runtime_archive: &Path,
+    foreign_archives: &[PathBuf],
     output: &Path,
     extra: &[String],
 ) -> Result<(), LinkError> {
@@ -282,13 +413,22 @@ fn link(
             path: runtime_archive.to_path_buf(),
         });
     }
+    for archive in foreign_archives {
+        if !archive.is_file() {
+            return Err(LinkError::ForeignArchiveMissing {
+                path: archive.clone(),
+            });
+        }
+    }
 
     let mut command = Command::new(&driver);
-    command
-        .arg(object)
-        .arg(runtime_archive)
-        .arg("-o")
-        .arg(executable);
+    command.arg(object);
+    // The foreign archives precede the runtime archive so an adapter's reference
+    // to a C symbol is satisfied by the archive that defines it.
+    for archive in foreign_archives {
+        command.arg(archive);
+    }
+    command.arg(runtime_archive).arg("-o").arg(executable);
     for argument in extra {
         command.arg(argument);
     }
@@ -373,6 +513,36 @@ fn macos_sysroot() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sidecar_forces_the_marker_string_helpers_and_every_adapter() {
+        // The host resolves each of these by name, and nothing inside the
+        // sidecar references them, so the link must force every one in.
+        let forced = force_foreign_symbols(&["kira_foreign_adapter_0".to_owned()]);
+        let joined = forced.join(" ");
+        for symbol in [
+            kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER,
+            kira_runtime_abi::FOREIGN_STRING_NEW_SYMBOL,
+            kira_runtime_abi::FOREIGN_STRING_FREE_SYMBOL,
+            kira_runtime_abi::FOREIGN_STRING_DATA_SYMBOL,
+            kira_runtime_abi::FOREIGN_STRING_LEN_SYMBOL,
+            "kira_foreign_adapter_0",
+        ] {
+            assert!(joined.contains(symbol), "sidecar must force `{symbol}`");
+        }
+        // Every entry is an undefined-symbol linker flag, never a bare input.
+        for argument in &forced {
+            assert!(argument.starts_with("-Wl,"), "unexpected flag `{argument}`");
+        }
+    }
+
+    #[test]
+    fn a_missing_foreign_archive_names_the_missing_file() {
+        let error = LinkError::ForeignArchiveMissing {
+            path: PathBuf::from("/nowhere/libffimath.a"),
+        };
+        assert!(error.to_string().contains("libffimath.a"));
+    }
 
     #[test]
     fn a_missing_runtime_archive_names_how_to_build_it() {

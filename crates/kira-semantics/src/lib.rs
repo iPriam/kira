@@ -30,6 +30,7 @@ mod decl;
 mod definitions;
 mod enums;
 mod exports;
+mod foreign;
 mod generics;
 mod imports;
 mod operators;

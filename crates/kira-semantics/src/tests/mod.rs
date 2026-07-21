@@ -9,6 +9,7 @@ mod closures;
 mod definitions;
 mod enums;
 mod exports;
+mod foreign;
 mod generics;
 mod imports;
 mod libraries;

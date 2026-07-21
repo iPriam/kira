@@ -7,7 +7,7 @@
 //! [`IrProgram`] is the contract that the program type-checked and has a valid
 //! entrypoint.
 
-use kira_runtime_abi::Execution;
+use kira_runtime_abi::{Execution, ForeignImport};
 use kira_semantics_model::{EnumId, StructId, Type, TypeTable};
 use la_arena::{Arena, Idx};
 
@@ -42,8 +42,25 @@ pub struct IrProgram {
     /// to it or take from it, because whether a function may be exported was
     /// decided in the frontend, above the backend split.
     pub exports: Vec<IrExport>,
+    /// The foreign (`@FFI.Extern`) imports, in declaration order.
+    ///
+    /// An [`IrCallee::Foreign`] indexes this vector. Carried across from the
+    /// HIR unchanged: whether a foreign signature is legal was decided in the
+    /// frontend, above the backend split, so lowering neither adds nor removes
+    /// a row. Empty for a program that declares no extern.
+    pub foreign_imports: Vec<IrForeignImport>,
     /// Arena backing every [`IrExprId`] across all functions.
     pub exprs: Arena<IrExpr>,
+}
+
+/// One foreign C function the program calls through the FFI seam.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IrForeignImport {
+    /// The function's name as the Kira author wrote it, for diagnostics.
+    pub name: String,
+    /// The library, symbol, ABI, and exact-width signature a backend binds and
+    /// calls. The `library` name is what a native-library catalog resolves.
+    pub import: ForeignImport,
 }
 
 /// One function a library offers its consumer.
@@ -481,4 +498,10 @@ pub enum IrCallee {
     Print,
     /// A user function, indexed into [`IrProgram::functions`].
     User(u32),
+    /// A foreign C function, indexed into [`IrProgram::foreign_imports`].
+    ///
+    /// The call site is ordinary Kira. A backend marshals the arguments to the
+    /// import's exact-width signature and invokes the generated adapter (native
+    /// engines) or the host's `call_foreign` (the VM).
+    Foreign(u32),
 }

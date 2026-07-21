@@ -53,6 +53,24 @@ pub enum Type {
     /// Like a struct, an enum is a nominal type: two enums with the same
     /// variants are still distinct, so this compares by [`EnumId`].
     Enum(EnumId),
+    /// An opaque, target-width pointer word (`RawPtr`).
+    ///
+    /// A first-class scalar Kira may store, return, and pass back, but never
+    /// dereferences, does arithmetic on, or frees. It is `Copy` and owns no
+    /// heap. Its only purpose is the C-FFI seam: a foreign call hands one back
+    /// and Kira hands it to a later foreign call unchanged.
+    RawPtr,
+    /// A borrowed, NUL-terminated C string, legal **only** as a foreign
+    /// (`@FFI.Extern`) parameter (`CString`).
+    ///
+    /// It is illegal for a local, a field, an ordinary function
+    /// parameter/result, and a foreign *result* in this slice: returned
+    /// C-string ownership is unspecified. A call may pass a Kira `String` where
+    /// a `CString` parameter is expected — the one explicit `String -> CString`
+    /// coercion — and the caller keeps its `String`. This variant never becomes
+    /// a runtime value: the VM builds a transient C string from the `String` at
+    /// the boundary and frees it before the foreign call returns.
+    CString,
 }
 
 impl Type {
@@ -86,6 +104,13 @@ impl Type {
             "Bool" => Type::Bool,
             "String" => Type::String,
             "Void" => Type::Void,
+            // The C-seam types are builtins by name. `CString`'s seam-only
+            // restriction is enforced by the position that resolves it, not by
+            // hiding the name: a `let x: CString` must resolve and then be
+            // refused with a diagnostic that names `CString`, not fail with an
+            // "unknown type".
+            "RawPtr" => Type::RawPtr,
+            "CString" => Type::CString,
             _ => return None,
         })
     }
@@ -175,7 +200,7 @@ impl Type {
     pub fn is_scalar(self) -> bool {
         matches!(
             self,
-            Type::Int(_) | Type::Float(_) | Type::Bool | Type::Void
+            Type::Int(_) | Type::Float(_) | Type::Bool | Type::Void | Type::RawPtr
         )
     }
 
@@ -206,6 +231,12 @@ impl Type {
             // An expression that already failed to analyze must not also
             // collect an ownership diagnostic on top of its type error.
             Type::Error => true,
+            // A `RawPtr` is an opaque word — copying it copies bits and frees
+            // nothing — so it needs no `move`. A `CString` is borrowed for the
+            // duration of one foreign call and owns nothing either; it is
+            // seam-only, so this arm is rarely reached, but a borrowed value is
+            // trivially copyable by the same logic.
+            Type::RawPtr | Type::CString => true,
             // An enum answers exactly as an array does: not trivially copyable
             // (a named enum local needs `move` into an owned parameter) and yet
             // it moves on bind.
@@ -236,6 +267,8 @@ impl Type {
             | Type::Void
             | Type::Error
             | Type::String
+            | Type::RawPtr
+            | Type::CString
             | Type::Struct(_) => false,
         }
     }

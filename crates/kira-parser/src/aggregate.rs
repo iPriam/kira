@@ -67,7 +67,7 @@ impl Parser<'_> {
                     }
                 }
                 TokenKind::Function => {
-                    if let Some(method) = self.parse_function(false, Execution::Inherited) {
+                    if let Some(method) = self.parse_function(false, Execution::Inherited, false) {
                         methods.push(method);
                     }
                 }
@@ -284,7 +284,8 @@ impl Parser<'_> {
                     }
                 }
                 TokenKind::Function => {
-                    if let Some(function) = self.parse_function(false, Execution::Inherited) {
+                    if let Some(function) = self.parse_function(false, Execution::Inherited, false)
+                    {
                         methods.push(ClassMethod {
                             is_override: false,
                             function,
@@ -393,7 +394,7 @@ impl Parser<'_> {
         self.bump(); // `override`
         match self.current_kind() {
             TokenKind::Function => {
-                if let Some(function) = self.parse_function(false, Execution::Inherited) {
+                if let Some(function) = self.parse_function(false, Execution::Inherited, false) {
                     methods.push(ClassMethod {
                         is_override: true,
                         function,

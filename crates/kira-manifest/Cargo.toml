@@ -12,3 +12,9 @@ workspace = true
 # The declaration loader returns a typed error, which is this workspace's rule
 # for any fallible function crossing a crate boundary.
 thiserror.workspace = true
+# The native-library model this crate parses `NativeLibs/*.toml` into.
+kira-native-lib-definition.workspace = true
+# `NativeLibs/*.toml` is a package manifest, so it goes through the workspace's
+# real TOML parser rather than ad-hoc slicing.
+toml.workspace = true
+serde.workspace = true

@@ -16,6 +16,8 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 mod exports;
+mod ffi;
+mod ffi_wasm;
 mod foundation;
 mod installed_toolchain;
 mod modules;

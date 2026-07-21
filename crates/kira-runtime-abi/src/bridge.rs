@@ -107,6 +107,12 @@ impl BridgeValueTag {
     /// for the same reason; it is defined here once so the two can never
     /// disagree.
     pub const HANDLE: BridgeValueTag = BridgeValueTag(8);
+
+    /// An opaque target-width pointer word used only by foreign calls.
+    ///
+    /// The payload carries the pointer bits zero-extended to 64 bits. Kira never
+    /// dereferences, performs arithmetic on, or frees the pointer.
+    pub const RAW_PTR: BridgeValueTag = BridgeValueTag(9);
 }
 
 /// One Kira value crossing the runtime/native boundary.
@@ -153,6 +159,11 @@ pub enum BridgeData {
     /// [`BridgeValueTag::HANDLE`]); nothing here reads it, and a receiver that
     /// cannot resolve it reports that rather than guessing.
     Handle(u64),
+    /// An opaque target-width pointer word.
+    ///
+    /// Every bit pattern, including null, is data. The receiving side never
+    /// dereferences or frees it.
+    RawPtr(u64),
 }
 
 impl BridgeValue {
@@ -191,6 +202,7 @@ impl BridgeValue {
             BridgeData::Bool(value) => (BridgeValueTag::BOOL, u64::from(value)),
             BridgeData::String(handle) => (BridgeValueTag::STRING, handle),
             BridgeData::Handle(handle) => (BridgeValueTag::HANDLE, handle),
+            BridgeData::RawPtr(pointer) => (BridgeValueTag::RAW_PTR, pointer),
         };
         BridgeValue {
             tag,
@@ -216,6 +228,9 @@ impl BridgeValue {
             // side is not the one that can tell a live handle from a stale one,
             // and the side that can rejects an unknown one by name.
             BridgeValueTag::HANDLE => BridgeData::Handle(self.payload),
+            // Pointer bits are opaque and null is valid. Width checking belongs
+            // to the native caller, which knows the target pointer width.
+            BridgeValueTag::RAW_PTR => BridgeData::RawPtr(self.payload),
             _ => return None,
         })
     }
@@ -259,6 +274,8 @@ mod tests {
             BridgeData::Handle(0),
             BridgeData::Handle(1),
             BridgeData::Handle(u64::MAX),
+            BridgeData::RawPtr(0),
+            BridgeData::RawPtr(0x0123_4567_89ab_cdef),
         ] {
             let encoded = BridgeValue::encode(data);
             assert_eq!(
@@ -320,6 +337,7 @@ mod tests {
         assert_eq!(BridgeValueTag::ARRAY.0, 6);
         assert_eq!(BridgeValueTag::ENUM.0, 7);
         assert_eq!(BridgeValueTag::HANDLE.0, 8);
+        assert_eq!(BridgeValueTag::RAW_PTR.0, 9);
     }
 
     /// A handle is written as tag 8 with the producer's word in the payload,
@@ -348,12 +366,21 @@ mod tests {
         }
     }
 
-    /// The tag next to `HANDLE` is still unassigned, and an artifact naming it
-    /// must be rejected rather than read as a handle whose number drifted.
+    /// Raw pointers append after handles and preserve every payload bit.
     #[test]
-    fn the_tag_after_handle_is_still_unknown() {
+    fn a_raw_pointer_encodes_as_tag_nine() {
+        let value = BridgeValue::encode(BridgeData::RawPtr(0x0123_4567_89ab_cdef));
+        assert_eq!(value.tag, BridgeValueTag::RAW_PTR);
+        assert_eq!(value.tag.0, 9);
+        assert_eq!(value.payload, 0x0123_4567_89ab_cdef);
+        assert_eq!(value.decode(), Some(BridgeData::RawPtr(value.payload)));
+    }
+
+    /// The tag after `RAW_PTR` remains unknown and must be rejected.
+    #[test]
+    fn tag_ten_is_rejected() {
         let value = BridgeValue {
-            tag: BridgeValueTag(9),
+            tag: BridgeValueTag(10),
             reserved: [0; 7],
             payload: 1,
         };

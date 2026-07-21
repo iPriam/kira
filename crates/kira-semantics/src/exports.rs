@@ -238,6 +238,25 @@ impl Analyzer<'_> {
             | Type::String
             | Type::Void
             | Type::Error => true,
+            // The C-seam types belong to the `@FFI.Extern` import direction, not
+            // the `@Export` boundary: `RawPtr` is an opaque host word Kira never
+            // interprets, and `CString` is borrowed C storage with no owned
+            // representation. Neither is part of the surface a consumer's wrapper
+            // is generated against, so both are refused here. (A written
+            // `CString` in an ordinary position is already `Error` by `KSEM176`,
+            // so only `RawPtr` reaches this arm in practice.)
+            Type::RawPtr | Type::CString => {
+                self.emit(
+                    span,
+                    "KSEM186",
+                    format!(
+                        "`{name}` cannot cross the export boundary: `RawPtr` and \
+                         `CString` are `@FFI.Extern` seam types for calling *into* C, \
+                         not part of a library's exported surface."
+                    ),
+                );
+                false
+            }
             Type::Array(_) => {
                 self.emit(
                     span,

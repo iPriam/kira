@@ -7,7 +7,7 @@
 //! are scoped to their owning function.
 
 use crate::ty::{EnumId, StructId, Type, TypeTable};
-use kira_runtime_abi::Execution;
+use kira_runtime_abi::{Execution, ForeignAbi, ForeignSignature};
 use kira_source::Span;
 use kira_syntax_model::ownership::OwnershipMode;
 use la_arena::{Arena, Idx};
@@ -24,6 +24,14 @@ pub struct FuncId(pub u32);
 /// Index of a local (parameter or `let`/`var` binding) within a function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LocalId(pub u32);
+
+/// Index of a foreign callable within a [`HirProgram`]'s foreign registry.
+///
+/// A bodyless `@FFI.Extern` declaration is **never** a [`HirFunction`] with an
+/// empty body: it is a row in [`HirProgram::foreign`], and a call to it names
+/// this id through [`Callee::Foreign`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ForeignId(pub u32);
 
 /// A fully analyzed program.
 ///
@@ -50,10 +58,39 @@ pub struct HirProgram {
     /// compile error, and recording it would hand a backend a signature the
     /// frontend already rejected.
     pub exports: Vec<HirExport>,
+    /// The foreign-callable registry, in declaration order.
+    ///
+    /// One row per `@FFI.Extern` declaration that passed every signature and
+    /// annotation check. A [`Callee::Foreign`] indexes this vector; a refused
+    /// extern is a compile error and is never recorded, so a backend only ever
+    /// sees a signature the frontend accepted.
+    pub foreign: Vec<HirForeign>,
     /// Arena backing every [`HirExprId`].
     pub exprs: Arena<HirExpr>,
     /// Arena backing every [`HirStmtId`].
     pub stmts: Arena<HirStmt>,
+}
+
+/// One `@FFI.Extern` foreign callable: a C symbol Kira calls seamlessly.
+///
+/// New Kira design: the oracle has no foreign-call concept. The record carries
+/// everything a backend needs to bind and call the C symbol — library, symbol,
+/// ABI, and the exact-width [`ForeignSignature`] — resolved once here so every
+/// engine (VM, LLVM/native, hybrid) consumes the same row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirForeign {
+    /// The function's name as the Kira author wrote it.
+    pub kira_name: String,
+    /// The native-library name from the annotation's `library` field.
+    pub library: String,
+    /// The C symbol from the annotation's `symbol` field.
+    pub symbol: String,
+    /// The declared ABI (only [`ForeignAbi::C`] in this slice).
+    pub abi: ForeignAbi,
+    /// The exact-width parameter and result types.
+    pub signature: ForeignSignature,
+    /// Span of the function's name, for diagnostics.
+    pub name_span: Span,
 }
 
 /// One function a library offers its consumer.
@@ -427,6 +464,12 @@ pub enum Callee {
     Builtin(Builtin),
     /// A user-defined function.
     User(FuncId),
+    /// A foreign C function, indexed into [`HirProgram::foreign`].
+    ///
+    /// The call site is ordinary Kira — no `@Native`, no ceremony — and the
+    /// registry row carries the exact-width signature the call was checked
+    /// against.
+    Foreign(ForeignId),
 }
 
 /// The builtins the v0 subset provides.

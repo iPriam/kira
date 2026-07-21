@@ -74,6 +74,10 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.push(o::CALL_NATIVE);
             out.extend_from_slice(&id.to_le_bytes());
         }
+        Instruction::CallForeign(id) => {
+            out.push(o::CALL_FOREIGN);
+            out.extend_from_slice(&id.to_le_bytes());
+        }
         Instruction::NewStruct(fields) => {
             out.push(o::NEW_STRUCT);
             out.extend_from_slice(&fields.to_le_bytes());
@@ -233,6 +237,7 @@ impl Cursor<'_> {
             o::JUMP_IF_FALSE => Instruction::JumpIfFalse(u32::from_le_bytes(self.take()?)),
             o::CALL => Instruction::Call(u32::from_le_bytes(self.take()?)),
             o::CALL_NATIVE => Instruction::CallNative(u32::from_le_bytes(self.take()?)),
+            o::CALL_FOREIGN => Instruction::CallForeign(u32::from_le_bytes(self.take()?)),
             o::NEW_STRUCT => Instruction::NewStruct(u16::from_le_bytes(self.take()?)),
             o::GET_FIELD => Instruction::GetField(u16::from_le_bytes(self.take()?)),
             o::STORE_FIELD => {

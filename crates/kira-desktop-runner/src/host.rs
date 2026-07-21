@@ -321,6 +321,7 @@ mod tests {
     fn printing_module() -> Module {
         Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             main: Some(0),
             strings: vec!["from the bundle".to_owned()],
             functions: vec![FuncProto {
@@ -667,6 +668,7 @@ mod tests {
         let mut host = DesktopHost::new(dir.0.clone());
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             main: Some(0),
             strings: Vec::new(),
             functions: vec![FuncProto {

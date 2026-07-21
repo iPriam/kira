@@ -31,11 +31,13 @@ use std::path::{Path, PathBuf};
 use kira_bytecode::module::Module;
 use kira_hybrid_definition::HybridManifest;
 use kira_runtime_abi::{
-    BridgeValue, Execution, HostCapabilities, NativeArg, NativeCallError, NativeResult,
+    BridgeValue, Execution, ForeignArg, ForeignCallError, ForeignResult, HostCapabilities,
+    NativeArg, NativeCallError, NativeResult,
 };
 use kira_vm_runtime::Program;
 
 use crate::error::HybridError;
+use crate::foreign;
 use crate::library::NativeLibrary;
 use crate::marshal::{self, OwnedArg};
 use crate::validate;
@@ -85,7 +87,7 @@ impl Session {
         validate::bundle(&manifest, &module)?;
 
         let program = Program::load(module).map_err(HybridError::Program)?;
-        let library = NativeLibrary::load(&library_path, &manifest.functions)?;
+        let library = NativeLibrary::load(&library_path, &manifest.functions, &manifest.foreign)?;
 
         Ok(Session {
             manifest,
@@ -165,6 +167,31 @@ impl Session {
         unsafe { marshal::lift_result(&self.library, out) }
             .map_err(|_| NativeCallError::MalformedResult(function_id))
     }
+
+    /// Calls one foreign adapter: the runtime-half `CALL_FOREIGN` direction.
+    ///
+    /// The adapter lives in the same native half the trampolines do, so this
+    /// reaches the one copy of the C library rather than opening a second one.
+    /// The import's signature comes from the manifest's foreign table, which the
+    /// bundle validation proved matches the bytecode.
+    fn call_foreign(
+        &self,
+        foreign_id: u32,
+        args: &[ForeignArg<'_>],
+    ) -> Result<ForeignResult, ForeignCallError> {
+        let adapter = self
+            .library
+            .adapter(foreign_id)
+            .ok_or(ForeignCallError::NoForeignHost)?;
+        let import = self
+            .manifest
+            .foreign
+            .get(foreign_id as usize)
+            .ok_or(ForeignCallError::NoForeignHost)?;
+        // SAFETY: the adapter is this library's, bound by import id, and the
+        // signature is the manifest row for that same id.
+        unsafe { foreign::call_adapter(&self.library, adapter, &import.signature, args) }
+    }
 }
 
 /// A [`HostCapabilities`] over a shared session.
@@ -190,6 +217,14 @@ impl HostCapabilities for Host<'_> {
         args: &[NativeArg<'_>],
     ) -> Result<NativeResult, NativeCallError> {
         self.session.call_native(function_id, args)
+    }
+
+    fn call_foreign(
+        &mut self,
+        foreign_id: u32,
+        args: &[ForeignArg<'_>],
+    ) -> Result<ForeignResult, ForeignCallError> {
+        self.session.call_foreign(foreign_id, args)
     }
 }
 

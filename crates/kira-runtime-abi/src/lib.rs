@@ -19,11 +19,18 @@
 pub mod bridge;
 pub mod enum_payload;
 pub mod execution;
+pub mod foreign;
 pub mod ownership;
 
 pub use bridge::{BridgeData, BridgeValue, BridgeValueTag};
 pub use enum_payload::EnumPayloadKind;
 pub use execution::Execution;
+pub use foreign::{
+    FOREIGN_ADAPTER_ABI_MARKER, FOREIGN_ADAPTER_ABI_VERSION, FOREIGN_STRING_DATA_SYMBOL,
+    FOREIGN_STRING_FREE_SYMBOL, FOREIGN_STRING_LEN_SYMBOL, FOREIGN_STRING_NEW_SYMBOL, ForeignAbi,
+    ForeignAdapterFn, ForeignAdapterStatus, ForeignArg, ForeignCallError, ForeignImport,
+    ForeignResult, ForeignSignature, ForeignType,
+};
 pub use ownership::Ownership;
 
 /// The version of the `kira_rt_*` native runtime contract.
@@ -106,6 +113,11 @@ pub enum NativeArg<'a> {
     /// export boundary, and the VM grows a handle representation with the
     /// persistent instance, not here.
     Handle(u64),
+    /// An opaque target-width pointer word.
+    ///
+    /// Kira may store and pass this word back, but never dereferences, performs
+    /// arithmetic on, or frees it.
+    RawPtr(u64),
 }
 
 /// What a native function returned to the VM.
@@ -130,6 +142,10 @@ pub enum NativeResult {
     /// stays where it was allocated and exactly one generated destructor frees
     /// it. What moves is the right to name it. See [`NativeArg::Handle`].
     Handle(u64),
+    /// An opaque target-width pointer word.
+    ///
+    /// Returning it transfers no ownership and installs no destructor.
+    RawPtr(u64),
 }
 
 /// Why a call into native code could not be made.
@@ -194,6 +210,19 @@ pub trait HostCapabilities {
         let _ = (function_id, args);
         Err(NativeCallError::NoNativeHalf)
     }
+
+    /// Runs the generated adapter for `foreign_id`.
+    ///
+    /// The default refuses so the portable VM never acquires a dynamic-loading
+    /// dependency and embedders opt into foreign access explicitly.
+    fn call_foreign(
+        &mut self,
+        foreign_id: u32,
+        args: &[ForeignArg<'_>],
+    ) -> Result<ForeignResult, ForeignCallError> {
+        let _ = (foreign_id, args);
+        Err(ForeignCallError::NoForeignHost)
+    }
 }
 
 /// A [`HostCapabilities`] implementation that records every line in memory.
@@ -244,5 +273,14 @@ mod tests {
         host.write_line("second");
         assert_eq!(host.lines(), ["first".to_owned(), "second".to_owned()]);
         assert_eq!(host.into_output(), "first\nsecond\n");
+    }
+
+    #[test]
+    fn host_capabilities_refuses_foreign_calls_by_default() {
+        let mut host = CapturingHost::new();
+        assert_eq!(
+            host.call_foreign(0, &[ForeignArg::I32(7)]),
+            Err(ForeignCallError::NoForeignHost)
+        );
     }
 }

@@ -31,6 +31,10 @@ pub use interp::{Program, RunOutcome, execute};
 pub use value::{Heap, HeapStats, StrId, Value};
 
 #[cfg(test)]
+#[path = "foreign_tests.rs"]
+mod foreign_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use kira_bytecode::module::{FuncProto, Module};
@@ -107,6 +111,7 @@ mod tests {
         shout.execution = kira_runtime_abi::Execution::Native;
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![main, shout],
             main: Some(0),
             strings: vec!["hi".to_owned()],
@@ -136,6 +141,7 @@ mod tests {
         );
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![func("main", 0, 0, vec![I::ReturnVoid]), greet],
             main: Some(0),
             strings: vec!["hi, ".to_owned()],
@@ -170,6 +176,7 @@ mod tests {
 
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![
                 func("main", 0, 0, vec![I::ReturnVoid]),
                 func("takes_one", 1, 1, vec![I::ReturnVoid]),
@@ -201,6 +208,7 @@ mod tests {
         native.execution = kira_runtime_abi::Execution::Native;
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![func("main", 0, 0, vec![I::ReturnVoid]), native],
             main: Some(0),
             strings: Vec::new(),
@@ -219,6 +227,7 @@ mod tests {
     fn a_host_call_with_the_wrong_arity_is_rejected() {
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![
                 func("main", 0, 0, vec![I::ReturnVoid]),
                 func("takes_one", 1, 1, vec![I::ReturnVoid]),
@@ -251,6 +260,7 @@ mod tests {
         native.execution = kira_runtime_abi::Execution::Native;
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![main, native],
             main: Some(0),
             strings: vec![],
@@ -272,6 +282,7 @@ mod tests {
         native.execution = kira_runtime_abi::Execution::Native;
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![main, native],
             main: Some(0),
             strings: vec![],
@@ -310,6 +321,7 @@ mod tests {
         );
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![main],
             main: Some(0),
             strings: vec![],
@@ -354,6 +366,7 @@ mod tests {
         );
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![main],
             main: Some(0),
             strings: vec![],
@@ -398,6 +411,7 @@ mod tests {
         );
         Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![main, fib],
             main: Some(0),
             strings: vec![],
@@ -433,6 +447,7 @@ mod tests {
         );
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![main],
             main: Some(0),
             strings: vec!["foo".to_owned(), "bar".to_owned()],
@@ -463,6 +478,7 @@ mod tests {
         );
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![main],
             main: Some(0),
             strings: vec![],
@@ -480,6 +496,7 @@ mod tests {
             // Empty code.
             Module {
                 exports: Default::default(),
+                foreign_imports: Vec::new(),
                 functions: vec![func("main", 0, 0, vec![])],
                 main: Some(0),
                 strings: vec![],
@@ -487,6 +504,7 @@ mod tests {
             // Falls off the end (not return-terminated).
             Module {
                 exports: Default::default(),
+                foreign_imports: Vec::new(),
                 functions: vec![func("main", 0, 0, vec![I::ConstInt(1)])],
                 main: Some(0),
                 strings: vec![],
@@ -494,6 +512,7 @@ mod tests {
             // ConstStr into an empty pool.
             Module {
                 exports: Default::default(),
+                foreign_imports: Vec::new(),
                 functions: vec![func("main", 0, 0, vec![I::ConstStr(3), I::ReturnVoid])],
                 main: Some(0),
                 strings: vec![],
@@ -501,6 +520,7 @@ mod tests {
             // LoadLocal beyond local_count.
             Module {
                 exports: Default::default(),
+                foreign_imports: Vec::new(),
                 functions: vec![func("main", 0, 1, vec![I::LoadLocal(9), I::ReturnVoid])],
                 main: Some(0),
                 strings: vec![],
@@ -508,6 +528,7 @@ mod tests {
             // More parameters than locals (fill_params would underflow slots).
             Module {
                 exports: Default::default(),
+                foreign_imports: Vec::new(),
                 functions: vec![func("main", 2, 0, vec![I::ReturnVoid])],
                 main: Some(0),
                 strings: vec![],
@@ -515,6 +536,7 @@ mod tests {
             // Entrypoint out of range.
             Module {
                 exports: Default::default(),
+                foreign_imports: Vec::new(),
                 functions: vec![func("main", 0, 0, vec![I::ReturnVoid])],
                 main: Some(7),
                 strings: vec![],
@@ -550,6 +572,7 @@ mod tests {
         );
         let module = Module {
             exports: Default::default(),
+            foreign_imports: Vec::new(),
             functions: vec![main],
             main: Some(0),
             strings: vec!["a".to_owned(), "bb".to_owned()],
