@@ -538,6 +538,14 @@ impl Codegen<'_> {
             match result {
                 // Every integer width and a `RawPtr` are an `i64` Kira value; the
                 // adapter already extended the C result into the payload.
+                //
+                // NOTE: the Rust seams (`foreign::check_pointer_width`,
+                // `kira-dynamic-ffi`, `kira-hybrid-runtime`) reject a `RawPtr`
+                // word with bits set above the target pointer width; this native
+                // read does not. A no-op on 64-bit hosts (the only supported
+                // targets today, where the payload width equals the pointer
+                // width). When a 32-bit target is added, mirror that width check
+                // here so both seams encode the identical contract.
                 ForeignType::I8
                 | ForeignType::I16
                 | ForeignType::I32

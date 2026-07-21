@@ -116,6 +116,12 @@ impl Codegen<'_> {
     }
 
     /// Writes `value` into the `BridgeValue` at `slot`, tagged for `ty`.
+    ///
+    /// The write itself goes through [`Codegen::store_bridge`], the one routine
+    /// that lays down all three fields — tag, zeroed reserved bytes, payload — so
+    /// the `@Native` seam and the foreign seam cannot drift on the must-be-zero
+    /// reserved invariant. This routine's only added job is turning a typed
+    /// `value` into the one payload word `ty` encodes into.
     pub(super) fn write_bridge_value(
         &self,
         slot: LLVMValueRef,
@@ -124,11 +130,10 @@ impl Codegen<'_> {
     ) -> Result<(), LlvmError> {
         let types = self.types;
         let (tag, payload) = bridge_tag_of(ty)?;
-        // SAFETY: `slot` points at a writable `BridgeValue`, and the builder is
-        // on a live block.
-        unsafe {
-            let payload = match payload {
-                // Void carries no payload; zero keeps the reserved word defined.
+        // SAFETY: `value` has `ty`'s LLVM type and the builder is on a live block.
+        let payload = unsafe {
+            match payload {
+                // Void carries no payload; an explicit zero word keeps it defined.
                 None => LLVMConstInt(types.i64, 0, 0),
                 Some(PayloadForm::AsIs) => value,
                 Some(PayloadForm::FloatBits) => {
@@ -140,28 +145,58 @@ impl Codegen<'_> {
                 Some(PayloadForm::PointerBits) => {
                     LLVMBuildPtrToInt(self.builder, value, types.i64, c"ret.handle".as_ptr())
                 }
-            };
-            let tag_ptr = LLVMBuildStructGEP2(
-                self.builder,
-                types.bridge_value,
-                slot,
-                0,
-                c"ret.tag.ptr".as_ptr(),
-            );
-            LLVMBuildStore(
-                self.builder,
-                LLVMConstInt(types.i8, u64::from(tag), 0),
-                tag_ptr,
-            );
-            let payload_ptr = LLVMBuildStructGEP2(
-                self.builder,
-                types.bridge_value,
-                slot,
-                2,
-                c"ret.payload.ptr".as_ptr(),
-            );
-            LLVMBuildStore(self.builder, payload, payload_ptr);
-        }
+            }
+        };
+        self.store_bridge(slot, tag, payload);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kira_runtime_abi::Execution;
+    use kira_semantics_model::Type;
+    use kira_semantics_model::hir::{HirExpr, HirFunction, HirProgram, HirStmt};
+    use kira_source::Span;
+
+    use crate::codegen::Module;
+
+    /// A `@Native` function's host trampoline packs its return value into a
+    /// `BridgeValue` that lives in an alloca, so the reserved gap starts as stack
+    /// garbage. The must-be-zero reserved invariant only holds if the trampoline
+    /// zeroes it before the value crosses `extern "C"`. `write_bridge_value`
+    /// writes through `store_bridge`, the one routine that zeroes reserved; this
+    /// pins that the `@Native` seam actually emits that store.
+    #[test]
+    fn a_native_trampoline_zeroes_the_bridge_value_reserved_bytes() {
+        let mut program = HirProgram::default();
+        let value = program.exprs.alloc(HirExpr::Int(42));
+        let ret = program.stmts.alloc(HirStmt::Return { value: Some(value) });
+        program.functions.push(HirFunction {
+            name: "answer".to_owned(),
+            param_count: 0,
+            return_type: Type::INT,
+            locals: Vec::new(),
+            body: vec![ret],
+            is_main: false,
+            execution: Execution::Native,
+            name_span: Span::new(0, 6),
+        });
+        let ir = kira_ir::lower(&program);
+
+        let module = Module::build_hybrid(&ir, "reserved_probe").expect("the hybrid half builds");
+        let dir = std::env::temp_dir().join(format!("kira-bridge-reserved-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the temp dir is creatable");
+        let ir_path = dir.join("reserved_probe.ll");
+        module.write_ir(&ir_path).expect("the IR is emitted");
+        let text = std::fs::read_to_string(&ir_path).expect("the IR is readable");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // `LLVMConstNull` of `[7 x i8]` prints as `zeroinitializer`; its store is
+        // the reserved-bytes write the trampoline must emit.
+        assert!(
+            text.contains("store [7 x i8] zeroinitializer"),
+            "the @Native trampoline must zero the BridgeValue reserved bytes; IR:\n{text}"
+        );
     }
 }
