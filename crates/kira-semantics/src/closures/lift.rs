@@ -49,6 +49,7 @@ impl Analyzer<'_> {
                 result,
                 dispatcher: None,
                 impls: Vec::new(),
+                named_functions: std::collections::HashMap::new(),
             },
         );
         Type::Struct(id)
@@ -135,6 +136,158 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         }
         self.lift_closure(ctx, repr, &param_types, result, params, body)
+    }
+
+    /// Resolves a bare function name as a first-class function value.
+    ///
+    /// A local or field of the same name has already won before this is called.
+    /// With an expected function type, the named function must match it exactly;
+    /// without one, its signature supplies the function value's type.
+    pub(crate) fn analyze_named_function_reference(
+        &mut self,
+        name: &str,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Option<HirExprId> {
+        let (target, params, result) = self
+            .lookup_function(name)
+            .map(|(id, params, result)| (id, params.to_vec(), result))?;
+        let repr = match expected {
+            Some(Type::Struct(id)) if self.fn_types.get(id).is_some() => {
+                let matches = self
+                    .fn_types
+                    .get(id)
+                    .is_some_and(|info| info.params == params && info.result == result);
+                if !matches {
+                    self.emit(
+                        span,
+                        "KSEM212",
+                        format!(
+                            "function `{name}` has type `{}`, which does not match expected `{}`",
+                            self.function_type_name(&params, result),
+                            self.type_name(Type::Struct(id))
+                        ),
+                    );
+                    return Some(self.program.exprs.alloc(HirExpr::Error));
+                }
+                id
+            }
+            Some(Type::Error) => return Some(self.program.exprs.alloc(HirExpr::Error)),
+            Some(expected) => {
+                self.emit(
+                    span,
+                    "KSEM212",
+                    format!(
+                        "function `{name}` is a function value, but `{}` is expected here",
+                        self.type_name(expected)
+                    ),
+                );
+                return Some(self.program.exprs.alloc(HirExpr::Error));
+            }
+            None => match self.function_type(params.clone(), result) {
+                Type::Struct(id) => id,
+                _ => return Some(self.program.exprs.alloc(HirExpr::Error)),
+            },
+        };
+        self.link_function(target, span);
+        Some(self.named_function_value(repr, target, name, &params, result))
+    }
+
+    /// Builds or reuses one named function's tag and returns its function value.
+    fn named_function_value(
+        &mut self,
+        repr: StructId,
+        target: FuncId,
+        name: &str,
+        params: &[Type],
+        result: Type,
+    ) -> HirExprId {
+        let tag = match self
+            .fn_types
+            .get(repr)
+            .and_then(|info| info.named_functions.get(&target))
+            .copied()
+        {
+            Some(tag) => tag,
+            None => {
+                let tag = self
+                    .fn_types
+                    .get(repr)
+                    .map_or(0, |info| info.impls.len() as u32);
+                let wrapper = self.named_function_wrapper(repr, target, name, params, result, tag);
+                if let Some(info) = self.fn_types.get_mut(repr) {
+                    info.impls.push(ClosureImpl { function: wrapper });
+                    info.named_functions.insert(target, tag);
+                }
+                tag
+            }
+        };
+        let tag_expr = self.program.exprs.alloc(HirExpr::Int(i64::from(tag)));
+        let expr = self.program.exprs.alloc(HirExpr::StructNew {
+            struct_id: repr,
+            fields: vec![tag_expr],
+        });
+        self.closure_sites.push(ClosureSite {
+            expr,
+            repr,
+            tag,
+            capture_fields: Vec::new(),
+            capture_values: Vec::new(),
+        });
+        expr
+    }
+
+    /// Synthesizes the environment-taking adapter the closure dispatcher calls.
+    fn named_function_wrapper(
+        &mut self,
+        repr: StructId,
+        target: FuncId,
+        name: &str,
+        params: &[Type],
+        result: Type,
+        tag: u32,
+    ) -> FuncId {
+        let wrapper = self.reserve_synth();
+        let mut ctx = FnCtx::new(result);
+        ctx.declare_hidden(Type::Struct(repr), false);
+        let mut args = Vec::with_capacity(params.len());
+        for &ty in params {
+            let local = ctx.declare_hidden(ty, false);
+            args.push(self.program.exprs.alloc(HirExpr::Local { local, ty }));
+        }
+        let call = self.program.exprs.alloc(HirExpr::Call {
+            callee: kira_semantics_model::hir::Callee::User(target),
+            args,
+            ty: result,
+            writeback: None,
+        });
+        let body = if result == Type::Void {
+            vec![
+                self.program.stmts.alloc(HirStmt::Expr { expr: call }),
+                self.program.stmts.alloc(HirStmt::Return { value: None }),
+            ]
+        } else {
+            vec![
+                self.program
+                    .stmts
+                    .alloc(HirStmt::Return { value: Some(call) }),
+            ]
+        };
+        self.fill_synth(
+            wrapper,
+            HirFunction {
+                name: format!("{name}$reference#{tag}"),
+                param_count: 1 + params.len() as u32,
+                return_type: result,
+                locals: ctx.locals,
+                body,
+                is_main: false,
+                execution: kira_semantics_model::Execution::Inherited,
+                mutates_self: false,
+                name_span: Span::new(0, 0),
+            },
+        );
+        wrapper
     }
 
     /// Lifts one closure literal to a top-level function and builds its value.

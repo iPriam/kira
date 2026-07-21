@@ -317,18 +317,8 @@ impl Analyzer<'_> {
                 fields.push(value);
                 continue;
             }
-            match self.field_default(id, index) {
-                Some(default) => {
-                    let declared = self
-                        .program
-                        .types
-                        .structs()
-                        .get(id)
-                        .and_then(|def| def.field(index))
-                        .map(|field| field.ty);
-                    let value = self.analyze_default(default, declared);
-                    fields.push(value);
-                }
+            match self.resolve_field_default(id, index) {
+                Some(default) => fields.push(default),
                 None if is_c_layout => {
                     fields.push(self.ffi_zero_field(id, index, name_span));
                 }

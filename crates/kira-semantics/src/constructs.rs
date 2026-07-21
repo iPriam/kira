@@ -30,7 +30,7 @@ use kira_semantics_model::{FieldDef, StructDef, StructId, Type};
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{CallArg, ConstructDecl, ConstructKind, Item};
 
-use crate::analyze::{Analyzer, FnCtx};
+use crate::analyze::{Analyzer, FieldDefault, FnCtx};
 
 /// Everything analysis remembers about one construct-backed declaration beyond
 /// its struct shape.
@@ -177,7 +177,11 @@ impl<'a> Analyzer<'a> {
                 ty,
                 mutable: false,
             });
-            defaults.push(field.default);
+            defaults.push(
+                field
+                    .default
+                    .map(|syntax| FieldDefault::new(syntax, self.source)),
+            );
         }
         // Computed and function members share the member namespace; a name that
         // collides with a field is a duplicate.
@@ -485,8 +489,8 @@ impl<'a> Analyzer<'a> {
             if initializers[index].is_some() {
                 continue;
             }
-            let filled = match self.field_default(id, index as u32) {
-                Some(default) => self.analyze_expr(ctx, default),
+            let filled = match self.resolve_field_default(id, index as u32) {
+                Some(default) => default,
                 None => {
                     let field = self
                         .program

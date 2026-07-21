@@ -16,6 +16,34 @@ fn a_function_type_checks_in_every_position() {
 }
 
 #[test]
+fn a_named_function_is_a_function_value() {
+    assert!(
+        codes(
+            "function double(value: Int) -> Int { return value * 2 }\n\
+             function apply(f: borrow (Int) -> Int, value: Int) -> Int { return f(value) }\n\
+             @Main function main() {\n\
+                 let inferred = double\n\
+                 let explicit: (Int) -> Int = double\n\
+                 print(apply(inferred, 20) + explicit(1))\n\
+                 return\n\
+             }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_named_function_must_match_its_expected_type() {
+    assert_eq!(
+        codes(
+            "function text() -> String { return \"no\" }\n\
+             @Main function main() { let value: () -> Int = text print(value()) return }"
+        ),
+        vec!["KSEM212"]
+    );
+}
+
+#[test]
 fn a_closure_with_no_expected_type_is_refused() {
     // Nothing at a `print` argument says what the parameters are, so there is
     // no signature to check the body against — and guessing one is exactly what

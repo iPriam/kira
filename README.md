@@ -709,6 +709,12 @@ A function type is written after `:` on a declaration that returns one, because
 `->` would be ambiguous with the function type's own arrow. Both spellings stay
 valid for every other result type.
 
+A top-level function name is a function value too. An expected function type
+checks its parameter and result types exactly; without an expectation, the
+function's signature supplies the type. A mismatch is `KSEM212`. Named functions
+use the same synthesized representation and dispatcher as closure literals, with
+an environment-free adapter as their dispatcher arm.
+
 **A closure costs no opcode, no IR node, and no backend code.** A function type
 becomes a synthesized struct — a tag plus the captures of every literal of that
 type — a literal becomes a lifted top-level function plus a value of that
