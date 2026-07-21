@@ -30,8 +30,11 @@ pub(crate) struct Types {
     pub(super) void: LLVMTypeRef,
     pub(super) i1: LLVMTypeRef,
     pub(super) i8: LLVMTypeRef,
+    pub(super) i16: LLVMTypeRef,
     pub(super) i32: LLVMTypeRef,
     pub(super) i64: LLVMTypeRef,
+    /// A 32-bit IEEE float, used only at the foreign C boundary for `F32`.
+    pub(super) f32: LLVMTypeRef,
     pub(super) f64: LLVMTypeRef,
     /// The opaque pointer every `String` handle is.
     pub(super) ptr: LLVMTypeRef,
@@ -51,8 +54,10 @@ impl Types {
                 void: LLVMVoidTypeInContext(context),
                 i1: LLVMInt1TypeInContext(context),
                 i8: LLVMInt8TypeInContext(context),
+                i16: LLVMInt16TypeInContext(context),
                 i32: LLVMInt32TypeInContext(context),
                 i64: LLVMInt64TypeInContext(context),
+                f32: LLVMFloatTypeInContext(context),
                 f64: LLVMDoubleTypeInContext(context),
                 ptr: LLVMPointerTypeInContext(context, 0),
                 bridge_value: bridge_value_type(context),
@@ -95,9 +100,21 @@ pub(crate) struct Runtime {
     /// whatever the instance inside it owned.
     pub(super) box_free: Callable,
     pub(super) trap_div_zero: Callable,
+    /// `kira_rt_trap_foreign`: how a generated adapter's non-success status
+    /// becomes a native trap at a foreign call site.
+    pub(super) trap_foreign: Callable,
     /// The version marker every emitted program references; see
     /// [`kira_runtime_abi::RUNTIME_ABI_MARKER`].
     pub(super) abi_marker: Callable,
+    /// The foreign-adapter version marker every generated adapter references, so
+    /// a stale sidecar fails to link by name; see
+    /// [`kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER`].
+    pub(super) foreign_marker: Callable,
+    /// `kira_rt_cstring_new`: builds transient NUL-terminated C storage from a
+    /// Kira string handle for one foreign call (null on interior NUL).
+    pub(super) cstring_new: Callable,
+    /// `kira_rt_cstring_free`: frees the storage `kira_rt_cstring_new` produced.
+    pub(super) cstring_free: Callable,
     /// `kira_hybrid_call_runtime`: how native code reaches the VM half.
     pub(super) call_runtime: Callable,
 }
@@ -194,7 +211,14 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             box_new: declare(c"kira_rt_box_new", types.ptr, &mut [types.i64]),
             box_free: declare(c"kira_rt_box_free", types.void, &mut [types.ptr, types.i64]),
             trap_div_zero: declare(c"kira_rt_trap_div_zero", types.void, &mut []),
+            trap_foreign: declare(c"kira_rt_trap_foreign", types.void, &mut [types.i32]),
             abi_marker: declare(&abi_marker_symbol(), types.void, &mut []),
+            // Appended after the runtime marker; the foreign helpers are an
+            // append-only addition to the `kira_rt_*` surface. An adapter
+            // references the marker so a stale sidecar fails to link by name.
+            foreign_marker: declare(&foreign_marker_symbol(), types.void, &mut []),
+            cstring_new: declare(c"kira_rt_cstring_new", types.ptr, &mut [types.ptr]),
+            cstring_free: declare(c"kira_rt_cstring_free", types.void, &mut [types.ptr]),
             call_runtime: declare(
                 c"kira_hybrid_call_runtime",
                 types.void,
@@ -211,4 +235,12 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
 /// the runtime archive cannot drift apart silently.
 fn abi_marker_symbol() -> CString {
     c_string(kira_runtime_abi::RUNTIME_ABI_MARKER)
+}
+
+/// The foreign-adapter ABI marker's symbol, as a C string.
+///
+/// Built from the shared constant so the backend and the native bridge that
+/// defines it cannot drift apart silently.
+fn foreign_marker_symbol() -> CString {
+    c_string(kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER)
 }

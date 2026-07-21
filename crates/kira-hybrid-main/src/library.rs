@@ -129,11 +129,10 @@ impl HybridLibrary {
                 tried,
             }
         })?;
-        let native = NativeLibrary::load(&path, &self.manifest.functions).map_err(|source| {
-            HybridMainError::NativeHalf {
-                library: self.name.clone(),
-                source,
-            }
+        let native = NativeLibrary::load(&path, &self.manifest.functions, &self.manifest.foreign)
+            .map_err(|source| HybridMainError::NativeHalf {
+            library: self.name.clone(),
+            source,
         })?;
         // No runtime invoker is installed. See `instance.rs`: a library instance
         // owns a heap and calls through `&mut self`, so a native function

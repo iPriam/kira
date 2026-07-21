@@ -4,6 +4,7 @@
 
 mod command;
 mod dispatch;
+mod foreign_libs;
 mod hybrid;
 mod hybrid_library;
 mod library;

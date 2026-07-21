@@ -36,6 +36,9 @@ kira-manifest.workspace = true
 # Manifest discovery: `kirac` walks up from the source file to the package that
 # governs it, which is what makes `kind = .Library` reach the frontend.
 kira-project.workspace = true
+# Structured target triples and the resolved-library catalog: `kirac` picks the
+# build target and resolves each `@FFI.Extern` import's archive against it.
+kira-native-lib-definition.workspace = true
 # Not called from Rust: depending on the native runtime makes cargo build
 # `libkira_native_bridge.a` into the same profile directory as `kirac`, which is
 # where the native link step looks for it.
@@ -55,4 +58,8 @@ thiserror.workspace = true
 # that a knvm-installed toolchain resolves its own Foundation has to install
 # with the real installer, not with a tree the test hand-shaped to match.
 kira-knvm.workspace = true
+# The FFI proofs compile the C fixture into a static archive with the managed
+# clang and llvm-ar, so the test needs no checked-in binary and no system
+# headers.
+kira-toolchain.workspace = true
 

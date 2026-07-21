@@ -212,7 +212,12 @@ fn export_type(
                 class: class as u32,
             }
         }
-        Type::Array(_) | Type::Enum(_) | Type::Error => {
+        // `RawPtr` and `CString` are the C-FFI seam types. `CString` is
+        // seam-only and never reaches an export; a `RawPtr` export is not part
+        // of the export surface this milestone pins, so both are refused here
+        // rather than given an export wire spelling that would have to be
+        // supported forever.
+        Type::Array(_) | Type::Enum(_) | Type::RawPtr | Type::CString | Type::Error => {
             return Err(CompileError::UncrossableExport {
                 export: export.to_owned(),
                 ty: program.types.type_name(ty),

@@ -49,6 +49,16 @@ fn bridge_tag_of(ty: Type) -> Result<(u8, Option<PayloadForm>), LlvmError> {
         // is a tagged value with no one-word form, and how it would cross is
         // undecided. See `BridgeValueTag::ENUM`.
         Type::Enum(_) => return Err(LlvmError::EnumAtSeam),
+        // A `RawPtr` and a `CString` are foreign-seam values, not `@Native`-seam
+        // ones: the VM refuses both here (`Heap::lower`/`lift` return `None`), so
+        // native code refuses them too, keeping the two engines in agreement. A
+        // raw pointer crosses the *foreign* seam through a generated adapter, and
+        // a `CString` is a foreign parameter position that never becomes a value.
+        Type::RawPtr | Type::CString => {
+            return Err(LlvmError::Unsupported(
+                "a raw pointer or C string crossing the @Native boundary",
+            ));
+        }
         Type::Error => return Err(LlvmError::Unsupported("a value with no type")),
     })
 }
@@ -93,6 +103,11 @@ impl Codegen<'_> {
                 Type::Struct(_) => return Err(LlvmError::StructAtSeam),
                 Type::Array(_) => return Err(LlvmError::ArrayAtSeam),
                 Type::Enum(_) => return Err(LlvmError::EnumAtSeam),
+                Type::RawPtr | Type::CString => {
+                    return Err(LlvmError::Unsupported(
+                        "a raw pointer or C string crossing the @Native boundary",
+                    ));
+                }
                 Type::Void | Type::Error => {
                     return Err(LlvmError::Unsupported("a parameter with no runtime value"));
                 }

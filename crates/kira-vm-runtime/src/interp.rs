@@ -210,6 +210,7 @@ impl<'h> Vm<'h> {
                     frames.push(callee);
                 }
                 Instruction::CallNative(id) => self.call_native(module, id)?,
+                Instruction::CallForeign(id) => self.call_foreign(module, id)?,
                 other => self.step(module, &mut frames[depth], other)?,
             }
         }
@@ -276,6 +277,10 @@ impl<'h> Vm<'h> {
                 Value::Struct(_) => return Err(VmError::StructAtSeam { function: id }),
                 Value::Array(_) => return Err(VmError::ArrayAtSeam { function: id }),
                 Value::Enum(_) => return Err(VmError::EnumAtSeam { function: id }),
+                // A raw pointer crosses the foreign seam, not the `@Native` one;
+                // one reaching here is a signature the backend should have
+                // refused, so the runtime restates the rule rather than guessing.
+                Value::RawPtr(_) => return Err(VmError::RawPtrAtSeam { function: id }),
             });
         }
         let returned = self
@@ -292,6 +297,64 @@ impl<'h> Vm<'h> {
             .heap
             .absorb(returned?)
             .ok_or(VmError::HandleAtSeam { function: id })?;
+        self.stack.push(result);
+        Ok(())
+    }
+
+    /// Calls a foreign C function through the embedder's `call_foreign`.
+    ///
+    /// The VM performs no FFI itself: it marshals its values to the import's
+    /// exact-width [`kira_runtime_abi::ForeignArg`]s, borrowing a `CString`
+    /// argument's bytes out of this heap for the one call, and asks the host.
+    /// That is what keeps the VM subtree free of dynamic loading and compiling
+    /// for `wasm32-unknown-unknown` while foreign calls run through a native
+    /// embedder. The arguments are this frame's to own, so they are dropped here
+    /// on every exit — a mismatch, a host error, or a clean return.
+    fn call_foreign(&mut self, module: &Module, id: u32) -> Result<(), VmError> {
+        let import = module
+            .foreign_imports
+            .get(id as usize)
+            .ok_or(VmError::UnknownForeign(id))?;
+        let signature = import.signature();
+        let params = signature.parameters();
+        let count = params.len();
+        let first = self
+            .stack
+            .len()
+            .checked_sub(count)
+            .ok_or(VmError::StackUnderflow)?;
+
+        // Build the borrowed foreign arguments, then invoke the host while they
+        // (and any `CString` bytes they borrow from the heap) are still alive.
+        let mut lowered = Vec::with_capacity(count);
+        let mut mismatch = None;
+        for (offset, &expected) in params.iter().enumerate() {
+            let value = self.stack[first + offset];
+            match self.heap.foreign_arg(expected, value) {
+                Some(argument) => lowered.push(argument),
+                None => {
+                    mismatch = Some(expected);
+                    break;
+                }
+            }
+        }
+        let outcome = match mismatch {
+            Some(expected) => Err(VmError::ForeignArgMismatch {
+                foreign: id,
+                expected,
+            }),
+            None => self
+                .host
+                .call_foreign(id, &lowered)
+                .map_err(VmError::ForeignCall),
+        };
+        // Release the heap borrow the arguments hold before freeing them.
+        drop(lowered);
+        for value in self.stack.split_off(first) {
+            self.heap.drop_value(value);
+        }
+
+        let result = self.heap.absorb_foreign(outcome?);
         self.stack.push(result);
         Ok(())
     }

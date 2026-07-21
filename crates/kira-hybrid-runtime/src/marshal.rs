@@ -58,6 +58,9 @@ pub fn lower_args(library: &NativeLibrary, args: &[NativeArg<'_>]) -> Vec<Bridge
                 // A handle is one opaque word and copies like a scalar: there
                 // is nothing to allocate and nothing for the callee to free.
                 NativeArg::Handle(handle) => BridgeData::Handle(handle),
+                // A raw pointer is likewise one opaque word that copies like a
+                // scalar; Kira never dereferences or frees it.
+                NativeArg::RawPtr(pointer) => BridgeData::RawPtr(pointer),
             };
             BridgeValue::encode(data)
         })
@@ -93,6 +96,8 @@ pub unsafe fn lift_result(
         // names a live object, and the VM — which can — refuses a handle it has
         // no representation for, by name.
         BridgeData::Handle(handle) => NativeResult::Handle(handle),
+        // An opaque pointer word, carried through with no allocation or free.
+        BridgeData::RawPtr(pointer) => NativeResult::RawPtr(pointer),
     })
 }
 
@@ -114,6 +119,8 @@ pub enum OwnedArg {
     Str(String),
     /// An opaque handle, copied like a scalar — nothing was transferred to own.
     Handle(u64),
+    /// An opaque target-width pointer word, copied like a scalar.
+    RawPtr(u64),
 }
 
 impl OwnedArg {
@@ -126,6 +133,7 @@ impl OwnedArg {
             OwnedArg::Bool(value) => NativeArg::Bool(*value),
             OwnedArg::Str(text) => NativeArg::Str(text),
             OwnedArg::Handle(handle) => NativeArg::Handle(*handle),
+            OwnedArg::RawPtr(pointer) => NativeArg::RawPtr(*pointer),
         }
     }
 }
@@ -171,6 +179,8 @@ pub unsafe fn take_args(
             // Nothing to take: a handle is a word, and the object behind it
             // belongs to whoever minted it for as long as it lives.
             BridgeData::Handle(handle) => OwnedArg::Handle(handle),
+            // An opaque pointer word: nothing to take ownership of.
+            BridgeData::RawPtr(pointer) => OwnedArg::RawPtr(pointer),
         };
         owned.push(argument);
     }
@@ -193,6 +203,7 @@ pub fn lower_result(library: &NativeLibrary, result: NativeResult) -> BridgeValu
         NativeResult::Bool(value) => BridgeData::Bool(value),
         NativeResult::Str(text) => BridgeData::String(library.new_string(&text)),
         NativeResult::Handle(handle) => BridgeData::Handle(handle),
+        NativeResult::RawPtr(pointer) => BridgeData::RawPtr(pointer),
     };
     BridgeValue::encode(data)
 }

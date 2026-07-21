@@ -36,6 +36,7 @@
 //! ```
 
 pub mod error;
+pub mod foreign;
 pub mod library;
 pub mod marshal;
 pub mod session;

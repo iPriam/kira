@@ -16,11 +16,13 @@
 pub mod array;
 pub mod boxes;
 pub mod enums;
+pub mod foreign;
 pub mod hybrid;
 pub mod runtime;
 
 pub use array::{KArray, KiraArray};
 pub use boxes::{kira_rt_box_free, kira_rt_box_new};
 pub use enums::{KEnum, KiraEnum, PAYLOAD_ENUM, PAYLOAD_INERT, PAYLOAD_STR};
+pub use foreign::{kira_foreign_adapter_abi_version_1, kira_rt_cstring_free, kira_rt_cstring_new};
 pub use hybrid::{RuntimeInvoker, kira_hybrid_call_runtime, kira_hybrid_install_runtime_invoker};
 pub use runtime::{KStr, KiraString};

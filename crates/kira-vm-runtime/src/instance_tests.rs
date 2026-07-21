@@ -73,6 +73,7 @@ fn library() -> Module {
     );
     Module {
         exports: Default::default(),
+        foreign_imports: Vec::new(),
         functions: vec![
             func("main", 0, 0, vec![I::ReturnVoid]),
             make_button,
@@ -504,6 +505,7 @@ fn ill_typed() -> Module {
     let takes_two = func("takes_two", 2, 2, vec![I::ConstVoid, I::Return]);
     Module {
         exports: Default::default(),
+        foreign_imports: Vec::new(),
         functions: vec![
             func("main", 0, 0, vec![I::ReturnVoid]),
             bad_div,

@@ -165,6 +165,7 @@ pub fn build_native_library(
                 .then(|| lib_directory.join(format!("{}.ll", options.name))),
             runtime_archive: options.runtime_archive.clone(),
             exports: surface.clone(),
+            foreign_archives: Vec::new(),
         },
     )?;
 

@@ -23,6 +23,8 @@ pub mod toml_text;
 pub use declaration_loader::{DeclarationError, load as load_declaration};
 pub use dependency::{DependencySource, DependencySpec, GitSource, PathSource, RegistrySource};
 pub use lockfile::LockFile;
+pub use native_lib_manifest::{RawNativeLibManifest, RawNativeTarget};
+pub use native_lib_parser::{NativeLibParseError, parse_native_lib_manifest};
 pub use package_manifest::PackageManifest;
 pub use platform_config::{
     ApplePlatform, Backend, BackendSelectionSource, BuildProfile, BuildSystem, ExecutionBackend,

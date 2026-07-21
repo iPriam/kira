@@ -18,6 +18,7 @@
 
 mod call;
 mod expr;
+mod foreign;
 mod operators;
 mod stmt;
 
@@ -131,6 +132,16 @@ impl<'a> Codegen<'a> {
                 // enum handle is the same: `kira_rt_enum_free` treats null as
                 // nothing to free.
                 Type::String | Type::Array(_) | Type::Enum(_) => LLVMConstPointerNull(llvm_type),
+                // A fresh `RawPtr` slot holds the null pointer word (zero), the
+                // same value the VM initializes a `Value::RawPtr` slot to. It
+                // owns nothing, so no first-store special case is needed.
+                Type::RawPtr => LLVMConstInt(llvm_type, 0, 0),
+                // `CString` is seam-only and never names a local slot.
+                Type::CString => {
+                    return Err(LlvmError::Unsupported(
+                        "a CString local (it is a foreign-parameter-only type)",
+                    ));
+                }
                 // Every field zeroed, which for a `String` field is the null
                 // handle the runtime already reads as `""` — so a fresh struct
                 // slot is free-able through the same path as any other, with no

@@ -39,6 +39,8 @@ use kira_toolchain::LlvmDiscoveryError;
 
 mod codegen;
 mod exports;
+#[cfg(test)]
+mod foreign_integration_tests;
 mod link;
 // Not gated: the platform link list is data about a host rather than something
 // LLVM answers, and a consumer's build script reads it on a machine with none.
@@ -47,6 +49,15 @@ mod platform;
 pub use exports::{NativeClass, NativeExport, NativeExportSurface};
 pub use link::LinkError;
 pub use platform::{PLATFORM_LINK_LISTS, PlatformLinkList, host_link_list, link_list_for};
+
+/// The exported symbol of the generated adapter for foreign import `index`.
+///
+/// A wire contract shared by every backend and every host: the LLVM backend
+/// defines this symbol, the VM sidecar host resolves it, and the hybrid manifest
+/// records it. Spelled once here so a producer and a consumer cannot disagree.
+pub fn adapter_name(index: usize) -> String {
+    format!("kira_foreign_adapter_{index}")
+}
 
 /// What went wrong producing native code.
 #[derive(Debug, thiserror::Error)]
@@ -153,6 +164,9 @@ pub struct NativeBuildOptions {
     pub ir_path: Option<PathBuf>,
     /// The native runtime archive (`libkira_native_bridge.a`) to link against.
     pub runtime_archive: PathBuf,
+    /// The selected C static archives that satisfy the program's `@FFI.Extern`
+    /// imports, in link order. Empty for a program with no foreign imports.
+    pub foreign_archives: Vec<PathBuf>,
 }
 
 /// The artifacts a native build produced.
@@ -193,7 +207,13 @@ pub fn build_native(
     let executable = match &options.executable_path {
         Some(path) => {
             let llvm = kira_toolchain::discover(None)?;
-            link::link_executable(&llvm, &options.object_path, &options.runtime_archive, path)?;
+            link::link_executable(
+                &llvm,
+                &options.object_path,
+                &options.runtime_archive,
+                &options.foreign_archives,
+                path,
+            )?;
             Some(path.clone())
         }
         None => None,
@@ -209,6 +229,50 @@ pub fn build_native(
         library: None,
         ir: options.ir_path.clone(),
     })
+}
+
+/// What the VM's foreign-adapter sidecar build should produce, and where.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdapterSidecarOptions {
+    /// The module name recorded in the emitted artifacts.
+    pub module_name: String,
+    /// Where the adapters-only object file is written.
+    pub object_path: PathBuf,
+    /// Where the linked sidecar shared library is written.
+    pub library_path: PathBuf,
+    /// The native runtime archive (`libkira_native_bridge.a`) to link against.
+    pub runtime_archive: PathBuf,
+    /// The selected C static archives that satisfy the program's foreign
+    /// imports, in link order.
+    pub foreign_archives: Vec<PathBuf>,
+}
+
+/// Compiles the program's foreign adapters into one loadable sidecar library.
+///
+/// The VM never links or dlopens anything itself; this is what the CLI build
+/// produces so a native-capable host can answer `call_foreign`. The sidecar
+/// carries one exported adapter per foreign import, the foreign-adapter marker,
+/// the string helpers the loader binds, and the selected C archives — all
+/// self-contained, so the host loads one file. Returns the sidecar path.
+pub fn build_adapter_sidecar(
+    program: &IrProgram,
+    options: &AdapterSidecarOptions,
+) -> Result<PathBuf, LlvmError> {
+    let module = codegen::Module::build_adapter_sidecar(program, &options.module_name)?;
+    module.emit_object(&options.object_path)?;
+    let llvm = kira_toolchain::discover(None)?;
+    let adapter_symbols: Vec<String> = (0..program.foreign_imports.len())
+        .map(adapter_name)
+        .collect();
+    link::link_adapter_sidecar(
+        &llvm,
+        &options.object_path,
+        &options.runtime_archive,
+        &options.foreign_archives,
+        &adapter_symbols,
+        &options.library_path,
+    )?;
+    Ok(options.library_path.clone())
 }
 
 /// Compiles `program` to a WebAssembly object for `device`.
@@ -311,10 +375,18 @@ pub fn build_hybrid_library(
             "a hybrid build with no library path",
         ))?;
     let llvm = kira_toolchain::discover(None)?;
-    link::link_shared_library(
+    // One adapter per foreign import lives in this same dylib; force each in and
+    // link the C archives that satisfy them, so the hybrid session binds every
+    // foreign call out of the one native half.
+    let adapter_symbols: Vec<String> = (0..program.foreign_imports.len())
+        .map(adapter_name)
+        .collect();
+    link::link_hybrid_library(
         &llvm,
         &options.object_path,
         &options.runtime_archive,
+        &options.foreign_archives,
+        &adapter_symbols,
         &library,
     )?;
 
@@ -350,4 +422,17 @@ pub struct HybridArtifacts {
     pub library: PathBuf,
     /// The trampoline symbol exported for each native function, by id.
     pub exports: Vec<(u32, String)>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The adapter symbol is a wire contract shared with the VM host and the
+    /// hybrid manifest, so it is pinned rather than only round-tripped.
+    #[test]
+    fn adapter_symbols_are_pinned_per_import_index() {
+        assert_eq!(adapter_name(0), "kira_foreign_adapter_0");
+        assert_eq!(adapter_name(7), "kira_foreign_adapter_7");
+    }
 }
