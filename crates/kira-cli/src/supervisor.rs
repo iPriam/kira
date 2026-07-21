@@ -149,6 +149,12 @@ fn watch(
     // one invocation.
     let hotpatch_disabled = kira_live::hotpatch_disabled_by_env();
     let mut watcher = SourceWatcher::new(watch_set(source));
+    // The baseline is now captured: from here on an edit will be seen. Announcing
+    // it is what lets a tool — or a test — edit without racing the initial build.
+    // A save that lands before this is folded into the baseline and lost, so the
+    // signal has to come from after the snapshot, not from `live.session.ready`,
+    // which is emitted before the watcher even exists.
+    emit(&LiveEvent::Watching);
     let deadline = options.quit_after.map(|after| Instant::now() + after);
 
     loop {
