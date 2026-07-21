@@ -10,6 +10,7 @@
 //! interns identifiers into an [`Interner`] returned alongside the tree.
 
 mod aggregate;
+mod construct;
 mod expr;
 mod generics;
 mod item;

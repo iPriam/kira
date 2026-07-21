@@ -26,6 +26,7 @@ mod arrays;
 mod build_kind;
 mod classes;
 mod closures;
+mod constructs;
 mod decl;
 mod definitions;
 mod enums;

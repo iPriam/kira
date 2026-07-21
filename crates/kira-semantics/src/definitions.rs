@@ -96,6 +96,18 @@ impl DeclSpans {
                         FileSpan::new(source, declaration.name_span),
                     );
                 }
+                Item::Construct(declaration) => {
+                    let owner = interner.resolve(declaration.name).to_owned();
+                    spans
+                        .types
+                        .insert(owner.clone(), FileSpan::new(source, declaration.name_span));
+                    for field in &declaration.fields {
+                        spans.fields.insert(
+                            (owner.clone(), interner.resolve(field.name).to_owned()),
+                            FileSpan::new(source, field.name_span),
+                        );
+                    }
+                }
                 Item::Function(_) | Item::Import(_) | Item::Unsupported(_) => {}
             }
         }

@@ -1,0 +1,134 @@
+//! Parser tests for the construct declaration family: the `construct Family`
+//! template and the construct-backed `Family Name(params)` declaration.
+
+use crate::*;
+use kira_syntax_model::ast::{ConstructKind, Item};
+
+fn parse_text(text: &str) -> ParseResult {
+    parse(SourceId::new(0), text)
+}
+
+/// The one construct declaration in `text`.
+fn only_construct(result: &ParseResult) -> &kira_syntax_model::ast::ConstructDecl {
+    match result.tree.items() {
+        [Item::Construct(declaration)] => declaration,
+        items => panic!("expected exactly one construct, got {items:?}"),
+    }
+}
+
+#[test]
+fn a_family_template_parses_with_a_required_field_and_a_computed_bridge() {
+    let result = parse_text(
+        r#"
+construct Shape {
+    @Required let sides: Int
+    let area: Int { 0 }
+}
+"#,
+    );
+    let declaration = only_construct(&result);
+    assert!(matches!(declaration.kind, ConstructKind::Family));
+    assert_eq!(result.interner.resolve(declaration.name), "Shape");
+    assert_eq!(declaration.fields.len(), 1);
+    assert!(declaration.fields[0].required);
+    assert_eq!(result.interner.resolve(declaration.fields[0].name), "sides");
+    assert_eq!(declaration.methods.len(), 1);
+    assert!(declaration.methods[0].computed);
+    assert_eq!(
+        result
+            .interner
+            .resolve(declaration.methods[0].function.name),
+        "area"
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn a_backed_declaration_parses_its_family_params_and_computed_override() {
+    let result = parse_text(
+        r#"
+Shape Square(side: Int) {
+    let area: Int { side * side }
+}
+"#,
+    );
+    let declaration = only_construct(&result);
+    let ConstructKind::Backed { family, params, .. } = &declaration.kind else {
+        panic!("expected a backed declaration, got {:?}", declaration.kind);
+    };
+    assert_eq!(result.interner.resolve(*family), "Shape");
+    assert_eq!(result.interner.resolve(declaration.name), "Square");
+    assert_eq!(params.len(), 1);
+    assert_eq!(result.interner.resolve(params[0].name), "side");
+    assert_eq!(declaration.methods.len(), 1);
+    assert!(declaration.methods[0].computed);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn a_backed_declaration_with_no_params_parses() {
+    let result = parse_text(
+        r#"
+Widget Spacer() {
+    let node: Int { 0 }
+}
+"#,
+    );
+    let declaration = only_construct(&result);
+    let ConstructKind::Backed { params, .. } = &declaration.kind else {
+        panic!("expected a backed declaration");
+    };
+    assert!(params.is_empty());
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn a_function_member_parses_alongside_a_computed_member() {
+    let result = parse_text(
+        r#"
+Widget Text(content: Int) {
+    let node: Int { content }
+    function width() -> Int {
+        return content
+    }
+}
+"#,
+    );
+    let declaration = only_construct(&result);
+    assert_eq!(declaration.methods.len(), 2);
+    assert!(declaration.methods[0].computed);
+    assert!(!declaration.methods[1].computed);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn a_content_slot_is_recorded_as_deferred_not_dropped() {
+    let result = parse_text(
+        r#"
+Widget Stack() {
+    @Content let children: [Int]
+    let node: Int { 0 }
+}
+"#,
+    );
+    let declaration = only_construct(&result);
+    assert_eq!(declaration.deferred.len(), 1);
+    assert_eq!(declaration.deferred[0].label, "`@Content` child slot");
+    // The executable computed member still parses beside it.
+    assert_eq!(declaration.methods.len(), 1);
+}
+
+#[test]
+fn an_extends_clause_on_a_family_is_recorded_as_deferred() {
+    let result = parse_text(
+        r#"
+construct Surface extends WebElement {
+    let node: Int { 0 }
+}
+"#,
+    );
+    let declaration = only_construct(&result);
+    assert_eq!(declaration.deferred.len(), 1);
+    assert_eq!(declaration.deferred[0].label, "`extends` inheritance");
+    assert_eq!(declaration.methods.len(), 1);
+}

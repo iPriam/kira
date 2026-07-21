@@ -22,9 +22,107 @@ pub enum Item {
     TypeAlias(TypeAliasDecl),
     /// An `import Module [as Alias]` declaration.
     Import(ImportDecl),
+    /// A `construct Family { ... }` declaration family, or a construct-backed
+    /// `Family Name(params) { ... }` declaration that conforms to one.
+    Construct(ConstructDecl),
     /// A construct the v0 subset parses but does not yet analyze (class,
     /// import, …); recorded so semantics can report it cleanly.
     Unsupported(UnsupportedItem),
+}
+
+/// A member of the `construct` declaration family: either a family template
+/// (`construct Family { ... }`) or a construct-backed declaration
+/// (`Family Name(params) { ... }`) that conforms to one.
+///
+/// New Kira design proven against the oracle's *meaning*, not its state: the
+/// oracle documents the construct family as validate-only ("construct-backed
+/// declarations do not execute yet"). Here a construct-backed declaration is a
+/// typed factory — it lowers to a class-shaped struct whose fields are the
+/// declared params and whose computed members are zero-argument methods — so
+/// constructing it and reading its bridge member runs on every backend.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstructDecl {
+    /// Whether this is the family template or a declaration backed by one.
+    pub kind: ConstructKind,
+    /// The declaration's own name (`Widget` for the family, `Text` for a
+    /// backed declaration).
+    pub name: Symbol,
+    /// Span of the name token, for diagnostics.
+    pub name_span: Span,
+    /// The stored members: `@Required let`, plain `let`, and defaulted `let`.
+    pub fields: Vec<ConstructField>,
+    /// The behaviour members: computed block-bodied bridges (`let node: T { … }`,
+    /// each a zero-argument method read as a property) and `function` members.
+    pub methods: Vec<ConstructMethod>,
+    /// Members and clauses parsed but not yet executable, kept so semantics can
+    /// refuse each with a precise typed diagnostic rather than dropping it.
+    pub deferred: Vec<DeferredConstruct>,
+    /// Span covering the whole declaration.
+    pub span: Span,
+}
+
+/// One behaviour member of a [`ConstructDecl`].
+///
+/// A computed member (`let node: T { … }`) and a `function` member are the same
+/// runtime shape — a method whose receiver is the backed declaration — so they
+/// share this node. What differs is the read: a computed member is read as a
+/// property (`value.node`), a `function` member is called (`value.lower(ctx)`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstructMethod {
+    /// Whether this came from a computed `let name: T { … }` member, which is
+    /// read as a property rather than called. The bridge member (`node`) is the
+    /// canonical one.
+    pub computed: bool,
+    /// The method itself: a zero-argument function for a computed member, or the
+    /// written signature for a `function` member.
+    pub function: Function,
+}
+
+/// Whether a [`ConstructDecl`] is the family template or a backed declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstructKind {
+    /// `construct Family { ... }` — a declaration family (a typed template).
+    Family,
+    /// `Family Name(params) { ... }` — a declaration backed by a family.
+    Backed {
+        /// The family this declaration conforms to.
+        family: Symbol,
+        /// Span of the family name, for diagnostics.
+        family_span: Span,
+        /// The construction inputs, written as a function-style param list.
+        params: Vec<Param>,
+    },
+}
+
+/// One stored member of a [`ConstructDecl`] (`@Required let`, plain `let`, or
+/// `let name: T = default`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstructField {
+    /// The member's name.
+    pub name: Symbol,
+    /// Span of the name token.
+    pub name_span: Span,
+    /// Whether the member carried `@Required`: a value every backed declaration
+    /// must provide.
+    pub required: bool,
+    /// The declared member type.
+    pub ty: TypeRefId,
+    /// The default initializer, when one was written.
+    pub default: Option<ExprId>,
+    /// Span covering the whole member.
+    pub span: Span,
+}
+
+/// A construct-family member or clause parsed but not yet executable.
+///
+/// Recorded so semantics refuses it with a precise typed diagnostic — never
+/// silently, and never as the generic parse-don't-crash node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredConstruct {
+    /// A short label naming the feature (`@Content slot`, `extends`, …).
+    pub label: &'static str,
+    /// Span of the not-yet-executable member or clause.
+    pub span: Span,
 }
 
 /// An `import Module [as Alias]` declaration.
