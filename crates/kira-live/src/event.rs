@@ -274,6 +274,14 @@ pub enum LiveEvent {
     FramePresented,
     /// Every milestone required for this session has been observed.
     SessionReady,
+    /// The session captured its source baseline and is now watching for edits.
+    ///
+    /// Emitted once, after the watcher's baseline snapshot is taken and before
+    /// the first poll. It is the moment an edit is guaranteed to be seen: a save
+    /// that lands before it is folded into the baseline and never reported as a
+    /// change. A tool that drives a session and then edits waits for this rather
+    /// than guessing how long the initial build took.
+    Watching,
     /// A watched source file changed.
     SourceChanged {
         /// The path that changed.
@@ -380,6 +388,7 @@ impl LiveEvent {
             Self::EntrypointStarted => "live.entrypoint.started",
             Self::FramePresented => "live.frame.presented",
             Self::SessionReady => "live.session.ready",
+            Self::Watching => "live.watch.started",
             Self::SourceChanged { .. } => "live.source.changed",
             Self::BundleRebuilt => "live.bundle.rebuilt",
             Self::ReloadNotified { .. } => "live.reload.notified",
@@ -621,6 +630,7 @@ mod tests {
             "live.server.started"
         );
         assert_eq!(LiveEvent::SessionReady.name(), "live.session.ready");
+        assert_eq!(LiveEvent::Watching.name(), "live.watch.started");
         assert_eq!(
             LiveEvent::EntrypointStarted.name(),
             "live.entrypoint.started"

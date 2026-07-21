@@ -72,20 +72,28 @@ impl Drop for Session {
     }
 }
 
-/// Runs a watched `kirac live` session and reads its output until `done` says
-/// enough has arrived, then stops the session and returns what it printed.
+/// Runs a watched `kirac live` session, edits the program once the session is
+/// actually watching, and reads until `done` says enough has arrived — then
+/// stops the session and returns what it printed.
 ///
-/// Waiting on the *event* rather than on a duration is the point. A reload
-/// rebuilds the program — for a hybrid app that is an LLVM compile and a link —
-/// and how long that takes depends on what else the machine is doing. A fixed
-/// budget therefore encodes the load of the machine that wrote it: these two
-/// tests failed under a parallel `cargo test` and passed alone. The session's
-/// `--quit-after` stays as a generous ceiling so a session that never gets
-/// there fails instead of hanging.
+/// Both halves wait on an *event*, never on a duration. `done` waits on the
+/// reload/relaunch signal because a rebuild — for a hybrid app, an LLVM compile
+/// and a link — takes as long as the loaded machine makes it take; the
+/// session's `--quit-after` stays only as a generous ceiling so a session that
+/// never gets there fails instead of hanging.
+///
+/// `edit` waits on `live.watch.started` for the same reason. The watcher takes
+/// its baseline the instant it starts, and a save that lands before that is
+/// folded into the baseline and never seen as a change — so an edit fired on a
+/// fixed delay races the initial build, and under a parallel `cargo test` that
+/// build can outlast the delay, the change is lost, and the reload never fires.
+/// Firing the edit only after the session announces it is watching removes the
+/// race outright: the save is guaranteed to land after the baseline.
 fn live_until(
     path: &Path,
     backend: &str,
     extra: &[&str],
+    edit: impl FnOnce(),
     done: impl Fn(&str) -> bool,
 ) -> (String, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_kirac"))
@@ -112,6 +120,7 @@ fn live_until(
         text
     });
 
+    let mut edit = Some(edit);
     let mut stdout = String::new();
     for line in BufReader::new(stdout_pipe).lines() {
         let Ok(line) = line else {
@@ -119,6 +128,13 @@ fn live_until(
         };
         stdout.push_str(&line);
         stdout.push('\n');
+        // The instant the session is watching, make the edit — never before, or
+        // the save is baked into the baseline and no change is ever reported.
+        if stdout.contains("live.watch.started")
+            && let Some(edit) = edit.take()
+        {
+            edit();
+        }
         if done(&stdout) {
             break;
         }
@@ -283,17 +299,17 @@ fn a_runtime_only_edit_to_a_hybrid_app_hot_patches() {
     let scratch = Scratch::new("hybrid-reload");
     let program = scratch.program(HYBRID_PROGRAM);
 
-    // Edit only the @Runtime half, mid-session. The native half is untouched, so
-    // it must rebuild byte-identical and the swap must be allowed.
+    // Edit only the @Runtime half, mid-session, the instant the session is
+    // watching. The native half is untouched, so it must rebuild byte-identical
+    // and the swap must be allowed.
     let edited = program.clone();
-    let editor = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(6));
+    let edit = move || {
         std::fs::write(
             &edited,
             HYBRID_PROGRAM.replace("return double(n) + 1", "return double(n) + 5000"),
         )
         .expect("edit the program");
-    });
+    };
 
     // Read until both halves of the evidence have arrived: the swapped-in code
     // has printed, and the session has called the reload done. The ceiling only
@@ -302,9 +318,9 @@ fn a_runtime_only_edit_to_a_hybrid_app_hot_patches() {
         &program,
         "hybrid",
         &["--watch", "--quit-after", "180s"],
+        edit,
         |seen| seen.contains("\n5020\n") && seen.contains("live.reload.completed"),
     );
-    editor.join().expect("the editor thread does not panic");
 
     assert!(
         stdout.contains("live.reload.completed mode=hotpatch"),
@@ -338,14 +354,13 @@ fn a_native_edit_to_a_hybrid_app_relaunches() {
     let program = scratch.program(HYBRID_PROGRAM);
 
     let edited = program.clone();
-    let editor = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(6));
+    let edit = move || {
         std::fs::write(
             &edited,
             HYBRID_PROGRAM.replace("return n * 2", "return n * 3"),
         )
         .expect("edit the program");
-    });
+    };
 
     // A relaunch ends at `live.runner.relaunched`, not at
     // `live.reload.completed`: only the hot-patch tier reports a completion,
@@ -355,9 +370,9 @@ fn a_native_edit_to_a_hybrid_app_relaunches() {
         &program,
         "hybrid",
         &["--watch", "--quit-after", "180s"],
+        edit,
         |seen| seen.contains("\n126\n") && seen.contains("live.runner.relaunched"),
     );
-    editor.join().expect("the editor thread does not panic");
 
     assert!(
         stdout.contains("mode=relaunch"),
