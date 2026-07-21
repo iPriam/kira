@@ -87,6 +87,21 @@ impl Parser<'_> {
                     self.tree.push_item(self.source, Item::Class(declaration));
                 }
             }
+            TokenKind::Construct => {
+                if let Some(declaration) = self.parse_construct_family() {
+                    self.tree
+                        .push_item(self.source, Item::Construct(declaration));
+                }
+            }
+            // `Family Name(params) { ... }` — a construct-backed declaration —
+            // is the one identifier-led top-level form. Anything else that
+            // starts with an identifier is still parse-don't-crash.
+            TokenKind::Identifier if self.at_construct_backed() => {
+                if let Some(declaration) = self.parse_construct_backed() {
+                    self.tree
+                        .push_item(self.source, Item::Construct(declaration));
+                }
+            }
             TokenKind::Identifier => self.parse_unsupported_item(),
             _ => {
                 // Stray token at top level: skip it with a diagnostic.
@@ -508,6 +523,7 @@ fn is_item_start(kind: TokenKind) -> bool {
             | TokenKind::Enum
             | TokenKind::Type
             | TokenKind::Class
+            | TokenKind::Construct
             | TokenKind::Import
     )
 }

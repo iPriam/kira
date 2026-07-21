@@ -153,6 +153,10 @@ pub(crate) struct Analyzer<'a> {
     /// is the only place that remembers which struct ids came from a class and
     /// what each one inherited. It never leaves analysis.
     pub(crate) classes: HashMap<StructId, crate::classes::ClassInfo>,
+    /// Per-construct-backed-declaration results, keyed by the struct id it was
+    /// compiled to. The only record that a struct id came from a construct, and
+    /// which of its members are computed bridges read as properties.
+    pub(crate) constructs: HashMap<StructId, crate::constructs::ConstructInfo>,
     /// The methods each struct and class declares itself, keyed by id.
     ///
     /// Kept beside the struct table because a method is not part of a struct's
@@ -223,6 +227,7 @@ impl<'a> Analyzer<'a> {
             payload_blame: None,
             aliases: AliasTable::new(),
             classes: HashMap::new(),
+            constructs: HashMap::new(),
             own_methods: HashMap::new(),
             unflattenable_classes: BTreeSet::new(),
             fn_types: crate::closures::FnTypeTable::default(),
@@ -253,6 +258,11 @@ impl<'a> Analyzer<'a> {
         // Classes flatten into the same table, and may extend a struct, so they
         // are declared once every struct exists.
         self.collect_classes();
+        // Construct-backed declarations become struct-shaped types too, and a
+        // param or member may name any struct, enum, or class, so they are
+        // declared once every one of those exists and before signatures — a
+        // backed declaration's methods take signature slots.
+        self.collect_constructs();
         let callables = self.callables();
         // Every synthesized function sits after every declared one, so the
         // declared count is the offset a reserved id is measured from. Fixed
@@ -330,6 +340,9 @@ impl<'a> Analyzer<'a> {
                 }
                 Item::Class(declaration) => {
                     self.class_callables(declaration, source, &mut callables)
+                }
+                Item::Construct(declaration) => {
+                    self.construct_callables(declaration, source, &mut callables)
                 }
                 Item::Enum(_) | Item::TypeAlias(_) | Item::Import(_) | Item::Unsupported(_) => {}
             }

@@ -205,6 +205,15 @@ impl Analyzer<'_> {
                     self.reject_argument_labels(&args, "a class constructor");
                     return self.analyze_class_new(ctx, id, &values, callee_span);
                 }
+                // A construct-backed declaration is constructed by calling it,
+                // like a class — but its params carry names, so a labeled
+                // argument binds to the input of that name.
+                if let Some(id) = self.construct_backed_named(&name)
+                    && ctx.resolve(&name).is_none()
+                {
+                    self.link_type_name(&name, callee_span);
+                    return self.analyze_construct_new(ctx, id, &args, callee_span);
+                }
                 // `T()` on a `@FFI.Struct { layout: c }` is the zeroed-value
                 // form: it takes no arguments and every field takes its zero.
                 // Field initializers are written `T { field: value }` instead.
@@ -290,6 +299,15 @@ impl Analyzer<'_> {
                 // property, written with the same syntax a field read uses.
                 if base_ty.is_array() {
                     return self.analyze_array_property(base_hir, &name, field_span);
+                }
+                // A construct's computed bridge member (`value.node`) is read as
+                // a property but runs the member, so it lowers to a method call
+                // rather than a field read.
+                if let Type::Struct(id) = base_ty
+                    && self.construct_computed_member(id, &name)
+                {
+                    return self
+                        .analyze_construct_bridge_read(ctx, base_hir, id, &name, field_span);
                 }
                 match self.resolve_field(base_ty, &name, field_span) {
                     Some((index, ty)) => {
