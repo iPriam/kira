@@ -1,9 +1,12 @@
 //! The program's one table of type shapes: structs and array types together.
 
-use super::Type;
+use kira_runtime_abi::NativeStateTypeId;
+
 use super::arrays::ArrayTable;
 use super::enums::EnumTable;
+use super::native_state::NativeStateTable;
 use super::structs::StructTable;
+use super::{FloatSpelling, IntSpelling, Type};
 
 /// Every shape a program's types can name: its structs and its array types.
 ///
@@ -17,6 +20,7 @@ pub struct TypeTable {
     structs: StructTable,
     arrays: ArrayTable,
     enums: EnumTable,
+    native_states: NativeStateTable,
 }
 
 impl TypeTable {
@@ -71,6 +75,40 @@ impl TypeTable {
         }
     }
 
+    /// The opaque callback-state handle type for `target`.
+    pub fn native_state_of(&mut self, target: Type) -> Type {
+        match self.native_states.intern(target) {
+            Some(id) => Type::NativeState(id),
+            None => Type::Error,
+        }
+    }
+
+    /// The Kira value type boxed by an opaque callback-state handle.
+    pub fn native_state_target(&self, ty: Type) -> Option<Type> {
+        match ty {
+            Type::NativeState(id) => self.native_states.target(id),
+            _ => None,
+        }
+    }
+
+    /// The collision-free runtime identity of a callback-state value type.
+    pub fn native_state_type_id(&self, ty: Type) -> Option<NativeStateTypeId> {
+        let (tag, payload) = match ty {
+            Type::Int(spelling) => (1_u64, int_code(spelling)),
+            Type::Float(spelling) => (2, float_code(spelling)),
+            Type::Bool => (3, 0),
+            Type::String => (4, 0),
+            Type::Struct(id) => (5, u64::from(id.index())),
+            Type::Array(id) => (6, u64::from(id.index())),
+            Type::Enum(id) => (7, u64::from(id.index())),
+            Type::RawPtr => (8, 0),
+            Type::Void | Type::Error | Type::CString | Type::NativeState(_) => {
+                return None;
+            }
+        };
+        Some(NativeStateTypeId::new((tag << 56) | payload))
+    }
+
     /// The canonical spelling of `ty`, for diagnostics.
     ///
     /// Owned rather than borrowed because an array's name is *built* — `[Int]`
@@ -86,6 +124,10 @@ impl TypeTable {
             Type::Void => "Void".to_owned(),
             Type::RawPtr => "RawPtr".to_owned(),
             Type::CString => "CString".to_owned(),
+            Type::NativeState(id) => match self.native_states.target(id) {
+                Some(target) => format!("NativeState<{}>", self.type_name(target)),
+                None => "<unknown native state>".to_owned(),
+            },
             Type::Error => "<error>".to_owned(),
             Type::Struct(id) => match self.structs.get(id) {
                 Some(def) => def.name.clone(),
@@ -125,6 +167,28 @@ impl TypeTable {
             },
             _ => false,
         }
+    }
+}
+
+fn int_code(spelling: IntSpelling) -> u64 {
+    match spelling {
+        IntSpelling::Plain => 0,
+        IntSpelling::I8 => 1,
+        IntSpelling::I16 => 2,
+        IntSpelling::I32 => 3,
+        IntSpelling::I64 => 4,
+        IntSpelling::U8 => 5,
+        IntSpelling::U16 => 6,
+        IntSpelling::U32 => 7,
+        IntSpelling::U64 => 8,
+    }
+}
+
+fn float_code(spelling: FloatSpelling) -> u64 {
+    match spelling {
+        FloatSpelling::Plain => 0,
+        FloatSpelling::F32 => 1,
+        FloatSpelling::F64 => 2,
     }
 }
 

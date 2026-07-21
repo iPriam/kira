@@ -314,7 +314,7 @@ fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridLibraryError> {
         Type::RawPtr => BridgeValueTag::RAW_PTR,
         // `CString` is seam-only — legal only as a foreign parameter — so it
         // never appears in a manifest row for an ordinary function.
-        Type::CString => {
+        Type::CString | Type::NativeState(_) => {
             return Err(HybridLibraryError::UnsupportedType {
                 function: function.to_owned(),
                 ty,

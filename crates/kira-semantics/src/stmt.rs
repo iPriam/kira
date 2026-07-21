@@ -120,8 +120,15 @@ impl Analyzer<'_> {
                     }
                     None => value_ty,
                 };
+                let native_state = match self.program.expr(value) {
+                    HirExpr::NativeRecover { type_id, .. } => Some(*type_id),
+                    _ => None,
+                };
                 let name = self.interner.resolve(name).to_owned();
                 let local = ctx.declare(&name, local_ty, mutable);
+                if let Some(type_id) = native_state {
+                    ctx.mark_native_state(local, type_id);
+                }
                 ctx.note_binding_span(local, name_span);
                 let hir = self
                     .program

@@ -39,6 +39,7 @@ mod tests {
                 // Bytecode only needs the slot count; the VM tags values
                 // dynamically, so the slot types are immaterial here.
                 locals: vec![kira_semantics_model::Type::INT; local_count as usize],
+                native_state_locals: vec![None; local_count as usize],
                 return_type: kira_semantics_model::Type::Void,
                 execution: kira_runtime_abi::Execution::Inherited,
                 mutates_self: false,
@@ -69,6 +70,7 @@ mod tests {
             name: "hot".to_owned(),
             param_count: 0,
             locals: Vec::new(),
+            native_state_locals: Vec::new(),
             return_type: kira_semantics_model::Type::Void,
             execution: Execution::Native,
             mutates_self: false,
@@ -154,6 +156,7 @@ mod tests {
                 name: "makeButton".to_owned(),
                 param_count: 1,
                 locals: vec![Type::String],
+                native_state_locals: vec![None],
                 return_type: Type::Void,
                 execution: kira_runtime_abi::Execution::Inherited,
                 mutates_self: false,

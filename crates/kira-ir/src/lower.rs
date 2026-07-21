@@ -80,6 +80,11 @@ impl Lowerer<'_> {
             name: function.name.clone(),
             param_count: function.param_count,
             locals: function.locals.iter().map(|local| local.ty).collect(),
+            native_state_locals: function
+                .locals
+                .iter()
+                .map(|local| local.native_state)
+                .collect(),
             return_type: function.return_type,
             execution: function.execution,
             mutates_self: function.mutates_self,
@@ -215,6 +220,22 @@ impl Lowerer<'_> {
             HirExpr::ArrayAppend { place, value } => IrExpr::ArrayAppend {
                 place: self.lower_place(&place),
                 value: self.lower_expr(value),
+            },
+            HirExpr::NativeState { value, type_id, ty } => IrExpr::NativeState {
+                value: self.lower_expr(value),
+                type_id,
+                ty,
+            },
+            HirExpr::NativeUserData { state } => IrExpr::NativeUserData {
+                state: self.lower_expr(state),
+            },
+            HirExpr::NativeRecover { raw, type_id, ty } => IrExpr::NativeRecover {
+                raw: self.lower_expr(raw),
+                type_id,
+                ty,
+            },
+            HirExpr::NativeStateFree { token } => IrExpr::NativeStateFree {
+                token: self.lower_expr(token),
             },
             HirExpr::Convert { operand, kind, ty } => IrExpr::Convert {
                 operand: self.lower_expr(operand),

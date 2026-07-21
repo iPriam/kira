@@ -145,7 +145,7 @@ impl Codegen<'_> {
     }
 
     /// The field types of a declared struct.
-    fn field_types(&self, id: StructId) -> Result<Vec<Type>, crate::LlvmError> {
+    pub(super) fn field_types(&self, id: StructId) -> Result<Vec<Type>, crate::LlvmError> {
         self.program
             .types
             .structs()

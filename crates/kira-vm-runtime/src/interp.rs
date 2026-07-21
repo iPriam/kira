@@ -13,6 +13,8 @@ use kira_runtime_abi::{HostCapabilities, NativeArg};
 use crate::error::VmError;
 use crate::value::{Heap, Value};
 
+mod host;
+mod native_state;
 mod operators;
 mod place;
 mod program;
@@ -326,129 +328,6 @@ impl<'h> Vm<'h> {
         Ok(())
     }
 
-    /// Calls into the native half through the embedder.
-    ///
-    /// The VM performs no part of the call itself: it pops the arguments,
-    /// hands the host safe Rust values, and pushes what comes back. That is
-    /// what lets the whole VM subtree stay free of FFI and keep compiling for
-    /// `wasm32-unknown-unknown` while still being one half of a hybrid program.
-    ///
-    /// Arguments are *borrowed* across the call — a string is handed over as a
-    /// `&str` into this heap, never a copy — and the result is *owned*, because
-    /// handing a value out is a move. The VM keeps ownership of every argument
-    /// and drops them here, exactly as a callee frame's locals are dropped.
-    fn call_native(&mut self, module: &Module, id: u32) -> Result<(), VmError> {
-        let proto = module
-            .functions
-            .get(id as usize)
-            .ok_or(VmError::UnknownFunction(id))?;
-        let count = proto.param_count as usize;
-        let first = self
-            .stack
-            .len()
-            .checked_sub(count)
-            .ok_or(VmError::StackUnderflow)?;
-        let arguments = &self.stack[first..];
-
-        // Borrowing the heap for the args while the host is borrowed mutably is
-        // fine: they are disjoint fields of this struct.
-        let mut lowered = Vec::with_capacity(count);
-        for value in arguments {
-            lowered.push(match *value {
-                Value::Int(value) => NativeArg::Int(value),
-                Value::Float(value) => NativeArg::Float(value),
-                Value::Bool(value) => NativeArg::Bool(value),
-                Value::Str(id) => NativeArg::Str(self.heap.get(id)),
-                Value::Void => NativeArg::Void,
-                // The hybrid ABI has no layout for a struct or an array yet, so
-                // there is no honest way to hand one across. The split is
-                // checked when the program is built, so this is the runtime
-                // restating a rule rather than the first place it is enforced.
-                Value::Struct(_) => return Err(VmError::StructAtSeam { function: id }),
-                Value::Array(_) => return Err(VmError::ArrayAtSeam { function: id }),
-                Value::Enum(_) => return Err(VmError::EnumAtSeam { function: id }),
-                // A raw pointer crosses the foreign seam, not the `@Native` one;
-                // one reaching here is a signature the backend should have
-                // refused, so the runtime restates the rule rather than guessing.
-                Value::RawPtr(_) => return Err(VmError::RawPtrAtSeam { function: id }),
-            });
-        }
-        let returned = self
-            .host
-            .call_native(id, &lowered)
-            .map_err(VmError::NativeCall);
-
-        // The arguments were this frame's to own, whatever the call did.
-        for value in self.stack.split_off(first) {
-            self.heap.drop_value(value);
-        }
-
-        let result = self
-            .heap
-            .absorb(returned?)
-            .ok_or(VmError::HandleAtSeam { function: id })?;
-        self.stack.push(result);
-        Ok(())
-    }
-
-    /// Calls a foreign C function through the embedder's `call_foreign`.
-    ///
-    /// The VM performs no FFI itself: it marshals its values to the import's
-    /// exact-width [`kira_runtime_abi::ForeignArg`]s, borrowing a `CString`
-    /// argument's bytes out of this heap for the one call, and asks the host.
-    /// That is what keeps the VM subtree free of dynamic loading and compiling
-    /// for `wasm32-unknown-unknown` while foreign calls run through a native
-    /// embedder. The arguments are this frame's to own, so they are dropped here
-    /// on every exit — a mismatch, a host error, or a clean return.
-    fn call_foreign(&mut self, module: &Module, id: u32) -> Result<(), VmError> {
-        let import = module
-            .foreign_imports
-            .get(id as usize)
-            .ok_or(VmError::UnknownForeign(id))?;
-        let signature = import.signature();
-        let params = signature.parameters();
-        let count = params.len();
-        let first = self
-            .stack
-            .len()
-            .checked_sub(count)
-            .ok_or(VmError::StackUnderflow)?;
-
-        // Build the borrowed foreign arguments, then invoke the host while they
-        // (and any `CString` bytes they borrow from the heap) are still alive.
-        let mut lowered = Vec::with_capacity(count);
-        let mut mismatch = None;
-        for (offset, &expected) in params.iter().enumerate() {
-            let value = self.stack[first + offset];
-            match self.heap.foreign_arg(expected, value) {
-                Some(argument) => lowered.push(argument),
-                None => {
-                    mismatch = Some(expected);
-                    break;
-                }
-            }
-        }
-        let outcome = match mismatch {
-            Some(expected) => Err(VmError::ForeignArgMismatch {
-                foreign: id,
-                expected,
-            }),
-            None => self
-                .host
-                .call_foreign(id, &lowered)
-                .map_err(VmError::ForeignCall),
-        };
-        // Release the heap borrow the arguments hold before freeing them.
-        drop(lowered);
-        for value in self.stack.split_off(first) {
-            self.heap.drop_value(value);
-        }
-
-        let result = self.heap.absorb_foreign(outcome?);
-        self.stack.push(result);
-        Ok(())
-    }
-
     /// Executes one non-control-flow-frame instruction against `frame`.
     fn step(
         &mut self,
@@ -473,13 +352,27 @@ impl<'h> Vm<'h> {
             }
             Instruction::StoreLocal(slot) => {
                 let value = self.pop()?;
-                let old = std::mem::replace(&mut frame.locals[slot as usize], value);
-                self.heap.drop_value(old);
+                if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
+                    let stored = self
+                        .heap
+                        .into_native_state(value)
+                        .ok_or(VmError::NativeStateValueMismatch)?;
+                    self.host
+                        .native_state_replace(token, type_id, stored)
+                        .map_err(VmError::NativeState)?;
+                } else {
+                    let old = std::mem::replace(&mut frame.locals[slot as usize], value);
+                    self.heap.drop_value(old);
+                }
             }
             Instruction::Pop => {
                 let value = self.pop()?;
                 self.heap.drop_value(value);
             }
+            Instruction::NativeState(type_word) => self.native_state_new(type_word)?,
+            Instruction::NativeUserData => self.native_user_data()?,
+            Instruction::NativeRecover(type_word) => self.native_recover(type_word)?,
+            Instruction::NativeStateFree => self.native_state_free()?,
             Instruction::Print => {
                 let value = self.pop()?;
                 let line = self
@@ -503,7 +396,14 @@ impl<'h> Vm<'h> {
                 self.stack.push(Value::Struct(id));
             }
             Instruction::GetField(index) => {
-                let base = self.pop()?;
+                let mut base = self.pop()?;
+                if let Value::NativeView { token, type_id } = base {
+                    let stored = self
+                        .host
+                        .native_state_recover(token, type_id)
+                        .map_err(VmError::NativeState)?;
+                    base = self.heap.from_native_state(stored);
+                }
                 let Value::Struct(id) = base else {
                     self.heap.drop_value(base);
                     return Err(VmError::NotAStruct);

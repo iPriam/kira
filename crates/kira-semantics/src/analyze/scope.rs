@@ -106,6 +106,7 @@ impl FnCtx {
             ty,
             mutable,
             ownership,
+            native_state: None,
         });
         self.ownership.push(LocalOwnership {
             mode: ownership,
@@ -121,6 +122,15 @@ impl FnCtx {
     /// Records where `local`'s name was written, for go-to-definition.
     pub(crate) fn note_binding_span(&mut self, local: LocalId, span: Span) {
         self.binding_spans[local.0 as usize] = Some(span);
+    }
+
+    /// Marks a local as a mutable view into opaque native callback state.
+    pub(crate) fn mark_native_state(
+        &mut self,
+        local: LocalId,
+        type_id: kira_runtime_abi::NativeStateTypeId,
+    ) {
+        self.locals[local.0 as usize].native_state = Some(type_id);
     }
 
     /// Where `local`'s name was written, when the source named it.
@@ -175,6 +185,7 @@ impl FnCtx {
             ty,
             mutable,
             ownership: OwnershipMode::Owned,
+            native_state: None,
         });
         self.ownership.push(LocalOwnership::owned());
         self.binding_spans.push(None);
@@ -193,6 +204,7 @@ impl FnCtx {
             ty,
             mutable: false,
             ownership: OwnershipMode::Owned,
+            native_state: None,
         });
         self.ownership.push(LocalOwnership::owned());
         // A capture stands in for the binding it copies, so a jump from a use

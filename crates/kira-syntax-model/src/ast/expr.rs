@@ -1,6 +1,6 @@
 //! Expressions, their field-initializer helper, and the operator enums.
 
-use super::{Block, ExprId};
+use super::{Block, ExprId, TypeRefId};
 use crate::ownership::OwnershipOp;
 use kira_core::Symbol;
 use kira_source::Span;
@@ -85,6 +85,8 @@ pub enum Expr {
         callee: Symbol,
         /// Span of the callee name.
         callee_span: Span,
+        /// Generic type arguments written between the name and value arguments.
+        type_args: Vec<TypeRefId>,
         /// The arguments, in written order, each optionally labeled with the
         /// parameter it binds.
         args: Vec<CallArg>,

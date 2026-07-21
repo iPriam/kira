@@ -7,7 +7,7 @@
 //! instead of panicking.
 
 use kira_bytecode::ModuleValidateError;
-use kira_runtime_abi::{ForeignCallError, ForeignType, NativeCallError};
+use kira_runtime_abi::{ForeignCallError, ForeignType, NativeCallError, NativeStateError};
 
 /// A trap raised while executing bytecode.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -83,6 +83,12 @@ pub enum VmError {
     /// VM-only host gives.
     #[error("foreign call failed: {0}")]
     ForeignCall(ForeignCallError),
+    /// An opaque native callback-state operation failed deterministically.
+    #[error("native callback state failed: {0}")]
+    NativeState(NativeStateError),
+    /// A callback-state instruction received a value it cannot box or name.
+    #[error("native callback-state value has the wrong runtime shape")]
+    NativeStateValueMismatch,
     /// A foreign argument did not have the exact-width type its signature named.
     ///
     /// Analysis checks every foreign call's argument types, so this is a
@@ -118,16 +124,6 @@ pub enum VmError {
         "function {function} passes a struct across the native seam, which has no layout for one"
     )]
     StructAtSeam {
-        /// The function at the boundary.
-        function: u32,
-    },
-    /// A raw pointer reached the `@Native` seam, which does not carry one.
-    ///
-    /// A raw pointer travels the foreign seam (`call_foreign`), not the
-    /// `@Native` one. Reaching this means a signature the backend should have
-    /// refused, so the runtime restates the rule rather than guessing.
-    #[error("function {function} passes a raw pointer across the native seam, which has none")]
-    RawPtrAtSeam {
         /// The function at the boundary.
         function: u32,
     },

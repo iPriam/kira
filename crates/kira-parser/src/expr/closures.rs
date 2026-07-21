@@ -131,6 +131,7 @@ impl Parser<'_> {
             Expr::Call {
                 callee,
                 callee_span,
+                type_args,
                 mut args,
                 ..
             } => {
@@ -138,6 +139,7 @@ impl Parser<'_> {
                 self.tree.add_expr(Expr::Call {
                     callee,
                     callee_span,
+                    type_args,
                     args,
                     span,
                 })
@@ -161,6 +163,7 @@ impl Parser<'_> {
             Expr::Name { symbol, span: name } => self.tree.add_expr(Expr::Call {
                 callee: symbol,
                 callee_span: name,
+                type_args: Vec::new(),
                 args: vec![self.positional_arg(closure)],
                 span,
             }),

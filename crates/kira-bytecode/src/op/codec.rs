@@ -83,6 +83,14 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.extend_from_slice(&func.to_le_bytes());
             encode_place(*slot, path, out);
         }
+        Instruction::NativeState(type_id) => {
+            out.push(o::NATIVE_STATE);
+            out.extend_from_slice(&type_id.to_le_bytes());
+        }
+        Instruction::NativeRecover(type_id) => {
+            out.push(o::NATIVE_RECOVER);
+            out.extend_from_slice(&type_id.to_le_bytes());
+        }
         Instruction::NewStruct(fields) => {
             out.push(o::NEW_STRUCT);
             out.extend_from_slice(&fields.to_le_bytes());
@@ -124,6 +132,8 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::EnumPayload => out.push(o::ENUM_PAYLOAD),
         Instruction::ConvertIntToFloat => out.push(o::CONVERT_INT_TO_FLOAT),
         Instruction::ConvertFloatToInt => out.push(o::CONVERT_FLOAT_TO_INT),
+        Instruction::NativeUserData => out.push(o::NATIVE_USER_DATA),
+        Instruction::NativeStateFree => out.push(o::NATIVE_STATE_FREE),
         Instruction::ConstVoid => out.push(o::CONST_VOID),
         Instruction::Pop => out.push(o::POP),
         Instruction::NegInt => out.push(o::NEG_INT),
@@ -245,6 +255,8 @@ impl Cursor<'_> {
             o::CALL => Instruction::Call(u32::from_le_bytes(self.take()?)),
             o::CALL_NATIVE => Instruction::CallNative(u32::from_le_bytes(self.take()?)),
             o::CALL_FOREIGN => Instruction::CallForeign(u32::from_le_bytes(self.take()?)),
+            o::NATIVE_STATE => Instruction::NativeState(u64::from_le_bytes(self.take()?)),
+            o::NATIVE_RECOVER => Instruction::NativeRecover(u64::from_le_bytes(self.take()?)),
             o::NEW_STRUCT => Instruction::NewStruct(u16::from_le_bytes(self.take()?)),
             o::GET_FIELD => Instruction::GetField(u16::from_le_bytes(self.take()?)),
             o::STORE_FIELD => {
@@ -377,6 +389,8 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::ENUM_PAYLOAD => Instruction::EnumPayload,
         o::CONVERT_INT_TO_FLOAT => Instruction::ConvertIntToFloat,
         o::CONVERT_FLOAT_TO_INT => Instruction::ConvertFloatToInt,
+        o::NATIVE_USER_DATA => Instruction::NativeUserData,
+        o::NATIVE_STATE_FREE => Instruction::NativeStateFree,
         o::PRINT => Instruction::Print,
         o::RETURN => Instruction::Return,
         o::RETURN_VOID => Instruction::ReturnVoid,
