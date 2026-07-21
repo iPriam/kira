@@ -18,6 +18,7 @@ use crate::classes::Qualifier;
 use crate::operators::{resolve_binary, resolve_unary, unary_spelling, unify_branches};
 
 mod calls;
+mod labels;
 
 impl Analyzer<'_> {
     /// Type-checks an AST expression, returning its HIR handle.
@@ -178,12 +179,19 @@ impl Analyzer<'_> {
                 ..
             } => {
                 let name = self.interner.resolve(callee).to_owned();
+                // The value paths below bind by position, not by parameter
+                // name; only a user function or method exposes names to bind a
+                // label against. Each of those paths keeps the written values
+                // and refuses a label it cannot honor.
+                let values = Self::argument_values(&args);
                 // A binding of function type is called by naming it, and the
                 // binding wins over a function of the same name for the same
                 // reason a local wins over a field: the nearer name is the one
                 // a reader means.
-                if let Some(call) = self.analyze_local_closure_call(ctx, &name, &args, callee_span)
+                if let Some(call) =
+                    self.analyze_local_closure_call(ctx, &name, &values, callee_span)
                 {
+                    self.reject_argument_labels(&args, "a call through a function value");
                     return call;
                 }
                 // A class is constructed by calling it, so a call whose callee
@@ -192,18 +200,23 @@ impl Analyzer<'_> {
                     && ctx.resolve(&name).is_none()
                 {
                     self.link_type_name(&name, callee_span);
-                    return self.analyze_class_new(ctx, id, &args, callee_span);
+                    // A constructor fills fields by position; binding them by
+                    // name is not supported on this surface yet.
+                    self.reject_argument_labels(&args, "a class constructor");
+                    return self.analyze_class_new(ctx, id, &values, callee_span);
                 }
                 // A bare call inside a method may name one of the receiver's
                 // own or inherited methods, the way a bare name may read one of
-                // its fields.
+                // its fields. A method exposes parameter names, so labels flow
+                // through unchanged.
                 if let Some(call) = self.implicit_method_call(ctx, &name, &args, callee_span) {
                     return call;
                 }
                 if name == "print" {
                     // `print` borrows: it renders its argument and consumes
                     // nothing the caller could miss.
-                    let arg_hirs: Vec<HirExprId> = args
+                    self.reject_argument_labels(&args, "the `print` builtin");
+                    let arg_hirs: Vec<HirExprId> = values
                         .iter()
                         .map(|&arg| self.analyze_expr(ctx, arg))
                         .collect();
@@ -212,7 +225,8 @@ impl Analyzer<'_> {
                     // A bare call whose name is a recorded `@FFI.Extern`
                     // callable is an ordinary Kira call — no `@Native`, no
                     // ceremony — resolved to `Callee::Foreign`.
-                    self.analyze_foreign_call(ctx, id, &args, callee_span)
+                    self.reject_argument_labels(&args, "a foreign function");
+                    self.analyze_foreign_call(ctx, id, &values, callee_span)
                 } else {
                     self.analyze_user_call_from_syntax(ctx, &name, &[], &args, callee_span)
                 }

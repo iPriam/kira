@@ -170,6 +170,7 @@ mod arithmetic;
 mod arrays;
 mod attempts;
 mod bitwise;
+mod calls;
 mod classes;
 mod closures;
 mod control_flow;

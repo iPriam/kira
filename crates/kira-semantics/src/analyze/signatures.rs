@@ -5,6 +5,7 @@
 //! declarations into [`FuncSig`] rows and answering questions about them —
 //! lookup by name, parameter shapes, and the declaration site a call links to.
 
+use kira_core::Symbol;
 use kira_semantics_model::hir::FuncId;
 use kira_semantics_model::{OwnershipMode, Type};
 use kira_source::{FileSpan, SourceId, Span};
@@ -16,6 +17,12 @@ use super::{Analyzer, Callable};
 pub(crate) struct FuncSig {
     pub(crate) name: String,
     pub(crate) params: Vec<Type>,
+    /// The written name of each parameter, positionally aligned with `params`,
+    /// so a labeled call can bind an argument to the parameter it names.
+    ///
+    /// A method's receiver occupies slot 0 and has no written name, so its
+    /// entry is `None` — a receiver slot can never be named by a label.
+    pub(crate) param_names: Vec<Option<Symbol>>,
     /// How each parameter takes its argument, positionally aligned with
     /// `params`.
     ///
@@ -48,6 +55,11 @@ impl<'a> Analyzer<'a> {
                     .iter()
                     .map(|param| self.resolve_type_ref(param.ty)),
             );
+            // A receiver slot carries no written name, so a label can never
+            // bind to it; the written parameters follow it in order.
+            let mut param_names: Vec<Option<Symbol>> =
+                callable.receiver.map(|_| None).into_iter().collect();
+            param_names.extend(function.params.iter().map(|param| Some(param.name)));
             // A method's receiver borrows: `p.sum()` reads `p` and leaves it
             // usable. The oracle says the same — an unannotated receiver is
             // `borrow_read` — so a method call never demands `move`.
@@ -88,6 +100,7 @@ impl<'a> Analyzer<'a> {
             self.sigs.push(FuncSig {
                 name,
                 params,
+                param_names,
                 param_ownership,
                 return_type,
                 name_span: function.name_span,
@@ -155,6 +168,13 @@ impl<'a> Analyzer<'a> {
     /// The ownership mode each parameter of `id` declares, receiver included.
     pub(crate) fn param_ownership(&self, id: FuncId) -> Vec<OwnershipMode> {
         self.sigs[id.0 as usize].param_ownership.clone()
+    }
+
+    /// The written name of each parameter of `id`, receiver included (`None`).
+    ///
+    /// A labeled call binds arguments to these names.
+    pub(crate) fn param_names(&self, id: FuncId) -> Vec<Option<Symbol>> {
+        self.sigs[id.0 as usize].param_names.clone()
     }
 
     /// The resolved type of each parameter of `id`, receiver included.

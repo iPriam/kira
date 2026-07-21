@@ -36,7 +36,10 @@ fn array_shape(result: &ParseResult, id: kira_syntax_model::ast::ExprId) -> Stri
             args,
             ..
         } => {
-            let rendered: Vec<String> = args.iter().map(|&arg| array_shape(result, arg)).collect();
+            let rendered: Vec<String> = args
+                .iter()
+                .map(|arg| array_shape(result, arg.value))
+                .collect();
             format!(
                 "{}.{}({})",
                 array_shape(result, *receiver),

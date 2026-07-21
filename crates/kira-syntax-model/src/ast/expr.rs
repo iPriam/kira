@@ -85,8 +85,9 @@ pub enum Expr {
         callee: Symbol,
         /// Span of the callee name.
         callee_span: Span,
-        /// The argument expressions, in order.
-        args: Vec<ExprId>,
+        /// The arguments, in written order, each optionally labeled with the
+        /// parameter it binds.
+        args: Vec<CallArg>,
         /// Span covering the whole call.
         span: Span,
     },
@@ -109,8 +110,9 @@ pub enum Expr {
         method: Symbol,
         /// Span of the method name.
         method_span: Span,
-        /// The argument expressions, in order, not counting the receiver.
-        args: Vec<ExprId>,
+        /// The arguments, in written order, not counting the receiver, each
+        /// optionally labeled with the parameter it binds.
+        args: Vec<CallArg>,
         /// Span covering the whole call.
         span: Span,
     },
@@ -224,6 +226,28 @@ pub struct ClosureParam {
     /// The parameter name.
     pub name: Symbol,
     /// Span of the name token.
+    pub span: Span,
+}
+
+/// One argument of an [`Expr::Call`] or [`Expr::MethodCall`].
+///
+/// A bare argument (`f(x)`) carries no label; a labeled argument
+/// (`f(index: x)`, `f(index = x)`) names the parameter it binds. Both binders
+/// are accepted — `=` is canonical, `:` stays valid for the transition window
+/// — and normalize to this one node, so nothing downstream can tell which was
+/// written. Whether a label reorders or merely names its position is a
+/// question for analysis, which holds the callee's parameters; the parser
+/// records the name and stops there.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallArg {
+    /// The parameter name written as a label, or `None` for a positional
+    /// argument.
+    pub label: Option<Symbol>,
+    /// Span of the label name, present exactly when `label` is.
+    pub label_span: Option<Span>,
+    /// The argument value.
+    pub value: ExprId,
+    /// Span covering the label (if any) and the value.
     pub span: Span,
 }
 

@@ -19,7 +19,7 @@
 use kira_lexer::decode_string_literal;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
-use kira_syntax_model::ast::{BinaryOp, Expr, ExprId, UnaryOp};
+use kira_syntax_model::ast::{BinaryOp, CallArg, Expr, ExprId, UnaryOp};
 use kira_syntax_model::ownership::OwnershipOp;
 
 use crate::Parser;
@@ -316,7 +316,7 @@ impl Parser<'_> {
         let name = self.intern_span(name_span);
         self.bump(); // member name
         let args = if self.at(TokenKind::LParen) {
-            Some(self.parse_call_args())
+            Some(self.parse_positional_call_args())
         } else {
             None
         };
@@ -352,13 +352,13 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_call_args(&mut self) -> Vec<ExprId> {
+    fn parse_call_args(&mut self) -> Vec<CallArg> {
         let mut args = Vec::new();
         self.bump(); // `(`
         self.with_struct_literals(|parser| {
             while !parser.at(TokenKind::RParen) && !parser.at_eof() {
                 let before = parser.pos;
-                args.push(parser.parse_expr());
+                args.push(parser.parse_call_arg());
                 if !parser.eat(TokenKind::Comma) {
                     break;
                 }
@@ -369,6 +369,74 @@ impl Parser<'_> {
         });
         self.expect(TokenKind::RParen);
         args
+    }
+
+    /// Parses one call argument, with an optional `label:` / `label =` binder.
+    ///
+    /// A leading identifier is a label only when a binder follows it, so `f(x)`
+    /// and `f(x + 1)` keep `x` as the start of an ordinary expression. Both
+    /// binders are accepted — `=` is canonical, `:` stays valid for the
+    /// transition window — mirroring a struct literal's field, and they
+    /// normalize to one node. What a label binds to is a question for analysis,
+    /// which holds the callee's parameters; the parser only records the name.
+    fn parse_call_arg(&mut self) -> CallArg {
+        let (label, label_span) = if self.at(TokenKind::Identifier)
+            && matches!(self.peek(1).kind, TokenKind::Colon | TokenKind::Equals)
+        {
+            let span = self.current().span;
+            let symbol = self.intern_span(span);
+            self.bump(); // label
+            self.bump(); // binder
+            (Some(symbol), Some(span))
+        } else {
+            (None, None)
+        };
+        let value = self.parse_expr();
+        let start =
+            label_span.map_or_else(|| self.tree.expr(value).span().start, |span| span.start);
+        let span = Span::from_bounds(start, self.previous_end());
+        CallArg {
+            label,
+            label_span,
+            value,
+            span,
+        }
+    }
+
+    /// Wraps a value expression as a positional (unlabeled) call argument.
+    ///
+    /// A trailing closure attaches this way: `f { … }` grows the call by one
+    /// argument that carries no label.
+    pub(crate) fn positional_arg(&self, value: ExprId) -> CallArg {
+        let span = self.tree.expr(value).span();
+        CallArg {
+            label: None,
+            label_span: None,
+            value,
+            span,
+        }
+    }
+
+    /// Parses a `(...)` argument list for a position that takes no labels,
+    /// reporting any that appear and keeping the values.
+    ///
+    /// An enum variant payload (`.Ok(value)`) is positional: the payload binds
+    /// by shape, not by a parameter name, so a label there is a mistake rather
+    /// than a binder.
+    fn parse_positional_call_args(&mut self) -> Vec<ExprId> {
+        let args = self.parse_call_args();
+        args.into_iter()
+            .map(|arg| {
+                if let Some(span) = arg.label_span {
+                    self.error(
+                        span,
+                        "KPAR056",
+                        "an enum variant payload does not take argument labels",
+                    );
+                }
+                arg.value
+            })
+            .collect()
     }
 
     fn parse_paren(&mut self) -> ExprId {

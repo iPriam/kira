@@ -9,7 +9,7 @@
 use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_semantics_model::{StructId, Type};
 use kira_source::Span;
-use kira_syntax_model::ast::ExprId;
+use kira_syntax_model::ast::{CallArg, ExprId};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::classes::{Member, Qualifier};
@@ -209,7 +209,7 @@ impl Analyzer<'_> {
         ctx: &mut FnCtx,
         qualifier: StructId,
         method: &str,
-        args: &[ExprId],
+        args: &[CallArg],
         span: Span,
     ) -> HirExprId {
         let Some(receiver) = ctx.receiver else {
@@ -349,7 +349,7 @@ impl Analyzer<'_> {
         &mut self,
         ctx: &mut FnCtx,
         name: &str,
-        args: &[ExprId],
+        args: &[CallArg],
         span: Span,
     ) -> Option<HirExprId> {
         let owner = ctx.receiver?;
