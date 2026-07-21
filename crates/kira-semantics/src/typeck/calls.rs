@@ -205,7 +205,11 @@ impl Analyzer<'_> {
             slots[index as usize] = Some(value);
         }
 
-        // Fill what the literal left out.
+        // Fill what the literal left out. A `@FFI.Struct { layout: c }` starts
+        // from a zeroed value, so an omitted field with no default takes its
+        // zero rather than being reported missing — the oracle's construction
+        // rule.
+        let is_c_layout = self.ffi_c_layout_named(&struct_name).is_some();
         let mut fields = Vec::with_capacity(field_count);
         let mut missing: Vec<String> = Vec::new();
         for index in 0..field_count as u32 {
@@ -224,6 +228,9 @@ impl Analyzer<'_> {
                         .map(|field| field.ty);
                     let value = self.analyze_default(default, declared);
                     fields.push(value);
+                }
+                None if is_c_layout => {
+                    fields.push(self.ffi_zero_field(id, index, name_span));
                 }
                 None => {
                     let field_name = self

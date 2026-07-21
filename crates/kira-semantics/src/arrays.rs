@@ -128,6 +128,16 @@ impl Analyzer<'_> {
         let base_ty = self.program.expr(base_hir).type_of();
         let index_hir = self.analyze_index_expr(ctx, index);
 
+        // Indexing an `@FFI.Array` reads its inline C storage, which is declared
+        // but not yet executable — refused precisely rather than as "cannot
+        // index a struct".
+        if let Type::Struct(id) = base_ty
+            && let Some(kind @ crate::ffi_types::FfiStructKind::Array) = self.ffi_struct_kind(id)
+        {
+            let _ = index_hir;
+            return self.refuse_ffi_not_executable(kind, id, span);
+        }
+
         let Some(element) = self.program.types.element_of(base_ty) else {
             // An error base already spoke; do not pile on.
             if base_ty != Type::Error {

@@ -10,6 +10,7 @@ mod closures;
 mod definitions;
 mod enums;
 mod exports;
+mod ffi_types;
 mod foreign;
 mod generics;
 mod imports;

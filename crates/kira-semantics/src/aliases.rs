@@ -18,20 +18,35 @@ use std::collections::HashMap;
 
 use kira_semantics_model::Type;
 use kira_source::Span;
-use kira_syntax_model::ast::{Item, TypeRefId};
+use kira_syntax_model::ast::{FfiTypeKind, Item, TypeRefId};
 
 use crate::analyze::Analyzer;
 use crate::types::NameContext;
 
-/// One `type Name = Target` declaration, plus where its resolution stands.
+/// One alias declaration, plus where its resolution stands.
+///
+/// Covers `type Name = Target`, `@FFI.Alias { target: T }` (both
+/// [`AliasBody::Written`]), and `@FFI.Pointer { target: T }`
+/// ([`AliasBody::RawPtr`], since a native pointer is one machine word whatever
+/// it points at).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AliasHeader {
-    /// The written target type.
-    target: TypeRefId,
+    /// What the alias resolves to.
+    body: AliasBody,
     /// Span of the alias name, where a cycle is reported.
     name_span: Span,
     /// How far this alias has got through resolution.
     state: AliasState,
+}
+
+/// What an [`AliasHeader`] stands for.
+#[derive(Debug, Clone, Copy)]
+enum AliasBody {
+    /// A written target type, resolved lazily against its file's imports.
+    Written(TypeRefId),
+    /// The single-word native pointer type, for `@FFI.Pointer`. No target is
+    /// resolved: every native pointer crosses the seam as [`Type::RawPtr`].
+    RawPtr,
 }
 
 /// The three states an alias passes through, in order.
@@ -62,29 +77,62 @@ impl Analyzer<'_> {
     pub(crate) fn collect_type_aliases(&mut self) {
         let tree = self.tree;
         for (source, item) in tree.items_with_source() {
-            let Item::TypeAlias(declaration) = item else {
-                continue;
-            };
             // An alias is written in one file, so its diagnostics point there.
             self.source = source;
-            let name = self.interner.resolve(declaration.name).to_owned();
-            if let Some(what) = self.alias_name_collision(&name) {
-                self.emit(
-                    declaration.name_span,
-                    "KSEM130",
-                    format!("type alias `{name}` collides with {what}"),
-                );
-                continue;
+            match item {
+                Item::TypeAlias(declaration) => {
+                    let name = self.interner.resolve(declaration.name).to_owned();
+                    self.register_alias(
+                        name,
+                        declaration.name_span,
+                        AliasBody::Written(declaration.target),
+                    );
+                }
+                // `@FFI.Alias`/`@FFI.Pointer` declare a typedef, not a struct:
+                // the struct table skips them (`is_alias_shaped`) and they live
+                // here instead, sharing the cycle guard and collision check.
+                Item::Struct(declaration) => {
+                    let body = match &declaration.ffi.as_ref().map(|mark| &mark.kind) {
+                        Some(FfiTypeKind::Alias { target }) => match target {
+                            Some(target) => AliasBody::Written(*target),
+                            None => {
+                                self.emit(
+                                    declaration.name_span,
+                                    "KSEM188",
+                                    "`@FFI.Alias` is missing its required `target` type",
+                                );
+                                continue;
+                            }
+                        },
+                        Some(FfiTypeKind::Pointer { .. }) => AliasBody::RawPtr,
+                        _ => continue,
+                    };
+                    let name = self.interner.resolve(declaration.name).to_owned();
+                    self.register_alias(name, declaration.name_span, body);
+                }
+                _ => continue,
             }
-            self.aliases.insert(
-                name,
-                AliasHeader {
-                    target: declaration.target,
-                    name_span: declaration.name_span,
-                    state: AliasState::Unresolved,
-                },
-            );
         }
+    }
+
+    /// Registers one alias, rejecting a name that already means something else.
+    fn register_alias(&mut self, name: String, name_span: Span, body: AliasBody) {
+        if let Some(what) = self.alias_name_collision(&name) {
+            self.emit(
+                name_span,
+                "KSEM130",
+                format!("type alias `{name}` collides with {what}"),
+            );
+            return;
+        }
+        self.aliases.insert(
+            name,
+            AliasHeader {
+                body,
+                name_span,
+                state: AliasState::Unresolved,
+            },
+        );
     }
 
     /// What `name` already means, when an alias may not claim it.
@@ -99,6 +147,12 @@ impl Analyzer<'_> {
         // against the declarations as written.
         for item in self.tree.items() {
             let (kind, declared) = match item {
+                // A `@FFI.Alias`/`@FFI.Pointer` struct *is* this alias, not a
+                // rival declaration of the name — skip it so it does not collide
+                // with itself.
+                Item::Struct(declaration) if crate::ffi_types::is_alias_shaped(declaration) => {
+                    continue;
+                }
                 Item::Struct(declaration) => ("struct", declaration.name),
                 Item::Enum(declaration) => ("enum", declaration.name),
                 Item::Class(declaration) => ("class", declaration.name),
@@ -136,7 +190,10 @@ impl Analyzer<'_> {
             AliasState::Unresolved => {}
         }
         self.set_alias_state(name, AliasState::Resolving);
-        let ty = self.resolve_type_in(header.target, context);
+        let ty = match header.body {
+            AliasBody::RawPtr => Type::RawPtr,
+            AliasBody::Written(target) => self.resolve_type_in(target, context),
+        };
         let state = match ty {
             Type::Error => AliasState::Unresolved,
             resolved => AliasState::Resolved(resolved),

@@ -19,7 +19,7 @@ use kira_runtime_abi::Execution;
 use kira_source::{FileSpan, Span};
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
-    Block, ExportMark, ForeignMark, Function, ImportDecl, Item, UnsupportedItem,
+    Block, ExportMark, FfiTypeMark, ForeignMark, Function, ImportDecl, Item, UnsupportedItem,
 };
 
 use crate::Parser;
@@ -35,6 +35,9 @@ pub(crate) struct Annotations {
     pub(crate) export: Option<ExportMark>,
     /// The `@FFI.Extern { ... }` marker, when one was written.
     pub(crate) foreign: Option<ForeignMark>,
+    /// The `@FFI.Struct`/`Pointer`/`Alias`/`Array`/`Callback` marker, when one
+    /// was written. These ride a struct declaration, not a function.
+    pub(crate) ffi_type: Option<FfiTypeMark>,
 }
 
 impl Default for Annotations {
@@ -44,6 +47,7 @@ impl Default for Annotations {
             execution: Execution::Inherited,
             export: None,
             foreign: None,
+            ffi_type: None,
         }
     }
 }
@@ -146,7 +150,20 @@ impl Parser<'_> {
                      handle. Declare this a `class` to export it.",
                 );
             }
-            if let Some(declaration) = self.parse_struct() {
+            // `@FFI.Extern` rides a function, never a struct: a struct declares
+            // a type, not a foreign callable. The mark is dropped and refused so
+            // the struct still parses as an ordinary type.
+            if let Some(foreign) = &annotations.foreign {
+                self.error(
+                    foreign.span,
+                    "KPAR056",
+                    "`@FFI.Extern` annotates a foreign *function*, not a struct; a \
+                     C-layout type is `@FFI.Struct`",
+                );
+            }
+            if let Some(mut declaration) = self.parse_struct() {
+                declaration.ffi = annotations.ffi_type;
+                declaration.span = Span::from_bounds(start.start, self.previous_end());
                 self.tree.push_item(self.source, Item::Struct(declaration));
             }
         } else {
@@ -239,6 +256,19 @@ impl Parser<'_> {
         &mut self,
         annotations: &Annotations,
     ) -> Option<Function> {
+        // A struct-shaped `@FFI.*` form declares a *type*, so it never rides a
+        // function. It is refused and dropped so the function still parses.
+        if let Some(mark) = &annotations.ffi_type {
+            self.error(
+                mark.name_span,
+                "KPAR056",
+                format!(
+                    "`@FFI.{}` declares a C type and annotates a `struct`, not a \
+                     function; a foreign function is `@FFI.Extern`",
+                    mark.kind.label()
+                ),
+            );
+        }
         let mut function = self.parse_function(
             annotations.is_main,
             annotations.execution,

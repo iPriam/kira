@@ -46,6 +46,7 @@ impl Parser<'_> {
                 name_span,
                 fields,
                 methods,
+                ffi: None,
                 span,
             });
         }
@@ -97,6 +98,7 @@ impl Parser<'_> {
             name_span,
             fields,
             methods,
+            ffi: None,
             span,
         })
     }

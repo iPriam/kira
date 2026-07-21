@@ -205,6 +205,32 @@ impl Analyzer<'_> {
                     self.reject_argument_labels(&args, "a class constructor");
                     return self.analyze_class_new(ctx, id, &values, callee_span);
                 }
+                // `T()` on a `@FFI.Struct { layout: c }` is the zeroed-value
+                // form: it takes no arguments and every field takes its zero.
+                // Field initializers are written `T { field: value }` instead.
+                if let Some(id) = self.ffi_c_layout_named(&name)
+                    && ctx.resolve(&name).is_none()
+                {
+                    self.link_type_name(&name, callee_span);
+                    self.reject_argument_labels(&args, "a C-layout struct constructor");
+                    if !values.is_empty() {
+                        let struct_name = self.program.types.type_name(Type::Struct(id));
+                        for &value in &values {
+                            self.analyze_expr(ctx, value);
+                        }
+                        self.emit(
+                            callee_span,
+                            "KSEM189",
+                            format!(
+                                "C-layout `{struct_name}` takes no positional arguments: write \
+                                 `{struct_name}()` for a zeroed value or `{struct_name} {{ field: \
+                                 value }}` to initialize fields"
+                            ),
+                        );
+                        return self.program.exprs.alloc(HirExpr::Error);
+                    }
+                    return self.ffi_zero_filled_struct(id, callee_span);
+                }
                 // A bare call inside a method may name one of the receiver's
                 // own or inherited methods, the way a bare name may read one of
                 // its fields. A method exposes parameter names, so labels flow

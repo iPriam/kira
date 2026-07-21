@@ -23,6 +23,13 @@ use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{ForeignMark, Function, Item, Param, TypeRef};
 
 use crate::analyze::{Analyzer, FnCtx};
+use crate::ffi_types::FfiStructKind;
+
+/// Whether a `@FFI.*` struct kind is one whose runtime behavior is not yet
+/// executable — an array or a callback, but not a C-layout struct.
+fn is_deferred_ffi(kind: FfiStructKind) -> bool {
+    matches!(kind, FfiStructKind::Array | FfiStructKind::Callback)
+}
 
 /// Whether a foreign type sits in a parameter or the result position.
 ///
@@ -412,6 +419,14 @@ impl<'a> Analyzer<'a> {
                     None
                 }
             },
+            // A `@FFI.Callback`/`@FFI.Array` type at the seam is a declared but
+            // not-yet-executable form, not a generic aggregate; its refusal
+            // names the form so the fix is clear.
+            Type::Struct(id) if self.ffi_struct_kind(id).is_some_and(is_deferred_ffi) => {
+                let kind = self.ffi_struct_kind(id).expect("checked by the guard");
+                self.emit_ffi_not_executable(kind, id, span);
+                None
+            }
             Type::Struct(_) | Type::Array(_) | Type::Enum(_) => {
                 self.emit(
                     span,

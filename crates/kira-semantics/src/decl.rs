@@ -84,12 +84,25 @@ impl<'a> Analyzer<'a> {
             let Item::Struct(declaration) = item else {
                 continue;
             };
+            // `@FFI.Alias`/`@FFI.Pointer` become type aliases, not struct rows —
+            // `collect_type_aliases` already registered them, so they take no
+            // struct id here.
+            if crate::ffi_types::is_alias_shaped(declaration) {
+                continue;
+            }
             let name = self.interner.resolve(declaration.name).to_owned();
             match self.program.types.structs_mut().declare(StructDef {
                 name: name.clone(),
                 fields: Vec::new(),
             }) {
                 Some(id) => {
+                    // A `@FFI.Struct`/`Array`/`Callback` mints a nominal id; the
+                    // kind decides zero-fill construction and use-site refusals.
+                    if let Some(crate::ffi_types::FfiClassification::Struct(kind)) =
+                        crate::ffi_types::classify(declaration)
+                    {
+                        self.ffi_structs.insert(id, kind);
+                    }
                     // Reserve the defaults slot now, in id order, so a function
                     // type minted while the second pass resolves fields (which
                     // pushes its own slot) cannot land on this struct's id.
