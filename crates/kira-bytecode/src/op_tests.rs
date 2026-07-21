@@ -158,6 +158,73 @@ fn the_conversion_opcodes_are_appended_after_the_foreign_call() {
 }
 
 #[test]
+fn the_call_mut_opcode_is_appended_after_the_conversions() {
+    // Append-only, spelled literally: `CALL_MUT` starts one past
+    // `CONVERT_FLOAT_TO_INT`, which was the last opcode before it, and nothing
+    // earlier moved. A renumber fails here rather than silently redirecting a
+    // module already on disk.
+    assert_eq!(opcode::CONVERT_FLOAT_TO_INT, 0x47);
+    assert_eq!(opcode::CALL_MUT, 0x48);
+}
+
+#[test]
+fn round_trips_a_mutating_call() {
+    // Both the empty-path form (`g.mutate()`) and a form walking a field then a
+    // stack-supplied array index, so a decoder that dropped or reordered a step
+    // fails here.
+    let code = vec![
+        Instruction::CallMut {
+            func: 0,
+            slot: 0,
+            path: PlacePath::new(vec![]).expect("an empty path"),
+        },
+        Instruction::CallMut {
+            func: 4_294_967_295,
+            slot: 7,
+            path: PlacePath::new(vec![PathStep::Field(2), PathStep::Index])
+                .expect("a two-step path"),
+        },
+        Instruction::ReturnVoid,
+    ];
+    let bytes = encode(&code);
+    assert_eq!(decode(&bytes).unwrap(), code);
+}
+
+#[test]
+fn a_truncated_mutating_call_operand_is_reported() {
+    // CALL_MUT opcode with fewer than four function-index bytes.
+    let err = decode(&[opcode::CALL_MUT, 0x00, 0x00]).unwrap_err();
+    assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
+}
+
+#[test]
+fn a_mutating_call_with_a_truncated_place_is_reported() {
+    // A full function index but a step count that promises a step whose bytes
+    // never arrive.
+    let mut bytes = vec![opcode::CALL_MUT];
+    bytes.extend_from_slice(&0u32.to_le_bytes()); // func
+    bytes.extend_from_slice(&0u16.to_le_bytes()); // slot
+    bytes.extend_from_slice(&1u16.to_le_bytes()); // one step promised
+    // ...but no step tag follows.
+    let err = decode(&bytes).unwrap_err();
+    assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
+}
+
+#[test]
+fn a_mutating_call_with_an_unknown_place_step_is_reported() {
+    let mut bytes = vec![opcode::CALL_MUT];
+    bytes.extend_from_slice(&0u32.to_le_bytes()); // func
+    bytes.extend_from_slice(&0u16.to_le_bytes()); // slot
+    bytes.extend_from_slice(&1u16.to_le_bytes()); // one step
+    bytes.push(0xff); // an unknown step tag
+    let err = decode(&bytes).unwrap_err();
+    assert!(matches!(
+        err,
+        DecodeError::UnknownOpcode { opcode: 0xff, .. }
+    ));
+}
+
+#[test]
 fn unknown_opcode_is_reported() {
     let err = decode(&[0xff]).unwrap_err();
     assert!(matches!(

@@ -148,6 +148,24 @@ pub enum Instruction {
     /// `HostCapabilities::call_foreign`, so the VM stays free of any
     /// dynamic-loading dependency and still compiles for wasm.
     CallForeign(u32),
+    /// Call the mutating method at the given index, then write its final
+    /// receiver back through a place in the caller's frame.
+    ///
+    /// The arguments — the receiver copy first, then the rest — are already on
+    /// the stack, exactly as [`Instruction::Call`]; any array indices the place
+    /// needs are pushed *after* them, per the [`PlacePath`] convention. The
+    /// callee runs like any other, but on return the runtime moves its slot 0
+    /// (the mutated receiver) into `slot` walked by `path` in the caller,
+    /// dropping whatever was there, before pushing the call's result. An empty
+    /// path writes the caller's local slot itself — the `g.mutate()` case.
+    CallMut {
+        /// The function index to call.
+        func: u32,
+        /// The caller-frame local slot the writeback place is rooted at.
+        slot: u16,
+        /// Steps to walk to the writeback location; may be empty.
+        path: PlacePath,
+    },
     /// Pop a value, format it, emit one output line, and push unit.
     Print,
     /// Return the stack top from the current function.
@@ -466,6 +484,12 @@ mod opcode {
     // runtime representation, so it emits no instruction at all.
     pub const CONVERT_INT_TO_FLOAT: u8 = 0x46;
     pub const CONVERT_FLOAT_TO_INT: u8 = 0x47;
+
+    // The mutating-method call. Appended after `CONVERT_FLOAT_TO_INT`, which was
+    // the last opcode before it; adding an opcode is not an ABI change. It
+    // carries a `u32` function index plus a place operand (slot and path), so it
+    // is decoded in `Cursor::next_instruction` rather than as a nullary opcode.
+    pub const CALL_MUT: u8 = 0x48;
 }
 
 #[cfg(test)]

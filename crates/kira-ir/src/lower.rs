@@ -82,6 +82,7 @@ impl Lowerer<'_> {
             locals: function.locals.iter().map(|local| local.ty).collect(),
             return_type: function.return_type,
             execution: function.execution,
+            mutates_self: function.mutates_self,
             body,
         }
     }
@@ -151,12 +152,18 @@ impl Lowerer<'_> {
                 otherwise: self.lower_expr(otherwise),
                 ty,
             },
-            HirExpr::Call { callee, args, ty } => {
+            HirExpr::Call {
+                callee,
+                args,
+                ty,
+                writeback,
+            } => {
                 let ir_args = args.iter().map(|&arg| self.lower_expr(arg)).collect();
                 IrExpr::Call {
                     callee: lower_callee(callee),
                     args: ir_args,
                     result: ty,
+                    writeback: writeback.as_ref().map(|place| self.lower_place(place)),
                 }
             }
             HirExpr::StructNew { struct_id, fields } => {

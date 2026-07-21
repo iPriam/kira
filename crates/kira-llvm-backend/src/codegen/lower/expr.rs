@@ -38,7 +38,12 @@ impl FunctionLowering<'_, '_> {
                 otherwise,
                 ty,
             } => self.lower_select(cond, then, otherwise, ty),
-            IrExpr::Call { callee, args, .. } => self.lower_call(callee, &args),
+            IrExpr::Call {
+                callee,
+                args,
+                writeback,
+                ..
+            } => self.lower_call(callee, &args, writeback.as_ref()),
             IrExpr::StructNew { struct_id, fields } => self.lower_struct_new(struct_id, &fields),
             IrExpr::EnumNew {
                 enum_id,

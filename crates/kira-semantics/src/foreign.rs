@@ -512,6 +512,7 @@ impl<'a> Analyzer<'a> {
             callee: Callee::Foreign(id),
             args: arg_hirs,
             ty,
+            writeback: None,
         })
     }
 }

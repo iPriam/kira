@@ -39,6 +39,7 @@ mod tests {
             callee: Callee::Builtin(Builtin::Print),
             args: vec![one],
             ty: Type::Void,
+            writeback: None,
         });
         let print_stmt = program.stmts.alloc(HirStmt::Expr { expr: call });
         let return_stmt = program.stmts.alloc(HirStmt::Return { value: None });
@@ -50,6 +51,7 @@ mod tests {
             body: vec![print_stmt, return_stmt],
             is_main: true,
             execution: kira_runtime_abi::Execution::Inherited,
+            mutates_self: false,
             name_span: Span::new(0, 4),
         });
         program.main = Some(FuncId(0));
@@ -113,6 +115,7 @@ mod tests {
             callee: Callee::Foreign(ForeignId(0)),
             args: vec![a, b],
             ty: Type::Int(kira_semantics_model::IntSpelling::I32),
+            writeback: None,
         });
         let eval = program.stmts.alloc(HirStmt::Expr { expr: call });
         program.functions[0].body = vec![eval];
