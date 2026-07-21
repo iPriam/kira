@@ -145,6 +145,13 @@ pub struct HirFunction {
     pub is_main: bool,
     /// The engine this function's body runs on, as written in the source.
     pub execution: Execution,
+    /// Whether this function is a method that mutates its receiver.
+    ///
+    /// `true` only for a method whose body assigns to `self`, appends through
+    /// `self`, or calls another mutating method on `self` (transitively). A
+    /// mutating method takes its receiver by reference so the mutation is
+    /// written back to the caller; every other function carries `false`.
+    pub mutates_self: bool,
     /// Span of the function's name, for diagnostics.
     pub name_span: Span,
 }
@@ -323,6 +330,16 @@ pub enum HirExpr {
         args: Vec<HirExprId>,
         /// The call's result type.
         ty: Type,
+        /// The place the callee's final `self` is written back into, set only
+        /// when the callee is a method that mutates its receiver.
+        ///
+        /// `None` for every ordinary call, which then behaves exactly as it did
+        /// before value-semantics writeback existed. When it is `Some`, `args[0]`
+        /// is the receiver and the mutated receiver is stored back into this
+        /// place after the call — the side effect that makes `self.field = x`
+        /// inside a method observable to the caller, while the call still yields
+        /// the method's declared return value.
+        writeback: Option<HirPlace>,
     },
     /// Construction of a struct value.
     ///

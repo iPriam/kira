@@ -238,7 +238,11 @@ impl Analyzer<'_> {
             ty: Type::Struct(receiver),
         });
         let target = self.parent_call_name(receiver, qualifier, method);
-        self.analyze_user_call_from_syntax(ctx, &target, &[self_hir], args, span)
+        let call = self.analyze_user_call_from_syntax(ctx, &target, &[self_hir], args, span);
+        // A parent-qualified call still runs on this instance's `self`, so a
+        // mutating parent method writes `self` back.
+        self.record_mut_self(call, &target, local);
+        call
     }
 
     /// The registered name of `qualifier`'s copy of `method` for `receiver`.
@@ -372,6 +376,11 @@ impl Analyzer<'_> {
             local,
             ty: Type::Struct(owner),
         });
-        Some(self.analyze_user_call_from_syntax(ctx, &qualified, &[receiver], args, span))
+        let call = self.analyze_user_call_from_syntax(ctx, &qualified, &[receiver], args, span);
+        // A bare call on a mutating sibling method writes `self` back: the
+        // enclosing method is itself mutating (the fixpoint marks it so), so
+        // `self` is a mutable place.
+        self.record_mut_self(call, &qualified, local);
+        Some(call)
     }
 }

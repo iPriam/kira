@@ -36,6 +36,7 @@ mod ffi_types;
 mod foreign;
 mod generics;
 mod imports;
+mod mutation;
 mod operators;
 mod ownership;
 mod place;

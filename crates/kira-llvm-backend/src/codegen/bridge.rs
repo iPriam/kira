@@ -180,6 +180,7 @@ mod tests {
             body: vec![ret],
             is_main: false,
             execution: Execution::Native,
+            mutates_self: false,
             name_span: Span::new(0, 6),
         });
         let ir = kira_ir::lower(&program);

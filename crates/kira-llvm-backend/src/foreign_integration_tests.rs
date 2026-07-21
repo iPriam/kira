@@ -77,6 +77,7 @@ fn fixture_program() -> IrProgram {
         body,
         is_main: true,
         execution: kira_runtime_abi::Execution::Inherited,
+        mutates_self: false,
         name_span: Span::new(0, 4),
     });
     program.main = Some(kira_semantics_model::hir::FuncId(0));
@@ -166,11 +167,13 @@ fn build_body(program: &mut HirProgram, body: &mut Vec<kira_semantics_model::hir
         callee: Callee::Foreign(ForeignId(9)),
         args: vec![],
         ty: Type::RawPtr,
+        writeback: None,
     });
     let ptr_word = program.exprs.alloc(HirExpr::Call {
         callee: Callee::Foreign(ForeignId(10)),
         args: vec![make_ptr],
         ty: Type::INT,
+        writeback: None,
     });
     body.push(print_stmt(program, ptr_word, Type::INT));
 }
@@ -190,6 +193,7 @@ fn call_print(
         callee: Callee::Foreign(ForeignId(foreign_index)),
         args: arg_ids,
         ty: result_ty,
+        writeback: None,
     });
     print_stmt(program, call, result_ty)
 }
@@ -205,6 +209,7 @@ fn print_stmt(
         callee: Callee::Builtin(Builtin::Print),
         args: vec![value],
         ty: Type::Void,
+        writeback: None,
     });
     program.stmts.alloc(HirStmt::Expr { expr: print })
 }

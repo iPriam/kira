@@ -27,21 +27,43 @@ pub(crate) enum PlacePurpose {
     Assign,
     /// The receiver of `append` (`xs.append(1)`).
     Append,
+    /// The receiver of a call to a method that mutates its receiver
+    /// (`g.mutate()`), which must name mutable storage so the mutation can be
+    /// written back.
+    MutCall,
 }
 
 impl PlacePurpose {
     /// The message for a target that does not name storage at all.
-    fn not_a_place(self) -> &'static str {
+    fn not_a_place(self) -> String {
         match self {
             PlacePurpose::Assign => {
                 "the left side of an assignment must be a variable, a field, or an element"
+                    .to_owned()
             }
             // A temporary is the likely mistake here, and naming it is more
             // use than restating the grammar.
             PlacePurpose::Append => {
                 "`append` needs a variable to append to; appending to a temporary value \
                  would write to something that is discarded immediately"
+                    .to_owned()
             }
+            PlacePurpose::MutCall => {
+                "a mutating method needs a variable to call it on; calling it on a temporary \
+                 value would mutate something discarded immediately"
+                    .to_owned()
+            }
+        }
+    }
+
+    /// The diagnostic code for a target that does not name storage.
+    ///
+    /// The mutating-call case is a fresh code: it is a call that failed, not the
+    /// left side of an assignment the reader never wrote.
+    fn not_a_place_code(self) -> &'static str {
+        match self {
+            PlacePurpose::Assign | PlacePurpose::Append => "KSEM025",
+            PlacePurpose::MutCall => "KSEM211",
         }
     }
 
@@ -54,6 +76,10 @@ impl PlacePurpose {
             PlacePurpose::Append => {
                 format!("cannot append to immutable binding `{name}` (declare it with `var`)")
             }
+            PlacePurpose::MutCall => format!(
+                "cannot call a mutating method through immutable binding `{name}` \
+                 (declare it with `var`)"
+            ),
         }
     }
 }
@@ -156,7 +182,11 @@ impl Analyzer<'_> {
                 Some((place, element))
             }
             other => {
-                self.emit(other.span(), "KSEM025", purpose.not_a_place());
+                self.emit(
+                    other.span(),
+                    purpose.not_a_place_code(),
+                    purpose.not_a_place(),
+                );
                 None
             }
         }

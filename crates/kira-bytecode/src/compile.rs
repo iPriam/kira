@@ -406,9 +406,20 @@ impl FnCompiler<'_> {
                 self.compile_expr(value)?;
                 self.code.push(Instruction::EnumPayload);
             }
-            IrExpr::Call { callee, args, .. } => {
+            IrExpr::Call {
+                callee,
+                args,
+                writeback,
+                ..
+            } => {
                 let callee = *callee;
                 let args = args.clone();
+                // A call that mutates its receiver carries the writeback place;
+                // it compiles to `CallMut`, which threads the mutated receiver
+                // back after the call.
+                if let Some(place) = writeback.clone() {
+                    return self.compile_mut_call(callee, &args, &place);
+                }
                 for arg in args {
                     self.compile_expr(arg)?;
                 }
@@ -418,6 +429,15 @@ impl FnCompiler<'_> {
                     // time, so the boundary costs a different opcode rather
                     // than a branch on every call.
                     IrCallee::User(index) => {
+                        // Every call to a mutating method carries a writeback,
+                        // handled above; one reaching here without it would
+                        // compile to a plain `Call` and silently lose the
+                        // mutation, so it is refused instead.
+                        if self.function_mutates_self(index) {
+                            return Err(CompileError::MalformedMutCall {
+                                function: self.function_name.to_owned(),
+                            });
+                        }
                         let native = self
                             .engines
                             .get(index as usize)
@@ -436,6 +456,58 @@ impl FnCompiler<'_> {
             }
         }
         Ok(())
+    }
+
+    /// Compiles a call to a mutating method into a [`Instruction::CallMut`].
+    ///
+    /// The arguments — the receiver copy first, then the rest — are pushed
+    /// exactly as an ordinary call pushes them; the writeback place's index
+    /// expressions follow, per the place convention, so the runtime pops the
+    /// indices off the top before the arguments. The callee's mutated receiver
+    /// (its slot 0) is written back through the place when it returns.
+    fn compile_mut_call(
+        &mut self,
+        callee: IrCallee,
+        args: &[IrExprId],
+        place: &IrPlace,
+    ) -> Result<(), CompileError> {
+        // Only a user method is ever a mutating callee: `print` and a foreign
+        // function have no receiver to write back.
+        let IrCallee::User(index) = callee else {
+            return Err(CompileError::MalformedMutCall {
+                function: self.function_name.to_owned(),
+            });
+        };
+        // A struct receiver cannot cross the seam, so a mutating call is always
+        // same-engine; a native callee here means the split misplaced one.
+        if self
+            .engines
+            .get(index as usize)
+            .is_some_and(|engine| *engine == Execution::Native)
+        {
+            return Err(CompileError::MutCallAcrossSeam {
+                function: self.function_name.to_owned(),
+            });
+        }
+        for &arg in args {
+            self.compile_expr(arg)?;
+        }
+        let slot = self.local_slot(place.local)?;
+        let path = self.compile_place_indices(place)?;
+        self.code.push(Instruction::CallMut {
+            func: index,
+            slot,
+            path,
+        });
+        Ok(())
+    }
+
+    /// Whether the function at `index` is a mutating method.
+    fn function_mutates_self(&self, index: u32) -> bool {
+        self.program
+            .functions
+            .get(index as usize)
+            .is_some_and(|function| function.mutates_self)
     }
 
     fn compile_binary(

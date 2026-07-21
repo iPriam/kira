@@ -1,7 +1,7 @@
 //! Call lowering: `print`, direct calls within this half, and the crossing into
 //! the VM half of a hybrid program.
 
-use kira_ir::{IrCallee, IrExprId};
+use kira_ir::{IrCallee, IrExprId, IrPlace};
 use kira_semantics_model::Type;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
@@ -11,10 +11,17 @@ use crate::LlvmError;
 
 impl FunctionLowering<'_, '_> {
     /// Lowers a call to `print` or a user function.
+    ///
+    /// `writeback` is `Some` only for a call to a method that mutates its
+    /// receiver; then `args[0]` is the receiver and the place is where the
+    /// mutation must land. The mutating case passes the receiver by pointer into
+    /// that place, so the callee's writes to `self` are the caller's, and the
+    /// call still yields the method's declared result.
     pub(super) fn lower_call(
         &mut self,
         callee: IrCallee,
         args: &[IrExprId],
+        writeback: Option<&IrPlace>,
     ) -> Result<LLVMValueRef, LlvmError> {
         match callee {
             IrCallee::Print => {
@@ -75,6 +82,20 @@ impl FunctionLowering<'_, '_> {
                     .functions
                     .get(index as usize)
                     .ok_or(LlvmError::Unsupported("a call to an unknown function"))?;
+                // A mutating method takes its receiver by reference: the caller
+                // hands over a pointer into the receiver's place, so the callee's
+                // writes to `self` land in the caller's storage.
+                if let Some(place) = writeback {
+                    return match target {
+                        Some(_) => self.lower_mut_call(index, place, args),
+                        // A struct receiver cannot cross the seam, so a mutating
+                        // call is never to the VM half; the frontend and the
+                        // bytecode compiler refuse it before here.
+                        None => Err(LlvmError::Unsupported(
+                            "a mutating method call across the hybrid seam",
+                        )),
+                    };
+                }
                 // Arguments evaluate left to right, as the VM pushes them.
                 let mut values = Vec::with_capacity(args.len());
                 for &argument in args {
@@ -98,6 +119,42 @@ impl FunctionLowering<'_, '_> {
             // exact-width signature and invoke the generated adapter directly.
             IrCallee::Foreign(index) => self.lower_foreign_call(index, args),
         }
+    }
+
+    /// Lowers a call to a mutating method.
+    ///
+    /// The receiver — `args[0]` — is passed as a pointer into its place, walked
+    /// exactly as `append` walks to the array it grows; the callee is compiled
+    /// with a pointer parameter 0 (see `declare_function`) and mutates through
+    /// it, so the write is the caller's. The remaining arguments are ordinary
+    /// by-value arguments, evaluated left to right. The call still returns the
+    /// method's declared result. Only ever a same-half call — a struct receiver
+    /// cannot cross the seam — so `target` is resolved in this module.
+    fn lower_mut_call(
+        &mut self,
+        index: u32,
+        place: &IrPlace,
+        args: &[IrExprId],
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let target = self
+            .codegen
+            .functions
+            .get(index as usize)
+            .copied()
+            .flatten()
+            .ok_or(LlvmError::Unsupported(
+                "a mutating call to a function not in this half",
+            ))?;
+        let (receiver_ptr, _ty) = self.walk_place(place.local, &place.path)?;
+        let mut values = Vec::with_capacity(args.len());
+        values.push(receiver_ptr);
+        for &argument in args.iter().skip(1) {
+            values.push(self.lower_expr(argument)?);
+        }
+        let returns_value =
+            self.codegen.program.functions[index as usize].return_type != Type::Void;
+        let name = if returns_value { c"call" } else { c"" };
+        Ok(self.call(target, &mut values, name))
     }
 
     /// Calls a function that lives in the VM half, from native code.

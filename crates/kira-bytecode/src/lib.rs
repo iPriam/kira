@@ -41,6 +41,7 @@ mod tests {
                 locals: vec![kira_semantics_model::Type::INT; local_count as usize],
                 return_type: kira_semantics_model::Type::Void,
                 execution: kira_runtime_abi::Execution::Inherited,
+                mutates_self: false,
                 body,
             }],
             types: Default::default(),
@@ -61,6 +62,7 @@ mod tests {
             callee: IrCallee::User(1),
             args: vec![],
             result: kira_semantics_model::Type::Void,
+            writeback: None,
         });
         let mut program = single_main(vec![IrStmt::Eval { expr: call }], exprs, 0);
         program.functions.push(IrFunction {
@@ -69,6 +71,7 @@ mod tests {
             locals: Vec::new(),
             return_type: kira_semantics_model::Type::Void,
             execution: Execution::Native,
+            mutates_self: false,
             body: Vec::new(),
         });
 
@@ -103,6 +106,7 @@ mod tests {
             callee: IrCallee::Print,
             args: vec![arg],
             result: kira_semantics_model::Type::Void,
+            writeback: None,
         });
         let program = single_main(vec![IrStmt::Eval { expr: call }], exprs, 0);
         let module = compile(&program).expect("compiles");
@@ -125,6 +129,7 @@ mod tests {
             callee: IrCallee::Print,
             args: vec![arg],
             result: kira_semantics_model::Type::Void,
+            writeback: None,
         });
         let program = single_main(vec![IrStmt::Eval { expr: call }], exprs, 0);
         let module = compile(&program).expect("compiles");
@@ -151,6 +156,7 @@ mod tests {
                 locals: vec![Type::String],
                 return_type: Type::Void,
                 execution: kira_runtime_abi::Execution::Inherited,
+                mutates_self: false,
                 body: vec![IrStmt::Return { value: None }],
             }],
             types: Default::default(),

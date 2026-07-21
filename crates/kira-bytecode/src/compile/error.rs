@@ -86,6 +86,29 @@ pub enum CompileError {
         /// The offending function's name.
         function: String,
     },
+    /// Internal invariant: a call to a mutating method carried no writeback
+    /// place, or one carried a writeback but its callee is not a user function —
+    /// the frontend records a writeback for every mutating-method call and only
+    /// a user method can be one, so either is a broken lowering.
+    #[error(
+        "bytecode compiler invariant violated: mutating-method call in `{function}` is malformed \
+         (missing writeback or non-user callee)"
+    )]
+    MalformedMutCall {
+        /// The offending function's name.
+        function: String,
+    },
+    /// A mutating method was assigned to the native half. A struct-receiver
+    /// method cannot cross the seam, so a mutating call is always same-engine;
+    /// reaching this means the split placed one across it.
+    #[error(
+        "function `{function}` calls a mutating method on the native engine, which structs cannot \
+         cross"
+    )]
+    MutCallAcrossSeam {
+        /// The offending function's name.
+        function: String,
+    },
     /// Internal invariant: an export's signature names a type that cannot cross
     /// the export boundary, which the frontend refuses before this runs.
     #[error(

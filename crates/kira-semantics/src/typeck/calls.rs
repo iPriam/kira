@@ -10,12 +10,78 @@
 //! calls to a user function.
 
 use kira_semantics_model::Type;
-use kira_semantics_model::hir::{Builtin, Callee, HirExpr, HirExprId};
+use kira_semantics_model::hir::{Builtin, Callee, HirExpr, HirExprId, HirPlace, LocalId};
 use kira_syntax_model::ast::{CallArg, Expr, ExprId, FieldInit};
 
 use crate::analyze::{Analyzer, FnCtx};
+use crate::place::PlacePurpose;
 
 impl Analyzer<'_> {
+    /// Records a receiver-writeback place on a just-built call whose callee
+    /// mutates its receiver, resolving the written `receiver` as a mutable
+    /// place.
+    ///
+    /// A non-mutating callee — the common case — is left untouched, so an
+    /// ordinary call carries no writeback and behaves exactly as before. A
+    /// receiver that is not a mutable place turns the call into an error, the
+    /// diagnostic already reported by place resolution (`KSEM021` for an
+    /// immutable binding, `KSEM211` for a temporary).
+    pub(crate) fn record_mut_receiver(
+        &mut self,
+        ctx: &mut FnCtx,
+        call: HirExprId,
+        qualified: &str,
+        receiver: ExprId,
+    ) {
+        if !self.callee_mutates(call, qualified) {
+            return;
+        }
+        match self.resolve_place(ctx, receiver, PlacePurpose::MutCall) {
+            Some((place, _)) => self.set_writeback(call, place),
+            None => self.program.exprs[call] = HirExpr::Error,
+        }
+    }
+
+    /// Records the writeback for a call whose receiver is `self` — an implicit
+    /// or parent-qualified call inside a method.
+    ///
+    /// `self` inside a mutating method is always a mutable place (the fixpoint
+    /// marks the enclosing method mutating whenever it calls one on `self`), so
+    /// the place is `self` with an empty path and no refusal is possible.
+    pub(crate) fn record_mut_self(
+        &mut self,
+        call: HirExprId,
+        qualified: &str,
+        self_local: LocalId,
+    ) {
+        if !self.callee_mutates(call, qualified) {
+            return;
+        }
+        self.set_writeback(
+            call,
+            HirPlace {
+                local: self_local,
+                path: Vec::new(),
+            },
+        );
+    }
+
+    /// Whether `call` is a real call whose callee `qualified` is a mutating
+    /// method.
+    fn callee_mutates(&self, call: HirExprId, qualified: &str) -> bool {
+        matches!(self.program.expr(call), HirExpr::Call { .. })
+            && self
+                .lookup_function(qualified)
+                .is_some_and(|(id, _, _)| self.mutates_self(id))
+    }
+
+    /// Sets the writeback place on a call node, if it is one.
+    fn set_writeback(&mut self, call: HirExprId, place: HirPlace) {
+        if let HirExpr::Call { writeback, .. } = &mut self.program.exprs[call] {
+            *writeback = Some(place);
+        }
+    }
+
     /// Type-checks `receiver.method(args)`.
     ///
     /// A method call is an ordinary call whose first argument is the receiver.
@@ -146,7 +212,12 @@ impl Analyzer<'_> {
             self.emit(method_span, "KSEM097", message);
             return self.program.exprs.alloc(HirExpr::Error);
         }
-        self.analyze_user_call_from_syntax(ctx, &qualified, &[receiver_hir], args, method_span)
+        let call =
+            self.analyze_user_call_from_syntax(ctx, &qualified, &[receiver_hir], args, method_span);
+        // When the method mutates its receiver, the written receiver is resolved
+        // as a mutable place so the mutation lands back in the caller's storage.
+        self.record_mut_receiver(ctx, call, &qualified, receiver);
+        call
     }
 
     /// Type-checks a struct literal into a [`HirExpr::StructNew`] holding one
@@ -323,6 +394,7 @@ impl Analyzer<'_> {
             callee: Callee::Builtin(Builtin::Print),
             args: args.to_vec(),
             ty: Type::Void,
+            writeback: None,
         })
     }
 
@@ -492,6 +564,7 @@ impl Analyzer<'_> {
             callee: Callee::User(id),
             args: args.to_vec(),
             ty: ret,
+            writeback: None,
         })
     }
 }

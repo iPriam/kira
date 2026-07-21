@@ -231,6 +231,12 @@ impl FunctionLowering<'_, '_> {
     /// freed here.
     pub(super) fn emit_return(&mut self, value: Option<LLVMValueRef>) -> Result<(), LlvmError> {
         for slot in 0..self.function.locals.len() as u32 {
+            // A mutating method's slot 0 is the caller's storage, borrowed
+            // through a pointer; freeing it here would release a value the
+            // caller still owns and will free itself.
+            if self.function.mutates_self && slot == 0 {
+                continue;
+            }
             let ty = self.local_type(slot)?;
             if !self.owns_heap(ty) {
                 continue;

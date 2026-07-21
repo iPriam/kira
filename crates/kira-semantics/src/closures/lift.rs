@@ -222,6 +222,7 @@ impl Analyzer<'_> {
                 body: stmts,
                 is_main: false,
                 execution,
+                mutates_self: false,
                 name_span: body.span,
             },
         );

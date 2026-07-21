@@ -76,6 +76,17 @@ impl<'a> Codegen<'a> {
     ) -> Result<Vec<LLVMValueRef>, LlvmError> {
         let mut locals = Vec::with_capacity(function.locals.len());
         for (slot, &ty) in function.locals.iter().enumerate() {
+            // A mutating method's receiver (slot 0) is a pointer into the
+            // caller's storage, passed as parameter 0. The slot *is* that
+            // pointer — every read and write of `self` goes through it, mutating
+            // the caller in place — so it is neither allocated nor initialized
+            // here, and (see `emit_return`) never freed here either.
+            if function.mutates_self && slot == 0 {
+                // SAFETY: `value` is this function; its parameter 0 is the
+                // pointer receiver `declare_function` gave it.
+                locals.push(unsafe { LLVMGetParam(value, 0) });
+                continue;
+            }
             let llvm_type = self.llvm_type(ty)?;
             let name = c_string(&format!("local.{slot}"));
             // SAFETY: the builder sits on the function's entry block, and every

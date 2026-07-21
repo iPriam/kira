@@ -18,6 +18,7 @@ mod generics;
 mod imports;
 mod libraries;
 mod matches;
+mod mutation;
 mod operators;
 mod widths;
 

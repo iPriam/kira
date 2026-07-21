@@ -167,6 +167,17 @@ impl Module {
                     Instruction::Call(callee) => {
                         *callee < function_count && !self.functions[*callee as usize].is_native()
                     }
+                    // Like `Call`, a `CallMut` must land on a bytecode body:
+                    // the writeback happens when that body returns, which a
+                    // native callee never does here. Its `slot` roots the
+                    // writeback place in this frame, so it is bounded too; the
+                    // path steps are checked by the runtime against the value in
+                    // hand, exactly as `StorePlace`'s are.
+                    Instruction::CallMut { func, slot, .. } => {
+                        *func < function_count
+                            && !self.functions[*func as usize].is_native()
+                            && *slot < function.local_count
+                    }
                     // A `CallNative` id names a function in the *program*, and
                     // is resolved by the host against the hybrid manifest — not
                     // an index into this module's table, so there is nothing

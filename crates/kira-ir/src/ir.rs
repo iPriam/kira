@@ -234,6 +234,14 @@ pub struct IrFunction {
     /// A hybrid build splits the program on this; a single-backend build
     /// resolves it against that backend's default.
     pub execution: Execution,
+    /// Whether this function is a method that mutates its receiver.
+    ///
+    /// A statically-typed backend reads this to give the function a by-reference
+    /// receiver (parameter slot 0), so a call site that carries a writeback
+    /// place mutates the caller's storage in place. The VM ignores it: its
+    /// writeback is driven entirely by the call instruction. `false` for every
+    /// ordinary function.
+    pub mutates_self: bool,
     /// The function body.
     pub body: Vec<IrStmt>,
 }
@@ -413,6 +421,14 @@ pub enum IrExpr {
         args: Vec<IrExprId>,
         /// The result type (`Void` for `print`).
         result: Type,
+        /// The place the callee's final `self` is written back into, set only
+        /// when the callee is a method that mutates its receiver.
+        ///
+        /// `None` for every ordinary call, which behaves exactly as before.
+        /// When it is `Some`, `args[0]` is the receiver and the mutated receiver
+        /// lands in this place after the call — the side effect that makes a
+        /// receiver mutation observable while the call still yields `result`.
+        writeback: Option<IrPlace>,
     },
     /// Construction of a struct value: one initializer per field, in
     /// declaration order, with defaults already filled in by analysis.
