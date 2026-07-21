@@ -19,11 +19,13 @@ fn a_class_flattens_its_parents_fields_and_methods() {
     );
 }
 
-/// A field typed by a name declared later gets the move-it-above fix, and the
-/// message names each owner by its own keyword — a class owner called a
-/// `struct` would send the reader looking for a declaration that is not there.
+/// A class field typed by a name declared later still gets the move-it-above
+/// fix: classes flatten in inheritance order, one pass, so a class field naming
+/// a class declared later cannot yet resolve. The message names each owner by
+/// its own keyword — a class owner called a `struct` would send the reader
+/// looking for a declaration that is not there.
 #[test]
-fn a_forward_referenced_field_type_is_explained_for_a_class_too() {
+fn a_forward_referenced_class_field_type_is_explained() {
     let reported = diagnostics(&format!(
         "class Wallet {{ var card: Card = Card() }}\nclass Card {{ var id: Int = 1 }}\n{MAIN}"
     ));
@@ -39,17 +41,43 @@ fn a_forward_referenced_field_type_is_explained_for_a_class_too() {
              move `Card` above `Wallet`"
         ]
     );
+}
 
-    // The same shape with structs keeps saying `struct`.
-    let reported = diagnostics(&format!(
-        "struct Wallet {{ var card: Card }}\nstruct Card {{ var id: Int }}\n{MAIN}"
-    ));
+/// A *struct* field may name a struct declared later in the same file: struct
+/// collection is two-phase, so every name is registered before any field is
+/// resolved. This is what a flat package scope means for a single file — the
+/// same rule that lets a field name a sibling in another file.
+#[test]
+fn a_struct_field_may_name_a_struct_declared_later_in_the_file() {
     assert!(
-        reported
-            .iter()
-            .any(|diagnostic| diagnostic.code == Some("KSEM051")
-                && diagnostic.message.starts_with("struct `Wallet`"))
+        diagnostics(&format!(
+            "struct Wallet {{ var card: Card }}\nstruct Card {{ var id: Int }}\n{MAIN}"
+        ))
+        .is_empty()
     );
+}
+
+/// A struct that reaches itself through by-value fields has no finite size, so
+/// it is broken and reported (`KSEM052`) rather than left to recurse a backend
+/// to death. Only the field closing the cycle is blamed; an array or enum field
+/// is indirection and breaks the cycle instead.
+#[test]
+fn a_struct_value_cycle_is_rejected() {
+    // Direct self-reference by value.
+    assert_eq!(
+        codes(&format!("struct Node {{ var next: Node }}\n{MAIN}")),
+        vec!["KSEM052"]
+    );
+    // A mutual by-value cycle is caught at its closing edge, reported once.
+    assert_eq!(
+        codes(&format!(
+            "struct A {{ var b: B }}\nstruct B {{ var a: A }}\n{MAIN}"
+        )),
+        vec!["KSEM052"]
+    );
+    // The same shape through an array breaks the cycle: a `[Node]` is a heap
+    // handle, so a finite `Node` can hold one.
+    assert!(diagnostics(&format!("struct Node {{ var next: [Node] }}\n{MAIN}")).is_empty());
 }
 
 #[test]

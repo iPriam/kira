@@ -114,6 +114,28 @@ impl StructTable {
         Some(index)
     }
 
+    /// Fills the fields of a struct declared as an empty header.
+    ///
+    /// The frontend's type collection runs in two passes: it declares every
+    /// struct's name first — so a field may name a sibling declared later —
+    /// and resolves the field lists in a second pass, once every name is in
+    /// the table. This writes the resolved list back into the row the header
+    /// minted. Returns `false` when `id` names no row.
+    ///
+    /// Unlike [`StructTable::push_field`], this replaces the whole list, and is
+    /// meant only for that collection pass, on a row declared empty a moment
+    /// earlier — not for reshaping a struct construction sites already agreed
+    /// on.
+    pub fn set_fields(&mut self, id: StructId, fields: Vec<FieldDef>) -> bool {
+        match self.defs.get_mut(id.0 as usize) {
+            Some(def) => {
+                def.fields = fields;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Every declared struct, in declaration order.
     pub fn defs(&self) -> &[StructDef] {
         &self.defs
@@ -167,6 +189,33 @@ mod tests {
         // The first declaration still owns the name and the row.
         assert_eq!(table.lookup("Point"), Some(id));
         assert_eq!(table.len(), 1);
+    }
+
+    #[test]
+    fn an_empty_header_takes_its_fields_in_a_second_pass() {
+        let mut table = StructTable::new();
+        // First pass: the name is declared with no fields, minting the id.
+        let id = table
+            .declare(StructDef {
+                name: "World".to_owned(),
+                fields: Vec::new(),
+            })
+            .expect("a fresh name declares");
+        assert!(table.get(id).expect("the id resolves").fields.is_empty());
+        // Second pass: the resolved fields are written back into that row.
+        let filled = table.set_fields(
+            id,
+            vec![FieldDef {
+                name: "tick".to_owned(),
+                ty: Type::INT,
+                mutable: true,
+            }],
+        );
+        assert!(filled);
+        let def = table.get(id).expect("the id still resolves");
+        assert_eq!(def.field_index("tick"), Some(0));
+        // An id no row carries is reported rather than panicking.
+        assert!(!table.set_fields(StructId(99), Vec::new()));
     }
 
     #[test]

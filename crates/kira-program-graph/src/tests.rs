@@ -247,8 +247,13 @@ fn an_entryless_package_import_exposes_its_namespace_and_all_source_files() {
     assert_eq!(files, vec!["Broken.kira", "Values.kira"]);
 }
 
+/// A bare package-name import pulls in the package's whole surface: every
+/// `.kira` file below its source directory, the `<name>.kira` root among them
+/// and the siblings the root never imports (`Unused`). A package's files are
+/// one flat scope, so a file is loaded because it is in the package, not because
+/// something imported it — which is what let `Unused` go unread before.
 #[test]
-fn a_package_entry_loads_its_imported_sibling() {
+fn a_package_import_with_a_root_file_loads_every_sibling() {
     let package = write_package(
         "entry",
         "Core",
@@ -265,15 +270,86 @@ fn a_package_entry_loads_its_imported_sibling() {
 
     let loaded =
         load_modules_with_packages(&entry, "import Core\n", &[], std::slice::from_ref(&package));
-    let order: Vec<&str> = loaded.iter().map(|source| source.module.as_str()).collect();
+    let mut identities: Vec<&str> = loaded.iter().map(|source| source.module.as_str()).collect();
+    identities.sort_unstable();
+
+    remove_package(&package);
+    let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
+    // The root file anchors the bare `import Core` binding, so no empty alias is
+    // added — every entry is a real file, and all three are present.
+    assert_eq!(
+        identities,
+        vec![
+            package_identity("Core", "Core"),
+            package_identity("Core", "Helper"),
+            package_identity("Core", "Unused"),
+        ]
+    );
+}
+
+/// A dotted sub-module import still names one file, not the whole package: it is
+/// a specific module (`Core.Values`), so aggregation is exactly the bare-name
+/// case and this one stays single-file.
+#[test]
+fn a_dotted_submodule_import_loads_only_that_file() {
+    let package = write_package(
+        "dotted-submodule",
+        "Core",
+        &[
+            ("Core", "function coreValue() -> Int { return 0 }"),
+            ("Values", "function value() -> Int { return 2 }"),
+            ("Other", "function other() -> Int { return 3 }"),
+        ],
+    );
+    let entry = write_modules("package-dotted-submodule", &[]);
+
+    let loaded = load_modules_with_packages(
+        &entry,
+        "import Core.Values as Values\n",
+        &[],
+        std::slice::from_ref(&package),
+    );
+    let identities: Vec<&str> = loaded.iter().map(|source| source.module.as_str()).collect();
+
+    remove_package(&package);
+    let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
+    assert_eq!(identities, vec![package_identity("Core", "Values")]);
+}
+
+/// A cyclic import graph inside a package still loads: the walk is
+/// visited-set-guarded, so two files that import each other terminate and each
+/// appears once. Rejecting a cycle would turn a working flat package into a
+/// compile error.
+#[test]
+fn a_cyclic_package_graph_still_loads() {
+    let package = write_package(
+        "cyclic",
+        "Core",
+        &[
+            (
+                "Core",
+                "import Ring\nfunction coreValue() -> Int { return ringValue() }",
+            ),
+            (
+                "Ring",
+                "import Core\nfunction ringValue() -> Int { return coreValue() }",
+            ),
+        ],
+    );
+    let entry = write_modules("package-cyclic", &[]);
+
+    let loaded =
+        load_modules_with_packages(&entry, "import Core\n", &[], std::slice::from_ref(&package));
+    let mut identities: Vec<&str> = loaded.iter().map(|source| source.module.as_str()).collect();
+    identities.sort_unstable();
 
     remove_package(&package);
     let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
     assert_eq!(
-        order,
+        identities,
         vec![
-            package_identity("Core", "Helper"),
             package_identity("Core", "Core"),
+            package_identity("Core", "Ring"),
         ]
     );
 }
