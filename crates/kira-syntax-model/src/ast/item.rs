@@ -146,6 +146,10 @@ pub struct StructDecl {
     /// A method is an ordinary [`Function`] here; what makes it a method is
     /// where it was written. Analysis is what gives it its receiver.
     pub methods: Vec<Function>,
+    /// The `@FFI.*` type annotation the declaration carried, when one was
+    /// written. Present for `@FFI.Struct`/`Pointer`/`Alias`/`Array`/`Callback`;
+    /// absent for a plain struct. `@FFI.Extern` never rides a struct.
+    pub ffi: Option<FfiTypeMark>,
     /// Span covering the whole declaration.
     pub span: Span,
 }
@@ -289,6 +293,82 @@ pub struct ForeignMark {
     pub block_span: Span,
     /// The fields the block wrote, in source order.
     pub fields: Vec<ForeignField>,
+}
+
+/// A `@FFI.*` annotation on a *struct* declaration — every member of the family
+/// except `@FFI.Extern`, which rides a function instead.
+///
+/// The five struct-attached forms each declare a *type* whose real shape the
+/// annotation carries: `@FFI.Struct` a C-layout struct, `@FFI.Pointer` a native
+/// pointer alias, `@FFI.Alias` a plain typedef, `@FFI.Array` an inline
+/// fixed-size C array, and `@FFI.Callback` a function-pointer typedef. The
+/// parser records the shape; the analyzer resolves the referenced types and
+/// decides what each becomes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FfiTypeMark {
+    /// Which of the five struct-attached `@FFI.*` forms this is, with its
+    /// parsed arguments.
+    pub kind: FfiTypeKind,
+    /// Span of the qualified annotation name (`FFI.Struct`, `FFI.Pointer`, …).
+    pub name_span: Span,
+    /// Span covering the whole `{ ... }` block.
+    pub block_span: Span,
+}
+
+/// The five struct-attached `@FFI.*` forms, each with the arguments its block
+/// carried. A required argument the block omitted is recorded as `None`/empty,
+/// so the analyzer reports the omission against the block rather than the parser
+/// bailing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FfiTypeKind {
+    /// `@FFI.Struct { layout: c; }` — a struct laid out by C rules. The
+    /// declaration's own body carries the fields; this only records `layout`.
+    Struct {
+        /// The `layout` value as written (`c`), and its span.
+        layout: Option<(Symbol, Span)>,
+    },
+    /// `@FFI.Pointer { target: T; ownership: o; }` — a native pointer alias.
+    Pointer {
+        /// The written pointee type, when present.
+        target: Option<TypeRefId>,
+        /// The `ownership` value as written (`borrowed`), and its span.
+        ownership: Option<(Symbol, Span)>,
+    },
+    /// `@FFI.Alias { target: T; }` — a plain typedef of one type to another.
+    Alias {
+        /// The written aliased type, when present.
+        target: Option<TypeRefId>,
+    },
+    /// `@FFI.Array { element: E; count: N; }` — an inline fixed-size C array.
+    Array {
+        /// The written element type, when present.
+        element: Option<TypeRefId>,
+        /// The written element count and its span, when present.
+        count: Option<(i64, Span)>,
+    },
+    /// `@FFI.Callback { abi: c; params: [T, …]; result: R; }` — a
+    /// function-pointer typedef.
+    Callback {
+        /// The `abi` value as written (`c`), and its span.
+        abi: Option<(Symbol, Span)>,
+        /// The written parameter types, in order; empty for `params: []`.
+        params: Vec<TypeRefId>,
+        /// The written result type, when present.
+        result: Option<TypeRefId>,
+    },
+}
+
+impl FfiTypeKind {
+    /// A short label naming the form, for diagnostics (`Struct`, `Pointer`, …).
+    pub fn label(&self) -> &'static str {
+        match self {
+            FfiTypeKind::Struct { .. } => "Struct",
+            FfiTypeKind::Pointer { .. } => "Pointer",
+            FfiTypeKind::Alias { .. } => "Alias",
+            FfiTypeKind::Array { .. } => "Array",
+            FfiTypeKind::Callback { .. } => "Callback",
+        }
+    }
 }
 
 /// A function declaration: signature plus body.

@@ -14,8 +14,9 @@ pub mod ownership;
 pub mod token;
 
 pub use ast::{
-    BinaryOp, Block, Expr, ExprId, ForIterable, ForeignField, ForeignMark, Function, Item, Param,
-    Stmt, StmtId, SyntaxTree, TypeRef, TypeRefId, UnaryOp, UnsupportedItem,
+    BinaryOp, Block, Expr, ExprId, FfiTypeKind, FfiTypeMark, ForIterable, ForeignField,
+    ForeignMark, Function, Item, Param, Stmt, StmtId, SyntaxTree, TypeRef, TypeRefId, UnaryOp,
+    UnsupportedItem,
 };
 pub use ownership::{OwnershipMode, OwnershipOp};
 pub use token::{Token, TokenKind};

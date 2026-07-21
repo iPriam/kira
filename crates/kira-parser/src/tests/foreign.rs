@@ -7,7 +7,7 @@
 //! semantics', so those cases live in the semantics tests.
 
 use super::*;
-use kira_syntax_model::ast::ForeignMark;
+use kira_syntax_model::ast::{FfiTypeKind, ForeignMark};
 
 /// The foreign marker of the one function in `text`.
 fn only_foreign(result: &ParseResult) -> &ForeignMark {
@@ -121,6 +121,121 @@ fn an_unknown_qualified_annotation_is_rejected() {
     assert!(codes(&result).contains(&"KPAR053"), "{:?}", codes(&result));
     // A dotted name other than `FFI.Extern` records no foreign marker.
     assert!(only_function(&result).foreign.is_none());
+}
+
+/// The `@FFI.*` type mark of the one struct in `text`.
+fn only_ffi_kind(result: &ParseResult) -> &FfiTypeKind {
+    &only_struct(result)
+        .ffi
+        .as_ref()
+        .expect("the struct carries an `@FFI.*` type mark")
+        .kind
+}
+
+#[test]
+fn ffi_struct_parses_layout_and_keeps_the_body() {
+    let result = parse_text(
+        "@FFI.Struct { layout: c; }\n\
+         struct Color {\n    var r: U8\n    var g: U8\n}",
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let declaration = only_struct(&result);
+    assert_eq!(declaration.fields.len(), 2);
+    match only_ffi_kind(&result) {
+        FfiTypeKind::Struct { layout } => {
+            let (symbol, _) = layout.expect("layout recorded");
+            assert_eq!(result.interner.resolve(symbol), "c");
+        }
+        other => panic!("expected Struct, got {other:?}"),
+    }
+}
+
+#[test]
+fn ffi_pointer_parses_target_and_ownership() {
+    let result =
+        parse_text("@FFI.Pointer { target: Color; ownership: borrowed; }\nstruct Color_ptr {}");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    match only_ffi_kind(&result) {
+        FfiTypeKind::Pointer { target, ownership } => {
+            assert!(target.is_some());
+            let (symbol, _) = ownership.expect("ownership recorded");
+            assert_eq!(result.interner.resolve(symbol), "borrowed");
+        }
+        other => panic!("expected Pointer, got {other:?}"),
+    }
+}
+
+#[test]
+fn ffi_alias_parses_a_plain_target() {
+    let result = parse_text("@FFI.Alias { target: U64; }\nstruct Address {}");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    match only_ffi_kind(&result) {
+        FfiTypeKind::Alias { target } => assert!(target.is_some()),
+        other => panic!("expected Alias, got {other:?}"),
+    }
+}
+
+#[test]
+fn ffi_alias_tolerates_a_union_tag_on_the_target() {
+    let result = parse_text("@FFI.Alias { target: union Version; }\nstruct Version {}");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    match only_ffi_kind(&result) {
+        FfiTypeKind::Alias { target } => assert!(target.is_some()),
+        other => panic!("expected Alias, got {other:?}"),
+    }
+}
+
+#[test]
+fn ffi_array_parses_element_and_count() {
+    let result = parse_text("@FFI.Array { element: U8; count: 8; }\nstruct Bytes8 {}");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    match only_ffi_kind(&result) {
+        FfiTypeKind::Array { element, count } => {
+            assert!(element.is_some());
+            let (value, _) = count.expect("count recorded");
+            assert_eq!(value, 8);
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+}
+
+#[test]
+fn ffi_callback_parses_params_and_result() {
+    let result = parse_text(
+        "@FFI.Callback { abi: c; params: [I32, RawPtr]; result: Void; }\nstruct Handler {}",
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    match only_ffi_kind(&result) {
+        FfiTypeKind::Callback {
+            params, result: r, ..
+        } => {
+            assert_eq!(params.len(), 2);
+            assert!(r.is_some());
+        }
+        other => panic!("expected Callback, got {other:?}"),
+    }
+}
+
+#[test]
+fn ffi_callback_parses_an_empty_params_list() {
+    let result = parse_text("@FFI.Callback { abi: c; params: []; result: I64; }\nstruct Thunk {}");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    match only_ffi_kind(&result) {
+        FfiTypeKind::Callback { params, .. } => assert!(params.is_empty()),
+        other => panic!("expected Callback, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_ffi_type_annotation_on_a_function_is_rejected() {
+    let result = parse_text("@FFI.Struct { layout: c; }\nfunction f() -> I32 { return 0 }");
+    assert!(codes(&result).contains(&"KPAR056"), "{:?}", codes(&result));
+}
+
+#[test]
+fn an_ffi_extern_on_a_struct_is_rejected() {
+    let result = parse_text("@FFI.Extern { library: l; symbol: s; abi: c; }\nstruct S {}");
+    assert!(codes(&result).contains(&"KPAR056"), "{:?}", codes(&result));
 }
 
 #[test]
