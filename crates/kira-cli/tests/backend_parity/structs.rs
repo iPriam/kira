@@ -28,6 +28,38 @@ function main() {
     assert_eq!(output, "30\n3\n6\n");
 }
 
+/// A struct field may name a struct declared later in the file: struct
+/// collection is two-phase, so `Outer` (the lower id) holding `Inner` (declared
+/// after it) compiles on every backend. This exercises the native backend's
+/// two-pass struct declaration — a by-value field of a struct at a higher id —
+/// which a single pass in declaration order would leave undefined.
+#[test]
+fn a_struct_field_naming_a_later_struct_agrees() {
+    let output = assert_parity(
+        r#"
+struct Outer {
+    var inner: Inner
+    var tag: Int = 7
+}
+
+struct Inner {
+    var depth: Int = 3
+}
+
+@Main
+function main() {
+    let o = Outer { inner: Inner { depth: 5 } }
+    print(o.inner.depth + o.tag)
+    // `Inner {}` takes its field default; `Outer`'s `tag` takes its own.
+    let d = Outer { inner: Inner {} }
+    print(d.inner.depth + d.tag)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "12\n10\n");
+}
+
 #[test]
 fn copying_a_struct_does_not_alias_it() {
     // The rule the reference corpus pins: `var a2 = a1; a2.x = 999` must leave

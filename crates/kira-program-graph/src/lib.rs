@@ -126,9 +126,10 @@ pub fn load_modules_with(
 ///
 /// Imports written by the project prefer project files, while imports written
 /// inside a dependency prefer that dependency's own files. Resolved packages
-/// are consulted next and bundled roots remain the final fallback. A root
-/// package import with no package entry file aggregates every `.kira` file below
-/// that package's source directory.
+/// are consulted next and bundled roots remain the final fallback. A bare
+/// package-name import always aggregates every `.kira` file below that package's
+/// source directory — the package's files are one flat module scope, and a
+/// `<name>.kira` root file, if present, is just one of them.
 #[must_use]
 pub fn load_modules_with_packages(
     entry_path: &Path,
@@ -255,12 +256,12 @@ fn read_module(
             continue;
         };
         if module == package.name {
-            let entry = package.source_dir.join(format!("{}.kira", package.name));
-            if entry.is_file() {
-                return read_package_module(relative.to_owned(), entry, package)
-                    .into_iter()
-                    .collect();
-            }
+            // A bare package-name import pulls in the package's entire top-level
+            // surface: every `.kira` file below its source directory forms one
+            // flat module scope, so the walk aggregates all of them. A
+            // `<name>.kira` root file, if present, is just one of the aggregated
+            // files — it is never loaded alone, which is what let a sibling
+            // holding `ComponentStore` go unread.
             return read_aggregate_modules(package);
         }
         let path = module_path(&package.source_dir, relative);
@@ -314,17 +315,31 @@ fn read_package_module(module: String, path: PathBuf, package: &PackageRoot) -> 
     })
 }
 
-/// Reads an entryless package's source files and adds its import namespace.
+/// Reads every source file of a package and, when it has no `<name>.kira` root
+/// file, adds its import namespace.
+///
+/// Every `.kira` file below the package's source directory is one flat module
+/// scope, so all of them are read. The bare `import <name>` needs one module to
+/// bind to: a `<name>.kira` root file already provides it — its identity is the
+/// package-name module — so the empty namespace alias is emitted only when the
+/// package has no such file, and never duplicates the root's identity.
 fn read_aggregate_modules(package: &PackageRoot) -> Vec<ReadModule> {
-    let mut modules: Vec<ReadModule> = package
-        .source_files()
-        .into_iter()
-        .filter_map(|path| {
-            let module = package_module_name(&package.source_dir, &path)?;
-            read_package_module(module, path, package)
-        })
-        .collect();
-    if modules.is_empty() {
+    let mut modules: Vec<ReadModule> = Vec::new();
+    let mut has_root = false;
+    for path in package.source_files() {
+        let Some(module) = package_module_name(&package.source_dir, &path) else {
+            continue;
+        };
+        let is_root = module == package.name;
+        let Some(read) = read_package_module(module, path, package) else {
+            continue;
+        };
+        if is_root {
+            has_root = true;
+        }
+        modules.push(read);
+    }
+    if modules.is_empty() || has_root {
         return modules;
     }
     let Some(absolute) = std::fs::canonicalize(&package.source_dir)
@@ -333,7 +348,7 @@ fn read_aggregate_modules(package: &PackageRoot) -> Vec<ReadModule> {
     else {
         return modules;
     };
-    // The namespace has no entry file. Emit its empty semantic alias after the
+    // The namespace has no root file. Emit its empty semantic alias after the
     // real files so package declarations retain dependency-first order.
     modules.push(ReadModule {
         module: kira_semantics::ImportTable::package_module_identity(&package.name, &package.name),

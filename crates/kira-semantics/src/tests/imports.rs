@@ -127,6 +127,22 @@ fn importing_foundation_reports_that_there_is_no_such_module() {
     );
 }
 
+/// The flat-package rule for types: a struct field may name a struct declared
+/// in another file of the program, with no import and regardless of load order.
+/// The entry file's `World` holds a `SpatialBvh` declared in a later sibling —
+/// two-phase collection registers every name before resolving any field, so the
+/// forward reference across files resolves instead of raising KSEM051.
+#[test]
+fn a_struct_field_may_name_a_struct_in_a_later_sibling_file() {
+    let diagnostics = module_diagnostics(
+        "struct World { var bvh: SpatialBvh  var tick: Int }\n\
+         @Main function main() { let w = World { bvh: SpatialBvh { depth: 0 }, tick: 1 } \
+         print(w.bvh.depth + w.tick) return }",
+        &[("bvh", "struct SpatialBvh { var depth: Int }")],
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
 /// A root that is not a module at all keeps its old diagnostic: this is a
 /// method call on an undefined name, not an import problem, and saying
 /// "unresolved namespace" would send the reader looking for an import to add.

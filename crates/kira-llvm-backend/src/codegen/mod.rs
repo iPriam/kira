@@ -369,27 +369,41 @@ impl<'a> Codegen<'a> {
         Ok(codegen)
     }
 
-    /// Creates one named LLVM struct type per declared struct.
+    /// Creates one named LLVM struct type per declared struct, in two passes.
     ///
-    /// Declaration order is resolution order — the analyzer rejects a field
-    /// naming a struct declared later — so every field type this needs is
-    /// already in `struct_types` by the time it is asked for. The types are
-    /// named so LLVM IR stays readable (`%Point`, not `{i64, i64}`).
+    /// A field may name a struct declared later: the analyzer's flat-package
+    /// scope no longer makes declaration order resolution order, so a struct at
+    /// a low id can hold one at a higher id. The first pass creates every named
+    /// struct opaque, so the second — which sets bodies — finds every element
+    /// type already in `struct_types`, whatever the order. A by-value value
+    /// cycle cannot reach here: the analyzer breaks it to `Error`, so every body
+    /// this sets is finitely sized. The types are named so LLVM IR stays
+    /// readable (`%Point`, not `{i64, i64}`).
     fn declare_structs(&mut self) -> Result<(), LlvmError> {
         for def in self.program.types.structs().defs() {
             let name = c_string(&def.name);
-            let mut fields = Vec::with_capacity(def.fields.len());
-            for field in &def.fields {
-                fields.push(self.llvm_type(field.ty)?);
-            }
-            // SAFETY: the context is live, every field type belongs to it, and
-            // `fields` outlives the `SetBody` call that copies it.
-            let ty = unsafe {
-                let ty = LLVMStructCreateNamed(self.context, name.as_ptr());
-                LLVMStructSetBody(ty, fields.as_mut_ptr(), fields.len() as u32, 0);
-                ty
-            };
+            // SAFETY: the context is live and `name` outlives this call, which
+            // only copies the string; the body is set in the second pass.
+            let ty = unsafe { LLVMStructCreateNamed(self.context, name.as_ptr()) };
             self.struct_types.push(ty);
+        }
+        for index in 0..self.program.types.structs().len() {
+            let mut fields = Vec::new();
+            if let Some(def) = self.program.types.structs().defs().get(index) {
+                fields.reserve(def.fields.len());
+                for field in &def.fields {
+                    fields.push(self.llvm_type(field.ty)?);
+                }
+            }
+            let Some(&ty) = self.struct_types.get(index) else {
+                continue;
+            };
+            // SAFETY: `ty` is a named struct in this context, every field type
+            // belongs to it, and `fields` outlives the `SetBody` call that
+            // copies it.
+            unsafe {
+                LLVMStructSetBody(ty, fields.as_mut_ptr(), fields.len() as u32, 0);
+            }
         }
         Ok(())
     }

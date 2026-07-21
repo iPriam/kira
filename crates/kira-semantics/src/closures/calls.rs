@@ -269,9 +269,10 @@ impl Analyzer<'_> {
     /// `String` passes the VM and is rejected by the LLVM verifier, which is
     /// exactly the parity break this exists to make impossible.
     ///
-    /// The recursion terminates because a type can only name types declared
-    /// before it: a struct field of the struct's own type is `KSEM051`, and an
-    /// enum payload of the enum's own type is `KSEM050`.
+    /// The recursion terminates because a value type cannot reach itself: a
+    /// struct that would contain itself by value is broken to `Error` and
+    /// reported (`KSEM052`), and an enum payload of the enum's own type is
+    /// `KSEM050`.
     fn default_value(&mut self, ty: Type) -> HirExprId {
         let node = match ty {
             Type::Float(_) => HirExpr::Float(0.0),
