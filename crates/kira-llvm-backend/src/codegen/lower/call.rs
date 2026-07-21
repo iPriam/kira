@@ -67,7 +67,7 @@ impl FunctionLowering<'_, '_> {
                     // Analysis rejects `print` of a raw pointer (an opaque
                     // foreign word has no pinned rendering) and `CString` is
                     // seam-only, so neither reaches a type-checked program.
-                    Type::RawPtr | Type::CString => {
+                    Type::RawPtr | Type::CString | Type::NativeState(_) => {
                         return Err(LlvmError::Unsupported("a print of a raw pointer"));
                     }
                     Type::Void | Type::Error => {
@@ -145,6 +145,43 @@ impl FunctionLowering<'_, '_> {
             .ok_or(LlvmError::Unsupported(
                 "a mutating call to a function not in this half",
             ))?;
+        if let Some(type_id) = self
+            .function
+            .native_state_locals
+            .get(place.local as usize)
+            .copied()
+            .flatten()
+        {
+            let root_ty = self.local_type(place.local)?;
+            let (root, _) = self.recover_native_state_alloca(place.local, type_id, root_ty)?;
+            let mut receiver_ptr = root;
+            let mut receiver_ty = root_ty;
+            for step in &place.path {
+                (receiver_ptr, receiver_ty) =
+                    self.walk_place_step(receiver_ptr, receiver_ty, step)?;
+            }
+            let mut values = Vec::with_capacity(args.len());
+            values.push(receiver_ptr);
+            for &argument in args.iter().skip(1) {
+                values.push(self.lower_expr(argument)?);
+            }
+            let returns_value =
+                self.codegen.program.functions[index as usize].return_type != Type::Void;
+            let name = if returns_value { c"call" } else { c"" };
+            let result = self.call(target, &mut values, name);
+            let llvm_type = self.codegen.llvm_type(root_ty)?;
+            // SAFETY: `root` is a live alloca of the recovered value.
+            let updated = unsafe {
+                LLVMBuildLoad2(
+                    self.codegen.builder,
+                    llvm_type,
+                    root,
+                    c"native.updated".as_ptr(),
+                )
+            };
+            self.replace_native_state_local(place.local, type_id, root_ty, updated)?;
+            return Ok(result);
+        }
         let (receiver_ptr, _ty) = self.walk_place(place.local, &place.path)?;
         let mut values = Vec::with_capacity(args.len());
         values.push(receiver_ptr);

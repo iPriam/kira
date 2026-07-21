@@ -55,7 +55,10 @@ impl Vm<'_> {
         slot: u16,
         steps: &[ResolvedStep],
     ) -> Result<Value, VmError> {
-        let mut current = frame.locals[slot as usize];
+        self.walk_value(frame.locals[slot as usize], steps)
+    }
+
+    fn walk_value(&self, mut current: Value, steps: &[ResolvedStep]) -> Result<Value, VmError> {
         for step in steps {
             current = self.walk_step(current, *step)?;
         }
@@ -95,6 +98,15 @@ impl Vm<'_> {
         steps: &[ResolvedStep],
         value: Value,
     ) -> Result<(), VmError> {
+        if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
+            return self.mutate_native_view(token, type_id, value, |vm, root, value| {
+                let Some((&last, walk)) = steps.split_last() else {
+                    return Err(VmError::EmptyFieldPath);
+                };
+                let target = vm.walk_value(root, walk)?;
+                vm.write_last(target, last, value)
+            });
+        }
         let Some((&last, walk)) = steps.split_last() else {
             return Err(VmError::EmptyFieldPath);
         };
@@ -115,6 +127,18 @@ impl Vm<'_> {
         path: &[u16],
         value: Value,
     ) -> Result<(), VmError> {
+        if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
+            return self.mutate_native_view(token, type_id, value, |vm, root, value| {
+                let Some((&last, walk)) = path.split_last() else {
+                    return Err(VmError::EmptyFieldPath);
+                };
+                let mut target = root;
+                for &index in walk {
+                    target = vm.walk_step(target, ResolvedStep::Field(index))?;
+                }
+                vm.write_last(target, ResolvedStep::Field(last), value)
+            });
+        }
         let Some((&last, walk)) = path.split_last() else {
             return Err(VmError::EmptyFieldPath);
         };
@@ -166,6 +190,18 @@ impl Vm<'_> {
         steps: &[ResolvedStep],
         value: Value,
     ) -> Result<(), VmError> {
+        if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
+            return self.mutate_native_view(token, type_id, value, |vm, root, value| {
+                let target = vm.walk_value(root, steps)?;
+                let Value::Array(id) = target else {
+                    return Err(VmError::NotAnArray);
+                };
+                if !vm.heap.push_element(id, value) {
+                    return Err(VmError::NotAnArray);
+                }
+                Ok(())
+            });
+        }
         let target = self.walk_place(frame, slot, steps)?;
         let Value::Array(id) = target else {
             return Err(VmError::NotAnArray);
@@ -174,6 +210,31 @@ impl Vm<'_> {
             return Err(VmError::NotAnArray);
         }
         Ok(())
+    }
+
+    fn mutate_native_view(
+        &mut self,
+        token: kira_runtime_abi::NativeStateToken,
+        type_id: kira_runtime_abi::NativeStateTypeId,
+        value: Value,
+        mutate: impl FnOnce(&mut Self, Value, Value) -> Result<(), VmError>,
+    ) -> Result<(), VmError> {
+        let stored = self
+            .host
+            .native_state_recover(token, type_id)
+            .map_err(VmError::NativeState)?;
+        let root = self.heap.from_native_state(stored);
+        if let Err(error) = mutate(self, root, value) {
+            self.heap.drop_value(root);
+            return Err(error);
+        }
+        let stored = self
+            .heap
+            .into_native_state(root)
+            .ok_or(VmError::NativeStateValueMismatch)?;
+        self.host
+            .native_state_replace(token, type_id, stored)
+            .map_err(VmError::NativeState)
     }
 
     /// Fills `buf` with `path`'s steps, popping one index value per `Index`

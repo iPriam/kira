@@ -8,12 +8,14 @@
 
 pub mod arrays;
 pub mod enums;
+pub mod native_state;
 pub mod scalars;
 pub mod structs;
 pub mod table;
 
 pub use arrays::{ArrayId, ArrayTable};
 pub use enums::{EnumDef, EnumId, EnumTable, VariantDef};
+pub use native_state::{NativeStateId, NativeStateTable};
 pub use scalars::{FloatSpelling, IntSpelling};
 pub use structs::{FieldDef, StructDef, StructId, StructTable};
 pub use table::TypeTable;
@@ -60,6 +62,8 @@ pub enum Type {
     /// heap. Its only purpose is the C-FFI seam: a foreign call hands one back
     /// and Kira hands it to a later foreign call unchanged.
     RawPtr,
+    /// An opaque handle to Kira-owned native callback state.
+    NativeState(NativeStateId),
     /// A borrowed, NUL-terminated C string, legal **only** as a foreign
     /// (`@FFI.Extern`) parameter (`CString`).
     ///
@@ -200,7 +204,12 @@ impl Type {
     pub fn is_scalar(self) -> bool {
         matches!(
             self,
-            Type::Int(_) | Type::Float(_) | Type::Bool | Type::Void | Type::RawPtr
+            Type::Int(_)
+                | Type::Float(_)
+                | Type::Bool
+                | Type::Void
+                | Type::RawPtr
+                | Type::NativeState(_)
         )
     }
 
@@ -236,7 +245,7 @@ impl Type {
             // duration of one foreign call and owns nothing either; it is
             // seam-only, so this arm is rarely reached, but a borrowed value is
             // trivially copyable by the same logic.
-            Type::RawPtr | Type::CString => true,
+            Type::RawPtr | Type::CString | Type::NativeState(_) => true,
             // An enum answers exactly as an array does: not trivially copyable
             // (a named enum local needs `move` into an owned parameter) and yet
             // it moves on bind.
@@ -269,6 +278,7 @@ impl Type {
             | Type::String
             | Type::RawPtr
             | Type::CString
+            | Type::NativeState(_)
             | Type::Struct(_) => false,
         }
     }

@@ -245,7 +245,7 @@ impl Analyzer<'_> {
             // is generated against, so both are refused here. (A written
             // `CString` in an ordinary position is already `Error` by `KSEM176`,
             // so only `RawPtr` reaches this arm in practice.)
-            Type::RawPtr | Type::CString => {
+            Type::RawPtr | Type::CString | Type::NativeState(_) => {
                 self.emit(
                     span,
                     "KSEM186",

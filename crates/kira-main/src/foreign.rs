@@ -16,7 +16,8 @@ use std::path::Path;
 use kira_dynamic_ffi::{ForeignAdapterError, ForeignAdapterLibrary};
 use kira_runtime_abi::{
     ForeignArg, ForeignCallError, ForeignResult, ForeignSignature, HostCapabilities, NativeArg,
-    NativeCallError, NativeResult,
+    NativeCallError, NativeResult, NativeStateError, NativeStateToken, NativeStateTypeId,
+    NativeStateValue,
 };
 
 /// One foreign import's binding: the adapter symbol to call and the exact-width
@@ -108,6 +109,35 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
     ) -> Result<NativeResult, NativeCallError> {
         // A VM-plus-sidecar host has no `@Native` half; only the foreign seam.
         self.inner.call_native(function_id, args)
+    }
+
+    fn native_state_create(
+        &mut self,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+    ) -> Result<NativeStateToken, NativeStateError> {
+        self.inner.native_state_create(ty, value)
+    }
+
+    fn native_state_recover(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+    ) -> Result<NativeStateValue, NativeStateError> {
+        self.inner.native_state_recover(token, ty)
+    }
+
+    fn native_state_replace(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        value: NativeStateValue,
+    ) -> Result<(), NativeStateError> {
+        self.inner.native_state_replace(token, ty, value)
+    }
+
+    fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
+        self.inner.native_state_free(token)
     }
 
     fn call_foreign(

@@ -7,7 +7,7 @@
 //! are scoped to their owning function.
 
 use crate::ty::{EnumId, StructId, Type, TypeTable};
-use kira_runtime_abi::{Execution, ForeignAbi, ForeignSignature};
+use kira_runtime_abi::{Execution, ForeignAbi, ForeignSignature, NativeStateTypeId};
 use kira_source::Span;
 use kira_syntax_model::ownership::OwnershipMode;
 use la_arena::{Arena, Idx};
@@ -176,6 +176,8 @@ pub struct HirLocal {
     ///
     /// [`KSEM111`-class]: https://docs.kira-lang.com/diagnostics
     pub ownership: OwnershipMode,
+    /// The boxed type id when this slot is a mutable `nativeRecover<T>` view.
+    pub native_state: Option<NativeStateTypeId>,
 }
 
 /// A statement in a function body.
@@ -438,6 +440,34 @@ pub enum HirExpr {
         /// The selected variant's declared payload type.
         ty: Type,
     },
+    /// Boxes a copy of a Kira-owned value in opaque callback-state storage.
+    NativeState {
+        /// The value copied into the box.
+        value: HirExprId,
+        /// The stable runtime identity of the boxed type.
+        type_id: NativeStateTypeId,
+        /// The opaque handle type returned to Kira.
+        ty: Type,
+    },
+    /// Exports a callback-state handle's stable opaque userdata token.
+    NativeUserData {
+        /// The state handle.
+        state: HirExprId,
+    },
+    /// Recovers typed mutable access through a returned userdata token.
+    NativeRecover {
+        /// The opaque raw userdata token.
+        raw: HirExprId,
+        /// The stable runtime identity recovery validates.
+        type_id: NativeStateTypeId,
+        /// The Kira value type exposed by the mutable view.
+        ty: Type,
+    },
+    /// Releases a callback-state handle or userdata token exactly once.
+    NativeStateFree {
+        /// The state handle or raw token.
+        token: HirExprId,
+    },
     /// A scalar type-conversion call, `T(operand)` where `T` is a numeric
     /// scalar type.
     ///
@@ -502,6 +532,8 @@ impl HirExpr {
             | HirExpr::Field { ty, .. }
             | HirExpr::ArrayNew { ty, .. }
             | HirExpr::EnumPayload { ty, .. }
+            | HirExpr::NativeState { ty, .. }
+            | HirExpr::NativeRecover { ty, .. }
             | HirExpr::Convert { ty, .. }
             | HirExpr::Index { ty, .. } => *ty,
             HirExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
@@ -509,7 +541,8 @@ impl HirExpr {
             // `.count` and a tag read are both `Int`; `.append` yields nothing.
             // None has a type that can vary, so none carries one.
             HirExpr::ArrayLen { .. } | HirExpr::EnumTag { .. } => Type::INT,
-            HirExpr::ArrayAppend { .. } => Type::Void,
+            HirExpr::NativeUserData { .. } => Type::RawPtr,
+            HirExpr::ArrayAppend { .. } | HirExpr::NativeStateFree { .. } => Type::Void,
             HirExpr::Error => Type::Error,
         }
     }

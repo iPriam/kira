@@ -26,6 +26,8 @@ mod entry;
 mod ffi;
 mod library;
 mod lower;
+mod native_state;
+mod native_state_enums;
 mod symbols;
 mod target;
 mod types;
@@ -44,6 +46,7 @@ use llvm_sys::prelude::*;
 use llvm_sys::target::{LLVMGetModuleDataLayout, LLVMTargetDataRef};
 
 use self::elements::Leaf;
+use self::native_state::StateLeaf;
 
 use self::ffi::{c_string, dispose_message, take_message};
 use self::symbols::symbol_name;
@@ -309,6 +312,10 @@ pub(crate) struct Codegen<'a> {
     /// `(element type, leaf)`. Memoized so two arrays of the same element share
     /// one leaf. See [`elements`].
     element_leaves: HashMap<(Type, Leaf), LLVMValueRef>,
+    /// Encode/decode leaves used by generic callback-state array conversion.
+    native_state_leaves: HashMap<(Type, StateLeaf), LLVMValueRef>,
+    /// Encode/decode helpers for payload-carrying enum callback state.
+    native_state_enum_leaves: HashMap<(kira_semantics_model::EnumId, StateLeaf), Callable>,
 }
 
 impl<'a> Codegen<'a> {
@@ -348,6 +355,8 @@ impl<'a> Codegen<'a> {
             string_counter: 0,
             target_data,
             element_leaves: HashMap::new(),
+            native_state_leaves: HashMap::new(),
+            native_state_enum_leaves: HashMap::new(),
         };
         // Struct types come first: a function signature may name one, and a
         // struct's fields may name a struct declared before it.
@@ -511,7 +520,7 @@ impl<'a> Codegen<'a> {
             // dereferenced, exactly as the VM keeps it in a `Value::RawPtr`.
             // Foreign marshalling converts it to a real pointer at the C
             // boundary inside the generated adapter.
-            Type::RawPtr => self.types.i64,
+            Type::RawPtr | Type::NativeState(_) => self.types.i64,
             Type::Void => self.types.void,
             Type::Struct(id) => *self
                 .struct_types
