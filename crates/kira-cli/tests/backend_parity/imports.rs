@@ -47,6 +47,30 @@ fn a_module_struct_runs_the_same_on_every_backend() {
     assert_eq!(out, "12\n");
 }
 
+/// A module-qualified struct literal, a module-qualified type, a
+/// module-qualified enum variant (payload-less and payload-carrying), and a
+/// module-qualified call, all in one program: the qualified spellings compile
+/// to the same constructions and calls the bare forms do, so the three backends
+/// agree on the answer.
+#[test]
+fn qualified_cross_module_references_run_the_same_on_every_backend() {
+    let out = assert_module_parity(
+        "import shapes as S\n\
+         @Main function main() { \
+         let b: S.Box = S.Box { size: S.Size.Large, tag: S.Size.Coded(7) } \
+         print(S.score(b)) print(score(b)) return }",
+        &[(
+            "shapes",
+            "enum Size { Small  Large  Coded(Int) }\n\
+             struct Box { let size: Size  let tag: Size }\n\
+             function score(b: borrow Box) -> Int { \
+             let base = b.size == .Large ? 10 : 1  return base + coded(b.tag) }\n\
+             function coded(s: borrow Size) -> Int { if s == .Small { return 0 } return 5 }",
+        )],
+    );
+    assert_eq!(out, "15\n15\n");
+}
+
 /// A module importing a module: the graph is transitive, and the deepest
 /// dependency's declarations are available to the ones above it.
 #[test]

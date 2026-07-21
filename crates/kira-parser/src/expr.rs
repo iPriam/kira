@@ -214,6 +214,24 @@ impl Parser<'_> {
                 span,
             }));
         }
+        // `Module.Type { … }` is a module-qualified struct literal. The parser
+        // cannot resolve the module, so it keeps the qualifier in the interned
+        // name — a dot cannot appear in an identifier, so the dotted spelling
+        // can never collide with a declared one — exactly as a qualified *type*
+        // reference does, and semantics strips it against the file's imports.
+        // The guard mirrors a bare `Name { … }`: a `{` in a condition opens a
+        // block, so a qualified literal there is written with parentheses too,
+        // and a `{ x in … }` is a trailing closure, not a literal.
+        if self.at(TokenKind::LBrace)
+            && !self.no_struct_literal
+            && !self.at_closure_start()
+            && let Some(prefix) = self.name_path_text(base)
+        {
+            let qualified = format!("{prefix}.{}", self.text_of(field_span));
+            let name_span = Span::from_bounds(base_span.start, field_span.end());
+            let symbol = self.intern_text(&qualified, name_span);
+            return Ok(self.parse_struct_literal(symbol, name_span));
+        }
         let span = Span::from_bounds(base_span.start, field_span.end());
         Ok(self.tree.add_expr(Expr::Field {
             base,
@@ -221,6 +239,26 @@ impl Parser<'_> {
             field_span,
             span,
         }))
+    }
+
+    /// Reconstructs the dotted spelling of a pure name path (`A`, `A.B`,
+    /// `A.B.C`), or `None` when the base is anything else.
+    ///
+    /// A module-qualified struct literal's qualifier is one of these paths, and
+    /// rebuilding it from the leaf spans drops any whitespace between segments —
+    /// the same way [`Parser::parse_type_ref`] assembles a qualified type name a
+    /// token at a time.
+    fn name_path_text(&self, base: ExprId) -> Option<String> {
+        match self.tree.expr(base) {
+            Expr::Name { span, .. } => Some(self.text_of(*span).to_owned()),
+            Expr::Field {
+                base, field_span, ..
+            } => {
+                let prefix = self.name_path_text(*base)?;
+                Some(format!("{prefix}.{}", self.text_of(*field_span)))
+            }
+            _ => None,
+        }
     }
 
     fn parse_primary(&mut self) -> ExprId {
@@ -472,207 +510,4 @@ fn binary_op(kind: TokenKind) -> Option<(BinaryOp, u8)> {
         _ => return None,
     };
     Some(pair)
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::parse;
-    use kira_source::SourceId;
-    use kira_syntax_model::SyntaxTree;
-    use kira_syntax_model::ast::{BinaryOp, Expr, Item, Stmt};
-
-    /// Renders the first return-statement expression of the first function as
-    /// a fully-parenthesized string, to assert precedence shape.
-    fn return_shape(text: &str) -> String {
-        let result = parse(SourceId::new(0), text);
-        let tree = &result.tree;
-        let function = match &tree.items()[0] {
-            Item::Function(f) => f,
-            other => panic!("expected function, got {other:?}"),
-        };
-        let stmt_id = *function.body.stmts.first().expect("a statement");
-        let expr = match tree.stmt(stmt_id) {
-            Stmt::Return {
-                value: Some(expr), ..
-            } => *expr,
-            other => panic!("expected return with value, got {other:?}"),
-        };
-        render(tree, expr, &result.interner)
-    }
-
-    fn render(
-        tree: &SyntaxTree,
-        id: kira_syntax_model::ast::ExprId,
-        interner: &kira_core::Interner,
-    ) -> String {
-        match tree.expr(id) {
-            Expr::Int { value, .. } => value.to_string(),
-            Expr::Bool { value, .. } => value.to_string(),
-            Expr::Name { symbol, .. } => interner.resolve(*symbol).to_owned(),
-            Expr::Unary { op, operand, .. } => {
-                format!("({:?} {})", op, render(tree, *operand, interner))
-            }
-            Expr::Binary { op, lhs, rhs, .. } => format!(
-                "({} {} {})",
-                render(tree, *lhs, interner),
-                spelling(*op),
-                render(tree, *rhs, interner)
-            ),
-            Expr::Conditional {
-                cond,
-                then,
-                otherwise,
-                ..
-            } => format!(
-                "({} ? {} : {})",
-                render(tree, *cond, interner),
-                render(tree, *then, interner),
-                render(tree, *otherwise, interner)
-            ),
-            other => format!("{other:?}"),
-        }
-    }
-
-    fn spelling(op: BinaryOp) -> &'static str {
-        op.spelling()
-    }
-
-    #[test]
-    fn multiplication_binds_tighter_than_addition() {
-        assert_eq!(
-            return_shape("function f() { return 2 + 3 * 4 }"),
-            "(2 + (3 * 4))"
-        );
-    }
-
-    #[test]
-    fn subtraction_is_left_associative() {
-        assert_eq!(
-            return_shape("function f() { return 10 - 2 - 3 }"),
-            "((10 - 2) - 3)"
-        );
-    }
-
-    #[test]
-    fn comparison_below_arithmetic_and_logic_below_comparison() {
-        assert_eq!(
-            return_shape("function f() { return 1 + 2 > 2 && 3 < 5 }"),
-            "(((1 + 2) > 2) && (3 < 5))"
-        );
-    }
-
-    #[test]
-    fn and_binds_tighter_than_or() {
-        assert_eq!(
-            return_shape("function f() { return true || false && false }"),
-            "(true || (false && false))"
-        );
-    }
-
-    #[test]
-    fn unary_binds_tighter_than_multiplication() {
-        assert_eq!(
-            return_shape("function f() { return 2 * -3 }"),
-            "(2 * (Neg 3))"
-        );
-    }
-
-    // The bitwise ladder. Each of these groups as C groups it, and as Go and
-    // Swift do not, so they pin the rungs a contributor is most likely to
-    // "correct" from memory.
-
-    #[test]
-    fn bitwise_and_binds_tighter_than_xor_and_or() {
-        assert_eq!(
-            return_shape("function f() { return 1 | 2 ^ 3 & 4 }"),
-            "(1 | (2 ^ (3 & 4)))"
-        );
-    }
-
-    #[test]
-    fn bitwise_or_binds_looser_than_equality() {
-        // C reads this the same way; Go and Swift read it as `(1 | 2) == 3`.
-        assert_eq!(
-            return_shape("function f() { return 1 | 2 == 3 }"),
-            "(1 | (2 == 3))"
-        );
-    }
-
-    #[test]
-    fn bitwise_binds_tighter_than_logical_and() {
-        assert_eq!(
-            return_shape("function f() { return true && 1 | 2 }"),
-            "(true && (1 | 2))"
-        );
-    }
-
-    #[test]
-    fn shift_binds_tighter_than_comparison_and_looser_than_addition() {
-        assert_eq!(
-            return_shape("function f() { return 1 + 2 << 3 < 4 }"),
-            "(((1 + 2) << 3) < 4)"
-        );
-    }
-
-    #[test]
-    fn shift_is_left_associative() {
-        assert_eq!(
-            return_shape("function f() { return 1 << 2 >> 3 }"),
-            "((1 << 2) >> 3)"
-        );
-    }
-
-    #[test]
-    fn complement_binds_tighter_than_bitwise_and() {
-        assert_eq!(
-            return_shape("function f() { return ~1 & 2 }"),
-            "((BitNot 1) & 2)"
-        );
-    }
-
-    // The conditional.
-
-    #[test]
-    fn conditional_binds_looser_than_every_binary_operator() {
-        assert_eq!(
-            return_shape("function f() { return a || b ? 1 + 2 : 3 | 4 }"),
-            "((a || b) ? (1 + 2) : (3 | 4))"
-        );
-    }
-
-    #[test]
-    fn conditional_is_right_associative() {
-        assert_eq!(
-            return_shape("function f() { return a ? 1 : b ? 2 : 3 }"),
-            "(a ? 1 : (b ? 2 : 3))"
-        );
-    }
-
-    #[test]
-    fn conditional_nests_in_its_then_branch() {
-        assert_eq!(
-            return_shape("function f() { return a ? b ? 1 : 2 : 3 }"),
-            "(a ? (b ? 1 : 2) : 3)"
-        );
-    }
-
-    /// A conditional missing its `:` recovers rather than derailing the parse:
-    /// the error is reported and the function still yields one return
-    /// statement, so later items keep being parsed.
-    #[test]
-    fn conditional_without_colon_recovers() {
-        let result = parse(SourceId::new(0), "function f() { return a ? 1 2 }");
-        assert!(
-            !result.diagnostics.is_empty(),
-            "a missing `:` must be diagnosed"
-        );
-        let function = match &result.tree.items()[0] {
-            Item::Function(f) => f,
-            other => panic!("expected function, got {other:?}"),
-        };
-        assert!(
-            !function.body.stmts.is_empty(),
-            "the function body must survive the error"
-        );
-    }
 }

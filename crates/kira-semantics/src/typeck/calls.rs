@@ -38,6 +38,24 @@ impl Analyzer<'_> {
         if let Some(call) = self.analyze_qualified_call(ctx, receiver, method, method_span, args) {
             return call;
         }
+        // `SizeMode.Fixed(3)` / `Foundation.SizeMode.Fixed(3)` is a
+        // payload-carrying enum variant written with a qualified spelling: the
+        // receiver names the enum, `method` names the variant, and the argument
+        // is its payload. It parses as a method call because the parser cannot
+        // tell an enum name from a value; the analyzer, holding the enum table
+        // and the import table, can.
+        if let Some(enum_id) = self.qualified_enum_at(ctx, receiver) {
+            self.reject_argument_labels(args, "an enum variant payload");
+            let values = Some(Self::argument_values(args));
+            return self.analyze_dot_member(
+                ctx,
+                method,
+                method_span,
+                &values,
+                method_span,
+                Some(Type::Enum(enum_id)),
+            );
+        }
 
         // Analyzing the receiver is how its type is known, and its type is what
         // decides which surface the call belongs to. For an array that is all
@@ -145,7 +163,18 @@ impl Analyzer<'_> {
         name_span: kira_source::Span,
         inits: &[FieldInit],
     ) -> HirExprId {
-        let struct_name = self.interner.resolve(name).to_owned();
+        // A module-qualified literal (`Support.Point { … }`) names the same
+        // struct the module declares bare: stripping the qualifier against this
+        // file's imports is the whole of it, exactly as a qualified *type*
+        // reference is resolved. An unimported root is reported there and the
+        // literal's own fields are still analyzed so their mistakes surface.
+        let written = self.interner.resolve(name).to_owned();
+        let Some(struct_name) = self.strip_module_qualifier(&written, name_span) else {
+            for init in inits {
+                self.analyze_expr(ctx, init.value);
+            }
+            return self.program.exprs.alloc(HirExpr::Error);
+        };
         let Some(id) = self.program.types.structs().lookup(&struct_name) else {
             // A function of this name is the likely mistake, so say which.
             let message = if self.lookup_function(&struct_name).is_some() {

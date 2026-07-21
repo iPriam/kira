@@ -276,7 +276,7 @@ impl Analyzer<'_> {
                 base,
                 field,
                 field_span,
-                ..
+                span,
             } => {
                 let name = self.interner.resolve(field).to_owned();
                 // `ClsAlpha.v` reads a parent's field through `self`; the base
@@ -292,6 +292,21 @@ impl Analyzer<'_> {
                         return self.program.exprs.alloc(HirExpr::Error);
                     }
                     Qualifier::NotAType => {}
+                }
+                // `SizeMode.Hug` / `Foundation.SizeMode.Fill` is a payload-less
+                // enum variant written with a qualified spelling rather than a
+                // leading dot — the base names the enum, `field` names the
+                // variant. Recognized before the base is analyzed as a value,
+                // because an enum name is not one.
+                if let Some(enum_id) = self.qualified_enum_at(ctx, base) {
+                    return self.analyze_dot_member(
+                        ctx,
+                        field,
+                        field_span,
+                        &None,
+                        span,
+                        Some(Type::Enum(enum_id)),
+                    );
                 }
                 let base_hir = self.analyze_expr(ctx, base);
                 let base_ty = self.program.expr(base_hir).type_of();

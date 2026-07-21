@@ -64,6 +64,68 @@ fn a_dotted_module_path_binds_its_last_segment() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
 
+/// A module-qualified struct literal names the same struct the module declares
+/// bare, so `Support.SupportPoint { … }` constructs it exactly as
+/// `SupportPoint { … }` does.
+#[test]
+fn a_qualified_struct_literal_resolves_through_the_alias() {
+    let diagnostics = module_diagnostics(
+        "import support as Support\n\
+         @Main function main() { let p = Support.SupportPoint { x: 1, y: 2 } print(p.x) return }",
+        &[("support", SUPPORT)],
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+/// A module a file did not import cannot qualify a struct literal: the qualifier
+/// is refused with the same file-scope diagnostic a qualified type gets.
+#[test]
+fn a_qualified_struct_literal_needs_this_files_import() {
+    let codes = module_codes(
+        "import support\nimport leak\n@Main function main() { print(leakValue()) return }",
+        &[
+            ("support", SUPPORT),
+            (
+                "leak",
+                "function leakValue() -> Int { let p = support.SupportPoint { x: 1, y: 2 } \
+                 return p.x }",
+            ),
+        ],
+    );
+    assert_eq!(codes, vec!["KSEM027"]);
+}
+
+/// A qualified enum variant is written with a spelling rather than a leading
+/// dot: `Support.Tone.Warm` and the bare `Tone.Warm` both name the variant, and
+/// a payload variant carries its argument through the same path.
+#[test]
+fn a_qualified_enum_variant_resolves_bare_and_module_qualified() {
+    let diagnostics = module_diagnostics(
+        "import support as Support\n\
+         @Main function main() { \
+         let a = Support.Tone.Warm  let b = Tone.Cool  let c = Support.Tone.Level(3) \
+         print(rank(a) + rank(b) + rank(c)) return }",
+        &[(
+            "support",
+            "enum Tone { Warm  Cool  Level(Int) }\n\
+             function rank(t: borrow Tone) -> Int { if t == .Warm { return 1 } return 2 }",
+        )],
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+/// A qualified spelling of a variant that does not exist is refused with the
+/// enum's own typed diagnostic, not a silent pass.
+#[test]
+fn an_unknown_qualified_enum_variant_is_refused() {
+    let codes = module_codes(
+        "import support as Support\n\
+         @Main function main() { let a = Support.Tone.Nope  return }",
+        &[("support", "enum Tone { Warm  Cool }")],
+    );
+    assert_eq!(codes, vec!["KSEM120"]);
+}
+
 /// The headline rule: an import written in one file does not carry into
 /// another. `leak.kira` never imported `support`, so its qualified reference
 /// has no namespace root to resolve through — even though the entry file's

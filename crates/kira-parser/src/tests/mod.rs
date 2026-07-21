@@ -15,6 +15,7 @@ mod enums;
 mod exports;
 mod foreign;
 mod generics;
+mod precedence;
 
 use crate::*;
 use kira_runtime_abi::Execution;
@@ -266,6 +267,70 @@ fn parses_a_struct_literal_with_both_binders() {
         panic!("expected a struct literal");
     };
     assert_eq!(fields.len(), 2, "both binders normalize to one node");
+}
+
+#[test]
+fn a_module_qualified_struct_literal_parses() {
+    // `Support.Point { … }` parses as one struct literal whose name keeps the
+    // dotted qualifier — semantics strips it against the file's imports — rather
+    // than a field read `Support.Point` followed by an unparsable `{`.
+    let result = parse_text("function f() { let p = Support.Point { x = 1, y: 2 } }");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let kira_syntax_model::ast::Stmt::Let { init, .. } = first_stmt(&result) else {
+        panic!("expected let");
+    };
+    let Expr::StructLit { name, fields, .. } = result.tree.expr(*init) else {
+        panic!(
+            "expected a struct literal, got {:?}",
+            result.tree.expr(*init)
+        );
+    };
+    assert_eq!(result.interner.resolve(*name), "Support.Point");
+    assert_eq!(fields.len(), 2);
+}
+
+#[test]
+fn a_deeper_qualified_struct_literal_keeps_every_segment() {
+    let result = parse_text("function f() { let v = A.B.Thing { n = 1 } }");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let kira_syntax_model::ast::Stmt::Let { init, .. } = first_stmt(&result) else {
+        panic!("expected let");
+    };
+    let Expr::StructLit { name, .. } = result.tree.expr(*init) else {
+        panic!("expected a struct literal");
+    };
+    assert_eq!(result.interner.resolve(*name), "A.B.Thing");
+}
+
+#[test]
+fn a_qualified_call_parses_as_a_method_call() {
+    // `Support.hello(1)` is a method call at the parser level: the receiver is
+    // the bare name `Support`, and only the analyzer decides it is a module.
+    let result = parse_text("function f() { let v = Support.hello(1) }");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let kira_syntax_model::ast::Stmt::Let { init, .. } = first_stmt(&result) else {
+        panic!("expected let");
+    };
+    let Expr::MethodCall { receiver, .. } = result.tree.expr(*init) else {
+        panic!("expected a method call, got {:?}", result.tree.expr(*init));
+    };
+    assert!(matches!(result.tree.expr(*receiver), Expr::Name { .. }));
+}
+
+/// A `{` in a condition still opens the block, never a qualified literal — the
+/// same rule a bare `Name { … }` follows, so `Module.Type` there is a field
+/// read and the loop body is the block.
+#[test]
+fn a_qualified_name_before_a_condition_brace_opens_a_block() {
+    let result = parse_text("function f() { if flags.ready { return } }");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let kira_syntax_model::ast::Stmt::If { cond, .. } = first_stmt(&result) else {
+        panic!("expected an if, got {:?}", first_stmt(&result));
+    };
+    assert!(
+        matches!(result.tree.expr(*cond), Expr::Field { .. }),
+        "the condition is a field read, not a struct literal",
+    );
 }
 
 /// The call-argument analogue of the struct-literal binder: `f(label: v)` and
