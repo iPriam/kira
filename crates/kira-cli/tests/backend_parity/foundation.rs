@@ -64,6 +64,44 @@ fn a_projects_own_foundation_shadows_the_bundled_one_on_every_backend() {
     assert_eq!(out, "local: x\n");
 }
 
+/// Foundation's geometry vocabulary constructs and reads the same on every
+/// backend: a memberwise `Point(x, y)` call, a `Rect { … }` literal, and a
+/// `mat4Identity()` all lower to the same struct value, and the three backends
+/// agree on the numbers read back out of them.
+#[test]
+fn foundation_geometry_types_agree_on_every_backend() {
+    let out = assert_parity(
+        "import Foundation\n\
+         @Main function main() {\n\
+             let p = Point(x: 1.0, y: 2.0)\n\
+             let s = Size(10.0, 20.0)\n\
+             let r = Rect { x: 3.0, y: 4.0, width: 100.0, height: 50.0 }\n\
+             let v = Vec3(0.0, 0.0, 1.0)\n\
+             let m = mat4Identity()\n\
+             print(p.x + p.y + s.width + s.height + r.width + r.height + v.z + m.m11)\n\
+             return\n\
+         }",
+    );
+    assert_eq!(out, "185\n");
+}
+
+/// A memberwise constructor reaching only its leading fields leaves the rest at
+/// their declared defaults — `Point(5.0)` sets `x` and defaults `y` to `0.0` —
+/// and every backend fills the same defaults.
+#[test]
+fn a_partial_memberwise_construction_defaults_the_rest_on_every_backend() {
+    let out = assert_parity(
+        "import Foundation\n\
+         @Main function main() {\n\
+             let p = Point(5.0)\n\
+             let m = Mat4()\n\
+             print(p.x + p.y + m.m00 + m.m33 + m.m01)\n\
+             return\n\
+         }",
+    );
+    assert_eq!(out, "7\n");
+}
+
 /// Foundation is imported, never implicit: a file that does not import it
 /// cannot call into it, and every backend refuses the same way. This is the
 /// negative half of the mechanism — without it, a passing positive case could

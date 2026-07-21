@@ -4,14 +4,116 @@
 // rather than with any project, so a program reaches it without a path and
 // without a dependency entry.
 //
-// It is deliberately small. Foundation's remaining files in the reference
-// implementation — Printable, Test, Derive, DeriveSerde, FileSystem, Web —
-// each wait on a language subsystem this compiler has not built yet
-// (constructs, comptime, macros, FFI). They are named as refusals in
-// `docs/foundation.md` rather than stubbed here: a stub that compiles and does
-// nothing is worse than an import that says what is missing.
+// The geometry and math vocabulary below is the subset of the reference
+// implementation's `Types/Maths` that the migrated corpus constructs and reads
+// — matched to the oracle on field names and types so a `Point { x: .., y: .. }`
+// literal and a `Size(w, h)` memberwise call mean the same thing they do there.
+// The type methods and matrix/quaternion algebra the oracle also defines wait
+// on struct operator overloading; they are named as a refusal in
+// `docs/foundation.md` rather than stubbed here.
 
 function printLine(text: borrow String) {
     print(text)
     return
+}
+
+// A point in a 2D coordinate space.
+struct Point {
+    var x: Float = 0.0
+    var y: Float = 0.0
+}
+
+// A 2D extent — a width and a height.
+struct Size {
+    var width: Float = 0.0
+    var height: Float = 0.0
+}
+
+// An axis-aligned rectangle: an origin and an extent.
+struct Rect {
+    var x: Float = 0.0
+    var y: Float = 0.0
+    var width: Float = 0.0
+    var height: Float = 0.0
+}
+
+// A vector in 3D space.
+struct Vec3 {
+    var x: Float = 0.0
+    var y: Float = 0.0
+    var z: Float = 0.0
+}
+
+// A row-major 4x4 matrix, defaulting to the identity.
+struct Mat4 {
+    var m00: Float = 1.0
+    var m01: Float = 0.0
+    var m02: Float = 0.0
+    var m03: Float = 0.0
+    var m10: Float = 0.0
+    var m11: Float = 1.0
+    var m12: Float = 0.0
+    var m13: Float = 0.0
+    var m20: Float = 0.0
+    var m21: Float = 0.0
+    var m22: Float = 1.0
+    var m23: Float = 0.0
+    var m30: Float = 0.0
+    var m31: Float = 0.0
+    var m32: Float = 0.0
+    var m33: Float = 1.0
+}
+
+// Newton's method square root: eight iterations from the value itself, which is
+// enough for the geometry the corpus uses it for. Zero and negatives return 0.0.
+function sqrtApprox(value: Float) -> Float {
+    if value <= 0.0 {
+        return 0.0
+    }
+
+    var estimate = value
+    var index = 0
+    while index < 8 {
+        estimate = 0.5 * (estimate + value / estimate)
+        index = index + 1
+    }
+    return estimate
+}
+
+// Reduces an angle in radians to the range (-pi, pi] the series below converge on.
+function wrapRadians(radians: Float) -> Float {
+    let pi = 3.141592653589793
+    let twoPi = 6.283185307179586
+    var value = radians
+    while value > pi {
+        value = value - twoPi
+    }
+    while value < -pi {
+        value = value + twoPi
+    }
+    return value
+}
+
+// Sine, from the first four terms of the Taylor series about a wrapped angle.
+function sinApprox(radians: Float) -> Float {
+    let x = wrapRadians(radians)
+    let x2 = x * x
+    let x3 = x2 * x
+    let x5 = x3 * x2
+    let x7 = x5 * x2
+    return x - x3 / 6.0 + x5 / 120.0 - x7 / 5040.0
+}
+
+// Cosine, from the first four terms of the Taylor series about a wrapped angle.
+function cosApprox(radians: Float) -> Float {
+    let x = wrapRadians(radians)
+    let x2 = x * x
+    let x4 = x2 * x2
+    let x6 = x4 * x2
+    return 1.0 - x2 / 2.0 + x4 / 24.0 - x6 / 720.0
+}
+
+// The 4x4 identity matrix.
+function mat4Identity() -> Mat4 {
+    return Mat4()
 }
