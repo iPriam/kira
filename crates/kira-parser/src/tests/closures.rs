@@ -128,7 +128,10 @@ fn a_trailing_closure_becomes_the_last_argument() {
         Expr::Call { callee, args, .. } => {
             assert_eq!(result.interner.resolve(*callee), "register");
             assert_eq!(args.len(), 1);
-            assert!(matches!(result.tree.expr(args[0]), Expr::Closure { .. }));
+            assert!(matches!(
+                result.tree.expr(args[0].value),
+                Expr::Closure { .. }
+            ));
         }
         other => panic!("{other:?}"),
     }
@@ -144,7 +147,10 @@ fn a_trailing_closure_appends_to_an_existing_argument_list() {
     match result.tree.expr(*expr) {
         Expr::Call { args, .. } => {
             assert_eq!(args.len(), 3);
-            assert!(matches!(result.tree.expr(args[2]), Expr::Closure { .. }));
+            assert!(matches!(
+                result.tree.expr(args[2].value),
+                Expr::Closure { .. }
+            ));
         }
         other => panic!("{other:?}"),
     }
@@ -162,7 +168,10 @@ fn a_trailing_closure_on_a_field_becomes_a_method_call() {
         Expr::MethodCall { method, args, .. } => {
             assert_eq!(result.interner.resolve(*method), "onEvent");
             assert_eq!(args.len(), 1);
-            assert!(matches!(result.tree.expr(args[0]), Expr::Closure { .. }));
+            assert!(matches!(
+                result.tree.expr(args[0].value),
+                Expr::Closure { .. }
+            ));
         }
         other => panic!("{other:?}"),
     }

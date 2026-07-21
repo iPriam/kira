@@ -4,6 +4,7 @@
 mod aliases;
 mod arrays;
 mod attempts;
+mod calls;
 mod classes;
 mod closures;
 mod definitions;
