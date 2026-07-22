@@ -51,6 +51,8 @@ fn foreign(symbol: &str, params: &[ForeignType], result: ForeignType) -> HirFore
         symbol: symbol.to_owned(),
         abi: ForeignAbi::C,
         signature: ForeignSignature::new(params.to_vec(), result),
+        param_wrappers: params.iter().map(|_| None).collect(),
+        result_wrapper: None,
         name_span: Span::new(0, 0),
     }
 }
