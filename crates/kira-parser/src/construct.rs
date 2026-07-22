@@ -20,7 +20,7 @@ use kira_source::Span;
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
     Block, ConstructDecl, ConstructField, ConstructKind, ConstructMethod, DeferredConstruct,
-    Function, Stmt,
+    Function, Stmt, TypeRef, TypeRefId,
 };
 
 use crate::Parser;
@@ -190,6 +190,23 @@ impl Parser<'_> {
                     });
                 }
             }
+            // `body { child … }` — the SwiftUI-style shorthand for a computed
+            // member that yields the widget's `body`. It parses (so it is not a
+            // stray-token error), but its type is the construct *family* — a
+            // heterogeneous supertype — so it is recorded as deferred: producing
+            // a family-typed value needs the `any Construct` composition the
+            // executable slice does not cover. `some X` / `[some X]` concrete
+            // slots are what execute.
+            TokenKind::Identifier if self.peek(1).kind == TokenKind::LBrace => {
+                let start = self.current().span;
+                self.bump(); // member name
+                self.parse_block(); // consume the body block, balanced
+                let span = Span::from_bounds(start.start, self.previous_end());
+                body.deferred.push(DeferredConstruct {
+                    label: kira_syntax_model::ast::BODY_SHORTHAND_LABEL,
+                    span,
+                });
+            }
             kind => {
                 let span = self.current().span;
                 self.error(
@@ -265,11 +282,20 @@ impl Parser<'_> {
                     );
                 }
             }
-            // Not-yet-executable annotated members: parse-and-record so the
-            // decl keeps parsing and semantics can refuse precisely.
+            // `@Content let x: T` — the compat spelling of a `some T` child
+            // slot. It parses to a real slot field: analysis fills it from a
+            // construction's trailing children, and executes it when `T` is a
+            // concrete type.
             "Content" => {
-                let label = "`@Content` child slot";
-                self.consume_deferred_member(body, at_span, label);
+                if self.at(TokenKind::Let) {
+                    self.parse_construct_content_slot(body);
+                } else {
+                    self.error(
+                        self.current().span,
+                        "KPAR063",
+                        "`@Content` annotates a `let` child-slot member",
+                    );
+                }
             }
             "Consuming" => {
                 let label = "`@Consuming` method";
@@ -316,7 +342,7 @@ impl Parser<'_> {
     fn parse_construct_let_required(&mut self, body: &mut ConstructBody) {
         let start = self.current().span;
         self.bump(); // `let`
-        let Some((name, name_span, ty)) = self.parse_construct_member_head() else {
+        let Some((name, name_span, ty, slot)) = self.parse_construct_member_head() else {
             return;
         };
         if self.at(TokenKind::LBrace) {
@@ -334,6 +360,28 @@ impl Parser<'_> {
             name,
             name_span,
             required: true,
+            slot,
+            ty,
+            default,
+            span,
+        });
+    }
+
+    /// Parses `@Content let name: T`, with `let` at the cursor — a child slot in
+    /// its compat spelling. Equivalent to a `let name: some T` field.
+    fn parse_construct_content_slot(&mut self, body: &mut ConstructBody) {
+        let start = self.current().span;
+        self.bump(); // `let`
+        let Some((name, name_span, ty, _slot)) = self.parse_construct_member_head() else {
+            return;
+        };
+        let default = self.eat(TokenKind::Equals).then(|| self.parse_expr());
+        let span = Span::from_bounds(start.start, self.previous_end());
+        body.fields.push(ConstructField {
+            name,
+            name_span,
+            required: false,
+            slot: true,
             ty,
             default,
             span,
@@ -345,7 +393,7 @@ impl Parser<'_> {
     fn parse_construct_let(&mut self, body: &mut ConstructBody, _is_var: bool) {
         let start = self.current().span;
         self.bump(); // `let` / `var`
-        let Some((name, name_span, ty)) = self.parse_construct_member_head() else {
+        let Some((name, name_span, ty, slot)) = self.parse_construct_member_head() else {
             return;
         };
         if self.at(TokenKind::LBrace) {
@@ -366,16 +414,17 @@ impl Parser<'_> {
             name,
             name_span,
             required: false,
+            slot,
             ty,
             default,
             span,
         });
     }
 
-    /// Parses the `name: Type` head shared by every `let` construct member.
-    fn parse_construct_member_head(
-        &mut self,
-    ) -> Option<(Symbol, Span, kira_syntax_model::ast::TypeRefId)> {
+    /// Parses the `name: Type` head shared by every `let` construct member,
+    /// returning whether the type was written as a child slot (`some X` /
+    /// `[some X]`).
+    fn parse_construct_member_head(&mut self) -> Option<(Symbol, Span, TypeRefId, bool)> {
         if !self.at(TokenKind::Identifier) {
             self.error(self.current().span, "KPAR010", "expected a member name");
             return None;
@@ -384,8 +433,36 @@ impl Parser<'_> {
         let name = self.intern_span(name_span);
         self.bump();
         self.expect(TokenKind::Colon);
-        let ty = self.parse_type_ref();
-        Some((name, name_span, ty))
+        let (ty, slot) = self.parse_construct_field_type();
+        Some((name, name_span, ty, slot))
+    }
+
+    /// Parses a construct field's type, recognizing the child-slot spellings
+    /// `some X` and `[some X]`.
+    ///
+    /// A slot's stored type is its *element* type: `some X` yields `X` and
+    /// `[some X]` yields `[X]`, so a single slot and a list slot are told apart
+    /// downstream by whether the type is an array. A plain type is not a slot.
+    fn parse_construct_field_type(&mut self) -> (TypeRefId, bool) {
+        // `some X`
+        if self.at_word("some") {
+            self.bump(); // `some`
+            return (self.parse_type_ref(), true);
+        }
+        // `[some X]`
+        if self.at(TokenKind::LBracket)
+            && self.peek(1).kind == TokenKind::Identifier
+            && self.text_of(self.peek(1).span) == "some"
+        {
+            let start = self.current().span;
+            self.bump(); // `[`
+            self.bump(); // `some`
+            let element = self.parse_type_ref();
+            self.expect(TokenKind::RBracket);
+            let span = Span::from_bounds(start.start, self.previous_end());
+            return (self.tree.add_type(TypeRef::Array { element, span }), true);
+        }
+        (self.parse_type_ref(), false)
     }
 
     /// Rewrites a block's trailing expression statement into a `return`, in
@@ -413,7 +490,7 @@ impl Parser<'_> {
     fn computed_member_function(
         name: Symbol,
         name_span: Span,
-        ty: kira_syntax_model::ast::TypeRefId,
+        ty: TypeRefId,
         body: Block,
         span: Span,
     ) -> Function {

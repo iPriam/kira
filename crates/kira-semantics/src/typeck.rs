@@ -184,9 +184,29 @@ impl Analyzer<'_> {
                 callee_span,
                 type_args,
                 args,
+                children,
                 ..
             } => {
                 let name = self.interner.resolve(callee).to_owned();
+                // Child content belongs to a construct-backed declaration alone.
+                // A call that carries children but is not one is reported here,
+                // once, after its children are analyzed so their own errors
+                // still surface.
+                let is_construct_construction =
+                    self.construct_backed_named(&name).is_some() && ctx.resolve(&name).is_none();
+                if !children.is_empty() && !is_construct_construction {
+                    for &child in &children {
+                        self.analyze_expr(ctx, child);
+                    }
+                    self.emit(
+                        callee_span,
+                        "KSEM233",
+                        format!(
+                            "`{name}` is not a construct-backed declaration, so it takes no \
+                             trailing child content"
+                        ),
+                    );
+                }
                 if let Some(intrinsic) =
                     self.analyze_native_state_intrinsic(ctx, &name, &type_args, &args, callee_span)
                 {
@@ -232,7 +252,7 @@ impl Analyzer<'_> {
                     && ctx.resolve(&name).is_none()
                 {
                     self.link_type_name(&name, callee_span);
-                    return self.analyze_construct_new(ctx, id, &args, callee_span);
+                    return self.analyze_construct_new(ctx, id, &args, &children, callee_span);
                 }
                 // `T()` on a `@FFI.Struct { layout: c }` is the zeroed-value
                 // form: it takes no arguments and every field takes its zero.

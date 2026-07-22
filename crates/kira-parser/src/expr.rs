@@ -179,9 +179,101 @@ impl Parser<'_> {
                 base = self.attach_trailing_closure(base);
                 continue;
             }
+            // A trailing content block attaches children to a construction:
+            // `HStack(spacing: 8) { Text("a") Text("b") }`. It follows a call
+            // only, since a construction is a call — a name is promoted to a
+            // call at the no-paren site, not here.
+            if self.at_content_block()
+                && let Some(next) = self.attach_content_block(base)
+            {
+                base = next;
+                continue;
+            }
             break;
         }
         base
+    }
+
+    /// Whether the cursor sits on a `{` that opens a **content block** — a
+    /// braced run of bare child expressions, as in `HStack { Text("a") }`.
+    ///
+    /// Pure lookahead. A content block is what a `{` is when it is neither a
+    /// closure (`{ x in … }`) nor a struct literal (whose first field is
+    /// `name =` / `name :`) nor empty (`{}`, which stays a struct literal). Only
+    /// the leftover — a `{` whose first token begins an expression rather than a
+    /// field binder — opens children.
+    pub(crate) fn at_content_block(&self) -> bool {
+        if !self.at(TokenKind::LBrace) || self.no_struct_literal || self.at_closure_start() {
+            return false;
+        }
+        // `{}` and `{ field = … }` / `{ field : … }` are struct literals.
+        if self.peek(1).kind == TokenKind::RBrace {
+            return false;
+        }
+        if self.peek(1).kind == TokenKind::Identifier
+            && matches!(self.peek(2).kind, TokenKind::Equals | TokenKind::Colon)
+        {
+            return false;
+        }
+        true
+    }
+
+    /// Parses `{ child child … }`, with the cursor on `{`, into the list of
+    /// child expressions it holds.
+    ///
+    /// Children are separated by nothing at all — newlines are insignificant in
+    /// Kira, so a run of constructions one per line is the common shape — the
+    /// same way an array literal's elements are.
+    pub(crate) fn parse_content_block(&mut self) -> Vec<ExprId> {
+        self.bump(); // `{`
+        let mut children = Vec::new();
+        self.with_struct_literals(|parser| {
+            while !parser.at(TokenKind::RBrace) && !parser.at_eof() {
+                let before = parser.pos;
+                while parser.eat(TokenKind::Semicolon) {}
+                if parser.at(TokenKind::RBrace) || parser.at_eof() {
+                    break;
+                }
+                children.push(parser.parse_expr());
+                parser.eat(TokenKind::Comma);
+                if parser.pos == before {
+                    parser.bump();
+                }
+            }
+        });
+        self.expect(TokenKind::RBrace);
+        children
+    }
+
+    /// Attaches a trailing content block's children to a construction call, or
+    /// returns `None` when the base is not a call the children can attach to.
+    fn attach_content_block(&mut self, base: ExprId) -> Option<ExprId> {
+        let Expr::Call {
+            callee,
+            callee_span,
+            type_args,
+            args,
+            children: existing,
+            span: base_span,
+        } = self.tree.expr(base).clone()
+        else {
+            return None;
+        };
+        // A second content block on one construction is malformed; the first
+        // already holds its children, so leave the base as it stands.
+        if !existing.is_empty() {
+            return None;
+        }
+        let children = self.parse_content_block();
+        let span = Span::from_bounds(base_span.start, self.previous_end());
+        Some(self.tree.add_expr(Expr::Call {
+            callee,
+            callee_span,
+            type_args,
+            args,
+            children,
+            span,
+        }))
     }
 
     /// Parses one `.field` or `.method(...)` step, with the cursor on `.`.
@@ -384,6 +476,23 @@ impl Parser<'_> {
                 callee_span: name_span,
                 type_args,
                 args,
+                children: Vec::new(),
+                span,
+            })
+        } else if self.at_content_block() {
+            // `HGroup { child child }` — a construction that passes children
+            // with no argument list. The braces hold bare child expressions, not
+            // `field: value` initializers, so it is a construct construction
+            // rather than a struct literal; analysis fills the callee's child
+            // slots from these children.
+            let children = self.parse_content_block();
+            let span = Span::from_bounds(name_span.start, self.previous_end());
+            self.tree.add_expr(Expr::Call {
+                callee: symbol,
+                callee_span: name_span,
+                type_args,
+                args: Vec::new(),
+                children,
                 span,
             })
         } else if self.at(TokenKind::LBrace) && !self.no_struct_literal && !self.at_closure_start()

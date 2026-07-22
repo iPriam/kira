@@ -137,7 +137,9 @@ Family Thing(value: Int) {
 }
 
 #[test]
-fn a_content_slot_is_refused_as_not_yet_executable() {
+fn a_concrete_content_slot_over_a_family_type_is_refused() {
+    // A child slot whose element type is a construct *family* is the
+    // heterogeneous case (`Any Family`), refused with KSEM228 — not KSEM203.
     assert_eq!(
         library_codes(
             r#"
@@ -145,13 +147,200 @@ construct Family {
     let node: Int { 0 }
 }
 
+Family Leaf() {
+    let node: Int { 0 }
+}
+
 Family Stack() {
-    @Content let children: [Int]
+    @Content let children: [Family]
     let node: Int { 0 }
 }
 "#,
         ),
-        vec!["KSEM203"]
+        vec!["KSEM228"]
+    );
+}
+
+/// A child slot over a concrete type is a real field and checks clean.
+#[test]
+fn a_concrete_child_slot_checks_clean() {
+    assert!(
+        library_codes(
+            r#"
+struct Leaf {
+    var value: Int = 0
+}
+
+construct Family {
+    let node: Int { 0 }
+}
+
+Family One() {
+    let child: some Leaf
+    let node: Int { child.value }
+}
+
+Family Many() {
+    let items: [some Leaf]
+    let node: Int { items.count }
+}
+"#,
+        )
+        .is_empty()
+    );
+}
+
+/// A construction fills a single slot and a list slot from its trailing
+/// children, and the whole program checks clean.
+#[test]
+fn a_construction_fills_its_child_slots() {
+    assert!(
+        codes(
+            r#"
+struct Leaf {
+    var value: Int = 0
+}
+
+construct Family {
+    let count: Int { 0 }
+}
+
+Family One() {
+    let child: some Leaf
+    let count: Int { 1 }
+}
+
+Family Many() {
+    let items: [some Leaf]
+    let count: Int { items.count }
+}
+
+@Main
+function main() {
+    let a = One() { Leaf { value = 3 } }
+    print(a.count)
+    let b = Many() { Leaf { value = 1 } Leaf { value = 2 } }
+    print(b.count)
+    return
+}
+"#,
+        )
+        .is_empty()
+    );
+}
+
+/// A child whose type does not satisfy the slot's element type is refused.
+#[test]
+fn a_wrong_typed_child_is_refused() {
+    assert_eq!(
+        codes(
+            r#"
+struct Leaf {
+    var value: Int = 0
+}
+
+construct Family {
+    let count: Int { 0 }
+}
+
+Family One() {
+    let child: some Leaf
+    let count: Int { 1 }
+}
+
+@Main
+function main() {
+    let a = One() { 42 }
+    print(a.count)
+    return
+}
+"#,
+        ),
+        vec!["KSEM232"]
+    );
+}
+
+/// A single slot takes exactly one child: two is a count mismatch.
+#[test]
+fn too_many_children_for_a_single_slot_is_refused() {
+    assert_eq!(
+        codes(
+            r#"
+struct Leaf {
+    var value: Int = 0
+}
+
+construct Family {
+    let count: Int { 0 }
+}
+
+Family One() {
+    let child: some Leaf
+    let count: Int { 1 }
+}
+
+@Main
+function main() {
+    let a = One() { Leaf {} Leaf {} }
+    print(a.count)
+    return
+}
+"#,
+        ),
+        vec!["KSEM231"]
+    );
+}
+
+/// Children on a construction whose declaration has no child slot are refused.
+#[test]
+fn children_on_a_slotless_construct_are_refused() {
+    assert_eq!(
+        codes(
+            r#"
+struct Leaf {
+    var value: Int = 0
+}
+
+construct Family {
+    let count: Int { 0 }
+}
+
+Family Plain(tag: Int) {
+    let count: Int { tag }
+}
+
+@Main
+function main() {
+    let a = Plain(tag: 1) { Leaf {} }
+    print(a.count)
+    return
+}
+"#,
+        ),
+        vec!["KSEM229"]
+    );
+}
+
+/// A trailing content block on something that is not a construct-backed
+/// declaration is refused.
+#[test]
+fn children_on_a_non_construct_are_refused() {
+    assert_eq!(
+        codes(
+            r#"
+function plain(tag: Int) -> Int {
+    return tag
+}
+
+@Main
+function main() {
+    let a = plain(tag: 1) { 1 }
+    print(a)
+    return
+}
+"#,
+        ),
+        vec!["KSEM233"]
     );
 }
 
@@ -170,6 +359,29 @@ construct Derived extends Base {
 "#,
         ),
         vec!["KSEM203"]
+    );
+}
+
+/// A `body { … }` shorthand yields a construct-family value — the heterogeneous
+/// case — so it is refused as `KSEM228` (`Any Construct` composition), not the
+/// structural `KSEM203`.
+#[test]
+fn a_body_shorthand_is_refused_as_heterogeneous_composition() {
+    assert_eq!(
+        library_codes(
+            r#"
+construct Family {
+    let node: Int { 0 }
+}
+
+Family Divider() {
+    body {
+        Rectangle(width = 1.0)
+    }
+}
+"#,
+        ),
+        vec!["KSEM228"]
     );
 }
 

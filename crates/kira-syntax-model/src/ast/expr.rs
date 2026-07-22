@@ -90,6 +90,14 @@ pub enum Expr {
         /// The arguments, in written order, each optionally labeled with the
         /// parameter it binds.
         args: Vec<CallArg>,
+        /// The bare children of a trailing `{ … }` content block, in order;
+        /// empty when none was written.
+        ///
+        /// Only a construct-backed declaration accepts child content (its child
+        /// slot fields, `some X` / `[some X]`, are filled from these). Analysis
+        /// refuses children on anything else. A closure trailing block is not
+        /// this — that attaches as a final argument in [`args`](Expr::Call::args).
+        children: Vec<ExprId>,
         /// Span covering the whole call.
         span: Span,
     },
