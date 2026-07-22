@@ -5,12 +5,12 @@
 //! mismatches become [`HirExpr::Error`] nodes (type `Error`), which the type
 //! lattice treats as compatible everywhere so one mistake does not cascade.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use kira_core::Interner;
 use kira_diagnostics::{Diagnostic, Label, Severity};
 use kira_semantics_model::hir::{FuncId, HirExprId, HirFunction, HirProgram};
-use kira_semantics_model::{OwnershipMode, StructId, Type};
+use kira_semantics_model::{EnumId, OwnershipMode, StructId, Type};
 use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::{ExprId, Function, Item};
@@ -185,6 +185,10 @@ pub(crate) struct Analyzer<'a> {
     /// compiled to. The only record that a struct id came from a construct, and
     /// which of its members are computed bridges read as properties.
     pub(crate) constructs: HashMap<StructId, crate::constructs::ConstructInfo>,
+    /// Construct families keyed by their source name.
+    pub(crate) construct_families: BTreeMap<String, crate::constructs::ConstructFamilyInfo<'a>>,
+    /// Reverse lookup from synthesized family enum to source family name.
+    pub(crate) construct_family_names: HashMap<EnumId, String>,
     /// The methods each struct and class declares itself, keyed by id.
     ///
     /// Kept beside the struct table because a method is not part of a struct's
@@ -258,6 +262,8 @@ impl<'a> Analyzer<'a> {
             aliases: AliasTable::new(),
             classes: HashMap::new(),
             constructs: HashMap::new(),
+            construct_families: BTreeMap::new(),
+            construct_family_names: HashMap::new(),
             own_methods: HashMap::new(),
             unflattenable_classes: BTreeSet::new(),
             fn_types: crate::closures::FnTypeTable::default(),
@@ -284,6 +290,9 @@ impl<'a> Analyzer<'a> {
         // Enums are declared before structs, so a struct field may name one; a
         // struct is declared before signatures, so a parameter may name either.
         self.collect_enums();
+        // A family type must exist before ordinary structs resolve fields that
+        // name it; concrete variants are filled after backed structs exist.
+        self.collect_construct_family_headers();
         self.collect_structs();
         // Classes flatten into the same table, and may extend a struct, so they
         // are declared once every struct exists.
@@ -305,6 +314,7 @@ impl<'a> Analyzer<'a> {
         // exactly when its callee is. The fixpoint reads the signatures the step
         // above built, so it runs after them.
         self.collect_mutating_methods(&callables);
+        self.check_construct_method_signatures();
         // `@Main` is a property of the program, not of any one file, and the
         // "no `@Main`" diagnostic has no span to point at — so it is attributed
         // to the entry file rather than to whichever module happened to declare
@@ -331,8 +341,9 @@ impl<'a> Analyzer<'a> {
             let hir_function = self.analyze_function(FuncId(index as u32), callable);
             self.program.functions.push(hir_function);
         }
-        // Lifted closure bodies and dispatchers are appended here, which is the
-        // one point at which every function type's literal set is final.
+        // Dynamic construct dispatchers and closure dispatchers share the same
+        // synthesized-function id space and are all filled before it is appended.
+        self.build_construct_dispatchers();
         self.finalize_closures();
         Analysis {
             program: self.program,

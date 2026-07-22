@@ -62,6 +62,32 @@ impl Analyzer<'_> {
     pub(crate) fn resolve_type_in(&mut self, id: TypeRefId, context: &NameContext) -> Type {
         match self.tree.type_ref(id).clone() {
             TypeRef::Named { name, span } => self.resolve_named_type(name, span, context),
+            TypeRef::AnyConstruct {
+                family,
+                family_span,
+                ..
+            } => {
+                let written = self.interner.resolve(family).to_owned();
+                let Some(name) = self.strip_module_qualifier(&written, family_span) else {
+                    return Type::Error;
+                };
+                match self.construct_family_type(&name) {
+                    Some(id) => {
+                        self.link_type_name(&name, family_span);
+                        Type::Enum(id)
+                    }
+                    None => {
+                        self.emit(
+                            family_span,
+                            "KSEM237",
+                            format!(
+                                "`Any {name}` requires a construct family; `{name}` is not one"
+                            ),
+                        );
+                        Type::Error
+                    }
+                }
+            }
             // A generic instantiation resolves to the enum it monomorphizes
             // into — an ordinary declared type by the time anyone else looks.
             TypeRef::Generic {
@@ -184,6 +210,10 @@ impl Analyzer<'_> {
             self.link_type_name(&text, span);
             return ty;
         }
+        if let Some(id) = self.construct_family_type(&text) {
+            self.link_type_name(&text, span);
+            return Type::Enum(id);
+        }
         if let Some(id) = self.program.types.structs().lookup(&text) {
             self.link_type_name(&text, span);
             return Type::Struct(id);
@@ -213,8 +243,8 @@ impl Analyzer<'_> {
                 span,
                 "KSEM050",
                 format!(
-                    "unknown type `{text}` (v0 supports Int, Float, Bool, String, Void, \
-                     declared structs and enums, and arrays of those)"
+                    "unknown type `{text}` (supported types include builtins, declared structs, \
+                     enums, construct families, and arrays of those)"
                 ),
             ),
         }

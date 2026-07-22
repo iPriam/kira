@@ -46,6 +46,16 @@ impl Analyzer<'_> {
         id: ExprId,
         expected: Option<Type>,
     ) -> HirExprId {
+        let value = self.analyze_expr_inner(ctx, id, expected);
+        self.coerce_construct_value(value, expected)
+    }
+
+    fn analyze_expr_inner(
+        &mut self,
+        ctx: &mut FnCtx,
+        id: ExprId,
+        expected: Option<Type>,
+    ) -> HirExprId {
         let node = self.tree.expr(id).clone();
         match node {
             Expr::Int { value, .. } => self.program.exprs.alloc(HirExpr::Int(value)),
@@ -111,39 +121,41 @@ impl Analyzer<'_> {
                     // A local wins over a field of the same name: the nearer
                     // binding is what a reader expects, and it is what lets a
                     // method take a parameter named like a field.
-                    crate::closures::Captured::Absent => match self.implicit_field(ctx, &name) {
-                        Some(expr) => {
-                            // A bare field read inside a method resolves to
-                            // the receiver's field, so a jump from it lands on
-                            // that field's declaration.
-                            if let Some(owner) = ctx.receiver.and_then(|owner| {
-                                self.program
-                                    .types
-                                    .structs()
-                                    .get(owner)
-                                    .map(|def| def.name.clone())
-                            }) {
-                                self.link_field_name(&owner, &name, span);
+                    crate::closures::Captured::Absent => {
+                        match self.implicit_field(ctx, &name, span) {
+                            Some(expr) => {
+                                // A bare field read inside a method resolves to
+                                // the receiver's field, so a jump from it lands on
+                                // that field's declaration.
+                                if let Some(owner) = ctx.receiver.and_then(|owner| {
+                                    self.program
+                                        .types
+                                        .structs()
+                                        .get(owner)
+                                        .map(|def| def.name.clone())
+                                }) {
+                                    self.link_field_name(&owner, &name, span);
+                                }
+                                expr
                             }
-                            expr
+                            None => {
+                                if let Some(reference) =
+                                    self.analyze_named_function_reference(&name, span, expected)
+                                {
+                                    return reference;
+                                }
+                                // A name several parents declare is inherited but
+                                // unresolvable, which is a different mistake from
+                                // one nobody declared — and a different fix.
+                                if !ctx.receiver.is_some_and(|owner| {
+                                    self.report_ambiguous_member(owner, &name, span, false)
+                                }) {
+                                    self.emit(span, "KSEM060", format!("undefined name `{name}`"));
+                                }
+                                self.program.exprs.alloc(HirExpr::Error)
+                            }
                         }
-                        None => {
-                            if let Some(reference) =
-                                self.analyze_named_function_reference(&name, span, expected)
-                            {
-                                return reference;
-                            }
-                            // A name several parents declare is inherited but
-                            // unresolvable, which is a different mistake from
-                            // one nobody declared — and a different fix.
-                            if !ctx.receiver.is_some_and(|owner| {
-                                self.report_ambiguous_member(owner, &name, span, false)
-                            }) {
-                                self.emit(span, "KSEM060", format!("undefined name `{name}`"));
-                            }
-                            self.program.exprs.alloc(HirExpr::Error)
-                        }
-                    },
+                    }
                 }
             }
             Expr::Unary { op, operand, span } => {
@@ -374,6 +386,13 @@ impl Analyzer<'_> {
                 if base_ty.is_array() {
                     return self.analyze_array_property(base_hir, &name, field_span);
                 }
+                if let Type::Enum(family_id) = base_ty
+                    && self.construct_family_computed_member(family_id, &name)
+                {
+                    return self.analyze_construct_family_property(
+                        ctx, base_hir, family_id, &name, field_span,
+                    );
+                }
                 // A construct's computed bridge member (`value.node`) is read as
                 // a property but runs the member, so it lowers to a method call
                 // rather than a field read.
@@ -578,16 +597,24 @@ impl Analyzer<'_> {
     ///
     /// Returns `None` outside a method, or when the struct has no such field,
     /// so the caller still reports an undefined name.
-    fn implicit_field(&mut self, ctx: &FnCtx, name: &str) -> Option<HirExprId> {
+    fn implicit_field(
+        &mut self,
+        ctx: &mut FnCtx,
+        name: &str,
+        span: kira_source::Span,
+    ) -> Option<HirExprId> {
         let owner = ctx.receiver?;
         let receiver = ctx.resolve("self")?;
-        let def = self.program.types.structs().get(owner)?;
-        let index = def.field_index(name)?;
-        let ty = def.field(index)?.ty;
         let base = self.program.exprs.alloc(HirExpr::Local {
             local: receiver,
             ty: Type::Struct(owner),
         });
+        if self.construct_computed_member(owner, name) {
+            return Some(self.analyze_construct_bridge_read(ctx, base, owner, name, span));
+        }
+        let def = self.program.types.structs().get(owner)?;
+        let index = def.field_index(name)?;
+        let ty = def.field(index)?.ty;
         Some(self.program.exprs.alloc(HirExpr::Field { base, index, ty }))
     }
 

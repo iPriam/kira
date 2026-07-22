@@ -20,20 +20,18 @@
 //! The box is generic over the variant's payload type. A scalar (`Int`,
 //! `Float`, `Bool`) fits one word directly — the backend passes its bits and
 //! this code copies them, owning nothing. A `String` payload is an owned `KStr`
-//! handle, and a *nested enum* payload is an owned [`KEnum`] handle; both are
-//! one word too, but each must be cloned when the enum is cloned and freed when
-//! it is freed. [`KiraEnum::payload_kind`] is what lets one clone/free pair
-//! serve all three without the box carrying the payload's type: the kind says
-//! whether that word is a handle to reclaim, and which kind of handle.
+//! handle, and a *nested enum* payload is an owned [`KEnum`] handle. A struct is
+//! wider, so its word points to aligned erased bytes plus clone/free leaves.
+//! [`KiraEnum::payload_kind`] lets one clone/free pair serve every case without
+//! carrying compiler type metadata: the kind says how to interpret and reclaim
+//! that word.
 //!
 //! A nested enum is what `Result`-shaped values are made of — `Error` carries
 //! the failure enum — so `attempt`/`try`/`handle` is the construct that needs
-//! [`PAYLOAD_ENUM`]. Recursion terminates because a payload's type is resolved
-//! against types that already resolve, so a cycle is unrepresentable; the VM's
-//! heap relies on the same argument.
-//!
-//! A struct or array payload is still refused at the declaration (`KSEM118`),
-//! so the one-word slot never has to carry an aggregate.
+//! [`PAYLOAD_ENUM`]. A struct payload uses [`PAYLOAD_AGGREGATE`]: its word points
+//! to aligned bytes plus compiler-generated clone/free leaves, allowing recursive
+//! construct-family values without baking compiler type metadata into runtime.
+//! Array payloads remain refused at declaration time.
 //!
 //! # Ownership
 //!
@@ -47,8 +45,11 @@
 //! These names are a wire contract with the backend's lowering and are
 //! append-only: never rename one or change a signature in place.
 
+use std::alloc::{self, Layout};
+
 use kira_runtime_abi::EnumPayloadKind;
 
+use crate::array::{ElemClone, ElemFree};
 use crate::runtime::{KStr, kira_rt_str_clone, kira_rt_str_free};
 
 /// A Kira enum at the native ABI: an opaque owned handle.
@@ -60,6 +61,8 @@ pub const PAYLOAD_INERT: i64 = EnumPayloadKind::INERT.as_i64();
 pub const PAYLOAD_STR: i64 = EnumPayloadKind::STR.as_i64();
 /// Payload word is an owned [`KEnum`] to clone and free with the box.
 pub const PAYLOAD_ENUM: i64 = EnumPayloadKind::ENUM.as_i64();
+/// Payload word points to an owned erased aggregate and its clone/free leaves.
+pub const PAYLOAD_AGGREGATE: i64 = EnumPayloadKind::AGGREGATE.as_i64();
 
 /// The heap box behind a [`KEnum`].
 ///
@@ -70,11 +73,150 @@ pub const PAYLOAD_ENUM: i64 = EnumPayloadKind::ENUM.as_i64();
 pub struct KiraEnum {
     /// The variant's discriminant.
     tag: i64,
-    /// What `payload` is: [`PAYLOAD_INERT`], [`PAYLOAD_STR`], or
-    /// [`PAYLOAD_ENUM`].
+    /// What `payload` is: [`PAYLOAD_INERT`], [`PAYLOAD_STR`],
+    /// [`PAYLOAD_ENUM`], or [`PAYLOAD_AGGREGATE`].
     payload_kind: i64,
     /// The variant's single payload, type-erased into one word.
     payload: u64,
+}
+
+/// Heap storage behind an aggregate payload word.
+///
+/// The bytes use the same fixed alignment as native array elements: every Kira
+/// field is at most eight-byte aligned, and LLVM's ABI size includes the padding
+/// needed to keep nested fields aligned. Clone/free leaves are generated for the
+/// concrete payload type, so this runtime never needs compiler type metadata.
+struct AggregatePayload {
+    data: *mut u8,
+    size: usize,
+    clone: Option<ElemClone>,
+    free: Option<ElemFree>,
+}
+
+const AGGREGATE_ALIGN: usize = 8;
+
+fn aggregate_layout(size: usize) -> Option<Layout> {
+    if size == 0 {
+        return None;
+    }
+    match Layout::from_size_align(size, AGGREGATE_ALIGN) {
+        Ok(layout) => Some(layout),
+        Err(_) => std::process::abort(),
+    }
+}
+
+fn alloc_aggregate_bytes(size: usize) -> *mut u8 {
+    match aggregate_layout(size) {
+        Some(layout) => {
+            // SAFETY: `layout` has non-zero size and valid power-of-two alignment.
+            let data = unsafe { alloc::alloc(layout) };
+            if data.is_null() {
+                alloc::handle_alloc_error(layout);
+            }
+            data
+        }
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Copies an owned aggregate value's bits into a fresh erased box.
+///
+/// This is a move, not a clone: the caller hands ownership of every handle in
+/// `source` to the returned payload and must not drop the source value again.
+///
+/// # Safety
+/// `source` must point to `size` readable bytes with the concrete payload type's
+/// layout. `clone` and `free`, when present, must operate on that same type.
+unsafe fn move_aggregate(
+    source: *const u8,
+    size: usize,
+    clone: Option<ElemClone>,
+    free: Option<ElemFree>,
+) -> *mut AggregatePayload {
+    let data = alloc_aggregate_bytes(size);
+    if size > 0 {
+        // SAFETY: caller supplies `size` readable bytes and `data` is a distinct
+        // allocation of exactly that size.
+        unsafe { std::ptr::copy_nonoverlapping(source, data, size) };
+    }
+    Box::into_raw(Box::new(AggregatePayload {
+        data,
+        size,
+        clone,
+        free,
+    }))
+}
+
+/// Produces an independent erased aggregate copy.
+///
+/// # Safety
+/// `value` must be null or a live aggregate payload from [`move_aggregate`].
+unsafe fn clone_aggregate(value: *mut AggregatePayload) -> *mut AggregatePayload {
+    if value.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: caller guarantees a live payload that outlives this read.
+    let source = unsafe { &*value };
+    let data = alloc_aggregate_bytes(source.size);
+    if source.size > 0 {
+        // SAFETY: both allocations cover `size` bytes and do not overlap.
+        unsafe { std::ptr::copy_nonoverlapping(source.data, data, source.size) };
+        if let Some(clone) = source.clone {
+            // SAFETY: the callback was emitted for this payload's concrete type;
+            // destination already contains a flat copy as its contract requires.
+            unsafe { clone(source.data, data) };
+        }
+    }
+    Box::into_raw(Box::new(AggregatePayload {
+        data,
+        size: source.size,
+        clone: source.clone,
+        free: source.free,
+    }))
+}
+
+/// Writes an independent aggregate copy into caller-owned storage.
+///
+/// # Safety
+/// `value` must be a live aggregate payload and `out` must point to `size`
+/// writable bytes with the payload's concrete alignment.
+unsafe fn read_aggregate(value: *mut AggregatePayload, out: *mut u8) {
+    if value.is_null() {
+        return;
+    }
+    // SAFETY: caller guarantees a live payload that outlives this read.
+    let source = unsafe { &*value };
+    if source.size == 0 {
+        return;
+    }
+    // SAFETY: `out` covers the payload's size and cannot overlap its private box.
+    unsafe { std::ptr::copy_nonoverlapping(source.data, out, source.size) };
+    if let Some(clone) = source.clone {
+        // SAFETY: callback and pointers carry the concrete payload type.
+        unsafe { clone(source.data, out) };
+    }
+}
+
+/// Releases an erased aggregate payload.
+///
+/// # Safety
+/// `value` must be null or a live payload, freed at most once.
+unsafe fn free_aggregate(value: *mut AggregatePayload) {
+    if value.is_null() {
+        return;
+    }
+    // SAFETY: caller's free-once contract makes this the only reclaim.
+    let value = unsafe { Box::from_raw(value) };
+    if !value.data.is_null() {
+        if let Some(free) = value.free {
+            // SAFETY: callback was emitted for the concrete payload type.
+            unsafe { free(value.data) };
+        }
+        if let Some(layout) = aggregate_layout(value.size) {
+            // SAFETY: `data` came from `alloc` with exactly this layout.
+            unsafe { alloc::dealloc(value.data, layout) };
+        }
+    }
 }
 
 /// Boxes a fresh enum value.
@@ -91,6 +233,30 @@ pub extern "C" fn kira_rt_enum_new(tag: i64, payload_kind: i64, payload: u64) ->
         payload_kind,
         payload,
     }))
+}
+
+/// Boxes a struct payload by moving its bytes into erased runtime storage.
+///
+/// Appended beside [`kira_rt_enum_new`] rather than changing its signature, so
+/// existing enum callers and runtime archives keep their ABI. The backend passes
+/// clone/free leaves for the concrete struct type; null means a flat bit-copy is
+/// sufficient or nothing owns storage.
+///
+/// # Safety
+/// `source` must point to `size` readable bytes of one live Kira struct value.
+/// The value's ownership is transferred to the returned enum and must not be
+/// released through `source` afterwards. Callbacks must match that struct type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_enum_new_aggregate(
+    tag: i64,
+    source: *const u8,
+    size: usize,
+    clone: Option<ElemClone>,
+    free: Option<ElemFree>,
+) -> KEnum {
+    // SAFETY: caller provides the concrete payload's bytes and matching leaves.
+    let payload = unsafe { move_aggregate(source, size, clone, free) };
+    kira_rt_enum_new(tag, PAYLOAD_AGGREGATE, payload as u64)
 }
 
 /// Reads an enum's discriminant tag; leaves the enum untouched.
@@ -137,8 +303,34 @@ pub unsafe extern "C" fn kira_rt_enum_payload(value: KEnum) -> u64 {
         // SAFETY: the kind promises `payload` is a live `KEnum`; cloning it
         // reads it and leaves it in place.
         PAYLOAD_ENUM => (unsafe { kira_rt_enum_clone(source.payload as KEnum) }) as u64,
+        // Aggregate payloads are wider than one word and use the dedicated
+        // out-pointer helper below.
+        PAYLOAD_AGGREGATE => 0,
         _ => source.payload,
     }
+}
+
+/// Reads a struct payload into caller-owned storage as an independent value.
+///
+/// The enum keeps owning its payload; clone leaves duplicate every nested handle
+/// into `out`, so the caller may outlive and free the source enum independently.
+///
+/// # Safety
+/// `value` must be a live enum whose payload kind is [`PAYLOAD_AGGREGATE`]. `out`
+/// must point to writable storage for the concrete payload type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_enum_payload_aggregate(value: KEnum, out: *mut u8) {
+    if value.is_null() {
+        return;
+    }
+    // SAFETY: caller guarantees a live enum handle.
+    let source = unsafe { &*value };
+    if source.payload_kind != PAYLOAD_AGGREGATE {
+        return;
+    }
+    // SAFETY: the kind promises an aggregate payload and caller provides its
+    // concrete destination slot.
+    unsafe { read_aggregate(source.payload as *mut AggregatePayload, out) };
 }
 
 /// Produces an independent copy of an enum (clone-on-read for locals).
@@ -163,6 +355,11 @@ pub unsafe extern "C" fn kira_rt_enum_clone(value: KEnum) -> KEnum {
         // SAFETY: the kind promises `payload` is a live `KEnum`; cloning it
         // reads it and leaves it in place.
         PAYLOAD_ENUM => (unsafe { kira_rt_enum_clone(source.payload as KEnum) }) as u64,
+        PAYLOAD_AGGREGATE => {
+            // SAFETY: the kind promises a live erased aggregate; cloning it
+            // leaves the source untouched and returns independent storage.
+            (unsafe { clone_aggregate(source.payload as *mut AggregatePayload) }) as u64
+        }
         _ => source.payload,
     };
     Box::into_raw(Box::new(KiraEnum {
@@ -194,6 +391,9 @@ pub unsafe extern "C" fn kira_rt_enum_free(value: KEnum) {
         // program's nesting depth, which is finite because a payload type
         // resolves against types that already resolve.
         PAYLOAD_ENUM => unsafe { kira_rt_enum_free(boxed.payload as KEnum) },
+        // SAFETY: the kind promises a live aggregate payload, owned exactly once
+        // by this enum box.
+        PAYLOAD_AGGREGATE => unsafe { free_aggregate(boxed.payload as *mut AggregatePayload) },
         _ => {}
     }
 }
@@ -262,6 +462,69 @@ mod tests {
             let scalar = kira_rt_enum_new(0, PAYLOAD_INERT, 77);
             assert_eq!(kira_rt_enum_payload(scalar), 77);
             kira_rt_enum_free(scalar);
+        }
+    }
+
+    #[repr(C)]
+    struct AggregateFixture {
+        count: i64,
+        label: KStr,
+    }
+
+    unsafe extern "C" fn clone_fixture(source: *const u8, target: *mut u8) {
+        // SAFETY: test passes pointers to aligned `AggregateFixture` values.
+        let (source, target) = unsafe {
+            (
+                &*(source.cast::<AggregateFixture>()),
+                &mut *(target.cast::<AggregateFixture>()),
+            )
+        };
+        // SAFETY: source label remains live for the duration of this clone.
+        target.label = unsafe { kira_rt_str_clone(source.label) };
+    }
+
+    unsafe extern "C" fn free_fixture(value: *mut u8) {
+        // SAFETY: test passes an aligned `AggregateFixture` slot exactly once.
+        let value = unsafe { &mut *value.cast::<AggregateFixture>() };
+        // SAFETY: the fixture owns this live label exactly once.
+        unsafe { kira_rt_str_free(value.label) };
+    }
+
+    #[test]
+    fn a_struct_payload_clones_reads_and_frees_independently() {
+        // SAFETY: every erased pointer uses `AggregateFixture`'s layout and every
+        // owned handle is freed exactly once.
+        unsafe {
+            let source = AggregateFixture {
+                count: 7,
+                label: str_handle("boxed"),
+            };
+            let value = kira_rt_enum_new_aggregate(
+                3,
+                std::ptr::from_ref(&source).cast::<u8>(),
+                size_of::<AggregateFixture>(),
+                Some(clone_fixture),
+                Some(free_fixture),
+            );
+            let copy = kira_rt_enum_clone(value);
+
+            let mut read = std::mem::MaybeUninit::<AggregateFixture>::uninit();
+            kira_rt_enum_payload_aggregate(value, read.as_mut_ptr().cast::<u8>());
+            let read = read.assume_init();
+            assert_eq!(read.count, 7);
+
+            let source_payload = &*((*value).payload as *mut AggregatePayload);
+            let copied_payload = &*((*copy).payload as *mut AggregatePayload);
+            let source_value = &*source_payload.data.cast::<AggregateFixture>();
+            let copied_value = &*copied_payload.data.cast::<AggregateFixture>();
+            assert_ne!(source_value.label, copied_value.label);
+            assert_ne!(source_value.label, read.label);
+            assert_ne!(copied_value.label, read.label);
+
+            kira_rt_enum_free(value);
+            kira_rt_enum_free(copy);
+            assert_eq!(crate::runtime::kira_rt_str_len(read.label), 5);
+            kira_rt_str_free(read.label);
         }
     }
 
