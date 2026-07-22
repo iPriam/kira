@@ -133,6 +133,7 @@ impl Parser<'_> {
                 callee_span,
                 type_args,
                 mut args,
+                children,
                 ..
             } => {
                 args.push(self.positional_arg(closure));
@@ -141,6 +142,7 @@ impl Parser<'_> {
                     callee_span,
                     type_args,
                     args,
+                    children,
                     span,
                 })
             }
@@ -165,6 +167,7 @@ impl Parser<'_> {
                 callee_span: name,
                 type_args: Vec::new(),
                 args: vec![self.positional_arg(closure)],
+                children: Vec::new(),
                 span,
             }),
             Expr::Field {

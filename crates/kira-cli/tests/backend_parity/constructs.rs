@@ -80,6 +80,58 @@ function main() {
     assert_eq!(output, "2\n40\n42\n");
 }
 
+/// A construct-backed declaration with child slots constructs and yields its
+/// bridge from the trailing children, byte-identically on every backend.
+///
+/// This is the child-slot execution requirement: a single `some X` slot and a
+/// list `[some X]` slot are filled from a construction's trailing content
+/// block, stored as ordinary fields, and read back through the bridge — so a
+/// widget tree with children *runs*, not merely validates.
+#[test]
+fn a_construction_with_children_yields_its_node() {
+    let output = assert_parity(
+        r#"
+struct Leaf {
+    var value: Int = 0
+}
+
+construct Panel {
+    let total: Int { 0 }
+}
+
+// A single-child slot: exactly one child, read back through the bridge.
+Panel Wrap() {
+    let inner: some Leaf
+    let total: Int { inner.value }
+}
+
+// A list slot: an ordered array of children, summed through the bridge.
+Panel Group() {
+    let items: [some Leaf]
+    let total: Int {
+        var sum = 0
+        for i in 0..items.count {
+            sum = sum + items[i].value
+        }
+        return sum
+    }
+}
+
+@Main
+function main() {
+    let w = Wrap() { Leaf { value = 7 } }
+    print(w.total)
+    let g = Group() { Leaf { value = 1 } Leaf { value = 2 } Leaf { value = 3 } }
+    print(g.total)
+    // A no-paren construction with children fills the same list slot.
+    print(Group { Leaf { value = 10 } Leaf { value = 20 } }.total)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "7\n6\n30\n");
+}
+
 /// A `function` member (not a computed bridge) is called with arguments and
 /// runs identically on every backend, beside a computed bridge.
 #[test]
