@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use kira_semantics_model::hir::{HirLocal, LocalId};
+use kira_semantics_model::hir::{HirLocal, HirStmtId, LocalId};
 use kira_semantics_model::{OwnershipMode, StructId, Type};
 use kira_source::Span;
 
@@ -59,6 +59,16 @@ pub(crate) struct FnCtx {
     pub(crate) enclosing: Option<Box<FnCtx>>,
     /// The closure this frame is the body of, when it is one.
     pub(crate) closure: Option<crate::closures::ClosureCtx>,
+    /// Statements produced while analyzing an expression that must run *before*
+    /// the statement the expression belongs to.
+    ///
+    /// A builder content block (`HStack { For(x in xs) { … } }`) fills its child
+    /// slot by running a loop, but a construction is an expression and the HIR
+    /// has no block-expression — so the loop is emitted here and the statement
+    /// driver drains it ahead of the statement whose expression produced it.
+    /// Empty except for the brief window between an expression pushing onto it
+    /// and [`Analyzer::analyze_stmt`] flushing it.
+    pending_stmts: Vec<HirStmtId>,
 }
 
 impl FnCtx {
@@ -73,7 +83,22 @@ impl FnCtx {
             loop_depth: 0,
             enclosing: None,
             closure: None,
+            pending_stmts: Vec::new(),
         }
+    }
+
+    /// Queues a statement to run before the statement currently being analyzed.
+    ///
+    /// Used by a builder content block to hoist its slot-filling loop ahead of
+    /// the statement whose construction expression it fills. See
+    /// [`Self::pending_stmts`].
+    pub(crate) fn hoist_stmt(&mut self, stmt: HirStmtId) {
+        self.pending_stmts.push(stmt);
+    }
+
+    /// Takes the hoisted statements queued since the last drain, in order.
+    pub(crate) fn take_pending_stmts(&mut self) -> Vec<HirStmtId> {
+        std::mem::take(&mut self.pending_stmts)
     }
 
     pub(crate) fn push_scope(&mut self) {

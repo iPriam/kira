@@ -40,7 +40,7 @@ mod mutation;
 mod operators;
 mod ownership;
 mod place;
-mod stmt;
+pub(crate) mod stmt;
 mod typeck;
 mod types;
 
