@@ -18,7 +18,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use kira_core::Symbol;
-use kira_semantics_model::hir::FuncId;
+use kira_semantics_model::hir::{FuncId, HirExprId};
 use kira_semantics_model::{EnumId, OwnershipMode, StructId, Type};
 use kira_source::SourceId;
 use kira_syntax_model::ast::Function;
@@ -93,6 +93,13 @@ pub(crate) struct ConstructFamilyMethod<'a> {
     /// first use). For a uniform `extend` modifier, its single body (reserved up
     /// front so an uncalled modifier is still checked and lowered).
     pub(crate) dispatcher: Option<FuncId>,
+    /// Resolved parameter defaults, aligned with [`Self::params`] (no receiver).
+    ///
+    /// A `None` slot has no default; a `Some` is the shared HIR that a call
+    /// omitting that argument fills with. Empty until resolved after signatures
+    /// exist — a family method carries no [`FuncId`] signature row of its own,
+    /// so its defaults live here rather than in `param_defaults`.
+    pub(crate) defaults: Vec<Option<HirExprId>>,
 }
 
 /// One construct family's type, conformance surface, and concrete variants.

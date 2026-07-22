@@ -5,7 +5,71 @@
 //! native build, and the hybrid bundle cannot disagree on which value reached
 //! which parameter.
 
-use crate::assert_parity;
+use crate::{assert_module_parity, assert_parity};
+
+#[test]
+fn parameter_defaults_fill_omitted_arguments_on_every_backend() {
+    // A default is resolved once into HIR and reused as an ordinary argument,
+    // so every backend runs the same fully-applied call — whether the argument
+    // was omitted positionally, omitted by label, or passed outright.
+    let output = assert_parity(
+        r#"
+function step(base: Int, by: Int = 10, tag: Int = 100) -> Int {
+    return base + by + tag
+}
+
+struct Counter {
+    var at: Int
+}
+
+function bump(counter: borrow Counter, by: Int = 3) -> Int {
+    return counter.at + by
+}
+
+@Main
+function main() {
+    // Every default taken.
+    print(step(1))
+    // One default taken.
+    print(step(1, 20))
+    // No default taken.
+    print(step(1, 20, 300))
+    // A labeled call omitting a middle defaulted parameter.
+    print(step(base: 1, tag: 300))
+    // A method call taking its default, then passing it.
+    let c = Counter { at = 5 }
+    print(bump(c))
+    print(bump(c, 40))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "111\n121\n321\n311\n8\n45\n");
+}
+
+/// An omitted argument is the value the callee's module resolved, even when
+/// the call site shares none of that module's imports.
+#[test]
+fn a_cross_module_parameter_default_agrees() {
+    let output = assert_module_parity(
+        "import definitions\n\
+         @Main function main() {\n\
+             print(seeded(1))\n\
+             return\n\
+         }",
+        &[
+            ("helper", "function helperValue() -> Int { return 41 }"),
+            (
+                "definitions",
+                "import helper as H\n\
+                 function seeded(base: Int, extra: Int = H.helperValue()) -> Int {\n\
+                     return base + extra\n\
+                 }",
+            ),
+        ],
+    );
+    assert_eq!(output.as_bytes(), b"42\n");
+}
 
 #[test]
 fn labeled_arguments_bind_by_name_on_every_backend() {

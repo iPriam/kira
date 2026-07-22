@@ -264,3 +264,54 @@ extend Widget {
     );
     assert_eq!(output, "15\n13\n");
 }
+
+/// A uniform `extend` modifier whose parameter declares a default — the shape
+/// the corpus's `font`/`surfaceBorder` modifiers use — fills the omitted
+/// argument identically on every backend, called on a concrete widget and on a
+/// family value.
+#[test]
+fn an_extend_modifier_default_fills_on_every_backend() {
+    let output = assert_parity(
+        r#"
+construct Widget {
+    @Required let body: Widget
+    function value() -> Int {
+        return body.value()
+    }
+}
+
+Widget Leaf(number: Int) {
+    function value() -> Int {
+        return number
+    }
+}
+
+Widget Boxed(extra: Int) {
+    let child: some Widget
+    function value() -> Int {
+        return child.value() + extra
+    }
+}
+
+extend Widget {
+    function plus(amount: Int = 100) -> Widget {
+        return Boxed(extra: amount) {
+            self
+        }
+    }
+}
+
+@Main function main() {
+    let base = Leaf(number = 10)
+    // Concrete receiver, default taken.
+    print(base.plus().value())
+    // Concrete receiver, argument passed.
+    print(base.plus(5).value())
+    // Family receiver, default taken on a chained call.
+    print(base.plus(1).plus().value())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "110\n15\n111\n");
+}

@@ -75,6 +75,10 @@ impl Parser<'_> {
         self.expect(TokenKind::Colon);
         let (ownership, ownership_span) = self.parse_param_ownership();
         let ty = self.parse_type_ref();
+        // A trailing `= expr` gives the parameter a default, the same grammar a
+        // struct field or enum-variant payload already uses. Semantics resolves
+        // it once in the declaring file and fills it at a call that omits it.
+        let default = self.eat(TokenKind::Equals).then(|| self.parse_expr());
         let span = Span::from_bounds(name_span.start, self.previous_end());
         Some(Param {
             name,
@@ -82,6 +86,7 @@ impl Parser<'_> {
             ownership,
             ownership_span,
             ty,
+            default,
             span,
         })
     }

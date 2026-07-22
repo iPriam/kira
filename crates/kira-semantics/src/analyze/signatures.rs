@@ -6,11 +6,11 @@
 //! lookup by name, parameter shapes, and the declaration site a call links to.
 
 use kira_core::Symbol;
-use kira_semantics_model::hir::FuncId;
+use kira_semantics_model::hir::{FuncId, HirExpr, HirExprId};
 use kira_semantics_model::{OwnershipMode, Type};
 use kira_source::{FileSpan, SourceId, Span};
 
-use super::{Analyzer, Callable};
+use super::{Analyzer, Callable, FieldDefault};
 
 /// The signature of a user function, resolved before bodies are checked so
 /// calls can be type-checked regardless of declaration order.
@@ -71,6 +71,16 @@ impl<'a> Analyzer<'a> {
             for param in &function.params {
                 param_ownership.push(self.check_param_ownership(param));
             }
+            // Defaults align with `params`, receiver included. A receiver slot
+            // never has one; each written parameter carries its default as
+            // unresolved syntax bound to this file, resolved once below.
+            let mut param_defaults: Vec<Option<FieldDefault>> =
+                callable.receiver.map(|_| None).into_iter().collect();
+            param_defaults.extend(function.params.iter().map(|param| {
+                param
+                    .default
+                    .map(|syntax| FieldDefault::new(syntax, callable.source))
+            }));
             let return_type = match &function.return_type {
                 Some(type_ref) => self.resolve_type_ref(*type_ref),
                 None => Type::Void,
@@ -107,6 +117,10 @@ impl<'a> Analyzer<'a> {
                 source: callable.source,
                 is_main,
             });
+            // Pushed in lockstep with `sigs` so a `FuncId` indexes both. A
+            // synthesized function reserves a later id with no row here, so the
+            // default lookup returns `None` for it — never a panic.
+            self.param_defaults.push(param_defaults);
         }
     }
 
@@ -197,5 +211,69 @@ impl<'a> Analyzer<'a> {
     /// gives.
     pub(crate) fn signature_return_type(&self, id: FuncId) -> Type {
         self.sigs[id.0 as usize].return_type
+    }
+
+    /// The default recorded for parameter `slot` of `id`, if one was written.
+    pub(crate) fn param_default(&self, id: FuncId, slot: usize) -> Option<FieldDefault> {
+        self.param_defaults
+            .get(id.0 as usize)
+            .and_then(|defaults| defaults.get(slot))
+            .copied()
+            .flatten()
+    }
+
+    /// Resolves every declared parameter default once, each in its declaring
+    /// file, after signatures exist so a default may call any function.
+    pub(crate) fn resolve_param_defaults(&mut self) {
+        for id in 0..self.sigs.len() as u32 {
+            let count = self.param_defaults.get(id as usize).map_or(0, Vec::len);
+            for slot in 0..count {
+                self.resolve_param_default(FuncId(id), slot);
+            }
+        }
+    }
+
+    /// Returns one resolved parameter default, resolving it in declaration
+    /// scope on first use — a call that omits the argument may reach it before
+    /// the outer pass does.
+    ///
+    /// The expression is analyzed in an empty local scope against the
+    /// parameter's declared type, exactly as a field default is, so it can see
+    /// neither the caller's locals nor the callee's other parameters. The
+    /// resolved HIR is cached and shared by every call that omits the argument.
+    pub(crate) fn resolve_param_default(&mut self, id: FuncId, slot: usize) -> Option<HirExprId> {
+        let default = self.param_default(id, slot)?;
+        if let Some(resolved) = default.resolved {
+            return Some(resolved);
+        }
+
+        let key = (id.0, slot as u32);
+        if !self.resolving_param_defaults.insert(key) {
+            let previous_source = self.source;
+            self.source = default.source;
+            self.emit(
+                self.tree.expr(default.syntax).span(),
+                "KSEM240",
+                "parameter defaults fill each other through the call graph and have no finite value",
+            );
+            self.source = previous_source;
+            return Some(self.program.exprs.alloc(HirExpr::Error));
+        }
+
+        let expected = self.param_types(id).get(slot).copied();
+        let previous_source = self.source;
+        self.source = default.source;
+        let resolved = self.analyze_default(default.syntax, expected);
+        self.source = previous_source;
+        self.resolving_param_defaults.remove(&key);
+        if let Some(target) = self
+            .param_defaults
+            .get_mut(id.0 as usize)
+            .and_then(|defaults| defaults.get_mut(slot))
+            .and_then(Option::as_mut)
+        {
+            target.resolved = Some(resolved);
+        }
+        Some(resolved)
     }
 }
