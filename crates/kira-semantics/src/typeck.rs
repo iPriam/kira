@@ -430,6 +430,34 @@ impl Analyzer<'_> {
                 args,
                 ..
             } => self.analyze_method_call(ctx, receiver, method, method_span, &args),
+            // A `For`/`if` builder only ever reaches analysis as a construction's
+            // content child, where [`fill_content_slots`] expands it or refuses
+            // the surrounding block (`KSEM229`/`KSEM230`/`KSEM242`). Reaching
+            // ordinary expression analysis means the surrounding construction
+            // was already rejected for another reason; its sub-expressions are
+            // still analyzed so their own mistakes surface, then it stands in
+            // with an error value rather than adding a second, vaguer message.
+            Expr::ContentFor {
+                iterable, ref body, ..
+            } => {
+                self.analyze_expr(ctx, iterable);
+                for &item in body {
+                    self.analyze_expr(ctx, item);
+                }
+                self.program.exprs.alloc(HirExpr::Error)
+            }
+            Expr::ContentIf {
+                cond,
+                ref then_body,
+                ref else_body,
+                ..
+            } => {
+                self.analyze_expr(ctx, cond);
+                for &item in then_body.iter().chain(else_body) {
+                    self.analyze_expr(ctx, item);
+                }
+                self.program.exprs.alloc(HirExpr::Error)
+            }
             Expr::Error { .. } => self.program.exprs.alloc(HirExpr::Error),
         }
     }

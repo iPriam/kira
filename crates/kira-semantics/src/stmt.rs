@@ -32,7 +32,7 @@ use crate::analyze::{Analyzer, FnCtx};
 use crate::place::PlacePurpose;
 
 mod attempts;
-mod fors;
+pub(crate) mod fors;
 mod matches;
 
 impl Analyzer<'_> {
@@ -79,10 +79,24 @@ impl Analyzer<'_> {
 
     /// Analyzes one statement, appending what it lowers to onto `out`.
     ///
+    /// A statement's expressions may hoist statements of their own — a builder
+    /// content block fills its slot by running a loop, and the HIR has no
+    /// block-expression to carry it (see [`FnCtx::hoist_stmt`]). Those run
+    /// *before* the statement that produced them, so they are drained onto `out`
+    /// ahead of it.
+    fn analyze_stmt(&mut self, ctx: &mut FnCtx, stmt_id: StmtId, out: &mut Vec<HirStmtId>) {
+        let mut produced = Vec::new();
+        self.analyze_stmt_inner(ctx, stmt_id, &mut produced);
+        out.extend(ctx.take_pending_stmts());
+        out.append(&mut produced);
+    }
+
+    /// Lowers one statement to HIR, appending what it becomes onto `out`.
+    ///
     /// Appends rather than returns because one statement of syntax is not
     /// always one statement of HIR: a `for` becomes a prologue plus a loop, and
     /// an unparseable statement becomes nothing at all.
-    fn analyze_stmt(&mut self, ctx: &mut FnCtx, stmt_id: StmtId, out: &mut Vec<HirStmtId>) {
+    fn analyze_stmt_inner(&mut self, ctx: &mut FnCtx, stmt_id: StmtId, out: &mut Vec<HirStmtId>) {
         match self.tree.stmt(stmt_id).clone() {
             Stmt::Let {
                 name,
@@ -230,9 +244,16 @@ impl Analyzer<'_> {
                     ForIterable::Range { start, end } => {
                         self.analyze_for_range(ctx, cursor, (start, end), &body, out)
                     }
-                    ForIterable::Each { array } => {
-                        self.analyze_for_each(ctx, cursor, array, &body, span, out)
-                    }
+                    ForIterable::Each { array } => self.analyze_for_each(
+                        ctx,
+                        cursor,
+                        array,
+                        span,
+                        out,
+                        |analyzer, ctx, out| {
+                            analyzer.analyze_stmts(ctx, &body.stmts, out);
+                        },
+                    ),
                 }
             }
             Stmt::Switch {
@@ -471,7 +492,7 @@ impl Analyzer<'_> {
         }
     }
 
-    fn analyze_condition(&mut self, ctx: &mut FnCtx, expr: ExprId) -> HirExprId {
+    pub(crate) fn analyze_condition(&mut self, ctx: &mut FnCtx, expr: ExprId) -> HirExprId {
         let cond_span = self.tree.expr(expr).span();
         let hir = self.analyze_expr(ctx, expr);
         let ty = self.program.expr(hir).type_of();

@@ -9,13 +9,14 @@
 //! a struct literal produces, so every backend runs a constructed widget — its
 //! children included — unchanged.
 
-use kira_semantics_model::hir::{HirExpr, HirExprId};
+use kira_semantics_model::hir::{HirExpr, HirExprId, HirPlace, HirStmt, HirStmtId, LocalId};
 use kira_semantics_model::{StructId, Type};
 use kira_source::Span;
-use kira_syntax_model::ast::{CallArg, ExprId};
+use kira_syntax_model::ast::{CallArg, Expr, ExprId};
 
 use super::ContentSlot;
 use crate::analyze::{Analyzer, FnCtx};
+use crate::stmt::fors::ForCursor;
 
 impl Analyzer<'_> {
     /// Type-checks `Name(args) { children }`: a construct-backed declaration's
@@ -216,17 +217,63 @@ impl Analyzer<'_> {
         }
         let slot = slots[0].clone();
         if slot.list {
-            let mut elements = Vec::with_capacity(children.len());
-            for &child in children {
-                let value = self.analyze_expr_expecting(ctx, child, Some(slot.element_ty));
-                self.check_child_type(child, value, &slot, name);
-                elements.push(value);
+            // A content block with no builder is a fixed array — the children in
+            // order — so it stays a plain `ArrayNew` with nothing to run.
+            if !children.iter().any(|&child| self.is_builder_item(child)) {
+                let mut elements = Vec::with_capacity(children.len());
+                for &child in children {
+                    let value = self.analyze_expr_expecting(ctx, child, Some(slot.element_ty));
+                    self.check_child_type(child, value, &slot, name);
+                    elements.push(value);
+                }
+                let array = self.program.exprs.alloc(HirExpr::ArrayNew {
+                    ty: slot.field_ty,
+                    elements,
+                });
+                initializers[slot.field_index as usize] = Some(array);
+                return;
             }
-            let array = self.program.exprs.alloc(HirExpr::ArrayNew {
+            // A builder builds the array at run time: a fresh mutable local
+            // starts empty, each item appends to it, and the local becomes the
+            // slot's value. The building statements are hoisted ahead of the
+            // statement whose construction they fill, because a construction is
+            // an expression and the HIR has no block-expression.
+            let acc = ctx.declare_hidden(slot.field_ty, true);
+            let empty = self.program.exprs.alloc(HirExpr::ArrayNew {
                 ty: slot.field_ty,
-                elements,
+                elements: Vec::new(),
             });
-            initializers[slot.field_index as usize] = Some(array);
+            let mut stmts = vec![self.program.stmts.alloc(HirStmt::Let {
+                local: acc,
+                init: empty,
+            })];
+            self.expand_content_items(ctx, children, acc, &slot, name, &mut stmts);
+            for stmt in stmts {
+                ctx.hoist_stmt(stmt);
+            }
+            let read = self.program.exprs.alloc(HirExpr::Local {
+                local: acc,
+                ty: slot.field_ty,
+            });
+            initializers[slot.field_index as usize] = Some(read);
+            return;
+        }
+        // A single slot takes exactly one child, so a builder — which produces
+        // any number — cannot fill it. Report it against the builder rather than
+        // letting a count check speak vaguely about it.
+        if let Some(&builder) = children.iter().find(|&&child| self.is_builder_item(child)) {
+            self.analyze_expr(ctx, builder);
+            self.emit(
+                self.tree.expr(builder).span(),
+                "KSEM242",
+                format!(
+                    "child slot `{}` of `{name}` holds exactly one child; a `For`/`if` builder \
+                     fills only a list slot (`[some X]`)",
+                    slot.name
+                ),
+            );
+            initializers[slot.field_index as usize] =
+                Some(self.program.exprs.alloc(HirExpr::Error));
             return;
         }
         // A single slot takes exactly one child.
@@ -272,6 +319,98 @@ impl Analyzer<'_> {
                     self.type_name(actual)
                 ),
             );
+        }
+    }
+
+    /// Whether `child` is a `For`/`if` builder item rather than a bare child.
+    fn is_builder_item(&self, child: ExprId) -> bool {
+        matches!(
+            self.tree.expr(child),
+            Expr::ContentFor { .. } | Expr::ContentIf { .. }
+        )
+    }
+
+    /// Lowers a run of content items into statements that append each produced
+    /// child to `acc`, the slot's array local.
+    ///
+    /// A bare child appends its value. A `For` reuses the `for`-each desugar,
+    /// its loop body appending each iteration's children. An `if` becomes an
+    /// [`HirStmt::If`] whose branches append theirs. The recursion is what lets
+    /// a builder nest inside a builder, and every child is still checked against
+    /// the slot's element type where it is written.
+    fn expand_content_items(
+        &mut self,
+        ctx: &mut FnCtx,
+        items: &[ExprId],
+        acc: LocalId,
+        slot: &ContentSlot,
+        name: &str,
+        out: &mut Vec<HirStmtId>,
+    ) {
+        for &item in items {
+            match self.tree.expr(item).clone() {
+                Expr::ContentFor {
+                    binding,
+                    binding_span,
+                    iterable,
+                    body,
+                    span,
+                } => {
+                    let cursor = ForCursor {
+                        name: binding,
+                        span: binding_span,
+                    };
+                    self.analyze_for_each(
+                        ctx,
+                        cursor,
+                        iterable,
+                        span,
+                        out,
+                        |analyzer, ctx, out| {
+                            analyzer.expand_content_items(ctx, &body, acc, slot, name, out);
+                        },
+                    );
+                }
+                Expr::ContentIf {
+                    cond,
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    let cond_expr = self.analyze_condition(ctx, cond);
+                    ctx.push_scope();
+                    let mut then_out = Vec::new();
+                    self.expand_content_items(ctx, &then_body, acc, slot, name, &mut then_out);
+                    ctx.pop_scope();
+                    ctx.push_scope();
+                    let mut else_out = Vec::new();
+                    self.expand_content_items(ctx, &else_body, acc, slot, name, &mut else_out);
+                    ctx.pop_scope();
+                    out.push(self.program.stmts.alloc(HirStmt::If {
+                        cond: cond_expr,
+                        then_body: then_out,
+                        else_body: else_out,
+                    }));
+                }
+                _ => {
+                    let value = self.analyze_expr_expecting(ctx, item, Some(slot.element_ty));
+                    // A child that is itself a construction with builder content
+                    // hoisted its own building statements; they belong here — in
+                    // this loop or branch, before the append that uses the value
+                    // — not drained at the enclosing statement, which would lift
+                    // them out of the control flow that guards them.
+                    out.extend(ctx.take_pending_stmts());
+                    self.check_child_type(item, value, slot, name);
+                    let append = self.program.exprs.alloc(HirExpr::ArrayAppend {
+                        place: HirPlace {
+                            local: acc,
+                            path: Vec::new(),
+                        },
+                        value,
+                    });
+                    out.push(self.program.stmts.alloc(HirStmt::Expr { expr: append }));
+                }
+            }
         }
     }
 
