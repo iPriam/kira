@@ -80,6 +80,8 @@ Revised slice priority (each substantial): the fuller `@FFI.*` annotation set (l
 
 Corpus follow-up (uncommitted, in `../kira_ui`): `[any Widget]` → `[Any Widget]` in `WidgetModel.kira`/`KiraUI.kira` for canonical spelling; left as WIP in that separate repo, not committed here.
 
+**Handoff / working-tree state (for a fresh session after `/clear`):** the two committed slices are `33e5e01` (Any spelling sweep) and `7b0946f` (Any Construct dispatch). The only uncommitted files in kira-rusty are `AGENTS.md` and `Cargo.toml` — these were already modified at this session's start, are NOT part of either slice, and should be left alone (do not sweep them into a migration commit; ask the user if unsure). Scratch repro at `.codex/tmp/any-construct.kira` is gitignored.
+
 Next slices: `extend C { }` fluent modifiers + builder control-flow (`For`/`if` content items) — the two features KSEM232/KSEM097 now name; then FFI aggregate seam (~329, KSEM182 254), borrow/move (~251), parser gaps (~215), closures, macros. The ~1150 autobind-blocked C typedefs still await the curated-prelude-vs-build-autobind call.
 
 --- (superseded design notes below) ---
