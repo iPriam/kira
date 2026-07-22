@@ -97,6 +97,20 @@ expects a 32-bit `usize`), which affects any wasm program that builds a string a
 all. `CString` length is proven on the host backends, where string creation is
 sound, and wasm `CString` follows once that helper's width is fixed.
 
+## Binding type vocabulary (`bind-types/`)
+
+A generated binding leans on C primitive typedefs it never defines — `VkFlags`,
+`UINT`, `BOOL`, `HRESULT`. Until header-driven autobind emits them, define each
+as a transparent alias to its Kira scalar (`type VkFlags = U32`,
+`type HANDLE = RawPtr`) in a `*_types.kira` file. The alias resolves away in the
+frontend, so a use site and its scalar are the same type on every backend.
+
+Such a file must live in a `bind-types/` directory — a peer of `bindings/`,
+kept apart from a package's own `types/` domain types and from generated
+`bindings/`. A `*_types.kira` source anywhere else is rejected with `KPK025`.
+The rule is a convention enforced at project discovery, not a compiler
+mechanism; delete the file once autobind emits the typedefs into the binding.
+
 ## Deferred to later milestones
 
 `CString` results, aggregates (structs, arrays, enums) across the seam, callbacks
