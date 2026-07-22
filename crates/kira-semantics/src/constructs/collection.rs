@@ -70,6 +70,7 @@ impl<'a> Analyzer<'a> {
                         param_names: Vec::new(),
                         ownership: Vec::new(),
                         result: Type::Error,
+                        uniform: false,
                         dispatcher: None,
                     },
                 );
@@ -186,9 +187,13 @@ impl<'a> Analyzer<'a> {
         }
 
         let family_surface = self.construct_families.get(&family_name).map(|info| {
+            // A uniform `extend` modifier has one shared body and is never
+            // implemented per variant, so it is not part of the conformance
+            // surface a backed declaration must satisfy.
             let methods = info
                 .methods
                 .iter()
+                .filter(|(_, method)| !method.uniform)
                 .map(|(name, method)| (name.clone(), method.computed))
                 .collect::<Vec<_>>();
             (info.enum_id, info.required.clone(), methods)

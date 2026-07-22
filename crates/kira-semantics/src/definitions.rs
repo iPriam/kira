@@ -108,7 +108,7 @@ impl DeclSpans {
                         );
                     }
                 }
-                Item::Function(_) | Item::Import(_) | Item::Unsupported(_) => {}
+                Item::Function(_) | Item::Import(_) | Item::Extend(_) | Item::Unsupported(_) => {}
             }
         }
         spans

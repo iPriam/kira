@@ -293,6 +293,10 @@ impl<'a> Analyzer<'a> {
         // A family type must exist before ordinary structs resolve fields that
         // name it; concrete variants are filled after backed structs exist.
         self.collect_construct_family_headers();
+        // `extend Family { … }` modifiers join the family's method surface once
+        // the family exists and before its method signatures are resolved, so a
+        // modifier's parameter and result types are resolved with the rest.
+        self.collect_extend_blocks();
         self.collect_structs();
         // Classes flatten into the same table, and may extend a struct, so they
         // are declared once every struct exists.
@@ -308,6 +312,10 @@ impl<'a> Analyzer<'a> {
         // here, before any signature can reserve one.
         self.synth_base = callables.len() as u32;
         self.collect_signatures(&callables);
+        // Each `extend` modifier lowers to one synthesized function; its id is
+        // reserved here, once `synth_base` is fixed, so an uncalled modifier is
+        // still checked and lowered. The bodies are filled after ordinary ones.
+        self.reserve_extend_bodies();
         // Which methods mutate their receiver is decided once here, before any
         // body is analyzed: a body analyzes `self` as mutable exactly when its
         // method is marked mutating, and a call site writes the receiver back
@@ -344,6 +352,9 @@ impl<'a> Analyzer<'a> {
         // Dynamic construct dispatchers and closure dispatchers share the same
         // synthesized-function id space and are all filled before it is appended.
         self.build_construct_dispatchers();
+        // Modifier bodies share the synthesized-function id space with the
+        // dispatchers and are filled before it is appended by the closures pass.
+        self.build_extend_methods();
         self.finalize_closures();
         Analysis {
             program: self.program,
@@ -396,7 +407,15 @@ impl<'a> Analyzer<'a> {
                 Item::Construct(declaration) => {
                     self.construct_callables(declaration, source, &mut callables)
                 }
-                Item::Enum(_) | Item::TypeAlias(_) | Item::Import(_) | Item::Unsupported(_) => {}
+                // An `extend` block's modifiers are not ordinary callables:
+                // each lowers to a synthesized function whose receiver is the
+                // family value, built after signatures exist. See
+                // `constructs::extend`.
+                Item::Enum(_)
+                | Item::TypeAlias(_)
+                | Item::Import(_)
+                | Item::Extend(_)
+                | Item::Unsupported(_) => {}
             }
         }
         callables

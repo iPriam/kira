@@ -20,7 +20,7 @@ use kira_source::Span;
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
     Block, ConstructDecl, ConstructField, ConstructKind, ConstructMethod, DeferredConstruct,
-    Function, Stmt, TypeRef, TypeRefId,
+    ExtendDecl, Function, Stmt, TypeRef, TypeRefId,
 };
 
 use crate::Parser;
@@ -43,6 +43,86 @@ impl Parser<'_> {
         self.at(TokenKind::Identifier)
             && self.peek(1).kind == TokenKind::Identifier
             && matches!(self.peek(2).kind, TokenKind::LParen | TokenKind::LBrace)
+    }
+
+    /// Whether the cursor begins an `extend Family { ... }` block.
+    ///
+    /// `extend` is a **contextual** keyword, not a reserved word: it is
+    /// recognized only here, by the leading identifier's text, so an ordinary
+    /// name spelled `extend` elsewhere is untouched. The `{` after the family
+    /// name is what tells the block apart from a construct-backed declaration
+    /// (`Family Name {`), whose second identifier is the declaration name — this
+    /// check must therefore run before [`at_construct_backed`](Self::at_construct_backed).
+    pub(crate) fn at_extend_block(&self) -> bool {
+        self.at(TokenKind::Identifier)
+            && self.text_of(self.current().span) == "extend"
+            && self.peek(1).kind == TokenKind::Identifier
+            && self.peek(2).kind == TokenKind::LBrace
+    }
+
+    /// Parses `extend Family { function ... }`, with `extend` at the cursor.
+    ///
+    /// The block holds only `function` modifiers; any other member is refused
+    /// with a typed diagnostic and skipped, so one malformed member does not
+    /// cascade. The family name and modifier bodies are what semantics needs —
+    /// each modifier lowers to a function whose receiver is the family value.
+    pub(crate) fn parse_extend(&mut self) -> Option<ExtendDecl> {
+        let start = self.current().span;
+        self.bump(); // `extend`
+        let name_span = self.current().span;
+        let name = if self.at(TokenKind::Identifier) {
+            let symbol = self.intern_span(name_span);
+            self.bump();
+            symbol
+        } else {
+            self.error(
+                name_span,
+                "KPAR063",
+                "expected the name of the construct family to extend",
+            );
+            Symbol::ERROR
+        };
+        let mut methods = Vec::new();
+        self.expect(TokenKind::LBrace);
+        while !self.at(TokenKind::RBrace) && !self.at_eof() {
+            let before = self.pos;
+            while self.eat(TokenKind::Semicolon) {}
+            if self.at(TokenKind::RBrace) || self.at_eof() {
+                break;
+            }
+            match self.current_kind() {
+                TokenKind::Function => {
+                    if let Some(function) = self.parse_function(false, Execution::Inherited, false)
+                    {
+                        methods.push(function);
+                    }
+                }
+                kind => {
+                    let span = self.current().span;
+                    self.error(
+                        span,
+                        "KPAR064",
+                        format!(
+                            "an `extend` block holds only `function` modifiers, found {}",
+                            kind.describe()
+                        ),
+                    );
+                    self.recover_to_next_construct_member();
+                }
+            }
+            while self.eat(TokenKind::Semicolon) {}
+            if self.pos == before {
+                self.bump();
+            }
+        }
+        self.expect(TokenKind::RBrace);
+        let span = Span::from_bounds(start.start, self.previous_end());
+        Some(ExtendDecl {
+            name,
+            name_span,
+            methods,
+            span,
+        })
     }
 
     /// Parses `construct Family [extends ...] { <member>* }`.

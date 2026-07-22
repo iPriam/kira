@@ -236,3 +236,67 @@ construct Surface extends WebElement {
     assert_eq!(declaration.deferred[0].label, "`extends` inheritance");
     assert_eq!(declaration.methods.len(), 1);
 }
+
+#[test]
+fn an_extend_block_parses_its_modifier_functions() {
+    let result = parse_text(
+        r#"
+extend Widget {
+    function padding(length: Float) -> Widget {
+        return Padding(length: length) {
+            self
+        }
+    }
+
+    function opacity(value: Float) -> Widget {
+        return OpacityLayer(value: value) {
+            self
+        }
+    }
+}
+"#,
+    );
+    let [Item::Extend(declaration)] = result.tree.items() else {
+        panic!("expected one extend block, got {:?}", result.tree.items());
+    };
+    assert_eq!(result.interner.resolve(declaration.name), "Widget");
+    assert_eq!(declaration.methods.len(), 2);
+    assert_eq!(
+        result.interner.resolve(declaration.methods[0].name),
+        "padding"
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn extend_is_only_contextual_so_a_name_spelled_extend_is_unaffected() {
+    // A construct-backed declaration whose *declaration* name is `extend` must
+    // still parse as a backed declaration, not be mistaken for an extend block:
+    // the block form is `extend Family {`, this is `Family extend {`.
+    let result = parse_text("Widget extend {\n}\n");
+    assert!(
+        matches!(
+            result.tree.items(),
+            [Item::Construct(declaration)]
+                if matches!(declaration.kind, ConstructKind::Backed { .. })
+        ),
+        "got {:?}",
+        result.tree.items()
+    );
+}
+
+#[test]
+fn an_extend_block_refuses_a_non_function_member() {
+    let result = parse_text(
+        r#"
+extend Widget {
+    let stray: Int = 0
+}
+"#,
+    );
+    assert!(
+        result.diagnostics.iter().any(|d| d.code == Some("KPAR064")),
+        "{:?}",
+        result.diagnostics
+    );
+}
