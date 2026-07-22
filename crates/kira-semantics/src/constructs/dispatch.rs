@@ -15,6 +15,9 @@ struct FamilyMethodShape {
     params: Vec<Type>,
     param_names: Vec<Option<kira_core::Symbol>>,
     ownership: Vec<OwnershipMode>,
+    /// Resolved parameter defaults, aligned with `params`. A `None` slot is
+    /// mandatory; a `Some` fills a call that omits it.
+    defaults: Vec<Option<HirExprId>>,
     result: Type,
 }
 
@@ -109,6 +112,7 @@ impl Analyzer<'_> {
             params,
             param_names,
             ownership,
+            defaults,
             result,
         } = shape;
         // A uniform `extend` modifier has one body called directly; a
@@ -122,11 +126,23 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         };
         let callable = format!("{}.{}", self.type_name(Type::Enum(family_id)), method);
-        let positional = self.bind_call_arguments(args, 0, &param_names, &callable, span);
+        // A slot with a default may be omitted without a missing-argument
+        // diagnostic; the caller fills it below.
+        let has_default: Vec<bool> = defaults.iter().map(Option::is_some).collect();
+        let positional =
+            self.bind_call_arguments(args, 0, &param_names, &has_default, &callable, span);
         let mut values = vec![receiver];
         for (index, slot_value) in positional.into_iter().enumerate() {
             let Some(arg) = slot_value else {
-                values.push(self.program.exprs.alloc(HirExpr::Error));
+                // An omitted argument takes its parameter's default; without one
+                // the missing/arity diagnostic already spoke, so stand in with
+                // an error value that keeps the shape honest.
+                let filled = defaults
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .unwrap_or_else(|| self.program.exprs.alloc(HirExpr::Error));
+                values.push(filled);
                 continue;
             };
             match (params.get(index), ownership.get(index)) {
@@ -134,6 +150,14 @@ impl Analyzer<'_> {
                     values.push(self.analyze_call_argument(ctx, arg, expected, mode, &callable))
                 }
                 _ => values.push(self.analyze_expr(ctx, arg)),
+            }
+        }
+        // A positional call that omitted trailing arguments fills them from
+        // their defaults, left to right, stopping at the first with none.
+        while values.len() - 1 < params.len() {
+            match defaults.get(values.len() - 1).copied().flatten() {
+                Some(default) => values.push(default),
+                None => break,
             }
         }
         if values.len() != params.len() + 1 {
@@ -191,6 +215,7 @@ impl Analyzer<'_> {
             params: method.params.clone(),
             param_names: method.param_names.clone(),
             ownership: method.ownership.clone(),
+            defaults: method.defaults.clone(),
             result: method.result,
         })
     }

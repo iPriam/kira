@@ -38,11 +38,16 @@ impl Analyzer<'_> {
     /// mix of labeled and positional arguments — because the program is already
     /// rejected and its remaining arguments should still be checked where they
     /// were written.
+    ///
+    /// `has_default` is aligned with `param_names[leading..]`: a slot marked
+    /// `true` may be left unfilled without a missing-argument diagnostic,
+    /// because the caller fills it from the parameter's default instead.
     pub(crate) fn bind_call_arguments(
         &mut self,
         args: &[CallArg],
         leading: usize,
         param_names: &[Option<Symbol>],
+        has_default: &[bool],
         name: &str,
         span: Span,
     ) -> Vec<Option<ExprId>> {
@@ -111,11 +116,14 @@ impl Analyzer<'_> {
             // spurious arity error on top.
             return args.iter().map(|arg| Some(arg.value)).collect();
         }
-        // A slot left unfilled is a missing argument, named by its parameter.
-        // The `None` is kept so the caller fills the slot rather than letting an
-        // arity mismatch re-report the same shortfall without the name.
+        // A slot left unfilled is a missing argument, named by its parameter —
+        // unless the parameter declares a default, in which case the caller
+        // fills it and this is no error. The `None` is kept either way so the
+        // caller fills the slot rather than letting an arity mismatch re-report
+        // the same shortfall without the name.
         for (index, slot) in bound.iter().enumerate() {
             if slot.is_none()
+                && !has_default.get(index).copied().unwrap_or(false)
                 && let Some(param) = written[index]
             {
                 self.emit(

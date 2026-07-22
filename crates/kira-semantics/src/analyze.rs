@@ -57,14 +57,18 @@ pub(crate) struct Callable<'a> {
     pub(crate) source: SourceId,
 }
 
-/// One struct field default, bound to the file where it was declared.
+/// One declared default initializer — a struct field's or a function
+/// parameter's — bound to the file where it was declared.
+///
+/// Both resolve the same way: once, in the declaring file's scope, reusing the
+/// resulting HIR at every site that omits the field or argument.
 #[derive(Clone, Copy)]
 pub(crate) struct FieldDefault {
     /// The default expression as written.
     pub(crate) syntax: ExprId,
     /// The declaring file whose imports and package scope resolve its names.
     pub(crate) source: SourceId,
-    /// The name-resolved, typed expression shared by every construction site.
+    /// The name-resolved, typed expression shared by every use site.
     pub(crate) resolved: Option<HirExprId>,
 }
 
@@ -143,6 +147,18 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) struct_defaults: Vec<Vec<Option<FieldDefault>>>,
     /// Defaults currently being resolved, guarding recursive default expansion.
     pub(crate) resolving_struct_defaults: BTreeSet<(u32, u32)>,
+    /// Each function's parameter defaults, indexed by [`FuncId`] and then by
+    /// parameter slot, receiver included (a receiver slot is always `None`).
+    ///
+    /// Kept beside the signature table for the same reason `struct_defaults` is
+    /// kept beside the type table: a default is unanalyzed syntax and the model
+    /// carries none. Each row remembers its declaring file and is resolved once
+    /// after signatures exist; every call that omits the argument reuses the
+    /// same name-resolved expression.
+    pub(crate) param_defaults: Vec<Vec<Option<FieldDefault>>>,
+    /// Parameter defaults currently being resolved, guarding a default that
+    /// fills itself through the call graph (`f(x = g())`, `g(y = f())`).
+    pub(crate) resolving_param_defaults: BTreeSet<(u32, u32)>,
     /// Each declared enum's per-variant payload defaults, as written, indexed
     /// by [`kira_semantics_model::EnumId`] and then by variant index.
     ///
@@ -254,6 +270,8 @@ impl<'a> Analyzer<'a> {
             in_foreign_signature: false,
             struct_defaults: Vec::new(),
             resolving_struct_defaults: BTreeSet::new(),
+            param_defaults: Vec::new(),
+            resolving_param_defaults: BTreeSet::new(),
             enum_defaults: Vec::new(),
             generic_enums: crate::generics::GenericEnumTable::new(),
             type_bindings: crate::generics::TypeBindings::new(),
@@ -343,6 +361,13 @@ impl<'a> Analyzer<'a> {
         // site can supply some unrelated file scope, and reuse that HIR at every
         // site that omits the field.
         self.resolve_struct_defaults();
+        // A parameter default belongs to its declaration too, and follows the
+        // same rule: resolve every one now, in its declaring file, and reuse the
+        // HIR at every call that omits the argument.
+        self.resolve_param_defaults();
+        // A construct-family method carries no signature row, so its parameter
+        // defaults resolve in their own pass — same rule, same moment.
+        self.resolve_construct_method_defaults();
         // Bodies are analyzed in the same order the signatures were collected,
         // which is what makes a `FuncId` index both.
         for (index, callable) in callables.iter().enumerate() {

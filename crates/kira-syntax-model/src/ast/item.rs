@@ -558,6 +558,13 @@ pub struct Param {
     pub ownership_span: Option<Span>,
     /// The declared parameter type, with any ownership prefix stripped.
     pub ty: TypeRefId,
+    /// The default initializer, when one was written (`x: Int = 3`).
+    ///
+    /// A call may omit a trailing (or, when labeled, a middle) argument whose
+    /// parameter declares one; semantics resolves the expression once in the
+    /// declaring file and fills the omitted slot with it. Absent means the
+    /// argument is mandatory.
+    pub default: Option<ExprId>,
     /// Span covering the whole parameter.
     pub span: Span,
 }
