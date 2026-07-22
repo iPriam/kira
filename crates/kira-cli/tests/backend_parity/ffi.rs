@@ -75,7 +75,7 @@ fn build_fixture_archive(dir: &Path) -> PathBuf {
 /// CLI resolves archives against is the entry's own directory. The manifest
 /// lists several host triples pointing at the one built archive, so the exact
 /// host the test runs on selects its own row.
-fn write_ffi_package() -> PathBuf {
+fn write_ffi_package(program: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("kirac_ffi_{}_{unique}", std::process::id()));
@@ -102,7 +102,7 @@ staticLib = "lib/libffifixture.a"
     .expect("native-lib manifest");
 
     let entry = dir.join("main.kira");
-    std::fs::write(&entry, include_str!("../fixtures/ffi/ffi_program.kira")).expect("program");
+    std::fs::write(&entry, program).expect("program");
     entry
 }
 
@@ -116,7 +116,7 @@ fn run_on(entry: &Path, backend: &str) -> Output {
 
 #[test]
 fn every_backend_agrees_on_the_ffi_fixture_and_shares_one_counter() {
-    let entry = write_ffi_package();
+    let entry = write_ffi_package(include_str!("../fixtures/ffi/ffi_program.kira"));
 
     let runs: Vec<(&str, Output)> = BACKENDS
         .iter()
@@ -148,6 +148,35 @@ fn every_backend_agrees_on_the_ffi_fixture_and_shares_one_counter() {
             tail,
             ["2", "1"],
             "the {backend} backend's counter did not advance 1 then 2",
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
+}
+
+/// A single-scalar-field C handle struct crosses the seam as its field: the
+/// result of `ffi_make_handle` (a `struct { unsigned int id; }` by value) is
+/// rebuilt into the Kira `Handle`, and `ffi_handle_id` reads the field back out
+/// of one. The round trip must produce the same `7 / 8 / 8` on every backend —
+/// the LLVM/native and hybrid runs each actually call the C function whose ABI
+/// prototype is the struct, through an adapter that names its single `U32`.
+#[test]
+fn every_backend_agrees_on_a_handle_struct_round_trip() {
+    let entry = write_ffi_package(include_str!("../fixtures/ffi/ffi_program_handle.kira"));
+
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "7\n8\n8\n",
+            "the {backend} backend disagreed on the handle-struct round trip\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "the {backend} backend did not exit cleanly\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
         );
     }
 

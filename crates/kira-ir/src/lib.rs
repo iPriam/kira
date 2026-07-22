@@ -107,6 +107,8 @@ mod tests {
                 [ForeignType::I32, ForeignType::I32],
                 ForeignType::I32,
             ),
+            param_wrappers: Box::from([None, None]),
+            result_wrapper: None,
             name_span: Span::new(0, 3),
         });
         let a = program.exprs.alloc(HirExpr::Int(20));

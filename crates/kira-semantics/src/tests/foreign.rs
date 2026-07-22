@@ -201,10 +201,41 @@ fn a_generic_type_in_the_signature_is_refused() {
 }
 
 #[test]
-fn a_struct_parameter_is_refused() {
-    let text = "struct Pt { let x: I32 }\n\
+fn a_multi_field_struct_parameter_is_refused() {
+    let text = "struct Pt { let x: I32\nlet y: I32 }\n\
                 @Main function main() { return }\n\
                 @FFI.Extern { library: l; symbol: s; abi: c; } function f(p: Pt) -> I32;";
+    assert_eq!(codes(text), vec!["KSEM182"]);
+}
+
+#[test]
+fn a_single_scalar_field_struct_crosses_as_its_field() {
+    // A C handle struct — one scalar member — is passed in a register exactly
+    // like that member, so it crosses the seam as the field's `U32` and carries
+    // the struct to rebuild on both sides.
+    let text = "struct Handle { var id: U32 }\n\
+                @Main function main() { return }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; } function f(h: Handle) -> Handle;";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+    let program = program(text);
+    let row = &program.foreign[0];
+    // The wire signature names the scalar, never the struct.
+    assert_eq!(row.signature.parameters(), &[ForeignType::U32]);
+    assert_eq!(row.signature.result(), ForeignType::U32);
+    // The wrapper on each side records that the scalar is a rebuilt handle.
+    assert_eq!(row.param_wrappers.len(), 1);
+    assert!(row.param_wrappers[0].is_some());
+    assert!(row.result_wrapper.is_some());
+    assert_eq!(row.param_wrappers[0], row.result_wrapper);
+}
+
+#[test]
+fn a_struct_whose_one_field_is_a_bare_int_is_refused() {
+    // `Int` has no fixed C width, so a struct wrapping one is not a handle: it
+    // falls to the ordinary aggregate refusal rather than crossing silently.
+    let text = "struct Loose { var n: Int }\n\
+                @Main function main() { return }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; } function f(h: Loose) -> I32;";
     assert_eq!(codes(text), vec!["KSEM182"]);
 }
 

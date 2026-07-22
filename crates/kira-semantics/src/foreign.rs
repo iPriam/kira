@@ -18,7 +18,7 @@
 
 use kira_runtime_abi::{ForeignAbi, ForeignSignature, ForeignType};
 use kira_semantics_model::hir::{Callee, ForeignId, HirExpr, HirExprId, HirForeign};
-use kira_semantics_model::{FloatSpelling, IntSpelling, Type};
+use kira_semantics_model::{FloatSpelling, IntSpelling, StructId, Type};
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{ForeignMark, Function, Item, Param, TypeRef};
 
@@ -109,12 +109,14 @@ impl<'a> Analyzer<'a> {
         let fields = self.parse_foreign_fields(mark);
         let signature = self.map_foreign_signature(function);
         match (annotations_ok, fields, signature) {
-            (true, Some((library, symbol)), Some(signature)) => Some(HirForeign {
+            (true, Some((library, symbol)), Some(mapped)) => Some(HirForeign {
                 kira_name: name.to_owned(),
                 library,
                 symbol,
                 abi: ForeignAbi::C,
-                signature,
+                signature: mapped.signature,
+                param_wrappers: mapped.param_wrappers,
+                result_wrapper: mapped.result_wrapper,
                 name_span: function.name_span,
             }),
             _ => None,
@@ -259,47 +261,92 @@ impl<'a> Analyzer<'a> {
         value
     }
 
-    /// Maps a foreign declaration's written signature to a [`ForeignSignature`],
-    /// or `None` when any parameter or the result cannot cross the seam.
-    fn map_foreign_signature(&mut self, function: &Function) -> Option<ForeignSignature> {
+    /// Maps a foreign declaration's written signature to its wire
+    /// [`ForeignSignature`] and the per-position wrapper structs, or `None` when
+    /// any parameter or the result cannot cross the seam.
+    fn map_foreign_signature(&mut self, function: &Function) -> Option<MappedForeign> {
         let mut params = Vec::with_capacity(function.params.len());
+        let mut param_wrappers = Vec::with_capacity(function.params.len());
         let mut ok = true;
         for param in &function.params {
             match self.map_foreign_param(param) {
-                Some(foreign_type) => params.push(foreign_type),
+                Some(seam) => {
+                    params.push(seam.ty);
+                    param_wrappers.push(seam.wrapper);
+                }
                 None => ok = false,
             }
         }
         let result = self.map_foreign_result(function);
         match (ok, result) {
-            (true, Some(result)) => Some(ForeignSignature::new(params, result)),
+            (true, Some(result)) => Some(MappedForeign {
+                signature: ForeignSignature::new(params, result.ty),
+                param_wrappers: param_wrappers.into(),
+                result_wrapper: result.wrapper,
+            }),
             _ => None,
         }
     }
 
-    /// Maps one written parameter to a [`ForeignType`], reporting why it cannot
+    /// Maps one written parameter to its seam type, reporting why it cannot
     /// cross when it cannot.
-    fn map_foreign_param(&mut self, param: &Param) -> Option<ForeignType> {
+    fn map_foreign_param(&mut self, param: &Param) -> Option<ForeignSeam> {
         let span = self.tree.type_ref(param.ty).span();
         if let Some(()) = self.refuse_written_shape(param.ty, span) {
             return None;
         }
         let ty = self.resolve_foreign_type(param.ty);
-        self.foreign_type_of(ty, span, Position::Param)
+        self.foreign_seam_of(ty, span, Position::Param)
     }
 
-    /// Maps the written result to a [`ForeignType`]; an absent result is
+    /// Maps the written result to its seam type; an absent result is
     /// [`ForeignType::Void`].
-    fn map_foreign_result(&mut self, function: &Function) -> Option<ForeignType> {
+    fn map_foreign_result(&mut self, function: &Function) -> Option<ForeignSeam> {
         let Some(type_ref) = function.return_type else {
-            return Some(ForeignType::Void);
+            return Some(ForeignSeam {
+                ty: ForeignType::Void,
+                wrapper: None,
+            });
         };
         let span = self.tree.type_ref(type_ref).span();
         if let Some(()) = self.refuse_written_shape(type_ref, span) {
             return None;
         }
         let ty = self.resolve_foreign_type(type_ref);
-        self.foreign_type_of(ty, span, Position::Result)
+        self.foreign_seam_of(ty, span, Position::Result)
+    }
+
+    /// The seam a written parameter or result crosses as. A single-scalar-field
+    /// struct (a C handle like `sg_image { id: U32 }`) crosses as its field's
+    /// scalar and carries the struct to rebuild at the call; every other type
+    /// falls to [`Self::foreign_type_of`], which maps the scalars and refuses
+    /// the rest. A deferred `@FFI.Callback`/`@FFI.Array` struct is left to that
+    /// refusal, not treated as a handle.
+    fn foreign_seam_of(&mut self, ty: Type, span: Span, position: Position) -> Option<ForeignSeam> {
+        if let Type::Struct(id) = ty
+            && !self.ffi_struct_kind(id).is_some_and(is_deferred_ffi)
+            && let Some(field_ty) = self.single_scalar_field_seam(id)
+        {
+            return Some(ForeignSeam {
+                ty: field_ty,
+                wrapper: Some(id),
+            });
+        }
+        self.foreign_type_of(ty, span, position)
+            .map(|ty| ForeignSeam { ty, wrapper: None })
+    }
+
+    /// The [`ForeignType`] a struct crosses as when it has exactly one field and
+    /// that field is a fixed-width seam scalar — the C single-member-struct
+    /// handle, passed in a register exactly like its member. `None` for any
+    /// other shape (no field, many fields, or a field that is itself an
+    /// aggregate or an ambiguous bare `Int`/`Float`).
+    fn single_scalar_field_seam(&self, id: StructId) -> Option<ForeignType> {
+        let def = self.program.types.structs().get(id)?;
+        let [field] = def.fields.as_slice() else {
+            return None;
+        };
+        scalar_foreign_type(field.ty)
     }
 
     /// Resolves a type inside a foreign signature, where `CString` is permitted
@@ -463,12 +510,17 @@ impl<'a> Analyzer<'a> {
         span: Span,
     ) -> HirExprId {
         // Snapshot the signature so the argument loop's `&mut self` does not
-        // overlap the borrow of `self.program.foreign`.
-        let (params, result, name) = {
+        // overlap the borrow of `self.program.foreign`. The wrappers ride
+        // alongside: a single-scalar-field handle struct crosses as its field's
+        // scalar, so the Kira side reads that field out of an argument and
+        // rebuilds the struct around the result.
+        let (params, param_wrappers, result, result_wrapper, name) = {
             let foreign = &self.program.foreign[id.0 as usize];
             (
                 foreign.signature.parameters().to_vec(),
+                foreign.param_wrappers.clone(),
                 foreign.signature.result(),
+                foreign.result_wrapper,
                 foreign.kira_name.clone(),
             )
         };
@@ -476,7 +528,7 @@ impl<'a> Analyzer<'a> {
             .iter()
             .map(|&arg| self.analyze_expr(ctx, arg))
             .collect();
-        if arg_hirs.len() != params.len() {
+        let seam_args = if arg_hirs.len() != params.len() {
             self.emit(
                 span,
                 "KSEM062",
@@ -486,34 +538,122 @@ impl<'a> Analyzer<'a> {
                     arg_hirs.len()
                 ),
             );
+            arg_hirs
         } else {
-            for (index, (&arg, &param)) in arg_hirs.iter().zip(params.iter()).enumerate() {
-                let actual = self.program.expr(arg).type_of();
-                if actual == Type::Error || foreign_arg_matches(actual, param) {
-                    continue;
+            self.check_and_lower_foreign_args(&arg_hirs, &params, &param_wrappers, &name, span)
+        };
+        let call = self.program.exprs.alloc(HirExpr::Call {
+            callee: Callee::Foreign(id),
+            args: seam_args,
+            ty: kira_type_for_foreign(result),
+            writeback: None,
+        });
+        // A handle result comes back as its field's scalar; rebuild the struct
+        // so the call's Kira type is the handle the author wrote.
+        match result_wrapper {
+            Some(struct_id) => self.program.exprs.alloc(HirExpr::StructNew {
+                struct_id,
+                fields: vec![call],
+            }),
+            None => call,
+        }
+    }
+
+    /// Type-checks each foreign argument against its parameter and returns the
+    /// values to hand the seam: an ordinary argument unchanged, and a
+    /// single-scalar-field handle argument replaced by a read of its one field.
+    fn check_and_lower_foreign_args(
+        &mut self,
+        arg_hirs: &[HirExprId],
+        params: &[ForeignType],
+        param_wrappers: &[Option<StructId>],
+        name: &str,
+        span: Span,
+    ) -> Vec<HirExprId> {
+        let mut seam_args = Vec::with_capacity(arg_hirs.len());
+        for (index, &arg) in arg_hirs.iter().enumerate() {
+            let actual = self.program.expr(arg).type_of();
+            match param_wrappers[index] {
+                Some(struct_id) => {
+                    if actual != Type::Error && actual != Type::Struct(struct_id) {
+                        self.emit(
+                            span,
+                            "KSEM183",
+                            format!(
+                                "argument {} of `{name}` expects `{}`, found `{}`",
+                                index + 1,
+                                self.type_name(Type::Struct(struct_id)),
+                                self.type_name(actual)
+                            ),
+                        );
+                    }
+                    // The sole field's scalar is what crosses the seam.
+                    seam_args.push(self.program.exprs.alloc(HirExpr::Field {
+                        base: arg,
+                        index: 0,
+                        ty: kira_type_for_foreign(params[index]),
+                    }));
                 }
-                let expected = match param {
-                    ForeignType::CString => "String".to_owned(),
-                    other => self.type_name(kira_type_for_foreign(other)),
-                };
-                self.emit(
-                    span,
-                    "KSEM183",
-                    format!(
-                        "argument {} of `{name}` expects `{expected}`, found `{}`",
-                        index + 1,
-                        self.type_name(actual)
-                    ),
-                );
+                None => {
+                    let param = params[index];
+                    if actual != Type::Error && !foreign_arg_matches(actual, param) {
+                        let expected = match param {
+                            ForeignType::CString => "String".to_owned(),
+                            other => self.type_name(kira_type_for_foreign(other)),
+                        };
+                        self.emit(
+                            span,
+                            "KSEM183",
+                            format!(
+                                "argument {} of `{name}` expects `{expected}`, found `{}`",
+                                index + 1,
+                                self.type_name(actual)
+                            ),
+                        );
+                    }
+                    seam_args.push(arg);
+                }
             }
         }
-        let ty = kira_type_for_foreign(result);
-        self.program.exprs.alloc(HirExpr::Call {
-            callee: Callee::Foreign(id),
-            args: arg_hirs,
-            ty,
-            writeback: None,
-        })
+        seam_args
+    }
+}
+
+/// The seam type a written parameter or result crosses as, with the wrapper
+/// struct to rebuild when it was a single-scalar-field handle struct.
+struct ForeignSeam {
+    /// The C-width type the value crosses the seam as.
+    ty: ForeignType,
+    /// The single-scalar-field struct the Kira side reads from / rebuilds into,
+    /// or `None` for an ordinary scalar.
+    wrapper: Option<StructId>,
+}
+
+/// A mapped foreign signature: the wire types plus the Kira-side wrappers that
+/// never reach the wire.
+struct MappedForeign {
+    /// The C-seam parameter and result types.
+    signature: ForeignSignature,
+    /// One wrapper per parameter, `Some` for a single-scalar-field handle.
+    param_wrappers: Box<[Option<StructId>]>,
+    /// The result's wrapper, if it is a single-scalar-field handle.
+    result_wrapper: Option<StructId>,
+}
+
+/// The [`ForeignType`] a resolved type crosses as when it is already a seam
+/// scalar, without emitting anything. Used to test a struct's sole field: a
+/// handle struct's member is a fixed-width integer, `F32`/`F64`, `Bool`, or
+/// `RawPtr`. A bare `Int`/`Float` (ambiguous width), a `CString` (borrowed,
+/// never a stored field), or any aggregate returns `None`.
+fn scalar_foreign_type(ty: Type) -> Option<ForeignType> {
+    match ty {
+        Type::Int(IntSpelling::Plain) => None,
+        Type::Int(spelling) => Some(int_foreign_type(spelling)),
+        Type::Float(FloatSpelling::F32) => Some(ForeignType::F32),
+        Type::Float(FloatSpelling::F64) => Some(ForeignType::F64),
+        Type::Bool => Some(ForeignType::Bool),
+        Type::RawPtr => Some(ForeignType::RawPtr),
+        _ => None,
     }
 }
 

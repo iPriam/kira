@@ -48,4 +48,15 @@ int ffi_load(void);
  * both halves share one copy of this code rather than two. */
 long long ffi_bump(void);
 
+/* A single-member C handle struct, passed and returned by value. A struct whose
+ * one member is a `unsigned int` shares that member's register ABI, so the Kira
+ * side crosses it as its `U32` field: it reads the field out of an argument and
+ * rebuilds the struct around a result. */
+struct ffi_handle {
+    unsigned int id;
+};
+struct ffi_handle ffi_make_handle(unsigned int id);
+unsigned int ffi_handle_id(struct ffi_handle h);
+struct ffi_handle ffi_bump_handle(struct ffi_handle h);
+
 #endif /* KIRA_FFI_FIXTURE_H */

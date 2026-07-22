@@ -39,3 +39,15 @@ int ffi_load(void) { return ffi_cell; }
 
 static long long ffi_counter = 0;
 long long ffi_bump(void) { return ++ffi_counter; }
+
+struct ffi_handle ffi_make_handle(unsigned int id) {
+    struct ffi_handle h;
+    h.id = id;
+    return h;
+}
+unsigned int ffi_handle_id(struct ffi_handle h) { return h.id; }
+struct ffi_handle ffi_bump_handle(struct ffi_handle h) {
+    struct ffi_handle r;
+    r.id = h.id + 1;
+    return r;
+}
