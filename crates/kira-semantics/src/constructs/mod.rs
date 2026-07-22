@@ -7,7 +7,7 @@
 //!
 //! - the declared **params** become the struct's stored fields, filled by the
 //!   construction call `Name(args)` (positional or by parameter name);
-//! - each **computed member** `let node: T { block }` becomes a zero-argument
+//! - each **computed member** `let node: Any { block }` becomes a zero-argument
 //!   method whose receiver is the declaration, so the block's bare names read
 //!   the declaration's fields — and reading `value.node` runs that method;
 //! - each **`function` member** becomes an ordinary method.
@@ -300,7 +300,7 @@ impl<'a> Analyzer<'a> {
     ///
     /// A slot over a construct **family** (`some Widget`, `[some Widget]`) is
     /// the heterogeneous case — storing differently-shaped children under one
-    /// family supertype needs the `any Construct` composition the executable
+    /// family supertype needs the `Any Construct` composition the executable
     /// slice does not cover — so it is refused here and its field is given
     /// `Error` type, which keeps a later read of the field silent rather than
     /// cascading. A slot over a concrete type (a `struct`, a `class`, or another
@@ -349,7 +349,7 @@ impl<'a> Analyzer<'a> {
     }
 
     /// The head type name a type reference names (`Widget` for `Widget`,
-    /// `[Widget]`, or `Widget<T>`), when it names one.
+    /// `[Widget]`, or `Widget<Element>`), when it names one.
     fn type_ref_head_name(&self, id: kira_syntax_model::ast::TypeRefId) -> Option<String> {
         match self.tree.type_ref(id) {
             kira_syntax_model::ast::TypeRef::Named { name, .. }
@@ -465,7 +465,7 @@ impl<'a> Analyzer<'a> {
                     "KSEM228",
                     "a `body { … }` member yields a value of the construct family — the \
                      heterogeneous case; producing one needs the `Any Construct` dynamic \
-                     dispatch that is not executable yet. Write a computed `let node: T { … }` \
+                     dispatch that is not executable yet. Write a computed `let node: Any { … }` \
                      bridge over a concrete type, or a concrete `some X` child slot",
                 );
                 continue;
@@ -475,7 +475,7 @@ impl<'a> Analyzer<'a> {
                 "KSEM203",
                 format!(
                     "{} is not executable yet in a construct; the executable slice supports \
-                     `@Required let`, `let name: T = default`, computed `let node: T {{ … }}` \
+                     `@Required let`, `let name: Any = default`, computed `let node: Any {{ … }}` \
                      bridges, `function` members, and `some X` / `[some X]` child slots over a \
                      concrete type",
                     deferred.label

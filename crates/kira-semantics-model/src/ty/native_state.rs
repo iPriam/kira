@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use super::Type;
 
-/// The identity of one `NativeState<T>` handle type.
+/// The identity of one `NativeState<Value>` handle type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct NativeStateId(u32);
@@ -16,7 +16,7 @@ impl NativeStateId {
     }
 }
 
-/// Every `NativeState<T>` shape mentioned by a program.
+/// Every `NativeState<Value>` shape mentioned by a program.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct NativeStateTable {
     targets: Vec<Type>,

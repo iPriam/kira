@@ -1,7 +1,7 @@
 // Arrays: a shared, growable, heap-backed sequence — and the ownership that
 // comes with it.
 //
-// An array is written `[T]`. Its whole surface is two members: `.append(v)`,
+// An array is written `[Element]`. Its whole surface is two members: `.append(v)`,
 // which grows it in place, and `.count`, a property (no parens). Elements are
 // read and written with `xs[i]`; an out-of-range or negative index is a runtime
 // trap, not a compile error, because an index is rarely a constant.

@@ -121,7 +121,7 @@ Coverage of the five required cases:
 - **String** — works, params and results. `String → CString` at a param is the
   oracle-pinned transient copy: the callee never keeps it, the caller retains
   ownership. A returned Rust `String` becomes a Kira `String` the VM owns.
-- **Array** — **REFUSED in v1.** A `[T]` in an extern signature, or a
+- **Array** — **REFUSED in v1.** An `[Element]` in an extern signature, or a
   `Vec<T>`/slice in a `#[kira::export]` signature, is a typed error
   (new code, § 6): the ownership question at the boundary — who frees the
   elements, what growth means for VM heap accounting — is exactly the hazard

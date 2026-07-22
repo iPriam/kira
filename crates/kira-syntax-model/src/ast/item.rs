@@ -51,7 +51,7 @@ pub struct ConstructDecl {
     pub name_span: Span,
     /// The stored members: `@Required let`, plain `let`, and defaulted `let`.
     pub fields: Vec<ConstructField>,
-    /// The behaviour members: computed block-bodied bridges (`let node: T { … }`,
+    /// The behaviour members: computed block-bodied bridges (`let node: Any { … }`,
     /// each a zero-argument method read as a property) and `function` members.
     pub methods: Vec<ConstructMethod>,
     /// Members and clauses parsed but not yet executable, kept so semantics can
@@ -63,13 +63,13 @@ pub struct ConstructDecl {
 
 /// One behaviour member of a [`ConstructDecl`].
 ///
-/// A computed member (`let node: T { … }`) and a `function` member are the same
+/// A computed member (`let node: Any { … }`) and a `function` member are the same
 /// runtime shape — a method whose receiver is the backed declaration — so they
 /// share this node. What differs is the read: a computed member is read as a
 /// property (`value.node`), a `function` member is called (`value.lower(ctx)`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConstructMethod {
-    /// Whether this came from a computed `let name: T { … }` member, which is
+    /// Whether this came from a computed `let name: Any { … }` member, which is
     /// read as a property rather than called. The bridge member (`node`) is the
     /// canonical one.
     pub computed: bool,
@@ -95,7 +95,7 @@ pub enum ConstructKind {
 }
 
 /// One stored member of a [`ConstructDecl`] (`@Required let`, plain `let`, or
-/// `let name: T = default`).
+/// `let name: Any = default`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConstructField {
     /// The member's name.
@@ -441,14 +441,14 @@ pub enum FfiTypeKind {
         /// The `layout` value as written (`c`), and its span.
         layout: Option<(Symbol, Span)>,
     },
-    /// `@FFI.Pointer { target: T; ownership: o; }` — a native pointer alias.
+    /// `@FFI.Pointer { target: Target; ownership: o; }` — a native pointer alias.
     Pointer {
         /// The written pointee type, when present.
         target: Option<TypeRefId>,
         /// The `ownership` value as written (`borrowed`), and its span.
         ownership: Option<(Symbol, Span)>,
     },
-    /// `@FFI.Alias { target: T; }` — a plain typedef of one type to another.
+    /// `@FFI.Alias { target: Target; }` — a plain typedef of one type to another.
     Alias {
         /// The written aliased type, when present.
         target: Option<TypeRefId>,
@@ -460,7 +460,7 @@ pub enum FfiTypeKind {
         /// The written element count and its span, when present.
         count: Option<(i64, Span)>,
     },
-    /// `@FFI.Callback { abi: c; params: [T, …]; result: R; }` — a
+    /// `@FFI.Callback { abi: c; params: [ParamType, …]; result: ResultType; }` — a
     /// function-pointer typedef.
     Callback {
         /// The `abi` value as written (`c`), and its span.

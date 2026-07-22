@@ -141,7 +141,7 @@ fn append_type_checks_its_element() {
 // ----- places -------------------------------------------------------
 
 /// Mutation needs a `var`, exactly as a field write does. Every corpus
-/// mutation site is written `var arr: [T] = []`.
+/// mutation site is written `var arr: [Element] = []`.
 #[test]
 fn mutating_through_an_immutable_binding_is_reported() {
     assert_eq!(

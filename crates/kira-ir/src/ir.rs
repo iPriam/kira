@@ -12,7 +12,7 @@ use kira_semantics_model::{EnumId, StructId, Type, TypeTable};
 use la_arena::{Arena, Idx};
 
 /// The scalar-conversion machine kinds, reused from the analyzer so the IR does
-/// not re-derive which conversion a `T(operand)` cast performs.
+/// not re-derive which conversion a `Target(operand)` cast performs.
 pub use kira_semantics_model::hir::ConvertKind;
 /// The typed binary operators, reused from the analyzer's instruction
 /// selection so the IR does not re-derive types.
@@ -546,7 +546,7 @@ pub enum IrExpr {
         /// The state handle or raw token.
         token: IrExprId,
     },
-    /// A scalar type-conversion, `T(operand)`.
+    /// A scalar type-conversion, `Target(operand)`.
     ///
     /// The `kind` fixes the machine operation (see
     /// [`ConvertKind`]); `ty` carries the target type. A backend that ignored

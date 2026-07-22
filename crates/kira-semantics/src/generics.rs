@@ -30,7 +30,7 @@
 //!
 //! Instantiation is recursive: a template's payload may itself be a generic
 //! enum. Memoizing on the mangled name stops direct recursion, but
-//! `enum Grow<T> { More(Grow<[T]>) }` mints a fresh name every time, so a depth
+//! `enum Grow<Value> { More(Grow<[Value]>) }` mints a fresh name every time, so a depth
 //! cap is what actually terminates it. Hitting the cap is `KSEM175` — a typed
 //! refusal, never a stack overflow.
 

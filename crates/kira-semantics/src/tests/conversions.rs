@@ -1,4 +1,4 @@
-//! Semantic analysis of scalar type-conversion calls `T(expr)`: every supported
+//! Semantic analysis of scalar type-conversion calls `Target(expr)`: every supported
 //! conversion type-checks, and every invalid one is refused with a typed code
 //! rather than reported as an undefined function.
 

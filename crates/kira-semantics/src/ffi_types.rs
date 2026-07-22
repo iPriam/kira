@@ -7,7 +7,7 @@
 //! other three mint a nominal struct id, recorded here by [`FfiStructKind`]:
 //!
 //! * `@FFI.Struct { layout: c }` is a real C-layout struct. Its one runtime
-//!   behavior is **zero-filled construction**: `T { ... }` and `T()` start from
+//!   behavior is **zero-filled construction**: `StructType { ... }` and `StructType()` start from
 //!   a zeroed value and apply the explicit initializers over it, exactly the
 //!   oracle's construction rule. That lowers to an ordinary `StructNew` of zero
 //!   literals, so every backend agrees with no new opcode — the zero-fill is a
@@ -91,7 +91,7 @@ pub(crate) fn is_alias_shaped(decl: &StructDecl) -> bool {
 
 impl Analyzer<'_> {
     /// The struct id of `name` when it is a `@FFI.Struct { layout: c }` type,
-    /// for the `T()` construction path.
+    /// for the `StructType()` construction path.
     pub(crate) fn ffi_c_layout_named(&self, name: &str) -> Option<StructId> {
         let id = self.program.types.structs().lookup(name)?;
         (self.ffi_structs.get(&id) == Some(&FfiStructKind::CLayout)).then_some(id)
@@ -102,7 +102,7 @@ impl Analyzer<'_> {
         self.ffi_structs.get(&id).copied()
     }
 
-    /// Builds a fully zero-filled value of a C-layout struct — the `T()` form.
+    /// Builds a fully zero-filled value of a C-layout struct — the `StructType()` form.
     ///
     /// Every field takes its zero; a field whose type has no defined zero in
     /// this slice is refused precisely and filled with an error node, so the

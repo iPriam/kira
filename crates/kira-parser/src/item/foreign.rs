@@ -380,7 +380,7 @@ impl Parser<'_> {
         Some((value, span))
     }
 
-    /// Reads a `[T, T, ...]` type list (`params`), possibly empty.
+    /// Reads a `[ParamType, ParamType, ...]` type list (`params`), possibly empty.
     fn parse_ffi_type_list(&mut self) -> Vec<TypeRefId> {
         let mut types = Vec::new();
         if !self.eat(TokenKind::LBracket) {
