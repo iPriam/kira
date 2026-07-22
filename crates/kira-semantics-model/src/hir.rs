@@ -89,6 +89,17 @@ pub struct HirForeign {
     pub abi: ForeignAbi,
     /// The exact-width parameter and result types.
     pub signature: ForeignSignature,
+    /// Per-parameter wrapper struct, one entry per signature parameter.
+    ///
+    /// `Some(id)` marks a parameter written as a single-scalar-field struct
+    /// (a C handle like `sg_image { id: U32 }`): it crosses the seam as its
+    /// field's scalar — the entry in [`Self::signature`] — and the call reads
+    /// that field out of the argument. `None` is an ordinary scalar parameter.
+    /// This is a Kira-side rebuild detail; it never reaches the wire signature.
+    pub param_wrappers: Box<[Option<StructId>]>,
+    /// The result's wrapper struct, `Some(id)` when the result is a
+    /// single-scalar-field struct rebuilt from the seam scalar at the call.
+    pub result_wrapper: Option<StructId>,
     /// Span of the function's name, for diagnostics.
     pub name_span: Span,
 }
