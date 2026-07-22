@@ -105,6 +105,15 @@ pub struct ConstructField {
     /// Whether the member carried `@Required`: a value every backed declaration
     /// must provide.
     pub required: bool,
+    /// Whether this is a **child slot**: a field whose type was written
+    /// `some X` / `[some X]`, or that carried the compat `@Content` annotation.
+    ///
+    /// A slot is filled at a construction site only by the bare children of the
+    /// trailing `{ … }` content block — never by a constructor argument or a
+    /// default. [`ty`](ConstructField::ty) carries the inner element type (`X`
+    /// for `some X`, `[X]` for `[some X]`), so a single slot and a list slot are
+    /// told apart by whether the type is an array.
+    pub slot: bool,
     /// The declared member type.
     pub ty: TypeRefId,
     /// The default initializer, when one was written.
@@ -124,6 +133,13 @@ pub struct DeferredConstruct {
     /// Span of the not-yet-executable member or clause.
     pub span: Span,
 }
+
+/// The [`DeferredConstruct::label`] a `body { … }` shorthand member carries.
+///
+/// Shared so semantics can tell this deferral — a value of the construct family,
+/// the heterogeneous case — apart from a structural clause and give it its own
+/// diagnostic rather than the generic one.
+pub const BODY_SHORTHAND_LABEL: &str = "a `body`-style computed member of construct-family type";
 
 /// An `import Module [as Alias]` declaration.
 ///

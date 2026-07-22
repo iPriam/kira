@@ -25,12 +25,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_semantics_model::{FieldDef, StructDef, StructId, Type};
 use kira_source::{SourceId, Span};
-use kira_syntax_model::ast::{CallArg, ConstructDecl, ConstructKind, Item};
+use kira_syntax_model::ast::{BODY_SHORTHAND_LABEL, ConstructDecl, ConstructKind, Item};
 
-use crate::analyze::{Analyzer, FieldDefault, FnCtx};
+use crate::analyze::{Analyzer, FieldDefault};
+
+mod construction;
 
 /// Everything analysis remembers about one construct-backed declaration beyond
 /// its struct shape.
@@ -42,6 +43,27 @@ pub(crate) struct ConstructInfo {
     /// bridge members (`node`), whether declared here or inherited from the
     /// family. A `value.node` read of one lowers to a method call.
     pub(crate) computed: HashSet<String>,
+    /// The child slots this declaration takes, in declaration order: fields
+    /// filled from a construction's trailing children rather than from an
+    /// argument or a default.
+    pub(crate) slots: Vec<ContentSlot>,
+}
+
+/// One child slot of a construct-backed declaration: a field filled by the
+/// bare children of a construction's trailing `{ … }` block.
+#[derive(Debug, Clone)]
+pub(crate) struct ContentSlot {
+    /// The slot field's index in the struct's fields.
+    pub(crate) field_index: u32,
+    /// The slot field's name (its channel name).
+    pub(crate) name: String,
+    /// Whether the slot holds an ordered list (`[some X]`) rather than exactly
+    /// one child (`some X`).
+    pub(crate) list: bool,
+    /// The element type each child must satisfy (`X`).
+    pub(crate) element_ty: Type,
+    /// The slot field's stored type (`X`, or `[X]` for a list slot).
+    pub(crate) field_ty: Type,
 }
 
 /// One family template's conformance surface.
@@ -168,20 +190,31 @@ impl<'a> Analyzer<'a> {
             defaults.push(None);
         }
         let param_count = fields.len();
+        let mut slots: Vec<ContentSlot> = Vec::new();
         for field in &declaration.fields {
             let field_name = self.interner.resolve(field.name).to_owned();
             self.note_duplicate_member(&mut seen, &field_name, field.name_span);
-            let ty = self.resolve_type_ref(field.ty);
+            let field_index = fields.len() as u32;
+            let ty = if field.slot {
+                self.resolve_slot_field(field, field_index, &field_name, families, &mut slots)
+            } else {
+                self.resolve_type_ref(field.ty)
+            };
             fields.push(FieldDef {
                 name: field_name,
                 ty,
                 mutable: false,
             });
-            defaults.push(
+            // A child slot is filled from the trailing children, never from a
+            // default, so a default written on one is meaningless.
+            let default = if field.slot {
+                None
+            } else {
                 field
                     .default
-                    .map(|syntax| FieldDefault::new(syntax, self.source)),
-            );
+                    .map(|syntax| FieldDefault::new(syntax, self.source))
+            };
+            defaults.push(default);
         }
         // Computed and function members share the member namespace; a name that
         // collides with a field is a duplicate.
@@ -257,8 +290,77 @@ impl<'a> Analyzer<'a> {
             ConstructInfo {
                 param_count,
                 computed,
+                slots,
             },
         );
+    }
+
+    /// Resolves a child slot field's stored type and records it as an executable
+    /// [`ContentSlot`] when its element type is concrete.
+    ///
+    /// A slot over a construct **family** (`some Widget`, `[some Widget]`) is
+    /// the heterogeneous case — storing differently-shaped children under one
+    /// family supertype needs the `any Construct` composition the executable
+    /// slice does not cover — so it is refused here and its field is given
+    /// `Error` type, which keeps a later read of the field silent rather than
+    /// cascading. A slot over a concrete type (a `struct`, a `class`, or another
+    /// construct-backed declaration) is a real field and executes.
+    fn resolve_slot_field(
+        &mut self,
+        field: &kira_syntax_model::ast::ConstructField,
+        field_index: u32,
+        field_name: &str,
+        families: &HashMap<String, FamilyInfo>,
+        slots: &mut Vec<ContentSlot>,
+    ) -> Type {
+        let (element_ref, list) = match self.tree.type_ref(field.ty) {
+            kira_syntax_model::ast::TypeRef::Array { element, .. } => (*element, true),
+            _ => (field.ty, false),
+        };
+        if let Some(name) = self.type_ref_head_name(element_ref)
+            && families.contains_key(&name)
+        {
+            self.emit(
+                field.name_span,
+                "KSEM228",
+                format!(
+                    "child slot `{field_name}` holds the construct family `{name}`, whose \
+                     children are differently-shaped; heterogeneous child composition — an \
+                     `Any {name}` that dispatches at run time — is not executable yet, so a slot \
+                     over a concrete type runs and this one is deferred"
+                ),
+            );
+            return Type::Error;
+        }
+        let element_ty = self.resolve_type_ref(element_ref);
+        let field_ty = if list {
+            self.program.types.array_of(element_ty)
+        } else {
+            element_ty
+        };
+        slots.push(ContentSlot {
+            field_index,
+            name: field_name.to_owned(),
+            list,
+            element_ty,
+            field_ty,
+        });
+        field_ty
+    }
+
+    /// The head type name a type reference names (`Widget` for `Widget`,
+    /// `[Widget]`, or `Widget<T>`), when it names one.
+    fn type_ref_head_name(&self, id: kira_syntax_model::ast::TypeRefId) -> Option<String> {
+        match self.tree.type_ref(id) {
+            kira_syntax_model::ast::TypeRef::Named { name, .. }
+            | kira_syntax_model::ast::TypeRef::Generic { name, .. } => {
+                Some(self.interner.resolve(*name).to_owned())
+            }
+            kira_syntax_model::ast::TypeRef::Array { element, .. } => {
+                self.type_ref_head_name(*element)
+            }
+            _ => None,
+        }
     }
 
     /// Registers a backed declaration's methods as callables: every own member
@@ -349,15 +451,33 @@ impl<'a> Analyzer<'a> {
 
     /// Refuses each not-yet-executable construct feature with a precise typed
     /// diagnostic — never silently, never as the generic parse-don't-crash node.
+    ///
+    /// A `body { … }` shorthand is separated out: its value is the construct
+    /// family — the heterogeneous case — so it is the same deferral a
+    /// family-typed child slot is (`KSEM228`), not a structural clause. That
+    /// keeps `KSEM203` for what is genuinely structural (`extends`, `requires`,
+    /// `@Consuming`, an unknown annotation).
     fn refuse_deferred(&mut self, declaration: &ConstructDecl) {
         for deferred in &declaration.deferred {
+            if deferred.label == BODY_SHORTHAND_LABEL {
+                self.emit(
+                    deferred.span,
+                    "KSEM228",
+                    "a `body { … }` member yields a value of the construct family — the \
+                     heterogeneous case; producing one needs the `Any Construct` dynamic \
+                     dispatch that is not executable yet. Write a computed `let node: T { … }` \
+                     bridge over a concrete type, or a concrete `some X` child slot",
+                );
+                continue;
+            }
             self.emit(
                 deferred.span,
                 "KSEM203",
                 format!(
                     "{} is not executable yet in a construct; the executable slice supports \
                      `@Required let`, `let name: T = default`, computed `let node: T {{ … }}` \
-                     bridges, and `function` members",
+                     bridges, `function` members, and `some X` / `[some X]` child slots over a \
+                     concrete type",
                     deferred.label
                 ),
             );
@@ -384,158 +504,5 @@ impl<'a> Analyzer<'a> {
             .get(&id)
             .map(|info| info.param_count)
             .unwrap_or_default()
-    }
-
-    /// Type-checks `Name(args)`: a construct-backed declaration's construction.
-    ///
-    /// The params fill the leading fields — positionally or by parameter name —
-    /// and any remaining field takes its declared default. The result is the
-    /// same [`HirExpr::StructNew`] a struct literal or a class constructor
-    /// produces, so downstream sees a fully initialized struct.
-    pub(crate) fn analyze_construct_new(
-        &mut self,
-        ctx: &mut FnCtx,
-        id: StructId,
-        args: &[CallArg],
-        span: Span,
-    ) -> HirExprId {
-        let name = self.program.types.type_name(Type::Struct(id));
-        let param_count = self.construct_param_count(id);
-        let field_count = self
-            .program
-            .types
-            .structs()
-            .get(id)
-            .map(|def| def.fields.len())
-            .unwrap_or_default();
-        // The param name and type for each of the leading slots.
-        let param_slots: Vec<(String, Type)> = (0..param_count)
-            .filter_map(|slot| {
-                self.program
-                    .types
-                    .structs()
-                    .get(id)
-                    .and_then(|def| def.field(slot as u32))
-                    .map(|field| (field.name.clone(), field.ty))
-            })
-            .collect();
-
-        let mut initializers: Vec<Option<HirExprId>> = vec![None; field_count];
-        let mut next_positional = 0usize;
-        for arg in args {
-            let value = self.analyze_expr(ctx, arg.value);
-            let slot = match arg.label {
-                Some(label) => {
-                    let label = self.interner.resolve(label).to_owned();
-                    match param_slots.iter().position(|(name, _)| *name == label) {
-                        Some(slot) => slot,
-                        None => {
-                            self.emit(
-                                arg.label_span.unwrap_or(span),
-                                "KSEM204",
-                                format!("`{name}` has no construction input named `{label}`"),
-                            );
-                            continue;
-                        }
-                    }
-                }
-                None => {
-                    let slot = next_positional;
-                    next_positional += 1;
-                    if slot >= param_count {
-                        self.emit(
-                            span,
-                            "KSEM205",
-                            format!(
-                                "`{name}` takes {param_count} construction input(s), found more"
-                            ),
-                        );
-                        continue;
-                    }
-                    slot
-                }
-            };
-            if initializers[slot].is_some() {
-                let (field, _) = &param_slots[slot];
-                self.emit(
-                    span,
-                    "KSEM206",
-                    format!("construction input `{field}` of `{name}` is set more than once"),
-                );
-            }
-            let expected = param_slots[slot].1;
-            let actual = self.program.expr(value).type_of();
-            if !actual.assignable_to(expected) {
-                let (field, _) = &param_slots[slot];
-                self.emit(
-                    span,
-                    "KSEM207",
-                    format!(
-                        "construction input `{field}` of `{name}` expects `{}`, found `{}`",
-                        self.type_name(expected),
-                        self.type_name(actual)
-                    ),
-                );
-            }
-            initializers[slot] = Some(value);
-        }
-
-        // Every slot is filled: a param from its argument, and each remaining
-        // slot — an unset param or an own field — from its declared default.
-        let mut slot = 0u32;
-        while (slot as usize) < field_count {
-            let index = slot as usize;
-            slot += 1;
-            if initializers[index].is_some() {
-                continue;
-            }
-            let filled = match self.resolve_field_default(id, index as u32) {
-                Some(default) => default,
-                None => {
-                    let field = self
-                        .program
-                        .types
-                        .structs()
-                        .get(id)
-                        .and_then(|def| def.field(index as u32))
-                        .map(|field| field.name.clone())
-                        .unwrap_or_default();
-                    self.emit(
-                        span,
-                        "KSEM208",
-                        format!("construction of `{name}` is missing input `{field}`"),
-                    );
-                    self.program.exprs.alloc(HirExpr::Error)
-                }
-            };
-            initializers[index] = Some(filled);
-        }
-        let fields: Vec<HirExprId> = initializers
-            .into_iter()
-            .map(|value| value.unwrap_or_else(|| self.program.exprs.alloc(HirExpr::Error)))
-            .collect();
-        self.program.exprs.alloc(HirExpr::StructNew {
-            struct_id: id,
-            fields,
-        })
-    }
-
-    /// Type-checks `value.node`: reading a construct's computed bridge member.
-    ///
-    /// The read runs the member, so it lowers to a call of the zero-argument
-    /// method the member became, with `value` as the receiver.
-    pub(crate) fn analyze_construct_bridge_read(
-        &mut self,
-        ctx: &mut FnCtx,
-        base: HirExprId,
-        id: StructId,
-        member: &str,
-        span: Span,
-    ) -> HirExprId {
-        let method = format!(
-            "{}.{member}",
-            self.program.types.type_name(Type::Struct(id))
-        );
-        self.analyze_user_call_from_syntax(ctx, &method, &[base], &[], span)
     }
 }

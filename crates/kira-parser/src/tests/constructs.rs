@@ -102,7 +102,7 @@ Widget Text(content: Int) {
 }
 
 #[test]
-fn a_content_slot_is_recorded_as_deferred_not_dropped() {
+fn a_content_annotation_parses_as_a_real_child_slot_field() {
     let result = parse_text(
         r#"
 Widget Stack() {
@@ -112,10 +112,68 @@ Widget Stack() {
 "#,
     );
     let declaration = only_construct(&result);
-    assert_eq!(declaration.deferred.len(), 1);
-    assert_eq!(declaration.deferred[0].label, "`@Content` child slot");
+    // `@Content` is the compat spelling of a child slot: a real field, not a
+    // deferred member.
+    assert!(
+        declaration.deferred.is_empty(),
+        "{:?}",
+        declaration.deferred
+    );
+    assert_eq!(declaration.fields.len(), 1);
+    assert!(declaration.fields[0].slot);
+    assert_eq!(
+        result.interner.resolve(declaration.fields[0].name),
+        "children"
+    );
     // The executable computed member still parses beside it.
     assert_eq!(declaration.methods.len(), 1);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn a_some_slot_field_and_a_list_slot_field_parse() {
+    let result = parse_text(
+        r#"
+Widget Wrap() {
+    let inner: some Leaf
+    let items: [some Leaf]
+    let node: Int { 0 }
+}
+"#,
+    );
+    let declaration = only_construct(&result);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(declaration.fields.len(), 2);
+    assert!(declaration.fields[0].slot);
+    assert_eq!(result.interner.resolve(declaration.fields[0].name), "inner");
+    assert!(declaration.fields[1].slot);
+    assert_eq!(result.interner.resolve(declaration.fields[1].name), "items");
+    // The list slot's stored type is the array `[Leaf]`.
+    assert!(matches!(
+        result.tree.type_ref(declaration.fields[1].ty),
+        kira_syntax_model::ast::TypeRef::Array { .. }
+    ));
+}
+
+#[test]
+fn a_body_shorthand_member_parses_and_is_recorded_as_deferred() {
+    let result = parse_text(
+        r#"
+Widget Divider() {
+    body {
+        Rectangle(width = 1.0)
+    }
+}
+"#,
+    );
+    let declaration = only_construct(&result);
+    // `body { … }` parses (no stray-token error) but is deferred: its type is
+    // the construct family, the heterogeneous case.
+    assert_eq!(declaration.deferred.len(), 1);
+    assert_eq!(
+        declaration.deferred[0].label,
+        "a `body`-style computed member of construct-family type"
+    );
 }
 
 #[test]
