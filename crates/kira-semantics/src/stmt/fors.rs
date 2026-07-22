@@ -19,9 +19,9 @@ use crate::analyze::{Analyzer, FnCtx};
 /// One value because the two travel together — the span is where a
 /// go-to-definition jump on a use of the variable lands.
 #[derive(Clone, Copy)]
-pub(super) struct ForCursor {
-    pub(super) name: Symbol,
-    pub(super) span: Span,
+pub(crate) struct ForCursor {
+    pub(crate) name: Symbol,
+    pub(crate) span: Span,
 }
 
 impl Analyzer<'_> {
@@ -173,14 +173,21 @@ impl Analyzer<'_> {
     /// ([`Analyzer::apply_binding_move`] is called from the `let` arm), and
     /// this statement is built here. So `for x in xs { }` leaves `xs` usable
     /// afterwards, which is what a reader expects of a loop that only reads.
-    pub(super) fn analyze_for_each(
+    /// Desugars a `for <name> in <xs>` loop, filling its body via `fill_body`.
+    ///
+    /// The statement form fills the body by analyzing the written block; a
+    /// builder content item fills it by appending each produced child to the
+    /// slot accumulator. Both run inside the loop's scope with the cursor
+    /// variable bound, so the desugar — and the parity it already has — is
+    /// shared rather than duplicated.
+    pub(crate) fn analyze_for_each(
         &mut self,
         ctx: &mut FnCtx,
         cursor_name: ForCursor,
         array: ExprId,
-        body: &Block,
         span: Span,
         out: &mut Vec<HirStmtId>,
+        fill_body: impl FnOnce(&mut Self, &mut FnCtx, &mut Vec<HirStmtId>),
     ) {
         let array_span = self.tree.expr(array).span();
         let array_expr = self.analyze_expr(ctx, array);
@@ -287,7 +294,7 @@ impl Analyzer<'_> {
         let mut loop_body = vec![bind, step];
         ctx.loop_depth += 1;
         ctx.push_scope();
-        self.analyze_stmts(ctx, &body.stmts, &mut loop_body);
+        fill_body(self, ctx, &mut loop_body);
         ctx.pop_scope();
         ctx.loop_depth -= 1;
         ctx.pop_scope();

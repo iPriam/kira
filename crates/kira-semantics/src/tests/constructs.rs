@@ -526,3 +526,129 @@ extend Widget {
         .contains(&"KSEM239")
     );
 }
+
+/// A `For`/`if` builder filling a `[some X]` slot type-checks cleanly.
+#[test]
+fn builder_content_items_check_clean() {
+    assert!(
+        codes(
+            r#"
+construct Widget {
+    @Required let body: Widget
+    function total() -> Int { return body.total() }
+}
+
+Widget Leaf(number: Int) {
+    function total() -> Int { return number }
+}
+
+Widget Group() {
+    let children: [some Widget]
+    function total() -> Int { return 0 }
+}
+
+function counts() -> [Int] {
+    let xs: [Int] = []
+    return xs
+}
+
+@Main function main() {
+    let on = true
+    let g = Group() {
+        Leaf(number = 1)
+        For(n in counts()) {
+            Leaf(number = n)
+        }
+        if on {
+            Leaf(number = 2)
+        }
+    }
+    print(g.total())
+    return
+}
+"#,
+        )
+        .is_empty()
+    );
+}
+
+/// A builder's produced child is still checked against the slot's element type.
+#[test]
+fn a_wrong_typed_builder_child_is_refused() {
+    assert!(
+        codes(
+            r#"
+construct Widget {
+    @Required let body: Widget
+    function total() -> Int { return body.total() }
+}
+
+Widget Leaf(number: Int) {
+    function total() -> Int { return number }
+}
+
+Widget Group() {
+    let children: [some Widget]
+    function total() -> Int { return 0 }
+}
+
+function counts() -> [Int] {
+    let xs: [Int] = []
+    return xs
+}
+
+@Main function main() {
+    let g = Group() {
+        For(n in counts()) {
+            n
+        }
+    }
+    print(g.total())
+    return
+}
+"#,
+        )
+        .contains(&"KSEM232")
+    );
+}
+
+/// A builder cannot fill a single (`some X`) slot, which takes exactly one
+/// child.
+#[test]
+fn a_builder_filling_a_single_slot_is_refused() {
+    assert!(
+        codes(
+            r#"
+construct Widget {
+    @Required let body: Widget
+    function total() -> Int { return body.total() }
+}
+
+Widget Leaf(number: Int) {
+    function total() -> Int { return number }
+}
+
+Widget Wrap() {
+    let child: some Widget
+    function total() -> Int { return child.total() }
+}
+
+function counts() -> [Int] {
+    let xs: [Int] = []
+    return xs
+}
+
+@Main function main() {
+    let w = Wrap() {
+        For(n in counts()) {
+            Leaf(number = n)
+        }
+    }
+    print(w.total())
+    return
+}
+"#,
+        )
+        .contains(&"KSEM242")
+    );
+}

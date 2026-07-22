@@ -315,3 +315,164 @@ extend Widget {
     );
     assert_eq!(output, "110\n15\n111\n");
 }
+
+/// `For`/`if` builder content items — the shape the UI corpus uses — fill a
+/// `[some Widget]` slot at run time. The child array is built by a hoisted
+/// loop/branch, so every backend must produce the same children in the same
+/// order.
+#[test]
+fn builder_content_items_fill_a_slot_on_every_backend() {
+    let output = assert_parity(
+        r#"
+construct Widget {
+    @Required let body: Widget
+    function total() -> Int { return body.total() }
+}
+
+Widget Leaf(number: Int) {
+    function total() -> Int { return number }
+}
+
+Widget Group() {
+    let children: [some Widget]
+    function total() -> Int {
+        var sum = 0
+        for c in children { sum = sum + c.total() }
+        return sum
+    }
+}
+
+function counts() -> [Int] {
+    var xs: [Int] = []
+    xs.append(1)
+    xs.append(2)
+    xs.append(3)
+    return xs
+}
+
+@Main function main() {
+    let big = true
+    let g = Group() {
+        // A bare child, a `For` producing one per element, and an `if`/`else`.
+        Leaf(number = 1000)
+        For(n in counts()) {
+            Leaf(number = n)
+            // A builder nests inside a builder.
+            if n == 2 {
+                Leaf(number = 20)
+            }
+        }
+        if big {
+            Leaf(number = 500)
+        } else {
+            Leaf(number = 9)
+        }
+    }
+    // 1000 + (1 + 2 + 20 + 3) + 500 = 1526
+    print(g.total())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "1526\n");
+}
+
+/// A `For` over an empty iterable contributes no children, and an `if` with no
+/// taken branch contributes none — identically on every backend.
+#[test]
+fn empty_builders_contribute_nothing_on_every_backend() {
+    let output = assert_parity(
+        r#"
+construct Widget {
+    @Required let body: Widget
+    function total() -> Int { return body.total() }
+}
+
+Widget Leaf(number: Int) {
+    function total() -> Int { return number }
+}
+
+Widget Group() {
+    let children: [some Widget]
+    function total() -> Int {
+        var n = 0
+        for c in children { n = n + 1 }
+        return n
+    }
+}
+
+function none() -> [Int] {
+    let xs: [Int] = []
+    return xs
+}
+
+@Main function main() {
+    let off = false
+    let g = Group() {
+        Leaf(number = 1)
+        For(n in none()) {
+            Leaf(number = n)
+        }
+        if off {
+            Leaf(number = 2)
+        }
+    }
+    // Only the one bare child survives.
+    print(g.total())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "1\n");
+}
+
+/// A builder nested through a construction: an outer `For` builds groups, each
+/// holding its own `For`. The inner group's building statements must land
+/// inside the outer loop, not escape it — so every backend agrees.
+#[test]
+fn builders_nested_through_a_construction_agree() {
+    let output = assert_parity(
+        r#"
+construct Widget {
+    @Required let body: Widget
+    function total() -> Int { return body.total() }
+}
+
+Widget Leaf(number: Int) {
+    function total() -> Int { return number }
+}
+
+Widget Group() {
+    let children: [some Widget]
+    function total() -> Int {
+        var sum = 0
+        for c in children { sum = sum + c.total() }
+        return sum
+    }
+}
+
+function pair() -> [Int] {
+    var xs: [Int] = []
+    xs.append(10)
+    xs.append(20)
+    return xs
+}
+
+@Main function main() {
+    let g = Group() {
+        For(base in pair()) {
+            Group() {
+                For(k in pair()) {
+                    Leaf(number = base + k)
+                }
+            }
+        }
+    }
+    // base=10: 20+30 = 50; base=20: 30+40 = 70; total 120.
+    print(g.total())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "120\n");
+}

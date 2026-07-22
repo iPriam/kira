@@ -205,6 +205,24 @@ impl<'a> Analyzer<'a> {
             Expr::DotMember {
                 args: Some(args), ..
             } => args.iter().any(|&arg| self.expr_mutates_self(arg, owner)),
+            Expr::ContentFor { iterable, body, .. } => {
+                self.expr_mutates_self(*iterable, owner)
+                    || body.iter().any(|&item| self.expr_mutates_self(item, owner))
+            }
+            Expr::ContentIf {
+                cond,
+                then_body,
+                else_body,
+                ..
+            } => {
+                self.expr_mutates_self(*cond, owner)
+                    || then_body
+                        .iter()
+                        .any(|&item| self.expr_mutates_self(item, owner))
+                    || else_body
+                        .iter()
+                        .any(|&item| self.expr_mutates_self(item, owner))
+            }
             // A closure captures `self` by value, so a mutation inside its body
             // never reaches the enclosing method's receiver — it is not scanned.
             Expr::Closure { .. }

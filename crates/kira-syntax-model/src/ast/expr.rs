@@ -220,6 +220,43 @@ pub enum Expr {
         /// Span covering the braces and their contents.
         span: Span,
     },
+    /// A `For` builder item inside a construction's content block:
+    /// `For(x in xs) { child … }`.
+    ///
+    /// Not an expression anywhere else — it appears only among the
+    /// [`children`](Expr::Call::children) of a construction, where it expands to
+    /// one child per iteration. Its body is itself a list of content items, so a
+    /// builder may nest.
+    ContentFor {
+        /// The loop variable's name.
+        binding: Symbol,
+        /// Span of the loop variable's name.
+        binding_span: Span,
+        /// The iterated value — an array or a `a..b` range.
+        iterable: ExprId,
+        /// The content items produced each iteration, in order.
+        body: Vec<ExprId>,
+        /// Span covering the whole `For( … ) { … }`.
+        span: Span,
+    },
+    /// An `if` builder item inside a construction's content block:
+    /// `if cond { child … } else if cond { … } else { … }`.
+    ///
+    /// Like [`ContentFor`](Expr::ContentFor), it appears only among a
+    /// construction's [`children`](Expr::Call::children): the taken branch's
+    /// items are produced and the others contribute nothing. An `else if` chain
+    /// nests as a single-item `else` branch holding another `ContentIf`.
+    ContentIf {
+        /// The `Bool` condition.
+        cond: ExprId,
+        /// The content items produced when the condition holds.
+        then_body: Vec<ExprId>,
+        /// The content items produced otherwise; empty when no `else` was
+        /// written.
+        else_body: Vec<ExprId>,
+        /// Span covering the whole `if … { … }`.
+        span: Span,
+    },
     /// An expression the parser could not parse; recovery inserts this.
     Error {
         /// Span of the malformed expression.
@@ -300,6 +337,8 @@ impl Expr {
             | Expr::Try { span, .. }
             | Expr::Ownership { span, .. }
             | Expr::Closure { span, .. }
+            | Expr::ContentFor { span, .. }
+            | Expr::ContentIf { span, .. }
             | Expr::Error { span } => *span,
         }
     }
