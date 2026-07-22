@@ -137,27 +137,25 @@ Family Thing(value: Int) {
 }
 
 #[test]
-fn a_concrete_content_slot_over_a_family_type_is_refused() {
-    // A child slot whose element type is a construct *family* is the
-    // heterogeneous case (`Any Family`), refused with KSEM228 — not KSEM203.
-    assert_eq!(
+fn a_content_slot_over_a_family_type_is_an_executable_heterogeneous_field() {
+    assert!(
         library_codes(
             r#"
 construct Family {
-    let node: Int { 0 }
+    function value() -> Int { return 0 }
 }
 
-Family Leaf() {
-    let node: Int { 0 }
+Family Leaf(number: Int) {
+    function value() -> Int { return number }
 }
 
 Family Stack() {
     @Content let children: [Family]
-    let node: Int { 0 }
+    function value() -> Int { return children.count }
 }
 "#,
-        ),
-        vec!["KSEM228"]
+        )
+        .is_empty()
     );
 }
 
@@ -362,26 +360,39 @@ construct Derived extends Base {
     );
 }
 
-/// A `body { … }` shorthand yields a construct-family value — the heterogeneous
-/// case — so it is refused as `KSEM228` (`Any Construct` composition), not the
-/// structural `KSEM203`.
+/// A `body { … }` shorthand returns the heterogeneous family value, and the
+/// inherited family method dispatches through it.
 #[test]
-fn a_body_shorthand_is_refused_as_heterogeneous_composition() {
-    assert_eq!(
-        library_codes(
+fn a_body_shorthand_and_family_dispatch_check_cleanly() {
+    assert!(
+        codes(
             r#"
-construct Family {
-    let node: Int { 0 }
-}
-
-Family Divider() {
-    body {
-        Rectangle(width = 1.0)
+construct Widget {
+    @Required let body: Widget
+    function value() -> Int {
+        return body.value()
     }
 }
+
+Widget Leaf(number: Int) {
+    function value() -> Int {
+        return number
+    }
+}
+
+Widget Wrapper() {
+    body {
+        Leaf(number = 7)
+    }
+}
+
+@Main function main() {
+    print(Wrapper().value())
+    return
+}
 "#,
-        ),
-        vec!["KSEM228"]
+        )
+        .is_empty()
     );
 }
 

@@ -88,9 +88,13 @@ pub(crate) struct Runtime {
     pub(super) array_clone: Callable,
     pub(super) array_free: Callable,
     pub(super) enum_new: Callable,
+    /// Boxes a moved struct payload with type-specific clone/free leaves.
+    pub(super) enum_new_aggregate: Callable,
     pub(super) enum_tag: Callable,
     /// Reads an enum's payload as an owned word (`match` arm bindings).
     pub(super) enum_payload: Callable,
+    /// Reads an aggregate payload into caller-owned storage.
+    pub(super) enum_payload_aggregate: Callable,
     pub(super) enum_clone: Callable,
     pub(super) enum_free: Callable,
     /// Allocates the storage one exported class instance lives in when it
@@ -220,11 +224,22 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             enum_new: declare(
                 c"kira_rt_enum_new",
                 types.ptr,
-                // (tag, owns_str, payload)
+                // (tag, payload_kind, payload)
                 &mut [types.i64, types.i64, types.i64],
+            ),
+            enum_new_aggregate: declare(
+                c"kira_rt_enum_new_aggregate",
+                types.ptr,
+                // (tag, source, size, clone, free)
+                &mut [types.i64, types.ptr, types.i64, types.ptr, types.ptr],
             ),
             enum_tag: declare(c"kira_rt_enum_tag", types.i64, &mut [types.ptr]),
             enum_payload: declare(c"kira_rt_enum_payload", types.i64, &mut [types.ptr]),
+            enum_payload_aggregate: declare(
+                c"kira_rt_enum_payload_aggregate",
+                types.void,
+                &mut [types.ptr, types.ptr],
+            ),
             enum_clone: declare(c"kira_rt_enum_clone", types.ptr, &mut [types.ptr]),
             enum_free: declare(c"kira_rt_enum_free", types.void, &mut [types.ptr]),
             // The box helpers hold an exported class instance for as long as a

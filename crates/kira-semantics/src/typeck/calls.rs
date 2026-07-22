@@ -154,6 +154,19 @@ impl Analyzer<'_> {
             let values = Self::argument_values(args);
             return self.analyze_array_method(ctx, receiver, &name, method_span, &values);
         }
+        if let Type::Enum(family_id) = receiver_ty
+            && self.is_construct_family_type(family_id)
+        {
+            let name = self.interner.resolve(method).to_owned();
+            return self.analyze_construct_family_call(
+                ctx,
+                receiver_hir,
+                family_id,
+                &name,
+                args,
+                method_span,
+            );
+        }
 
         // An error receiver already spoke; do not pile on.
         if receiver_ty == Type::Error {

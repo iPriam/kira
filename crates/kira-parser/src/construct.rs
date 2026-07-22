@@ -65,7 +65,7 @@ impl Parser<'_> {
             deferred,
             ..ConstructBody::default()
         };
-        self.parse_construct_body(&mut body);
+        self.parse_construct_body(&mut body, None);
         let span = Span::from_bounds(start.start, self.previous_end());
         Some(ConstructDecl {
             kind: ConstructKind::Family,
@@ -94,7 +94,7 @@ impl Parser<'_> {
             Vec::new()
         };
         let mut body = ConstructBody::default();
-        self.parse_construct_body(&mut body);
+        self.parse_construct_body(&mut body, Some((family, family_span)));
         let span = Span::from_bounds(start.start, self.previous_end());
         Some(ConstructDecl {
             kind: ConstructKind::Backed {
@@ -148,7 +148,11 @@ impl Parser<'_> {
     }
 
     /// Parses the braced member body shared by both construct forms.
-    fn parse_construct_body(&mut self, body: &mut ConstructBody) {
+    fn parse_construct_body(
+        &mut self,
+        body: &mut ConstructBody,
+        backing_family: Option<(Symbol, Span)>,
+    ) {
         if !self.expect(TokenKind::LBrace) {
             return;
         }
@@ -158,7 +162,7 @@ impl Parser<'_> {
             if self.at(TokenKind::RBrace) || self.at_eof() {
                 break;
             }
-            self.parse_construct_member(body);
+            self.parse_construct_member(body, backing_family);
             while self.eat(TokenKind::Semicolon) {}
             if self.pos == before {
                 self.bump();
@@ -168,7 +172,11 @@ impl Parser<'_> {
     }
 
     /// Parses one construct member.
-    fn parse_construct_member(&mut self, body: &mut ConstructBody) {
+    fn parse_construct_member(
+        &mut self,
+        body: &mut ConstructBody,
+        backing_family: Option<(Symbol, Span)>,
+    ) {
         match self.current_kind() {
             TokenKind::At => self.parse_annotated_construct_member(body),
             TokenKind::Let => self.parse_construct_let(body, false),
@@ -191,21 +199,36 @@ impl Parser<'_> {
                 }
             }
             // `body { child … }` — the SwiftUI-style shorthand for a computed
-            // member that yields the widget's `body`. It parses (so it is not a
-            // stray-token error), but its type is the construct *family* — a
-            // heterogeneous supertype — so it is recorded as deferred: producing
-            // a family-typed value needs the `Any Construct` composition the
-            // executable slice does not cover. `some X` / `[some X]` concrete
-            // slots are what execute.
+            // member whose result type is the declaration's construct family.
+            // A backed declaration has that family in its header, so the shorthand
+            // becomes the same zero-argument computed method as an explicit
+            // `let body: Widget { … }` member.
             TokenKind::Identifier if self.peek(1).kind == TokenKind::LBrace => {
                 let start = self.current().span;
+                let name_span = start;
+                let name = self.intern_span(name_span);
                 self.bump(); // member name
-                self.parse_block(); // consume the body block, balanced
+                let block = self.parse_block();
                 let span = Span::from_bounds(start.start, self.previous_end());
-                body.deferred.push(DeferredConstruct {
-                    label: kira_syntax_model::ast::BODY_SHORTHAND_LABEL,
-                    span,
-                });
+                match backing_family {
+                    Some((family, family_span)) => {
+                        self.make_block_return_its_tail(&block);
+                        let ty = self.tree.add_type(TypeRef::Named {
+                            name: family,
+                            span: family_span,
+                        });
+                        body.methods.push(ConstructMethod {
+                            computed: true,
+                            function: Self::computed_member_function(
+                                name, name_span, ty, block, span,
+                            ),
+                        });
+                    }
+                    None => body.deferred.push(DeferredConstruct {
+                        label: "a `body` shorthand on a construct family template",
+                        span,
+                    }),
+                }
             }
             kind => {
                 let span = self.current().span;
@@ -298,8 +321,22 @@ impl Parser<'_> {
                 }
             }
             "Consuming" => {
-                let label = "`@Consuming` method";
-                self.consume_deferred_member(body, at_span, label);
+                if self.at(TokenKind::Function) {
+                    if let Some(function) = self.parse_function(false, Execution::Inherited, false)
+                    {
+                        body.methods.push(ConstructMethod {
+                            computed: false,
+                            function,
+                        });
+                    }
+                } else {
+                    self.error(
+                        self.current().span,
+                        "KPAR064",
+                        "`@Consuming` annotates a `function` member",
+                    );
+                    self.consume_deferred_member(body, at_span, "malformed `@Consuming` member");
+                }
             }
             other => {
                 self.error(

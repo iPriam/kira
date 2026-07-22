@@ -92,8 +92,7 @@ impl Codegen<'_> {
             let enum_tag = self.const_i32(index as u32);
             let node = match payload {
                 Some(payload_ty) => {
-                    let word = self.call(self.runtime.enum_payload, &mut [value], c"enum.payload");
-                    let payload = self.decode_payload_word(payload_ty, word)?;
+                    let payload = self.read_runtime_enum_payload(value, payload_ty)?;
                     let child = self.encode_native_state_value(payload, payload_ty)?;
                     let node = self.aggregate_node_dynamic(NativeStateValueTag::ENUM, enum_tag, 1);
                     self.set_native_child(node, 0, child);
@@ -153,7 +152,8 @@ impl Codegen<'_> {
             unsafe { LLVMAddCase(switch, self.const_int(index as i64), block) };
             // SAFETY: position at this fresh block.
             unsafe { LLVMPositionBuilderAtEnd(self.builder, block) };
-            let (kind, word) = match payload {
+            let tag = self.const_int(index as i64);
+            let boxed = match payload {
                 Some(payload_ty) => {
                     let child = self.call(
                         self.runtime.native_value_child,
@@ -161,15 +161,14 @@ impl Codegen<'_> {
                         c"native.enum.payload",
                     );
                     let payload = self.decode_native_state_value(child, payload_ty)?;
-                    self.encode_payload_word(payload_ty, payload)?
+                    self.box_runtime_enum_payload(tag, payload_ty, payload)?
                 }
-                None => (self.const_int(0), self.const_int(0)),
+                None => self.call(
+                    self.runtime.enum_new,
+                    &mut [tag, self.const_int(0), self.const_int(0)],
+                    c"enum",
+                ),
             };
-            let boxed = self.call(
-                self.runtime.enum_new,
-                &mut [self.const_int(index as i64), kind, word],
-                c"enum",
-            );
             self.call(self.runtime.native_value_free, &mut [node], c"");
             // SAFETY: this case is unterminated and joins merge.
             unsafe { LLVMBuildBr(self.builder, merge) };
@@ -185,6 +184,61 @@ impl Codegen<'_> {
         // SAFETY: phi is the helper's pointer result.
         unsafe { LLVMBuildRet(self.builder, phi) };
         Ok(())
+    }
+
+    fn read_runtime_enum_payload(
+        &mut self,
+        value: LLVMValueRef,
+        ty: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        if matches!(ty, Type::Struct(_)) {
+            let llvm_type = self.llvm_type(ty)?;
+            // SAFETY: `llvm_type` belongs to this context and the runtime writes
+            // one owned aggregate value into this slot.
+            let out = unsafe {
+                LLVMBuildAlloca(self.builder, llvm_type, c"enum.aggregate.payload".as_ptr())
+            };
+            self.call(self.runtime.enum_payload_aggregate, &mut [value, out], c"");
+            // SAFETY: the helper initialized `out` as `llvm_type`.
+            return Ok(unsafe {
+                LLVMBuildLoad2(
+                    self.builder,
+                    llvm_type,
+                    out,
+                    c"enum.aggregate.value".as_ptr(),
+                )
+            });
+        }
+        let word = self.call(self.runtime.enum_payload, &mut [value], c"enum.payload");
+        self.decode_payload_word(ty, word)
+    }
+
+    fn box_runtime_enum_payload(
+        &mut self,
+        tag: LLVMValueRef,
+        ty: Type,
+        value: LLVMValueRef,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        if matches!(ty, Type::Struct(_)) {
+            let llvm_type = self.llvm_type(ty)?;
+            // SAFETY: the slot belongs to this context and `value` has its type.
+            let source = unsafe {
+                let source =
+                    LLVMBuildAlloca(self.builder, llvm_type, c"enum.aggregate.source".as_ptr());
+                LLVMBuildStore(self.builder, value, source);
+                source
+            };
+            let size = self.abi_size(ty)?;
+            let clone = self.element_clone(ty)?;
+            let free = self.element_free(ty)?;
+            return Ok(self.call(
+                self.runtime.enum_new_aggregate,
+                &mut [tag, source, size, clone, free],
+                c"enum.aggregate",
+            ));
+        }
+        let (kind, word) = self.encode_payload_word(ty, value)?;
+        Ok(self.call(self.runtime.enum_new, &mut [tag, kind, word], c"enum"))
     }
 
     fn decode_payload_word(

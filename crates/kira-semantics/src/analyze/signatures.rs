@@ -125,7 +125,10 @@ impl<'a> Analyzer<'a> {
     /// following the oracle's own precedent for a reserved-but-unimplemented
     /// mode (`copy` of a non-trivial value is `KSEM116` there for exactly this
     /// reason). `KSEM112` is the free code in the ownership band.
-    fn check_param_ownership(&mut self, param: &kira_syntax_model::ast::Param) -> OwnershipMode {
+    pub(crate) fn check_param_ownership(
+        &mut self,
+        param: &kira_syntax_model::ast::Param,
+    ) -> OwnershipMode {
         if param.ownership == OwnershipMode::BorrowMut {
             let span = param.ownership_span.unwrap_or(param.span);
             self.emit(

@@ -160,3 +160,58 @@ function main() {
     );
     assert_eq!(output, "36\n60\n");
 }
+
+/// Differently-shaped concrete widgets upcast into `Any Widget`, survive a
+/// heterogeneous child array, and dispatch family methods identically on every
+/// backend.
+#[test]
+fn heterogeneous_family_values_dispatch_on_every_backend() {
+    let output = assert_parity(
+        r#"
+construct Widget {
+    @Required let body: Widget
+    function value() -> Int {
+        return body.value()
+    }
+}
+
+Widget Leaf(number: Int) {
+    function value() -> Int {
+        return number
+    }
+}
+
+Widget Double(number: Int) {
+    body {
+        Leaf(number = number * 2)
+    }
+}
+
+Widget Sum() {
+    @Content let children: [Widget]
+    function value() -> Int {
+        var total = 0
+        for index in 0..children.count {
+            total = total + children[index].value()
+        }
+        return total
+    }
+}
+
+function read(widget: Any Widget) -> Int {
+    return widget.value()
+}
+
+@Main function main() {
+    let tree: Widget = Sum() {
+        Leaf(number = 2)
+        Double(number = 3)
+    }
+    print(tree.value())
+    print(read(Leaf(number = 5)))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "8\n5\n");
+}

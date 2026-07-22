@@ -134,13 +134,6 @@ pub struct DeferredConstruct {
     pub span: Span,
 }
 
-/// The [`DeferredConstruct::label`] a `body { … }` shorthand member carries.
-///
-/// Shared so semantics can tell this deferral — a value of the construct family,
-/// the heterogeneous case — apart from a structural clause and give it its own
-/// diagnostic rather than the generic one.
-pub const BODY_SHORTHAND_LABEL: &str = "a `body`-style computed member of construct-family type";
-
 /// An `import Module [as Alias]` declaration.
 ///
 /// Imports are **file-scoped**: an import written in one file says nothing
@@ -560,6 +553,19 @@ pub enum TypeRef {
         /// Where the type name appears.
         span: Span,
     },
+    /// A construct-qualified heterogeneous type: `Any Widget`.
+    ///
+    /// The family stays separate from ordinary nominal types in syntax so
+    /// semantics can reject `Any` applied to a struct, class, alias, or builtin
+    /// instead of silently treating the qualifier as decoration.
+    AnyConstruct {
+        /// The construct family's name, including any module qualifier.
+        family: Symbol,
+        /// Span of the family name alone, for definition links and diagnostics.
+        family_span: Span,
+        /// Span covering `Any` through the family name.
+        span: Span,
+    },
     /// A generic instantiation: `Result<Int, AppError>`.
     ///
     /// Written only where a generic declaration is in scope. Semantics
@@ -613,6 +619,7 @@ impl TypeRef {
     pub fn span(&self) -> Span {
         match self {
             TypeRef::Named { span, .. }
+            | TypeRef::AnyConstruct { span, .. }
             | TypeRef::Generic { span, .. }
             | TypeRef::Array { span, .. }
             | TypeRef::Function { span, .. }

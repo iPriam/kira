@@ -51,6 +51,9 @@ fn only_struct(result: &ParseResult) -> &kira_syntax_model::ast::StructDecl {
 fn type_spelling(result: &ParseResult, id: TypeRefId) -> String {
     match result.tree.type_ref(id) {
         TypeRef::Named { name, .. } => result.interner.resolve(*name).to_owned(),
+        TypeRef::AnyConstruct { family, .. } => {
+            format!("Any {}", result.interner.resolve(*family))
+        }
         TypeRef::Generic { name, args, .. } => {
             let written: Vec<String> = args.iter().map(|&arg| type_spelling(result, arg)).collect();
             format!("{}<{}>", result.interner.resolve(*name), written.join(", "))

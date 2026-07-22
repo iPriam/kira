@@ -276,7 +276,7 @@ impl Analyzer<'_> {
     /// struct that would contain itself by value is broken to `Error` and
     /// reported (`KSEM052`), and an enum payload of the enum's own type is
     /// `KSEM050`.
-    fn default_value(&mut self, ty: Type) -> HirExprId {
+    pub(crate) fn default_value(&mut self, ty: Type) -> HirExprId {
         let node = match ty {
             Type::Float(_) => HirExpr::Float(0.0),
             Type::Bool => HirExpr::Bool(false),
