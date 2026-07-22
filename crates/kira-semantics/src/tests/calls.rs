@@ -119,3 +119,95 @@ fn a_label_on_the_print_builtin_is_refused() {
         vec!["KSEM191"]
     );
 }
+
+// ----- parameter defaults ------------------------------------------------
+
+#[test]
+fn a_positional_call_may_omit_a_trailing_defaulted_argument() {
+    // `add(1)` fills `step` from its default, so the call type-checks with no
+    // arity error.
+    assert!(
+        diagnostics(
+            "function add(base: Int, step: Int = 3) -> Int { return base + step }\n\
+             @Main function main() { print(add(1)) return }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_positional_call_may_still_pass_a_defaulted_argument() {
+    assert!(
+        diagnostics(
+            "function add(base: Int, step: Int = 3) -> Int { return base + step }\n\
+             @Main function main() { print(add(1, 5)) return }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_labeled_call_may_omit_a_defaulted_argument() {
+    // The omitted `step` is filled from its default rather than earning the
+    // missing-argument refusal a default-less parameter would.
+    assert!(
+        diagnostics(
+            "function add(base: Int, step: Int = 3) -> Int { return base + step }\n\
+             @Main function main() { print(add(base: 1)) return }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_default_still_type_checks_a_passed_argument() {
+    // Supplying the wrong type for a defaulted parameter is still a type error.
+    assert!(
+        codes(
+            "function add(base: Int, step: Int = 3) -> Int { return base + step }\n\
+             @Main function main() { print(add(1, true)) return }"
+        )
+        .contains(&"KSEM063")
+    );
+}
+
+#[test]
+fn a_default_less_missing_argument_is_still_an_arity_error() {
+    // Only the defaulted trailing parameter may be omitted; a bare `add(1)`
+    // against two default-less parameters is still KSEM062.
+    assert!(
+        codes(
+            "function add(base: Int, step: Int) -> Int { return base + step }\n\
+             @Main function main() { print(add(1)) return }"
+        )
+        .contains(&"KSEM062")
+    );
+}
+
+#[test]
+fn a_default_may_call_a_helper_in_its_declaring_file() {
+    // The default resolves in the declaring module's scope, so it may name a
+    // sibling function.
+    assert!(
+        diagnostics(
+            "function base() -> Int { return 7 }\n\
+             function add(x: Int, y: Int = base()) -> Int { return x + y }\n\
+             @Main function main() { print(add(1)) return }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn parameter_defaults_that_fill_each_other_are_refused() {
+    // `f`'s default calls `g` omitting its argument, whose default calls `f`
+    // omitting its argument: the cycle has no finite value.
+    assert!(
+        codes(
+            "function g(a: Int = f()) -> Int { return a }\n\
+             function f(b: Int = g()) -> Int { return b }\n\
+             @Main function main() { print(f()) return }"
+        )
+        .contains(&"KSEM240")
+    );
+}

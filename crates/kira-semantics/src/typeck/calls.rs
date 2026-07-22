@@ -508,17 +508,27 @@ impl Analyzer<'_> {
         // ownership and type checks below see the same positional list an
         // unlabeled call produces.
         let param_names = self.param_names(id);
-        let positional = self.bind_call_arguments(args, leading.len(), &param_names, name, span);
+        // Which written (non-receiver) slots carry a default, so a labeled call
+        // may omit one without a missing-argument diagnostic.
+        let has_default: Vec<bool> = (leading.len()..params.len())
+            .map(|slot| self.param_default(id, slot).is_some())
+            .collect();
+        let positional =
+            self.bind_call_arguments(args, leading.len(), &param_names, &has_default, name, span);
         let ownership = self.param_ownership(id);
         let mut all = leading.to_vec();
         for (index, slot_value) in positional.into_iter().enumerate() {
             let slot = index + leading.len();
-            // A labeled call that named no argument for this parameter left it
-            // empty; the missing-argument diagnostic already spoke, so stand in
+            // A slot no argument filled takes its parameter's default, when one
+            // was declared; otherwise the missing-argument diagnostic already
+            // spoke (labeled) or the arity check will (positional), so stand in
             // with an error value that keeps the arity honest and cascades no
             // further.
             let Some(arg) = slot_value else {
-                all.push(self.program.exprs.alloc(HirExpr::Error));
+                let filled = self
+                    .resolve_param_default(id, slot)
+                    .unwrap_or_else(|| self.program.exprs.alloc(HirExpr::Error));
+                all.push(filled);
                 continue;
             };
             // An arity mismatch leaves some argument with no parameter to
@@ -530,6 +540,15 @@ impl Analyzer<'_> {
                     all.push(self.analyze_call_argument(ctx, arg, expected, mode, name));
                 }
                 _ => all.push(self.analyze_expr(ctx, arg)),
+            }
+        }
+        // A positional call that omitted trailing arguments fills them from
+        // their defaults, left to right, stopping at the first parameter that
+        // declares none — a genuine shortfall the arity check then reports.
+        while all.len() < params.len() {
+            match self.resolve_param_default(id, all.len()) {
+                Some(default) => all.push(default),
+                None => break,
             }
         }
         self.analyze_user_call(name, &all, span)

@@ -2,9 +2,10 @@
 
 use std::collections::HashSet;
 
+use kira_semantics_model::hir::HirExprId;
 use kira_semantics_model::{EnumDef, FieldDef, StructDef, StructId, Type, VariantDef};
 use kira_source::{SourceId, Span};
-use kira_syntax_model::ast::{ConstructDecl, ConstructKind, Item};
+use kira_syntax_model::ast::{ConstructDecl, ConstructKind, Function, Item};
 
 use super::{
     ConstructFamilyInfo, ConstructFamilyMethod, ConstructInfo, ConstructVariant, ContentSlot,
@@ -72,6 +73,7 @@ impl<'a> Analyzer<'a> {
                         result: Type::Error,
                         uniform: false,
                         dispatcher: None,
+                        defaults: Vec::new(),
                     },
                 );
             }
@@ -343,6 +345,56 @@ impl<'a> Analyzer<'a> {
                 method.param_names = param_names;
                 method.ownership = ownership;
                 method.result = result;
+            }
+        }
+    }
+
+    /// Resolves every construct-family method's parameter defaults once, each in
+    /// its declaring file.
+    ///
+    /// A family method (a per-variant method or a uniform `extend` modifier)
+    /// carries no [`kira_semantics_model::hir::FuncId`] signature row, so its
+    /// defaults cannot ride [`Analyzer::resolve_param_defaults`]. They are
+    /// resolved here the same way — after signatures exist, in an empty scope,
+    /// against each parameter's declared type — and reused by every call on a
+    /// family value that omits the argument.
+    pub(crate) fn resolve_construct_method_defaults(&mut self) {
+        let rows: Vec<(String, String, SourceId, &'a Function, Vec<Type>)> = self
+            .construct_families
+            .iter()
+            .flat_map(|(family, info)| {
+                info.methods.iter().map(move |(name, method)| {
+                    (
+                        family.clone(),
+                        name.clone(),
+                        method.source,
+                        method.function,
+                        method.params.clone(),
+                    )
+                })
+            })
+            .collect();
+        for (family, name, source, function, params) in rows {
+            if function.params.iter().all(|param| param.default.is_none()) {
+                continue;
+            }
+            self.source = source;
+            let defaults: Vec<Option<HirExprId>> = function
+                .params
+                .iter()
+                .enumerate()
+                .map(|(index, param)| {
+                    param
+                        .default
+                        .map(|syntax| self.analyze_default(syntax, params.get(index).copied()))
+                })
+                .collect();
+            if let Some(method) = self
+                .construct_families
+                .get_mut(&family)
+                .and_then(|info| info.methods.get_mut(&name))
+            {
+                method.defaults = defaults;
             }
         }
     }

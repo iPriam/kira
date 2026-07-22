@@ -329,6 +329,34 @@ Two edges are deliberate:
   exactly what the checker guarantees — so the whole subsystem is a static
   check. See [.codex/work/ownership.md](.codex/work/ownership.md).
 
+## Parameter defaults
+
+A parameter may declare a default with `=`, and a call may then omit its
+argument:
+
+```kira
+function step(base: Int, by: Int = 1, tag: Int = 100) -> Int {
+    return base + by + tag
+}
+
+print(step(1))              // 102 — both defaults filled
+print(step(1, 5))           // 106 — one default filled
+print(step(base: 1, tag: 9)) // 11 — a labeled call omits the middle default
+```
+
+A positional call fills omitted **trailing** arguments; a labeled call may omit
+any defaulted parameter, middle ones included. Every call path fills the same
+way — a free function, a method, and a construct-family modifier alike. A
+parameter with no default is still mandatory: omitting it is `KSEM062`, exactly
+as before.
+
+The default is resolved **once**, in the file the function was declared in — so
+it may name that file's helpers regardless of where the call is written — and
+the resulting value is reused at every call that omits the argument, mirroring a
+struct field default. Two defaults that fill each other through the call graph
+(`f(x = g())` where `g(y = f())`) have no finite value and are refused with
+`KSEM240`.
+
 ## Loops
 
 `while` tests before each iteration. `for` walks a **half-open** integer range:

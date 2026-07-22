@@ -82,6 +82,7 @@ impl<'a> Analyzer<'a> {
                     result: Type::Error,
                     uniform: true,
                     dispatcher: None,
+                    defaults: Vec::new(),
                 },
             );
         }
