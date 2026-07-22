@@ -156,7 +156,7 @@ Widget Wrap() {
 }
 
 #[test]
-fn a_body_shorthand_member_parses_and_is_recorded_as_deferred() {
+fn a_body_shorthand_member_becomes_a_computed_family_typed_method() {
     let result = parse_text(
         r#"
 Widget Divider() {
@@ -167,13 +167,59 @@ Widget Divider() {
 "#,
     );
     let declaration = only_construct(&result);
-    // `body { … }` parses (no stray-token error) but is deferred: its type is
-    // the construct family, the heterogeneous case.
-    assert_eq!(declaration.deferred.len(), 1);
-    assert_eq!(
-        declaration.deferred[0].label,
-        "a `body`-style computed member of construct-family type"
+    assert!(declaration.deferred.is_empty());
+    assert_eq!(declaration.methods.len(), 1);
+    let method = &declaration.methods[0];
+    assert!(method.computed);
+    assert_eq!(result.interner.resolve(method.function.name), "body");
+    let Some(return_type) = method.function.return_type else {
+        panic!("body shorthand needs its family result type");
+    };
+    assert!(matches!(
+        result.tree.type_ref(return_type),
+        kira_syntax_model::ast::TypeRef::Named { name, .. }
+            if result.interner.resolve(*name) == "Widget"
+    ));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn a_consuming_function_member_parses_as_an_executable_method() {
+    let result = parse_text(
+        r#"
+construct Widget {
+    @Consuming
+    function lower(context: Int) -> Int {
+        return context
+    }
+}
+"#,
     );
+    let declaration = only_construct(&result);
+    assert!(declaration.deferred.is_empty());
+    assert_eq!(declaration.methods.len(), 1);
+    assert!(!declaration.methods[0].computed);
+    assert_eq!(
+        result
+            .interner
+            .resolve(declaration.methods[0].function.name),
+        "lower"
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn an_any_construct_type_keeps_its_family_qualifier() {
+    let result = parse_text("struct Holder { let value: Any UI.Widget }");
+    let [Item::Struct(declaration)] = result.tree.items() else {
+        panic!("expected one struct");
+    };
+    assert!(matches!(
+        result.tree.type_ref(declaration.fields[0].ty),
+        kira_syntax_model::ast::TypeRef::AnyConstruct { family, .. }
+            if result.interner.resolve(*family) == "UI.Widget"
+    ));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
 }
 
 #[test]

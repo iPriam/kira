@@ -326,18 +326,56 @@ impl FunctionLowering<'_, '_> {
         payload: Option<IrExprId>,
     ) -> Result<LLVMValueRef, LlvmError> {
         let tag_value = self.codegen.const_int(i64::from(tag));
-        let (owns_str, payload_word) = match payload {
-            None => (self.codegen.const_int(0), self.codegen.const_int(0)),
-            Some(payload) => {
-                let payload_ty = self.codegen.enum_payload_type(enum_id, tag)?;
-                let value = self.lower_expr(payload)?;
-                self.encode_enum_payload(payload_ty, value)?
-            }
+        let Some(payload) = payload else {
+            return Ok(self.call(
+                self.codegen.runtime.enum_new,
+                &mut [
+                    tag_value,
+                    self.codegen.const_int(0),
+                    self.codegen.const_int(0),
+                ],
+                c"enum",
+            ));
         };
+        let payload_ty = self.codegen.enum_payload_type(enum_id, tag)?;
+        let value = self.lower_expr(payload)?;
+        if matches!(payload_ty, Type::Struct(_)) {
+            return self.lower_enum_aggregate_new(tag_value, payload_ty, value);
+        }
+        let (kind, payload_word) = self.encode_enum_payload(payload_ty, value)?;
         Ok(self.call(
             self.codegen.runtime.enum_new,
-            &mut [tag_value, owns_str, payload_word],
+            &mut [tag_value, kind, payload_word],
             c"enum",
+        ))
+    }
+
+    /// Moves a struct payload into the runtime's erased aggregate box.
+    fn lower_enum_aggregate_new(
+        &mut self,
+        tag: LLVMValueRef,
+        ty: Type,
+        value: LLVMValueRef,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let llvm_type = self.codegen.llvm_type(ty)?;
+        // SAFETY: `llvm_type` belongs to this context, `value` has that type, and
+        // the builder is positioned on a live block.
+        let slot = unsafe {
+            let slot = LLVMBuildAlloca(
+                self.codegen.builder,
+                llvm_type,
+                c"enum.aggregate.source".as_ptr(),
+            );
+            LLVMBuildStore(self.codegen.builder, value, slot);
+            slot
+        };
+        let size = self.codegen.abi_size(ty)?;
+        let clone = self.codegen.element_clone(ty)?;
+        let free = self.codegen.element_free(ty)?;
+        Ok(self.call(
+            self.codegen.runtime.enum_new_aggregate,
+            &mut [tag, slot, size, clone, free],
+            c"enum.aggregate",
         ))
     }
 
@@ -402,12 +440,39 @@ impl FunctionLowering<'_, '_> {
     fn lower_enum_payload(&mut self, value: IrExprId, ty: Type) -> Result<LLVMValueRef, LlvmError> {
         let value_ty = self.type_of(value);
         let enum_value = self.lower_expr(value)?;
-        let word = self.call(
-            self.codegen.runtime.enum_payload,
-            &mut [enum_value],
-            c"enum.payload",
-        );
-        let decoded = self.decode_enum_payload(ty, word)?;
+        let decoded = if matches!(ty, Type::Struct(_)) {
+            let llvm_type = self.codegen.llvm_type(ty)?;
+            // SAFETY: `llvm_type` belongs to this context and the runtime writes
+            // one owned value of exactly that type into `out`.
+            let out = unsafe {
+                LLVMBuildAlloca(
+                    self.codegen.builder,
+                    llvm_type,
+                    c"enum.aggregate.payload".as_ptr(),
+                )
+            };
+            self.call(
+                self.codegen.runtime.enum_payload_aggregate,
+                &mut [enum_value, out],
+                c"",
+            );
+            // SAFETY: the helper initialized `out` with a value of `llvm_type`.
+            unsafe {
+                LLVMBuildLoad2(
+                    self.codegen.builder,
+                    llvm_type,
+                    out,
+                    c"enum.aggregate.value".as_ptr(),
+                )
+            }
+        } else {
+            let word = self.call(
+                self.codegen.runtime.enum_payload,
+                &mut [enum_value],
+                c"enum.payload",
+            );
+            self.decode_enum_payload(ty, word)?
+        };
         self.drop_value(enum_value, value_ty)?;
         Ok(decoded)
     }
@@ -458,6 +523,7 @@ fn payload_kind(ty: Type) -> i64 {
     match ty {
         Type::String => EnumPayloadKind::STR,
         Type::Enum(_) => EnumPayloadKind::ENUM,
+        Type::Struct(_) => EnumPayloadKind::AGGREGATE,
         _ => EnumPayloadKind::INERT,
     }
     .as_i64()
@@ -467,7 +533,7 @@ fn payload_kind(ty: Type) -> i64 {
 mod tests {
     use super::payload_kind;
     use kira_runtime_abi::EnumPayloadKind;
-    use kira_semantics_model::{EnumDef, EnumTable, Type};
+    use kira_semantics_model::{EnumDef, EnumTable, StructDef, Type, TypeTable};
 
     /// The kinds this lowering emits are the ones the runtime interprets.
     ///
@@ -487,5 +553,18 @@ mod tests {
             })
             .expect("a fresh table accepts the first declaration");
         assert_eq!(payload_kind(Type::Enum(id)), EnumPayloadKind::ENUM.as_i64());
+
+        let mut types = TypeTable::new();
+        let id = types
+            .structs_mut()
+            .declare(StructDef {
+                name: "Payload".to_owned(),
+                fields: Vec::new(),
+            })
+            .expect("a fresh table accepts the first struct");
+        assert_eq!(
+            payload_kind(Type::Struct(id)),
+            EnumPayloadKind::AGGREGATE.as_i64()
+        );
     }
 }

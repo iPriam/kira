@@ -54,10 +54,10 @@ pub struct VariantDef {
     pub name: String,
     /// The payload's resolved type, or `None` for a payload-less variant.
     ///
-    /// The v0 subset carries a payload of a single value, and only a scalar or
-    /// a `String`: those cross the enum box's type-erased slot cleanly, while a
-    /// struct/enum/array payload has no representation there yet and is refused
-    /// at the declaration.
+    /// A scalar fits the enum box's payload word directly. Strings and nested
+    /// enums travel as owned handles; structs travel through an erased aggregate
+    /// box with compiler-generated clone/free leaves. Arrays remain refused until
+    /// their element callbacks can travel with the payload too.
     pub payload: Option<Type>,
 }
 
@@ -104,6 +104,23 @@ impl EnumTable {
         self.defs.get(id.0 as usize)
     }
 
+    /// Replaces the variants of an enum declared as an empty header.
+    ///
+    /// Construct-family enums are cyclic with their backed structs: the family
+    /// type must exist before those structs resolve fields, while each variant's
+    /// payload is one of those structs. Declaring the empty header first and
+    /// filling it once all struct ids exist breaks that registration cycle
+    /// without exposing an incomplete shape downstream.
+    pub fn set_variants(&mut self, id: EnumId, variants: Vec<VariantDef>) -> bool {
+        match self.defs.get_mut(id.0 as usize) {
+            Some(def) => {
+                def.variants = variants;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Every declared enum, in declaration order.
     pub fn defs(&self) -> &[EnumDef] {
         &self.defs
@@ -119,18 +136,20 @@ impl EnumTable {
         self.defs.is_empty()
     }
 
-    /// Whether any variant of an enum carries a payload that owns heap storage
-    /// (a `String`), so a copy must clone it and a drop must release it.
+    /// Whether any variant carries a payload represented by owned heap storage.
     ///
-    /// A payload-less enum, or one whose payloads are all scalars, owns no heap
-    /// beyond its own box; a variant with a `String` payload does. The answer
-    /// is the whole enum's, not one variant's, because a value's static type is
-    /// the enum and any of its variants could be the one it holds.
+    /// Strings and nested enums are handles, and a struct payload gets its own
+    /// erased aggregate allocation even when all of that struct's fields are
+    /// scalar. A payload-less enum or scalar-only payload owns nothing beyond
+    /// the enum box itself.
     pub fn owns_heap_payload(&self, id: EnumId) -> bool {
         self.get(id).is_some_and(|def| {
-            def.variants
-                .iter()
-                .any(|variant| matches!(variant.payload, Some(Type::String)))
+            def.variants.iter().any(|variant| {
+                matches!(
+                    variant.payload,
+                    Some(Type::String | Type::Enum(_) | Type::Struct(_))
+                )
+            })
         })
     }
 }

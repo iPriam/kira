@@ -111,10 +111,10 @@ impl Analyzer<'_> {
 
     /// Restricts an enum payload to a type the runtime box can carry.
     ///
-    /// The box holds one type-erased value slot, which a scalar, a `String`, or
-    /// a nested enum handle crosses cleanly. A struct or an array payload has no
-    /// representation there yet, so it is refused rather than silently
-    /// mislowered — the same precedent as a struct at the native seam.
+    /// The box holds one type-erased value slot. A scalar fits directly; a
+    /// `String` or nested enum is an owned handle; a struct uses an erased
+    /// aggregate box with compiler-generated clone/free leaves. Arrays remain
+    /// refused until their element callbacks can travel with the payload.
     ///
     /// A nested enum is admitted because `Result`-shaped values are built from
     /// one: `Error` carries the failure enum, which is what
@@ -129,6 +129,7 @@ impl Analyzer<'_> {
             | Type::Float(_)
             | Type::Bool
             | Type::String
+            | Type::Struct(_)
             | Type::Enum(_)
             | Type::Error => ty,
             _ => {
@@ -137,7 +138,7 @@ impl Analyzer<'_> {
                     "KSEM118",
                     format!(
                         "an enum payload of type `{}` is not supported yet; a payload may be \
-                         `Int`, `Float`, `Bool`, `String`, or another enum",
+                         `Int`, `Float`, `Bool`, `String`, a struct, or another enum",
                         self.type_name(ty)
                     ),
                 );

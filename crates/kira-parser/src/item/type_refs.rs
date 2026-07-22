@@ -169,6 +169,30 @@ impl Parser<'_> {
         }
         if self.at(TokenKind::Identifier) {
             let start = self.current().span;
+            let is_any_construct =
+                self.text_of(start) == "Any" && self.peek(1).kind == TokenKind::Identifier;
+            if is_any_construct {
+                self.bump(); // `Any`
+                let family_start = self.current().span;
+                let mut text = self.text_of(family_start).to_owned();
+                self.bump();
+                while self.at(TokenKind::Dot) && self.peek(1).kind == TokenKind::Identifier {
+                    self.bump(); // `.`
+                    let segment = self.current().span;
+                    text.push('.');
+                    text.push_str(self.text_of(segment));
+                    self.bump();
+                }
+                let family_span = Span::from_bounds(family_start.start, self.previous_end());
+                let family = self.intern_text(&text, family_span);
+                let span = Span::from_bounds(start.start, self.previous_end());
+                return self.tree.add_type(TypeRef::AnyConstruct {
+                    family,
+                    family_span,
+                    span,
+                });
+            }
+
             let mut text = self.text_of(start).to_owned();
             self.bump();
             while self.at(TokenKind::Dot) && self.peek(1).kind == TokenKind::Identifier {
