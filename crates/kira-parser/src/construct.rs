@@ -3,7 +3,7 @@
 //! `Family Name(params) { ... }` that conforms to one.
 //!
 //! Both share a member body — stored `let` members, computed block-bodied
-//! members (`let node: T { expr }`), and `function` members — so they share a
+//! members (`let node: Any { expr }`), and `function` members — so they share a
 //! parser. A family adds nothing to the header beyond its name; a backed
 //! declaration adds a function-style parameter list, which becomes its
 //! construction inputs.
@@ -194,7 +194,7 @@ impl Parser<'_> {
             // member that yields the widget's `body`. It parses (so it is not a
             // stray-token error), but its type is the construct *family* — a
             // heterogeneous supertype — so it is recorded as deferred: producing
-            // a family-typed value needs the `any Construct` composition the
+            // a family-typed value needs the `Any Construct` composition the
             // executable slice does not cover. `some X` / `[some X]` concrete
             // slots are what execute.
             TokenKind::Identifier if self.peek(1).kind == TokenKind::LBrace => {
@@ -269,7 +269,7 @@ impl Parser<'_> {
         let name = self.text_of(name_span).to_owned();
         self.bump();
         match name.as_str() {
-            // `@Required let name: T` — a member every backed declaration must
+            // `@Required let name: Any` — a member every backed declaration must
             // provide. This one executes: it is a stored field.
             "Required" => {
                 if self.at(TokenKind::Let) {
@@ -282,10 +282,10 @@ impl Parser<'_> {
                     );
                 }
             }
-            // `@Content let x: T` — the compat spelling of a `some T` child
+            // `@Content let x: Any` — the compat spelling of a `some Any` child
             // slot. It parses to a real slot field: analysis fills it from a
-            // construction's trailing children, and executes it when `T` is a
-            // concrete type.
+            // construction's trailing children, and executes it when its declared
+            // type is concrete.
             "Content" => {
                 if self.at(TokenKind::Let) {
                     self.parse_construct_content_slot(body);
@@ -338,7 +338,7 @@ impl Parser<'_> {
         body.deferred.push(DeferredConstruct { label, span });
     }
 
-    /// Parses `@Required let name: T [= default]`, with `let` at the cursor.
+    /// Parses `@Required let name: Any [= default]`, with `let` at the cursor.
     fn parse_construct_let_required(&mut self, body: &mut ConstructBody) {
         let start = self.current().span;
         self.bump(); // `let`
@@ -367,8 +367,8 @@ impl Parser<'_> {
         });
     }
 
-    /// Parses `@Content let name: T`, with `let` at the cursor — a child slot in
-    /// its compat spelling. Equivalent to a `let name: some T` field.
+    /// Parses `@Content let name: Any`, with `let` at the cursor — a child slot in
+    /// its compat spelling. Equivalent to a `let name: some Any` field.
     fn parse_construct_content_slot(&mut self, body: &mut ConstructBody) {
         let start = self.current().span;
         self.bump(); // `let`
@@ -397,7 +397,7 @@ impl Parser<'_> {
             return;
         };
         if self.at(TokenKind::LBrace) {
-            // `let node: T { block }` — a computed member: a zero-argument method
+            // `let node: Any { block }` — a computed member: a zero-argument method
             // read as a property.
             let block = self.parse_block();
             self.make_block_return_its_tail(&block);
@@ -485,8 +485,8 @@ impl Parser<'_> {
         }
     }
 
-    /// Builds the zero-argument method a computed member (`let node: T { … }`)
-    /// desugars to: no parameters, result type `T`, body the written block.
+    /// Builds the zero-argument method a computed member (`let node: Any { … }`)
+    /// desugars to: no parameters, result type `Any`, body the written block.
     fn computed_member_function(
         name: Symbol,
         name_span: Span,

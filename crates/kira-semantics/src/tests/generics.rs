@@ -169,7 +169,7 @@ fn a_type_parameter_may_not_shadow_a_builtin() {
 #[test]
 fn a_repeated_type_parameter_is_reported() {
     assert!(
-        codes("enum Pair<T, T> { One(T) }\n@Main function main() { print(1) return }")
+        codes("enum Pair<Value, Value> { One(Value) }\n@Main function main() { print(1) return }")
             .contains(&"KSEM171")
     );
 }
@@ -188,11 +188,11 @@ fn a_duplicate_generic_enum_is_reported() {
 
 #[test]
 fn a_template_that_grows_its_own_argument_is_refused_not_overflowed() {
-    // `Grow<[T]>` mints a fresh mangled name every round, so the memo cannot
+    // `Grow<[Value]>` mints a fresh mangled name every round, so the memo cannot
     // stop it — the depth cap does, and it must be a diagnostic.
     assert!(
         codes(
-            "enum Grow<T> { More(Grow<[T]>) }\n\
+            "enum Grow<Value> { More(Grow<[Value]>) }\n\
              @Main function main() { let x: Grow<Int> = .More(.More(.More(.More(x)))) return }"
         )
         .contains(&"KSEM175")
@@ -205,7 +205,7 @@ fn an_unbound_type_name_in_a_template_body_is_an_unknown_type() {
     // template body's own mistake surfaces at the instantiation.
     assert!(
         !codes(
-            "enum Holder<T> { One(T) Two(Missing) }\n\
+            "enum Holder<Value> { One(Value) Two(Missing) }\n\
          @Main function main() { let x: Holder<Int> = .One(1) print(1) return }"
         )
         .is_empty()
@@ -256,16 +256,16 @@ fn attempt_and_try_resolve_a_generic_result_nominally() {
 #[test]
 fn a_generic_struct_class_and_function_are_refused_by_name() {
     assert!(
-        codes("struct Box<T> { let v: Int }\n@Main function main() { print(1) return }")
+        codes("struct Box<Value> { let v: Int }\n@Main function main() { print(1) return }")
             .contains(&"KPAR047")
     );
     assert!(
-        codes("class Box<T> { let v: Int = 1 }\n@Main function main() { print(1) return }")
+        codes("class Box<Value> { let v: Int = 1 }\n@Main function main() { print(1) return }")
             .contains(&"KPAR047")
     );
     assert!(
         codes(
-            "function id<T>(v: Int) -> Int { return v }\n@Main function main() { print(1) return }"
+            "function id<Value>(v: Int) -> Int { return v }\n@Main function main() { print(1) return }"
         )
         .contains(&"KPAR047")
     );

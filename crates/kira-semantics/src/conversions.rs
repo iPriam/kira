@@ -1,4 +1,4 @@
-//! Scalar type-conversion calls: `T(expr)` where `T` is a numeric scalar type.
+//! Scalar type-conversion calls: `Target(expr)` where `Target` is a numeric scalar type.
 //!
 //! The call form `Int(x)`, `U32(x)`, `Float(x)`, and the rest of the sized set
 //! is a **value conversion**, not a function call. The scalar *types* already
@@ -24,7 +24,7 @@ use kira_syntax_model::ast::CallArg;
 use crate::analyze::{Analyzer, FnCtx};
 
 impl Analyzer<'_> {
-    /// Recognizes and type-checks a scalar conversion call `T(operand)`.
+    /// Recognizes and type-checks a scalar conversion call `Target(operand)`.
     ///
     /// Returns `None` when the call is not a numeric conversion at all — the
     /// callee does not name a numeric scalar type, or a local of that name

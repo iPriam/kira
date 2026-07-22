@@ -97,9 +97,9 @@ fn an_array_of_an_instantiation_parses() {
 #[test]
 fn a_generic_struct_class_and_function_are_refused_by_name() {
     for text in [
-        "struct Box<T> { let v: Int }",
-        "class Box<T> { let v: Int = 1 }",
-        "function id<T>(v: Int) -> Int { return v }",
+        "struct Box<Value> { let v: Int }",
+        "class Box<Value> { let v: Int = 1 }",
+        "function id<Value>(v: Int) -> Int { return v }",
     ] {
         let result = parse_text(text);
         assert!(
