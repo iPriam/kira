@@ -17,6 +17,35 @@ pub const REPO_MANIFEST_FILE_NAME: &str = "Kira.toml";
 pub const MANIFEST_FILE_NAME: &str = PREFERRED_MANIFEST_FILE_NAME;
 pub const ENTRYPOINT_REL_PATH: &str = "app/main.kira";
 
+/// The directory a `*_types.kira` foreign-binding vocabulary file must live in.
+pub const BIND_TYPES_DIR_NAME: &str = "bind-types";
+
+/// The filename suffix marking a foreign-binding type-vocabulary source.
+pub const BIND_TYPES_FILE_SUFFIX: &str = "_types.kira";
+
+/// Whether `path` is a `*_types.kira` source placed outside a `bind-types/`
+/// directory.
+///
+/// A `*_types.kira` file is the convention for hand-authored foreign-binding
+/// type vocabulary — the C primitive typedefs a generated binding assumes — and
+/// must sit directly inside a `bind-types/` directory, separate from a package's
+/// own `types/` domain types and from generated `bindings/`. A path whose file
+/// name does not end in `_types.kira` is never misplaced; one that does is
+/// misplaced unless its immediate parent directory is named `bind-types`.
+#[must_use]
+pub fn is_misplaced_bind_types_file(path: &std::path::Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if !file_name.ends_with(BIND_TYPES_FILE_SUFFIX) {
+        return false;
+    }
+    path.parent()
+        .and_then(std::path::Path::file_name)
+        .and_then(|name| name.to_str())
+        != Some(BIND_TYPES_DIR_NAME)
+}
+
 /// All accepted manifest file names, in precedence order.
 pub const MANIFEST_FILE_NAMES: [&str; 4] = [
     DECLARATION_MANIFEST_FILE_NAME,
@@ -528,5 +557,34 @@ mod tests {
         assert_eq!(DECLARATION_MANIFEST_FILE_NAME, MANIFEST_FILE_NAMES[0]);
         assert!(is_declaration_manifest("some/dir/package.kira"));
         assert!(!is_declaration_manifest("some/dir/kira.toml"));
+    }
+
+    #[test]
+    fn bind_types_file_in_bind_types_dir_is_well_placed() {
+        assert!(!is_misplaced_bind_types_file(std::path::Path::new(
+            "pkg/app/bind-types/vulkan_types.kira"
+        )));
+    }
+
+    #[test]
+    fn bind_types_file_outside_bind_types_dir_is_misplaced() {
+        assert!(is_misplaced_bind_types_file(std::path::Path::new(
+            "pkg/app/types/vulkan_types.kira"
+        )));
+        assert!(is_misplaced_bind_types_file(std::path::Path::new(
+            "pkg/app/bindings/vulkan_types.kira"
+        )));
+    }
+
+    #[test]
+    fn a_non_types_suffix_file_is_never_misplaced() {
+        // Only `*_types.kira` is governed; `types.kira` (no underscore prefix)
+        // and ordinary sources are exempt wherever they sit.
+        assert!(!is_misplaced_bind_types_file(std::path::Path::new(
+            "pkg/app/types/types.kira"
+        )));
+        assert!(!is_misplaced_bind_types_file(std::path::Path::new(
+            "pkg/app/Core/Widget.kira"
+        )));
     }
 }
