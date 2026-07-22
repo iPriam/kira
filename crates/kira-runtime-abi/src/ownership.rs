@@ -7,9 +7,9 @@
 //!
 //! | Kira | Rust | Who frees |
 //! |---|---|---|
-//! | `function f(x: T)` | `fn f(x: T)` | the callee — the argument is moved in |
-//! | `function f(x: borrow T)` | `fn f(x: &T)` | the caller — the callee only reads |
-//! | `function f(x: borrow mut T)` | `fn f(x: &mut T)` | the caller — the callee may write |
+//! | `function f(x: Any)` | `fn f(x: T)` | the callee — the argument is moved in |
+//! | `function f(x: borrow Any)` | `fn f(x: &T)` | the caller — the callee only reads |
+//! | `function f(x: borrow mut Any)` | `fn f(x: &mut T)` | the caller — the callee may write |
 //! | `f(move x)` | `f(x)` | the callee; `x` is dead afterwards |
 //! | `Int`, `Float`, `Bool` | `Copy` types | nobody — trivial values are copied |
 //!
@@ -35,7 +35,7 @@
 /// How a parameter takes its argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Ownership {
-    /// By value: the argument is moved in and the callee frees it (`T`).
+    /// By value: the argument is moved in and the callee frees it (`Any`).
     ///
     /// The default, because Kira owns by default.
     #[default]

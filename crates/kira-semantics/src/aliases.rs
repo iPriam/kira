@@ -25,8 +25,8 @@ use crate::types::NameContext;
 
 /// One alias declaration, plus where its resolution stands.
 ///
-/// Covers `type Name = Target`, `@FFI.Alias { target: T }` (both
-/// [`AliasBody::Written`]), and `@FFI.Pointer { target: T }`
+/// Covers `type Name = Target`, `@FFI.Alias { target: Target }` (both
+/// [`AliasBody::Written`]), and `@FFI.Pointer { target: Target }`
 /// ([`AliasBody::RawPtr`], since a native pointer is one machine word whatever
 /// it points at).
 #[derive(Debug, Clone, Copy)]

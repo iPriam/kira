@@ -215,7 +215,7 @@ function main() {
 fn a_leading_dot_return_resolves_against_the_return_type() {
     // `return .Red` has no local annotation to lean on: the leading dot resolves
     // against the function's declared return type. This pins that context by
-    // itself rather than leaving it to the plumbing the `let x: T = .V` cases
+    // itself rather than leaving it to the plumbing the `let x: EnumType = .V` cases
     // already exercise.
     let output = assert_parity(
         r#"

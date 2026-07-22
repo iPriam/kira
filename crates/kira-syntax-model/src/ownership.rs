@@ -25,19 +25,19 @@ pub enum OwnershipMode {
     /// A named non-trivial argument must say `move` to reach one, which is
     /// what makes the transfer visible at the call site.
     Owned,
-    /// A read-only, non-consuming borrow (`borrow T`).
+    /// A read-only, non-consuming borrow (`borrow Any`).
     ///
     /// The caller keeps ownership and may keep using the value afterwards.
     BorrowRead,
-    /// A mutable, non-consuming borrow (`borrow mut T`).
+    /// A mutable, non-consuming borrow (`borrow mut Any`).
     ///
     /// The caller keeps ownership, the callee may write through it, and the
     /// caller's binding must be mutable ([`super::ast::Local::Var`]-like).
     BorrowMut,
-    /// An explicit ownership transfer (`move T` as a parameter, `move e` as an
+    /// An explicit ownership transfer (`move Any` as a parameter, `move e` as an
     /// argument).
     Move,
-    /// An explicit copy (`copy T` as a parameter, `copy e` as an argument).
+    /// An explicit copy (`copy Any` as a parameter, `copy e` as an argument).
     ///
     /// Only a trivially-copyable value can actually be copied today; anything
     /// else is rejected rather than deep-cloned.
@@ -56,7 +56,7 @@ impl OwnershipMode {
     /// Whether this mode consumes the argument it is given.
     ///
     /// [`OwnershipMode::Owned`] and [`OwnershipMode::Move`] are the same rule
-    /// at a call site — a bare `T` parameter consumes exactly as a `move T`
+    /// at a call site — a bare `Any` parameter consumes exactly as a `move Any`
     /// one does — which is why the checker branches on this rather than on the
     /// two variants separately.
     pub fn consumes(self) -> bool {

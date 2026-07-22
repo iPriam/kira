@@ -222,7 +222,7 @@ fn a_generic_struct_is_refused_by_name() {
     // function has no call site in the corpus, so it is refused rather than
     // guessed at.
     let output =
-        run_source("struct Box<T> { let v: Int }\n@Main function main() { print(1) return }");
+        run_source("struct Box<Value> { let v: Int }\n@Main function main() { print(1) return }");
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("KPAR047"));
 }

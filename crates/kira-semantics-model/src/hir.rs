@@ -176,7 +176,7 @@ pub struct HirLocal {
     ///
     /// [`KSEM111`-class]: https://docs.kira-lang.com/diagnostics
     pub ownership: OwnershipMode,
-    /// The boxed type id when this slot is a mutable `nativeRecover<T>` view.
+    /// The boxed type id when this slot is a mutable `nativeRecover<Value>` view.
     pub native_state: Option<NativeStateTypeId>,
 }
 
@@ -468,7 +468,7 @@ pub enum HirExpr {
         /// The state handle or raw token.
         token: HirExprId,
     },
-    /// A scalar type-conversion call, `T(operand)` where `T` is a numeric
+    /// A scalar type-conversion call, `Target(operand)` where `Target` is a numeric
     /// scalar type.
     ///
     /// This is a value conversion, not a function call: `Int(2.9)` is `2`,

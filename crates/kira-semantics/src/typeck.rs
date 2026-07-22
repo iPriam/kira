@@ -254,9 +254,9 @@ impl Analyzer<'_> {
                     self.link_type_name(&name, callee_span);
                     return self.analyze_construct_new(ctx, id, &args, &children, callee_span);
                 }
-                // `T()` on a `@FFI.Struct { layout: c }` is the zeroed-value
+                // `StructType()` on a `@FFI.Struct { layout: c }` is the zeroed-value
                 // form: it takes no arguments and every field takes its zero.
-                // Field initializers are written `T { field: value }` instead.
+                // Field initializers are written `StructType { field: value }` instead.
                 if let Some(id) = self.ffi_c_layout_named(&name)
                     && ctx.resolve(&name).is_none()
                 {

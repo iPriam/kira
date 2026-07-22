@@ -16,7 +16,7 @@
 //! An element that owns nothing needs neither leaf: the flat `memcpy` a clone
 //! starts with is already a correct copy of an `Int`, and freeing one is
 //! nothing. So `[Int]` passes null for both, and the runtime skips its loop
-//! entirely. Only `[String]`, `[SomeStruct]`, and `[[T]]` cost a leaf — which
+//! entirely. Only `[String]`, `[SomeStruct]`, and `[[Element]]` cost a leaf — which
 //! is the same line `owns_heap` already draws everywhere else.
 //!
 //! # Memoized per type

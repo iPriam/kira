@@ -1,4 +1,4 @@
-//! Array parsing: recursive `[T]` types, literals with optional separators,
+//! Array parsing: recursive `[Element]` types, literals with optional separators,
 //! index postfix, and the recovery a malformed type falls back to.
 
 use crate::*;

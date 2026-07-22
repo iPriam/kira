@@ -1,4 +1,4 @@
-//! Parity for scalar type-conversion calls `T(expr)`: a numeric cast must run
+//! Parity for scalar type-conversion calls `Target(expr)`: a numeric cast must run
 //! byte-identically on the vm, llvm, and hybrid backends.
 //!
 //! The oracle pins these semantics, and the three backends must agree with it
