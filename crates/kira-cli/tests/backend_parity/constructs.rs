@@ -215,3 +215,52 @@ function read(widget: Any Widget) -> Int {
     );
     assert_eq!(output, "8\n5\n");
 }
+
+/// An `extend` fluent modifier runs on every backend: it is called on a concrete
+/// widget and on a family value, chains, and each layer it builds contributes to
+/// the final value byte-identically on the vm, llvm, and hybrid backends.
+#[test]
+fn extend_modifiers_chain_on_every_backend() {
+    let output = assert_parity(
+        r#"
+construct Widget {
+    @Required let body: Widget
+    function value() -> Int {
+        return body.value()
+    }
+}
+
+Widget Leaf(number: Int) {
+    function value() -> Int {
+        return number
+    }
+}
+
+Widget Boxed(extra: Int) {
+    let child: some Widget
+    function value() -> Int {
+        return child.value() + extra
+    }
+}
+
+extend Widget {
+    function plus(amount: Int) -> Widget {
+        return Boxed(extra: amount) {
+            self
+        }
+    }
+}
+
+@Main function main() {
+    let base = Leaf(number = 10)
+    // Concrete receiver: the widget has no `plus`, its family does.
+    print(base.plus(5).value())
+    // Family receiver, chained: each modifier wraps the previous family value.
+    let chained = base.plus(1).plus(2)
+    print(chained.value())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "15\n13\n");
+}

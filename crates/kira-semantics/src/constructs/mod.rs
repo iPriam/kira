@@ -26,6 +26,7 @@ use kira_syntax_model::ast::Function;
 mod collection;
 mod construction;
 mod dispatch;
+mod extend;
 
 /// Everything analysis remembers about one construct-backed declaration beyond
 /// its struct shape.
@@ -82,7 +83,15 @@ pub(crate) struct ConstructFamilyMethod<'a> {
     pub(crate) ownership: Vec<OwnershipMode>,
     /// Resolved result type.
     pub(crate) result: Type,
-    /// Synthesized dynamic dispatcher, reserved on first use.
+    /// Whether this is a **uniform** modifier from an `extend` block: one shared
+    /// body whose receiver is the family value, rather than a per-variant method
+    /// every concrete declaration implements. A uniform method is never
+    /// conformance-checked against the variants and is called directly, so
+    /// [`Self::dispatcher`] holds its single body rather than a tag dispatcher.
+    pub(crate) uniform: bool,
+    /// For a per-variant method, the synthesized dynamic dispatcher (reserved on
+    /// first use). For a uniform `extend` modifier, its single body (reserved up
+    /// front so an uncalled modifier is still checked and lowered).
     pub(crate) dispatcher: Option<FuncId>,
 }
 

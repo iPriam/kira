@@ -93,6 +93,15 @@ impl Parser<'_> {
                         .push_item(self.source, Item::Construct(declaration));
                 }
             }
+            // `extend Family { ... }` leads with the contextual keyword
+            // `extend`, whose second token is an identifier and third a brace —
+            // the same shape a construct-backed declaration wears, so it is
+            // matched first.
+            TokenKind::Identifier if self.at_extend_block() => {
+                if let Some(declaration) = self.parse_extend() {
+                    self.tree.push_item(self.source, Item::Extend(declaration));
+                }
+            }
             // `Family Name(params) { ... }` — a construct-backed declaration —
             // is the one identifier-led top-level form. Anything else that
             // starts with an identifier is still parse-don't-crash.

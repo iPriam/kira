@@ -25,9 +25,34 @@ pub enum Item {
     /// A `construct Family { ... }` declaration family, or a construct-backed
     /// `Family Name(params) { ... }` declaration that conforms to one.
     Construct(ConstructDecl),
+    /// An `extend Family { function ... }` block: fluent modifier methods added
+    /// to a construct family's chainable surface.
+    Extend(ExtendDecl),
     /// A construct the v0 subset parses but does not yet analyze (class,
     /// import, …); recorded so semantics can report it cleanly.
     Unsupported(UnsupportedItem),
+}
+
+/// An `extend Family { function ... }` block.
+///
+/// New Kira design proven against the oracle's *meaning*: the oracle documents
+/// `extend` as validate-only (modifier bodies are checked, never lowered).
+/// Here each modifier lowers to one real function whose receiver is the family
+/// value (`Any Family`) — so a fluent chain (`text.padding(8).background(fill)`)
+/// runs on every backend. A modifier returns the family type and wraps the
+/// receiver via `self`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtendDecl {
+    /// The construct family being extended (`Widget`).
+    pub name: Symbol,
+    /// Span of the family name, for diagnostics and definition links.
+    pub name_span: Span,
+    /// The modifier methods, in declaration order. Each is an ordinary
+    /// [`Function`]; what makes it a modifier is the block it was written in —
+    /// analysis binds `self` to the family value.
+    pub methods: Vec<Function>,
+    /// Span covering the whole `extend` block.
+    pub span: Span,
 }
 
 /// A member of the `construct` declaration family: either a family template

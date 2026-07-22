@@ -111,7 +111,14 @@ impl Analyzer<'_> {
             ownership,
             result,
         } = shape;
-        let Some(dispatcher) = self.construct_dispatcher_for(family_id, method) else {
+        // A uniform `extend` modifier has one body called directly; a
+        // per-variant method is reached through a synthesized tag dispatcher.
+        let callee = if self.family_method_is_uniform(family_id, method) {
+            self.family_uniform_body(family_id, method)
+        } else {
+            self.construct_dispatcher_for(family_id, method)
+        };
+        let Some(dispatcher) = callee else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
         let callable = format!("{}.{}", self.type_name(Type::Enum(family_id)), method);
@@ -214,19 +221,24 @@ impl Analyzer<'_> {
             .construct_families
             .iter()
             .flat_map(|(family, info)| {
-                info.methods.iter().flat_map(move |(method_name, method)| {
-                    info.variants.iter().map(move |variant| {
-                        (
-                            family.clone(),
-                            method_name.clone(),
-                            method.function.name_span,
-                            method.source,
-                            method.params.clone(),
-                            method.result,
-                            *variant,
-                        )
+                info.methods
+                    .iter()
+                    // A uniform `extend` modifier has one shared body, so it is
+                    // never conformance-checked against the concrete variants.
+                    .filter(|(_, method)| !method.uniform)
+                    .flat_map(move |(method_name, method)| {
+                        info.variants.iter().map(move |variant| {
+                            (
+                                family.clone(),
+                                method_name.clone(),
+                                method.function.name_span,
+                                method.source,
+                                method.params.clone(),
+                                method.result,
+                                *variant,
+                            )
+                        })
                     })
-                })
             })
             .collect();
         for (family, method, span, source, expected_params, expected_result, variant) in rows {
@@ -273,10 +285,15 @@ impl Analyzer<'_> {
             .construct_families
             .iter()
             .flat_map(|(family, info)| {
-                info.methods.iter().filter_map(move |(method, info)| {
-                    info.dispatcher
-                        .map(|dispatcher| (dispatcher, family.clone(), method.clone()))
-                })
+                info.methods
+                    .iter()
+                    // A uniform modifier reuses the `dispatcher` slot for its own
+                    // body, filled by `build_extend_methods`, not a tag dispatcher.
+                    .filter(|(_, info)| !info.uniform)
+                    .filter_map(move |(method, info)| {
+                        info.dispatcher
+                            .map(|dispatcher| (dispatcher, family.clone(), method.clone()))
+                    })
             })
             .collect();
         rows.sort_by_key(|(dispatcher, _, _)| dispatcher.0);

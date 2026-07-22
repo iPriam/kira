@@ -445,3 +445,84 @@ function main() {
         vec!["KSEM207"]
     );
 }
+
+/// An `extend` block adds a fluent modifier the family value and a concrete
+/// backed value both call, and a chain of them type-checks clean.
+#[test]
+fn an_extend_modifier_is_callable_on_a_family_and_a_concrete_value() {
+    assert!(
+        codes(
+            r#"
+construct Widget {
+    let tag: Int { 0 }
+}
+
+Widget Leaf(id: Int) {
+    let tag: Int { id }
+}
+
+Widget Padding(length: Int) {
+    let child: some Widget
+    let tag: Int { 0 }
+}
+
+extend Widget {
+    function padding(length: Int) -> Widget {
+        return Padding(length: length) {
+            self
+        }
+    }
+}
+
+@Main
+function main() {
+    let base = Leaf(id: 1)
+    let once = base.padding(8)
+    let twice = once.padding(4)
+    print(twice.tag)
+    return
+}
+"#,
+        )
+        .is_empty()
+    );
+}
+
+/// Extending a family that does not exist is refused.
+#[test]
+fn extending_an_unknown_family_is_refused() {
+    assert!(
+        library_codes(
+            r#"
+extend Gadget {
+    function noop() -> Int {
+        return 0
+    }
+}
+"#,
+        )
+        .contains(&"KSEM238")
+    );
+}
+
+/// A modifier whose name is already a family method is refused rather than
+/// shadowing it.
+#[test]
+fn a_modifier_colliding_with_a_family_method_is_refused() {
+    assert!(
+        codes(
+            r#"
+construct Widget {
+    function lower() -> Int { return 0 }
+}
+
+extend Widget {
+    function lower() -> Widget {
+        return self
+    }
+}
+"#,
+        )
+        .contains(&"KSEM239")
+    );
+}

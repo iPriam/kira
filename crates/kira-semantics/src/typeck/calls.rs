@@ -205,6 +205,23 @@ impl Analyzer<'_> {
             }
         }
         if self.lookup_function(&qualified).is_none() {
+            // A concrete construct value calls its family's `extend` modifiers
+            // through the same syntax: the receiver has no method of this name,
+            // but its family does. Upcast the receiver into the family value and
+            // dispatch there — `Text(…).padding(8)` becomes a family call.
+            if let Type::Struct(owner) = receiver_ty
+                && let Some(family_id) = self.family_uniform_method(owner, &name)
+            {
+                let upcast = self.coerce_construct_value(receiver_hir, Some(Type::Enum(family_id)));
+                return self.analyze_construct_family_call(
+                    ctx,
+                    upcast,
+                    family_id,
+                    &name,
+                    args,
+                    method_span,
+                );
+            }
             if let Type::Struct(owner) = receiver_ty
                 && self.report_ambiguous_member(owner, &name, method_span, true)
             {
