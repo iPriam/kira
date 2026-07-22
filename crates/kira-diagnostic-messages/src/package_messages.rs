@@ -128,11 +128,29 @@ pub fn lockfile_drift(description: &str) -> Diagnostic {
     )
 }
 
+/// Builds KPK025: the `*_types.kira` source at `path` is not in a `bind-types/`
+/// directory.
+///
+/// A `*_types.kira` file is the convention for hand-authored foreign-binding
+/// type vocabulary (the C primitive typedefs a generated binding assumes), and
+/// it must live in a `bind-types/` directory so it stays separate from a
+/// package's own `types/` domain types and from generated `bindings/`.
+pub fn misplaced_bind_types_file(path: &str) -> Diagnostic {
+    package_error(
+        DiagnosticCode::Kpk025MisplacedBindTypesFile,
+        "`*_types.kira` file outside `bind-types/`",
+        format!(
+            "`{path}` ends in `_types.kira` but does not sit directly in a `bind-types/` directory."
+        ),
+        "Move the file into a `bind-types/` directory beside `bindings/`, or rename it if it is not foreign-binding type vocabulary.",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         conflicting_package_identity, cyclic_package_dependency, duplicate_dependency_declaration,
-        lockfile_drift, missing_dependency_package,
+        lockfile_drift, misplaced_bind_types_file, missing_dependency_package,
     };
     use crate::{CompilerPhase, DiagnosticDomain};
     use kira_diagnostics::{Diagnostic, Severity};
@@ -184,5 +202,12 @@ mod tests {
         let diagnostic = lockfile_drift("package `Core` is absent");
 
         assert_package_diagnostic(&diagnostic, "KPK024", Severity::Warning);
+    }
+
+    #[test]
+    fn misplaced_bind_types_file_is_package_error() {
+        let diagnostic = misplaced_bind_types_file("app/types/vulkan_types.kira");
+
+        assert_package_diagnostic(&diagnostic, "KPK025", Severity::Error);
     }
 }

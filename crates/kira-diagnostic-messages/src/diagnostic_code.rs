@@ -32,6 +32,8 @@ pub enum DiagnosticCode {
     Kpk023ConflictingPackageIdentity,
     /// KPK024 — the lockfile disagrees with the resolved manifest graph.
     Kpk024LockfileDrift,
+    /// KPK025 — a `*_types.kira` source sits outside a `bind-types/` directory.
+    Kpk025MisplacedBindTypesFile,
 }
 
 impl DiagnosticCode {
@@ -50,6 +52,7 @@ impl DiagnosticCode {
             DiagnosticCode::Kpk022DuplicateDependencyDeclaration => "KPK022",
             DiagnosticCode::Kpk023ConflictingPackageIdentity => "KPK023",
             DiagnosticCode::Kpk024LockfileDrift => "KPK024",
+            DiagnosticCode::Kpk025MisplacedBindTypesFile => "KPK025",
         }
     }
 
@@ -74,6 +77,7 @@ mod tests {
             ),
             (DiagnosticCode::Kpk023ConflictingPackageIdentity, "KPK023"),
             (DiagnosticCode::Kpk024LockfileDrift, "KPK024"),
+            (DiagnosticCode::Kpk025MisplacedBindTypesFile, "KPK025"),
         ];
 
         for (code, expected) in cases {

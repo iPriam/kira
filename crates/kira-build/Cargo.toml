@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 kira-bytecode.workspace = true
+kira-diagnostic-messages.workspace = true
 kira-diagnostics.workspace = true
 kira-ir.workspace = true
 # The native engine. A library built for it is compiled machine code, and this

@@ -146,6 +146,12 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
         )?;
     }
 
+    // Enforce the `bind-types/` convention across every loaded source: a
+    // `*_types.kira` foreign-binding vocabulary file must sit in a `bind-types/`
+    // directory. Reported here, the one place the entry and every loaded module
+    // path converge with the diagnostics channel.
+    diagnostics.extend(bind_types_placement_diagnostics(path, &modules));
+
     // The SourceMap mirrors the salsa input file for file and in the same order,
     // so diagnostic spans render against the file they were written in: the
     // entry file at `FILE_SOURCE_ID`, then module `i` at `module_source_id(i)`.
@@ -191,6 +197,24 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
             .map(|found| found.manifest.execution_mode.clone()),
         default_build_target: package.map(|found| found.manifest.build_target),
     })
+}
+
+/// Reports every loaded source whose `*_types.kira` name sits outside a
+/// `bind-types/` directory (KPK025).
+///
+/// The check spans the entry file and every aggregated module — the whole set
+/// the frontend will analyze — so a misplaced binding-vocabulary file in any
+/// package, a dependency included, is caught.
+fn bind_types_placement_diagnostics(entry: &Path, modules: &[ModuleSource]) -> Vec<Diagnostic> {
+    std::iter::once(entry)
+        .chain(modules.iter().map(|module| Path::new(&module.path)))
+        .filter(|path| kira_project::is_misplaced_bind_types_file(path))
+        .map(|path| {
+            kira_diagnostic_messages::package_messages::misplaced_bind_types_file(
+                &path.display().to_string(),
+            )
+        })
+        .collect()
 }
 
 /// Adds every unreferenced library source and each source's import closure.
@@ -562,6 +586,49 @@ mod tests {
                 .diagnostics
                 .iter()
                 .any(|d| d.code == Some("KSEM060"))
+        );
+    }
+
+    #[test]
+    fn a_types_file_outside_bind_types_is_reported() {
+        let dir = TempDir::new("misplaced-bind-types");
+        dir.write(
+            "package.kira",
+            "Package Gfx {\n    let kind = .Library\n    let moduleRoot = \"Gfx\"\n}\n",
+        );
+        let entry = dir.write("app/Gfx.kira", "function value() -> Int { return 1 }");
+        // A `*_types.kira` file in `types/` rather than `bind-types/` is refused.
+        dir.write("app/types/gfx_types.kira", "type Handle = RawPtr\n");
+
+        let compiled = compile(&entry).expect("compile");
+        assert!(
+            compiled
+                .diagnostics
+                .iter()
+                .any(|d| d.code == Some("KPK025")),
+            "{:?}",
+            compiled.diagnostics
+        );
+    }
+
+    #[test]
+    fn a_types_file_inside_bind_types_is_accepted() {
+        let dir = TempDir::new("placed-bind-types");
+        dir.write(
+            "package.kira",
+            "Package Gfx {\n    let kind = .Library\n    let moduleRoot = \"Gfx\"\n}\n",
+        );
+        let entry = dir.write("app/Gfx.kira", "function value() -> Int { return 1 }");
+        dir.write("app/bind-types/gfx_types.kira", "type Handle = RawPtr\n");
+
+        let compiled = compile(&entry).expect("compile");
+        assert!(
+            !compiled
+                .diagnostics
+                .iter()
+                .any(|d| d.code == Some("KPK025")),
+            "{:?}",
+            compiled.diagnostics
         );
     }
 }
