@@ -42,6 +42,11 @@ The VM-hot crates (`kira-vm-runtime`, `kira-bytecode`) are compiled with
 `opt-level = 3` even in the dev profile: a debug interpreter is 4–11× slower,
 and the dev snapshot is what `kira run` uses for interactive work.
 
+`run`, `build`, and `check` take a `.kira` file or a package directory. Omit it
+and they use the package directory you are standing in, so `kirac check` inside
+an app is `kirac check .`. A directory holding no `package.kira` is refused by
+name.
+
 ## Structs
 
 A `struct` is a non-inheriting value shape. Members are written with `let` or
