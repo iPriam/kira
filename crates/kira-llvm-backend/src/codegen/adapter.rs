@@ -25,7 +25,7 @@
 //! them), the VM sidecar (a marker-only module exports them), and the hybrid
 //! native half (its host resolves them by name).
 
-use kira_runtime_abi::{ForeignAdapterStatus, ForeignType};
+use kira_runtime_abi::{ForeignAdapterStatus, ForeignType, ForeignTypeSpec};
 use kira_semantics_model::Type;
 use llvm_sys::LLVMIntPredicate;
 use llvm_sys::core::*;
@@ -75,8 +75,13 @@ impl Codegen<'_> {
     fn emit_foreign_adapter(&mut self, index: usize) -> Result<(), LlvmError> {
         let import = self.program.foreign_imports[index].import.clone();
         let signature = import.signature();
-        let params: Vec<ForeignType> = signature.parameters().to_vec();
-        let result = signature.result();
+        let params: Vec<ForeignType> = signature
+            .parameters()
+            .iter()
+            .copied()
+            .map(scalar_of)
+            .collect::<Result<_, _>>()?;
+        let result = scalar_of(signature.result())?;
         let adapter = self.foreign_adapters[index];
         let c_fn = self.declare_c_function(import.symbol(), &params, result);
 
@@ -568,6 +573,18 @@ impl Codegen<'_> {
             }
         })
     }
+}
+
+/// The scalar a signature position names.
+///
+/// An aggregate position is refused rather than mapped: passing a C-layout
+/// struct by value needs the platform's aggregate classification, which is not
+/// something this backend derives. The frontend refuses an aggregate at the
+/// seam, so this is a backstop on a signature that never reaches here.
+pub(super) fn scalar_of(spec: ForeignTypeSpec) -> Result<ForeignType, LlvmError> {
+    spec.scalar().ok_or(LlvmError::Unsupported(
+        "a C-layout aggregate at the foreign seam",
+    ))
 }
 
 /// The sign/zero-extension attribute a small integer C type needs, if any.

@@ -97,14 +97,18 @@ pub(super) fn run_on_vm(
         }
     };
     let bindings = foreign_bindings(ir);
-    let mut host =
-        match kira_main::ForeignHost::load(&sidecar, bindings, NativeStateHost::new(StdoutHost)) {
-            Ok(host) => host,
-            Err(error) => {
-                eprintln!("kirac: cannot load the foreign-adapter sidecar: {error}");
-                return EXIT_FAILURE;
-            }
-        };
+    let mut host = match kira_main::ForeignHost::load(
+        &sidecar,
+        bindings,
+        ir.foreign_aggregates.clone(),
+        NativeStateHost::new(StdoutHost),
+    ) {
+        Ok(host) => host,
+        Err(error) => {
+            eprintln!("kirac: cannot load the foreign-adapter sidecar: {error}");
+            return EXIT_FAILURE;
+        }
+    };
     match kira_vm_runtime::execute(&module, &mut host) {
         Ok(_) => EXIT_OK,
         Err(trap) => {

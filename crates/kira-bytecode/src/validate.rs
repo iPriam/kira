@@ -292,6 +292,7 @@ mod tests {
         Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions,
             main: Some(main),
             strings,
@@ -304,6 +305,7 @@ mod tests {
         Module {
             exports,
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![func(
                 "makeButton",
                 1,
@@ -432,6 +434,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![func("add", 2, 2, vec![Instruction::ReturnVoid])],
             main: None,
             strings: vec![],
@@ -445,6 +448,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![func("add", 0, 0, vec![])],
             main: None,
             strings: vec![],

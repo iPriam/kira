@@ -103,7 +103,7 @@ mod tests {
             library: "ffimath".to_owned(),
             symbol: "kira_ffi_add".to_owned(),
             abi: ForeignAbi::C,
-            signature: ForeignSignature::new(
+            signature: ForeignSignature::scalars(
                 [ForeignType::I32, ForeignType::I32],
                 ForeignType::I32,
             ),

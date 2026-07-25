@@ -15,9 +15,9 @@ use std::path::Path;
 
 use kira_dynamic_ffi::{ForeignAdapterError, ForeignAdapterLibrary};
 use kira_runtime_abi::{
-    ForeignArg, ForeignCallError, ForeignResult, ForeignSignature, HostCapabilities, NativeArg,
-    NativeCallError, NativeResult, NativeStateError, NativeStateToken, NativeStateTypeId,
-    NativeStateValue,
+    ForeignAggregates, ForeignArg, ForeignCallError, ForeignResult, ForeignSignature,
+    HostCapabilities, NativeArg, NativeCallError, NativeResult, NativeStateError, NativeStateToken,
+    NativeStateTypeId, NativeStateValue,
 };
 
 /// One foreign import's binding: the adapter symbol to call and the exact-width
@@ -63,12 +63,17 @@ impl<H: HostCapabilities> ForeignHost<H> {
     /// The load verifies the sidecar's foreign-adapter ABI marker and resolves
     /// its string helpers; a stale or incompatible sidecar is rejected here by
     /// name rather than at the first foreign call.
+    ///
+    /// `aggregates` is the program's C-layout aggregate table, which the
+    /// bindings' signatures index; it sizes the buffer an aggregate result is
+    /// written into.
     pub fn load(
         sidecar: &Path,
         imports: Vec<ForeignBinding>,
+        aggregates: ForeignAggregates,
         inner: H,
     ) -> Result<ForeignHost<H>, ForeignAdapterError> {
-        let library = ForeignAdapterLibrary::load(sidecar)?;
+        let library = ForeignAdapterLibrary::load(sidecar, aggregates)?;
         Ok(ForeignHost {
             inner,
             library,

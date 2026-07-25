@@ -191,7 +191,15 @@ impl Session {
             .ok_or(ForeignCallError::NoForeignHost)?;
         // SAFETY: the adapter is this library's, bound by import id, and the
         // signature is the manifest row for that same id.
-        unsafe { foreign::call_adapter(&self.library, adapter, &import.signature, args) }
+        unsafe {
+            foreign::call_adapter(
+                &self.library,
+                adapter,
+                &import.signature,
+                &self.manifest.foreign_aggregates,
+                args,
+            )
+        }
     }
 }
 

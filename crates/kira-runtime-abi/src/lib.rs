@@ -16,6 +16,7 @@
 //! rng, native FFI) extend this trait as the language grows; the VM core never
 //! gains a filesystem, process, or thread dependency.
 
+pub mod aggregate;
 pub mod bridge;
 pub mod enum_payload;
 pub mod execution;
@@ -23,6 +24,10 @@ pub mod foreign;
 pub mod native_state;
 pub mod ownership;
 
+pub use aggregate::{
+    ForeignAggregate, ForeignAggregateError, ForeignAggregateId, ForeignAggregates, ForeignLayout,
+    ForeignLeaf, ForeignMember, ForeignPointerWidth,
+};
 pub use bridge::{BridgeData, BridgeValue, BridgeValueTag};
 pub use enum_payload::EnumPayloadKind;
 pub use execution::Execution;
@@ -30,7 +35,7 @@ pub use foreign::{
     FOREIGN_ADAPTER_ABI_MARKER, FOREIGN_ADAPTER_ABI_VERSION, FOREIGN_STRING_DATA_SYMBOL,
     FOREIGN_STRING_FREE_SYMBOL, FOREIGN_STRING_LEN_SYMBOL, FOREIGN_STRING_NEW_SYMBOL, ForeignAbi,
     ForeignAdapterFn, ForeignAdapterStatus, ForeignArg, ForeignCallError, ForeignImport,
-    ForeignResult, ForeignSignature, ForeignType,
+    ForeignResult, ForeignSignature, ForeignType, ForeignTypeSpec,
 };
 pub use native_state::{
     NativeStateError, NativeStateHost, NativeStateStatus, NativeStateStore, NativeStateToken,

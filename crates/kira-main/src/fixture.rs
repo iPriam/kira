@@ -50,6 +50,7 @@ pub(crate) const BUTTON: ExportType = ExportType::Handle { class: 0 };
 pub(crate) fn library() -> Module {
     Module {
         foreign_imports: Vec::new(),
+        foreign_aggregates: Default::default(),
         exports: ExportTable {
             classes: vec!["Button".to_owned()],
             functions: vec![

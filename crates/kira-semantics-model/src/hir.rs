@@ -7,7 +7,9 @@
 //! are scoped to their owning function.
 
 use crate::ty::{EnumId, StructId, Type, TypeTable};
-use kira_runtime_abi::{Execution, ForeignAbi, ForeignSignature, NativeStateTypeId};
+use kira_runtime_abi::{
+    Execution, ForeignAbi, ForeignAggregates, ForeignSignature, NativeStateTypeId,
+};
 use kira_source::Span;
 use kira_syntax_model::ownership::OwnershipMode;
 use la_arena::{Arena, Idx};
@@ -65,6 +67,13 @@ pub struct HirProgram {
     /// extern is a compile error and is never recorded, so a backend only ever
     /// sees a signature the frontend accepted.
     pub foreign: Vec<HirForeign>,
+    /// The C-layout aggregates the foreign signatures name by index.
+    ///
+    /// Built while validating the `@FFI.Extern` declarations: a Kira struct
+    /// that crosses the seam is described here once, by its member tree, and
+    /// every position naming it holds the same index. Empty for a program whose
+    /// externs pass only scalars.
+    pub foreign_aggregates: ForeignAggregates,
     /// Arena backing every [`HirExprId`].
     pub exprs: Arena<HirExpr>,
     /// Arena backing every [`HirStmtId`].

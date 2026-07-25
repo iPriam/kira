@@ -27,6 +27,7 @@ fn program(
         main: None,
         exports,
         foreign_imports: Vec::new(),
+        foreign_aggregates: Default::default(),
         exprs,
     }
 }

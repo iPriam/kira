@@ -23,11 +23,17 @@
 //! public artifact, so decoding validates rather than trusts.
 
 use kira_runtime_abi::{
-    BridgeValueTag, Execution, ForeignAbi, ForeignImport, ForeignSignature, ForeignType, Ownership,
+    BridgeValueTag, Execution, ForeignAbi, ForeignAggregate, ForeignAggregateError,
+    ForeignAggregateId, ForeignAggregates, ForeignImport, ForeignMember, ForeignSignature,
+    ForeignType, ForeignTypeSpec, Ownership,
 };
 
 /// The magic bytes that open a serialized manifest: "KHM1".
 pub const MAGIC: [u8; 4] = *b"KHM1";
+
+/// The aggregate-member byte that introduces a nested aggregate; anything else
+/// is a scalar's own foreign-type tag, none of which reaches `0xff`.
+const NESTED_MEMBER_TAG: u8 = 0xff;
 
 /// The entrypoint slot's value when a hybrid module has no entrypoint (a
 /// library).
@@ -89,6 +95,11 @@ pub struct HybridManifest {
     /// imports, and absent from the byte stream then — an old manifest that
     /// predates this section decodes with an empty table.
     pub foreign: Vec<HybridForeign>,
+    /// The C-layout aggregates the foreign signatures name by index.
+    ///
+    /// Empty for a program whose externs pass only scalars, which is also what
+    /// a manifest written before this section existed decodes as.
+    pub foreign_aggregates: ForeignAggregates,
 }
 
 /// One `@FFI.Extern` import: its C library and symbol, its exact-width
@@ -198,6 +209,31 @@ pub enum ManifestDecodeError {
     /// A foreign import carried no adapter symbol to bind.
     #[error("foreign import `{0}` in hybrid manifest carries no adapter symbol")]
     ForeignWithoutAdapter(String),
+    /// An aggregate member named a type byte this build does not know.
+    #[error("unknown member type `{tag}` in aggregate {index} of hybrid manifest")]
+    UnknownForeignAggregateMember {
+        /// The offending aggregate's table index.
+        index: u32,
+        /// The unrecognized member byte.
+        tag: u8,
+    },
+    /// An aggregate's members could not form a layable-out row.
+    #[error("aggregate {index} in hybrid manifest is malformed")]
+    MalformedForeignAggregate {
+        /// The offending aggregate's table index.
+        index: u32,
+        /// Why the aggregate table rejected the row.
+        #[source]
+        source: ForeignAggregateError,
+    },
+    /// A foreign signature named an aggregate index the table does not contain.
+    #[error("foreign import `{import}` names aggregate {index}, absent from this manifest")]
+    UnknownForeignAggregate {
+        /// The import whose signature named it.
+        import: String,
+        /// The unresolved aggregate index.
+        index: u32,
+    },
 }
 
 impl HybridManifest {
@@ -245,10 +281,28 @@ impl HybridManifest {
                 out.push(import.abi.tag());
                 write_u32(&mut out, import.signature.parameters().len() as u32);
                 for parameter in import.signature.parameters() {
-                    out.push(parameter.tag());
+                    write_spec(&mut out, *parameter);
                 }
-                out.push(import.signature.result().tag());
+                write_spec(&mut out, import.signature.result());
                 write_string(&mut out, &import.adapter_symbol);
+            }
+        }
+        // The aggregate table follows the imports that index it, and is omitted
+        // when empty for the same reason the imports are: a scalar-only program
+        // writes bytes identical to a manifest predating aggregates.
+        if !self.foreign_aggregates.is_empty() {
+            write_u32(&mut out, self.foreign_aggregates.len() as u32);
+            for aggregate in self.foreign_aggregates.iter() {
+                write_u32(&mut out, aggregate.members().len() as u32);
+                for member in aggregate.members() {
+                    match member {
+                        ForeignMember::Scalar(ty) => out.push(ty.tag()),
+                        ForeignMember::Aggregate(id) => {
+                            out.push(NESTED_MEMBER_TAG);
+                            write_u32(&mut out, id.0);
+                        }
+                    }
+                }
             }
         }
         out
@@ -300,6 +354,7 @@ impl HybridManifest {
         }
 
         let foreign = read_foreign(&mut reader)?;
+        let foreign_aggregates = read_foreign_aggregates(&mut reader, &foreign)?;
 
         // A library carries no entrypoint, so there is no index to bound.
         let entry = match entry {
@@ -319,6 +374,7 @@ impl HybridManifest {
             entry,
             functions,
             foreign,
+            foreign_aggregates,
         })
     }
 }
@@ -348,9 +404,9 @@ fn read_foreign(reader: &mut Reader<'_>) -> Result<Vec<HybridForeign>, ManifestD
         let param_count = reader.u32()?;
         let mut parameters = Vec::with_capacity(param_count as usize);
         for _ in 0..param_count {
-            parameters.push(read_foreign_type(reader, &symbol)?);
+            parameters.push(read_spec(reader, &symbol)?);
         }
-        let result = read_foreign_type(reader, &symbol)?;
+        let result = read_spec(reader, &symbol)?;
         let adapter_symbol = reader.string()?;
         if adapter_symbol.is_empty() {
             return Err(ManifestDecodeError::ForeignWithoutAdapter(symbol));
@@ -366,16 +422,88 @@ fn read_foreign(reader: &mut Reader<'_>) -> Result<Vec<HybridForeign>, ManifestD
     Ok(foreign)
 }
 
-/// Reads one foreign-type byte, naming `import` on an unknown tag.
-fn read_foreign_type(
+/// Reads the aggregate table, or an empty table when the stream ends first, and
+/// checks that every index the imports named resolves inside it.
+fn read_foreign_aggregates(
+    reader: &mut Reader<'_>,
+    imports: &[HybridForeign],
+) -> Result<ForeignAggregates, ManifestDecodeError> {
+    let mut aggregates = ForeignAggregates::new();
+    if !reader.is_at_end() {
+        let count = reader.u32()?;
+        for index in 0..count {
+            let member_count = reader.u32()?;
+            let mut members = Vec::with_capacity(member_count as usize);
+            for _ in 0..member_count {
+                members.push(read_member(reader, index)?);
+            }
+            aggregates
+                .push(ForeignAggregate::new(members))
+                .map_err(|source| ManifestDecodeError::MalformedForeignAggregate {
+                    index,
+                    source,
+                })?;
+        }
+    }
+    for import in imports {
+        for spec in import
+            .signature
+            .parameters()
+            .iter()
+            .copied()
+            .chain(std::iter::once(import.signature.result()))
+        {
+            if let Some(id) = spec.aggregate()
+                && aggregates.get(id).is_none()
+            {
+                return Err(ManifestDecodeError::UnknownForeignAggregate {
+                    import: import.symbol.clone(),
+                    index: id.0,
+                });
+            }
+        }
+    }
+    Ok(aggregates)
+}
+
+/// Writes one signature position: its tag byte, plus a table index when the tag
+/// names an aggregate.
+fn write_spec(out: &mut Vec<u8>, spec: ForeignTypeSpec) {
+    out.push(spec.tag());
+    if let Some(id) = spec.aggregate() {
+        write_u32(out, id.0);
+    }
+}
+
+/// Reads one signature position, naming `import` on an unknown tag.
+fn read_spec(
     reader: &mut Reader<'_>,
     import: &str,
-) -> Result<ForeignType, ManifestDecodeError> {
+) -> Result<ForeignTypeSpec, ManifestDecodeError> {
     let tag = reader.byte()?;
-    ForeignType::from_tag(tag).ok_or_else(|| ManifestDecodeError::UnknownForeignType {
-        import: import.to_owned(),
-        tag,
-    })
+    if tag == ForeignTypeSpec::AGGREGATE_TAG {
+        return Ok(ForeignTypeSpec::Aggregate(ForeignAggregateId(
+            reader.u32()?,
+        )));
+    }
+    ForeignType::from_tag(tag)
+        .map(ForeignTypeSpec::Scalar)
+        .ok_or_else(|| ManifestDecodeError::UnknownForeignType {
+            import: import.to_owned(),
+            tag,
+        })
+}
+
+/// Reads one aggregate member, naming the containing aggregate on an unknown
+/// scalar tag.
+fn read_member(reader: &mut Reader<'_>, index: u32) -> Result<ForeignMember, ManifestDecodeError> {
+    let tag = reader.byte()?;
+    if tag == NESTED_MEMBER_TAG {
+        return Ok(ForeignMember::Aggregate(ForeignAggregateId(reader.u32()?)));
+    }
+    ForeignType::from_tag(tag)
+        .map(ForeignMember::Scalar)
+        .ok_or(ManifestDecodeError::UnknownForeignAggregateMember { index, tag })
 }
 
 /// Appends a `u32` length-prefixed byte string.
@@ -464,6 +592,7 @@ mod tests {
                 },
             ],
             foreign: Vec::new(),
+            foreign_aggregates: Default::default(),
         }
     }
 
@@ -474,7 +603,7 @@ mod tests {
                 library: "ffimath".to_owned(),
                 symbol: "kira_ffi_add".to_owned(),
                 abi: ForeignAbi::C,
-                signature: ForeignSignature::new(
+                signature: ForeignSignature::scalars(
                     [ForeignType::I32, ForeignType::I32],
                     ForeignType::I32,
                 ),
@@ -484,7 +613,7 @@ mod tests {
                 library: "ffimath".to_owned(),
                 symbol: "kira_ffi_name_len".to_owned(),
                 abi: ForeignAbi::C,
-                signature: ForeignSignature::new([ForeignType::CString], ForeignType::U64),
+                signature: ForeignSignature::scalars([ForeignType::CString], ForeignType::U64),
                 adapter_symbol: "kira_foreign_adapter_1".to_owned(),
             },
         ];

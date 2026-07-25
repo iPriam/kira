@@ -7,7 +7,7 @@
 //! instead of panicking.
 
 use kira_bytecode::ModuleValidateError;
-use kira_runtime_abi::{ForeignCallError, ForeignType, NativeCallError, NativeStateError};
+use kira_runtime_abi::{ForeignCallError, ForeignTypeSpec, NativeCallError, NativeStateError};
 
 /// A trap raised while executing bytecode.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -99,7 +99,7 @@ pub enum VmError {
         /// The foreign-import id at the boundary.
         foreign: u32,
         /// The exact-width type the signature named.
-        expected: ForeignType,
+        expected: ForeignTypeSpec,
     },
     /// A jump target fell outside the current function's code.
     #[error("jump to out-of-range instruction {0}")]

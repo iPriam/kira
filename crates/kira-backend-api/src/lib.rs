@@ -245,7 +245,7 @@ mod tests {
             library,
             "some_symbol",
             ForeignAbi::C,
-            ForeignSignature::new([], ForeignType::Void),
+            ForeignSignature::scalars([], ForeignType::Void),
         )
     }
 

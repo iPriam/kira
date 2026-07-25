@@ -14,6 +14,7 @@ fn module(code: Vec<I>, locals: u16) -> Module {
     Module {
         exports: Default::default(),
         foreign_imports: Vec::new(),
+        foreign_aggregates: Default::default(),
         functions: vec![FuncProto {
             name: "main".to_owned(),
             param_count: 0,

@@ -49,6 +49,7 @@ mod tests {
             main: Some(0),
             exports: Vec::new(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             exprs,
         }
     }
@@ -166,6 +167,7 @@ mod tests {
             main: None,
             exports: Vec::new(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             exprs: la_arena::Arena::new(),
         };
         let button = program

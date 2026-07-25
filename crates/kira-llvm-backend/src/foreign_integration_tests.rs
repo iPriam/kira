@@ -50,7 +50,7 @@ fn foreign(symbol: &str, params: &[ForeignType], result: ForeignType) -> HirFore
         library: "ffitest".to_owned(),
         symbol: symbol.to_owned(),
         abi: ForeignAbi::C,
-        signature: ForeignSignature::new(params.to_vec(), result),
+        signature: ForeignSignature::scalars(params.iter().copied(), result),
         param_wrappers: params.iter().map(|_| None).collect(),
         result_wrapper: None,
         name_span: Span::new(0, 0),

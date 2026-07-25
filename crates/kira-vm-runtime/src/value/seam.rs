@@ -1,6 +1,8 @@
 //! Value conversion at native and foreign call seams.
 
-use kira_runtime_abi::{ForeignArg, ForeignResult, ForeignType, NativeArg, NativeResult};
+use kira_runtime_abi::{
+    ForeignArg, ForeignResult, ForeignType, ForeignTypeSpec, NativeArg, NativeResult,
+};
 
 use super::{Heap, Value};
 
@@ -131,7 +133,11 @@ impl Heap {
     /// call returns). Every other supported argument is a `Copy` scalar. A
     /// mismatch returns `None` rather than guessing — analysis has already
     /// checked the signature, so this is a backstop, not the primary check.
-    pub fn foreign_arg(&self, expected: ForeignType, value: Value) -> Option<ForeignArg<'_>> {
+    pub fn foreign_arg(&self, expected: ForeignTypeSpec, value: Value) -> Option<ForeignArg<'_>> {
+        // An aggregate position has no scalar crossing and is the `None` case
+        // here: the frontend refuses an aggregate at the seam, so no signature
+        // this runs against holds one.
+        let expected = expected.scalar()?;
         Some(match (expected, value) {
             (ForeignType::Void, Value::Void) => ForeignArg::Void,
             (ForeignType::I8, Value::Int(v)) => ForeignArg::I8(v as i8),
@@ -158,8 +164,13 @@ impl Heap {
     /// narrows them. `RawPtr` stays an opaque word. `CString` never appears —
     /// returned C-string ownership is not part of the adapter ABI, so a
     /// [`ForeignResult`] can never carry one.
-    pub fn absorb_foreign(&mut self, result: ForeignResult) -> Value {
-        match result {
+    ///
+    /// An aggregate result yields `None`: turning C-layout bytes back into a
+    /// struct needs the aggregate's member tree, which lives in the module, not
+    /// in the heap. The frontend refuses an aggregate at the seam, so no
+    /// signature this runs against returns one.
+    pub fn absorb_foreign(&mut self, result: ForeignResult) -> Option<Value> {
+        Some(match result {
             ForeignResult::Void => Value::Void,
             ForeignResult::I8(v) => Value::Int(i64::from(v)),
             ForeignResult::I16(v) => Value::Int(i64::from(v)),
@@ -173,6 +184,7 @@ impl Heap {
             ForeignResult::F32(v) => Value::Float(f64::from(v)),
             ForeignResult::F64(v) => Value::Float(v),
             ForeignResult::RawPtr(w) => Value::RawPtr(w),
-        }
+            ForeignResult::Aggregate { .. } => return None,
+        })
     }
 }

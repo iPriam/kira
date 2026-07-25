@@ -16,7 +16,7 @@
 //! call resolves to [`Callee::User`], and the argument coercion `String ->
 //! CString` is the one implicit conversion the seam allows.
 
-use kira_runtime_abi::{ForeignAbi, ForeignSignature, ForeignType};
+use kira_runtime_abi::{ForeignAbi, ForeignSignature, ForeignType, ForeignTypeSpec};
 use kira_semantics_model::hir::{Callee, ForeignId, HirExpr, HirExprId, HirForeign};
 use kira_semantics_model::{FloatSpelling, IntSpelling, StructId, Type};
 use kira_source::{SourceId, Span};
@@ -280,7 +280,7 @@ impl<'a> Analyzer<'a> {
         let result = self.map_foreign_result(function);
         match (ok, result) {
             (true, Some(result)) => Some(MappedForeign {
-                signature: ForeignSignature::new(params, result.ty),
+                signature: ForeignSignature::scalars(params, result.ty),
                 param_wrappers: param_wrappers.into(),
                 result_wrapper: result.wrapper,
             }),
@@ -545,7 +545,7 @@ impl<'a> Analyzer<'a> {
         let call = self.program.exprs.alloc(HirExpr::Call {
             callee: Callee::Foreign(id),
             args: seam_args,
-            ty: kira_type_for_foreign(result),
+            ty: kira_type_for_spec(result),
             writeback: None,
         });
         // A handle result comes back as its field's scalar; rebuild the struct
@@ -565,7 +565,7 @@ impl<'a> Analyzer<'a> {
     fn check_and_lower_foreign_args(
         &mut self,
         arg_hirs: &[HirExprId],
-        params: &[ForeignType],
+        params: &[ForeignTypeSpec],
         param_wrappers: &[Option<StructId>],
         name: &str,
         span: Span,
@@ -591,15 +591,15 @@ impl<'a> Analyzer<'a> {
                     seam_args.push(self.program.exprs.alloc(HirExpr::Field {
                         base: arg,
                         index: 0,
-                        ty: kira_type_for_foreign(params[index]),
+                        ty: kira_type_for_spec(params[index]),
                     }));
                 }
                 None => {
                     let param = params[index];
                     if actual != Type::Error && !foreign_arg_matches(actual, param) {
-                        let expected = match param {
-                            ForeignType::CString => "String".to_owned(),
-                            other => self.type_name(kira_type_for_foreign(other)),
+                        let expected = match param.scalar() {
+                            Some(ForeignType::CString) => "String".to_owned(),
+                            _ => self.type_name(kira_type_for_spec(param)),
                         };
                         self.emit(
                             span,
@@ -698,15 +698,28 @@ fn kira_type_for_foreign(foreign_type: ForeignType) -> Type {
     }
 }
 
-/// Whether a Kira argument type is accepted for a foreign parameter type.
+/// The Kira [`Type`] a signature position maps back to.
+///
+/// An aggregate position has no scalar spelling and is unreachable here: the
+/// declaration checks refuse an aggregate at the seam before a signature is
+/// recorded, so no [`HirForeign`] holds one. It maps to [`Type::Error`] rather
+/// than a guess, which is the type that stays silent downstream.
+fn kira_type_for_spec(spec: ForeignTypeSpec) -> Type {
+    match spec.scalar() {
+        Some(ty) => kira_type_for_foreign(ty),
+        None => Type::Error,
+    }
+}
+
+/// Whether a Kira argument type is accepted for a foreign parameter position.
 ///
 /// A `CString` parameter accepts a Kira `String` and nothing else — the single
 /// explicit coercion. Every other parameter accepts a value assignable to the
 /// Kira type it maps back to, so an integer literal (`Int`) reaches any fixed
 /// width exactly as it does elsewhere.
-fn foreign_arg_matches(actual: Type, param: ForeignType) -> bool {
-    match param {
-        ForeignType::CString => actual == Type::String,
-        other => actual.assignable_to(kira_type_for_foreign(other)),
+fn foreign_arg_matches(actual: Type, param: ForeignTypeSpec) -> bool {
+    match param.scalar() {
+        Some(ForeignType::CString) => actual == Type::String,
+        _ => actual.assignable_to(kira_type_for_spec(param)),
     }
 }

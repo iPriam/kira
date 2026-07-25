@@ -7,7 +7,7 @@
 //! [`IrProgram`] is the contract that the program type-checked and has a valid
 //! entrypoint.
 
-use kira_runtime_abi::{Execution, ForeignImport, NativeStateTypeId};
+use kira_runtime_abi::{Execution, ForeignAggregates, ForeignImport, NativeStateTypeId};
 use kira_semantics_model::{EnumId, StructId, Type, TypeTable};
 use la_arena::{Arena, Idx};
 
@@ -52,6 +52,12 @@ pub struct IrProgram {
     /// frontend, above the backend split, so lowering neither adds nor removes
     /// a row. Empty for a program that declares no extern.
     pub foreign_imports: Vec<IrForeignImport>,
+    /// The C-layout aggregates the foreign signatures name by index.
+    ///
+    /// Carried across from the HIR unchanged, for the same reason the imports
+    /// are: what a struct's C layout is was decided in the frontend, above the
+    /// backend split. Empty for a program whose externs pass only scalars.
+    pub foreign_aggregates: ForeignAggregates,
     /// Arena backing every [`IrExprId`] across all functions.
     pub exprs: Arena<IrExpr>,
 }
