@@ -98,12 +98,15 @@ impl Command {
     ///
     /// Kept honest against the real parsers: `run`/`build` go through
     /// `CompileOptions::parse`, `live` through `LiveOptions::parse`, `check`
-    /// takes one path, `help` one optional word. A verb with no handler yet
-    /// has no argument shape to advertise.
+    /// takes one optional path, `help` one optional word. A verb with no
+    /// handler yet has no argument shape to advertise.
+    ///
+    /// The path is optional on `run`, `build`, and `check` because omitting it
+    /// means the package directory you are standing in.
     pub fn arguments(self) -> &'static str {
         match self {
-            Self::Run | Self::Build => " <file|dir> [--backend vm|llvm|hybrid] [--device]",
-            Self::Check => " <file|dir>",
+            Self::Run | Self::Build => " [file|dir] [--backend vm|llvm|hybrid] [--device]",
+            Self::Check => " [file|dir]",
             Self::Live => " [runner] <file> [--backend vm|hybrid] [--watch]",
             Self::Help => " [all]",
             _ => "",
