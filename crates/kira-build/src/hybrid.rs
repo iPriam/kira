@@ -289,6 +289,7 @@ pub fn manifest(
                 )
             })
             .collect(),
+        foreign_aggregates: program.foreign_aggregates.clone(),
     })
 }
 

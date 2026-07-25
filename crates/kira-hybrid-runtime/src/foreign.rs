@@ -12,11 +12,20 @@
 //! precisely the second copy this path exists to avoid.
 
 use kira_runtime_abi::{
-    BridgeData, BridgeValue, ForeignAdapterFn, ForeignAdapterStatus, ForeignArg, ForeignCallError,
-    ForeignResult, ForeignSignature, ForeignType,
+    BridgeData, BridgeValue, BridgeValueTag, ForeignAdapterFn, ForeignAdapterStatus,
+    ForeignAggregates, ForeignArg, ForeignCallError, ForeignPointerWidth, ForeignResult,
+    ForeignSignature, ForeignType, ForeignTypeSpec,
 };
 
 use crate::library::NativeLibrary;
+
+/// The pointer width of this process, which is the target the loaded native
+/// half was compiled for.
+const HOST_POINTER_WIDTH: ForeignPointerWidth = if size_of::<usize>() == 8 {
+    ForeignPointerWidth::Bits64
+} else {
+    ForeignPointerWidth::Bits32
+};
 
 /// Calls one adapter with `args`, marshalling through `library`'s allocator.
 ///
@@ -33,11 +42,12 @@ pub unsafe fn call_adapter(
     library: &NativeLibrary,
     adapter: ForeignAdapterFn,
     signature: &ForeignSignature,
+    aggregates: &ForeignAggregates,
     args: &[ForeignArg<'_>],
 ) -> Result<ForeignResult, ForeignCallError> {
-    if signature.result() == ForeignType::CString {
+    if signature.result() == ForeignTypeSpec::Scalar(ForeignType::CString) {
         return Err(ForeignCallError::UnsupportedResultType(
-            ForeignType::CString,
+            ForeignTypeSpec::Scalar(ForeignType::CString),
         ));
     }
     if args.len() != signature.parameters().len() {
@@ -54,10 +64,25 @@ pub unsafe fn call_adapter(
     for (index, (&expected, &argument)) in
         signature.parameters().iter().zip(args.iter()).enumerate()
     {
-        lowered.push(lower_argument(expected, argument, index, &mut strings)?);
+        lowered.push(lower_argument(
+            expected,
+            argument,
+            index,
+            aggregates,
+            &mut strings,
+        )?);
     }
 
-    let mut out = BridgeValue::VOID;
+    // An aggregate result is written into storage this caller owns, so the
+    // native half never allocates one and a failed call leaves it untouched.
+    let mut result_buffer = match signature.result().aggregate() {
+        Some(id) => vec![0u8; aggregates.layout_of(id, HOST_POINTER_WIDTH)?.size as usize],
+        None => Vec::new(),
+    };
+    let mut out = match signature.result().aggregate() {
+        Some(_) => BridgeValue::new(BridgeValueTag::AGGREGATE, result_buffer.as_mut_ptr() as u64),
+        None => BridgeValue::VOID,
+    };
     let pointer = if lowered.is_empty() {
         std::ptr::null()
     } else {
@@ -70,23 +95,25 @@ pub unsafe fn call_adapter(
     drop(strings);
 
     match status {
-        ForeignAdapterStatus::SUCCESS => lift_result(signature.result(), out),
+        ForeignAdapterStatus::SUCCESS => lift_result(signature.result(), out, result_buffer),
         ForeignAdapterStatus::BAD_ARGUMENT_COUNT => Err(ForeignCallError::AdapterBadArgumentCount),
         ForeignAdapterStatus::BAD_ARGUMENT_TAG => Err(ForeignCallError::AdapterBadArgumentTag),
         ForeignAdapterStatus::INTERIOR_NUL => Err(ForeignCallError::AdapterInteriorNul),
         ForeignAdapterStatus::MALFORMED_RESULT => Err(ForeignCallError::AdapterMalformedResult),
+        ForeignAdapterStatus::BAD_RESULT_SLOT => Err(ForeignCallError::AdapterBadResultSlot),
         ForeignAdapterStatus(other) => Err(ForeignCallError::UnknownAdapterStatus(other)),
     }
 }
 
 /// Lowers one borrowed argument into the bridge value the adapter reads.
 fn lower_argument(
-    expected: ForeignType,
+    expected: ForeignTypeSpec,
     argument: ForeignArg<'_>,
     index: usize,
+    aggregates: &ForeignAggregates,
     strings: &mut TransientStrings<'_>,
 ) -> Result<BridgeValue, ForeignCallError> {
-    let actual = argument.foreign_type();
+    let actual = argument.spec();
     if actual != expected {
         return Err(ForeignCallError::ArgumentType {
             index,
@@ -95,6 +122,22 @@ fn lower_argument(
         });
     }
     let data = match argument {
+        // An aggregate crosses as a borrowed pointer to its C-layout bytes,
+        // which no `BridgeData` variant models: those all fit one payload word.
+        ForeignArg::Aggregate { id, bytes } => {
+            let expected_size = aggregates.layout_of(id, HOST_POINTER_WIDTH)?.size as usize;
+            if bytes.len() != expected_size {
+                return Err(ForeignCallError::AggregateSize {
+                    index,
+                    expected: expected_size,
+                    actual: bytes.len(),
+                });
+            }
+            return Ok(BridgeValue::new(
+                BridgeValueTag::AGGREGATE,
+                bytes.as_ptr() as u64,
+            ));
+        }
         ForeignArg::Void => BridgeData::Void,
         ForeignArg::I8(value) => BridgeData::Int(i64::from(value)),
         ForeignArg::I16(value) => BridgeData::Int(i64::from(value)),
@@ -122,9 +165,13 @@ fn lower_argument(
 }
 
 /// Lifts what the adapter wrote into an owned foreign result.
+///
+/// `result_buffer` is the caller's aggregate storage, empty for every scalar
+/// result; a successful aggregate call hands its bytes straight out.
 fn lift_result(
-    expected: ForeignType,
+    expected: ForeignTypeSpec,
     value: BridgeValue,
+    result_buffer: Vec<u8>,
 ) -> Result<ForeignResult, ForeignCallError> {
     if value.reserved != [0; 7] {
         return Err(ForeignCallError::MalformedResultReserved);
@@ -135,6 +182,20 @@ fn lift_result(
             actual: value.tag.0,
         });
     }
+    let expected = match expected {
+        ForeignTypeSpec::Scalar(ty) => ty,
+        // The adapter fills the caller's buffer in place, so the payload it
+        // leaves must still be the pointer handed in.
+        ForeignTypeSpec::Aggregate(id) => {
+            if value.payload != result_buffer.as_ptr() as u64 {
+                return Err(ForeignCallError::AdapterMalformedResult);
+            }
+            return Ok(ForeignResult::Aggregate {
+                id,
+                bytes: result_buffer.into_boxed_slice(),
+            });
+        }
+    };
     Ok(match expected {
         ForeignType::Void => ForeignResult::Void,
         ForeignType::I8 => ForeignResult::I8(value.payload as i8),
@@ -154,7 +215,7 @@ fn lift_result(
         }
         ForeignType::CString => {
             return Err(ForeignCallError::UnsupportedResultType(
-                ForeignType::CString,
+                ForeignTypeSpec::Scalar(ForeignType::CString),
             ));
         }
     })

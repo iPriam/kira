@@ -6,10 +6,11 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
 use kira_runtime_abi::{
-    BridgeData, BridgeValue, FOREIGN_ADAPTER_ABI_MARKER, FOREIGN_STRING_DATA_SYMBOL,
-    FOREIGN_STRING_FREE_SYMBOL, FOREIGN_STRING_LEN_SYMBOL, FOREIGN_STRING_NEW_SYMBOL,
-    ForeignAdapterFn, ForeignAdapterStatus, ForeignArg, ForeignCallError, ForeignResult,
-    ForeignSignature, ForeignType,
+    BridgeData, BridgeValue, BridgeValueTag, FOREIGN_ADAPTER_ABI_MARKER,
+    FOREIGN_STRING_DATA_SYMBOL, FOREIGN_STRING_FREE_SYMBOL, FOREIGN_STRING_LEN_SYMBOL,
+    FOREIGN_STRING_NEW_SYMBOL, ForeignAdapterFn, ForeignAdapterStatus, ForeignAggregates,
+    ForeignArg, ForeignCallError, ForeignPointerWidth, ForeignResult, ForeignSignature,
+    ForeignType, ForeignTypeSpec,
 };
 use thiserror::Error;
 
@@ -93,13 +94,19 @@ struct StringHelpers {
 pub struct ForeignAdapterLibrary {
     path: PathBuf,
     adapters: RefCell<HashMap<String, ForeignAdapterFn>>,
+    aggregates: ForeignAggregates,
     strings: StringHelpers,
     library: DynamicLibrary,
 }
 
 impl ForeignAdapterLibrary {
     /// Loads a generated adapter library and binds its version marker and string helpers.
-    pub fn load(path: &Path) -> Result<Self, ForeignAdapterError> {
+    ///
+    /// `aggregates` is the program's C-layout aggregate table, which the
+    /// signatures passed to [`Self::call`] index. It belongs to the library
+    /// rather than to a call because one sidecar serves one program: every
+    /// adapter in it was generated against this same table.
+    pub fn load(path: &Path, aggregates: ForeignAggregates) -> Result<Self, ForeignAdapterError> {
         let library =
             DynamicLibrary::open(path).map_err(|source| ForeignAdapterError::Library {
                 path: path.to_path_buf(),
@@ -122,6 +129,7 @@ impl ForeignAdapterLibrary {
         Ok(Self {
             path: path.to_path_buf(),
             adapters: RefCell::new(HashMap::new()),
+            aggregates,
             strings,
             library,
         })
@@ -144,7 +152,7 @@ impl ForeignAdapterLibrary {
         args: &[ForeignArg<'_>],
     ) -> Result<ForeignResult, ForeignAdapterError> {
         let adapter = self.adapter(adapter_symbol)?;
-        call_adapter(adapter, signature, args, &self.strings).map_err(Into::into)
+        call_adapter(adapter, signature, &self.aggregates, args, &self.strings).map_err(Into::into)
     }
 
     fn adapter(&self, symbol: &str) -> Result<ForeignAdapterFn, ForeignAdapterError> {
@@ -210,15 +218,24 @@ fn validate_symbol(symbol: &str) -> Result<(), ForeignAdapterError> {
     Ok(())
 }
 
+/// The pointer width of this process, which is the target an adapter library
+/// loaded here was compiled for.
+const HOST_POINTER_WIDTH: ForeignPointerWidth = if size_of::<usize>() == 8 {
+    ForeignPointerWidth::Bits64
+} else {
+    ForeignPointerWidth::Bits32
+};
+
 fn call_adapter(
     adapter: ForeignAdapterFn,
     signature: &ForeignSignature,
+    aggregates: &ForeignAggregates,
     args: &[ForeignArg<'_>],
     helpers: &StringHelpers,
 ) -> Result<ForeignResult, ForeignCallError> {
-    if signature.result() == ForeignType::CString {
+    if signature.result() == ForeignTypeSpec::Scalar(ForeignType::CString) {
         return Err(ForeignCallError::UnsupportedResultType(
-            ForeignType::CString,
+            ForeignTypeSpec::Scalar(ForeignType::CString),
         ));
     }
     if args.len() != signature.parameters().len() {
@@ -243,39 +260,54 @@ fn call_adapter(
             expected,
             argument,
             index,
+            aggregates,
             &mut temporary_strings,
         )?);
     }
 
-    let mut out = BridgeValue::VOID;
+    // An aggregate result is written into storage this caller owns: the adapter
+    // never allocates, so nothing has to be freed on the far side and a failed
+    // call leaves the buffer untouched rather than half-owned.
+    let mut result_buffer = match signature.result().aggregate() {
+        Some(id) => vec![0u8; aggregates.layout_of(id, HOST_POINTER_WIDTH)?.size as usize],
+        None => Vec::new(),
+    };
+    let mut out = match signature.result().aggregate() {
+        Some(_) => BridgeValue::new(BridgeValueTag::AGGREGATE, result_buffer.as_mut_ptr() as u64),
+        None => BridgeValue::VOID,
+    };
     let pointer = if lowered.is_empty() {
         std::ptr::null()
     } else {
         lowered.as_ptr()
     };
     // SAFETY: `pointer` covers exactly `count` initialized bridge values (or is
-    // null for zero), `out` is writable for this call, and `adapter` was bound
-    // only after the version-1 marker was verified.
+    // null for zero), `out` is writable for this call and — for an aggregate
+    // result — addresses `result_buffer`, which is live across the call and
+    // sized from the same layout the adapter was generated against. `adapter`
+    // was bound only after the versioned marker was verified.
     let status = unsafe { adapter(pointer, count, &mut out) };
     drop(temporary_strings);
 
     match status {
-        ForeignAdapterStatus::SUCCESS => lift_result(signature.result(), out),
+        ForeignAdapterStatus::SUCCESS => lift_result(signature.result(), out, result_buffer),
         ForeignAdapterStatus::BAD_ARGUMENT_COUNT => Err(ForeignCallError::AdapterBadArgumentCount),
         ForeignAdapterStatus::BAD_ARGUMENT_TAG => Err(ForeignCallError::AdapterBadArgumentTag),
         ForeignAdapterStatus::INTERIOR_NUL => Err(ForeignCallError::AdapterInteriorNul),
         ForeignAdapterStatus::MALFORMED_RESULT => Err(ForeignCallError::AdapterMalformedResult),
+        ForeignAdapterStatus::BAD_RESULT_SLOT => Err(ForeignCallError::AdapterBadResultSlot),
         ForeignAdapterStatus(status) => Err(ForeignCallError::UnknownAdapterStatus(status)),
     }
 }
 
 fn lower_argument(
-    expected: ForeignType,
+    expected: ForeignTypeSpec,
     argument: ForeignArg<'_>,
     index: usize,
+    aggregates: &ForeignAggregates,
     strings: &mut TemporaryStrings<'_>,
 ) -> Result<BridgeValue, ForeignCallError> {
-    let actual = argument.foreign_type();
+    let actual = argument.spec();
     if actual != expected {
         return Err(ForeignCallError::ArgumentType {
             index,
@@ -285,6 +317,23 @@ fn lower_argument(
     }
 
     let value = match argument {
+        // An aggregate crosses as a borrowed pointer to its C-layout bytes, so
+        // it encodes directly rather than through `BridgeData`, which models
+        // only values that fit one payload word.
+        ForeignArg::Aggregate { id, bytes } => {
+            let expected_size = aggregates.layout_of(id, HOST_POINTER_WIDTH)?.size as usize;
+            if bytes.len() != expected_size {
+                return Err(ForeignCallError::AggregateSize {
+                    index,
+                    expected: expected_size,
+                    actual: bytes.len(),
+                });
+            }
+            return Ok(BridgeValue::new(
+                BridgeValueTag::AGGREGATE,
+                bytes.as_ptr() as u64,
+            ));
+        }
         ForeignArg::Void => BridgeData::Void,
         ForeignArg::I8(value) => BridgeData::Int(i64::from(value)),
         ForeignArg::I16(value) => BridgeData::Int(i64::from(value)),
@@ -311,9 +360,16 @@ fn lower_argument(
     Ok(BridgeValue::encode(value))
 }
 
+/// Reads the adapter's out slot back as an owned result.
+///
+/// `result_buffer` is the caller's aggregate storage, empty for every scalar
+/// result. It is taken by value because a successful aggregate call hands its
+/// bytes straight out: nothing copies them a second time, and a failed call
+/// drops them here.
 fn lift_result(
-    expected: ForeignType,
+    expected: ForeignTypeSpec,
     value: BridgeValue,
+    result_buffer: Vec<u8>,
 ) -> Result<ForeignResult, ForeignCallError> {
     if value.reserved != [0; 7] {
         return Err(ForeignCallError::MalformedResultReserved);
@@ -324,6 +380,23 @@ fn lift_result(
             actual: value.tag.0,
         });
     }
+
+    let expected = match expected {
+        ForeignTypeSpec::Scalar(ty) => ty,
+        // The adapter fills the caller's buffer in place, so the returned
+        // payload must still be the pointer this caller handed it. A different
+        // word means the adapter wrote somewhere else, and the bytes here would
+        // be the zeroes they started as.
+        ForeignTypeSpec::Aggregate(id) => {
+            if value.payload != result_buffer.as_ptr() as u64 {
+                return Err(ForeignCallError::AdapterMalformedResult);
+            }
+            return Ok(ForeignResult::Aggregate {
+                id,
+                bytes: result_buffer.into_boxed_slice(),
+            });
+        }
+    };
 
     let result = match expected {
         ForeignType::Void => ForeignResult::Void,
@@ -344,7 +417,7 @@ fn lift_result(
         }
         ForeignType::CString => {
             return Err(ForeignCallError::UnsupportedResultType(
-                ForeignType::CString,
+                ForeignTypeSpec::Scalar(ForeignType::CString),
             ));
         }
     };
@@ -408,7 +481,7 @@ use std::ffi::c_void;
 pub struct BridgeValue { tag: u8, reserved: [u8; 7], payload: u64 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn kira_foreign_adapter_abi_version_1() {}
+pub extern "C" fn kira_foreign_adapter_abi_version_2() {}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_str_new(data: *const u8, len: usize) -> *mut c_void {
@@ -477,7 +550,7 @@ pub unsafe extern "C" fn test_bad_status(_: *const BridgeValue, _: u32, _: *mut 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn test_malformed_result(_: *const BridgeValue, _: u32, out: *mut BridgeValue) -> u32 {
-    unsafe { *out = BridgeValue { tag: 10, reserved: [0; 7], payload: 0 }; }
+    unsafe { *out = BridgeValue { tag: 200, reserved: [0; 7], payload: 0 }; }
     0
 }
 "#;
@@ -530,9 +603,10 @@ pub extern "C" fn kira_foreign_adapter_abi_version_0() {}
     #[test]
     fn loads_and_calls_a_generated_adapter() {
         let fixture = Fixture::compile(ADAPTER_SOURCE);
-        let library = ForeignAdapterLibrary::load(&fixture.library).expect("fixture should load");
+        let library = ForeignAdapterLibrary::load(&fixture.library, ForeignAggregates::new())
+            .expect("fixture should load");
         let signature =
-            ForeignSignature::new([ForeignType::I32, ForeignType::I32], ForeignType::I32);
+            ForeignSignature::scalars([ForeignType::I32, ForeignType::I32], ForeignType::I32);
         assert_eq!(
             library
                 .call(
@@ -557,15 +631,16 @@ pub extern "C" fn kira_foreign_adapter_abi_version_0() {}
     #[test]
     fn cstring_and_raw_pointer_ownership_are_preserved() {
         let fixture = Fixture::compile(ADAPTER_SOURCE);
-        let library = ForeignAdapterLibrary::load(&fixture.library).expect("fixture should load");
-        let cstring = ForeignSignature::new([ForeignType::CString], ForeignType::U64);
+        let library = ForeignAdapterLibrary::load(&fixture.library, ForeignAggregates::new())
+            .expect("fixture should load");
+        let cstring = ForeignSignature::scalars([ForeignType::CString], ForeignType::U64);
         assert_eq!(
             library
                 .call("test_cstring_len", &cstring, &[ForeignArg::CString("kira")])
                 .expect("CString should be copied"),
             ForeignResult::U64(4)
         );
-        let pointer = ForeignSignature::new([ForeignType::RawPtr], ForeignType::RawPtr);
+        let pointer = ForeignSignature::scalars([ForeignType::RawPtr], ForeignType::RawPtr);
         assert_eq!(
             library
                 .call("test_raw_ptr", &pointer, &[ForeignArg::RawPtr(0x1234)])
@@ -578,13 +653,14 @@ pub extern "C" fn kira_foreign_adapter_abi_version_0() {}
     fn rejects_a_stale_marker_and_malformed_symbol() {
         let stale = Fixture::compile(STALE_SOURCE);
         assert!(matches!(
-            ForeignAdapterLibrary::load(&stale.library),
+            ForeignAdapterLibrary::load(&stale.library, ForeignAggregates::new()),
             Err(ForeignAdapterError::IncompatibleAbi { .. })
         ));
 
         let fixture = Fixture::compile(ADAPTER_SOURCE);
-        let library = ForeignAdapterLibrary::load(&fixture.library).expect("fixture should load");
-        let signature = ForeignSignature::new([], ForeignType::Void);
+        let library = ForeignAdapterLibrary::load(&fixture.library, ForeignAggregates::new())
+            .expect("fixture should load");
+        let signature = ForeignSignature::scalars([], ForeignType::Void);
         assert!(matches!(
             library.call("bad\0symbol", &signature, &[]),
             Err(ForeignAdapterError::MalformedSymbol { .. })
@@ -594,8 +670,9 @@ pub extern "C" fn kira_foreign_adapter_abi_version_0() {}
     #[test]
     fn reports_count_tag_nul_status_and_malformed_result_without_panicking() {
         let fixture = Fixture::compile(ADAPTER_SOURCE);
-        let library = ForeignAdapterLibrary::load(&fixture.library).expect("fixture should load");
-        let void = ForeignSignature::new([], ForeignType::Void);
+        let library = ForeignAdapterLibrary::load(&fixture.library, ForeignAggregates::new())
+            .expect("fixture should load");
+        let void = ForeignSignature::scalars([], ForeignType::Void);
         assert!(matches!(
             library.call("test_bad_count", &void, &[]),
             Err(ForeignAdapterError::Call(
@@ -623,11 +700,11 @@ pub extern "C" fn kira_foreign_adapter_abi_version_0() {}
         assert!(matches!(
             library.call("test_malformed_result", &void, &[]),
             Err(ForeignAdapterError::Call(
-                ForeignCallError::MalformedResultTag { actual: 10, .. }
+                ForeignCallError::MalformedResultTag { actual: 200, .. }
             ))
         ));
 
-        let cstring = ForeignSignature::new([ForeignType::CString], ForeignType::Void);
+        let cstring = ForeignSignature::scalars([ForeignType::CString], ForeignType::Void);
         assert!(matches!(
             library.call("test_add", &cstring, &[ForeignArg::CString("a\0b")]),
             Err(ForeignAdapterError::Call(ForeignCallError::InteriorNul {

@@ -97,7 +97,15 @@ impl Vm<'_> {
             self.heap.drop_value(value);
         }
 
-        let result = self.heap.absorb_foreign(outcome?);
+        let outcome = outcome?;
+        let spec = outcome.spec();
+        let result = self
+            .heap
+            .absorb_foreign(outcome)
+            .ok_or(VmError::ForeignArgMismatch {
+                foreign: id,
+                expected: spec,
+            })?;
         self.stack.push(result);
         Ok(())
     }

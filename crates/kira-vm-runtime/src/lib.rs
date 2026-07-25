@@ -116,6 +116,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![main, shout],
             main: Some(0),
             strings: vec!["hi".to_owned()],
@@ -174,6 +175,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![main],
             main: Some(0),
             strings: Vec::new(),
@@ -209,6 +211,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![func("main", 0, 0, vec![I::ReturnVoid]), greet],
             main: Some(0),
             strings: vec!["hi, ".to_owned()],
@@ -244,6 +247,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![
                 func("main", 0, 0, vec![I::ReturnVoid]),
                 func("takes_one", 1, 1, vec![I::ReturnVoid]),
@@ -276,6 +280,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![func("main", 0, 0, vec![I::ReturnVoid]), native],
             main: Some(0),
             strings: Vec::new(),
@@ -295,6 +300,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![
                 func("main", 0, 0, vec![I::ReturnVoid]),
                 func("takes_one", 1, 1, vec![I::ReturnVoid]),
@@ -328,6 +334,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![main, native],
             main: Some(0),
             strings: vec![],
@@ -350,6 +357,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![main, native],
             main: Some(0),
             strings: vec![],
@@ -389,6 +397,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![main],
             main: Some(0),
             strings: vec![],
@@ -434,6 +443,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![main],
             main: Some(0),
             strings: vec![],
@@ -479,6 +489,7 @@ mod tests {
         Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![main, fib],
             main: Some(0),
             strings: vec![],
@@ -515,6 +526,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![main],
             main: Some(0),
             strings: vec!["foo".to_owned(), "bar".to_owned()],
@@ -546,6 +558,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![main],
             main: Some(0),
             strings: vec![],
@@ -564,6 +577,7 @@ mod tests {
             Module {
                 exports: Default::default(),
                 foreign_imports: Vec::new(),
+                foreign_aggregates: Default::default(),
                 functions: vec![func("main", 0, 0, vec![])],
                 main: Some(0),
                 strings: vec![],
@@ -572,6 +586,7 @@ mod tests {
             Module {
                 exports: Default::default(),
                 foreign_imports: Vec::new(),
+                foreign_aggregates: Default::default(),
                 functions: vec![func("main", 0, 0, vec![I::ConstInt(1)])],
                 main: Some(0),
                 strings: vec![],
@@ -580,6 +595,7 @@ mod tests {
             Module {
                 exports: Default::default(),
                 foreign_imports: Vec::new(),
+                foreign_aggregates: Default::default(),
                 functions: vec![func("main", 0, 0, vec![I::ConstStr(3), I::ReturnVoid])],
                 main: Some(0),
                 strings: vec![],
@@ -588,6 +604,7 @@ mod tests {
             Module {
                 exports: Default::default(),
                 foreign_imports: Vec::new(),
+                foreign_aggregates: Default::default(),
                 functions: vec![func("main", 0, 1, vec![I::LoadLocal(9), I::ReturnVoid])],
                 main: Some(0),
                 strings: vec![],
@@ -596,6 +613,7 @@ mod tests {
             Module {
                 exports: Default::default(),
                 foreign_imports: Vec::new(),
+                foreign_aggregates: Default::default(),
                 functions: vec![func("main", 2, 0, vec![I::ReturnVoid])],
                 main: Some(0),
                 strings: vec![],
@@ -604,6 +622,7 @@ mod tests {
             Module {
                 exports: Default::default(),
                 foreign_imports: Vec::new(),
+                foreign_aggregates: Default::default(),
                 functions: vec![func("main", 0, 0, vec![I::ReturnVoid])],
                 main: Some(7),
                 strings: vec![],
@@ -640,6 +659,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             functions: vec![main],
             main: Some(0),
             strings: vec!["a".to_owned(), "bb".to_owned()],
