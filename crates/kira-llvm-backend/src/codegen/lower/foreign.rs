@@ -25,8 +25,13 @@ impl FunctionLowering<'_, '_> {
         let idx = index as usize;
         let import = self.codegen.program.foreign_imports[idx].import.clone();
         let signature = import.signature();
-        let params: Vec<ForeignType> = signature.parameters().to_vec();
-        let result = signature.result();
+        let params: Vec<ForeignType> = signature
+            .parameters()
+            .iter()
+            .copied()
+            .map(crate::codegen::adapter::scalar_of)
+            .collect::<Result<_, _>>()?;
+        let result = crate::codegen::adapter::scalar_of(signature.result())?;
         let adapter = *self
             .codegen
             .foreign_adapters

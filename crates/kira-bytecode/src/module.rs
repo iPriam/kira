@@ -6,9 +6,13 @@
 //! just an in-memory structure. The format is append-only.
 
 use crate::exports::{ExportTable, ExportType, ModuleExport};
-use crate::module_foreign::{read_foreign, write_foreign};
+use crate::module_foreign::{
+    read_foreign, read_foreign_aggregates, write_foreign, write_foreign_aggregates,
+};
 use crate::op::{DecodeError, Instruction, decode, encode};
-use kira_runtime_abi::{BridgeValueTag, Execution, ForeignImport};
+use kira_runtime_abi::{
+    BridgeValueTag, Execution, ForeignAggregateError, ForeignAggregates, ForeignImport,
+};
 
 /// The magic bytes that open a serialized module: "KBC1".
 pub const MAGIC: [u8; 4] = *b"KBC1";
@@ -49,6 +53,11 @@ pub struct Module {
     /// still written first, so the appended foreign bytes are never misread as
     /// an exports section.
     pub foreign_imports: Vec<ForeignImport>,
+    /// The C-layout aggregates the foreign signatures name by index.
+    ///
+    /// Empty for a module whose externs pass only scalars, which is also what a
+    /// module written before the aggregate section existed decodes as.
+    pub foreign_aggregates: ForeignAggregates,
 }
 
 /// One compiled function: its signature shape and its code.
@@ -136,6 +145,31 @@ pub enum ModuleDecodeError {
         /// The unrecognized foreign-type tag byte.
         tag: u8,
     },
+    /// An aggregate member named a type byte this build does not know.
+    #[error("aggregate {index} names member type tag `{tag}`, which this build does not know")]
+    UnknownForeignAggregateMember {
+        /// The offending aggregate's table index.
+        index: u32,
+        /// The unrecognized member tag byte.
+        tag: u8,
+    },
+    /// An aggregate's members could not form a layable-out row.
+    #[error("aggregate {index} in this module is malformed")]
+    MalformedForeignAggregate {
+        /// The offending aggregate's table index.
+        index: u32,
+        /// Why the aggregate table rejected the row.
+        #[source]
+        source: ForeignAggregateError,
+    },
+    /// A foreign signature named an aggregate index the table does not contain.
+    #[error("foreign import `{import}` names aggregate {index}, which this module does not define")]
+    UnknownForeignAggregate {
+        /// The C symbol of the offending import.
+        import: String,
+        /// The unresolved aggregate index.
+        index: u32,
+    },
     /// Bytes remained after the last section the format defines.
     ///
     /// Every section is self-delimiting, so leftovers mean the stream was
@@ -172,6 +206,13 @@ impl Module {
         self.write_exports(&mut out, has_foreign);
         if has_foreign {
             write_foreign(&mut out, &self.foreign_imports);
+        }
+        // The aggregate table follows the foreign section and is omitted when
+        // empty, so a scalar-only program's bytes are unchanged from before
+        // aggregates existed. An aggregate can only be reached through a
+        // foreign signature, so a non-empty table always sits behind one.
+        if !self.foreign_aggregates.is_empty() {
+            write_foreign_aggregates(&mut out, &self.foreign_aggregates);
         }
         out
     }
@@ -239,6 +280,7 @@ impl Module {
         }
         let exports = read_exports(&mut reader)?;
         let foreign_imports = read_foreign(&mut reader)?;
+        let foreign_aggregates = read_foreign_aggregates(&mut reader, &foreign_imports)?;
         if reader.offset != bytes.len() {
             return Err(ModuleDecodeError::TrailingBytes(
                 bytes.len() - reader.offset,
@@ -250,6 +292,7 @@ impl Module {
             strings,
             exports,
             foreign_imports,
+            foreign_aggregates,
         })
     }
 }
@@ -372,6 +415,7 @@ mod tests {
         let module = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             main: Some(1),
             strings: vec!["hello".to_owned(), "world".to_owned()],
             functions: vec![
@@ -412,6 +456,7 @@ mod tests {
         Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             main: None,
             strings: Vec::new(),
             functions: vec![FuncProto {
@@ -451,6 +496,7 @@ mod tests {
         let bytes = Module {
             exports: Default::default(),
             foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
             main: Some(0),
             ..library_module()
         }
@@ -608,10 +654,12 @@ mod tests {
     fn bytes_after_the_last_section_are_rejected() {
         // `exporting_module` has exports but no foreign imports, so its bytes
         // end after the exports section. A complete (empty) foreign section is
-        // four zero bytes (a count of zero); appending three more bytes past it
-        // is trailing garbage the decoder must reject once both sections are
-        // read, rather than run half an artifact.
+        // four zero bytes (a count of zero), and so is a complete empty
+        // aggregate section; appending three more bytes past both is trailing
+        // garbage the decoder must reject once every section is read, rather
+        // than run half an artifact.
         let mut bytes = exporting_module().to_bytes();
+        bytes.extend_from_slice(&[0, 0, 0, 0]);
         bytes.extend_from_slice(&[0, 0, 0, 0]);
         bytes.extend_from_slice(&[0, 0, 0]);
         assert_eq!(

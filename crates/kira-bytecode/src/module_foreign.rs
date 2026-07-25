@@ -1,5 +1,5 @@
 //! The KBC1 foreign-import section: the `@FFI.Extern` rows a `CallForeign` id
-//! indexes.
+//! indexes, and the C-layout aggregate table those rows index in turn.
 //!
 //! Appended after the exports section, with the same append-only discipline:
 //! an old module ends before it and decodes as zero imports, a partial section
@@ -7,15 +7,30 @@
 //! typed error rather than a guess. See [`crate::module`] for the empty-exports
 //! prelude that keeps this section unambiguous when a module has foreign
 //! imports but no exports.
+//!
+//! The aggregate table is appended *after* the import rows, which reference it
+//! by index, so a decoder reads the references before it can resolve them and
+//! checks every index once the table is in hand. The other order would have
+//! been readable in one pass but not appendable: a module written before
+//! aggregates existed ends where the table now begins, and moving the table
+//! ahead of the rows would change bytes that already exist.
 
-use kira_runtime_abi::{ForeignAbi, ForeignImport, ForeignSignature, ForeignType};
+use kira_runtime_abi::{
+    ForeignAbi, ForeignAggregate, ForeignAggregateId, ForeignAggregates, ForeignImport,
+    ForeignMember, ForeignSignature, ForeignType, ForeignTypeSpec,
+};
 
 use crate::module::{ModuleDecodeError, Reader, write_bytes, write_u32};
+
+/// The member byte that introduces a nested aggregate; anything else is a
+/// scalar's own foreign-type tag.
+const NESTED_MEMBER_TAG: u8 = 0xff;
 
 /// Writes the foreign-import section: a count, then one row per import.
 ///
 /// Each row is the library name, the C symbol, the ABI tag byte, the parameter
-/// count, one foreign-type tag byte per parameter, and the result tag byte.
+/// count, one type-spec per parameter, and the result spec. A spec is one tag
+/// byte, followed by a `u32` table index when the tag names an aggregate.
 pub(crate) fn write_foreign(out: &mut Vec<u8>, imports: &[ForeignImport]) {
     write_u32(out, imports.len() as u32);
     for import in imports {
@@ -25,9 +40,31 @@ pub(crate) fn write_foreign(out: &mut Vec<u8>, imports: &[ForeignImport]) {
         let signature = import.signature();
         write_u32(out, signature.parameters().len() as u32);
         for parameter in signature.parameters() {
-            out.push(parameter.tag());
+            write_spec(out, *parameter);
         }
-        out.push(signature.result().tag());
+        write_spec(out, signature.result());
+    }
+}
+
+/// Writes the aggregate table: a count, then each aggregate's members in
+/// declaration order.
+///
+/// A member is one byte — a scalar's foreign-type tag, or [`NESTED_MEMBER_TAG`]
+/// followed by a `u32` index. The tag is unambiguous because no scalar tag
+/// reaches `0xff`.
+pub(crate) fn write_foreign_aggregates(out: &mut Vec<u8>, aggregates: &ForeignAggregates) {
+    write_u32(out, aggregates.len() as u32);
+    for aggregate in aggregates.iter() {
+        write_u32(out, aggregate.members().len() as u32);
+        for member in aggregate.members() {
+            match member {
+                ForeignMember::Scalar(ty) => out.push(ty.tag()),
+                ForeignMember::Aggregate(id) => {
+                    out.push(NESTED_MEMBER_TAG);
+                    write_u32(out, id.0);
+                }
+            }
+        }
     }
 }
 
@@ -57,9 +94,9 @@ pub(crate) fn read_foreign(
         let param_count = reader.read_u32()?;
         let mut parameters = Vec::new();
         for _ in 0..param_count {
-            parameters.push(read_foreign_type(reader, &symbol)?);
+            parameters.push(read_spec(reader, &symbol)?);
         }
-        let result = read_foreign_type(reader, &symbol)?;
+        let result = read_spec(reader, &symbol)?;
         imports.push(ForeignImport::new(
             library,
             symbol,
@@ -70,17 +107,84 @@ pub(crate) fn read_foreign(
     Ok(imports)
 }
 
-/// Reads one foreign-type tag byte, naming `import` in the error on an unknown
-/// tag so the diagnosis points at the offending row.
-fn read_foreign_type(
+/// Reads the aggregate table, or an empty table when the stream ends first, and
+/// checks that every index the imports named resolves inside it.
+pub(crate) fn read_foreign_aggregates(
     reader: &mut Reader<'_>,
-    import: &str,
-) -> Result<ForeignType, ModuleDecodeError> {
+    imports: &[ForeignImport],
+) -> Result<ForeignAggregates, ModuleDecodeError> {
+    let mut aggregates = ForeignAggregates::new();
+    if !reader.is_at_end() {
+        let count = reader.read_u32()?;
+        for index in 0..count {
+            let member_count = reader.read_u32()?;
+            let mut members = Vec::with_capacity(member_count as usize);
+            for _ in 0..member_count {
+                members.push(read_member(reader, index)?);
+            }
+            aggregates
+                .push(ForeignAggregate::new(members))
+                .map_err(|source| ModuleDecodeError::MalformedForeignAggregate { index, source })?;
+        }
+    }
+    for import in imports {
+        let signature = import.signature();
+        for spec in signature
+            .parameters()
+            .iter()
+            .copied()
+            .chain(std::iter::once(signature.result()))
+        {
+            if let Some(id) = spec.aggregate()
+                && aggregates.get(id).is_none()
+            {
+                return Err(ModuleDecodeError::UnknownForeignAggregate {
+                    import: import.symbol().to_owned(),
+                    index: id.0,
+                });
+            }
+        }
+    }
+    Ok(aggregates)
+}
+
+/// Writes one signature position.
+fn write_spec(out: &mut Vec<u8>, spec: ForeignTypeSpec) {
+    out.push(spec.tag());
+    if let Some(id) = spec.aggregate() {
+        write_u32(out, id.0);
+    }
+}
+
+/// Reads one signature position, naming `import` in the error on an unknown tag
+/// so the diagnosis points at the offending row.
+fn read_spec(reader: &mut Reader<'_>, import: &str) -> Result<ForeignTypeSpec, ModuleDecodeError> {
     let tag = reader.take(1)?[0];
-    ForeignType::from_tag(tag).ok_or_else(|| ModuleDecodeError::UnknownForeignType {
-        import: import.to_owned(),
-        tag,
-    })
+    if tag == ForeignTypeSpec::AGGREGATE_TAG {
+        return Ok(ForeignTypeSpec::Aggregate(ForeignAggregateId(
+            reader.read_u32()?,
+        )));
+    }
+    ForeignType::from_tag(tag)
+        .map(ForeignTypeSpec::Scalar)
+        .ok_or_else(|| ModuleDecodeError::UnknownForeignType {
+            import: import.to_owned(),
+            tag,
+        })
+}
+
+/// Reads one aggregate member, naming the containing aggregate on an unknown
+/// scalar tag.
+fn read_member(reader: &mut Reader<'_>, index: u32) -> Result<ForeignMember, ModuleDecodeError> {
+    let tag = reader.take(1)?[0];
+    if tag == NESTED_MEMBER_TAG {
+        return Ok(ForeignMember::Aggregate(ForeignAggregateId(
+            reader.read_u32()?,
+        )));
+    }
+    ForeignType::from_tag(tag)
+        .map(ForeignMember::Scalar)
+        .ok_or(ModuleDecodeError::UnknownForeignAggregateMember { index, tag })
 }
 
 #[cfg(test)]
@@ -106,18 +210,22 @@ mod tests {
             main: Some(0),
             strings: Vec::new(),
             exports: Default::default(),
+            foreign_aggregates: Default::default(),
             foreign_imports: vec![
                 ForeignImport::new(
                     "ffimath",
                     "kira_ffi_add",
                     ForeignAbi::C,
-                    ForeignSignature::new([ForeignType::I32, ForeignType::I32], ForeignType::I32),
+                    ForeignSignature::scalars(
+                        [ForeignType::I32, ForeignType::I32],
+                        ForeignType::I32,
+                    ),
                 ),
                 ForeignImport::new(
                     "ffimath",
                     "kira_ffi_name_len",
                     ForeignAbi::C,
-                    ForeignSignature::new([ForeignType::CString], ForeignType::U64),
+                    ForeignSignature::scalars([ForeignType::CString], ForeignType::U64),
                 ),
             ],
         }
@@ -216,7 +324,7 @@ mod tests {
             "lib",
             "sym",
             ForeignAbi::C,
-            ForeignSignature::new([ForeignType::I8], ForeignType::I32),
+            ForeignSignature::scalars([ForeignType::I8], ForeignType::I32),
         )];
         module
     }

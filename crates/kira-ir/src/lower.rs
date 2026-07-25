@@ -53,6 +53,7 @@ pub fn lower(program: &HirProgram) -> IrProgram {
                 ),
             })
             .collect(),
+        foreign_aggregates: program.foreign_aggregates.clone(),
         exprs: la_arena::Arena::new(),
     };
     let mut lowerer = Lowerer {

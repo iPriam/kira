@@ -1,5 +1,6 @@
 //! The safe Rust vocabulary and C ABI for calls through generated foreign adapters.
 
+use crate::aggregate::{ForeignAggregateError, ForeignAggregateId};
 use crate::{BridgeValue, BridgeValueTag};
 
 /// The ABI a foreign declaration uses.
@@ -109,30 +110,126 @@ impl ForeignType {
     }
 }
 
-/// The complete type signature of one foreign import.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ForeignSignature {
-    parameters: Box<[ForeignType]>,
-    result: ForeignType,
+/// One position in a foreign signature: a seam scalar, or a C-layout aggregate
+/// named by its index in the program's aggregate table.
+///
+/// [`ForeignType`] stays scalar-only so its pinned tags never move. A spec
+/// serializes as one tag byte — a scalar's own tag, or
+/// [`ForeignTypeSpec::AGGREGATE_TAG`] followed by the table index — so a decoder
+/// written before aggregates existed rejects the new byte by name instead of
+/// misreading the index that follows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ForeignTypeSpec {
+    /// A fixed-width seam scalar.
+    Scalar(ForeignType),
+    /// A C-layout aggregate, by index into the program's aggregate table.
+    Aggregate(ForeignAggregateId),
 }
 
-impl ForeignSignature {
-    /// Creates a signature from its parameter and result types.
-    pub fn new(parameters: impl Into<Box<[ForeignType]>>, result: ForeignType) -> Self {
-        Self {
-            parameters: parameters.into(),
-            result,
+impl ForeignTypeSpec {
+    /// The appended tag byte that introduces an aggregate position.
+    pub const AGGREGATE_TAG: u8 = 14;
+
+    /// Returns the serialized tag byte for this position.
+    pub const fn tag(self) -> u8 {
+        match self {
+            Self::Scalar(ty) => ty.tag(),
+            Self::Aggregate(_) => Self::AGGREGATE_TAG,
         }
     }
 
-    /// Returns the parameter types in declaration order.
-    pub fn parameters(&self) -> &[ForeignType] {
+    /// Returns the seam scalar, or `None` when this position is an aggregate.
+    pub const fn scalar(self) -> Option<ForeignType> {
+        match self {
+            Self::Scalar(ty) => Some(ty),
+            Self::Aggregate(_) => None,
+        }
+    }
+
+    /// Returns the aggregate index, or `None` when this position is a scalar.
+    pub const fn aggregate(self) -> Option<ForeignAggregateId> {
+        match self {
+            Self::Scalar(_) => None,
+            Self::Aggregate(id) => Some(id),
+        }
+    }
+
+    /// Returns the bridge tag a generated adapter uses for this position.
+    pub const fn bridge_tag(self) -> BridgeValueTag {
+        match self {
+            Self::Scalar(ty) => ty.bridge_tag(),
+            Self::Aggregate(_) => BridgeValueTag::AGGREGATE,
+        }
+    }
+}
+
+impl From<ForeignType> for ForeignTypeSpec {
+    fn from(ty: ForeignType) -> Self {
+        Self::Scalar(ty)
+    }
+}
+
+/// A scalar compares equal to the position that names it, so a caller holding
+/// the seam vocabulary need not wrap one to ask.
+impl PartialEq<ForeignType> for ForeignTypeSpec {
+    fn eq(&self, other: &ForeignType) -> bool {
+        self.scalar() == Some(*other)
+    }
+}
+
+/// The complete type signature of one foreign import.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ForeignSignature {
+    parameters: Box<[ForeignTypeSpec]>,
+    result: ForeignTypeSpec,
+}
+
+impl ForeignSignature {
+    /// Creates a signature from its parameter and result positions.
+    pub fn new(
+        parameters: impl Into<Box<[ForeignTypeSpec]>>,
+        result: impl Into<ForeignTypeSpec>,
+    ) -> Self {
+        Self {
+            parameters: parameters.into(),
+            result: result.into(),
+        }
+    }
+
+    /// Creates a signature whose every position is a seam scalar.
+    ///
+    /// The common shape, and the only one a program with no C-layout aggregate
+    /// in any signature ever has.
+    pub fn scalars(parameters: impl IntoIterator<Item = ForeignType>, result: ForeignType) -> Self {
+        Self::new(
+            parameters
+                .into_iter()
+                .map(ForeignTypeSpec::Scalar)
+                .collect::<Vec<_>>(),
+            result,
+        )
+    }
+
+    /// Returns the parameter positions in declaration order.
+    pub fn parameters(&self) -> &[ForeignTypeSpec] {
         &self.parameters
     }
 
-    /// Returns the result type.
-    pub const fn result(&self) -> ForeignType {
+    /// Returns the result position.
+    pub const fn result(&self) -> ForeignTypeSpec {
         self.result
+    }
+
+    /// Returns whether any position in this signature is an aggregate.
+    ///
+    /// This is what decides whether the backend generates a C shim for the
+    /// import: a scalar-only signature reaches its C symbol directly.
+    pub fn has_aggregate(&self) -> bool {
+        self.result.aggregate().is_some()
+            || self
+                .parameters
+                .iter()
+                .any(|spec| spec.aggregate().is_some())
     }
 }
 
@@ -213,12 +310,19 @@ pub enum ForeignArg<'a> {
     RawPtr(u64),
     /// UTF-8 bytes borrowed for this call and copied to transient C storage.
     CString(&'a str),
+    /// A C-layout aggregate, borrowed for this call.
+    Aggregate {
+        /// The aggregate's index in the program's table.
+        id: ForeignAggregateId,
+        /// Exactly the aggregate's `sizeof` bytes, in the target's C layout.
+        bytes: &'a [u8],
+    },
 }
 
 impl ForeignArg<'_> {
-    /// Returns this argument's exact foreign type.
-    pub const fn foreign_type(self) -> ForeignType {
-        match self {
+    /// Returns this argument's exact seam position.
+    pub const fn spec(self) -> ForeignTypeSpec {
+        ForeignTypeSpec::Scalar(match self {
             Self::Void => ForeignType::Void,
             Self::I8(_) => ForeignType::I8,
             Self::I16(_) => ForeignType::I16,
@@ -233,15 +337,16 @@ impl ForeignArg<'_> {
             Self::F64(_) => ForeignType::F64,
             Self::RawPtr(_) => ForeignType::RawPtr,
             Self::CString(_) => ForeignType::CString,
-        }
+            Self::Aggregate { id, .. } => return ForeignTypeSpec::Aggregate(id),
+        })
     }
 }
 
 /// An owned value returned from a foreign call.
 ///
 /// `CString` is intentionally absent: returned C-string ownership is not part
-/// of adapter ABI version 1.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// of the adapter ABI.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ForeignResult {
     /// The unit value.
     Void,
@@ -269,12 +374,19 @@ pub enum ForeignResult {
     F64(f64),
     /// An opaque target-width pointer word, zero-extended in the bridge payload.
     RawPtr(u64),
+    /// A C-layout aggregate, owned: exactly its `sizeof` bytes in target layout.
+    Aggregate {
+        /// The aggregate's index in the program's table.
+        id: ForeignAggregateId,
+        /// The returned bytes, copied out of the call's result buffer.
+        bytes: Box<[u8]>,
+    },
 }
 
 impl ForeignResult {
-    /// Returns this result's exact foreign type.
-    pub const fn foreign_type(self) -> ForeignType {
-        match self {
+    /// Returns this result's exact seam position.
+    pub const fn spec(&self) -> ForeignTypeSpec {
+        ForeignTypeSpec::Scalar(match self {
             Self::Void => ForeignType::Void,
             Self::I8(_) => ForeignType::I8,
             Self::I16(_) => ForeignType::I16,
@@ -288,7 +400,8 @@ impl ForeignResult {
             Self::F32(_) => ForeignType::F32,
             Self::F64(_) => ForeignType::F64,
             Self::RawPtr(_) => ForeignType::RawPtr,
-        }
+            Self::Aggregate { id, .. } => return ForeignTypeSpec::Aggregate(*id),
+        })
     }
 }
 
@@ -312,13 +425,22 @@ impl ForeignAdapterStatus {
     pub const INTERIOR_NUL: Self = Self(3);
     /// The adapter could not encode a valid result.
     pub const MALFORMED_RESULT: Self = Self(4);
+    /// The caller did not present a writable aggregate buffer in the out slot.
+    pub const BAD_RESULT_SLOT: Self = Self(5);
 }
 
 /// The version of the generated foreign-adapter ABI.
-pub const FOREIGN_ADAPTER_ABI_VERSION: u32 = 1;
+///
+/// Version 2 added aggregates: an aggregate argument arrives as a pointer to
+/// C-layout bytes under [`BridgeValueTag::AGGREGATE`], and an aggregate result
+/// is written into a buffer the *caller* presents in the out slot before the
+/// call. Version 1 adapters have neither, and a version-1 caller would hand a
+/// version-2 adapter an out slot it does not fill — so the marker name carries
+/// the version and a mismatch fails the link rather than the run.
+pub const FOREIGN_ADAPTER_ABI_VERSION: u32 = 2;
 
 /// The versioned marker symbol every generated adapter library must export.
-pub const FOREIGN_ADAPTER_ABI_MARKER: &str = "kira_foreign_adapter_abi_version_1";
+pub const FOREIGN_ADAPTER_ABI_MARKER: &str = "kira_foreign_adapter_abi_version_2";
 
 /// The string-allocation helper resolved from an adapter library.
 pub const FOREIGN_STRING_NEW_SYMBOL: &str = "kira_rt_str_new";
@@ -331,9 +453,17 @@ pub const FOREIGN_STRING_LEN_SYMBOL: &str = "kira_rt_str_len";
 
 /// A generated adapter's uniform C-call entrypoint.
 ///
+/// An aggregate argument's payload is a pointer to the aggregate's C-layout
+/// bytes, readable for the duration of the call. When the import's result is an
+/// aggregate, `out` must arrive already carrying [`BridgeValueTag::AGGREGATE`]
+/// and a pointer to a writable buffer of at least the aggregate's `sizeof`
+/// bytes; the adapter fills that buffer and leaves the same tag and pointer in
+/// place. Any other result type ignores `out`'s incoming contents.
+///
 /// # Safety
 /// `args` must address `count` readable [`BridgeValue`]s, or be null when the
-/// count is zero. `out` must address one writable [`BridgeValue`].
+/// count is zero. `out` must address one writable [`BridgeValue`], and — for an
+/// aggregate result — must already point at a buffer of the required size.
 pub type ForeignAdapterFn = unsafe extern "C" fn(
     args: *const BridgeValue,
     count: u32,
@@ -359,11 +489,27 @@ pub enum ForeignCallError {
     ArgumentType {
         /// The argument position.
         index: usize,
-        /// The signature's type.
-        expected: ForeignType,
-        /// The supplied value's type.
-        actual: ForeignType,
+        /// The signature's position.
+        expected: ForeignTypeSpec,
+        /// The supplied value's position.
+        actual: ForeignTypeSpec,
     },
+    /// An aggregate argument carries a different byte count than its layout.
+    #[error("foreign aggregate argument {index} carries {actual} bytes, expected {expected}")]
+    AggregateSize {
+        /// The argument position.
+        index: usize,
+        /// The aggregate's `sizeof` on this target.
+        expected: usize,
+        /// The supplied byte count.
+        actual: usize,
+    },
+    /// The program's aggregate table cannot be laid out for this target.
+    #[error("foreign aggregate layout: {0}")]
+    AggregateLayout(#[from] ForeignAggregateError),
+    /// The adapter reported that the caller's aggregate result slot was unusable.
+    #[error("foreign adapter rejected the aggregate result buffer it was given")]
+    AdapterBadResultSlot,
     /// The argument count does not fit the adapter ABI's `u32` count.
     #[error("foreign call has {actual} arguments, exceeding the adapter ABI limit")]
     TooManyArguments {
@@ -408,9 +554,9 @@ pub enum ForeignCallError {
     /// The adapter wrote nonzero bytes into the reserved bridge field.
     #[error("foreign adapter returned nonzero reserved bytes")]
     MalformedResultReserved,
-    /// Adapter ABI version 1 cannot return the declared type safely.
-    #[error("foreign adapter ABI version 1 does not support result type {0:?}")]
-    UnsupportedResultType(ForeignType),
+    /// The adapter ABI cannot return the declared type safely.
+    #[error("the foreign adapter ABI does not support result type {0:?}")]
+    UnsupportedResultType(ForeignTypeSpec),
 }
 
 #[cfg(test)]
@@ -452,15 +598,58 @@ mod tests {
 
     #[test]
     fn adapter_marker_and_status_values_are_pinned() {
-        assert_eq!(FOREIGN_ADAPTER_ABI_VERSION, 1);
+        assert_eq!(FOREIGN_ADAPTER_ABI_VERSION, 2);
         assert_eq!(
             FOREIGN_ADAPTER_ABI_MARKER,
-            "kira_foreign_adapter_abi_version_1"
+            "kira_foreign_adapter_abi_version_2"
         );
         assert_eq!(ForeignAdapterStatus::SUCCESS.0, 0);
         assert_eq!(ForeignAdapterStatus::BAD_ARGUMENT_COUNT.0, 1);
         assert_eq!(ForeignAdapterStatus::BAD_ARGUMENT_TAG.0, 2);
         assert_eq!(ForeignAdapterStatus::INTERIOR_NUL.0, 3);
         assert_eq!(ForeignAdapterStatus::MALFORMED_RESULT.0, 4);
+        assert_eq!(ForeignAdapterStatus::BAD_RESULT_SLOT.0, 5);
+    }
+
+    #[test]
+    fn the_aggregate_spec_tag_sits_past_every_scalar_tag() {
+        // A scalar position keeps the scalar's own pinned tag, so no existing
+        // byte moves; the aggregate byte is the first one past them.
+        for tag in 0..=13u8 {
+            let ty = ForeignType::from_tag(tag).expect("a pinned scalar tag");
+            assert_eq!(ForeignTypeSpec::Scalar(ty).tag(), tag);
+        }
+        assert_eq!(ForeignTypeSpec::AGGREGATE_TAG, 14);
+        assert_eq!(ForeignType::from_tag(ForeignTypeSpec::AGGREGATE_TAG), None);
+        assert_eq!(
+            ForeignTypeSpec::Aggregate(ForeignAggregateId(7)).tag(),
+            ForeignTypeSpec::AGGREGATE_TAG
+        );
+        assert_eq!(
+            ForeignTypeSpec::Aggregate(ForeignAggregateId(7)).bridge_tag(),
+            BridgeValueTag::AGGREGATE
+        );
+    }
+
+    #[test]
+    fn a_signature_reports_whether_any_position_is_an_aggregate() {
+        let scalars = ForeignSignature::new(
+            [
+                ForeignTypeSpec::Scalar(ForeignType::I32),
+                ForeignTypeSpec::Scalar(ForeignType::F64),
+            ],
+            ForeignType::Void,
+        );
+        assert!(!scalars.has_aggregate());
+        let in_param = ForeignSignature::new(
+            [ForeignTypeSpec::Aggregate(ForeignAggregateId(0))],
+            ForeignType::Void,
+        );
+        assert!(in_param.has_aggregate());
+        let in_result = ForeignSignature::new(
+            [ForeignTypeSpec::Scalar(ForeignType::I32)],
+            ForeignTypeSpec::Aggregate(ForeignAggregateId(0)),
+        );
+        assert!(in_result.has_aggregate());
     }
 }

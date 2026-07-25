@@ -7,7 +7,7 @@
 //! rather than in generated code, because both are ordinary Rust that every
 //! adapter shares:
 //!
-//! - [`kira_foreign_adapter_abi_version_1`], the versioned marker an adapter
+//! - [`kira_foreign_adapter_abi_version_2`], the versioned marker an adapter
 //!   library exports and a loader checks by name — the foreign-seam mirror of
 //!   [`crate::runtime::kira_rt_abi_version_2`]. A stale sidecar does not define
 //!   this version's marker, so loading it fails by name instead of running the
@@ -39,7 +39,7 @@ use crate::runtime::{KStr, kira_rt_str_data, kira_rt_str_len};
 /// [`kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER`]; the test below keeps the
 /// two from drifting.
 #[unsafe(no_mangle)]
-pub extern "C" fn kira_foreign_adapter_abi_version_1() {}
+pub extern "C" fn kira_foreign_adapter_abi_version_2() {}
 
 /// Allocates a transient NUL-terminated C string from a Kira `String` handle.
 ///
@@ -125,10 +125,10 @@ mod tests {
     fn the_marker_matches_the_shared_contract() {
         assert_eq!(
             kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER,
-            "kira_foreign_adapter_abi_version_1"
+            "kira_foreign_adapter_abi_version_2"
         );
         // Referenced so a rename breaks this test rather than a link.
-        kira_foreign_adapter_abi_version_1();
+        kira_foreign_adapter_abi_version_2();
     }
 
     #[test]

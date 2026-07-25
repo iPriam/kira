@@ -113,6 +113,23 @@ impl BridgeValueTag {
     /// The payload carries the pointer bits zero-extended to 64 bits. Kira never
     /// dereferences, performs arithmetic on, or frees the pointer.
     pub const RAW_PTR: BridgeValueTag = BridgeValueTag(9);
+
+    /// A C-layout aggregate used only by foreign calls, carried by pointer.
+    ///
+    /// This tag **travels**, and it is the one tag whose payload is a pointer to
+    /// storage rather than the value itself: the payload addresses the
+    /// aggregate's `sizeof` bytes in the target's C layout. That is the whole
+    /// reason it can exist where [`BridgeValueTag::STRUCT`] cannot. A Kira
+    /// struct crossing the *native* seam raises an ownership question — who
+    /// frees the strings inside — that has no answer yet. A C-layout aggregate
+    /// raises none: its members are fixed-width scalars and nested aggregates
+    /// of the same kind, so the bytes are the whole value, nothing inside them
+    /// is owned, and the buffer belongs to the caller for exactly one call.
+    ///
+    /// The pointed-to bytes are read-only for an argument. For a result the
+    /// caller presents the buffer and the adapter writes it; ownership never
+    /// moves.
+    pub const AGGREGATE: BridgeValueTag = BridgeValueTag(10);
 }
 
 /// One Kira value crossing the runtime/native boundary.

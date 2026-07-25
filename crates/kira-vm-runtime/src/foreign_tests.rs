@@ -57,31 +57,31 @@ fn foreign_imports() -> Vec<ForeignImport> {
             "ffimath",
             "kira_ffi_add",
             ForeignAbi::C,
-            ForeignSignature::new([ForeignType::I32, ForeignType::I32], ForeignType::I32),
+            ForeignSignature::scalars([ForeignType::I32, ForeignType::I32], ForeignType::I32),
         ),
         ForeignImport::new(
             "ffimath",
             "kira_ffi_name_len",
             ForeignAbi::C,
-            ForeignSignature::new([ForeignType::CString], ForeignType::U64),
+            ForeignSignature::scalars([ForeignType::CString], ForeignType::U64),
         ),
         ForeignImport::new(
             "ffimath",
             "kira_ffi_origin",
             ForeignAbi::C,
-            ForeignSignature::new([], ForeignType::RawPtr),
+            ForeignSignature::scalars([], ForeignType::RawPtr),
         ),
         ForeignImport::new(
             "ffimath",
             "kira_ffi_bits",
             ForeignAbi::C,
-            ForeignSignature::new([ForeignType::RawPtr], ForeignType::U64),
+            ForeignSignature::scalars([ForeignType::RawPtr], ForeignType::U64),
         ),
         ForeignImport::new(
             "ffimath",
             "kira_ffi_null_origin",
             ForeignAbi::C,
-            ForeignSignature::new([], ForeignType::RawPtr),
+            ForeignSignature::scalars([], ForeignType::RawPtr),
         ),
     ]
 }
@@ -91,6 +91,7 @@ fn module(code: Vec<I>, strings: Vec<String>) -> Module {
     Module {
         exports: Default::default(),
         foreign_imports: foreign_imports(),
+        foreign_aggregates: Default::default(),
         functions: vec![FuncProto {
             name: "main".to_owned(),
             param_count: 0,
