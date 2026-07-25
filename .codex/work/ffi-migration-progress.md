@@ -94,9 +94,66 @@ Corpus follow-up (uncommitted, in `../kira_ui`): `[any Widget]` → `[Any Widget
 
 **Editor 1116 → 902** across the two slices: `KSEM182` **254 → 61**. Of the original 254, ~103 were single-field handle structs (now crossing) and 82 were the bare-`Float` corpus bug (now `F64`); the −214 includes their cascades.
 
-**Handoff / working-tree state (for a fresh session after `/clear`):** last committed kira-rusty slice is the single-field handle struct (`2c41fe9`), atop the `bind-types/` enforcement, builder control-flow (`5d7b3c0`), parameter defaults (`ccf33dd`). Corpus commits in `../kira-graphics`: `24cc49b` (bind-types typedef sidecars), `ca4e068` (sokol `F64`) — **separate repo, needed for the editor re-measure**. The only uncommitted files in kira-rusty are `AGENTS.md` and `Cargo.toml` — modified at an earlier session's start, NOT part of any slice; leave them alone (ask the user before touching). Scratch under `.codex/tmp/` is gitignored.
+**Handoff / working-tree state (for a fresh session after `/clear`):** last committed kira-rusty slice is the aggregate wire vocabulary (`b4f8012`), atop the path-less CLI default (`b032d39`) and the single-field handle struct (`2c41fe9`). Corpus commits in `../kira-graphics`: `24cc49b` (bind-types typedef sidecars), `ca4e068` (sokol `F64`) — **separate repo, needed for the editor re-measure**. The only uncommitted files in kira-rusty are `AGENTS.md` and `Cargo.toml` — modified at an earlier session's start, NOT part of any slice; leave them alone (ask the user before touching). Scratch under `.codex/tmp/` is gitignored.
 
 **Next slice (start here on `continue`): the multi-field struct-by-value C ABI** (`KSEM182` 50 — the "aggregate has no single-word C representation" refusal). These are genuine by-value aggregate params/returns: `sapp_query_desc() -> sapp_desc`, `sapp_get_swapchain() -> sapp_swapchain`, `MetalCGRect` (4×F64 HFA), `sg_limits` (14 scalar fields), and structs nesting other structs. Unlike the single-field handle, there is no desugar that avoids the ABI: a by-value return genuinely returns aggregate bytes. It needs C-layout computation (offsets/padding), System-V + AArch64 classification (incl. HFA and `sret` for large returns / `byval` for large params), and marshalling on VM (build C-layout bytes) / LLVM (struct type + sret/byval + extract-insert) / hybrid, proven byte-identical — and it touches the adapter wire contract (`RUNTIME_ABI_VERSION`). This is the genuinely large, multi-session slice, not a quick fix; scope it as a full frontend-through-backend feature. **The 11 remaining `KSEM182` are `CString` results** — a separate deliberate ownership refusal (who frees a returned C string), its own slice, not part of the aggregate ABI. After aggregates: `KSEM205` 105 (construction-input arity), borrow/move (`KSEM112` 98, `KSEM107` 103), parser gaps (`KPAR023`/`KPAR024` ~88), the `borrow`/`mut`-as-type parse bug (32, in `KSEM050`), closures.
+
+**Aggregate wire vocabulary — LANDED (2026-07-26, `b4f8012`).** The first half of
+the struct-by-value slice: everywhere a foreign call is *described* can now name
+a C-layout aggregate, though the frontend still refuses one, so nothing emits it
+yet. A signature position is a `ForeignTypeSpec` (scalar, or an index into a new
+per-program aggregate table of nested member trees); `ForeignType` keeps its
+scalar spelling and pinned tags. Append-only in KBC1 and KHM1: byte 14 opens an
+aggregate spec, the table section follows the import rows it indexes and is
+omitted when empty, and a member may name only a lower index — which makes
+layout a single forward pass and a cycle unrepresentable. `BridgeValueTag::AGGREGATE`
+(10) travels by pointer to C-layout bytes; `FOREIGN_ADAPTER_ABI_VERSION` is 2 with
+the marker renamed, because the out-slot contract changed (the caller presents
+the result buffer, so nothing crosses ownership). `RUNTIME_ABI_VERSION` stays 2 —
+no `kira_rt_*` signature moved. The VM host and hybrid native half marshal both
+directions already. Green: fmt, clippy `-D warnings`, build, nextest **1706/1706**,
+wasm32 VM-core.
+
+**The design call for the second half — clang computes the ABI, Kira never
+classifies.** Full reasoning in `.codex/work/ffi-aggregate-abi.md`. For each
+import naming an aggregate, the backend generates a C translation unit that
+redeclares the struct and the real symbol and wraps the call in a shim taking
+every aggregate by pointer; the managed clang compiles it, and everything Kira
+emits keeps speaking pointers and scalars. Writing the classifier ourselves means
+x86-64 System V eightbyte classification, AArch64 HFA and indirect-return rules,
+and the wasm32 rules — provable on one architecture from this machine, so two
+thirds would ship asserted. `byval`/`sret` do not substitute: both force the
+memory class, and the corpus needs the register cases (`MetalCGRect` is a 4×`F64`
+HFA, `MetalNSPoint` 2×`F64`).
+
+Remaining for the slice: frontend acceptance (build the table from
+`@FFI.Struct { layout: c }`, keep refusing members that are callbacks, inline
+arrays, `CString`, or Kira heap types), the C shim generator plus its clang step
+wired into the executable / sidecar / hybrid / emcc links, LLVM marshalling
+between a Kira struct value and a C-layout alloca, VM marshalling between
+`Value::Struct` and the bytes, and a differential parity test against a real C
+fixture plus a `sizeof`/`offsetof` check that pins the layout to clang's.
+
+**Path-less CLI invocations — LANDED (2026-07-26, `b032d39`).** `kirac run`,
+`build`, and `check` required an explicit path; a bare invocation inside an app
+directory was a usage error. It now defaults to `.` and goes through the same
+package discovery, so a directory with no `package.kira` is still refused by
+name.
+
+**`package.kira` drops its `nativeLibraries` — OPEN, blocks FFI from the
+corpus.** `kira-manifest`'s declaration loader handles `version`, `kira`,
+`moduleRoot`, `kind`, `dependencies`, and `defaults`, and routes every other key
+into a silent catch-all — including `nativeLibraries` and `assets`.
+`ProjectManifest::native_libraries` is consequently never populated by anything.
+The only path that feeds it is `NativeLibs/*.toml`, a schema this repo invented:
+the corpus's one such file, `kira-graphics/NativeLibs/DirectX12.toml`, uses
+`[library] name` and `[target.<triple>]` where the parser expects top-level
+`name` and `[[target]]`, so it would not parse either, and sokol — what the
+editor actually links on macOS — is declared only in `package.kira`. So no native
+library resolves for a real Project Matter app and no `@FFI.Extern` can link.
+The inline schema is also richer than the TOML: `headers`, `sources`, `autobind`,
+and `nativeTargets` rows carrying `defines` and macOS `frameworks`, which the
+link line needs. Fix this before claiming any aggregate work runs end to end.
 
 --- (superseded design notes below) ---
 
