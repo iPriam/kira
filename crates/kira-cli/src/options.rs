@@ -47,12 +47,13 @@ pub struct CompileOptions {
     pub emit_llvm_ir: bool,
 }
 
+/// The path a `run`/`build`/`check` uses when the invocation names none: the
+/// current directory, which package discovery then resolves as a package.
+pub const DEFAULT_PATH: &str = ".";
+
 /// Why an invocation could not be parsed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum OptionsError {
-    /// No path was given.
-    #[error("expected a path to a .kira file or package directory")]
-    MissingPath,
     /// `--backend` was given without a value.
     #[error("`--backend` expects one of: vm, llvm, hybrid")]
     BackendMissingValue,
@@ -152,7 +153,12 @@ impl CompileOptions {
         };
 
         Ok(CompileOptions {
-            path: path.ok_or(OptionsError::MissingPath)?,
+            // No path means the package you are standing in, the way every
+            // other build tool reads a bare invocation. Nothing is guessed: `.`
+            // goes through the same package discovery an explicit path does, so
+            // a directory holding no `package.kira` is refused by name there
+            // rather than by a usage error here.
+            path: path.unwrap_or_else(|| DEFAULT_PATH.to_owned()),
             backend,
             backend_explicit,
             device,
@@ -289,11 +295,23 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bad_invocations_with_a_reason() {
+    fn a_bare_invocation_compiles_the_package_you_are_standing_in() {
         assert_eq!(
-            CompileOptions::parse(&args(&[])),
-            Err(OptionsError::MissingPath)
+            CompileOptions::parse(&args(&[])).expect("parses").path,
+            DEFAULT_PATH
         );
+        // Flags alone still leave the path defaulted, so `kirac build
+        // --backend llvm` in a package directory means what it looks like.
+        assert_eq!(
+            CompileOptions::parse(&args(&["--backend", "llvm"]))
+                .expect("parses")
+                .path,
+            DEFAULT_PATH
+        );
+    }
+
+    #[test]
+    fn rejects_bad_invocations_with_a_reason() {
         assert_eq!(
             CompileOptions::parse(&args(&["--backend"])),
             Err(OptionsError::BackendMissingValue)

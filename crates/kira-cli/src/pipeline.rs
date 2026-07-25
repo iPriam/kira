@@ -55,12 +55,15 @@ pub const EXIT_FAILURE: i32 = 1;
 /// Process exit code for usage errors (missing arguments, unreadable file).
 pub const EXIT_USAGE: i32 = 2;
 
-/// Runs `kirac check <file|dir>`: report diagnostics, never execute.
+/// Runs `kirac check [file|dir]`: report diagnostics, never execute.
+///
+/// With no path, checks the package you are standing in — the same default
+/// `run` and `build` take.
 pub fn check(args: &[String]) -> i32 {
-    let Some(path) = args.first() else {
-        eprintln!("kirac check: expected a path to a .kira file or package directory");
-        return EXIT_USAGE;
-    };
+    let path = args
+        .first()
+        .map(String::as_str)
+        .unwrap_or(crate::options::DEFAULT_PATH);
     match compile(path) {
         Ok(compiled) => {
             emit_diagnostics(&compiled.diagnostics, &compiled.sources);
