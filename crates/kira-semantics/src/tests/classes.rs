@@ -19,28 +19,42 @@ fn a_class_flattens_its_parents_fields_and_methods() {
     );
 }
 
-/// A class field typed by a name declared later still gets the move-it-above
-/// fix: classes flatten in inheritance order, one pass, so a class field naming
-/// a class declared later cannot yet resolve. The message names each owner by
-/// its own keyword — a class owner called a `struct` would send the reader
-/// looking for a declaration that is not there.
+/// A class field may name a class declared later, exactly as a struct field may
+/// name a later struct: class *names* join the table before any field resolves,
+/// and only the flattening that `extends` needs waits for inheritance order.
 #[test]
-fn a_forward_referenced_class_field_type_is_explained() {
+fn a_class_field_may_name_a_class_declared_later() {
     let reported = diagnostics(&format!(
         "class Wallet {{ var card: Card = Card() }}\nclass Card {{ var id: Int = 1 }}\n{MAIN}"
     ));
-    let messages: Vec<&str> = reported
+    assert!(reported.is_empty(), "{reported:?}");
+}
+
+/// And in the other direction: a struct field may name a class.
+///
+/// This is what an application's configuration struct looks like — a record of
+/// settings holding the class the host hands it — and it resolves whichever file
+/// each was written in.
+#[test]
+fn a_struct_field_may_name_a_class() {
+    let reported = diagnostics(&format!(
+        "struct Config {{ var wallet: Wallet }}\nclass Wallet {{ var id: Int = 1 }}\n{MAIN}"
+    ));
+    assert!(reported.is_empty(), "{reported:?}");
+}
+
+/// Lifting the ordering means a value cycle can now be *spelled* through a
+/// class, so it is caught outright rather than left to recurse forever.
+#[test]
+fn a_value_cycle_through_a_class_is_refused() {
+    let reported = diagnostics(&format!(
+        "struct Holder {{ var card: Card }}\nclass Card {{ var holder: Holder }}\n{MAIN}"
+    ));
+    let codes: Vec<&str> = reported
         .iter()
-        .filter(|diagnostic| diagnostic.code == Some("KSEM051"))
-        .map(|diagnostic| diagnostic.message.as_str())
+        .filter_map(|diagnostic| diagnostic.code)
         .collect();
-    assert_eq!(
-        messages,
-        vec![
-            "class `Wallet` cannot hold a `Card` because `Card` is declared later in the file; \
-             move `Card` above `Wallet`"
-        ]
-    );
+    assert_eq!(codes, vec!["KSEM052"], "{reported:?}");
 }
 
 /// A *struct* field may name a struct declared later in the same file: struct

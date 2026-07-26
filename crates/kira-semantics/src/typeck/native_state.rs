@@ -262,10 +262,18 @@ impl Analyzer<'_> {
         eligible
     }
 
+    /// Whether a struct may be boxed as callback state.
+    ///
+    /// A **function type**'s representation struct qualifies on its own terms
+    /// rather than by exception: it holds a tag and the captures of every
+    /// closure literal of that type, and a capture already had to be trivially
+    /// copyable to exist — so the generic field walk below answers `true` for it
+    /// without a special case, and boxing a struct that holds a frame handler
+    /// works because that is what an application's runtime state *is*.
+    ///
+    /// A C-layout struct still does not: its bytes are C's, and a box that
+    /// recovered one would be handing back storage the box never owned.
     fn native_state_struct_eligible(&self, id: StructId, visiting: &mut HashSet<Type>) -> bool {
-        if self.as_function_type(Type::Struct(id)).is_some() {
-            return false;
-        }
         let Some(def) = self.program.types.structs().get(id) else {
             return false;
         };

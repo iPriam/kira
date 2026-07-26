@@ -241,7 +241,30 @@ unsafe extern "C" fn invoke_runtime(
         // SAFETY: the caller guarantees `count` readable values at `args`.
         unsafe { std::slice::from_raw_parts(args, count as usize) }
     };
-    let arguments: Vec<NativeArg<'_>> = values.iter().map(|value| scalar_arg(*value)).collect();
+    // A `CString` callback argument arrives as a string handle from the
+    // sidecar's runtime, because the `const char*` C passed is only guaranteed
+    // for the length of *its* call — the thunk copied it before entering here.
+    // The bytes are taken (and the handle freed) into storage that outlives the
+    // borrowed argument list below, so the interpreter sees an ordinary `&str`.
+    let owned: Vec<Option<String>> = values
+        .iter()
+        .map(|value| match value.decode() {
+            Some(BridgeData::String(handle)) => {
+                // SAFETY: the thunk transfers the handle to this call; it comes
+                // from this sidecar and is freed exactly once here.
+                Some(unsafe { session.library.take_string(handle) })
+            }
+            _ => None,
+        })
+        .collect();
+    let arguments: Vec<NativeArg<'_>> = values
+        .iter()
+        .zip(&owned)
+        .map(|(value, text)| match text {
+            Some(text) => NativeArg::Str(text),
+            None => scalar_arg(*value),
+        })
+        .collect();
 
     let mut host = SessionHost { session };
     match session.program.call(&mut host, function_id, &arguments) {

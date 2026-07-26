@@ -477,18 +477,13 @@ impl<'a> Analyzer<'a> {
                 None
             }
             Type::RawPtr => Some(ForeignType::RawPtr),
-            Type::CString => match position {
-                Position::Param => Some(ForeignType::CString),
-                Position::Result => {
-                    self.emit(
-                        span,
-                        "KSEM182",
-                        "a `CString` result is not supported: who frees a returned C \
-                         string is unspecified. Return a `RawPtr` and a length instead",
-                    );
-                    None
-                }
-            },
+            // A `CString` crosses in both directions, and in neither does Kira
+            // hold C storage. Inbound the seam builds a transient C copy of the
+            // caller's `String` for the one call; outbound it copies the bytes
+            // the callee returns while its pointer is still good, so nothing is
+            // ever freed on Kira's side and the question of who owns a returned
+            // C string never arises. Kira sees a `String` either way.
+            Type::CString => Some(ForeignType::CString),
             // A `@FFI.Callback`/`@FFI.Array` type at the seam is a declared but
             // not-yet-executable form, not a generic aggregate; its refusal
             // names the form so the fix is clear.

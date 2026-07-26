@@ -606,3 +606,56 @@ function main() {
     );
     assert_eq!(output, "6\n");
 }
+
+/// A `RawPtr` and a function value of another type are both capturable: each
+/// copies words and owns nothing, so a closure may carry a host handle and a
+/// callback.
+///
+/// This is what an inline event loop needs — the handler and the opaque host
+/// pointer both cross into the closure — and it runs the same on every backend.
+/// A capture of the closure's *own* function type is the one shape that has no
+/// representation, and it is refused (KSEM251) rather than lowered.
+#[test]
+fn a_closure_captures_a_raw_pointer_and_a_function_value() {
+    let output = assert_parity(
+        r#"
+struct Frame {
+    var n: Int
+}
+
+function bump(frame: borrow mut Frame) {
+    frame.n = frame.n + 1
+    return
+}
+
+struct Host {
+    var seed: Int
+}
+
+@Main
+function main() {
+    let boxed = nativeState(Host { seed: 5 })
+    // A `RawPtr` from the callback-state box: an opaque host handle, exactly
+    // what a real event loop captures alongside its handler.
+    let handle = nativeUserData(boxed)
+    let step: (Int) -> Int = { v in return v + 1 }
+
+    let apply: (borrow mut Frame) -> Void = { f in
+        bump(f)
+        f.n = step(f.n)
+        var host = nativeRecover<Host>(handle)
+        f.n = f.n + host.seed
+        return
+    }
+
+    var f = Frame { n: 1 }
+    apply(f)
+    print(f.n)
+    nativeStateFree(boxed)
+    return
+}
+"#,
+    );
+    // 1 bumped to 2, stepped to 3, plus the captured host's seed of 5.
+    assert_eq!(output, "8\n");
+}

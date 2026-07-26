@@ -17,8 +17,8 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// The output every backend must produce, line for line.
-const EXPECTED: &str =
-    "42\n-5\n200\n-9\n40000\n4000000000\n1975\n5000000000\nfalse\n3.75\n1.75\n4\n42\n0\n7\n1\n2\n";
+const EXPECTED: &str = "42\n-5\n200\n-9\n40000\n4000000000\n1975\n5000000000\nfalse\n3.75\n1.75\n\
+     4\n42\n0\n7\nhello from C\nround trip\n|\nhello from C!\n1\n2\n";
 
 /// Every backend the FFI program must behave identically on.
 const BACKENDS: [&str; 3] = ["vm", "llvm", "hybrid"];
@@ -413,7 +413,9 @@ fn every_backend_agrees_on_a_kira_function_called_from_c() {
     ));
 
     // combine(3, 4) = 34; combine(combine(3, 4), 4) = 344; combine(5, 6) * 2.
-    const EXPECTED_KIRA_CALLBACK: &str = "34\n344\n112\n";
+    // Then the C-string callback: "kira" echoed and measured (4 * 100 + 7), and
+    // a NULL argument arriving as the empty string (0 * 100 + 9).
+    const EXPECTED_KIRA_CALLBACK: &str = "34\n344\n112\nkira!\n407\n!\n9\n";
 
     for backend in BACKENDS {
         let run = run_on(&entry, backend);

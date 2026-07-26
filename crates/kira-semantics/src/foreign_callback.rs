@@ -26,6 +26,19 @@ use kira_source::Span;
 use crate::analyze::Analyzer;
 use crate::ffi_types::FfiStructKind;
 
+/// Which side of a callback signature a type sits on.
+///
+/// The two differ on exactly one type: a `String` parameter carries a
+/// `const char*` the thunk copies in, and a `String` result has nowhere to hand
+/// C storage from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallbackPosition {
+    /// A parameter of the callback.
+    Param,
+    /// The callback's result.
+    Result,
+}
+
 impl Analyzer<'_> {
     /// The callback value for `name` when `expected` is a `@FFI.Callback` type
     /// and `name` is a top-level function, or `None` when this is not that
@@ -114,7 +127,7 @@ impl Analyzer<'_> {
                     index + 1
                 ));
             };
-            match self.callback_scalar_of(*param) {
+            match self.callback_scalar_of(*param, CallbackPosition::Param) {
                 Some(actual) if actual == *expected => {}
                 _ => {
                     return Err(format!(
@@ -140,7 +153,7 @@ impl Analyzer<'_> {
                 ))
             };
         }
-        match self.callback_scalar_of(result) {
+        match self.callback_scalar_of(result, CallbackPosition::Result) {
             Some(actual) if actual == expected_result => Ok(()),
             _ => Err(format!(
                 "the callback returns `{expected_result:?}` at the seam and the function returns \
@@ -154,8 +167,20 @@ impl Analyzer<'_> {
     ///
     /// The same exact-width rule the `@FFI.Extern` seam applies: a bare `Int` or
     /// `Float` has no C width, so it is not a callback parameter either.
-    fn callback_scalar_of(&self, ty: Type) -> Option<ForeignType> {
-        crate::foreign::scalar_foreign_type(ty)
+    ///
+    /// A **parameter** may additionally be a `String`, which carries a
+    /// `const char*` C sees: the thunk copies the bytes on the way in, so the
+    /// Kira function receives owned text and C keeps its storage. A *result*
+    /// may not, and that asymmetry is the ownership question answering itself —
+    /// C would have to be handed a pointer somebody frees, and a Kira `String`
+    /// belongs to Kira.
+    fn callback_scalar_of(&self, ty: Type, position: CallbackPosition) -> Option<ForeignType> {
+        match (ty, position) {
+            // Two spellings of one C position: `CString` is how the annotation
+            // names it, `String` is how a Kira function taking it does.
+            (Type::CString | Type::String, CallbackPosition::Param) => Some(ForeignType::CString),
+            _ => crate::foreign::scalar_foreign_type(ty),
+        }
     }
 
     /// The id of the callback entry for `function` and `signature`, adding it on
@@ -212,21 +237,26 @@ impl Analyzer<'_> {
         params: &[kira_syntax_model::ast::TypeRefId],
         result: Option<kira_syntax_model::ast::TypeRefId>,
     ) -> Option<ForeignSignature> {
+        // A callback annotation *is* a C signature, so its types resolve as one:
+        // `CString` names a `const char*` here exactly as it does in an
+        // `@FFI.Extern`, rather than becoming `Error` and taking the whole
+        // signature with it.
+        let outer_foreign = self.in_foreign_signature;
+        self.in_foreign_signature = true;
+        let resolved: Vec<Type> = params.iter().map(|&p| self.resolve_type_ref(p)).collect();
+        let written_result = result.map(|written| self.resolve_type_ref(written));
+        self.in_foreign_signature = outer_foreign;
+
         let mut specs = Vec::with_capacity(params.len());
-        for param in params {
-            let ty = self.resolve_type_ref(*param);
-            specs.push(ForeignTypeSpec::Scalar(self.callback_scalar_of(ty)?));
+        for ty in resolved {
+            specs.push(ForeignTypeSpec::Scalar(
+                self.callback_scalar_of(ty, CallbackPosition::Param)?,
+            ));
         }
-        let result = match result {
+        let result = match written_result {
             None => ForeignType::Void,
-            Some(written) => {
-                let ty = self.resolve_type_ref(written);
-                if ty == Type::Void {
-                    ForeignType::Void
-                } else {
-                    self.callback_scalar_of(ty)?
-                }
-            }
+            Some(Type::Void) => ForeignType::Void,
+            Some(ty) => self.callback_scalar_of(ty, CallbackPosition::Result)?,
         };
         Some(ForeignSignature::new(
             specs,

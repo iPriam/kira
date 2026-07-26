@@ -286,6 +286,109 @@ impl<'a> Analyzer<'a> {
         resolved
     }
 
+    /// Breaks every by-value cycle left in the finished struct table.
+    ///
+    /// [`Self::break_struct_value_cycles`] sees only the structs of one pass, so
+    /// it cannot see an edge through a **class** — and since a struct field may
+    /// name a class and a class field may name a struct, a cycle can be spelled
+    /// with either kind or both. This runs once the table is complete, which is
+    /// the only point every edge exists, and reports what it breaks by the same
+    /// rule and with the same code.
+    ///
+    /// A field broken to `Error` stays broken: the walk removes back-edges, so
+    /// what is left can be recursed without a visited set — which is what every
+    /// later pass over a field type relies on.
+    pub(crate) fn break_remaining_value_cycles(&mut self) {
+        let ids: Vec<StructId> = self.program.types.structs().ids().collect();
+        let count = ids.len();
+        let edges: Vec<Vec<(usize, usize)>> = ids
+            .iter()
+            .map(|&id| match self.program.types.structs().get(id) {
+                Some(def) => def
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(slot, field)| match field.ty {
+                        Type::Struct(target) => Some((slot, target.index() as usize)),
+                        _ => None,
+                    })
+                    .collect(),
+                None => Vec::new(),
+            })
+            .collect();
+
+        // 0 unvisited, 1 on the current path, 2 finished.
+        let mut colour = vec![0u8; count];
+        let mut broken: Vec<(usize, usize)> = Vec::new();
+        for root in 0..count {
+            if colour[root] != 0 {
+                continue;
+            }
+            colour[root] = 1;
+            let mut stack = vec![(root, 0usize)];
+            while let Some((node, cursor)) = stack.pop() {
+                if cursor == edges[node].len() {
+                    colour[node] = 2;
+                    continue;
+                }
+                stack.push((node, cursor + 1));
+                let (slot, target) = edges[node][cursor];
+                match colour.get(target).copied() {
+                    Some(0) => {
+                        colour[target] = 1;
+                        stack.push((target, 0));
+                    }
+                    Some(1) => broken.push((node, slot)),
+                    _ => {}
+                }
+            }
+        }
+
+        for (index, slot) in broken {
+            let Some(&id) = ids.get(index) else {
+                continue;
+            };
+            let name = self.program.types.type_name(Type::Struct(id));
+            let mut fields = match self.program.types.structs().get(id) {
+                Some(def) => def.fields.clone(),
+                None => continue,
+            };
+            if let Some(field) = fields.get_mut(slot) {
+                field.ty = Type::Error;
+            }
+            self.program.types.structs_mut().set_fields(id, fields);
+            if let Some(source) = self.struct_sources.get(&id).copied() {
+                self.source = source;
+            }
+            let span = self.declaration_name_span(&name).unwrap_or(Span::new(0, 0));
+            self.emit(
+                span,
+                "KSEM052",
+                format!(
+                    "`{name}` cannot contain itself by value: its fields form a cycle with no \
+                     finite size. Hold one of them behind an array (`[{name}]`) or an enum to \
+                     break it."
+                ),
+            );
+        }
+    }
+
+    /// The span of the `struct` or `class` declaration written under `name`.
+    ///
+    /// Found from the syntax rather than kept beside the row, because only a
+    /// diagnostic ever wants it and only for a declaration that went wrong.
+    fn declaration_name_span(&self, name: &str) -> Option<Span> {
+        self.tree.items().iter().find_map(|item| match item {
+            Item::Struct(declaration) if self.interner.resolve(declaration.name) == name => {
+                Some(declaration.name_span)
+            }
+            Item::Class(declaration) if self.interner.resolve(declaration.name) == name => {
+                Some(declaration.name_span)
+            }
+            _ => None,
+        })
+    }
+
     /// Commits one resolved struct: writes its fields into the reserved row and
     /// records its defaults and methods against the same id.
     fn commit_struct(&mut self, entry: ResolvedStruct) {
@@ -315,6 +418,15 @@ impl<'a> Analyzer<'a> {
         let name = self.interner.resolve(declaration.name).to_owned();
         let mut fields: Vec<FieldDef> = Vec::with_capacity(declaration.fields.len());
         let mut defaults: Vec<Option<FieldDefault>> = Vec::with_capacity(declaration.fields.len());
+        // An `@FFI.*` declaration's fields describe a **C** layout, not a Kira
+        // value: `struct sg_desc { var window_title: CString }` mirrors a
+        // `const char*` member. So `CString` resolves here exactly as it does in
+        // an `@FFI.Extern` signature, and the rule that keeps it out of
+        // Kira-owned storage is unweakened — a C-layout struct has no
+        // constructible `CString` field, and that is refused where the value
+        // would be minted rather than where the layout is described.
+        let outer_foreign = self.in_foreign_signature;
+        self.in_foreign_signature = declaration.ffi.is_some();
         for field in &declaration.fields {
             let field_name = self.interner.resolve(field.name).to_owned();
             if fields.iter().any(|existing| existing.name == field_name) {
@@ -341,6 +453,7 @@ impl<'a> Analyzer<'a> {
                     .map(|syntax| FieldDefault::new(syntax, self.source)),
             );
         }
+        self.in_foreign_signature = outer_foreign;
         (StructDef { name, fields }, defaults)
     }
 

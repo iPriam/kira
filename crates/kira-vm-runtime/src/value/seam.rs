@@ -161,9 +161,10 @@ impl Heap {
     ///
     /// Integer results are stored in the VM's 64-bit `Int`, sign- or
     /// zero-extended by their declared width, exactly as the generated adapter
-    /// narrows them. `RawPtr` stays an opaque word. `CString` never appears —
-    /// returned C-string ownership is not part of the adapter ABI, so a
-    /// [`ForeignResult`] can never carry one.
+    /// narrows them. `RawPtr` stays an opaque word. A `CString` result already
+    /// carries the callee's bytes rather than its pointer — the seam copied them
+    /// while the pointer was good — so it lands on this heap as an ordinary
+    /// owned `String` and nothing here ever holds C storage.
     ///
     /// An aggregate result yields `None`: turning C-layout bytes back into a
     /// struct needs the aggregate's member tree, which lives in the module, not
@@ -184,6 +185,7 @@ impl Heap {
             ForeignResult::F32(v) => Value::Float(f64::from(v)),
             ForeignResult::F64(v) => Value::Float(v),
             ForeignResult::RawPtr(w) => Value::RawPtr(w),
+            ForeignResult::CString(text) => Value::Str(self.alloc(text)),
             ForeignResult::Aggregate { .. } => return None,
         })
     }

@@ -27,8 +27,8 @@ const HOST_POINTER_WIDTH: ForeignPointerWidth = ForeignPointerWidth::HOST;
 ///
 /// Every transient `CString` is copied into a fresh handle from `library` and
 /// freed on every exit path — a clean return, a tag mismatch, or a status error.
-/// A `CString` result is refused: adapter ABI version 1 does not own returned C
-/// strings.
+/// A `CString` **result** is copied in the other direction, out of storage the
+/// callee keeps, so nothing here holds C memory or frees any.
 ///
 /// # Safety
 /// `adapter` must be one of `library`'s bound adapters, and `signature` must be
@@ -41,11 +41,6 @@ pub unsafe fn call_adapter(
     aggregates: &ForeignAggregates,
     args: &[ForeignArg<'_>],
 ) -> Result<ForeignResult, ForeignCallError> {
-    if signature.result() == ForeignTypeSpec::Scalar(ForeignType::CString) {
-        return Err(ForeignCallError::UnsupportedResultType(
-            ForeignTypeSpec::Scalar(ForeignType::CString),
-        ));
-    }
     if args.len() != signature.parameters().len() {
         return Err(ForeignCallError::ArgumentCount {
             expected: signature.parameters().len(),
@@ -91,7 +86,9 @@ pub unsafe fn call_adapter(
     drop(strings);
 
     match status {
-        ForeignAdapterStatus::SUCCESS => lift_result(signature.result(), out, result_buffer),
+        ForeignAdapterStatus::SUCCESS => {
+            lift_result(signature.result(), out, result_buffer, library)
+        }
         ForeignAdapterStatus::BAD_ARGUMENT_COUNT => Err(ForeignCallError::AdapterBadArgumentCount),
         ForeignAdapterStatus::BAD_ARGUMENT_TAG => Err(ForeignCallError::AdapterBadArgumentTag),
         ForeignAdapterStatus::INTERIOR_NUL => Err(ForeignCallError::AdapterInteriorNul),
@@ -168,6 +165,7 @@ fn lift_result(
     expected: ForeignTypeSpec,
     value: BridgeValue,
     result_buffer: Vec<u8>,
+    library: &NativeLibrary,
 ) -> Result<ForeignResult, ForeignCallError> {
     if value.reserved != [0; 7] {
         return Err(ForeignCallError::MalformedResultReserved);
@@ -209,10 +207,17 @@ fn lift_result(
             check_pointer_width(value.payload)?;
             ForeignResult::RawPtr(value.payload)
         }
+        // The adapter already copied the callee's bytes into a string handle
+        // from the loaded native half's own runtime — the same handle shape a
+        // transient argument crosses as, in the other direction. Read and free
+        // it through that library, because it is that library's allocation.
         ForeignType::CString => {
-            return Err(ForeignCallError::UnsupportedResultType(
-                ForeignTypeSpec::Scalar(ForeignType::CString),
-            ));
+            check_pointer_width(value.payload)?;
+            // SAFETY: the adapter returned this as a live handle from the same
+            // library; it is read here and freed exactly once.
+            let text = unsafe { library.take_string(value.payload) }
+                .map_err(|_| ForeignCallError::AdapterMalformedResult)?;
+            ForeignResult::CString(text)
         }
     })
 }

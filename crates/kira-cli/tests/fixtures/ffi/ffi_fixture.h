@@ -138,4 +138,18 @@ int ffi_run_stored(int a, int b);
 int ffi_hooks_apply(struct ffi_hooks h, int a, int b);
 int ffi_call_adder(ffi_adder add, int a, int b);
 
+/* A returned borrowed C string: storage the callee keeps and never hands over,
+ * which the seam copies on the way out so Kira holds no C memory and frees
+ * none. `ffi_echo_or_null` returns NULL for an empty input, which is the case
+ * that has to read as the empty string rather than crash. */
+const char *ffi_greeting(void);
+const char *ffi_echo_or_null(const char *s);
+
+/* A callback C enters with a `const char*` it owns. The Kira side has to see
+ * owned text — a copy made while the pointer is still C's — and a NULL argument
+ * has to arrive as the empty string rather than as a crash. */
+typedef int (*ffi_labeler)(const char *text, int n);
+int ffi_call_labeler(ffi_labeler label, const char *text, int n);
+int ffi_call_labeler_null(ffi_labeler label, int n);
+
 #endif /* KIRA_FFI_FIXTURE_H */

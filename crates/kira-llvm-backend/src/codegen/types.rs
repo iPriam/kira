@@ -117,6 +117,10 @@ pub(crate) struct Runtime {
     /// a stale sidecar fails to link by name; see
     /// [`kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER`].
     pub(super) foreign_marker: Callable,
+    /// `kira_rt_str_from_cstr`: copies a `CString` result's bytes out of the
+    /// storage the callee keeps, which is how a returned C string becomes an
+    /// owned Kira `String` with nothing to free on this side.
+    pub(super) str_from_cstr: Callable,
     /// `kira_rt_cstring_new`: builds transient NUL-terminated C storage from a
     /// Kira string handle for one foreign call (null on interior NUL).
     pub(super) cstring_new: Callable,
@@ -264,6 +268,7 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             foreign_marker: declare(&foreign_marker_symbol(), types.void, &mut []),
             cstring_new: declare(c"kira_rt_cstring_new", types.ptr, &mut [types.ptr]),
             cstring_free: declare(c"kira_rt_cstring_free", types.void, &mut [types.ptr]),
+            str_from_cstr: declare(c"kira_rt_str_from_cstr", types.ptr, &mut [types.ptr]),
             call_runtime: declare(
                 c"kira_hybrid_call_runtime",
                 types.void,

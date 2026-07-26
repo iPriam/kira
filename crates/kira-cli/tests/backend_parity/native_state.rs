@@ -134,3 +134,59 @@ function main() {
     );
     assert_eq!(output, "1\n");
 }
+
+/// Callback state that holds a **function value** boxes, recovers, and is still
+/// callable on every backend.
+///
+/// This is the shape an application's runtime state actually has: a struct of
+/// counters plus the handlers the host calls back into. A function value is a
+/// tag and its captures, every one of which had to be trivially copyable to
+/// exist, so it boxes as an ordinary struct — and calling the recovered handler
+/// is what proves the tag survived the round trip rather than merely the bytes.
+#[test]
+fn callback_state_holding_a_function_value_round_trips() {
+    let output = assert_parity(
+        r#"
+struct Frame {
+    var n: Int
+}
+
+function bump(frame: borrow mut Frame) {
+    frame.n = frame.n + 1
+    return
+}
+
+function scale(frame: borrow mut Frame) {
+    frame.n = frame.n * 3
+    return
+}
+
+struct AppState {
+    var count: Int
+    var onFrame: (borrow mut Frame) -> Void
+}
+
+@Main
+function main() {
+    let boxed = nativeState(AppState { count: 4, onFrame: bump })
+    var recovered = nativeRecover<AppState>(nativeUserData(boxed))
+    var f = Frame { n: 10 }
+    recovered.onFrame(f)
+    print(recovered.count)
+    print(f.n)
+
+    let other = nativeState(AppState { count: 9, onFrame: scale })
+    var second = nativeRecover<AppState>(nativeUserData(other))
+    second.onFrame(f)
+    print(second.count)
+    print(f.n)
+
+    nativeStateFree(boxed)
+    nativeStateFree(other)
+    return
+}
+"#,
+    );
+    // 10 bumped to 11, then scaled to 33 — each state reached its own handler.
+    assert_eq!(output, "4\n11\n9\n33\n");
+}

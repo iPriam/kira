@@ -416,10 +416,18 @@ impl<'a> Analyzer<'a> {
         // the family exists and before its method signatures are resolved, so a
         // modifier's parameter and result types are resolved with the rest.
         self.collect_extend_blocks();
+        // Class *names* join the same table before struct fields resolve, for
+        // the reason enum names do: a struct field may name a class and a class
+        // field may name a struct, so neither kind can wait for the other to
+        // finish. Flattening still waits until every struct exists, because a
+        // class may extend one.
+        let class_headers = self.declare_class_headers();
         self.collect_structs();
-        // Classes flatten into the same table, and may extend a struct, so they
-        // are declared once every struct exists.
-        self.collect_classes();
+        self.collect_classes(&class_headers);
+        // Every by-value edge in the table exists only now that both kinds are
+        // filled, and a cycle spelled through a class is one neither pass could
+        // see on its own.
+        self.break_remaining_value_cycles();
         // Construct-backed declarations become struct-shaped types too, and a
         // param or member may name any struct, enum, or class, so they are
         // declared once every one of those exists and before signatures — a

@@ -28,6 +28,7 @@
 //! These names are a wire contract with the backend's lowering and are
 //! append-only: never rename one or change a signature in place.
 
+use std::ffi::{CStr, c_char};
 use std::io::Write;
 use std::slice;
 
@@ -232,6 +233,35 @@ pub unsafe extern "C" fn kira_rt_str_data(value: KStr) -> *const u8 {
 pub unsafe extern "C" fn kira_rt_str_len(value: KStr) -> usize {
     // SAFETY: caller passes a live (or null) handle that outlives this read.
     unsafe { bytes_of(value) }.len()
+}
+
+/// Copies a NUL-terminated C string into a fresh owned handle.
+///
+/// The native half of a `CString` **result**: a foreign function hands back a
+/// `const char*` it keeps, and this copies the bytes while that pointer is still
+/// good, so nothing in Kira ever holds C storage or is asked to free it. That
+/// copy is the whole ownership answer, and it is the same one the VM's seam and
+/// the hybrid host give — which is what makes the three print the same string.
+///
+/// A null pointer is the empty string: a C function returning `NULL` for
+/// "nothing" is the one reading that invents no value.
+///
+/// Appended after the string helpers, so it is not an ABI change.
+///
+/// # Safety
+/// `value` must be null or point at a NUL-terminated byte sequence that stays
+/// valid for the length of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_str_from_cstr(value: *const c_char) -> KStr {
+    if value.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: caller guarantees a NUL-terminated sequence valid for this call.
+    let bytes = unsafe { CStr::from_ptr(value) }.to_bytes();
+    if bytes.is_empty() {
+        return std::ptr::null_mut();
+    }
+    into_handle(bytes.to_vec().into_boxed_slice())
 }
 
 /// Reports a division-by-zero trap and exits with a failure code, mirroring the

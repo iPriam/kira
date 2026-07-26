@@ -344,8 +344,10 @@ impl ForeignArg<'_> {
 
 /// An owned value returned from a foreign call.
 ///
-/// `CString` is intentionally absent: returned C-string ownership is not part
-/// of the adapter ABI.
+/// A `CString` result carries the *bytes*, not the pointer. That is the whole
+/// ownership answer: the callee returns a `const char*` it keeps, the seam
+/// copies it while it is still valid, and nothing on the Kira side ever holds a
+/// pointer into C storage or is asked to free one. Kira sees an owned `String`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ForeignResult {
     /// The unit value.
@@ -374,6 +376,8 @@ pub enum ForeignResult {
     F64(f64),
     /// An opaque target-width pointer word, zero-extended in the bridge payload.
     RawPtr(u64),
+    /// The bytes of a returned C string, copied out of storage the callee keeps.
+    CString(String),
     /// A C-layout aggregate, owned: exactly its `sizeof` bytes in target layout.
     Aggregate {
         /// The aggregate's index in the program's table.
@@ -400,6 +404,7 @@ impl ForeignResult {
             Self::F32(_) => ForeignType::F32,
             Self::F64(_) => ForeignType::F64,
             Self::RawPtr(_) => ForeignType::RawPtr,
+            Self::CString(_) => ForeignType::CString,
             Self::Aggregate { id, .. } => return ForeignTypeSpec::Aggregate(*id),
         })
     }

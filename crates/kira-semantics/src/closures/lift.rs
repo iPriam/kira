@@ -549,12 +549,37 @@ impl Analyzer<'_> {
             );
             return Captured::Refused;
         }
-        if !super::is_trivially_copyable(ty) {
+        if !self.capture_is_trivially_copyable(ty) {
             self.emit(
                 span,
                 "KSEM117",
                 format!(
                     "closure captures `{name}` of type `{}`, which is not trivially copyable",
+                    self.type_name(ty)
+                ),
+            );
+            return Captured::Refused;
+        }
+        // A capture becomes a *field* of the closure's representation struct, so
+        // capturing a function value whose type reaches this one would make that
+        // struct contain itself by value: a value of infinite size. It is
+        // refused here rather than pushed, because pushing it is what makes the
+        // rest of the analyzer recurse forever over a cyclic type.
+        //
+        // The self-capture case — a closure of `(borrow mut Frame) -> Void`
+        // capturing another value of exactly that type — is the one an
+        // application hits, and lifting it needs a function value to carry its
+        // environment behind an indirection rather than inline. That is a change
+        // to the representation, not to this check.
+        if self.capture_would_be_cyclic(repr, ty) {
+            self.emit(
+                span,
+                "KSEM251",
+                format!(
+                    "closure captures `{name}` of type `{}`, which is the closure's own \
+                     function type: the captured value would have to be stored inside a \
+                     value of its own type, which has no size. Call it where it is bound, \
+                     or pass it in as a parameter of the closure.",
                     self.type_name(ty)
                 ),
             );
