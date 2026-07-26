@@ -232,6 +232,7 @@ mod generics;
 mod imports;
 mod libraries;
 mod logic;
+mod macros;
 mod matches;
 mod mutation;
 mod native_state;
