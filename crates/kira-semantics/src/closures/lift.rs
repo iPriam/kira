@@ -145,11 +145,14 @@ impl Analyzer<'_> {
             }
             return self.program.exprs.alloc(HirExpr::Error);
         };
-        let info = self
-            .fn_types
-            .get(repr)
-            .map(|info| (info.params.clone(), info.result));
-        let Some((param_types, result)) = info else {
+        let info = self.fn_types.get(repr).map(|info| {
+            (
+                info.params.clone(),
+                info.param_ownership.clone(),
+                info.result,
+            )
+        });
+        let Some((param_types, modes, result)) = info else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
         if params.len() != param_types.len() {
@@ -165,7 +168,7 @@ impl Analyzer<'_> {
             );
             return self.program.exprs.alloc(HirExpr::Error);
         }
-        self.lift_closure(ctx, repr, &param_types, result, params, body)
+        self.lift_closure(ctx, repr, &param_types, &modes, result, params, body)
     }
 
     /// Resolves a bare function name as a first-class function value.
@@ -224,16 +227,18 @@ impl Analyzer<'_> {
             },
         };
         self.link_function(target, span);
-        Some(self.named_function_value(repr, target, name, &params, result))
+        Some(self.named_function_value(repr, target, name, &params, &modes, result))
     }
 
     /// Builds or reuses one named function's tag and returns its function value.
+    #[allow(clippy::too_many_arguments)]
     fn named_function_value(
         &mut self,
         repr: StructId,
         target: FuncId,
         name: &str,
         params: &[Type],
+        modes: &[OwnershipMode],
         result: Type,
     ) -> HirExprId {
         let tag = match self
@@ -248,7 +253,8 @@ impl Analyzer<'_> {
                     .fn_types
                     .get(repr)
                     .map_or(0, |info| info.impls.len() as u32);
-                let wrapper = self.named_function_wrapper(repr, target, name, params, result, tag);
+                let wrapper =
+                    self.named_function_wrapper(repr, target, name, params, modes, result, tag);
                 if let Some(info) = self.fn_types.get_mut(repr) {
                     info.impls.push(ClosureImpl { function: wrapper });
                     info.named_functions.insert(target, tag);
@@ -272,12 +278,21 @@ impl Analyzer<'_> {
     }
 
     /// Synthesizes the environment-taking adapter the closure dispatcher calls.
+    ///
+    /// The adapter drops the environment and forwards the rest, so a `borrow
+    /// mut` parameter shifts by one on the way through: the wrapper's slot
+    /// `index + 1` is the target's slot `index`, and the writeback names the
+    /// target's. Without it the wrapper would call a by-reference function and
+    /// throw away what it wrote, which is what the bytecode compiler's
+    /// missing-writeback invariant catches.
+    #[allow(clippy::too_many_arguments)]
     fn named_function_wrapper(
         &mut self,
         repr: StructId,
         target: FuncId,
         name: &str,
         params: &[Type],
+        modes: &[OwnershipMode],
         result: Type,
         tag: u32,
     ) -> FuncId {
@@ -285,15 +300,27 @@ impl Analyzer<'_> {
         let mut ctx = FnCtx::new(result);
         ctx.declare_hidden(Type::Struct(repr), false);
         let mut args = Vec::with_capacity(params.len());
-        for &ty in params {
-            let local = ctx.declare_hidden(ty, false);
+        let mut writebacks = Vec::new();
+        for (index, &ty) in params.iter().enumerate() {
+            let mode = modes.get(index).copied().unwrap_or(OwnershipMode::Owned);
+            let mutable = mode == OwnershipMode::BorrowMut;
+            let local = ctx.declare_hidden_as(ty, mutable, mode);
             args.push(self.program.exprs.alloc(HirExpr::Local { local, ty }));
+            if mutable {
+                writebacks.push(kira_semantics_model::hir::HirWriteback {
+                    param: index as u32,
+                    place: kira_semantics_model::hir::HirPlace {
+                        local,
+                        path: Vec::new(),
+                    },
+                });
+            }
         }
         let call = self.program.exprs.alloc(HirExpr::Call {
             callee: kira_semantics_model::hir::Callee::User(target),
             args,
             ty: result,
-            writebacks: Vec::new(),
+            writebacks,
         });
         let body = if result == Type::Void {
             vec![
@@ -325,11 +352,13 @@ impl Analyzer<'_> {
     }
 
     /// Lifts one closure literal to a top-level function and builds its value.
+    #[allow(clippy::too_many_arguments)]
     fn lift_closure(
         &mut self,
         ctx: &mut FnCtx,
         repr: StructId,
         param_types: &[Type],
+        modes: &[OwnershipMode],
         result: Type,
         params: &[ClosureParam],
         body: &Block,
@@ -350,9 +379,14 @@ impl Analyzer<'_> {
         // read one from. A body that writes one gets "undefined name", which is
         // accurate — the closure genuinely has no `self`.
         inner.receiver = None;
-        for (param, &ty) in params.iter().zip(param_types) {
+        // A closure parameter takes the mode its *type* declares, not `Owned`.
+        // The literal never writes one, so the type is the only place it can
+        // come from — and it has to arrive, or a body writing through a `borrow
+        // mut` parameter would be refused for mutating an owned binding.
+        for (index, (param, &ty)) in params.iter().zip(param_types).enumerate() {
             let name = self.interner.resolve(param.name).to_owned();
-            inner.declare_param(&name, ty, false, OwnershipMode::Owned);
+            let mode = modes.get(index).copied().unwrap_or(OwnershipMode::Owned);
+            inner.declare_param(&name, ty, mode == OwnershipMode::BorrowMut, mode);
         }
         inner.closure = Some(ClosureCtx {
             repr,

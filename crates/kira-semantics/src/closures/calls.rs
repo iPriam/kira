@@ -1,7 +1,8 @@
 //! Calling a closure value, and finishing the desugar once analysis is done.
 
 use kira_semantics_model::hir::{
-    Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirStmt, HirStmtId, LocalId,
+    Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirPlace, HirStmt, HirStmtId,
+    HirWriteback, LocalId,
 };
 use kira_semantics_model::{OwnershipMode, StructId, Type};
 use kira_source::Span;
@@ -88,30 +89,6 @@ impl Analyzer<'_> {
         }) else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
-        // A `borrow mut` parameter is carried by writing the callee's final
-        // value back into the caller, and the instruction that does it names its
-        // callee by index. Through a function *value* the callee is not known
-        // until run time, so there is no index to name — the call is refused
-        // rather than compiled into one that drops the write.
-        if let Some(slot) = modes
-            .iter()
-            .position(|&mode| mode == OwnershipMode::BorrowMut)
-        {
-            self.emit(
-                span,
-                "KSEM249",
-                format!(
-                    "cannot call through `{}`: parameter {slot} is `borrow mut`, and the \
-                     writeback that carries one names its callee, which a function value \
-                     does not fix until run time",
-                    self.type_name(Type::Struct(repr))
-                ),
-            );
-            for &arg in args {
-                self.analyze_expr(ctx, arg);
-            }
-            return self.program.exprs.alloc(HirExpr::Error);
-        }
         let dispatcher = self.dispatcher_for(repr);
         if args.len() != params.len() {
             self.emit(
@@ -126,6 +103,11 @@ impl Analyzer<'_> {
             );
         }
         let mut all = vec![expr];
+        // Where each `borrow mut` argument's final value lands. The dispatcher
+        // carries the closure value in slot 0, so a source parameter `index` is
+        // the dispatcher's `index + 1` — the writeback names the dispatcher's
+        // numbering, because that is the call the instruction actually makes.
+        let mut writebacks: Vec<HirWriteback> = Vec::new();
         for (index, &arg) in args.iter().enumerate() {
             match params.get(index) {
                 // Each argument is checked against the mode the *type* declares
@@ -135,6 +117,16 @@ impl Analyzer<'_> {
                     let name = self.type_name(Type::Struct(repr));
                     let mode = modes.get(index).copied().unwrap_or(OwnershipMode::Owned);
                     all.push(self.analyze_call_argument(ctx, arg, expected, mode, &name));
+                    if mode == OwnershipMode::BorrowMut {
+                        self.record_borrow_mut_argument(
+                            ctx,
+                            arg,
+                            index,
+                            index as u32 + 1,
+                            &name,
+                            &mut writebacks,
+                        );
+                    }
                 }
                 None => all.push(self.analyze_expr(ctx, arg)),
             }
@@ -159,7 +151,7 @@ impl Analyzer<'_> {
             callee: Callee::User(dispatcher),
             args: all,
             ty: result,
-            writebacks: Vec::new(),
+            writebacks,
         })
     }
 
@@ -251,6 +243,14 @@ impl Analyzer<'_> {
 
     /// One dispatcher branch: forward the closure value and every parameter to
     /// the lifted body, and return what it returns.
+    ///
+    /// A `borrow mut` parameter is forwarded *and written back*: the arm passes
+    /// the dispatcher's own parameter, and the value the arm's target leaves in
+    /// it lands back in that same slot — which the dispatcher, itself declaring
+    /// the slot `borrow mut`, then carries out to its caller. That chain is what
+    /// makes a mutable borrow survive a call through a function value, where the
+    /// callee is not known until the tag is read.
+    #[allow(clippy::too_many_arguments)]
     fn dispatch_arm(
         &mut self,
         target: FuncId,
@@ -258,20 +258,31 @@ impl Analyzer<'_> {
         repr: StructId,
         param_locals: &[LocalId],
         params: &[Type],
+        modes: &[OwnershipMode],
         result: Type,
     ) -> Vec<HirStmtId> {
         let mut args = vec![self.program.exprs.alloc(HirExpr::Local {
             local: env,
             ty: Type::Struct(repr),
         })];
-        for (&local, &ty) in param_locals.iter().zip(params.iter()) {
+        let mut writebacks = Vec::new();
+        for (index, (&local, &ty)) in param_locals.iter().zip(params.iter()).enumerate() {
             args.push(self.program.exprs.alloc(HirExpr::Local { local, ty }));
+            if modes.get(index) == Some(&OwnershipMode::BorrowMut) {
+                writebacks.push(HirWriteback {
+                    param: index as u32 + 1,
+                    place: HirPlace {
+                        local,
+                        path: Vec::new(),
+                    },
+                });
+            }
         }
         let call = self.program.exprs.alloc(HirExpr::Call {
             callee: Callee::User(target),
             args,
             ty: result,
-            writebacks: Vec::new(),
+            writebacks,
         });
         if result == Type::Void {
             vec![
@@ -373,11 +384,14 @@ impl Analyzer<'_> {
 
     /// The dispatcher for one function type: a branch per closure literal.
     fn dispatcher_body(&mut self, repr: StructId) -> HirFunction {
-        let Some((params, result, impls)) = self
-            .fn_types
-            .get(repr)
-            .map(|info| (info.params.clone(), info.result, info.impls.clone()))
-        else {
+        let Some((params, modes, result, impls)) = self.fn_types.get(repr).map(|info| {
+            (
+                info.params.clone(),
+                info.param_ownership.clone(),
+                info.result,
+                info.impls.clone(),
+            )
+        }) else {
             return HirFunction {
                 name: "<unreachable dispatcher>".to_owned(),
                 param_count: 0,
@@ -393,8 +407,13 @@ impl Analyzer<'_> {
         let mut ctx = FnCtx::new(result);
         let env = ctx.declare_hidden(Type::Struct(repr), false);
         let mut param_locals = Vec::with_capacity(params.len());
-        for &ty in &params {
-            param_locals.push(ctx.declare_hidden(ty, false));
+        for (index, &ty) in params.iter().enumerate() {
+            let mode = modes.get(index).copied().unwrap_or(OwnershipMode::Owned);
+            // A `borrow mut` slot is declared mutable as well as borrowing: the
+            // arm writes its result back into it, and a slot nothing may write
+            // is one the writeback cannot land in.
+            let mutable = mode == OwnershipMode::BorrowMut;
+            param_locals.push(ctx.declare_hidden_as(ty, mutable, mode));
         }
 
         // The last literal is the chain's unconditional tail rather than one
@@ -404,8 +423,15 @@ impl Analyzer<'_> {
         // that every backend agrees is of that type.
         let mut body: Vec<HirStmtId> = Vec::with_capacity(impls.len().max(1));
         for (tag, closure) in impls.iter().enumerate() {
-            let arm =
-                self.dispatch_arm(closure.function, env, repr, &param_locals, &params, result);
+            let arm = self.dispatch_arm(
+                closure.function,
+                env,
+                repr,
+                &param_locals,
+                &params,
+                &modes,
+                result,
+            );
             if tag + 1 == impls.len() {
                 body.extend(arm);
                 break;

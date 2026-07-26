@@ -73,7 +73,7 @@ impl Parser<'_> {
         let name = self.intern_span(name_span);
         self.bump();
         self.expect(TokenKind::Colon);
-        let (ownership, ownership_span) = self.parse_param_ownership();
+        let (ownership, ownership_span) = self.parse_ownership_prefix();
         let ty = self.parse_type_ref();
         // A trailing `= expr` gives the parameter a default, the same grammar a
         // struct field or enum-variant payload already uses. Semantics resolves
@@ -91,7 +91,7 @@ impl Parser<'_> {
         })
     }
 
-    /// Parses the ownership prefix of a parameter type, if one is written.
+    /// Parses the ownership prefix of a written type, if one is written.
     ///
     /// Accepts `borrow`, `borrow mut`, `move`, and `copy`. All four are
     /// contextual identifiers, so each is committed to only when a type name
@@ -99,7 +99,12 @@ impl Parser<'_> {
     /// `borrow`) and `f(x: move)` (a type named `move`, were one declared)
     /// parsing as they always did. A bare type yields
     /// [`OwnershipMode::Owned`], which is the default rather than a fallback.
-    fn parse_param_ownership(&mut self) -> (OwnershipMode, Option<Span>) {
+    ///
+    /// Shared by every position that admits a prefix — a declared parameter, a
+    /// function type's parameter, a `let` or `var` annotation — because the
+    /// lookahead that makes the keyword contextual has to be identical in all
+    /// of them or one position would commit where another backs off.
+    pub(crate) fn parse_ownership_prefix(&mut self) -> (OwnershipMode, Option<Span>) {
         if self.at_word("borrow") && self.peek_is_word(1, "mut") && self.peek_starts_type(2) {
             let start = self.current().span;
             self.bump(); // `borrow`
@@ -239,7 +244,7 @@ impl Parser<'_> {
         let mut param_ownership = Vec::new();
         while !self.at(TokenKind::RParen) && !self.at_eof() {
             let before = self.pos;
-            let (mode, _) = self.parse_param_ownership();
+            let (mode, _) = self.parse_ownership_prefix();
             param_ownership.push(mode);
             params.push(self.parse_type_ref());
             self.eat(TokenKind::Comma);

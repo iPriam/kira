@@ -253,12 +253,27 @@ impl FnCtx {
     /// it spells its own variables, because name resolution only ever consults
     /// the scope stack.
     pub(crate) fn declare_hidden(&mut self, ty: Type, mutable: bool) -> LocalId {
+        self.declare_hidden_as(ty, mutable, OwnershipMode::Owned)
+    }
+
+    /// Declares an unnamed local carrying an explicit ownership mode.
+    ///
+    /// A synthesized *parameter* needs one: the mode of a slot is what tells
+    /// lowering to pass it by reference, so a dispatcher forwarding a `borrow
+    /// mut` parameter has to declare it as one or the write it forwards lands
+    /// in a copy the caller never sees.
+    pub(crate) fn declare_hidden_as(
+        &mut self,
+        ty: Type,
+        mutable: bool,
+        ownership: OwnershipMode,
+    ) -> LocalId {
         let id = LocalId(self.locals.len() as u32);
         self.locals.push(HirLocal {
             name: String::new(),
             ty,
             mutable,
-            ownership: OwnershipMode::Owned,
+            ownership,
             native_state: None,
         });
         self.ownership.push(LocalOwnership::owned());

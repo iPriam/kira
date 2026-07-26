@@ -2,6 +2,7 @@
 //! arms, and what a `for` iterates).
 
 use super::{ExprId, StmtId, TypeRefId};
+use crate::ownership::OwnershipMode;
 use kira_core::Symbol;
 use kira_source::Span;
 
@@ -97,6 +98,14 @@ pub enum Stmt {
         mutable: bool,
         /// Optional written type annotation.
         ty: Option<TypeRefId>,
+        /// The ownership prefix written on that annotation, if any.
+        ///
+        /// A binding may say how it takes its initializer — `let f: borrow (Int)
+        /// -> Void = g` — exactly as a parameter says how it takes its argument.
+        /// [`OwnershipMode::Owned`] is the default rather than a fallback.
+        ownership: OwnershipMode,
+        /// Span of the ownership prefix, for the diagnostic that refuses one.
+        ownership_span: Option<Span>,
         /// The initializing expression.
         init: ExprId,
         /// Span covering the statement.
