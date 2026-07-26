@@ -685,6 +685,49 @@ fn mutably_borrowing_one_binding_twice_in_a_call_is_refused() {
     assert_eq!(codes(text), vec!["KSEM247"]);
 }
 
+/// Two sibling fields of one binding are two distinct places.
+///
+/// The shape the corpus writes: `sceneApplyEdit(ws.doc, ws.world, op)`. Keying
+/// the refusal on the root binding alone rejected it, which was wrong — neither
+/// write can reach the other's storage.
+#[test]
+fn mutably_borrowing_two_fields_of_one_binding_is_accepted() {
+    let text = "struct Doc { var n: Int }\n\
+                    struct World { var n: Int }\n\
+                    struct State { var doc: Doc  var world: World }\n\
+                    function apply(d: borrow mut Doc, w: borrow mut World) { \
+                    d.n = d.n + 1 w.n = w.n + 1 return }\n\
+                    @Main function main() { \
+                    var state = State { doc: Doc { n: 1 }, world: World { n: 2 } } \
+                    apply(state.doc, state.world) print(state.doc.n) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// A place that *contains* another is still one place: the outer write would
+/// erase the inner one.
+#[test]
+fn mutably_borrowing_a_binding_and_its_own_field_is_refused() {
+    let text = "struct Doc { var n: Int }\n\
+                    struct State { var doc: Doc }\n\
+                    function apply(s: borrow mut State, d: borrow mut Doc) { \
+                    d.n = s.doc.n return }\n\
+                    @Main function main() { var state = State { doc: Doc { n: 1 } } \
+                    apply(state, state.doc) return }";
+    assert_eq!(codes(text), vec!["KSEM247"]);
+}
+
+/// Two elements of one array cannot be told apart without evaluating the
+/// indices, so the pair is refused rather than assumed distinct.
+#[test]
+fn mutably_borrowing_two_elements_of_one_array_is_refused() {
+    let text = "struct Cell { var n: Int }\n\
+                    function apply(a: borrow mut Cell, b: borrow mut Cell) { \
+                    a.n = b.n return }\n\
+                    @Main function main() { var cells = [Cell { n: 1 }, Cell { n: 2 }] \
+                    apply(cells[0], cells[1]) return }";
+    assert_eq!(codes(text), vec!["KSEM247"]);
+}
+
 /// Two distinct bindings are two distinct places, so the same call is fine.
 #[test]
 fn mutably_borrowing_two_bindings_in_one_call_is_accepted() {
