@@ -20,6 +20,7 @@ mod native_state;
 mod operators;
 mod place;
 mod program;
+mod strings;
 
 pub(crate) use self::program::check_signature;
 pub use self::program::{Program, RunOutcome, execute};
@@ -396,16 +397,46 @@ impl Vm<'_> {
                     self.heap.drop_value(base);
                     return Err(VmError::NotAString);
                 };
-                // Characters, not bytes — the same units `charAt` and
+                // Bytes, not characters — the same units `charAt` and
                 // `substring` index, and the same count the native helper
                 // produces, which is what keeps the two engines agreeing on
                 // text that is not all ASCII.
-                let counted = i64::try_from(self.heap.get(id).chars().count())
-                    .map_err(|_| VmError::ArrayTooLong);
+                let counted =
+                    i64::try_from(self.heap.get(id).len()).map_err(|_| VmError::ArrayTooLong);
                 // The string is freed on every path out, not just the one that
                 // produced a count.
                 self.heap.drop_value(base);
                 self.stack.push(Value::Int(counted?));
+            }
+            Instruction::StringCharAt => {
+                let index = self.pop()?;
+                let base = self.pop()?;
+                let read = self.read_char_at(base, index);
+                self.stack.push(Value::Int(read?));
+            }
+            Instruction::StringSubstring => {
+                let end = self.pop()?;
+                let start = self.pop()?;
+                let base = self.pop()?;
+                let carved = self.carve_substring(base, start, end);
+                let text = carved?;
+                let id = self.heap.alloc(text);
+                self.stack.push(Value::Str(id));
+            }
+            Instruction::StringIndexOf => {
+                let needle = self.pop()?;
+                let base = self.pop()?;
+                let found = self.find_index_of(base, needle);
+                self.stack.push(Value::Int(found?));
+            }
+            Instruction::StringOf => {
+                let value = self.pop()?;
+                let text = self
+                    .heap
+                    .format_and_consume(value)
+                    .ok_or(VmError::UnprintableValue)?;
+                let id = self.heap.alloc(text);
+                self.stack.push(Value::Str(id));
             }
             Instruction::NewEnum { tag, has_payload } => {
                 // The payload, when present, was pushed last, so it comes off

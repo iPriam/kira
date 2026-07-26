@@ -47,6 +47,7 @@ impl Parser<'_> {
                 fields,
                 methods,
                 ffi: None,
+                derives_copy: None,
                 span,
             });
         }
@@ -99,6 +100,7 @@ impl Parser<'_> {
             fields,
             methods,
             ffi: None,
+            derives_copy: None,
             span,
         })
     }
@@ -172,6 +174,7 @@ impl Parser<'_> {
                 name_span,
                 type_params,
                 variants,
+                derives_copy: None,
                 span,
             });
         }
@@ -209,6 +212,7 @@ impl Parser<'_> {
             name_span,
             type_params,
             variants,
+            derives_copy: None,
             span,
         })
     }

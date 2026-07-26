@@ -256,6 +256,22 @@ impl Lowerer<'_> {
             HirExpr::ArrayLen { array } => IrExpr::ArrayLen {
                 array: self.lower_expr(array),
             },
+            HirExpr::StringCharAt { text, index } => IrExpr::StringCharAt {
+                text: self.lower_expr(text),
+                index: self.lower_expr(index),
+            },
+            HirExpr::StringSubstring { text, start, end } => IrExpr::StringSubstring {
+                text: self.lower_expr(text),
+                start: self.lower_expr(start),
+                end: self.lower_expr(end),
+            },
+            HirExpr::StringIndexOf { text, needle } => IrExpr::StringIndexOf {
+                text: self.lower_expr(text),
+                needle: self.lower_expr(needle),
+            },
+            HirExpr::StringOf { value } => IrExpr::StringOf {
+                value: self.lower_expr(value),
+            },
             HirExpr::StringLen { text } => IrExpr::StringLen {
                 text: self.lower_expr(text),
             },

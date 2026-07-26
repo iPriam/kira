@@ -305,6 +305,122 @@ comptime macro MemberwiseInit {
 `@Derive(X)` where `X` is not a derive-kind macro is `KMAC011`, and applying a
 macro to a declaration kind outside its `appliesTo` is `KMAC007`.
 
+## Builtin derives shipped in Foundation
+
+Foundation ships four derive macros written in pure Kira, in
+`foundation/app/Derive.kira` and `foundation/app/DeriveSerde.kira`. All four are
+available as `@Derive` targets in any file with its own `import Foundation`, and
+the only user-facing top-level names they introduce are the macro names, so they
+cannot collide with user code.
+
+| Derive | Generated free function | Contract |
+| --- | --- | --- |
+| `Equatable` | `function eq_<Type>(a: borrow <Type>, b: borrow <Type>) -> Bool` | structural, per-field equality |
+| `Clone` | `function clone_<Type>(v: borrow <Type>) -> <Type>` | independent deep-value copy |
+| `Serializable` | `function serialize_<Type>(v: borrow <Type>) -> String` | value to compact wire string |
+| `Deserializable` | `function deserialize_<Type>(s: borrow String) -> <Type>` | wire string to value, trapping on malformed input |
+
+The generated name is glued to the derived type's exact name — `eq_Point`,
+`clone_Point`, `serialize_Point`, `deserialize_Point` — and that is a fixed
+contract other tooling reads.
+
+All four share one field classification. A builtin scalar field (`Int`, `Float`,
+`Bool`, `String`, and the sized numeric and C types) is handled directly:
+compared with `!=`, copied by field read, rendered with `String(x)`. A field
+whose type is another *bare* named type is a nested derived type and recurses
+through that type's own generated function, so `eq_Segment` calls `eq_Point` on
+its `from` and `to`; a missing `eq_X` surfaces as an ordinary unknown-call
+diagnostic, which is the right one because the fix is deriving it there.
+
+An array, generic, or optional field type is refused with a `Diagnostics.error`
+naming the field rather than emitting broken code. Detection is exact: a type is
+bare iff concatenating its identifiers reproduces its source text, so `[Int]`
+gives `"Int"`, which is not `"[Int]"`.
+
+### The wire format
+
+`Serializable` and `Deserializable` build on the value-`String` primitives —
+`String(x)`, `s.count`, `s.charAt`, `s.substring`, `s.indexOf` — and expand into
+ordinary Kira, so the generated printer and parser are identical on every
+backend. The format is compact, deterministic, and single-line:
+
+```
+TypeName{field1=VALUE;field2=VALUE;...}
+```
+
+An `Int`, `Float`, or `Bool` is `String(x)`; a `String` is its text wrapped in
+`"`; a nested derived struct is `serialize_<FieldType>(x)` recursed inline, so
+`from=Point{x=1;y=2}` sits inside its parent's braces.
+
+Deserialization is the exact inverse. It validates the leading `TypeName{`, then
+for each field in declaration order locates `label=`, carves the value with a
+brace-aware scanner (a `;` or `}` at brace depth zero terminates it, so a nested
+struct's own balanced braces with their internal `;` are consumed whole),
+converts by field type, and steps over the delimiter.
+
+**Malformed input traps.** Any structural violation — a wrong type name, a
+missing `=` / `;` / `}`, truncated text, a non-digit where an `Int` is expected —
+drives an out-of-range `charAt` or an inverted `substring`, both of which the
+runtime turns into a hard trap on every backend. There is no partial or
+best-effort parse: a value either round-trips or the program stops.
+
+**Round-trip law.** For every value `v` of a supported type,
+`deserialize_T(serialize_T(v))` equals `v` field-wise.
+
+```kira
+@Derive(Equatable, Serializable, Deserializable)
+struct Point { var x: Int; var y: Int }
+
+let wire = serialize_Point(Point { x: 1, y: -2 })   // "Point{x=1;y=-2}"
+let back = deserialize_Point(wire)                  // Point { x: 1, y: -2 }
+```
+
+Two limits are worth stating. A `String` value is **not escaped**: a `String`
+field whose text contains `"`, `;`, or `}` is out of contract, and no error is
+raised, but the wire string is then ambiguous and will not round-trip.
+`Deserializable` **refuses a `Float` field** — there is no lossless `Float`
+parsing primitive, so refusing beats shipping a parser that silently loses the
+low bits. Both derives are `appliesTo { struct }` only.
+
+## `@Derive(Copy)` — the builtin copyability assertion
+
+`Copy` is a compiler builtin rather than a Foundation macro: it generates no code
+and produces no free function. It is an *opt-in assertion* that a type is
+structurally copyable, checked at compile time — which is why macro expansion
+leaves it in place instead of consuming it.
+
+Kira already classifies copyability automatically and structurally: a type is
+copyable when every field or variant payload is, and it *moves* the moment it
+gains a heap-owning field (a `String`, an array), an opaque payload (a callback,
+native state), or anything that transitively contains one. That classification is
+silent — adding one such field flips a type from copy to move at every call site
+with no signal at the declaration. `@Derive(Copy)` makes the contract explicit
+and enforced.
+
+On an eligible type the derive is a **no-op**: it compiles and the type behaves
+exactly as before, granting no new powers. On an ineligible one it is `KIR005`,
+naming the first offending field or variant payload and its type, and the check
+is transitive — a struct whose field type is itself non-copyable is rejected at
+the nested member, and an enum is checked through every variant payload.
+
+```kira
+@Derive(Copy)                 // ok: every field is a scalar
+struct Point {
+    var x: Int
+    var y: Int
+}
+
+@Derive(Copy)                 // error[KIR005]: `Label` derives `Copy`, but its
+struct Label {                //   member `text` has type `String`, which is not
+    let id: Int               //   copyable, so `Label` moves rather than copies.
+    let text: String
+}
+```
+
+`Copy` composes with the Foundation derives: `@Derive(Copy, Equatable)` runs the
+builtin assertion *and* generates `eq_<Type>`. It is recognized before the
+user-macro lookup, so it never trips `KMAC011`.
+
 ## Property wrappers
 
 `kind { wrapper }` is the full property-wrapper protocol: one macro defines it,
@@ -405,7 +521,13 @@ Expansion is total: a malformed macro is reported and left unexpanded, so the
 file still reaches the parser and everything else wrong with it is still
 reported.
 
-Coverage is `crates/kira-macros/src` for the pass itself and
+`@Derive(Copy)` is the one part not owned by this crate: the parser records it,
+and `kira-semantics` answers it once every type exists, because copyability is a
+question about a whole reachable shape rather than about syntax.
+
+Coverage is `crates/kira-macros/src` for the pass itself,
+`crates/kira-semantics/src/tests/copyable.rs` for the `Copy` assertion, and
 `crates/kira-cli/tests/backend_parity/macros.rs` for the claim that matters —
 the same macro-using program, the same stdout, on the VM, the LLVM backend, and
-the hybrid split.
+the hybrid split, including both Foundation derive pairs and the wire format
+they produce.

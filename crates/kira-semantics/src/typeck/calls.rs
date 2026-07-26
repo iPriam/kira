@@ -11,9 +11,7 @@
 
 use kira_semantics_model::OwnershipMode;
 use kira_semantics_model::Type;
-use kira_semantics_model::hir::{
-    Builtin, Callee, HirExpr, HirExprId, HirPlace, HirWriteback, LocalId,
-};
+use kira_semantics_model::hir::{Callee, HirExpr, HirExprId, HirPlace, HirWriteback, LocalId};
 use kira_syntax_model::ast::{CallArg, Expr, ExprId, FieldInit};
 
 use crate::analyze::{Analyzer, FnCtx};
@@ -181,6 +179,13 @@ impl Analyzer<'_> {
             );
         }
 
+        if receiver_ty == Type::String {
+            // A string builtin binds its arguments by shape, not by a parameter
+            // name, so a label on one is a mistake.
+            let name = self.interner.resolve(method).to_owned();
+            let values = Self::argument_values(args);
+            return self.analyze_string_method(ctx, receiver_hir, &name, method_span, &values);
+        }
         // An error receiver already spoke; do not pile on.
         if receiver_ty == Type::Error {
             return self.program.exprs.alloc(HirExpr::Error);
@@ -407,38 +412,6 @@ impl Analyzer<'_> {
         self.program.exprs.alloc(HirExpr::StructNew {
             struct_id: id,
             fields,
-        })
-    }
-
-    pub(super) fn analyze_print(
-        &mut self,
-        args: &[HirExprId],
-        span: kira_source::Span,
-    ) -> HirExprId {
-        if args.len() != 1 {
-            self.emit(
-                span,
-                "KSEM080",
-                format!("`print` takes exactly one argument, found {}", args.len()),
-            );
-        } else {
-            let arg_ty = self.program.expr(args[0]).type_of();
-            if arg_ty != Type::Error && !arg_ty.is_printable() {
-                self.emit(
-                    span,
-                    "KSEM081",
-                    format!(
-                        "`print` cannot format a value of type `{}`",
-                        self.type_name(arg_ty)
-                    ),
-                );
-            }
-        }
-        self.program.exprs.alloc(HirExpr::Call {
-            callee: Callee::Builtin(Builtin::Print),
-            args: args.to_vec(),
-            ty: Type::Void,
-            writebacks: Vec::new(),
         })
     }
 

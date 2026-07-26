@@ -339,17 +339,34 @@ fn binary(op: BinaryOp, left: Value, right: Value) -> Result<Value, EvalError> {
 }
 
 /// Equality over the scalar compile-time values.
+///
+/// Everything that carries text compares *by* its text, across the four types
+/// that do. A macro that asks whether a field's type is `"Int"` is comparing a
+/// `TypeRef` with a `String`, and answering "those are different types" would
+/// be true and useless: the question it is really asking is whether the source
+/// reads the same, and that has one answer.
 fn comparable(left: &Value, right: &Value) -> Result<bool, EvalError> {
     match (left, right) {
         (Value::Int(a), Value::Int(b)) => Ok(a == b),
         (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
-        (Value::Str(a), Value::Str(b)) => Ok(a == b),
-        (Value::Identifier(a), Value::Identifier(b)) => Ok(a == b),
-        (a, b) => Err(EvalError::unsupported(format!(
-            "comparing a `{}` with a `{}`",
-            a.type_name(),
-            b.type_name()
-        ))),
+        (a, b) => match (as_text(a), as_text(b)) {
+            (Some(a), Some(b)) => Ok(a == b),
+            _ => Err(EvalError::unsupported(format!(
+                "comparing a `{}` with a `{}`",
+                a.type_name(),
+                b.type_name()
+            ))),
+        },
+    }
+}
+
+/// The text a value carries, for the types that carry one.
+fn as_text(value: &Value) -> Option<&str> {
+    match value {
+        Value::Str(text) | Value::Syntax(text) | Value::Identifier(text) | Value::TypeRef(text) => {
+            Some(text)
+        }
+        _ => None,
     }
 }
 

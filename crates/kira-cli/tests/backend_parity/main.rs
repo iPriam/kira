@@ -94,10 +94,27 @@ fn assert_module_parity(entry: &str, modules: &[(&str, &str)]) -> String {
 
 /// Runs `source` on one backend.
 fn run_on(source_path: &std::path::Path, backend: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_kirac"))
+    kirac()
         .args(["run", "--backend", backend, source_path.to_str().unwrap()])
         .output()
         .expect("run kirac")
+}
+
+/// The repo's own `foundation/`, which every run here is pinned to.
+///
+/// Foundation discovery prefers the toolchain `current.toml` points at over the
+/// checkout, so a machine with an older toolchain installed would otherwise run
+/// these against *that* Foundation and prove nothing about the one in the tree.
+/// Pinning makes the tests hermetic and says which Foundation they are about.
+fn foundation_home() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../foundation")
+}
+
+/// A `kirac` command pinned to this checkout's Foundation.
+fn kirac() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_kirac"));
+    command.env("KIRA_FOUNDATION_HOME", foundation_home());
+    command
 }
 
 /// Every backend a program must behave identically on.
@@ -117,7 +134,7 @@ fn assert_parity_on_disk(source: &str) -> String {
     let runs: Vec<(&str, Output)> = BACKENDS
         .iter()
         .map(|backend| {
-            let run = Command::new(env!("CARGO_BIN_EXE_kirac"))
+            let run = kirac()
                 .args(["run", "--backend", backend, path.to_str().unwrap()])
                 .current_dir(&directory)
                 .output()
@@ -222,6 +239,7 @@ mod closures;
 mod constructs;
 mod control_flow;
 mod conversions;
+mod derives;
 mod enums;
 mod examples;
 mod ffi;

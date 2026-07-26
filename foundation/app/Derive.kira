@@ -1,0 +1,109 @@
+// Foundation's builtin `@Derive(...)` macros, written in pure Kira.
+//
+// Foundation is merged into every importing package, so these `comptime macro`
+// declarations register as derive macros for all Kira code in a program that
+// imports it. Four ship here:
+//
+//   @Derive(Equatable)      generates  function eq_<Type>(a: borrow <Type>, b: borrow <Type>) -> Bool
+//   @Derive(Clone)          generates  function clone_<Type>(v: borrow <Type>) -> <Type>
+//   @Derive(Serializable)   generates  function serialize_<Type>(v: borrow <Type>) -> String
+//   @Derive(Deserializable) generates  function deserialize_<Type>(s: borrow String) -> <Type>
+//
+// The generated name is glued to the derived type's exact name — `eq_Point`,
+// `clone_Point`, `serialize_Point`, `deserialize_Point` — and that is a fixed
+// contract other tooling reads. Only the macro names themselves are top-level
+// public API; the shared deserialization helpers carry the reserved
+// `__kira_deser_` prefix so they can never collide with user code.
+//
+// Field classification is shared by all four. A builtin scalar field is handled
+// directly; a field whose type is another *bare* named type is a nested derived
+// type and is handled by recursion through that type's own generated function.
+// A missing `eq_X` / `clone_X` surfaces as an ordinary unknown-call diagnostic,
+// which is the right one: the fix is deriving it there.
+//
+// LIMITATIONS (v1):
+//   * Array / generic / optional fields — any type whose source text is not a
+//     single bare identifier, such as `[Int]` or `Map<K, V>` — are refused with
+//     a `Diagnostics.error` naming the field rather than emitting broken code.
+//     Detection is exact: a type is bare iff concatenating its identifiers
+//     reproduces its source text (`[Int]` gives `"Int"`, which is not `"[Int]"`).
+//   * `Deserializable` refuses a `Float` field: there is no lossless `Float`
+//     parsing primitive, so refusing beats shipping a lossy parser.
+//   * `appliesTo { struct }` only; enums are a follow-up.
+
+comptime macro Equatable {
+    kind { derive }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        var checks: [Syntax] = []
+        for field in target.fields {
+            var joined: String = ""
+            for id in field.type.asSyntax().identifiers() {
+                joined = joined + id.asString()
+            }
+            if joined != field.type.asSyntax() {
+                Diagnostics.error("Derive(Equatable): field has an unsupported array or generic type; only bare scalar or nested-derived struct fields are supported", at: target.syntax)
+            }
+            var isScalar: Bool = false
+            for sname in ["Int", "Float", "Bool", "String", "I8", "U8", "I16", "U16", "I32", "U32", "I64", "U64", "F32", "F64", "CBool", "CString", "RawPtr"] {
+                if field.type == sname {
+                    isScalar = true
+                }
+            }
+            if isScalar {
+                checks.append(quote {
+                    if a.#{field.name} != b.#{field.name} {
+                        return false
+                    }
+                })
+            } else {
+                checks.append(quote {
+                    if eq_#{field.type.asSyntax()}(a.#{field.name}, b.#{field.name}) == false {
+                        return false
+                    }
+                })
+            }
+        }
+        return quote {
+            function eq_#{target.name}(a: borrow #{target.name}, b: borrow #{target.name}) -> Bool {
+                #{checks}
+                return true
+            }
+        }
+    }
+}
+
+comptime macro Clone {
+    kind { derive }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        var inits: [Syntax] = []
+        for field in target.fields {
+            var joined: String = ""
+            for id in field.type.asSyntax().identifiers() {
+                joined = joined + id.asString()
+            }
+            if joined != field.type.asSyntax() {
+                Diagnostics.error("Derive(Clone): field has an unsupported array or generic type; only bare scalar or nested-derived struct fields are supported", at: target.syntax)
+            }
+            var isScalar: Bool = false
+            for sname in ["Int", "Float", "Bool", "String", "I8", "U8", "I16", "U16", "I32", "U32", "I64", "U64", "F32", "F64", "CBool", "CString", "RawPtr"] {
+                if field.type == sname {
+                    isScalar = true
+                }
+            }
+            if isScalar {
+                inits.append(quote { #{field.name}: v.#{field.name} })
+            } else {
+                inits.append(quote { #{field.name}: clone_#{field.type.asSyntax()}(v.#{field.name}) })
+            }
+        }
+        return quote {
+            function clone_#{target.name}(v: borrow #{target.name}) -> #{target.name} {
+                return #{target.name} {
+                    #{Syntax.join(inits, ", ")}
+                }
+            }
+        }
+    }
+}

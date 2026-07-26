@@ -88,6 +88,30 @@ impl FnCompiler<'_> {
                 self.compile_expr(text)?;
                 self.code.push(Instruction::StringLen);
             }
+            IrExpr::StringCharAt { text, index } => {
+                let (text, index) = (*text, *index);
+                self.compile_expr(text)?;
+                self.compile_expr(index)?;
+                self.code.push(Instruction::StringCharAt);
+            }
+            IrExpr::StringSubstring { text, start, end } => {
+                let (text, start, end) = (*text, *start, *end);
+                self.compile_expr(text)?;
+                self.compile_expr(start)?;
+                self.compile_expr(end)?;
+                self.code.push(Instruction::StringSubstring);
+            }
+            IrExpr::StringIndexOf { text, needle } => {
+                let (text, needle) = (*text, *needle);
+                self.compile_expr(text)?;
+                self.compile_expr(needle)?;
+                self.code.push(Instruction::StringIndexOf);
+            }
+            IrExpr::StringOf { value } => {
+                let value = *value;
+                self.compile_expr(value)?;
+                self.code.push(Instruction::StringOf);
+            }
             IrExpr::CStringNew { text } => {
                 let text = *text;
                 self.compile_expr(text)?;
