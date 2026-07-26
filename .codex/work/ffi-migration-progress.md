@@ -284,11 +284,22 @@ this was being built.
 is the honest half: files naming things they never imported, answered until now
 by the leak.
 
-**Still open on this rule:** two packages cannot yet *declare* the same name —
-`StructTable` keys by bare name, so the second declaration is `KSEM004`
-"already defined" (48, all generated FFI typedefs like `U32_array_2` repeated
-across binding packages). Fixing that needs the table keyed by (owner, name),
-which is the next step of the same slice.
+**Same name in two packages — LANDED (2026-07-26, `c4b7506`).** The second half:
+the struct-name index is keyed by owner and name, so both declarations get a
+row. Resolution order is own package → the declarations no package owns
+(bundled `Foundation`, another module of the program, a synthesized struct) →
+the packages this file imports. A repeat *inside* one package is still
+`KSEM004`, because one package is one flat scope. Two fixes fell out on the way,
+both previously hidden by the duplicates: struct method registration looked its
+receiver up by bare name, and the duplicate diagnostic rendered in whichever
+file the pass had visited last. **Editor 687 → 651**; the 32 duplicates left are
+real (`_opaque_pthread_t` declared in two binding files of one package).
+
+**Still keyed by bare name:** functions (`sig_index`), enums, aliases, and
+construct families. Two packages declaring the same *function* name still
+collide, and a method is registered as `Owner.method`, so same-named structs in
+two packages would share a method key. Not yet reached by the corpus; the same
+owner-keying is the fix when it is.
 
 **The design call, for the record — clang computes the ABI, Kira never
 classifies.** Full reasoning in `.codex/work/ffi-aggregate-abi.md`. For each
