@@ -7,3 +7,8 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+kira-core.workspace = true
+kira-source.workspace = true
+la-arena.workspace = true
