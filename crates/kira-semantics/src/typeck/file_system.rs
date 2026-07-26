@@ -30,7 +30,6 @@ impl Analyzer<'_> {
     ) -> Option<HirExprId> {
         let op = FileSystemOp::from_intrinsic_name(name)?;
         self.reject_intrinsic_type_args(name, type_args, span);
-        self.reject_argument_labels(args, &format!("the `{name}` intrinsic"));
 
         let values: Vec<HirExprId> = args
             .iter()
