@@ -226,6 +226,17 @@ impl Parser<'_> {
     /// The result is mandatory: a function type with no `->` names nothing, so
     /// a missing arrow is reported and the whole type recovers to
     /// [`TypeRef::Error`] rather than silently becoming `() -> Void`.
+    ///
+    /// An ownership prefix on a parameter — `(borrow GraphicsEvent) -> Void` —
+    /// is *not* accepted here yet, and the reason is worth writing down because
+    /// the cheap version of accepting it is wrong. Reading the prefix and
+    /// dropping it makes the parameter owned, so every indirect call site then
+    /// demands `move` for a value the source correctly declared `borrow` — 16
+    /// false positives across the corpus when tried. The mode has to be carried
+    /// on [`TypeRef::Function`] and checked at the indirect call, which is a
+    /// slice of its own; `borrow mut` needs more still, since the writeback
+    /// instruction names its callee by index and a function value's callee is
+    /// not known until run time.
     fn parse_function_type(&mut self) -> TypeRefId {
         let start = self.current().span;
         self.bump(); // `(`
