@@ -328,10 +328,21 @@ impl Parser<'_> {
         }
     }
 
+    /// Parses an integer literal, decimal or hexadecimal.
+    ///
+    /// A hex literal is a **bit pattern**, so it is read as 64 unsigned bits and
+    /// reinterpreted: `0xffffffffffffffff` is `-1`, the same value C writes that
+    /// way, and a mask does not have to be spelled as a negative decimal. A
+    /// decimal literal is a *number* and keeps its own range — `9223372036854775808`
+    /// is out of range whichever way it is written.
     fn parse_int(&mut self, span: Span) -> ExprId {
         self.bump();
         let text = self.text_of(span);
-        let value = match text.parse::<i64>() {
+        let parsed = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            Some(digits) => u64::from_str_radix(digits, 16).map(|bits| bits as i64),
+            None => text.parse::<i64>(),
+        };
+        let value = match parsed {
             Ok(value) => value,
             Err(_) => {
                 self.error(

@@ -103,3 +103,31 @@ function main() {
     );
     assert_eq!(output, "3.5\n2\n3\n0.75\ntrue\ntrue\n-1.5\n");
 }
+
+/// A hexadecimal literal is the same value on every backend, including the
+/// full-width bit pattern.
+///
+/// The corpus writes GUIDs and masks in hex, so the interesting cases are a
+/// mask that would not fit as a positive `i64`, one at each width boundary, and
+/// hex mixed into ordinary arithmetic.
+#[test]
+fn hexadecimal_literals_agree() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    print(0xff)
+    print(0x1bc6ea02)
+    print(0X10 + 1)
+    print(0x7fffffffffffffff)
+    print(0xffffffffffffffff)
+    print(0xff == 255)
+    return
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "255\n466020866\n17\n9223372036854775807\n-1\ntrue\n"
+    );
+}
