@@ -149,7 +149,9 @@ impl IrProgram {
             | IrExpr::Convert { ty, .. }
             | IrExpr::Index { ty, .. } => *ty,
             IrExpr::Select { ty, .. } => *ty,
-            IrExpr::ArrayLen { .. } | IrExpr::EnumTag { .. } => Type::INT,
+            IrExpr::ArrayLen { .. } | IrExpr::StringLen { .. } | IrExpr::EnumTag { .. } => {
+                Type::INT
+            }
             IrExpr::NativeUserData { .. } => Type::RawPtr,
             IrExpr::ArrayAppend { .. } | IrExpr::NativeStateFree { .. } => Type::Void,
         }
@@ -550,6 +552,11 @@ pub enum IrExpr {
     ArrayLen {
         /// The array-typed expression being measured.
         array: IrExprId,
+    },
+    /// A string's character count (`s.count`).
+    StringLen {
+        /// The string-typed expression being measured.
+        text: IrExprId,
     },
     /// `xs.append(v)`: push one element onto an array, in place.
     ///

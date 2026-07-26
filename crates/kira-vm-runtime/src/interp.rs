@@ -389,6 +389,23 @@ impl Vm<'_> {
                 self.heap.drop_value(base);
                 self.stack.push(Value::Int(counted?));
             }
+            Instruction::StringLen => {
+                let base = self.pop()?;
+                let Value::Str(id) = base else {
+                    self.heap.drop_value(base);
+                    return Err(VmError::NotAString);
+                };
+                // Characters, not bytes — the same units `charAt` and
+                // `substring` index, and the same count the native helper
+                // produces, which is what keeps the two engines agreeing on
+                // text that is not all ASCII.
+                let counted = i64::try_from(self.heap.get(id).chars().count())
+                    .map_err(|_| VmError::ArrayTooLong);
+                // The string is freed on every path out, not just the one that
+                // produced a count.
+                self.heap.drop_value(base);
+                self.stack.push(Value::Int(counted?));
+            }
             Instruction::NewEnum { tag, has_payload } => {
                 // The payload, when present, was pushed last, so it comes off
                 // first and the box takes ownership of it — nothing is copied
@@ -455,6 +472,16 @@ impl Vm<'_> {
                 // `as` matches the native `sitofp`.
                 let value = self.pop_int()?;
                 self.stack.push(Value::Float(value as f64));
+            }
+            Instruction::ConvertFloatToBits => {
+                // A reinterpretation: the IEEE-754 bit pattern, unchanged. The
+                // native backend bitcasts, which is the same 64 bits.
+                let value = self.pop_float()?;
+                self.stack.push(Value::Int(value.to_bits() as i64));
+            }
+            Instruction::ConvertBitsToFloat => {
+                let value = self.pop_int()?;
+                self.stack.push(Value::Float(f64::from_bits(value as u64)));
             }
             Instruction::ConvertFloatToInt => {
                 // Truncate toward zero, saturating out-of-range to

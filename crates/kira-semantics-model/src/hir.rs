@@ -446,6 +446,14 @@ pub enum HirExpr {
         /// The array-typed expression being measured.
         array: HirExprId,
     },
+    /// A string's character count (`s.count`) — a property, not a call.
+    ///
+    /// Characters, not bytes: `charAt` and `substring` index the same units, so
+    /// a count in bytes would disagree with the two primitives it sits beside.
+    StringLen {
+        /// The string-typed expression being measured.
+        text: HirExprId,
+    },
     /// `xs.append(v)`: push one element onto an array, in place.
     ///
     /// The receiver is a **place**, not an expression, and that is the whole
@@ -568,6 +576,18 @@ pub enum ConvertKind {
     /// Float to integer: truncate toward zero, saturating out-of-range inputs
     /// to `i64::MIN`/`i64::MAX` and mapping NaN to zero. Never traps.
     FloatToInt,
+    /// `floatToBits`: the IEEE-754 bit pattern of a `Float`, as a `U64`.
+    ///
+    /// A reinterpretation, not a conversion — the opposite of [`Self::FloatToInt`]
+    /// in every way that matters. Nothing rounds, nothing saturates, and NaN
+    /// keeps the exact payload it had, which is what makes it usable for
+    /// serializing a float byte for byte.
+    FloatToBits,
+    /// `bitsToFloat`: the `Float` an IEEE-754 bit pattern denotes.
+    ///
+    /// The exact inverse of [`Self::FloatToBits`], so a round trip through the
+    /// two is the identity for every value including NaN.
+    BitsToFloat,
 }
 
 impl HirExpr {
@@ -599,7 +619,9 @@ impl HirExpr {
             HirExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),
             // `.count` and a tag read are both `Int`; `.append` yields nothing.
             // None has a type that can vary, so none carries one.
-            HirExpr::ArrayLen { .. } | HirExpr::EnumTag { .. } => Type::INT,
+            HirExpr::ArrayLen { .. } | HirExpr::StringLen { .. } | HirExpr::EnumTag { .. } => {
+                Type::INT
+            }
             HirExpr::NativeUserData { .. } => Type::RawPtr,
             HirExpr::ArrayAppend { .. } | HirExpr::NativeStateFree { .. } => Type::Void,
             HirExpr::Error => Type::Error,

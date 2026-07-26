@@ -144,3 +144,32 @@ fn conversions_flow_through_functions_and_loops() {
     );
     assert_eq!(output, "5\n42\n");
 }
+
+/// `floatToBits` / `bitsToFloat` reinterpret the same 64 bits on every backend.
+///
+/// The exact patterns are the point: they are what a serializer writes, so a
+/// backend that rounded, saturated, or normalized a NaN would corrupt a file
+/// rather than merely disagree. The round trip is checked at values a numeric
+/// conversion would not preserve.
+#[test]
+fn the_float_bit_reinterpretations_agree_on_every_backend() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    print(floatToBits(1.0) == U64(4607182418800017408))
+    print(floatToBits(2.0) == U64(4611686018427387904))
+    print(floatToBits(0.0) == U64(0))
+    print(bitsToFloat(floatToBits(3.14159)) == 3.14159)
+    print(bitsToFloat(floatToBits(0.0 - 1.0)) == (0.0 - 1.0))
+    print(bitsToFloat(floatToBits(123456.789)) == 123456.789)
+    // A fraction no integer conversion could carry: `U64(0.5)` is 0, and the
+    // bits are not.
+    print(floatToBits(0.5) == U64(4602678819172646912))
+    print(bitsToFloat(U64(4602678819172646912)) == 0.5)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n");
+}
