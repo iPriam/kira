@@ -427,6 +427,44 @@ fn using_a_moved_local_is_rejected() {
     assert_eq!(codes(text), vec!["KSEM107"]);
 }
 
+/// Assigning to a moved-out binding gives it a value again.
+///
+/// The shape a program threads an owned value through a sequence of steps
+/// with: each step takes the value and hands back the next one, and the
+/// binding names whichever one is current.
+#[test]
+fn assigning_to_a_moved_local_makes_it_live_again() {
+    let text = "struct Mesh { let id: Int }\n\
+                    function step(mesh: Mesh) -> Mesh { return Mesh { id: mesh.id + 1 } }\n\
+                    function inspect(mesh: borrow Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } \
+                    mesh = step(move mesh) mesh = step(move mesh) print(inspect(mesh)) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// The value is analyzed before the binding is restored, so a *second* read of
+/// the moved local in the same assignment is still a use-after-move.
+#[test]
+fn an_assignment_does_not_excuse_reading_the_moved_local_in_its_own_value() {
+    let text = "struct Mesh { let id: Int }\n\
+                    function step(mesh: Mesh, n: Int) -> Mesh { return Mesh { id: mesh.id + n } }\n\
+                    function inspect(mesh: borrow Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } \
+                    mesh = step(move mesh, inspect(mesh)) return }";
+    assert_eq!(codes(text), vec!["KSEM107"]);
+}
+
+/// Writing *through* a moved-out binding is not a reinitialization: the field
+/// write needs the value that is gone.
+#[test]
+fn assigning_to_a_field_of_a_moved_local_is_still_rejected() {
+    let text = "struct Mesh { var id: Int }\n\
+                    function consume(mesh: Mesh) { return }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } \
+                    consume(move mesh) mesh.id = 2 return }";
+    assert_eq!(codes(text), vec!["KSEM107"]);
+}
+
 /// The oracle's `FsbOwnershipMoveTwice`.
 #[test]
 fn moving_the_same_local_twice_is_rejected() {

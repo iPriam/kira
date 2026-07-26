@@ -93,6 +93,20 @@ impl Analyzer<'_> {
         target: ExprId,
         purpose: PlacePurpose,
     ) -> Option<(HirPlace, Type)> {
+        self.resolve_place_step(ctx, target, purpose, false)
+    }
+
+    /// One step of the place walk. `through_path` says this expression is a
+    /// *base* the write reaches through rather than the target itself, which is
+    /// the whole of the difference between reinitializing a binding and writing
+    /// into the value it still holds.
+    fn resolve_place_step(
+        &mut self,
+        ctx: &mut FnCtx,
+        target: ExprId,
+        purpose: PlacePurpose,
+        through_path: bool,
+    ) -> Option<(HirPlace, Type)> {
         match self.tree.expr(target).clone() {
             Expr::Name { symbol, span } => {
                 let name = self.interner.resolve(symbol).to_owned();
@@ -105,7 +119,13 @@ impl Analyzer<'_> {
                     return None;
                 };
                 // A moved-out local names no storage: whatever it held is gone.
-                if !self.check_local_live(ctx, local, span) {
+                // Assigning to the binding *itself* is the exception — `tree =
+                // step(move tree)` gives it a value again, and the caller marks
+                // it live once the new value has been analyzed. Writing
+                // *through* it (`tree.node = …`) still needs the value that is
+                // gone, and so does an `append` or a mutating call.
+                let reinitializes = !through_path && purpose == PlacePurpose::Assign;
+                if !reinitializes && !self.check_local_live(ctx, local, span) {
                     return None;
                 }
                 if !ctx.is_mutable(local) {
@@ -130,7 +150,7 @@ impl Analyzer<'_> {
                 field_span,
                 ..
             } => {
-                let (mut place, base_ty) = self.resolve_place(ctx, base, purpose)?;
+                let (mut place, base_ty) = self.resolve_place_step(ctx, base, purpose, true)?;
                 let field_name = self.interner.resolve(field).to_owned();
                 let (index, field_ty) = self.resolve_field(base_ty, &field_name, field_span)?;
                 let mutable = match base_ty {
@@ -159,7 +179,7 @@ impl Analyzer<'_> {
                 Some((place, field_ty))
             }
             Expr::Index { base, index, span } => {
-                let (mut place, base_ty) = self.resolve_place(ctx, base, purpose)?;
+                let (mut place, base_ty) = self.resolve_place_step(ctx, base, purpose, true)?;
                 let Some(element) = self.program.types.element_of(base_ty) else {
                     if base_ty != Type::Error {
                         self.emit(
