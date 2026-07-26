@@ -1,0 +1,488 @@
+//! Declaration reflection: what a macro sees when it is handed a
+//! `Declaration`.
+//!
+//! This is a *locating* scan, not a parse. `Declaration.syntax` and
+//! `Field.syntax` are documented as the declaration's and the field's exact
+//! source text, and `Syntax.dropField` / `Syntax.rewriteProperty` are span
+//! edits that must leave everything they do not touch byte-for-byte intact,
+//! comments included. So every piece here is a byte range of the original file
+//! rather than a node, and the annotations the real parser discards — the ones
+//! that summon macros — are preserved.
+
+use kira_source::{SourceId, Span};
+use kira_syntax_model::TokenKind;
+
+use crate::tokens::Lexed;
+
+/// Which declaration form a macro was applied to.
+///
+/// These are the words an `appliesTo { … }` list is written with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeclarationKind {
+    /// `struct Name { … }`
+    Struct,
+    /// `class Name { … }`
+    Class,
+    /// `enum Name { … }`
+    Enum,
+    /// `construct Family { … }`
+    Construct,
+    /// A construct-backed declaration: `Family Name(params) { … }`.
+    Form,
+    /// `function name(…) { … }`
+    Function,
+    /// Anything else at file scope.
+    Other,
+}
+
+impl DeclarationKind {
+    /// The `appliesTo` word this kind is written with.
+    pub(crate) fn word(self) -> &'static str {
+        match self {
+            DeclarationKind::Struct => "struct",
+            DeclarationKind::Class => "class",
+            DeclarationKind::Enum => "enum",
+            DeclarationKind::Construct => "construct",
+            DeclarationKind::Form => "form",
+            DeclarationKind::Function => "function",
+            DeclarationKind::Other => "declaration",
+        }
+    }
+}
+
+/// One `@Name` or `@Derive(A, B)` written above a declaration or a field.
+#[derive(Debug, Clone)]
+pub(crate) struct Annotation {
+    /// The annotation's name, without the `@`.
+    pub(crate) name: String,
+    /// The names inside its `(…)`, in order; empty when it has none.
+    pub(crate) arguments: Vec<String>,
+    /// The bytes the whole annotation covers, `@` included.
+    pub(crate) span: Span,
+}
+
+/// One field or enum variant of a declaration.
+#[derive(Debug, Clone)]
+pub(crate) struct Field {
+    /// The field's name, or the variant's.
+    pub(crate) name: String,
+    /// The written type, or `""` for a payload-less variant.
+    pub(crate) type_text: String,
+    /// The initial-value expression as written, or `""` when absent.
+    pub(crate) initializer: String,
+    /// The whole field declaration, annotations included.
+    pub(crate) syntax: String,
+    /// The bytes the whole field declaration covers, annotations included.
+    pub(crate) span: Span,
+    /// The annotations written above it.
+    pub(crate) annotations: Vec<Annotation>,
+}
+
+/// One declaration, as a macro sees it.
+#[derive(Debug, Clone)]
+pub(crate) struct Declaration {
+    /// Which form it wears.
+    pub(crate) kind: DeclarationKind,
+    /// Its name.
+    pub(crate) name: String,
+    /// Its fields, or an enum's variants, in declaration order.
+    pub(crate) fields: Vec<Field>,
+    /// The declaration's exact source text, annotations **excluded**.
+    pub(crate) syntax: String,
+    /// The bytes the declaration covers, annotations excluded.
+    pub(crate) span: Span,
+    /// The annotations written above it.
+    pub(crate) annotations: Vec<Annotation>,
+}
+
+/// Scans the declaration starting at token `start`, which must sit on the first
+/// `@` or on the declaration's first keyword.
+///
+/// Returns the declaration and the index just past it, or `None` when the file
+/// ends inside it.
+pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize)> {
+    let (annotations, head) = scan_annotations(file, start);
+    let (kind, name_index) = match file.kind(head) {
+        TokenKind::Struct => (DeclarationKind::Struct, head + 1),
+        TokenKind::Class => (DeclarationKind::Class, head + 1),
+        TokenKind::Enum => (DeclarationKind::Enum, head + 1),
+        TokenKind::Construct => (DeclarationKind::Construct, head + 1),
+        TokenKind::Function => (DeclarationKind::Function, head + 1),
+        TokenKind::Identifier
+            if file.is_ident(head + 1) && file.kind(head + 2) == TokenKind::LParen =>
+        {
+            (DeclarationKind::Form, head + 1)
+        }
+        _ => (DeclarationKind::Other, head),
+    };
+    let name = if file.is_ident(name_index) {
+        file.text_at(name_index).to_owned()
+    } else {
+        String::new()
+    };
+
+    let mut index = head;
+    while index < file.len() && file.kind(index) != TokenKind::LBrace {
+        if file.kind(index) == TokenKind::Eof {
+            return None;
+        }
+        if file.kind(index) == TokenKind::LParen {
+            index = file.match_close(index)?;
+        }
+        index += 1;
+    }
+    let open = index;
+    let close = file.match_close(open)?;
+    let span = file.span_of(head, close);
+    let fields = match kind {
+        DeclarationKind::Enum => scan_variants(file, open, close),
+        _ => scan_fields(file, open, close),
+    };
+
+    Some((
+        Declaration {
+            kind,
+            name,
+            fields,
+            syntax: file.slice(span).to_owned(),
+            span,
+            annotations,
+        },
+        close + 1,
+    ))
+}
+
+/// Re-scans `text` as a standalone declaration.
+///
+/// This is what makes `Syntax` closed under the declaration-shaped operations:
+/// `dropField` and `rewriteProperty` both return syntax that a further
+/// `dropField` may be applied to, and both return *text*, so the way to answer
+/// "is this still a declaration?" is to look at it again.
+pub(crate) fn parse(text: &str) -> Option<Declaration> {
+    let file = Lexed::new(SourceId::new(0), text);
+    let mut index = 0usize;
+    while index < file.len() && file.kind(index) == TokenKind::Eof {
+        index += 1;
+    }
+    let (declaration, _) = scan(&file, 0)?;
+    if declaration.kind == DeclarationKind::Other {
+        return None;
+    }
+    Some(declaration)
+}
+
+/// Consumes a run of `@Name` / `@Derive(A, B)` annotations.
+fn scan_annotations(file: &Lexed<'_>, start: usize) -> (Vec<Annotation>, usize) {
+    let mut annotations = Vec::new();
+    let mut index = start;
+    while file.kind(index) == TokenKind::At {
+        if !file.is_ident(index + 1) {
+            break;
+        }
+        let mut name = file.text_at(index + 1).to_owned();
+        let mut last = index + 1;
+        // A qualified annotation — `@FFI.Extern` — keeps its dotted spelling so
+        // it is never mistaken for a macro named after its first segment.
+        while file.kind(last + 1) == TokenKind::Dot && file.is_ident(last + 2) {
+            name.push('.');
+            name.push_str(file.text_at(last + 2));
+            last += 2;
+        }
+        let mut arguments = Vec::new();
+        if file.kind(last + 1) == TokenKind::LParen {
+            if let Some(close) = file.match_close(last + 1) {
+                arguments = file
+                    .split_group(last + 1, close)
+                    .into_iter()
+                    .map(|(first, end)| file.slice(file.span_of(first, end)).trim().to_owned())
+                    .collect();
+                last = close;
+            }
+        } else if file.kind(last + 1) == TokenKind::LBrace {
+            // `@FFI.Extern { … }` and `@Export { … }` carry a block payload.
+            if let Some(close) = file.match_close(last + 1) {
+                last = close;
+            }
+        }
+        annotations.push(Annotation {
+            name,
+            arguments,
+            span: file.span_of(index, last),
+        });
+        index = last + 1;
+    }
+    (annotations, index)
+}
+
+/// Scans the `var` / `let` members of a declaration body.
+fn scan_fields(file: &Lexed<'_>, open: usize, close: usize) -> Vec<Field> {
+    let mut fields = Vec::new();
+    let mut index = open + 1;
+    while index < close {
+        if file.kind(index) == TokenKind::Function {
+            index = skip_member(file, index, close);
+            continue;
+        }
+        if file.kind(index) != TokenKind::At
+            && !matches!(file.kind(index), TokenKind::Let | TokenKind::Var)
+        {
+            index += 1;
+            continue;
+        }
+        let (annotations, after) = scan_annotations(file, index);
+        if !matches!(file.kind(after), TokenKind::Let | TokenKind::Var) || !file.is_ident(after + 1)
+        {
+            index = if after > index { after } else { index + 1 };
+            continue;
+        }
+        let name = file.text_at(after + 1).to_owned();
+        let end = member_end(file, after + 2, close);
+        let (type_text, initializer) = split_annotation(file, after + 2, end);
+        let span = file.span_of(index, end);
+        fields.push(Field {
+            name,
+            type_text,
+            initializer,
+            syntax: file.slice(span).to_owned(),
+            span,
+            annotations,
+        });
+        index = end + 1;
+    }
+    fields
+}
+
+/// Scans an enum body's variants.
+///
+/// A variant surfaces as a field: its name is the variant's, and its type is
+/// the payload type or the empty string, which is what lets one derive macro
+/// walk a struct and an enum with the same loop.
+fn scan_variants(file: &Lexed<'_>, open: usize, close: usize) -> Vec<Field> {
+    let mut fields = Vec::new();
+    let mut index = open + 1;
+    while index < close {
+        if !file.is_ident(index) {
+            index += 1;
+            continue;
+        }
+        let name = file.text_at(index).to_owned();
+        let mut last = index;
+        let mut type_text = String::new();
+        if file.kind(index + 1) == TokenKind::Colon {
+            let end = payload_end(file, index + 2, close);
+            type_text = file.slice(file.span_of(index + 2, end)).trim().to_owned();
+            last = end;
+        }
+        let span = file.span_of(index, last);
+        fields.push(Field {
+            name,
+            type_text,
+            initializer: String::new(),
+            syntax: file.slice(span).to_owned(),
+            span,
+            annotations: Vec::new(),
+        });
+        index = last + 1;
+    }
+    fields
+}
+
+/// The last token index of an enum variant's payload type, which starts at
+/// `from`.
+///
+/// Variants have no leading keyword to end on, so the payload runs to the end
+/// of its own line: `Ok: Int` on one line and `Error: AppError` on the next are
+/// two variants, not one with a very long type.
+fn payload_end(file: &Lexed<'_>, from: usize, close: usize) -> usize {
+    let mut last = from;
+    let mut index = from + 1;
+    while index < close && !file.newline_before(index) && file.kind(index) != TokenKind::Comma {
+        match file.kind(index) {
+            TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => {
+                match file.match_close(index) {
+                    Some(end) => {
+                        last = end;
+                        index = end + 1;
+                        continue;
+                    }
+                    None => break,
+                }
+            }
+            _ => last = index,
+        }
+        index += 1;
+    }
+    last
+}
+
+/// The last token index of the member that starts at `from`.
+///
+/// A member ends where the next one begins: at the next annotation, `let`,
+/// `var`, or `function` at the body's own depth, or at the closing brace.
+fn member_end(file: &Lexed<'_>, from: usize, close: usize) -> usize {
+    let mut index = from;
+    let mut last = from;
+    while index < close {
+        match file.kind(index) {
+            TokenKind::At | TokenKind::Let | TokenKind::Var | TokenKind::Function => break,
+            TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => {
+                match file.match_close(index) {
+                    Some(end) => {
+                        last = end;
+                        index = end + 1;
+                        continue;
+                    }
+                    None => break,
+                }
+            }
+            _ => last = index,
+        }
+        index += 1;
+    }
+    last.max(from.saturating_sub(1))
+}
+
+/// Splits `: Type = initializer` into its two written halves.
+fn split_annotation(file: &Lexed<'_>, from: usize, end: usize) -> (String, String) {
+    let mut index = from;
+    if file.kind(index) == TokenKind::Colon {
+        index += 1;
+    }
+    let type_start = index;
+    let mut equals = None;
+    while index <= end {
+        match file.kind(index) {
+            TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => {
+                match file.match_close(index) {
+                    Some(close) => index = close,
+                    None => break,
+                }
+            }
+            TokenKind::Equals => {
+                equals = Some(index);
+                break;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    match equals {
+        Some(at) if at > type_start => (
+            file.slice(file.span_of(type_start, at - 1))
+                .trim()
+                .to_owned(),
+            file.slice(file.span_of(at + 1, end)).trim().to_owned(),
+        ),
+        Some(_) => (
+            String::new(),
+            file.slice(file.span_of(from, end)).trim().to_owned(),
+        ),
+        None if end >= type_start => (
+            file.slice(file.span_of(type_start, end)).trim().to_owned(),
+            String::new(),
+        ),
+        None => (String::new(), String::new()),
+    }
+}
+
+/// Skips a member with a `{ … }` body, returning the index just past it.
+fn skip_member(file: &Lexed<'_>, from: usize, close: usize) -> usize {
+    let mut index = from;
+    while index < close {
+        if file.kind(index) == TokenKind::LBrace {
+            return file.match_close(index).map_or(close, |end| end + 1);
+        }
+        index += 1;
+    }
+    close
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scan_text(text: &str) -> Declaration {
+        let file = Lexed::new(SourceId::new(0), text);
+        scan(&file, 0).expect("a declaration").0
+    }
+
+    #[test]
+    fn a_struct_reflects_its_fields() {
+        let declaration = scan_text("struct Point {\n    var x: Int\n    var y: Int = 2\n}\n");
+        assert_eq!(declaration.kind, DeclarationKind::Struct);
+        assert_eq!(declaration.name, "Point");
+        assert_eq!(declaration.fields.len(), 2);
+        assert_eq!(declaration.fields[0].name, "x");
+        assert_eq!(declaration.fields[0].type_text, "Int");
+        assert_eq!(declaration.fields[0].initializer, "");
+        assert_eq!(declaration.fields[1].initializer, "2");
+    }
+
+    #[test]
+    fn an_enum_reflects_its_variants() {
+        let declaration = scan_text("enum Color {\n    Red\n    Green\n    Blue\n}\n");
+        assert_eq!(declaration.kind, DeclarationKind::Enum);
+        let names: Vec<&str> = declaration
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Red", "Green", "Blue"]);
+    }
+
+    #[test]
+    fn a_payload_variant_carries_its_type() {
+        let declaration = scan_text("enum Outcome {\n    Ok: Int\n    Error: AppError\n}\n");
+        assert_eq!(declaration.fields[0].type_text, "Int");
+        assert_eq!(declaration.fields[1].type_text, "AppError");
+    }
+
+    #[test]
+    fn a_field_annotation_is_preserved() {
+        let declaration = scan_text(
+            "MfxPanel Demo() {\n    @Tracked var count: Int = 7\n    let body: Int = 1\n}\n",
+        );
+        assert_eq!(declaration.kind, DeclarationKind::Form);
+        assert_eq!(declaration.name, "Demo");
+        assert_eq!(declaration.fields[0].annotations[0].name, "Tracked");
+        assert_eq!(declaration.fields[0].initializer, "7");
+        assert!(declaration.fields[0].syntax.starts_with("@Tracked"));
+        assert!(declaration.fields[1].annotations.is_empty());
+    }
+
+    #[test]
+    fn a_declaration_annotation_is_separate_from_its_syntax() {
+        let declaration =
+            scan_text("@Derive(Equatable, Clone)\nstruct Point {\n    var x: Int\n}\n");
+        assert_eq!(declaration.annotations.len(), 1);
+        assert_eq!(declaration.annotations[0].name, "Derive");
+        assert_eq!(
+            declaration.annotations[0].arguments,
+            vec!["Equatable", "Clone"]
+        );
+        assert!(declaration.syntax.starts_with("struct Point"));
+    }
+
+    #[test]
+    fn methods_are_not_fields() {
+        let declaration = scan_text(
+            "struct S {\n    var a: Int\n    function get() -> Int {\n        var hidden = 1\n        return hidden\n    }\n    var b: Int\n}\n",
+        );
+        let names: Vec<&str> = declaration
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn syntax_round_trips_through_a_reparse() {
+        let text = "struct Point {\n    var x: Int = 1 // a comment\n}\n";
+        let declaration = scan_text(text);
+        let again = parse(&declaration.syntax).expect("a declaration");
+        assert_eq!(again.name, "Point");
+        assert_eq!(again.fields.len(), 1);
+        assert!(again.syntax.contains("// a comment"));
+    }
+}

@@ -19,6 +19,7 @@ kira-runtime-abi = { path = "crates/kira-runtime-abi" }
 kira-syntax-model = { path = "crates/kira-syntax-model" }
 kira-lexer = { path = "crates/kira-lexer" }
 kira-parser = { path = "crates/kira-parser" }
+kira-macros = { path = "crates/kira-macros" }
 kira-ksl-syntax-model = { path = "crates/kira-ksl-syntax-model" }
 kira-ksl-parser = { path = "crates/kira-ksl-parser" }
 kira-semantics-model = { path = "crates/kira-semantics-model" }

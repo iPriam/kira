@@ -158,6 +158,62 @@ pub struct DiagnosticAccumulator(pub Diagnostic);
 #[derive(Debug, Clone)]
 pub struct DefinitionAccumulator(pub DefinitionLink);
 
+/// Every file of the program after macro expansion, in source-id order.
+///
+/// Expansion is a source-to-source transform, so what the parser sees — and
+/// what a diagnostic's span is an offset into — is this text rather than what
+/// was read from disk. A program that declares no macros gets its own bytes
+/// back, so nothing changes for one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpandedProgram {
+    /// The entry file's text, at [`FILE_SOURCE_ID`].
+    pub entry: String,
+    /// Each module's text, module *i* at [`module_source_id`]`(i)`.
+    pub modules: Vec<String>,
+}
+
+impl ExpandedProgram {
+    /// The text at `source`, when `source` names a file of this program.
+    pub fn text(&self, source: SourceId) -> Option<&str> {
+        if source == FILE_SOURCE_ID {
+            return Some(&self.entry);
+        }
+        self.modules
+            .iter()
+            .enumerate()
+            .find(|&(index, _)| module_source_id(index) == source)
+            .map(|(_, text)| text.as_str())
+    }
+}
+
+/// Expands every macro in the program, accumulating expansion diagnostics.
+///
+/// Runs between lexing and parsing, so the declarations a macro generates are
+/// resolved and type-checked exactly like hand-written ones and every backend
+/// is unaffected by construction.
+#[salsa::tracked(returns(clone))]
+pub fn expanded(db: &dyn salsa::Database, source: SourceProgram) -> ExpandedProgram {
+    let modules = source.modules(db);
+    let entry_text = source.text(db);
+    let mut files: Vec<(SourceId, &str)> = modules
+        .iter()
+        .enumerate()
+        .map(|(index, module)| (module_source_id(index), module.text.as_str()))
+        .collect();
+    files.push((FILE_SOURCE_ID, entry_text.as_str()));
+
+    let expansion = kira_macros::expand(&files);
+    for diagnostic in expansion.diagnostics {
+        DiagnosticAccumulator(diagnostic).accumulate(db);
+    }
+    let mut texts = expansion.texts;
+    let entry = texts.pop().unwrap_or_default();
+    ExpandedProgram {
+        entry,
+        modules: texts,
+    }
+}
+
 /// A parsed program: the syntax tree and the interner backing its symbols.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedProgram {
@@ -176,14 +232,14 @@ pub struct ParsedProgram {
 /// way round.
 #[salsa::tracked(returns(clone))]
 pub fn parsed(db: &dyn salsa::Database, source: SourceProgram) -> ParsedProgram {
-    let modules = source.modules(db);
-    let entry_text = source.text(db);
-    let mut files: Vec<(SourceId, &str)> = modules
+    let expansion = expanded(db, source);
+    let mut files: Vec<(SourceId, &str)> = expansion
+        .modules
         .iter()
         .enumerate()
-        .map(|(index, module)| (module_source_id(index), module.text.as_str()))
+        .map(|(index, text)| (module_source_id(index), text.as_str()))
         .collect();
-    files.push((FILE_SOURCE_ID, entry_text.as_str()));
+    files.push((FILE_SOURCE_ID, expansion.entry.as_str()));
 
     let result = kira_parser::parse_files(&files);
     for diagnostic in result.diagnostics {

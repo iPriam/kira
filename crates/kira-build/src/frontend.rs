@@ -152,32 +152,42 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
     // path converge with the diagnostics channel.
     diagnostics.extend(bind_types_placement_diagnostics(path, &modules));
 
-    // The SourceMap mirrors the salsa input file for file and in the same order,
-    // so diagnostic spans render against the file they were written in: the
-    // entry file at `FILE_SOURCE_ID`, then module `i` at `module_source_id(i)`.
-    let mut sources = SourceMap::new();
-    let id = sources
-        .insert(display.clone(), text.clone())
-        .map_err(|full| FrontendError::SourceMapFull {
-            message: full.to_string(),
-        })?;
-    debug_assert_eq!(id, FILE_SOURCE_ID);
-    for (index, module) in modules.iter().enumerate() {
-        let id = sources
-            .insert(module.path.clone(), module.text.clone())
-            .map_err(|full| FrontendError::SourceMapFull {
-                message: full.to_string(),
-            })?;
-        debug_assert_eq!(id, kira_semantics::module_source_id(index));
-    }
-
     let build_kind = match package.as_ref().map(|found| found.kind()) {
         Some(kira_manifest::PackageKind::Library) => BuildKind::Library,
         Some(kira_manifest::PackageKind::App) | None => BuildKind::Application,
     };
 
     let db = salsa::DatabaseImpl::new();
-    let source = SourceProgram::new(&db, text, display, modules, build_kind);
+    let module_paths: Vec<String> = modules.iter().map(|module| module.path.clone()).collect();
+    let source = SourceProgram::new(&db, text, display.clone(), modules, build_kind);
+
+    // The SourceMap mirrors the salsa input file for file and in the same order,
+    // so diagnostic spans render against the file they were written in: the
+    // entry file at `FILE_SOURCE_ID`, then module `i` at `module_source_id(i)`.
+    // It holds each file's text *after macro expansion*, because that is the
+    // text the parser saw and the text every span is an offset into. A program
+    // that declares no macros gets its own bytes back, so this is the file as
+    // written for all but a macro-using program.
+    let expansion = kira_semantics::expanded(&db, source);
+    let mut sources = SourceMap::new();
+    let id =
+        sources
+            .insert(display, expansion.entry)
+            .map_err(|full| FrontendError::SourceMapFull {
+                message: full.to_string(),
+            })?;
+    debug_assert_eq!(id, FILE_SOURCE_ID);
+    for (index, path) in module_paths.into_iter().enumerate() {
+        let module_text = expansion.modules.get(index).cloned().unwrap_or_default();
+        let id =
+            sources
+                .insert(path, module_text)
+                .map_err(|full| FrontendError::SourceMapFull {
+                    message: full.to_string(),
+                })?;
+        debug_assert_eq!(id, kira_semantics::module_source_id(index));
+    }
+
     let ir = lowered(&db, source);
     diagnostics.extend(
         lowered::accumulated::<DiagnosticAccumulator>(&db, source)

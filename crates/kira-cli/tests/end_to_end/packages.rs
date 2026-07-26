@@ -213,15 +213,16 @@ fn the_real_editor_directory_resolves_dependency_package_sources() {
         trimmed.starts_with("error[") || trimmed.starts_with("warning[")
     }) {
         // A bare package-name import now aggregates every `.kira` file of the
-        // dependency, so files using surface this subset does not lex or parse
-        // yet (macro interpolation, `#{...}`) surface honest `KLEX`/`KPAR`
-        // diagnostics against their own lines rather than going unread. Those
-        // are real, rendered compiler codes, which is all this gate asserts.
+        // dependency, so files using surface this subset does not lex, parse, or
+        // expand yet surface honest `KLEX`/`KPAR`/`KMAC` diagnostics against
+        // their own lines rather than going unread. Those are real, rendered
+        // compiler codes, which is all this gate asserts.
         assert!(
             line.contains("[KSEM")
                 || line.contains("[KPAR")
                 || line.contains("[KPK")
-                || line.contains("[KLEX"),
+                || line.contains("[KLEX")
+                || line.contains("[KMAC"),
             "diagnostic lacks an honest compiler code: {line}"
         );
         assert!(line.contains("]:"), "diagnostic is not rendered: {line}");
