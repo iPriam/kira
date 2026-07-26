@@ -75,6 +75,7 @@ fn library() -> Module {
         exports: Default::default(),
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
+        foreign_callbacks: Vec::new(),
         functions: vec![
             func("main", 0, 0, vec![I::ReturnVoid]),
             make_button,
@@ -508,6 +509,7 @@ fn ill_typed() -> Module {
         exports: Default::default(),
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
+        foreign_callbacks: Vec::new(),
         functions: vec![
             func("main", 0, 0, vec![I::ReturnVoid]),
             bad_div,

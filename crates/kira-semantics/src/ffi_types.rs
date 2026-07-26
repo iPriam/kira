@@ -188,9 +188,10 @@ impl Analyzer<'_> {
         let Some(mark) = declaration.ffi.as_ref() else {
             return false;
         };
-        if !matches!(mark.kind, FfiTypeKind::Callback { .. }) {
+        let FfiTypeKind::Callback { params, result, .. } = &mark.kind else {
             return false;
-        }
+        };
+        let (params, result) = (params.clone(), *result);
         if !def.fields.is_empty() {
             let name = self.interner.resolve(declaration.name).to_owned();
             self.emit(
@@ -203,6 +204,12 @@ impl Analyzer<'_> {
             );
             return false;
         }
+        let name = self.interner.resolve(declaration.name).to_owned();
+        if let Some(signature) = self.resolve_callback_signature(&params, result)
+            && let Some(id) = self.program.types.structs().lookup(&name)
+        {
+            self.ffi_callback_signatures.insert(id, signature);
+        }
         def.fields.push(kira_semantics_model::FieldDef {
             name: FFI_CALLBACK_FIELD.to_owned(),
             ty: Type::RawPtr,
@@ -211,11 +218,17 @@ impl Analyzer<'_> {
         true
     }
 
-    /// The struct id of `name` when it is a `@FFI.Struct { layout: c }` type,
-    /// for the `StructType()` construction path.
+    /// The struct id of `name` when it is a `@FFI.*` type that constructs from
+    /// a zeroed value — a C-layout struct, an inline array, or a callback.
+    ///
+    /// All three describe C storage whose zero is defined: a zeroed struct, an
+    /// array of no elements, and a null pointer. An omitted field of one takes
+    /// that zero rather than being reported missing, which is the oracle's
+    /// construction rule for `@FFI.Struct` and the only sensible reading of the
+    /// other two.
     pub(crate) fn ffi_c_layout_named(&self, name: &str) -> Option<StructId> {
         let id = self.program.types.structs().lookup(name)?;
-        (self.ffi_structs.get(&id) == Some(&FfiStructKind::CLayout)).then_some(id)
+        self.ffi_structs.contains_key(&id).then_some(id)
     }
 
     /// The `@FFI.*` kind of a struct id, when it came from one.

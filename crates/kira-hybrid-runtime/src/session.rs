@@ -88,7 +88,16 @@ impl Session {
         validate::bundle(&manifest, &module)?;
 
         let program = Program::load(module).map_err(HybridError::Program)?;
-        let library = NativeLibrary::load(&library_path, &manifest.functions, &manifest.foreign)?;
+        // The callback rows ride on the bytecode half, which already carries
+        // them for the VM's own `ForeignCallback`; the native half is where
+        // their thunks live.
+        let callbacks = program.module().foreign_callbacks.len();
+        let library = NativeLibrary::load(
+            &library_path,
+            &manifest.functions,
+            &manifest.foreign,
+            callbacks,
+        )?;
 
         Ok(Session {
             manifest,
@@ -234,6 +243,13 @@ impl HostCapabilities for Host<'_> {
         args: &[ForeignArg<'_>],
     ) -> Result<ForeignResult, ForeignCallError> {
         self.session.call_foreign(foreign_id, args)
+    }
+
+    fn foreign_callback(&mut self, callback_id: u32) -> Result<u64, ForeignCallError> {
+        self.session
+            .library
+            .callback_address(callback_id)
+            .ok_or(ForeignCallError::NoForeignHost)
     }
 
     fn native_state_create(

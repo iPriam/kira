@@ -547,9 +547,21 @@ impl<'a> Analyzer<'a> {
                 foreign.kira_name.clone(),
             )
         };
+        // Each argument is analyzed against the Kira type its position expects,
+        // so a bare function name lands where a `@FFI.Callback` parameter can
+        // recognize it. Every other position ignores the expectation, exactly as
+        // it does at an ordinary call.
         let arg_hirs: Vec<HirExprId> = args
             .iter()
-            .map(|&arg| self.analyze_expr(ctx, arg))
+            .enumerate()
+            .map(|(index, &arg)| {
+                let expected = param_wrappers
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .map(Type::Struct);
+                self.analyze_expr_expecting(ctx, arg, expected)
+            })
             .collect();
         let seam_args = if arg_hirs.len() != params.len() {
             self.emit(

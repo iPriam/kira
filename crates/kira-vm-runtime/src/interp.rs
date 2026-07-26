@@ -341,6 +341,7 @@ impl<'h> Vm<'h> {
             Instruction::ConstBool(value) => self.stack.push(Value::Bool(value)),
             Instruction::ConstVoid => self.stack.push(Value::Void),
             Instruction::ConstRawPtrNull => self.stack.push(Value::RawPtr(0)),
+            Instruction::ForeignCallback(id) => self.foreign_callback(module, id)?,
             Instruction::ConstStr(index) => {
                 let text = module.strings[index as usize].clone();
                 let id = self.heap.alloc(text);

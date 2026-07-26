@@ -79,7 +79,10 @@ pub(super) fn run_on_vm(
         }
     };
 
-    if ir.foreign_imports.is_empty() {
+    // A program with no foreign half needs no sidecar; one that hands a Kira
+    // function to C needs the same sidecar an import does, because the entry
+    // thunk C calls lives in it.
+    if ir.foreign_imports.is_empty() && ir.foreign_callbacks.is_empty() {
         let mut host = NativeStateHost::new(StdoutHost);
         return match kira_vm_runtime::execute(&module, &mut host) {
             Ok(_) => EXIT_OK,
@@ -97,25 +100,32 @@ pub(super) fn run_on_vm(
             return EXIT_FAILURE;
         }
     };
-    let bindings = foreign_bindings(ir);
-    let mut host = match kira_main::ForeignHost::load(
+    let program = match kira_vm_runtime::Program::load(module) {
+        Ok(program) => program,
+        Err(error) => {
+            eprintln!("kirac: {error}");
+            return EXIT_FAILURE;
+        }
+    };
+    let callbacks = (0..ir.foreign_callbacks.len())
+        .map(kira_llvm_backend::callback_name)
+        .collect();
+    let session = match kira_main::ForeignSession::load(
+        program,
         &sidecar,
-        bindings,
+        foreign_bindings(ir),
+        callbacks,
         ir.foreign_aggregates.clone(),
-        NativeStateHost::new(StdoutHost),
     ) {
-        Ok(host) => host,
+        Ok(session) => session,
         Err(error) => {
             eprintln!("kirac: cannot load the foreign-adapter sidecar: {error}");
             return EXIT_FAILURE;
         }
     };
-    match kira_vm_runtime::execute(&module, &mut host) {
+    match session.run() {
         Ok(_) => EXIT_OK,
         Err(trap) => {
-            if let Some(detail) = host.take_detail() {
-                eprintln!("kirac: {detail}");
-            }
             eprintln!("kirac: runtime trap: {trap}");
             EXIT_FAILURE
         }

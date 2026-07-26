@@ -18,6 +18,9 @@ impl FnCompiler<'_> {
                 self.code.push(Instruction::ConstStr(pool));
             }
             IrExpr::RawPtrNull => self.code.push(Instruction::ConstRawPtrNull),
+            IrExpr::ForeignCallbackPtr { callback } => {
+                self.code.push(Instruction::ForeignCallback(*callback));
+            }
             IrExpr::Local(slot) => {
                 let slot = self.local_slot(*slot)?;
                 self.code.push(Instruction::LoadLocal(slot));

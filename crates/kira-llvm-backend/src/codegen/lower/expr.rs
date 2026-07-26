@@ -31,6 +31,9 @@ impl FunctionLowering<'_, '_> {
             }
             // A `RawPtr` is an `i64` here, so the null pointer is that zero.
             IrExpr::RawPtrNull => Ok(self.codegen.const_int(0)),
+            IrExpr::ForeignCallbackPtr { callback } => {
+                self.codegen.callback_thunk_address(callback as usize)
+            }
             IrExpr::Local(slot) => self.load_local(slot),
             IrExpr::Unary { op, operand } => {
                 let value = self.lower_expr(operand)?;

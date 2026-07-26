@@ -135,6 +135,10 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::NativeUserData => out.push(o::NATIVE_USER_DATA),
         Instruction::NativeStateFree => out.push(o::NATIVE_STATE_FREE),
         Instruction::ConstRawPtrNull => out.push(o::RAW_PTR_NULL),
+        Instruction::ForeignCallback(id) => {
+            out.push(o::FOREIGN_CALLBACK);
+            out.extend_from_slice(&id.to_le_bytes());
+        }
         Instruction::ConstVoid => out.push(o::CONST_VOID),
         Instruction::Pop => out.push(o::POP),
         Instruction::NegInt => out.push(o::NEG_INT),
@@ -256,6 +260,7 @@ impl Cursor<'_> {
             o::CALL => Instruction::Call(u32::from_le_bytes(self.take()?)),
             o::CALL_NATIVE => Instruction::CallNative(u32::from_le_bytes(self.take()?)),
             o::CALL_FOREIGN => Instruction::CallForeign(u32::from_le_bytes(self.take()?)),
+            o::FOREIGN_CALLBACK => Instruction::ForeignCallback(u32::from_le_bytes(self.take()?)),
             o::NATIVE_STATE => Instruction::NativeState(u64::from_le_bytes(self.take()?)),
             o::NATIVE_RECOVER => Instruction::NativeRecover(u64::from_le_bytes(self.take()?)),
             o::NEW_STRUCT => Instruction::NewStruct(u16::from_le_bytes(self.take()?)),

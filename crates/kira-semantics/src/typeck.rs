@@ -46,8 +46,38 @@ impl Analyzer<'_> {
         id: ExprId,
         expected: Option<Type>,
     ) -> HirExprId {
+        // A bare function name is not an expression anywhere else — Kira has no
+        // function type — so the one position that gives it a meaning is
+        // recognized before the name is resolved as a value and reported
+        // undefined.
+        if let Some(callback) = self.callback_named_here(ctx, id, expected) {
+            return callback;
+        }
         let value = self.analyze_expr_inner(ctx, id, expected);
         self.coerce_construct_value(value, expected)
+    }
+
+    /// The callback value when `id` is a bare name, `expected` is an
+    /// `@FFI.Callback` type, and the name is a top-level function rather than
+    /// something in scope.
+    ///
+    /// A local wins: a variable holding a callback the program got from C is
+    /// read as itself, exactly as it would be under any other expected type.
+    fn callback_named_here(
+        &mut self,
+        ctx: &FnCtx,
+        id: ExprId,
+        expected: Option<Type>,
+    ) -> Option<HirExprId> {
+        let Expr::Name { symbol, span } = self.tree.expr(id) else {
+            return None;
+        };
+        let (symbol, span) = (*symbol, *span);
+        let name = self.interner.resolve(symbol).to_owned();
+        if ctx.resolve(&name).is_some() {
+            return None;
+        }
+        self.foreign_callback_value(&name, expected, span)
     }
 
     fn analyze_expr_inner(

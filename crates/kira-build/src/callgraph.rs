@@ -133,6 +133,7 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         | IrExpr::Bool(_)
         | IrExpr::Str(_)
         | IrExpr::RawPtrNull
+        | IrExpr::ForeignCallbackPtr { .. }
         | IrExpr::Local(_) => {}
     }
 }

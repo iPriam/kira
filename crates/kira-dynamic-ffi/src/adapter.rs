@@ -87,6 +87,29 @@ struct StringHelpers {
     _len: StrLenFn,
 }
 
+/// The host callback a generated thunk reaches the interpreter through.
+///
+/// The same shape `kira-native-bridge` installs for the hybrid half, spelled
+/// here because this crate does not link the runtime: a thunk hands over the
+/// function id, its arguments as [`BridgeValue`]s, and one writable slot for the
+/// result.
+///
+/// # Safety
+/// `args` must point at `count` readable `BridgeValue`s (or be null when `count`
+/// is 0), and `out` at one writable `BridgeValue`.
+pub type RuntimeInvoker = unsafe extern "C" fn(
+    function_id: u32,
+    args: *const BridgeValue,
+    count: u32,
+    out: *mut BridgeValue,
+);
+
+/// The installer the runtime archive exports, which the sidecar carries.
+type InstallInvokerFn = unsafe extern "C" fn(invoker: Option<RuntimeInvoker>);
+
+/// The symbol that installer is exported under.
+const INSTALL_INVOKER: &str = "kira_hybrid_install_runtime_invoker";
+
 /// A loaded, ABI-checked Kira-generated foreign-adapter library.
 ///
 /// Adapter entrypoints are resolved once and cached by symbol. The library owns
@@ -153,6 +176,56 @@ impl ForeignAdapterLibrary {
     ) -> Result<ForeignResult, ForeignAdapterError> {
         let adapter = self.adapter(adapter_symbol)?;
         call_adapter(adapter, signature, &self.aggregates, args, &self.strings).map_err(Into::into)
+    }
+
+    /// The address of a generated callback entry thunk, by symbol.
+    ///
+    /// What a `@FFI.Callback` value carries under the VM: the VM emits no
+    /// machine code, so the only address that can enter a Kira function from C
+    /// is this thunk in the sidecar. It is returned as a word rather than a
+    /// typed pointer because nothing on this side ever calls it — C does.
+    pub fn callback_address(&self, symbol: &str) -> Result<u64, ForeignAdapterError> {
+        validate_symbol(symbol)?;
+        // SAFETY: the symbol names a generated thunk; its address is read and
+        // handed to C, never called or dereferenced here, and stays valid while
+        // `self.library` is alive.
+        let entry =
+            unsafe { self.library.lookup::<unsafe extern "C" fn()>(symbol) }.map_err(|source| {
+                ForeignAdapterError::MissingAdapter {
+                    path: self.path.clone(),
+                    symbol: symbol.to_owned(),
+                    source,
+                }
+            })?;
+        Ok(*entry as usize as u64)
+    }
+
+    /// Installs the invoker the sidecar's callback thunks reach the interpreter
+    /// through, or clears it with `None`.
+    ///
+    /// The sidecar links the same runtime archive the hybrid native half does,
+    /// so the door is already there — `kira_hybrid_install_runtime_invoker` —
+    /// and a VM run installs its own invoker through it for the length of the
+    /// run.
+    ///
+    /// # Safety
+    /// `invoker` must stay callable until it is cleared or the process exits.
+    pub unsafe fn install_callback_invoker(
+        &self,
+        invoker: Option<RuntimeInvoker>,
+    ) -> Result<(), ForeignAdapterError> {
+        // SAFETY: the symbol has this exact signature in the linked runtime
+        // archive, and the caller guarantees the invoker outlives its use.
+        let install = unsafe { self.library.lookup::<InstallInvokerFn>(INSTALL_INVOKER) }.map_err(
+            |source| ForeignAdapterError::MissingAdapter {
+                path: self.path.clone(),
+                symbol: INSTALL_INVOKER.to_owned(),
+                source,
+            },
+        )?;
+        // SAFETY: as above; the installer merely stores the pointer.
+        unsafe { (*install)(invoker) };
+        Ok(())
     }
 
     fn adapter(&self, symbol: &str) -> Result<ForeignAdapterFn, ForeignAdapterError> {

@@ -369,6 +369,109 @@ fn indexing_an_ffi_array_type_points_at_its_elements_field() {
 }
 
 #[test]
+fn a_kira_function_named_where_a_callback_is_expected_records_one_entry() {
+    let text = "@FFI.Callback { abi: c; params: [I32, I32]; result: I32; }\n\
+                struct Adder {}\n\
+                function combine(a: I32, b: I32) -> I32 { return a + b }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; }\n\
+                function callAdder(add: Adder, a: I32, b: I32) -> I32;\n\
+                @Main function main() { print(callAdder(combine, 1, 2)) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+    let program = program(text);
+    assert_eq!(program.foreign_callbacks.len(), 1);
+    let entry = &program.foreign_callbacks[0];
+    assert_eq!(
+        entry.signature().parameters(),
+        &[
+            kira_runtime_abi::ForeignTypeSpec::Scalar(ForeignType::I32),
+            kira_runtime_abi::ForeignTypeSpec::Scalar(ForeignType::I32)
+        ]
+    );
+}
+
+#[test]
+fn naming_the_same_function_twice_records_one_callback_entry() {
+    let text = "@FFI.Callback { abi: c; params: [I32]; result: Void; }\n\
+                struct Sink {}\n\
+                function take(x: I32) -> Void { return }\n\
+                @FFI.Extern { library: l; symbol: a; abi: c; }\n\
+                function first(s: Sink) -> Void;\n\
+                @FFI.Extern { library: l; symbol: b; abi: c; }\n\
+                function second(s: Sink) -> Void;\n\
+                @Main function main() { first(take)\n second(take) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+    assert_eq!(program(text).foreign_callbacks.len(), 1);
+}
+
+#[test]
+fn a_function_whose_signature_does_not_fit_the_callback_is_refused() {
+    let wrong_result = "@FFI.Callback { abi: c; params: [I32]; result: I32; }\n\
+                        struct Adder {}\n\
+                        function takes(x: I32) -> Void { return }\n\
+                        @FFI.Extern { library: l; symbol: s; abi: c; }\n\
+                        function use_it(a: Adder) -> Void;\n\
+                        @Main function main() { use_it(takes) return }";
+    assert_eq!(codes(wrong_result), vec!["KSEM246"]);
+
+    let wrong_arity = "@FFI.Callback { abi: c; params: [I32]; result: Void; }\n\
+                       struct Sink {}\n\
+                       function takes(x: I32, y: I32) -> Void { return }\n\
+                       @FFI.Extern { library: l; symbol: s; abi: c; }\n\
+                       function use_it(a: Sink) -> Void;\n\
+                       @Main function main() { use_it(takes) return }";
+    assert_eq!(codes(wrong_arity), vec!["KSEM246"]);
+
+    // A bare `Int` has no C width, so it is not a callback parameter either.
+    let bare_int = "@FFI.Callback { abi: c; params: [I32]; result: Void; }\n\
+                    struct Sink {}\n\
+                    function takes(x: Int) -> Void { return }\n\
+                    @FFI.Extern { library: l; symbol: s; abi: c; }\n\
+                    function use_it(a: Sink) -> Void;\n\
+                    @Main function main() { use_it(takes) return }";
+    assert_eq!(codes(bare_int), vec!["KSEM246"]);
+}
+
+#[test]
+fn a_callback_declaring_a_type_the_seam_cannot_carry_is_refused_where_it_is_filled() {
+    // Declaring it is clean: a generated binding declares every callback its
+    // headers name, and most are never filled.
+    let declared = "@FFI.Callback { abi: c; params: [String]; result: Void; }\n\
+                    struct Sink {}\n\
+                    @Main function main() { return }";
+    assert!(
+        diagnostics(declared).is_empty(),
+        "{:?}",
+        diagnostics(declared)
+    );
+
+    // Handing a Kira function to one is where it cannot work, and is reported.
+    let filled = "@FFI.Callback { abi: c; params: [String]; result: Void; }\n\
+                  struct Sink {}\n\
+                  function takes(x: String) -> Void { return }\n\
+                  @FFI.Extern { library: l; symbol: s; abi: c; }\n\
+                  function use_it(a: Sink) -> Void;\n\
+                  @Main function main() { use_it(takes) return }";
+    assert_eq!(codes(filled), vec!["KSEM245"]);
+}
+
+#[test]
+fn a_local_wins_over_a_function_of_the_same_name_in_a_callback_slot() {
+    // A callback the program got from C, held in a variable named like a
+    // function, is read as the variable.
+    let text = "@FFI.Callback { abi: c; params: [I32]; result: Void; }\n\
+                struct Sink {}\n\
+                function handler(x: I32) -> Void { return }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; }\n\
+                function use_it(a: Sink) -> Void;\n\
+                @Main function main() { let handler = Sink {}\n use_it(handler) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+    assert!(
+        program(text).foreign_callbacks.is_empty(),
+        "the local is the value, so no entry is recorded"
+    );
+}
+
+#[test]
 fn a_c_layout_struct_with_an_unseamable_field_is_refused_by_field_name() {
     let text = "@FFI.Struct { layout: c; }\n\
                 struct Bad { var x: F64\n var label: String }\n\

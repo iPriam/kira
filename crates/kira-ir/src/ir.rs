@@ -7,7 +7,9 @@
 //! [`IrProgram`] is the contract that the program type-checked and has a valid
 //! entrypoint.
 
-use kira_runtime_abi::{Execution, ForeignAggregates, ForeignImport, NativeStateTypeId};
+use kira_runtime_abi::{
+    Execution, ForeignAggregates, ForeignCallback, ForeignImport, NativeStateTypeId,
+};
 use kira_semantics_model::{EnumId, StructId, Type, TypeTable};
 use la_arena::{Arena, Idx};
 
@@ -58,6 +60,12 @@ pub struct IrProgram {
     /// are: what a struct's C layout is was decided in the frontend, above the
     /// backend split. Empty for a program whose externs pass only scalars.
     pub foreign_aggregates: ForeignAggregates,
+    /// The Kira functions reachable from C as function pointers, carried across
+    /// from the HIR unchanged.
+    ///
+    /// Each row's index is the callback id an [`IrExpr::ForeignCallback`]
+    /// carries, and the name the backend gives the entry thunk it emits.
+    pub foreign_callbacks: Vec<ForeignCallback>,
     /// Arena backing every [`IrExprId`] across all functions.
     pub exprs: Arena<IrExpr>,
 }
@@ -117,7 +125,7 @@ impl IrProgram {
             IrExpr::Float(_) => Type::FLOAT,
             IrExpr::Bool(_) => Type::Bool,
             IrExpr::Str(_) => Type::String,
-            IrExpr::RawPtrNull => Type::RawPtr,
+            IrExpr::RawPtrNull | IrExpr::ForeignCallbackPtr { .. } => Type::RawPtr,
             IrExpr::Local(slot) => function
                 .locals
                 .get(*slot as usize)
@@ -398,6 +406,13 @@ pub enum IrExpr {
     Str(String),
     /// The null raw pointer — the zero a C-layout pointer member fills with.
     RawPtrNull,
+    /// The address C enters a Kira function at, for callback `callback`.
+    ///
+    /// An index into [`IrProgram::foreign_callbacks`]; its value is a `RawPtr`.
+    ForeignCallbackPtr {
+        /// The callback entry this address enters.
+        callback: u32,
+    },
     /// A read of a local slot.
     Local(u32),
     /// A unary operation.

@@ -148,8 +148,8 @@ taking every aggregate through a pointer. The target's own C compiler builds it
 — the managed clang for a host build, `emcc` for wasm — and applies the ABI it
 defines. Everything Kira emits speaks only pointers and scalars.
 
-A field the seam cannot carry is refused by name. A `@FFI.Callback` member, a
-`CString`, and any Kira heap type still are.
+A field the seam cannot carry is refused by name: a `CString`, and any Kira heap
+type.
 
 ### Inline arrays
 
@@ -184,6 +184,49 @@ C decays an array to a pointer — a different type with different ownership —
 the seam refuses it there and asks for `RawPtr` when that is what the symbol
 takes.
 
+## Callbacks
+
+A `@FFI.Callback` declares a C function pointer, and its value is one. It
+crosses both as a struct member and on its own:
+
+```text
+@FFI.Callback { abi: c; params: [I32, I32]; result: I32; }
+struct Adder {}
+
+@FFI.Struct { layout: c; }
+struct Hooks { var add: Adder
+var scale: I32 }
+
+@FFI.Extern { library: demo; symbol: run_hooks; abi: c; }
+function runHooks(h: Hooks, a: I32, b: I32) -> I32;
+```
+
+A pointer C hands out can be stored and passed back. A **Kira function** can
+also fill one — `Hooks { add: combine, scale: 2 }`, where `combine` is an
+ordinary Kira function — and C then calls into Kira through it:
+
+- The value is the address of a generated entry thunk, one per (function,
+  signature) pair, named `kira_ffi_callback_<i>`.
+- On a native build the thunk calls the compiled function directly. Under the
+  VM it reaches the interpreter through the adapter sidecar, on the same door
+  the hybrid native half uses to call a `@Runtime` function. C cannot tell the
+  two apart, which is the point.
+- The function's declared types must match the callback's, position for
+  position, under the same exact-width rule the extern seam applies: a bare
+  `Int` is not a callback parameter any more than it is an extern one.
+- A bare function name means this **only** where a callback is expected. Kira
+  has no function type, so it is not a value anywhere else, and a local of the
+  same name wins.
+
+Zero-fill gives a callback member `NULL`, so `Hooks {}` is the no-callback case
+and C sees it as null.
+
+A callback signature carries fixed-width scalars, `Bool`, and `RawPtr`, and
+returns one of those or nothing. A generated binding may declare callbacks whose
+types the seam cannot carry — or has never seen defined — and declaring one is
+clean; the refusal (`KSEM245`) comes when a Kira function is handed to it.
+Closures and methods are not callbacks: nothing captures across the boundary.
+
 ## Wasm
 
 A wasm build passes the matching `wasm32-emscripten` archive and the generated
@@ -214,7 +257,7 @@ mechanism; delete the file once autobind emits the typedefs into the binding.
 
 ## Deferred to later milestones
 
-`CString` results, Kira enums and heap types across the seam, callbacks and
-function pointers, non-C ABIs, variadics, generic externs, header parsing and
-autobind, dynamic-only C libraries, and compiling native-library sources. Each is
-refused today with a typed diagnostic rather than mislowered.
+`CString` results, Kira enums and heap types across the seam, aggregates and
+strings in a callback signature, non-C ABIs, variadics, generic externs, header
+parsing and autobind, dynamic-only C libraries, and compiling native-library
+sources. Each is refused today with a typed diagnostic rather than mislowered.

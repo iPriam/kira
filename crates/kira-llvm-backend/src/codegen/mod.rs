@@ -21,6 +21,7 @@
 
 mod adapter;
 mod bridge;
+mod callback;
 mod elements;
 mod entry;
 mod ffi;
@@ -503,6 +504,9 @@ impl<'a> Codegen<'a> {
         // and a hybrid half so their call sites resolve, a sidecar so a host can
         // load them.
         self.emit_foreign_adapters()?;
+        // And one entry thunk per callback, for the same reason: whatever holds
+        // the adapters is what a C library reaches Kira through.
+        self.emit_foreign_callbacks()?;
         match self.kind {
             // A whole program is entered through C `main`.
             ModuleKind::Executable => self.lower_entry_point(),
