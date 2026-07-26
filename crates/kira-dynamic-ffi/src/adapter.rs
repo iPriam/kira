@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
+use std::slice;
 
 use kira_runtime_abi::{
     BridgeData, BridgeValue, BridgeValueTag, FOREIGN_ADAPTER_ABI_MARKER,
@@ -83,8 +84,8 @@ pub enum ForeignAdapterError {
 struct StringHelpers {
     new: StrNewFn,
     free: StrFreeFn,
-    _data: StrDataFn,
-    _len: StrLenFn,
+    data: StrDataFn,
+    len: StrLenFn,
 }
 
 /// The host callback a generated thunk reaches the interpreter through.
@@ -145,8 +146,8 @@ impl ForeignAdapterLibrary {
         let strings = StringHelpers {
             new: bind_helper(&library, path, FOREIGN_STRING_NEW_SYMBOL)?,
             free: bind_helper(&library, path, FOREIGN_STRING_FREE_SYMBOL)?,
-            _data: bind_helper(&library, path, FOREIGN_STRING_DATA_SYMBOL)?,
-            _len: bind_helper(&library, path, FOREIGN_STRING_LEN_SYMBOL)?,
+            data: bind_helper(&library, path, FOREIGN_STRING_DATA_SYMBOL)?,
+            len: bind_helper(&library, path, FOREIGN_STRING_LEN_SYMBOL)?,
         };
 
         Ok(Self {
@@ -161,6 +162,21 @@ impl ForeignAdapterLibrary {
     /// Returns the artifact this loader opened.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Copies a string handle's bytes out of this library and frees the handle.
+    ///
+    /// What a `CString` callback argument arrives as: the generated entry thunk
+    /// copies C's bytes into a handle from *this* library's runtime before
+    /// entering Kira, because the `const char*` C passed is only guaranteed for
+    /// the length of its call. The handle is that library's allocation, so it is
+    /// read and released through it.
+    ///
+    /// # Safety
+    /// `handle` must be null or a live string handle from this library,
+    /// transferred to this call; it is freed exactly once here.
+    pub unsafe fn take_string(&self, handle: u64) -> String {
+        take_string_handle(&self.strings, handle)
     }
 
     /// Calls one generated adapter using its declared exact-width signature.
@@ -302,11 +318,6 @@ fn call_adapter(
     args: &[ForeignArg<'_>],
     helpers: &StringHelpers,
 ) -> Result<ForeignResult, ForeignCallError> {
-    if signature.result() == ForeignTypeSpec::Scalar(ForeignType::CString) {
-        return Err(ForeignCallError::UnsupportedResultType(
-            ForeignTypeSpec::Scalar(ForeignType::CString),
-        ));
-    }
     if args.len() != signature.parameters().len() {
         return Err(ForeignCallError::ArgumentCount {
             expected: signature.parameters().len(),
@@ -359,7 +370,9 @@ fn call_adapter(
     drop(temporary_strings);
 
     match status {
-        ForeignAdapterStatus::SUCCESS => lift_result(signature.result(), out, result_buffer),
+        ForeignAdapterStatus::SUCCESS => {
+            lift_result(signature.result(), out, result_buffer, helpers)
+        }
         ForeignAdapterStatus::BAD_ARGUMENT_COUNT => Err(ForeignCallError::AdapterBadArgumentCount),
         ForeignAdapterStatus::BAD_ARGUMENT_TAG => Err(ForeignCallError::AdapterBadArgumentTag),
         ForeignAdapterStatus::INTERIOR_NUL => Err(ForeignCallError::AdapterInteriorNul),
@@ -439,6 +452,7 @@ fn lift_result(
     expected: ForeignTypeSpec,
     value: BridgeValue,
     result_buffer: Vec<u8>,
+    helpers: &StringHelpers,
 ) -> Result<ForeignResult, ForeignCallError> {
     if value.reserved != [0; 7] {
         return Err(ForeignCallError::MalformedResultReserved);
@@ -484,13 +498,42 @@ fn lift_result(
             check_pointer_width(value.payload)?;
             ForeignResult::RawPtr(value.payload)
         }
+        // The adapter already copied the callee's bytes into a string handle
+        // from this library's own runtime — the same handle shape an argument
+        // crosses as, in the other direction. Read it and free it here, exactly
+        // as a transient argument handle is freed.
         ForeignType::CString => {
-            return Err(ForeignCallError::UnsupportedResultType(
-                ForeignTypeSpec::Scalar(ForeignType::CString),
-            ));
+            check_pointer_width(value.payload)?;
+            ForeignResult::CString(take_string_handle(helpers, value.payload))
         }
     };
     Ok(result)
+}
+
+/// Reads a string handle from an adapter library's runtime and frees it.
+///
+/// The handle is that library's, not this process's, so it is read and released
+/// through the helpers bound from the same library — mixing allocators here
+/// would be the one way to turn a correct adapter into a crash.
+fn take_string_handle(helpers: &StringHelpers, payload: u64) -> String {
+    if payload == 0 {
+        return String::new();
+    }
+    let handle = payload as usize as *mut c_void;
+    // SAFETY: the adapter returned this as a live handle from the same library
+    // these helpers were bound from; it is read here and freed exactly once.
+    let text = unsafe {
+        let len = (helpers.len)(handle);
+        let data = (helpers.data)(handle);
+        if len == 0 || data.is_null() {
+            String::new()
+        } else {
+            String::from_utf8_lossy(slice::from_raw_parts(data, len)).into_owned()
+        }
+    };
+    // SAFETY: the same handle, consumed exactly once.
+    unsafe { (helpers.free)(handle) };
+    text
 }
 
 fn check_pointer_width(value: u64) -> Result<(), ForeignCallError> {

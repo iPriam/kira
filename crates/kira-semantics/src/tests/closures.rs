@@ -373,3 +373,54 @@ fn a_binding_named_borrow_still_parses() {
             .is_empty()
     );
 }
+
+// ----- what a closure may carry ------------------------------------------
+
+/// A `RawPtr` capture copies a word and frees nothing, so it needs no `copy`.
+#[test]
+fn a_raw_pointer_may_be_captured() {
+    let text = "struct Host { var seed: Int }\n\
+                @Main function main() { \
+                let boxed = nativeState(Host { seed: 1 }) \
+                let handle = nativeUserData(boxed) \
+                let f: () -> Int = { in var h = nativeRecover<Host>(handle) return h.seed } \
+                print(f()) nativeStateFree(boxed) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// A function value of *another* function type nests: one representation struct
+/// holding another is an ordinary struct.
+#[test]
+fn a_function_value_of_another_type_may_be_captured() {
+    let text = "@Main function main() { \
+                let step: (Int) -> Int = { v in return v + 1 } \
+                let run: () -> Int = { in return step(1) } \
+                print(run()) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// A capture of the closure's *own* function type has no representation: the
+/// value would sit inside a value of its own type.
+#[test]
+fn a_function_value_of_the_closures_own_type_is_refused() {
+    let text = "@Main function main() { \
+                let step: (Int) -> Int = { v in return v + 1 } \
+                let again: (Int) -> Int = { v in return step(v) } \
+                print(again(1)) return }";
+    assert_eq!(codes(text), vec!["KSEM251"]);
+}
+
+/// Callback state may hold a function value: it is a tag plus captures that
+/// each had to be trivially copyable, so it boxes like any other struct.
+#[test]
+fn callback_state_may_hold_a_function_value() {
+    let text = "struct Frame { var n: Int }\n\
+                function bump(frame: borrow mut Frame) { frame.n = frame.n + 1 return }\n\
+                struct AppState { var count: Int\n var onFrame: (borrow mut Frame) -> Void }\n\
+                @Main function main() { \
+                let boxed = nativeState(AppState { count: 1, onFrame: bump }) \
+                var back = nativeRecover<AppState>(nativeUserData(boxed)) \
+                var f = Frame { n: 1 } back.onFrame(f) print(f.n) \
+                nativeStateFree(boxed) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}

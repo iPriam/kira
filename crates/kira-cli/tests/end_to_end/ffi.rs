@@ -13,8 +13,8 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// The output the full fixture prints on the VM, through the sidecar.
-pub(crate) const EXPECTED: &str =
-    "42\n-5\n200\n-9\n40000\n4000000000\n1975\n5000000000\nfalse\n3.75\n1.75\n4\n42\n0\n7\n1\n2\n";
+pub(crate) const EXPECTED: &str = "42\n-5\n200\n-9\n40000\n4000000000\n1975\n5000000000\nfalse\n3.75\n1.75\n\
+     4\n42\n0\n7\nhello from C\nround trip\n|\nhello from C!\n1\n2\n";
 
 /// A fresh temp directory unique to one test.
 pub(crate) fn scratch(tag: &str) -> PathBuf {
@@ -146,24 +146,42 @@ fn an_undeclared_native_library_is_a_typed_diagnostic() {
 }
 
 #[test]
-fn a_cstring_result_is_refused_by_the_frontend() {
-    // A frontend refusal reaches the CLI as a rendered diagnostic with its stable
-    // code, proving the seam's type rules are enforced end to end.
+fn the_seam_accepts_a_cstring_result_and_still_refuses_a_string() {
+    // Both halves of one rule, proven through the CLI: `CString` is the seam's
+    // spelling for C text in either direction, and `String` is Kira's — naming
+    // Kira's at the seam is still the mistake it always was, and the refusal
+    // reaches the CLI as a rendered diagnostic with its stable code.
     let dir = scratch("cstring-result");
-    let entry = dir.join("main.kira");
+
+    let good = dir.join("good.kira");
     std::fs::write(
-        &entry,
+        &good,
         "@FFI.Extern { library: l; symbol: s; abi: c; }\n\
-         function bad() -> CString;\n\
+         function greeting() -> CString;\n\
+         @Main function main() { print(greeting()) return }\n",
+    )
+    .expect("program");
+    let output = run(&["check", good.to_str().unwrap()]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a CString result checks clean: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let bad = dir.join("bad.kira");
+    std::fs::write(
+        &bad,
+        "@FFI.Extern { library: l; symbol: s; abi: c; }\n\
+         function bad() -> String;\n\
          @Main function main() { return }\n",
     )
     .expect("program");
-
-    let output = run(&["check", entry.to_str().unwrap()]);
+    let output = run(&["check", bad.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(1));
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("KSEM182"),
-        "a CString result must be refused with KSEM182: {}",
+        "a String result must be refused with KSEM182: {}",
         String::from_utf8_lossy(&output.stderr),
     );
     let _ = std::fs::remove_dir_all(&dir);

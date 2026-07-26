@@ -28,7 +28,9 @@
 
 use std::collections::HashMap;
 
-use kira_runtime_abi::{ForeignAggregate, ForeignAggregateId, ForeignArrayElement, ForeignMember};
+use kira_runtime_abi::{
+    ForeignAggregate, ForeignAggregateId, ForeignArrayElement, ForeignMember, ForeignType,
+};
 use kira_semantics_model::{StructId, Type};
 use kira_source::Span;
 
@@ -203,7 +205,7 @@ impl Analyzer<'_> {
         if ty == Type::Error {
             return None;
         }
-        if let Some(scalar) = crate::foreign::scalar_foreign_type(ty) {
+        if let Some(scalar) = member_foreign_type(ty) {
             return Some(ForeignArrayElement::Scalar(scalar));
         }
         if let Type::Struct(nested) = ty {
@@ -216,7 +218,7 @@ impl Analyzer<'_> {
             "KSEM182",
             format!(
                 "`{}` holds `{}`, which cannot cross the C seam: an inline C array's elements \
-                 are fixed-width scalars, `Bool`, `RawPtr`, and `@FFI.Struct {{ layout: c }}` \
+                 are fixed-width scalars, `Bool`, `RawPtr`, `CString`, and `@FFI.Struct {{ layout: c }}` \
                  or `@FFI.Array` types",
                 self.struct_name(container),
                 self.type_name(ty),
@@ -237,7 +239,7 @@ impl Analyzer<'_> {
         if ty == Type::Error {
             return None;
         }
-        if let Some(scalar) = crate::foreign::scalar_foreign_type(ty) {
+        if let Some(scalar) = member_foreign_type(ty) {
             return Some(ForeignMember::Scalar(scalar));
         }
         if let Type::Struct(nested) = ty
@@ -255,8 +257,8 @@ impl Analyzer<'_> {
             "KSEM182",
             format!(
                 "field `{field}` of `{}` cannot cross the C seam as `{}`: a C-layout \
-                 struct's fields are fixed-width scalars, `Bool`, `RawPtr`, and other \
-                 `@FFI.Struct {{ layout: c }}`, `@FFI.Array`, or `@FFI.Callback` types",
+                 struct's fields are fixed-width scalars, `Bool`, `RawPtr`, `CString`, and \
+                 other `@FFI.Struct {{ layout: c }}`, `@FFI.Array`, or `@FFI.Callback` types",
                 self.struct_name(container),
                 self.type_name(ty),
             ),
@@ -267,5 +269,24 @@ impl Analyzer<'_> {
     /// A struct's written name, for a diagnostic.
     fn struct_name(&self, id: StructId) -> String {
         self.type_name(Type::Struct(id))
+    }
+}
+
+/// The [`ForeignType`] a C-layout struct's field or a C array's element sits in
+/// the layout as.
+///
+/// This is [`crate::foreign::scalar_foreign_type`] plus `CString`, and the extra
+/// case is the whole reason it exists. At a *signature* `CString` is a direction
+/// — a borrowed C string the seam builds for the duration of one call — so a
+/// result position has to refuse it. In a **layout** it is not a direction at
+/// all: `const char* window_title` is a pointer word, laid out and aligned
+/// exactly as a `RawPtr` member is, and a binding file that mirrors a C struct
+/// has to be able to say so. Nothing is loosened by admitting it: a value of
+/// such a struct still cannot be constructed with a `CString` field, which the
+/// zero-fill rule refuses where the value would be minted.
+fn member_foreign_type(ty: Type) -> Option<ForeignType> {
+    match ty {
+        Type::CString => Some(ForeignType::CString),
+        other => crate::foreign::scalar_foreign_type(other),
     }
 }
