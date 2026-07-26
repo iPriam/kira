@@ -250,6 +250,20 @@ descriptor struct and calls after the call that gave it returned. Green: fmt,
 clippy `-D warnings`, build, nextest **1781/1781**, wasm32 VM-core. **Editor 852
 → 847.**
 
+**Hexadecimal integer literals — LANDED (2026-07-26).** The `KPAR023`/`KPAR024`
+bucket was not a parser bug: the lexer had no hex, so `0x1bc6ea02` was the
+literal `0` followed by the name `x1bc6ea02`, and inside a newline-separated
+struct literal every argument after the first read as a stray field name. A hex
+literal is a bit pattern (sixty-four unsigned bits, reinterpreted, so
+`0xffffffffffffffff` is `-1`); a decimal one keeps its own range. `0x` opens a
+literal only when a hex digit follows, so `0xyz` is unchanged. No IR, opcode, or
+backend surface; proven byte-identical vm/llvm/hybrid, and the bitwise example's
+now-false claim about masks needing to be built by wrapping is corrected. Green
+(1787 tests). **Editor 847 → 745** (−102); `KPAR023`/`KPAR024` → 0.
+
+Only `0x` — the corpus writes 74 of them and no `0b`/`0o`, and there is no
+oracle evidence for the other bases, so they were not invented.
+
 **The design call, for the record — clang computes the ABI, Kira never
 classifies.** Full reasoning in `.codex/work/ffi-aggregate-abi.md`. For each
 import naming an aggregate, the backend generates a C translation unit that
