@@ -211,14 +211,44 @@ trip through a Kira struct and being called back through it, and that pointer
 passed on its own. **Editor 943 → 852** (−91); the 86 `@FFI.Callback` member
 refusals are gone.
 
-**Next: a Kira function as a callback.** Pointers C owns now cross; what does
-not yet is `sapp_desc { init_userdata_cb: init }`, where `init` is a Kira
-function. The oracle's model is that a callback typedef lowers to a real native
-function pointer a Kira function may fill. That needs a C-ABI entry thunk per
-callback target on each backend: native code can point straight at a generated
-thunk, while the VM has no native code of its own and must reach the interpreter
-back through the adapter sidecar — the same shape `kira-hybrid-runtime`'s
-`invoke_runtime` already has for the native half calling a `@Runtime` function.
+**A Kira function is callable from C — LANDED (2026-07-26).** The other half:
+`Hooks { add: combine }` now works, where `combine` is an ordinary Kira
+function, and C calls into Kira through it on VM, LLVM/native, and hybrid.
+
+The value is the address of a generated entry thunk, one per (function,
+signature) pair, named `kira_ffi_callback_<i>`. What the thunk does depends on
+whether the module holding it also holds the function's body: an executable's
+and a hybrid half's `@Native` targets are a direct call with one conversion per
+argument, while everything else marshals into `BridgeValue`s and goes through
+`kira_hybrid_call_runtime` — the door the hybrid native half already used to
+call a `@Runtime` function. So the VM's sidecar and the hybrid dylib reach the
+interpreter by one path, not two, and C cannot tell which it got.
+
+Re-entering the VM needed a session: `kira-main`'s `ForeignSession` owns the
+`Program` and the sidecar, installs the invoker for the run, and finds itself
+from the thunk through a thread-local — the shape `kira-hybrid-runtime` already
+had. The nested call is a *fresh* `Program::call` with its own heap and stack,
+so nothing is aliased; callback state is shared across levels, because a
+callback recovering state boxed by the outer run is the whole point of it.
+
+Frontend: a bare function name means a callback **only** where one is expected
+(Kira has no function type, and a local of the same name wins). The function's
+declared types must match the callback's position for position under the
+exact-width rule. Signatures resolve quietly at the declaration and are refused
+where a function is handed over (`KSEM245`), because a generated binding
+declares hundreds of callbacks it never fills — reporting at the declaration
+turned the editor into 3272 errors, which is how that rule was found.
+
+Wire: a callback table appended to KBC1 after the aggregates, each section now
+forcing the ones before it to be written; append-only opcode
+`FOREIGN_CALLBACK=0x4e` and `RAW_PTR_NULL=0x4d`; no version moved.
+
+Proven byte-identical vm/llvm/hybrid by
+`backend_parity/ffi.rs::every_backend_agrees_on_a_kira_function_called_from_c`:
+an immediate call back, two crossings in one call, and a callback C stores in a
+descriptor struct and calls after the call that gave it returned. Green: fmt,
+clippy `-D warnings`, build, nextest **1781/1781**, wasm32 VM-core. **Editor 852
+→ 847.**
 
 **The design call, for the record — clang computes the ABI, Kira never
 classifies.** Full reasoning in `.codex/work/ffi-aggregate-abi.md`. For each
