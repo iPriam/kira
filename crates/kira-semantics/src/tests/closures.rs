@@ -260,25 +260,116 @@ fn a_function_type_does_not_match_one_differing_only_in_a_mode() {
     assert_eq!(codes(text), vec!["KSEM212"]);
 }
 
-/// A `borrow mut` parameter may be *written* on a function type and a matching
-/// function assigned to it — what cannot happen yet is a call through it, and
-/// that is refused where it happens rather than at the declaration.
+/// A `borrow mut` parameter may be written on a function type, assigned a
+/// matching function, and *called through* — the writeback rides the dispatcher.
 #[test]
-fn a_borrow_mut_function_type_declares_but_does_not_call() {
-    let declaring = "struct Frame { var n: Int }\n\
-                         function bump(frame: borrow mut Frame) { frame.n = frame.n + 1 return }\n\
-                         @Main function main() { \
-                         let onFrame: (borrow mut Frame) -> Void = bump print(1) return }";
-    assert!(
-        diagnostics(declaring).is_empty(),
-        "{:?}",
-        diagnostics(declaring)
-    );
+fn a_borrow_mut_function_type_declares_and_calls() {
+    let text = "struct Frame { var n: Int }\n\
+                    function bump(frame: borrow mut Frame) { frame.n = frame.n + 1 return }\n\
+                    @Main function main() { \
+                    let onFrame: (borrow mut Frame) -> Void = bump \
+                    var f = Frame { n: 1 } onFrame(f) print(f.n) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
 
-    let calling = "struct Frame { var n: Int }\n\
-                       function bump(frame: borrow mut Frame) { frame.n = frame.n + 1 return }\n\
-                       @Main function main() { \
-                       let onFrame: (borrow mut Frame) -> Void = bump \
-                       var f = Frame { n: 1 } onFrame(f) return }";
-    assert_eq!(codes(calling), vec!["KSEM249"]);
+/// A closure literal's parameter takes the mode its type declares, so a body
+/// that writes through a `borrow mut` parameter is not refused for mutating an
+/// owned binding.
+#[test]
+fn a_closure_may_write_through_a_borrow_mut_parameter() {
+    let text = "struct Frame { var n: Int }\n\
+                    @Main function main() { \
+                    let onFrame: (borrow mut Frame) -> Void = { f in f.n = f.n + 1 return } \
+                    var f = Frame { n: 1 } onFrame(f) print(f.n) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// The temporary rule holds through a function value too: there is nowhere in
+/// the caller for the callee's write to land.
+#[test]
+fn a_temporary_is_refused_as_a_borrow_mut_argument_through_a_function_value() {
+    let text = "struct Frame { var n: Int }\n\
+                    function bump(frame: borrow mut Frame) { frame.n = frame.n + 1 return }\n\
+                    @Main function main() { \
+                    let onFrame: (borrow mut Frame) -> Void = bump \
+                    onFrame(Frame { n: 1 }) return }";
+    assert_eq!(codes(text), vec!["KSEM248"]);
+}
+
+// ----- an ownership prefix on a binding's annotation -----------------------
+
+/// A binding may carry the same ownership prefix a parameter may, and a
+/// `borrow` one is honored for a type an owned binding leaves alone anyway.
+#[test]
+fn a_borrow_prefix_on_a_binding_annotation_is_accepted() {
+    let text = "struct Frame { var n: Int }\n\
+                    function bump(frame: borrow mut Frame) { frame.n = frame.n + 1 return }\n\
+                    @Main function main() { \
+                    let onFrame: borrow (borrow mut Frame) -> Void = bump \
+                    var f = Frame { n: 1 } onFrame(f) print(f.n) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// The prefix is part of the *binding*, not the type, so it does not change
+/// which function type the annotation names.
+#[test]
+fn a_borrow_prefix_does_not_change_the_annotated_type() {
+    let text = "function double(v: Int) -> Int { return v * 2 }\n\
+                    function apply(f: borrow (Int) -> Int, v: Int) -> Int { return f(v) }\n\
+                    @Main function main() { \
+                    let a: borrow (Int) -> Int = double \
+                    let b: (Int) -> Int = double \
+                    print(apply(a, 1) + apply(b, 2)) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// A type that aliases its source cannot be borrowed by a binding: nothing
+/// shares storage, so the binding would read as a view over a snapshot.
+#[test]
+fn a_borrow_prefix_on_an_aliasing_type_is_refused() {
+    assert_eq!(
+        codes(
+            "@Main function main() { let xs: [Int] = [1] let ys: borrow [Int] = xs print(ys.count) return }"
+        ),
+        vec!["KSEM250"]
+    );
+}
+
+/// `borrow mut` on a binding is refused whatever the type: a write through it
+/// has no caller to land in.
+#[test]
+fn a_borrow_mut_prefix_on_a_binding_is_refused() {
+    assert_eq!(
+        codes(
+            "struct Frame { var n: Int }\n\
+             @Main function main() { var f = Frame { n: 1 } \
+             let g: borrow mut Frame = f print(g.n) return }"
+        ),
+        vec!["KSEM250"]
+    );
+}
+
+/// `move` on a binding consumes its initializer, whatever the type — which is
+/// what separates it from the implicit move, that only fires for an aliasing
+/// one.
+#[test]
+fn a_move_prefix_on_a_binding_consumes_its_initializer() {
+    assert_eq!(
+        codes(
+            "struct Frame { var n: Int }\n\
+             @Main function main() { let f = Frame { n: 1 } \
+             let g: move Frame = f print(f.n) return }"
+        ),
+        vec!["KSEM107"]
+    );
+}
+
+/// A binding *named* `borrow` still parses as one: the prefix is contextual, so
+/// it is committed to only when a type follows.
+#[test]
+fn a_binding_named_borrow_still_parses() {
+    assert!(
+        diagnostics("@Main function main() { let borrow: Int = 1 print(borrow) return }")
+            .is_empty()
+    );
 }

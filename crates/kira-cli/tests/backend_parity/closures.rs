@@ -458,3 +458,151 @@ function main() {
     );
     assert_eq!(output, "down/one\ndown/one\ndown\n");
 }
+
+/// Calling through a function type whose parameter is `borrow mut` writes back
+/// into the caller's binding on every backend.
+///
+/// A mutable borrow is the one mode that *is* observable at run time, so unlike
+/// `borrow` this is not a static check with no lowering: the dispatcher takes
+/// the slot by reference, forwards it, and carries what the arm wrote back out
+/// to its own caller. If any backend dropped a link in that chain it would print
+/// the unchanged value, so the numbers here are the proof the chain holds.
+#[test]
+fn calling_through_a_borrow_mut_function_type_agrees() {
+    let output = assert_parity(
+        r#"
+struct Frame {
+    var n: Int
+    var label: String
+}
+
+function bump(frame: borrow mut Frame) {
+    frame.n = frame.n + 1
+    frame.label = frame.label + "!"
+    return
+}
+
+@Main
+function main() {
+    let onFrame: (borrow mut Frame) -> Void = bump
+    var f = Frame { n: 1, label: "a" }
+    onFrame(f)
+    onFrame(f)
+    print(f.n)
+    print(f.label)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "3\na!!\n");
+}
+
+/// A closure *literal* of a `borrow mut` function type writes back too, and two
+/// literals of one type dispatch to the arm their tag names.
+#[test]
+fn a_borrow_mut_closure_literal_writes_back_and_agrees() {
+    let output = assert_parity(
+        r#"
+struct Frame {
+    var n: Int
+}
+
+function apply(f: borrow (borrow mut Frame) -> Void, target: borrow mut Frame) {
+    f(target)
+    return
+}
+
+@Main
+function main() {
+    let double: (borrow mut Frame) -> Void = { g in g.n = g.n * 2 return }
+    let inc: (borrow mut Frame) -> Void = { g in g.n = g.n + 3 return }
+    var f = Frame { n: 5 }
+    double(f)
+    print(f.n)
+    inc(f)
+    print(f.n)
+    apply(double, f)
+    print(f.n)
+    return
+}
+"#,
+    );
+    // 5 *2 -> 10, +3 -> 13, *2 -> 26.
+    assert_eq!(output, "10\n13\n26\n");
+}
+
+/// A `borrow mut` argument reaching a function value through a *nested* place
+/// lands back in that same field, not in a copy of the whole binding.
+#[test]
+fn a_nested_place_written_through_a_function_value_agrees() {
+    let output = assert_parity(
+        r#"
+struct Inner {
+    var n: Int
+}
+
+struct Outer {
+    var left: Inner
+    var right: Inner
+}
+
+function bump(inner: borrow mut Inner) {
+    inner.n = inner.n + 10
+    return
+}
+
+@Main
+function main() {
+    let onInner: (borrow mut Inner) -> Void = bump
+    var o = Outer { left: Inner { n: 1 }, right: Inner { n: 2 } }
+    onInner(o.left)
+    print(o.left.n)
+    print(o.right.n)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "11\n2\n");
+}
+
+/// A binding that declares `borrow` on its annotation runs identically to one
+/// that does not, on every backend.
+///
+/// The prefix is a static statement about how the binding takes its initializer
+/// and is only accepted where owned and borrowed coincide — so if any backend
+/// had started treating the binding differently, these two would disagree.
+#[test]
+fn a_borrow_prefix_on_a_binding_annotation_agrees() {
+    let output = assert_parity(
+        r#"
+struct Frame {
+    var n: Int
+}
+
+function bump(frame: borrow mut Frame) {
+    frame.n = frame.n + 1
+    return
+}
+
+function twice(f: borrow (borrow mut Frame) -> Void, target: borrow mut Frame) {
+    f(target)
+    f(target)
+    return
+}
+
+@Main
+function main() {
+    let borrowed: borrow (borrow mut Frame) -> Void = bump
+    let owned: (borrow mut Frame) -> Void = bump
+    var f = Frame { n: 0 }
+    borrowed(f)
+    owned(f)
+    twice(borrowed, f)
+    twice(owned, f)
+    print(f.n)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "6\n");
+}

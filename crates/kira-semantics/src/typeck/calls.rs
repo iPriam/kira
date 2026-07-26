@@ -560,7 +560,14 @@ impl Analyzer<'_> {
                 (Some(&expected), Some(&mode)) => {
                     all.push(self.analyze_call_argument(ctx, arg, expected, mode, name));
                     if mode == OwnershipMode::BorrowMut {
-                        self.record_borrow_mut_argument(ctx, arg, slot, name, &mut writebacks);
+                        self.record_borrow_mut_argument(
+                            ctx,
+                            arg,
+                            slot,
+                            slot as u32,
+                            name,
+                            &mut writebacks,
+                        );
                     }
                 }
                 _ => all.push(self.analyze_expr(ctx, arg)),
@@ -598,11 +605,17 @@ impl Analyzer<'_> {
     /// silently accepted. Two arguments rooted at the same local are refused
     /// for the same reason in reverse — both writes would land in one place and
     /// the later one would erase the earlier.
-    fn record_borrow_mut_argument(
+    ///
+    /// `slot` is the parameter as the *source* numbers it, which is what the
+    /// diagnostic names; `param` is the slot on the function actually called,
+    /// and the two differ by one through a function value, whose dispatcher
+    /// carries the closure itself in slot 0.
+    pub(crate) fn record_borrow_mut_argument(
         &mut self,
         ctx: &mut FnCtx,
         arg: ExprId,
         slot: usize,
+        param: u32,
         callee: &str,
         writebacks: &mut Vec<HirWriteback>,
     ) {
@@ -615,7 +628,9 @@ impl Analyzer<'_> {
             .find(|entry| crate::place::places_overlap(&entry.place, &place))
         {
             let name = ctx.local_name(place.local);
-            let other = existing.param;
+            // Reported in the source's numbering, which is the callee's shifted
+            // back by however far this call's slot 0 sits from parameter 0.
+            let other = existing.param as usize + slot - param as usize;
             self.emit(
                 span,
                 "KSEM247",
@@ -627,10 +642,7 @@ impl Analyzer<'_> {
             );
             return;
         }
-        writebacks.push(HirWriteback {
-            param: slot as u32,
-            place,
-        });
+        writebacks.push(HirWriteback { param, place });
     }
 
     fn analyze_user_call(

@@ -13,6 +13,7 @@ use kira_core::Symbol;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{Block, ForIterable, Stmt, StmtId};
+use kira_syntax_model::ownership::OwnershipMode;
 
 use crate::Parser;
 
@@ -73,10 +74,15 @@ impl Parser<'_> {
         if self.at(TokenKind::Identifier) {
             self.bump();
         }
-        let ty = if self.eat(TokenKind::Colon) {
-            Some(self.parse_type_ref())
+        // The same ownership prefix a parameter may carry, in the same place
+        // relative to the type: `let f: borrow (Int) -> Void = g`. Parsed with
+        // the shared helper so `let borrow = 1` — a binding *named* `borrow` —
+        // keeps parsing as it always did.
+        let (ownership, ownership_span, ty) = if self.eat(TokenKind::Colon) {
+            let (ownership, ownership_span) = self.parse_ownership_prefix();
+            (ownership, ownership_span, Some(self.parse_type_ref()))
         } else {
-            None
+            (OwnershipMode::Owned, None, None)
         };
         let init = if self.eat(TokenKind::Equals) {
             self.parse_expr()
@@ -94,6 +100,8 @@ impl Parser<'_> {
             name_span,
             mutable,
             ty,
+            ownership,
+            ownership_span,
             init,
             span,
         })
