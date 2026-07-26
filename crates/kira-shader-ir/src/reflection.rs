@@ -18,6 +18,7 @@
 //! bind camera msl 0 1 -
 //! layout Camera 16 80
 //! field Camera view_projection 0 16 64 64
+//! count particles msl 3
 //! ```
 //!
 //! Text rather than a packed binary because a host reads this once at pipeline
@@ -150,6 +151,14 @@ pub fn encode(reflection: &Reflection) -> String {
                 binding.group_index,
                 binding.binding_index,
                 optional(binding.glsl_name.as_deref())
+            ));
+        }
+        for (target, binding) in &resource.length_bindings {
+            out.push_str(&format!(
+                "count {} {} {}\n",
+                resource.resource_name,
+                target.label(),
+                binding
             ));
         }
     }
@@ -321,6 +330,7 @@ pub fn decode(text: &str) -> Result<Reflection, ReflectionError> {
                         .transpose()?,
                     visibility: parse_visibility(fields[8], at)?,
                     backend_bindings: Vec::new(),
+                    length_bindings: Vec::new(),
                 });
             }
             "bind" => {
@@ -355,6 +365,20 @@ pub fn decode(text: &str) -> Result<Reflection, ReflectionError> {
                     location: None,
                 };
                 declared_type(&mut reflection, fields[1]).fields.push(field);
+            }
+            "count" => {
+                count(4)?;
+                let target = parse(BackendTarget::parse, fields[2], at, "backend")?;
+                let binding = parse_number(fields[3], at)?;
+                let owner = reflection
+                    .resources
+                    .iter_mut()
+                    .find(|resource| resource.resource_name == fields[1])
+                    .ok_or_else(|| ReflectionError::Unanchored {
+                        line: at,
+                        name: fields[1].to_owned(),
+                    })?;
+                owner.length_bindings.push((target, binding));
             }
             "layout" => {
                 count(4)?;
@@ -634,6 +658,7 @@ mod tests {
                     binding_index: 1,
                     glsl_name: None,
                 }],
+                length_bindings: vec![(BackendTarget::Msl, 3)],
             }],
         }
     }
