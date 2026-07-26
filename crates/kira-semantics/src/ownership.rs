@@ -85,6 +85,78 @@ impl LocalOwnership {
     }
 }
 
+/// The move state across the arms of a branch.
+///
+/// Arms are alternatives: at most one of them runs. Analyzing them one after
+/// another in a single state makes a move in the first arm a use-after-move in
+/// the second, which is the bug this exists to stop — the oracle accepts
+/// `Metal -> return f(move p)  Vulkan -> return g(move p)`, and so must this.
+///
+/// So each arm is analyzed from the state at the branch point, and what reaches
+/// the code *after* the branch is the union of the arms that can get there. An
+/// arm that definitely returns contributes nothing to that union: its move
+/// happened on a path that never rejoins.
+pub(crate) struct BranchMoves {
+    /// The state every arm starts from.
+    before: Vec<Option<Span>>,
+    /// The union over the arms that fall through, or `None` when none has yet.
+    joined: Option<Vec<Option<Span>>>,
+}
+
+impl BranchMoves {
+    /// Records the state at the branch point, before any arm is analyzed.
+    pub(crate) fn start(ctx: &FnCtx) -> Self {
+        Self {
+            before: ctx.moved_state(),
+            joined: None,
+        }
+    }
+
+    /// Puts the state back to the branch point, for the next arm to start from.
+    pub(crate) fn enter_arm(&self, ctx: &mut FnCtx) {
+        ctx.reset_moves(&self.before);
+    }
+
+    /// Folds an analyzed arm's state into the join, unless it diverges.
+    pub(crate) fn leave_arm(&mut self, ctx: &FnCtx, diverges: bool) {
+        if diverges {
+            return;
+        }
+        let arm = ctx.moved_state();
+        match &mut self.joined {
+            Some(joined) => {
+                for (slot, moved) in arm.into_iter().enumerate() {
+                    match joined.get_mut(slot) {
+                        Some(entry) if entry.is_none() => *entry = moved,
+                        _ => {}
+                    }
+                }
+            }
+            None => self.joined = Some(arm),
+        }
+    }
+
+    /// Installs the state the code after the branch sees.
+    ///
+    /// `exhaustive` says the arms cover every case — an `if` with an `else`, a
+    /// `switch` with a `default`, a `match` over every variant. When they do
+    /// not, there is one more path to the join: the one where no arm ran, which
+    /// arrives with the state the branch started in.
+    pub(crate) fn finish(self, ctx: &mut FnCtx, exhaustive: bool) {
+        let Some(joined) = self.joined else {
+            // Every arm diverged. Either the branch is exhaustive and nothing
+            // follows it, or the fall-through path is the only one left; both
+            // are the state it started in.
+            ctx.reset_moves(&self.before);
+            return;
+        };
+        ctx.reset_moves(&joined);
+        if !exhaustive {
+            ctx.union_moves(&self.before);
+        }
+    }
+}
+
 /// What a call-site argument said about ownership, if anything.
 ///
 /// Only `move` and `copy` can be written on an argument; `borrow` is the

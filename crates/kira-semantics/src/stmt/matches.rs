@@ -130,8 +130,10 @@ impl Analyzer<'_> {
         });
         out.push(bind_tag);
 
-        let resolved = self.resolve_arms(ctx, enum_id, slot, arms);
-        self.check_coverage(enum_id, &resolved, arms, span);
+        let mut branch = crate::ownership::BranchMoves::start(ctx);
+        let resolved = self.resolve_arms(ctx, enum_id, slot, arms, &mut branch);
+        let exhaustive = self.check_coverage(enum_id, &resolved, arms, span);
+        branch.finish(ctx, exhaustive);
         out.extend(self.build_chain(tag_slot, resolved));
     }
 
@@ -146,6 +148,7 @@ impl Analyzer<'_> {
         enum_id: EnumId,
         slot: LocalId,
         arms: &[MatchArm],
+        branch: &mut crate::ownership::BranchMoves,
     ) -> Vec<ResolvedArm> {
         let mut resolved: Vec<ResolvedArm> = Vec::with_capacity(arms.len());
         for arm in arms {
@@ -178,7 +181,11 @@ impl Analyzer<'_> {
                 );
                 continue;
             }
+            // Exactly one arm runs, so each starts from the state at the
+            // `match` and contributes to the join only if it can reach it.
+            branch.enter_arm(ctx);
             let body = self.analyze_arm_body(ctx, enum_id, slot, tag, arm);
+            branch.leave_arm(ctx, self.body_definitely_returns(&body));
             resolved.push(ResolvedArm { tag, body });
         }
         resolved
@@ -254,18 +261,21 @@ impl Analyzer<'_> {
     /// Skipped when an arm failed to resolve: a misspelled variant already
     /// reported would otherwise also show up as the variant it failed to name
     /// being uncovered, which is one mistake told twice.
+    ///
+    /// Returns whether the arms cover every variant, which is also what decides
+    /// whether the code after the `match` has a path that ran no arm at all.
     fn check_coverage(
         &mut self,
         enum_id: EnumId,
         resolved: &[ResolvedArm],
         arms: &[MatchArm],
         span: Span,
-    ) {
+    ) -> bool {
         if resolved.len() != arms.len() {
-            return;
+            return false;
         }
         let Some(def) = self.program.types.enums().get(enum_id) else {
-            return;
+            return false;
         };
         let missing: Vec<String> = def
             .variants
@@ -275,7 +285,7 @@ impl Analyzer<'_> {
             .map(|(_, variant)| variant.name.clone())
             .collect();
         if missing.is_empty() {
-            return;
+            return true;
         }
         self.emit(
             span,
@@ -286,6 +296,7 @@ impl Analyzer<'_> {
                 missing.join(", ")
             ),
         );
+        false
     }
 
     /// Assembles the resolved arms into the `if`/`else` chain.

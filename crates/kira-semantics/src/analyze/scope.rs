@@ -201,6 +201,45 @@ impl FnCtx {
         self.ownership = snapshot;
     }
 
+    /// Where each local was moved out, if it has been — the part of the
+    /// ownership state that branching has to reason about.
+    ///
+    /// Only the move column, because it is the only part a branch changes: a
+    /// local's [`OwnershipMode`] is fixed at its declaration. Unlike
+    /// [`FnCtx::ownership_snapshot`] this is *not* a whole-state replacement —
+    /// a branch declares locals of its own, so the state grows while an arm is
+    /// analyzed and truncating it back would leave the ownership column shorter
+    /// than the local table it indexes.
+    pub(crate) fn moved_state(&self) -> Vec<Option<Span>> {
+        self.ownership.iter().map(|state| state.moved).collect()
+    }
+
+    /// Puts the move column back to `state`, leaving any local declared since
+    /// as it is — such a local is out of scope past the branch that declared it.
+    pub(crate) fn reset_moves(&mut self, state: &[Option<Span>]) {
+        for (slot, moved) in state.iter().enumerate() {
+            if let Some(entry) = self.ownership.get_mut(slot) {
+                entry.moved = *moved;
+            }
+        }
+    }
+
+    /// Unions `state` into the move column: a local moved on *either* path is
+    /// moved after the two rejoin.
+    ///
+    /// The conservative direction, and the only sound one: the compiler does not
+    /// know which arm ran, so a value one of them gave away is one it may no
+    /// longer have.
+    pub(crate) fn union_moves(&mut self, state: &[Option<Span>]) {
+        for (slot, moved) in state.iter().enumerate() {
+            if let Some(entry) = self.ownership.get_mut(slot)
+                && entry.moved.is_none()
+            {
+                entry.moved = *moved;
+            }
+        }
+    }
+
     /// The name a local was declared with.
     pub(crate) fn local_name(&self, local: LocalId) -> String {
         self.locals[local.0 as usize].name.clone()
