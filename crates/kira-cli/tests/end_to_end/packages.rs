@@ -177,18 +177,36 @@ fn the_real_editor_directory_resolves_dependency_package_sources() {
     assert!(output.status.code().is_some(), "process crashed: {stderr}");
     assert!(!stderr.contains("panicked at"), "{stderr}");
     assert!(!stderr.contains("stack backtrace"), "{stderr}");
+    // Every package the editor's manifest declares has to resolve. Asserted per
+    // dependency rather than by finding one of that package's *diagnostics* in
+    // the output: a package that checks clean renders no path, so keying the
+    // gate on a rendered path would make it fail the moment the migration fixed
+    // that package — which is exactly what happened to the `Core` spelling of
+    // this check.
+    for dependency in ["Editor", "KiraGraphics", "Core", "Graphics"] {
+        assert!(
+            !stderr.contains(&format!("Dependency `{dependency}`")),
+            "`{dependency}` dependency resolution failed: {stderr}"
+        );
+        assert!(
+            !stderr.contains(&format!(
+                "error[KSEM032]: Kira could not find a module for import `{dependency}`"
+            )),
+            "the `{dependency}` import was unresolved: {stderr}"
+        );
+    }
+    // A dependency whose sources never loaded takes every name it declares with
+    // it, so the failure mode this gate exists to catch is a flood of
+    // undefined-name diagnostics rather than one message. Any single package
+    // going missing puts the count far past what the corpus carries.
+    let undefined = stderr
+        .lines()
+        .filter(|line| line.contains("[KSEM060]") || line.contains("[KSEM061]"))
+        .count();
     assert!(
-        stderr.contains("/project-matter/modules/core/")
-            || stderr.contains("/project-matter/modules/core\\"),
-        "Core package sources were not rendered: {stderr}"
-    );
-    assert!(
-        !stderr.contains("Dependency `KiraGraphics`"),
-        "KiraGraphics dependency resolution failed: {stderr}"
-    );
-    assert!(
-        !stderr.contains("error[KSEM032]: Kira could not find a module for import `KiraGraphics`"),
-        "KiraGraphics import was unresolved: {stderr}"
+        undefined < 200,
+        "{undefined} undefined-name diagnostics: a dependency package's sources \
+         did not load. {stderr}"
     );
     for line in stderr.lines().filter(|line| {
         let trimmed = line.trim_start();
