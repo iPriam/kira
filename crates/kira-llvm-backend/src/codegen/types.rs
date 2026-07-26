@@ -130,6 +130,12 @@ pub(crate) struct Runtime {
     pub(super) cstring_new: Callable,
     /// `kira_rt_cstring_free`: frees the storage `kira_rt_cstring_new` produced.
     pub(super) cstring_free: Callable,
+    /// `kira_rt_cstring_retain`: C storage for a `CString` struct member, never
+    /// freed because C keeps reading it after the call returns.
+    pub(super) cstring_retain: Callable,
+    /// `kira_rt_clayout_retain`: the same storage rule for a struct handed to C
+    /// by address.
+    pub(super) clayout_retain: Callable,
     /// `kira_hybrid_call_runtime`: how native code reaches the VM half.
     pub(super) call_runtime: Callable,
     pub(super) native_value_int: Callable,
@@ -278,6 +284,12 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             foreign_marker: declare(&foreign_marker_symbol(), types.void, &mut []),
             cstring_new: declare(c"kira_rt_cstring_new", types.ptr, &mut [types.ptr]),
             cstring_free: declare(c"kira_rt_cstring_free", types.void, &mut [types.ptr]),
+            cstring_retain: declare(c"kira_rt_cstring_retain", types.i64, &mut [types.ptr]),
+            clayout_retain: declare(
+                c"kira_rt_clayout_retain",
+                types.i64,
+                &mut [types.ptr, types.i64],
+            ),
             str_from_cstr: declare(c"kira_rt_str_from_cstr", types.ptr, &mut [types.ptr]),
             str_count: declare(c"kira_rt_str_count", types.i64, &mut [types.ptr]),
             call_runtime: declare(

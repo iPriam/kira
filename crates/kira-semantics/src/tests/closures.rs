@@ -399,15 +399,16 @@ fn a_function_value_of_another_type_may_be_captured() {
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
 
-/// A capture of the closure's *own* function type has no representation: the
-/// value would sit inside a value of its own type.
+/// A capture of the closure's *own* function type type-checks: the value cannot
+/// sit inside a value of its own type, so it travels behind a one-element array
+/// instead of inline.
 #[test]
-fn a_function_value_of_the_closures_own_type_is_refused() {
+fn a_function_value_of_the_closures_own_type_is_captured() {
     let text = "@Main function main() { \
                 let step: (Int) -> Int = { v in return v + 1 } \
                 let again: (Int) -> Int = { v in return step(v) } \
                 print(again(1)) return }";
-    assert_eq!(codes(text), vec!["KSEM251"]);
+    assert!(diagnostics(text).is_empty(), "{:?}", codes(text));
 }
 
 /// Callback state may hold a function value: it is a tag plus captures that

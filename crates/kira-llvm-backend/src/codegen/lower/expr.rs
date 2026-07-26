@@ -66,6 +66,13 @@ impl FunctionLowering<'_, '_> {
             IrExpr::Index { base, index, ty } => self.lower_index(base, index, ty),
             IrExpr::ArrayLen { array } => self.lower_array_len(array),
             IrExpr::StringLen { text } => self.lower_string_len(text),
+            IrExpr::CLayoutAddress { value, aggregate } => {
+                self.lower_clayout_address(value, aggregate)
+            }
+            IrExpr::CStringNew { text } => {
+                let value = self.lower_expr(text)?;
+                Ok(self.call(self.codegen.runtime.cstring_retain, &mut [value], c"cstr"))
+            }
             IrExpr::FileSystem { op, args, ty } => self.lower_file_system(op, &args, ty),
             IrExpr::ArrayAppend { place, value } => self.lower_array_append(&place, value),
             IrExpr::NativeState { value, type_id, .. } => {

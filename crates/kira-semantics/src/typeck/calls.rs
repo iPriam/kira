@@ -334,17 +334,28 @@ impl Analyzer<'_> {
                 );
                 continue;
             }
-            if !value_ty.assignable_to(field_ty) {
-                self.emit(
-                    init.span,
-                    "KSEM094",
-                    format!(
-                        "field `{field_name}` of `{struct_name}` expects `{}`, found `{}`",
-                        self.type_name(field_ty),
-                        self.type_name(value_ty)
-                    ),
-                );
-            }
+            // A `String` filling a `CString` member is the one coercion here:
+            // the member is a pointer word, and the bytes it points at are
+            // copied into storage that outlives the call. See
+            // `kira_runtime_abi::c_storage` for why that storage is never freed.
+            let value = if field_ty == Type::CString && value_ty == Type::String {
+                self.program
+                    .exprs
+                    .alloc(HirExpr::CStringNew { text: value })
+            } else {
+                if !value_ty.assignable_to(field_ty) {
+                    self.emit(
+                        init.span,
+                        "KSEM094",
+                        format!(
+                            "field `{field_name}` of `{struct_name}` expects `{}`, found `{}`",
+                            self.type_name(field_ty),
+                            self.type_name(value_ty)
+                        ),
+                    );
+                }
+                value
+            };
             slots[index as usize] = Some(value);
         }
 

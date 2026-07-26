@@ -613,8 +613,9 @@ function main() {
 ///
 /// This is what an inline event loop needs — the handler and the opaque host
 /// pointer both cross into the closure — and it runs the same on every backend.
-/// A capture of the closure's *own* function type is the one shape that has no
-/// representation, and it is refused (KSEM251) rather than lowered.
+/// A capture of the closure's own function type needs an indirection to have a
+/// representation at all; that case is
+/// [`a_closure_captures_a_function_value_of_its_own_type`].
 #[test]
 fn a_closure_captures_a_raw_pointer_and_a_function_value() {
     let output = assert_parity(
@@ -658,4 +659,61 @@ function main() {
     );
     // 1 bumped to 2, stepped to 3, plus the captured host's seed of 5.
     assert_eq!(output, "8\n");
+}
+
+/// A closure captures a function value of the closure's own type, on every
+/// backend.
+///
+/// The capture becomes a field of the closure's representation struct, so
+/// storing it inline would make that struct contain itself — a value of no
+/// size. It travels behind a one-element array instead: a heap handle, so the
+/// struct is a fixed size again, and copying an array copies its element, so the
+/// captured function value behaves exactly as an inline field would have.
+///
+/// The default parameter is what makes both arms observable: the first call
+/// captures a function that does nothing, the second one that adds ten, and the
+/// closure's own `+ 1` runs either way.
+#[test]
+fn a_closure_captures_a_function_value_of_its_own_type() {
+    let output = assert_parity(
+        r#"
+struct Frame {
+    var value: Int = 0
+}
+
+function noopFrame(frame: borrow mut Frame) -> Void {
+    return
+}
+
+function bump(frame: borrow mut Frame) -> Void {
+    frame.value = frame.value + 10
+    return
+}
+
+function onFrame(handler: borrow (borrow mut Frame) -> Void) -> Void {
+    var f = Frame { value: 1 }
+    handler(f)
+    print(f.value)
+    return
+}
+
+function runApp(engineFrame: borrow (borrow mut Frame) -> Void = noopFrame) -> Void {
+    onFrame({ frame in
+        let hostFrame: borrow (borrow mut Frame) -> Void = engineFrame
+        hostFrame(frame)
+        frame.value = frame.value + 1
+        return
+    })
+    return
+}
+
+@Main
+function main() {
+    runApp()
+    runApp(bump)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "2\n12\n");
 }

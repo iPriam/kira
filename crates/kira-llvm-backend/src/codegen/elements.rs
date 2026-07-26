@@ -84,13 +84,37 @@ impl Codegen<'_> {
         if let Some(cached) = self.element_leaves.get(&(ty, leaf)) {
             return Ok(*cached);
         }
-        let function = self.define_element_leaf(ty, leaf)?;
+        // Declared and cached **before** its body is emitted. A type may reach
+        // itself — a closure that captures a function value of its own type
+        // holds it behind a one-element array, so the representation struct
+        // contains an array of itself — and that leaf's body asks for the leaf
+        // of the element type, which is this one. Caching the declaration first
+        // is what turns that from unbounded recursion into an ordinary
+        // recursive function.
+        let (function, entry) = self.declare_element_leaf(ty, leaf);
         self.element_leaves.insert((ty, leaf), function);
+
+        // The leaf is emitted between whatever else is being built, so the
+        // builder's position is saved and restored around it.
+        // SAFETY: the builder is live; `entry` belongs to `function`.
+        let resume = unsafe { LLVMGetInsertBlock(self.builder) };
+        // SAFETY: `entry` is an empty block of a function in this module.
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, entry) };
+        let emitted = self.emit_leaf_body(ty, leaf, function);
+        // SAFETY: `resume` is the block the caller was building into, or null
+        // when there was none (the leaf was requested outside a function body).
+        unsafe {
+            if !resume.is_null() {
+                LLVMPositionBuilderAtEnd(self.builder, resume);
+            }
+        }
+        emitted?;
         Ok(function)
     }
 
-    /// Emits one leaf's body.
-    fn define_element_leaf(&mut self, ty: Type, leaf: Leaf) -> Result<LLVMValueRef, LlvmError> {
+    /// Declares one leaf and gives back its empty entry block.
+    fn declare_element_leaf(&mut self, ty: Type, leaf: Leaf) -> (LLVMValueRef, LLVMBasicBlockRef) {
+        let _ = ty;
         let ordinal = self.element_leaves.len() as u32;
         let name = c_string(&match leaf {
             Leaf::Clone => format!("kira.elem.clone.{ordinal}"),
@@ -114,24 +138,7 @@ impl Codegen<'_> {
             (function, entry)
         };
 
-        // The leaf is emitted between whatever else is being built, so the
-        // builder's position is saved and restored around it.
-        // SAFETY: the builder is live; `entry` belongs to `function`.
-        let resume = unsafe { LLVMGetInsertBlock(self.builder) };
-        // SAFETY: `entry` is an empty block of a function in this module.
-        unsafe { LLVMPositionBuilderAtEnd(self.builder, entry) };
-
-        let emitted = self.emit_leaf_body(ty, leaf, function);
-
-        // SAFETY: `resume` is the block the caller was building into, or null
-        // when there was none (the leaf was requested outside a function body).
-        unsafe {
-            if !resume.is_null() {
-                LLVMPositionBuilderAtEnd(self.builder, resume);
-            }
-        }
-        emitted?;
-        Ok(function)
+        (function, entry)
     }
 
     /// The body of one leaf: load, act, and (for a clone) store back.

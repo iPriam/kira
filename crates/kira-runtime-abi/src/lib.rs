@@ -18,6 +18,7 @@
 
 pub mod aggregate;
 pub mod bridge;
+pub mod c_storage;
 pub mod enum_payload;
 pub mod execution;
 pub mod file_system;

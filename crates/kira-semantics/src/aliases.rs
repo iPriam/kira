@@ -27,7 +27,7 @@ use crate::types::NameContext;
 ///
 /// Covers `type Name = Target`, `@FFI.Alias { target: Target }` (both
 /// [`AliasBody::Written`]), and `@FFI.Pointer { target: Target }`
-/// ([`AliasBody::RawPtr`], since a native pointer is one machine word whatever
+/// ([`AliasBody::Pointer`], since a native pointer is one machine word whatever
 /// it points at).
 #[derive(Debug, Clone)]
 pub(crate) struct AliasHeader {
@@ -48,9 +48,12 @@ pub(crate) struct AliasHeader {
 enum AliasBody {
     /// A written target type, resolved lazily against its file's imports.
     Written(TypeRefId),
-    /// The single-word native pointer type, for `@FFI.Pointer`. No target is
-    /// resolved: every native pointer crosses the seam as [`Type::RawPtr`].
-    RawPtr,
+    /// A native pointer, for `@FFI.Pointer`. Always [`Type::RawPtr`]: every
+    /// native pointer is one machine word, and the target is never resolved —
+    /// see [`Analyzer::resolve_alias_name`] for why resolving it would be
+    /// actively wrong. What it is called is recorded in
+    /// [`Analyzer::pointer_targets`].
+    Pointer,
 }
 
 /// The three states an alias passes through, in order.
@@ -109,7 +112,18 @@ impl Analyzer<'_> {
                                 continue;
                             }
                         },
-                        Some(FfiTypeKind::Pointer { .. }) => AliasBody::RawPtr,
+                        Some(FfiTypeKind::Pointer { target, .. }) => {
+                            // Record what it points at by name, without
+                            // resolving anything: a name is enough to find a
+                            // C-layout struct later, and resolution here would
+                            // report on targets that are meant to be opaque.
+                            if let Some(target) = target {
+                                let alias = self.interner.resolve(declaration.name).to_owned();
+                                let pointee = self.written_type_name(*target);
+                                self.pointer_targets.insert(alias, pointee);
+                            }
+                            AliasBody::Pointer
+                        }
                         _ => continue,
                     };
                     // A forward declaration only names a C type; whatever
@@ -243,7 +257,14 @@ impl Analyzer<'_> {
         }
         self.set_alias_state(name, AliasState::Resolving);
         let ty = match header.body {
-            AliasBody::RawPtr => Type::RawPtr,
+            // A pointer is one machine word whatever it points at, so the target
+            // is deliberately **not** resolved here. Generated bindings point at
+            // C types nobody declared (`SECURITY_ATTRIBUTES`) and at themselves
+            // (an opaque handle typedef), and resolving either would invent a
+            // diagnostic for a declaration that is perfectly good. What the
+            // target is *called* is recorded at collection time instead, and
+            // looked up by name only where a call needs it.
+            AliasBody::Pointer => Type::RawPtr,
             AliasBody::Written(target) => self.resolve_type_in(target, context),
         };
         let state = match ty {

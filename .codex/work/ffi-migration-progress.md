@@ -740,3 +740,79 @@ a tail of nine: the `CString`-in-a-C-layout-field ownership question
 (`KSEM095`), mixed labelled and positional arguments (`KSEM189` ×2), a `body`
 that can finish without returning (`KSEM033`), the self-typed closure capture
 (`KSEM251`), and the `Center.kira` parse cluster (`KPAR020`/`KPAR002`).
+
+---
+
+## The rest of the non-macro tail — LANDED (2026-07-26, 48 → 31)
+
+**Every remaining editor error is the macro system**, which the user excluded:
+`KLEX001` ×22 (`#{…}`/`quote{}`), `KSEM900` (`comptime macro`), and the
+`Wrapped` placeholder with its `KSEM214` cascade (×8). Nothing else is left.
+
+### The harness was lying, and that is the finding
+
+`../kira-zig/zig-out/bin/kira` is **byte-identical to `kira-bootstrapper`** — a
+launcher that dispatches to whatever `~/.kira/toolchains/current.toml` selects.
+`knvm binstall` writes that file, so after installing this checkout the "oracle"
+*was this compiler*, and a differential run compared kira-rusty to itself and
+agreed on everything. A full page of "the oracle rejects it identically, so this
+is a corpus bug" was produced that way before a kira-rusty-only diagnostic code
+appeared in the "oracle" output and gave it away.
+
+The real compiler is **`~/.kira/toolchains/dev/1.7.3/bin/kirac`** (~19 MB; the
+launcher is ~2 MB, which is the quickest tell — `--version` prints
+`kira-bootstrapper 1.7.3` either way). Re-run properly, the oracle *accepts*
+almost everything that had been "confirmed corpus". The committed filesystem
+parity was re-verified against it and holds. **Treat every earlier note in this
+file that cites `zig-out/bin/kira` as unverified**, including the "~174 of 321
+confirmed corpus-side" table.
+
+Sanity-check any differential harness before trusting it: feed it a program this
+compiler is known to reject and the oracle is known to accept.
+
+### Landed
+
+**Argument labels are decorative** (`76495dc`). This corrected a shipped silent
+divergence rather than adding a feature: `tag(c = 3, b = 2, a = 1)` printed 321
+on the reference and 123 here, both compilers content. Calls now bind by
+position. A **construction** still binds by name — measured, both agree — so only
+the call path moved. The unknown-label, duplicate-label, mixed-argument, and
+label-on-an-unlabeled-surface refusals went with it, each having rejected a
+program the reference runs. Arity is still checked. The user chose literal parity
+over the stricter alternative.
+
+**A construction's trailing block.** `SurfaceBox(…) { }` empty, and
+`{ let field = value }` overrides that become ordinary arguments. **A `body` that
+ends in `if`/`else if`/`else`**, each arm a tail; an arm-less `if` is still
+refused.
+
+**`CString` members and structs by address.** A `String` in a `CString` member of
+a C-layout struct crosses, and a parameter written as an `@FFI.Pointer` to a
+C-layout struct accepts that struct and passes its address. Both need storage
+that outlives the call, and both get storage that is **never released** —
+`kira_runtime_abi::c_storage`. Measured, not assumed: a C fixture stashes the
+pointer and reads it back after the call returned, and two distinct strings
+survive as two distinct buffers. Zero-fill is `NULL`, which is not a pointer to
+`""`; the reference agrees. Wire: `CSTRING_NEW = 0x54`, `CLAYOUT_ADDRESS = 0x55`,
+and `kira_rt_cstring_retain`/`kira_rt_clayout_retain` appended;
+`RUNTIME_ABI_VERSION` unmoved.
+
+**The reference segfaults on the by-value case** (a C-layout struct with a
+`CString` member passed by value). That is not behaviour to reproduce: the value
+is well defined, so this compiler computes it — `28` on all three backends where
+the reference dies on SIGSEGV. Safety outranks literal parity, per the user.
+
+**A closure captures a function value of its own type.** The capture would make
+the representation struct contain itself, so it travels behind a **one-element
+array** — a heap handle, fixed size, and copying an array copies its element, so
+the value behaves exactly as an inline field would. That made a Kira type
+genuinely self-reaching for the first time and exposed a real backend bug: LLVM
+cached an element clone/free leaf *after* emitting its body, so a recursive type
+recursed until the compiler's stack overflowed. The declaration is now cached
+before the body, which is what turns it into an ordinary recursive function.
+
+Corpus: six C typedefs (`kira-graphics 31673d1`), two placeholder fields
+(`ui-foundation 2e3683b`).
+
+Green throughout: fmt, clippy `-D warnings`, build, nextest **1890/1890**,
+wasm32 VM-core, plus differential runs against the real oracle on every shape.

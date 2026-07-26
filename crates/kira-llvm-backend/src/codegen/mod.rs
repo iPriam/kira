@@ -548,7 +548,12 @@ impl<'a> Codegen<'a> {
             // dereferenced, exactly as the VM keeps it in a `Value::RawPtr`.
             // Foreign marshalling converts it to a real pointer at the C
             // boundary inside the generated adapter.
-            Type::RawPtr | Type::NativeState(_) => self.types.i64,
+            // A `CString` is a pointer word too. It names a foreign parameter
+            // position, where it never becomes a value — but as a *member* of a
+            // C-layout struct it is real storage: the address of bytes that
+            // outlive the call, which Kira stores and passes back and never
+            // dereferences.
+            Type::RawPtr | Type::NativeState(_) | Type::CString => self.types.i64,
             Type::Void => self.types.void,
             Type::Struct(id) => *self
                 .struct_types
@@ -556,16 +561,6 @@ impl<'a> Codegen<'a> {
                 .ok_or(LlvmError::Unsupported("a struct the module never declared"))?,
             // Lowering only ever runs on a program that type-checked, so an
             // error type here means a broken frontend contract, not user input.
-            // `CString` is seam-only: it names a foreign parameter position and
-            // never becomes a first-class value, so it has no LLVM
-            // representation. A caller passes a `String` that the adapter copies
-            // to transient C storage; this type never reaches a local or a
-            // signature the backend lowers.
-            Type::CString => {
-                return Err(LlvmError::Unsupported(
-                    "a CString value (it is a foreign-parameter-only type)",
-                ));
-            }
             Type::Error => {
                 return Err(LlvmError::Unsupported(
                     "a program that failed to type-check",

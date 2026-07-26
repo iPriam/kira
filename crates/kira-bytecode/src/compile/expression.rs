@@ -88,6 +88,16 @@ impl FnCompiler<'_> {
                 self.compile_expr(text)?;
                 self.code.push(Instruction::StringLen);
             }
+            IrExpr::CStringNew { text } => {
+                let text = *text;
+                self.compile_expr(text)?;
+                self.code.push(Instruction::CStringNew);
+            }
+            IrExpr::CLayoutAddress { value, aggregate } => {
+                let (value, aggregate) = (*value, *aggregate);
+                self.compile_expr(value)?;
+                self.code.push(Instruction::CLayoutAddress(aggregate.0));
+            }
             IrExpr::FileSystem { op, args, .. } => {
                 let (op, args) = (*op, args.clone());
                 for arg in args {

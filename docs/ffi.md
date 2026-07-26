@@ -30,13 +30,23 @@ Parameters and results may be `Void`, the fixed-width integers `I8`/`I16`/`I32`/
 integer names are mandatory because the C width is part of the contract — bare
 `Int` and `Float` are refused, as is a Kira `String` in a signature.
 
-`CString` is a parameter-only type. A call passes a Kira `String` where a
-`CString` parameter is expected — the one implicit coercion — and the value is
-copied into transient NUL-terminated storage for the duration of the call; the
-caller keeps its `String`. An interior NUL byte is a typed trap rather than a
-truncated string. `CString` is illegal as a local, a field, an ordinary
-parameter or result, or an extern **result**: returned-string ownership is
-unspecified and deferred.
+`CString` is C text, and how long its storage lives depends on where it is
+written. As a **parameter**, a call passes a Kira `String` — the one implicit
+coercion — and the bytes are copied into transient NUL-terminated storage for
+the duration of the call; the caller keeps its `String`. An interior NUL byte is
+a typed trap rather than a truncated string. `CString` is illegal as a local, as
+an ordinary parameter or result, or as an extern **result**: returned-string
+ownership is unspecified and deferred.
+
+As a **member of a C-layout struct** it is a pointer word, and its storage is
+never released. That is not an oversight. A descriptor is handed to C once and
+read for the rest of the run — a window title, a canvas selector — so a pointer
+valid only for the call that passed it would be read after free, which is the
+worst failure this seam can produce. Leaking is safe where freeing on a schedule
+this side guesses is not, and the cost is one allocation per distinct string a
+program hands over. A program that builds one per frame would grow without
+bound. A member left out of the literal zero-fills to `NULL`, which is a
+different value from a pointer to `""` and which C tells apart.
 
 `RawPtr` is an opaque target-width word. Kira may store it, return it, and pass
 it back to C, but never dereferences it, does arithmetic on it, or frees it — a
@@ -148,8 +158,16 @@ taking every aggregate through a pointer. The target's own C compiler builds it
 — the managed clang for a host build, `emcc` for wasm — and applies the ABI it
 defines. Everything Kira emits speaks only pointers and scalars.
 
-A field the seam cannot carry is refused by name: a `CString`, and any Kira heap
-type.
+A field the seam cannot carry is refused by name: any Kira heap type. A
+`CString` field does cross — see above for the storage it gets.
+
+### A struct passed by address
+
+A parameter written as an `@FFI.Pointer` to a C-layout struct also accepts that
+struct itself, which is what `sapp_run(move desc)` means: the seam writes the
+struct's C-layout image and passes its address. The image gets the same storage
+a `CString` member does, and for the same reason — the callee may keep the
+pointer, and nothing on this side knows whether it did.
 
 ### Inline arrays
 

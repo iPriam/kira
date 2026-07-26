@@ -327,12 +327,15 @@ fn encode_scalar(ty: ForeignType, value: Value, width: ForeignPointerWidth) -> O
         (ForeignType::F32, Value::Float(v)) => (v as f32).to_le_bytes().to_vec(),
         (ForeignType::F64, Value::Float(v)) => v.to_le_bytes().to_vec(),
         (ForeignType::Bool, Value::Bool(v)) => vec![u8::from(v)],
-        (ForeignType::RawPtr, Value::RawPtr(w)) => match width {
+        // A `CString` member is a pointer word like any other: the address of
+        // storage that outlives the call (see `kira_runtime_abi::c_string`), so
+        // it encodes exactly as a `RawPtr` does and null is a zero word.
+        (ForeignType::RawPtr | ForeignType::CString, Value::RawPtr(w)) => match width {
             ForeignPointerWidth::Bits32 => (w as u32).to_le_bytes().to_vec(),
             ForeignPointerWidth::Bits64 => w.to_le_bytes().to_vec(),
         },
-        // `Void` has no bytes and `CString` no owner inside a struct; the
-        // frontend refuses both as members, so neither can arrive here.
+        // `Void` has no bytes; the frontend refuses it as a member, so it cannot
+        // arrive here.
         _ => return None,
     })
 }
@@ -360,12 +363,15 @@ fn decode_scalar(ty: ForeignType, bytes: &[u8]) -> Option<Value> {
         // did not respect the type, and reading it as `!= 0` is what C itself
         // would do.
         ForeignType::Bool => Value::Bool(*bytes.first()? != 0),
-        ForeignType::RawPtr => Value::RawPtr(match bytes.len() {
+        // Read back as the opaque word it is. Kira never dereferences a
+        // pointer it did not mint, so a `CString` member read out of C bytes is
+        // a `RawPtr` value and nothing more.
+        ForeignType::RawPtr | ForeignType::CString => Value::RawPtr(match bytes.len() {
             4 => u64::from(u32::from_le_bytes(array(bytes)?)),
             8 => u64::from_le_bytes(array(bytes)?),
             _ => return None,
         }),
-        ForeignType::Void | ForeignType::CString => return None,
+        ForeignType::Void => return None,
     })
 }
 

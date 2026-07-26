@@ -149,6 +149,38 @@ impl FunctionLowering<'_, '_> {
     }
 
     /// Rebuilds a Kira struct of type `ty` out of `buffer`'s C-layout bytes.
+    /// Writes a struct's C-layout image into storage that outlives the call and
+    /// leaves that storage's address.
+    ///
+    /// The buffer `write_aggregate_buffer` builds is an alloca — right for a
+    /// by-value crossing, where C reads it during the call and the frame is
+    /// gone afterwards. A pointer handed to C is the other case: the callee may
+    /// keep it, so the image is copied somewhere that outlives the frame, and
+    /// [`kira_runtime_abi::c_storage`] explains why that somewhere is never
+    /// freed.
+    pub(in crate::codegen) fn lower_clayout_address(
+        &mut self,
+        value: kira_ir::ir::IrExprId,
+        id: ForeignAggregateId,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let ty = self.type_of(value);
+        let lowered = self.lower_expr(value)?;
+        let buffer = self.write_aggregate_buffer(id, lowered, ty)?;
+        let layout = self
+            .codegen
+            .program
+            .foreign_aggregates
+            .layout_of(id, self.codegen.pointer_width)
+            .map_err(|_| LlvmError::Unsupported("an aggregate with no computable C layout"))?;
+        // SAFETY: `types.i64` belongs to this module's context.
+        let size = unsafe { LLVMConstInt(self.codegen.types.i64, u64::from(layout.size), 0) };
+        Ok(self.call(
+            self.codegen.runtime.clayout_retain,
+            &mut [buffer, size],
+            c"clayout",
+        ))
+    }
+
     pub(super) fn read_aggregate_buffer(
         &mut self,
         id: ForeignAggregateId,

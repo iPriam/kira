@@ -1,0 +1,87 @@
+// A `CString` member of a C-layout struct, and a struct handed to C by address.
+//
+// Both need storage that outlives the call: a descriptor is given to C once and
+// read for the rest of the run, so a pointer valid only for the call that passed
+// it would be read after free. `kira_runtime_abi::c_storage` explains why that
+// storage is never released, which is the only answer that cannot dangle.
+
+@FFI.Struct { layout: c; }
+struct ffi_desc {
+    let tag: I32 = 0
+    let title: CString
+}
+
+@FFI.Pointer { target: ffi_desc; ownership: borrowed; }
+struct ffi_desc_ptr {}
+
+@FFI.Extern { library: ffifixture; symbol: ffi_desc_by_value; abi: c; }
+function ffiDescByValue(d: ffi_desc): I32;
+@FFI.Extern { library: ffifixture; symbol: ffi_desc_by_pointer; abi: c; }
+function ffiDescByPointer(d: ffi_desc_ptr): I32;
+@FFI.Extern { library: ffifixture; symbol: ffi_desc_keep; abi: c; }
+function ffiDescKeep(d: ffi_desc_ptr): Void;
+@FFI.Extern { library: ffifixture; symbol: ffi_desc_recall; abi: c; }
+function ffiDescRecall(): I32;
+
+@Native
+function zeroFilled() -> I32 {
+    // `title` is left out, so it zero-fills — and a C string's zero is NULL,
+    // which is a different value from a pointer to the empty string.
+    let d = ffi_desc { tag: 7 }
+    return ffiDescByPointer(move d)
+}
+
+@Native
+function byPointer(name: borrow String) -> I32 {
+    let d = ffi_desc {
+        tag: 9
+        title: name
+    }
+    return ffiDescByPointer(move d)
+}
+
+@Native
+function byValue(name: borrow String) -> I32 {
+    let d = ffi_desc {
+        tag: 8
+        title: name
+    }
+    return ffiDescByValue(move d)
+}
+
+// C keeps the pointer and reads it later, which is the case a call-scoped
+// buffer would get wrong.
+@Native
+function keepIt(name: borrow String) -> Void {
+    let d = ffi_desc {
+        tag: 6
+        title: name
+    }
+    ffiDescKeep(move d)
+    return
+}
+
+@Native
+function recallIt() -> I32 {
+    return ffiDescRecall()
+}
+
+@Native
+function emptyTitle() -> I32 {
+    let d = ffi_desc {
+        tag: 5
+        title: ""
+    }
+    return ffiDescByPointer(move d)
+}
+
+@Main
+function main() {
+    print(zeroFilled())
+    print(byPointer("kira"))
+    print(byValue("kira"))
+    print(emptyTitle())
+    keepIt("kira")
+    print(recallIt())
+    return
+}

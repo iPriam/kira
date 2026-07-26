@@ -158,10 +158,15 @@ impl Codegen<'_> {
                 ForeignType::F64 => {
                     LLVMBuildBitCast(builder, payload, types.f64, c"a.f64".as_ptr())
                 }
-                ForeignType::RawPtr => {
+                // A `CString` is a pointer word here. As a *parameter* it never
+                // reaches this point — the adapter builds transient C storage
+                // for it first — but as a member of a C-layout struct it is
+                // already the address of storage that outlives the call, so it
+                // crosses exactly as a `RawPtr` does.
+                ForeignType::RawPtr | ForeignType::CString => {
                     LLVMBuildIntToPtr(builder, payload, types.ptr, c"a.ptr".as_ptr())
                 }
-                ForeignType::Void | ForeignType::CString => {
+                ForeignType::Void => {
                     return Err(LlvmError::Unsupported(
                         "a foreign argument the adapter cannot marshal",
                     ));
@@ -470,12 +475,15 @@ impl Codegen<'_> {
                 ForeignType::Bool => LLVMBuildTrunc(builder, value, types.i1, c"m.bool".as_ptr()),
                 ForeignType::F32 => LLVMBuildFPExt(builder, value, types.f64, c"m.f64".as_ptr()),
                 ForeignType::F64 => value,
-                ForeignType::RawPtr => {
+                // Read back as the opaque word it is: Kira never dereferences
+                // a pointer it did not mint, so a `CString` member arrives as
+                // the same pointer word a `RawPtr` member does.
+                ForeignType::RawPtr | ForeignType::CString => {
                     LLVMBuildPtrToInt(builder, value, types.i64, c"m.ptr".as_ptr())
                 }
-                ForeignType::Void | ForeignType::CString => {
+                ForeignType::Void => {
                     return Err(LlvmError::Unsupported(
-                        "a `Void` or `CString` member of a C-layout aggregate",
+                        "a `Void` member of a C-layout aggregate",
                     ));
                 }
             }

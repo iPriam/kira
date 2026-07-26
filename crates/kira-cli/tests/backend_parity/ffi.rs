@@ -464,3 +464,43 @@ fn every_backend_agrees_on_a_handle_struct_round_trip() {
 
     let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
 }
+
+/// A `CString` member and a struct handed to C by address, on every backend.
+///
+/// The storage question both raise is the same one, and it has one answer: a
+/// descriptor is given to C once and read for the rest of the run, so the bytes
+/// behind its `const char*` — and behind the descriptor pointer itself — outlive
+/// the call and are never freed. `ffi_desc_keep`/`ffi_desc_recall` is what turns
+/// that into a result: C stashes the pointer and reads it after the call that
+/// gave it has returned, which a call-scoped buffer would fail.
+///
+/// The reference implementation crashes on the by-value case here. That is not
+/// a behaviour to reproduce: the value is well defined, so this compiler
+/// computes it rather than inheriting a segmentation fault.
+#[test]
+fn every_backend_agrees_on_a_c_string_member_and_a_struct_by_address() {
+    let entry = write_ffi_package(include_str!("../fixtures/ffi/ffi_program_cstring.kira"));
+
+    // A zero-filled title is NULL (0 * 10 + 7); "kira" by pointer (2 * 10 + 9)
+    // and by value (2 * 10 + 8); the empty string is a real pointer, not NULL
+    // (1 * 10 + 5); and the kept pointer still reads "kira" (2 * 10 + 6).
+    const EXPECTED_CSTRING: &str = "7\n29\n28\n15\n26\n";
+
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            EXPECTED_CSTRING,
+            "the {backend} backend disagreed on a CString member\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "the {backend} backend did not exit cleanly\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
+}
