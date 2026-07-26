@@ -15,25 +15,30 @@
 
 use kira_semantics_model::hir::{HirBinaryOp, HirExpr, HirExprId};
 use kira_semantics_model::{EnumDef, EnumId, Type, VariantDef};
-use kira_source::Span;
+use kira_source::{SourceId, Span};
+use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::{EnumDecl, Expr, ExprId, Item};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::types::NameContext;
 
-impl Analyzer<'_> {
-    /// Declares every enum, in source order, resolving payload types as it goes.
+impl<'a> Analyzer<'a> {
+    /// First pass: declares every enum's name with no variants yet.
     ///
-    /// Runs before structs, so a struct field may name an enum. A payload type
-    /// is resolved against the enums and structs declared so far, exactly as a
-    /// struct field's type is.
-    pub(crate) fn collect_enums(&mut self) {
-        let tree = self.tree;
+    /// Runs before structs, so a struct field may name an enum. The variants
+    /// wait for [`Analyzer::resolve_enum_payloads`], because a payload may name
+    /// a struct — `Backdrop(Glow)` — and no struct has an id yet. Resolving both
+    /// halves here is what made a struct payload unresolvable at all: the two
+    /// declaration kinds each need the other, so one of them has to arrive in
+    /// two parts, exactly as a struct's own fields do.
+    pub(crate) fn declare_enum_headers(&mut self) -> Vec<(EnumId, &'a EnumDecl, SourceId)> {
+        let tree: &'a SyntaxTree = self.tree;
+        let mut headers = Vec::new();
         for (source, item) in tree.items_with_source() {
             let Item::Enum(declaration) = item else {
                 continue;
             };
-            // Payload types resolve against the imports of the declaring file.
+            // The name and its diagnostics belong to the declaring file.
             self.source = source;
             // A generic declaration names no type — it is registered as a
             // template and waits for a written instantiation to mint one.
@@ -41,16 +46,40 @@ impl Analyzer<'_> {
                 continue;
             }
             let name = self.interner.resolve(declaration.name).to_owned();
-            let (def, defaults) = self.resolve_enum_def(declaration, name.clone());
-            match self.program.types.enums_mut().declare(def) {
-                // Pushed only on success, which keeps `enum_defaults` indexed by
-                // the same ids the table mints.
-                Some(_) => self.enum_defaults.push(defaults),
+            match self.program.types.enums_mut().declare(EnumDef {
+                name: name.clone(),
+                variants: Vec::new(),
+            }) {
+                Some(id) => {
+                    // Reserved in id order now and filled by the second pass, so
+                    // `enum_defaults` stays indexed by the ids the table minted.
+                    self.enum_defaults.push(Vec::new());
+                    headers.push((id, declaration, source));
+                }
                 None => self.emit(
                     declaration.name_span,
                     "KSEM006",
                     format!("enum `{name}` is already defined"),
                 ),
+            }
+        }
+        headers
+    }
+
+    /// Second pass: resolves each declared enum's variants, now that every
+    /// struct, class, and construct-backed type has an id a payload can name.
+    pub(crate) fn resolve_enum_payloads(&mut self, headers: &[(EnumId, &'a EnumDecl, SourceId)]) {
+        for &(id, declaration, source) in headers {
+            // Payload types resolve against the imports of the declaring file.
+            self.source = source;
+            let name = self.interner.resolve(declaration.name).to_owned();
+            let (def, defaults) = self.resolve_enum_def(declaration, name);
+            self.program
+                .types
+                .enums_mut()
+                .set_variants(id, def.variants);
+            if let Some(slot) = self.enum_defaults.get_mut(id.index() as usize) {
+                *slot = defaults;
             }
         }
     }

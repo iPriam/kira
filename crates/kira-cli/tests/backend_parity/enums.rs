@@ -270,3 +270,48 @@ function main() {
     );
     assert_eq!(output, "1\n0\n");
 }
+
+/// An enum carrying a struct payload runs the same on every backend.
+///
+/// Newly representable: enum payloads resolve after every struct exists, so a
+/// variant may name one. The payload travels as an erased aggregate box, which
+/// is the path most likely to differ between the VM's tagged values and the
+/// native box — so the case reads a field back out of it after a round trip
+/// through a match.
+#[test]
+fn an_enum_carrying_a_struct_payload_agrees() {
+    let output = assert_parity(
+        r#"
+struct Glow {
+    var radius: Float
+    var label: String
+}
+
+enum Effect {
+    Nothing
+    Backdrop(Glow)
+    Layer(Glow)
+}
+
+function describe(effect: borrow Effect) -> String {
+    match effect {
+        Nothing -> return "none"
+        Backdrop(g) -> return "backdrop/" + g.label
+        Layer(g) -> return "layer/" + g.label
+    }
+}
+
+@Main
+function main() {
+    let a = Effect.Backdrop(Glow { radius: 2.0, label: "soft" })
+    let b = Effect.Layer(Glow { radius: 8.0, label: "hard" })
+    print(describe(a))
+    print(describe(b))
+    let c = Effect.Nothing
+    print(describe(c))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "backdrop/soft\nlayer/hard\nnone\n");
+}
