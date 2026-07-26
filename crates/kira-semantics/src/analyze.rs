@@ -240,6 +240,12 @@ pub(crate) struct Analyzer<'a> {
     /// where a C-layout struct's zero-fill construction and an array's or
     /// callback's typed "not yet executable" refusals read their answer.
     pub(crate) ffi_structs: HashMap<StructId, crate::ffi_types::FfiStructKind>,
+    /// The file each declared struct was written in.
+    ///
+    /// Kept because a bare name is resolved against one program-wide table
+    /// while a *declaration* belongs to one package, and telling two same-named
+    /// declarations apart needs to know which package each came from.
+    pub(crate) struct_sources: HashMap<StructId, SourceId>,
     /// The C extent of each `@FFI.Array` type, which its Kira type does not
     /// carry: a Kira array's length is its own, while the C declaration reserves
     /// exactly this many elements.
@@ -256,6 +262,32 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) definitions: Vec<crate::DefinitionLink>,
     /// Declaration name spans, indexed from the tree before resolution runs.
     pub(crate) decl_spans: crate::definitions::DeclSpans,
+}
+
+impl Analyzer<'_> {
+    /// The struct `name` denotes *here*, or `None` when no declaration of that
+    /// name is visible from the file being analyzed.
+    ///
+    /// The table is program-wide because one program is compiled at once, but a
+    /// name is not: a declaration is nameable bare only from its own package or
+    /// from a file that imports that package. See
+    /// [`crate::imports::ImportTable::sees`] for the rule, and why it does not
+    /// compose through a dependency's own imports.
+    pub(crate) fn visible_struct(&self, name: &str) -> Option<StructId> {
+        let id = self.program.types.structs().lookup(name)?;
+        self.struct_is_visible(id).then_some(id)
+    }
+
+    /// Whether the declaration behind `id` is nameable from the current file.
+    pub(crate) fn struct_is_visible(&self, id: StructId) -> bool {
+        match self.struct_sources.get(&id) {
+            Some(declared) => self.imports.sees(self.source, *declared),
+            // A struct with no recorded declaration is synthesized (a closure's
+            // environment, a construct family's dispatcher): the compiler made
+            // it for this program, so it belongs to whoever is asking.
+            None => true,
+        }
+    }
 }
 
 impl<'a> Analyzer<'a> {
@@ -300,6 +332,7 @@ impl<'a> Analyzer<'a> {
             closure_sites: Vec::new(),
             current_execution: kira_semantics_model::Execution::Inherited,
             ffi_structs: HashMap::new(),
+            struct_sources: HashMap::new(),
             ffi_array_counts: HashMap::new(),
             ffi_callback_signatures: HashMap::new(),
             foreign_aggregates: crate::foreign_aggregate::ForeignAggregateBuilder::default(),

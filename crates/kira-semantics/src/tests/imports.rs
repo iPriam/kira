@@ -352,6 +352,112 @@ fn mutually_importing_modules_are_accepted() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
 
+/// A package's declarations are nameable only where the package is imported.
+///
+/// This is the whole of the visibility rule: one program's own files share a
+/// flat scope, a dependency's names arrive through an import, and neither
+/// reaches further than that.
+#[test]
+fn a_package_declaration_needs_an_import_to_be_named() {
+    let db = salsa::DatabaseImpl::new();
+    let modules = vec![ModuleSource {
+        module: ImportTable::package_module_identity("Widgets", "Widgets"),
+        path: "Widgets/Widgets.kira".to_owned(),
+        text: "struct Panel { var w: Int }\nfunction makePanel() -> Int { return 1 }".to_owned(),
+    }];
+    let importing = SourceProgram::application(
+        &db,
+        "import Widgets\n@Main function main() { print(makePanel()) return }".to_owned(),
+        "main.kira".to_owned(),
+        modules.clone(),
+    );
+    assert!(
+        analyzed::accumulated::<DiagnosticAccumulator>(&db, importing).is_empty(),
+        "an imported package's function is nameable"
+    );
+
+    let without = SourceProgram::application(
+        &db,
+        "@Main function main() { print(makePanel()) return }".to_owned(),
+        "main.kira".to_owned(),
+        modules,
+    );
+    let diagnostics = analyzed::accumulated::<DiagnosticAccumulator>(&db, without);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.0.code == Some("KSEM061")),
+        "without the import the name is not in scope: {diagnostics:?}"
+    );
+}
+
+/// What a package imports does not become its consumer's vocabulary.
+#[test]
+fn visibility_does_not_compose_through_a_dependencys_own_imports() {
+    let db = salsa::DatabaseImpl::new();
+    let modules = vec![
+        ModuleSource {
+            module: ImportTable::package_module_identity("Inner", "Inner"),
+            path: "Inner/Inner.kira".to_owned(),
+            text: "function innerOnly() -> Int { return 1 }".to_owned(),
+        },
+        ModuleSource {
+            module: ImportTable::package_module_identity("Outer", "Outer"),
+            path: "Outer/Outer.kira".to_owned(),
+            text: "import Inner\nfunction outerCalls() -> Int { return innerOnly() }".to_owned(),
+        },
+    ];
+    let source = SourceProgram::application(
+        &db,
+        "import Outer\n@Main function main() { print(innerOnly()) return }".to_owned(),
+        "main.kira".to_owned(),
+        modules,
+    );
+    let diagnostics = analyzed::accumulated::<DiagnosticAccumulator>(&db, source);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.0.code == Some("KSEM061")),
+        "`Outer` importing `Inner` does not lend `Inner` to whoever imports `Outer`: \
+         {diagnostics:?}"
+    );
+}
+
+/// A same-named declaration in another package does not capture a bare name.
+///
+/// The shape that sent the corpus wrong: one package declares a widget `Text`
+/// and another declares its own `Text` function. A file of the second package
+/// means its own, and never has to know the first exists.
+#[test]
+fn a_local_declaration_wins_over_a_same_named_one_in_another_package() {
+    let db = salsa::DatabaseImpl::new();
+    let modules = vec![
+        ModuleSource {
+            module: ImportTable::package_module_identity("Widgets", "Widgets"),
+            path: "Widgets/Widgets.kira".to_owned(),
+            text: "struct Text { var content: Int }".to_owned(),
+        },
+        ModuleSource {
+            module: ImportTable::package_module_identity("Views", "Views"),
+            path: "Views/Views.kira".to_owned(),
+            text: "function Text(a: Int, b: Int) -> Int { return a + b }\n\
+                   function useText() -> Int { return Text(1, 2) }"
+                .to_owned(),
+        },
+    ];
+    let source = SourceProgram::application(
+        &db,
+        "import Views\n@Main function main() { print(useText()) return }".to_owned(),
+        "main.kira".to_owned(),
+        modules,
+    );
+    let diagnostics = analyzed::accumulated::<DiagnosticAccumulator>(&db, source);
+    assert!(
+        diagnostics.is_empty(),
+        "`Views` means its own `Text`, not the struct in `Widgets`: {diagnostics:?}"
+    );
+}
+
 /// Equal relative module names retain their package identity for both imports.
 #[test]
 fn same_named_modules_in_two_packages_link_to_their_own_sources() {
