@@ -56,37 +56,76 @@ pub struct FieldDef {
 ///
 /// The table is the one owner of struct shapes: the HIR, the IR, and every
 /// backend read layout and names from here rather than carrying their own copy.
+///
+/// # Why the name index is keyed by owner
+///
+/// One program holds every package it depends on, and two packages may each
+/// declare a `Text` without either being wrong. So the index is keyed by
+/// *owner and name* rather than name alone: both declarations get a row, and
+/// deciding which one a file means is the resolver's job, not the table's. A
+/// struct with no owner belongs to the program's own files, which share one
+/// scope and so share one key space.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct StructTable {
     defs: Vec<StructDef>,
-    // Kept in step with `defs` by `declare`, which is the only way to add one.
+    // Kept in step with `defs` by `declare_owned`, the only way to add one.
     index: std::collections::HashMap<String, StructId>,
 }
 
+/// The index key a declaration sits under.
+fn owned_key(owner: Option<&str>, name: &str) -> String {
+    match owner {
+        Some(owner) => format!("{owner}::{name}"),
+        None => name.to_owned(),
+    }
+}
+
 impl StructTable {
+    /// Every declared struct's id, in declaration order.
+    ///
+    /// A pass that walks the whole table asks for ids rather than re-deriving
+    /// them from names: a name no longer identifies one row, because two
+    /// packages may each declare it.
+    pub fn ids(&self) -> impl Iterator<Item = StructId> + '_ {
+        (0..self.defs.len()).map(|index| StructId(index as u32))
+    }
+
     /// Creates an empty table.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Adds a struct, returning its id, or `None` when the name is taken.
+    /// Adds a struct owned by no package — the program's own.
+    pub fn declare(&mut self, def: StructDef) -> Option<StructId> {
+        self.declare_owned(None, def)
+    }
+
+    /// Adds a struct `owner` declares, returning its id, or `None` when that
+    /// package already declares the name.
     ///
     /// Rejecting the duplicate here rather than overwriting keeps the name
     /// index and the rows in step: every id resolves, and every name resolves
-    /// to the first declaration.
-    pub fn declare(&mut self, def: StructDef) -> Option<StructId> {
-        if self.index.contains_key(&def.name) {
+    /// to the first declaration *of its package*.
+    pub fn declare_owned(&mut self, owner: Option<&str>, def: StructDef) -> Option<StructId> {
+        let key = owned_key(owner, &def.name);
+        if self.index.contains_key(&key) {
             return None;
         }
         let id = StructId(u32::try_from(self.defs.len()).ok()?);
-        self.index.insert(def.name.clone(), id);
+        self.index.insert(key, id);
         self.defs.push(def);
         Some(id)
     }
 
-    /// The struct `name` declares, or `None` when no struct has that name.
+    /// The struct `name` declares in the program's own files.
     pub fn lookup(&self, name: &str) -> Option<StructId> {
-        self.index.get(name).copied()
+        self.lookup_owned(None, name)
+    }
+
+    /// The struct `owner` declares under `name`, or `None` when it declares
+    /// none.
+    pub fn lookup_owned(&self, owner: Option<&str>, name: &str) -> Option<StructId> {
+        self.index.get(&owned_key(owner, name)).copied()
     }
 
     /// The definition behind an id.

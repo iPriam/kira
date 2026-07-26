@@ -423,6 +423,76 @@ fn visibility_does_not_compose_through_a_dependencys_own_imports() {
     );
 }
 
+/// Two packages may each declare the same name, and each means its own.
+///
+/// The name index is keyed by owner, so neither declaration is a duplicate of
+/// the other; a file that imports both is what would have to disambiguate, and
+/// a file that imports one simply gets that one.
+#[test]
+fn two_packages_may_declare_the_same_struct_name() {
+    let db = salsa::DatabaseImpl::new();
+    let modules = vec![
+        ModuleSource {
+            module: ImportTable::package_module_identity("First", "First"),
+            path: "First/First.kira".to_owned(),
+            text: "struct Handle { var id: Int }\n\
+                   function firstHandle() -> Int { return Handle { id: 1 }.id }"
+                .to_owned(),
+        },
+        ModuleSource {
+            module: ImportTable::package_module_identity("Second", "Second"),
+            path: "Second/Second.kira".to_owned(),
+            text: "struct Handle { var tag: Int\nvar extra: Int }\n\
+                   function secondHandle() -> Int { return Handle { tag: 2, extra: 3 }.extra }"
+                .to_owned(),
+        },
+    ];
+    let source = SourceProgram::application(
+        &db,
+        "import First\nimport Second\n\
+         @Main function main() { print(firstHandle()) print(secondHandle()) return }"
+            .to_owned(),
+        "main.kira".to_owned(),
+        modules,
+    );
+    let diagnostics = analyzed::accumulated::<DiagnosticAccumulator>(&db, source);
+    assert!(
+        diagnostics.is_empty(),
+        "each package's `Handle` is its own declaration, with its own fields: {diagnostics:?}"
+    );
+}
+
+/// Declaring the same name twice *inside* one package is still a duplicate.
+#[test]
+fn one_package_may_not_declare_the_same_struct_name_twice() {
+    let db = salsa::DatabaseImpl::new();
+    let modules = vec![
+        ModuleSource {
+            module: ImportTable::package_module_identity("Only", "Only"),
+            path: "Only/Only.kira".to_owned(),
+            text: "struct Handle { var id: Int }".to_owned(),
+        },
+        ModuleSource {
+            module: ImportTable::package_module_identity("Only", "Again"),
+            path: "Only/Again.kira".to_owned(),
+            text: "struct Handle { var other: Int }".to_owned(),
+        },
+    ];
+    let source = SourceProgram::application(
+        &db,
+        "import Only\n@Main function main() { return }".to_owned(),
+        "main.kira".to_owned(),
+        modules,
+    );
+    let diagnostics = analyzed::accumulated::<DiagnosticAccumulator>(&db, source);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.0.code == Some("KSEM004")),
+        "one package is one flat scope, so the second declaration collides: {diagnostics:?}"
+    );
+}
+
 /// A same-named declaration in another package does not capture a bare name.
 ///
 /// The shape that sent the corpus wrong: one package declares a widget `Text`
