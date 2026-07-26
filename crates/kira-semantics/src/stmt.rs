@@ -24,7 +24,7 @@
 //! already express costs a rewrite here instead of a node in every layer.
 
 use kira_semantics_model::hir::{HirExprId, HirStmt, HirStmtId, LocalId};
-use kira_semantics_model::{HirExpr, Type};
+use kira_semantics_model::{HirExpr, OwnershipMode, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{Block, ExprId, ForIterable, Stmt, StmtId, SwitchCase};
 
@@ -103,6 +103,8 @@ impl Analyzer<'_> {
                 name_span,
                 mutable,
                 ty,
+                ownership,
+                ownership_span,
                 init,
                 ..
             } => {
@@ -112,11 +114,24 @@ impl Analyzer<'_> {
                 // one from — the annotation is the only thing that knows.
                 let declared = ty.map(|type_ref| self.resolve_type_ref(type_ref));
                 let value = self.analyze_expr_expecting(ctx, init, declared);
-                // Rust-style implicit move on bind: a binding whose value would
-                // otherwise alias its source consumes that source. An array is
-                // the type this fires for.
-                self.apply_binding_move(ctx, init, value);
                 let value_ty = self.program.expr(value).type_of();
+                // What the binding does to its initializer is exactly what its
+                // ownership prefix decides, so the prefix is checked before the
+                // move is applied rather than after.
+                let ownership = self.check_binding_ownership(ownership, ownership_span, value_ty);
+                match ownership {
+                    // Rust-style implicit move on bind: a binding whose value
+                    // would otherwise alias its source consumes that source. An
+                    // array is the type this fires for.
+                    OwnershipMode::Owned => self.apply_binding_move(ctx, init, value),
+                    // Written `move`, so the source is given away whatever it
+                    // holds.
+                    OwnershipMode::Move => self.force_binding_move(ctx, init),
+                    // `borrow` and `copy` leave the source alone — and are only
+                    // accepted for a type an owned binding would have left alone
+                    // too, so there is nothing here to do differently.
+                    _ => {}
+                }
                 let local_ty = match declared {
                     Some(annotation) => {
                         if !value_ty.assignable_to(annotation) {
@@ -139,7 +154,7 @@ impl Analyzer<'_> {
                     _ => None,
                 };
                 let name = self.interner.resolve(name).to_owned();
-                let local = ctx.declare(&name, local_ty, mutable);
+                let local = ctx.declare_param(&name, local_ty, mutable, ownership);
                 if let Some(type_id) = native_state {
                     ctx.mark_native_state(local, type_id);
                 }

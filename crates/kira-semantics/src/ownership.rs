@@ -302,6 +302,79 @@ impl Analyzer<'_> {
         ctx.mark_moved(local, self.tree.expr(init).span());
     }
 
+    /// Checks the ownership prefix written on a binding's annotation, returning
+    /// the mode the binding actually gets.
+    ///
+    /// A binding may say how it takes its initializer — `let f: borrow (Int) ->
+    /// Void = g` — and the answer decides one thing: whether the initializer is
+    /// consumed.
+    ///
+    /// `borrow` and `copy` say it is not, and are accepted only for a type that
+    /// does not move on bind. That is not a restriction looking for a reason: a
+    /// type that *does* move on bind aliases its source, so a binding that
+    /// borrowed one would have to share storage with it, and nothing in this
+    /// runtime shares storage — the binding would hold a snapshot while reading
+    /// as a view, and a later write through the source would silently not be
+    /// seen. For every other type an owned binding already leaves the source
+    /// alone, so `borrow` and `copy` coincide with `Owned` and can be honored
+    /// exactly.
+    ///
+    /// `borrow mut` is refused everywhere for the sharper form of the same
+    /// reason: a write *through* the binding has nowhere to land.
+    ///
+    /// A refused prefix yields [`OwnershipMode::Owned`], so the binding still
+    /// declares and the rest of the body checks against a real type.
+    pub(crate) fn check_binding_ownership(
+        &mut self,
+        ownership: OwnershipMode,
+        ownership_span: Option<Span>,
+        bound_ty: Type,
+    ) -> OwnershipMode {
+        let Some(span) = ownership_span else {
+            return OwnershipMode::Owned;
+        };
+        let refusal = match ownership {
+            OwnershipMode::Owned | OwnershipMode::Move => return ownership,
+            OwnershipMode::BorrowRead | OwnershipMode::Copy if !bound_ty.moves_on_bind() => {
+                return ownership;
+            }
+            OwnershipMode::BorrowRead | OwnershipMode::Copy => format!(
+                "a `{}` binding of `{}` would have to share storage with what it binds, \
+                 because a value of that type aliases its source; nothing in this runtime \
+                 shares storage, so the binding would hold a snapshot while reading as a \
+                 view. Drop the prefix to take it by value.",
+                ownership.spelling(),
+                self.type_name(bound_ty)
+            ),
+            OwnershipMode::BorrowMut => format!(
+                "a `borrow mut` binding of `{}` has nowhere to write through to: a mutable \
+                 borrow is carried by writing the callee's final value back into the \
+                 caller, and a binding has no caller. Declare the parameter `borrow mut` \
+                 where the write belongs instead.",
+                self.type_name(bound_ty)
+            ),
+        };
+        self.emit(span, "KSEM250", refusal);
+        OwnershipMode::Owned
+    }
+
+    /// Consumes a binding's initializer because the binding said `move`.
+    ///
+    /// Unlike [`Analyzer::apply_binding_move`] this does not ask whether the
+    /// type aliases: `move` is written, so the source is given away whatever it
+    /// holds — the same thing `move` at an argument means.
+    pub(crate) fn force_binding_move(&mut self, ctx: &mut FnCtx, init: ExprId) {
+        let Some(local) = self.named_local(ctx, init) else {
+            return;
+        };
+        if ctx.ownership_of(local).mode != OwnershipMode::Owned
+            || !ctx.ownership_of(local).is_live()
+        {
+            return;
+        }
+        ctx.mark_moved(local, self.tree.expr(init).span());
+    }
+
     /// Checks one argument against the mode its parameter declared.
     ///
     /// This is the whole call-site rule set, in the order the modes decide it:
