@@ -8,6 +8,7 @@
 
 use kira_backend_api::WasmDevice;
 use kira_ir::IrProgram;
+use kira_llvm_backend::NativeLinkInputs;
 use kira_main::StdoutHost;
 use kira_runtime_abi::NativeStateHost;
 
@@ -20,13 +21,13 @@ pub(super) fn run_web(
     ir: &IrProgram,
     options: &CompileOptions,
     device: WasmDevice,
-    foreign_archives: &[std::path::PathBuf],
+    foreign_link: &NativeLinkInputs,
 ) -> i32 {
     match wasm::run(
         ir,
         std::path::Path::new(&options.path),
         device,
-        foreign_archives,
+        foreign_link,
     ) {
         Ok(()) => EXIT_OK,
         Err(error) => {
@@ -43,13 +44,13 @@ pub(super) fn run_web(
 pub(super) fn run_hybrid(
     ir: &IrProgram,
     options: &CompileOptions,
-    foreign_archives: &[std::path::PathBuf],
+    foreign_link: &NativeLinkInputs,
 ) -> i32 {
     match hybrid::run(
         ir,
         std::path::Path::new(&options.path),
         options.emit_llvm_ir,
-        foreign_archives,
+        foreign_link,
     ) {
         Ok(code) => code,
         Err(error) => {
@@ -68,7 +69,7 @@ pub(super) fn run_hybrid(
 pub(super) fn run_on_vm(
     ir: &IrProgram,
     source: &std::path::Path,
-    foreign_archives: &[std::path::PathBuf],
+    foreign_link: &NativeLinkInputs,
 ) -> i32 {
     let module = match kira_bytecode::compile(ir) {
         Ok(module) => module,
@@ -89,7 +90,7 @@ pub(super) fn run_on_vm(
         };
     }
 
-    let sidecar = match native::build_adapter_sidecar(ir, source, foreign_archives) {
+    let sidecar = match native::build_adapter_sidecar(ir, source, foreign_link) {
         Ok(path) => path,
         Err(error) => {
             eprintln!("kirac: {error}");
@@ -143,9 +144,9 @@ fn foreign_bindings(ir: &IrProgram) -> Vec<kira_main::ForeignBinding> {
 pub(super) fn run_native(
     ir: &IrProgram,
     options: &CompileOptions,
-    foreign_archives: &[std::path::PathBuf],
+    foreign_link: &NativeLinkInputs,
 ) -> i32 {
-    let Some(artifacts) = build_native(ir, options, foreign_archives) else {
+    let Some(artifacts) = build_native(ir, options, foreign_link) else {
         return EXIT_FAILURE;
     };
     let Some(executable) = artifacts.executable else {
@@ -165,13 +166,13 @@ pub(super) fn run_native(
 pub(super) fn build_native(
     ir: &IrProgram,
     options: &CompileOptions,
-    foreign_archives: &[std::path::PathBuf],
+    foreign_link: &NativeLinkInputs,
 ) -> Option<kira_llvm_backend::NativeArtifacts> {
     match native::build(
         ir,
         std::path::Path::new(&options.path),
         options.emit_llvm_ir,
-        foreign_archives,
+        foreign_link,
     ) {
         Ok(artifacts) => Some(artifacts),
         Err(error) => {

@@ -8,6 +8,7 @@
 
 pub mod declaration_loader;
 pub mod declaration_loader_state;
+mod declaration_native_libs;
 pub mod declaration_writer;
 pub mod dependency;
 pub mod lockfile;
@@ -23,7 +24,9 @@ pub mod toml_text;
 pub use declaration_loader::{DeclarationError, load as load_declaration};
 pub use dependency::{DependencySource, DependencySpec, GitSource, PathSource, RegistrySource};
 pub use lockfile::LockFile;
-pub use native_lib_manifest::{RawNativeLibManifest, RawNativeTarget};
+pub use native_lib_manifest::{
+    RawFlatManifest, RawFlatTarget, RawSectionedManifest, RawSectionedTarget,
+};
 pub use native_lib_parser::{NativeLibParseError, parse_native_lib_manifest};
 pub use package_manifest::PackageManifest;
 pub use platform_config::{

@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use kira_hybrid_definition::HybridManifest;
 use kira_ir::IrProgram;
-use kira_llvm_backend::NativeBuildOptions;
+use kira_llvm_backend::{NativeBuildOptions, NativeLinkInputs};
 
 use crate::native::{self, Artifacts, NativeError};
 
@@ -69,14 +69,14 @@ pub enum HybridError {
 
 /// Builds `program` into a hybrid bundle under `.kira-build/`.
 ///
-/// `foreign_archives` are the selected C static libraries. They are linked into
+/// `foreign_link` are the selected C static libraries. They are linked into
 /// the one native half — alongside the adapters the backend emits there — so the
 /// session binds every foreign call out of a single dylib.
 pub fn build(
     program: &IrProgram,
     source: &Path,
     emit_llvm_ir: bool,
-    foreign_archives: &[PathBuf],
+    foreign_link: &NativeLinkInputs,
 ) -> Result<HybridBundle, HybridError> {
     let artifacts =
         Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
@@ -101,7 +101,7 @@ pub fn build(
         exports: kira_llvm_backend::NativeExportSurface::default(),
         ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
         runtime_archive: native::runtime_archive()?,
-        foreign_archives: foreign_archives.to_vec(),
+        foreign_link: foreign_link.clone(),
     };
     let native = kira_llvm_backend::build_hybrid_library(program, &options)?;
 
@@ -120,9 +120,9 @@ pub fn run(
     program: &IrProgram,
     source: &Path,
     emit_llvm_ir: bool,
-    foreign_archives: &[PathBuf],
+    foreign_link: &NativeLinkInputs,
 ) -> Result<i32, HybridError> {
-    let bundle = build(program, source, emit_llvm_ir, foreign_archives)?;
+    let bundle = build(program, source, emit_llvm_ir, foreign_link)?;
     let session = kira_hybrid_runtime::Session::load(&bundle.manifest)?;
     session.run()?;
     Ok(0)

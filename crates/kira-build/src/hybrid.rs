@@ -378,9 +378,9 @@ pub fn build_hybrid_library(
                 .emit_llvm_ir
                 .then(|| lib_directory.join(format!("{}.ll", options.name))),
             runtime_archive: options.runtime_archive.clone(),
-            // Foreign archives are linked into the hybrid native half through
-            // the hybrid build path, not this base options struct.
-            foreign_archives: Vec::new(),
+            // Foreign link inputs reach the hybrid native half through the
+            // hybrid build path, not this base options struct.
+            foreign_link: kira_llvm_backend::NativeLinkInputs::EMPTY,
         },
     )?;
 

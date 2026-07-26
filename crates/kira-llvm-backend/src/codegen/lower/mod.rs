@@ -19,6 +19,7 @@
 mod call;
 mod expr;
 mod foreign;
+mod foreign_aggregate;
 mod operators;
 mod stmt;
 

@@ -19,7 +19,25 @@ use kira_semantics_model::hir::{
 };
 use kira_source::Span;
 
+use kira_native_lib_definition::{
+    NativeLinkAttributes, NativeLinkInputs, ResolvedTargetRow, TargetTriple,
+};
+
 use crate::{NativeBuildOptions, build_native};
+
+/// The link inputs for a build whose one foreign library is `archive`.
+///
+/// A row is how the resolver hands an archive to the link line, so the test
+/// goes through the same shape rather than a path list of its own.
+fn link_inputs(archive: &Path) -> NativeLinkInputs {
+    let mut inputs = NativeLinkInputs::default();
+    inputs.push_row(&ResolvedTargetRow::new(
+        TargetTriple::new("test", "test", "none"),
+        Some(archive.to_path_buf()),
+        NativeLinkAttributes::default(),
+    ));
+    inputs
+}
 
 /// The C fixture: one function per supported conversion, no system headers.
 const FIXTURE_C: &str = r#"
@@ -286,7 +304,7 @@ fn a_native_program_calls_c_symbols_through_generated_adapters() {
             exports: crate::NativeExportSurface::default(),
             ir_path: None,
             runtime_archive: runtime_archive(),
-            foreign_archives: vec![archive],
+            foreign_link: link_inputs(&archive),
         },
     )
     .expect("the FFI program links");

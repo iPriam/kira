@@ -24,6 +24,7 @@ mod bridge;
 mod elements;
 mod entry;
 mod ffi;
+mod foreign_scalar;
 mod library;
 mod lower;
 mod native_state;
@@ -38,7 +39,7 @@ use std::ffi::CStr;
 use std::path::Path;
 
 use kira_ir::{IrFunction, IrProgram};
-use kira_runtime_abi::Execution;
+use kira_runtime_abi::{Execution, ForeignPointerWidth};
 use kira_semantics_model::Type;
 use llvm_sys::analysis::{LLVMVerifierFailureAction, LLVMVerifyModule};
 use llvm_sys::core::*;
@@ -103,7 +104,11 @@ impl Module {
     /// does not have. That is the mirror of the VM-only build compiling every
     /// function to bytecode, and it is what keeps the two backends agreeing on
     /// any program.
-    pub(crate) fn build(program: &IrProgram, module_name: &str) -> Result<Self, LlvmError> {
+    pub(crate) fn build(
+        program: &IrProgram,
+        module_name: &str,
+        pointer_width: ForeignPointerWidth,
+    ) -> Result<Self, LlvmError> {
         let engines = vec![Execution::Native; program.functions.len()];
         Self::lower(
             program,
@@ -111,6 +116,7 @@ impl Module {
             ModuleKind::Executable,
             engines,
             &NativeExportSurface::default(),
+            pointer_width,
         )
     }
 
@@ -125,7 +131,14 @@ impl Module {
         exports: &NativeExportSurface,
     ) -> Result<Self, LlvmError> {
         let engines = vec![Execution::Native; program.functions.len()];
-        Self::lower(program, module_name, ModuleKind::Library, engines, exports)
+        Self::lower(
+            program,
+            module_name,
+            ModuleKind::Library,
+            engines,
+            exports,
+            ForeignPointerWidth::HOST,
+        )
     }
 
     /// Lowers only the program's foreign adapters into a module for the VM's
@@ -145,6 +158,7 @@ impl Module {
             ModuleKind::AdapterSidecar,
             engines,
             &NativeExportSurface::default(),
+            ForeignPointerWidth::HOST,
         )
     }
 
@@ -161,6 +175,7 @@ impl Module {
             ModuleKind::HybridLibrary,
             engines,
             &NativeExportSurface::default(),
+            ForeignPointerWidth::HOST,
         )
     }
 
@@ -171,6 +186,7 @@ impl Module {
         kind: ModuleKind,
         engines: Vec<Execution>,
         exports: &NativeExportSurface,
+        pointer_width: ForeignPointerWidth,
     ) -> Result<Self, LlvmError> {
         let name = c_string(module_name);
         // SAFETY: the context, module, and builder are created together and
@@ -187,7 +203,7 @@ impl Module {
             }
         };
 
-        let mut codegen = Codegen::new(&owned, program, kind, engines, exports)?;
+        let mut codegen = Codegen::new(&owned, program, kind, engines, exports, pointer_width)?;
         codegen.lower_program()?;
         owned.verify()?;
         Ok(owned)
@@ -268,6 +284,12 @@ impl Drop for Module {
 /// Lowers a program into an owned [`Module`].
 pub(crate) struct Codegen<'a> {
     program: &'a IrProgram,
+    /// The pointer width of the target this module is emitted for.
+    ///
+    /// Baked into every C-layout aggregate offset the lowering computes, so it
+    /// has to be the *target*'s width, not this machine's: a wasm32 module
+    /// built on a 64-bit host lays a pointer member out in four bytes.
+    pointer_width: ForeignPointerWidth,
     context: LLVMContextRef,
     module: LLVMModuleRef,
     builder: LLVMBuilderRef,
@@ -327,6 +349,7 @@ impl<'a> Codegen<'a> {
         kind: ModuleKind,
         engines: Vec<Execution>,
         exports: &NativeExportSurface,
+        pointer_width: ForeignPointerWidth,
     ) -> Result<Self, LlvmError> {
         let types = Types::new(owned.context);
         let runtime = declare_runtime(owned.module, &types);
@@ -357,6 +380,7 @@ impl<'a> Codegen<'a> {
             element_leaves: HashMap::new(),
             native_state_leaves: HashMap::new(),
             native_state_enum_leaves: HashMap::new(),
+            pointer_width,
         };
         // Struct types come first: a function signature may name one, and a
         // struct's fields may name a struct declared before it.
