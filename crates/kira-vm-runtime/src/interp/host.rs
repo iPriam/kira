@@ -57,6 +57,23 @@ impl Vm<'_> {
     }
 
     /// Calls a foreign C function through the embedder's `call_foreign`.
+    /// Pushes the address C enters the Kira function callback `id` names.
+    ///
+    /// The VM produces no native code, so the address is the host's to give: it
+    /// is the entry thunk the backend generated for this row. A host without a
+    /// foreign half refuses, exactly as it refuses a foreign call.
+    pub(super) fn foreign_callback(&mut self, module: &Module, id: u32) -> Result<(), VmError> {
+        if module.foreign_callbacks.get(id as usize).is_none() {
+            return Err(VmError::UnknownForeignCallback(id));
+        }
+        let address = self
+            .host
+            .foreign_callback(id)
+            .map_err(VmError::ForeignCall)?;
+        self.stack.push(Value::RawPtr(address));
+        Ok(())
+    }
+
     pub(super) fn call_foreign(&mut self, module: &Module, id: u32) -> Result<(), VmError> {
         let import = module
             .foreign_imports

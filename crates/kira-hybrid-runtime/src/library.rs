@@ -137,6 +137,8 @@ pub struct NativeLibrary {
     /// one reach one copy of the C code. Indexed by import id, so reaching an
     /// adapter is a total function of the id the bytecode's `CallForeign` names.
     adapters: Vec<ForeignAdapterFn>,
+    /// The address of each generated callback entry thunk, by callback id.
+    callbacks: Vec<u64>,
     str_new: StrNewFn,
     str_free: StrFreeFn,
     str_data: StrDataFn,
@@ -168,6 +170,15 @@ pub struct NativeLibrary {
     _library: libloading::Library,
 }
 
+/// The entry thunk symbol for callback `index`.
+///
+/// Spelled here rather than imported: this crate is the host side and does not
+/// depend on the backend that defines the symbol. The name is the same wire
+/// contract `kira_llvm_backend::callback_name` writes.
+fn kira_llvm_backend_callback_name(index: usize) -> String {
+    format!("kira_ffi_callback_{index}")
+}
+
 impl NativeLibrary {
     /// Loads `path` and binds every symbol the host needs: the string helpers,
     /// the runtime invoker, one trampoline per native function in `functions`,
@@ -177,6 +188,7 @@ impl NativeLibrary {
         path: &Path,
         functions: &[HybridFunction],
         foreign: &[HybridForeign],
+        callbacks: usize,
     ) -> Result<NativeLibrary, HybridError> {
         // SAFETY: loading a library runs its initializers, which is why this is
         // unsafe. The library is one this toolchain built and named in a
@@ -250,10 +262,22 @@ impl NativeLibrary {
             }
         }
 
+        // One entry thunk per callback row, bound by the name the backend gave
+        // it. Their addresses are what a `@FFI.Callback` value carries; nothing
+        // here ever calls one, because C is what does.
+        let mut callback_entries = Vec::with_capacity(callbacks);
+        for index in 0..callbacks {
+            let mut name = kira_llvm_backend_callback_name(index).into_bytes();
+            name.push(0);
+            let entry: unsafe extern "C" fn() = bind(&library, path, &name)?;
+            callback_entries.push(entry as usize as u64);
+        }
+
         Ok(NativeLibrary {
             path: path.to_path_buf(),
             trampolines,
             adapters,
+            callbacks: callback_entries,
             str_new,
             str_free,
             str_data,
@@ -302,6 +326,12 @@ impl NativeLibrary {
     /// id names no import this library bound.
     pub fn adapter(&self, foreign_id: u32) -> Option<ForeignAdapterFn> {
         self.adapters.get(foreign_id as usize).copied()
+    }
+
+    /// The address C enters Kira at for callback `callback_id`, or `None` when
+    /// the id names no callback this library bound.
+    pub fn callback_address(&self, callback_id: u32) -> Option<u64> {
+        self.callbacks.get(callback_id as usize).copied()
     }
 
     /// Installs the host's runtime invoker, or clears it with `None`.

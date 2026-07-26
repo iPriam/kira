@@ -31,6 +31,7 @@ fn printing_module() -> Module {
         exports: Default::default(),
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
+        foreign_callbacks: Vec::new(),
         main: Some(0),
         strings: vec![APP_OUTPUT.to_owned()],
         functions: vec![FuncProto {
@@ -271,6 +272,7 @@ fn a_session_whose_app_never_starts_is_not_ready() {
         exports: Default::default(),
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
+        foreign_callbacks: Vec::new(),
         main: Some(0),
         strings: Vec::new(),
         functions: vec![FuncProto {

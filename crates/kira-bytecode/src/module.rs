@@ -7,11 +7,13 @@
 
 use crate::exports::{ExportTable, ExportType, ModuleExport};
 use crate::module_foreign::{
-    read_foreign, read_foreign_aggregates, write_foreign, write_foreign_aggregates,
+    read_foreign, read_foreign_aggregates, read_foreign_callbacks, write_foreign,
+    write_foreign_aggregates, write_foreign_callbacks,
 };
 use crate::op::{DecodeError, Instruction, decode, encode};
 use kira_runtime_abi::{
-    BridgeValueTag, Execution, ForeignAggregateError, ForeignAggregates, ForeignImport,
+    BridgeValueTag, Execution, ForeignAggregateError, ForeignAggregates, ForeignCallback,
+    ForeignImport,
 };
 
 /// The magic bytes that open a serialized module: "KBC1".
@@ -58,6 +60,13 @@ pub struct Module {
     /// Empty for a module whose externs pass only scalars, which is also what a
     /// module written before the aggregate section existed decodes as.
     pub foreign_aggregates: ForeignAggregates,
+    /// The Kira functions reachable from C as function pointers.
+    ///
+    /// Empty for a module that passes no Kira function to C, which is also what
+    /// a module written before this section existed decodes as. A
+    /// `ForeignCallback(id)` instruction indexes it, and the host resolves the
+    /// entry thunk the backend generated for the same id.
+    pub foreign_callbacks: Vec<ForeignCallback>,
 }
 
 /// One compiled function: its signature shape and its code.
@@ -202,7 +211,13 @@ impl Module {
         // foreign imports but no exports, the empty exports framing is written
         // anyway (`force`), so `read_exports` consumes it as an empty section
         // rather than mistaking the foreign bytes for class/export counts.
-        let has_foreign = !self.foreign_imports.is_empty();
+        //
+        // Each later section forces the ones before it to be written, empty or
+        // not, for the same reason: a section is only unambiguous when every
+        // section it follows is present to be consumed first.
+        let has_callbacks = !self.foreign_callbacks.is_empty();
+        let has_aggregates = !self.foreign_aggregates.is_empty() || has_callbacks;
+        let has_foreign = !self.foreign_imports.is_empty() || has_aggregates;
         self.write_exports(&mut out, has_foreign);
         if has_foreign {
             write_foreign(&mut out, &self.foreign_imports);
@@ -211,8 +226,12 @@ impl Module {
         // empty, so a scalar-only program's bytes are unchanged from before
         // aggregates existed. An aggregate can only be reached through a
         // foreign signature, so a non-empty table always sits behind one.
-        if !self.foreign_aggregates.is_empty() {
+        if has_aggregates {
             write_foreign_aggregates(&mut out, &self.foreign_aggregates);
+        }
+        // And the callback table last, on the same terms.
+        if has_callbacks {
+            write_foreign_callbacks(&mut out, &self.foreign_callbacks);
         }
         out
     }
@@ -281,6 +300,7 @@ impl Module {
         let exports = read_exports(&mut reader)?;
         let foreign_imports = read_foreign(&mut reader)?;
         let foreign_aggregates = read_foreign_aggregates(&mut reader, &foreign_imports)?;
+        let foreign_callbacks = read_foreign_callbacks(&mut reader)?;
         if reader.offset != bytes.len() {
             return Err(ModuleDecodeError::TrailingBytes(
                 bytes.len() - reader.offset,
@@ -293,6 +313,7 @@ impl Module {
             exports,
             foreign_imports,
             foreign_aggregates,
+            foreign_callbacks,
         })
     }
 }
@@ -416,6 +437,7 @@ mod tests {
             exports: Default::default(),
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
+            foreign_callbacks: Vec::new(),
             main: Some(1),
             strings: vec!["hello".to_owned(), "world".to_owned()],
             functions: vec![
@@ -457,6 +479,7 @@ mod tests {
             exports: Default::default(),
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
+            foreign_callbacks: Vec::new(),
             main: None,
             strings: Vec::new(),
             functions: vec![FuncProto {
@@ -497,6 +520,7 @@ mod tests {
             exports: Default::default(),
             foreign_imports: Vec::new(),
             foreign_aggregates: Default::default(),
+            foreign_callbacks: Vec::new(),
             main: Some(0),
             ..library_module()
         }
@@ -653,14 +677,15 @@ mod tests {
     #[test]
     fn bytes_after_the_last_section_are_rejected() {
         // `exporting_module` has exports but no foreign imports, so its bytes
-        // end after the exports section. A complete (empty) foreign section is
-        // four zero bytes (a count of zero), and so is a complete empty
-        // aggregate section; appending three more bytes past both is trailing
-        // garbage the decoder must reject once every section is read, rather
-        // than run half an artifact.
+        // end after the exports section. Each appended section is complete when
+        // it carries a count of zero — four zero bytes — and there are three of
+        // them: foreign imports, aggregates, callbacks. Three more bytes past
+        // all of them is trailing garbage the decoder must reject once every
+        // section is read, rather than run half an artifact.
         let mut bytes = exporting_module().to_bytes();
-        bytes.extend_from_slice(&[0, 0, 0, 0]);
-        bytes.extend_from_slice(&[0, 0, 0, 0]);
+        for _ in 0..3 {
+            bytes.extend_from_slice(&[0, 0, 0, 0]);
+        }
         bytes.extend_from_slice(&[0, 0, 0]);
         assert_eq!(
             Module::from_bytes(&bytes).unwrap_err(),

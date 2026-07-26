@@ -54,6 +54,7 @@ pub fn lower(program: &HirProgram) -> IrProgram {
             })
             .collect(),
         foreign_aggregates: program.foreign_aggregates.clone(),
+        foreign_callbacks: program.foreign_callbacks.clone(),
         exprs: la_arena::Arena::new(),
     };
     let mut lowerer = Lowerer {
@@ -138,6 +139,7 @@ impl Lowerer<'_> {
             HirExpr::Bool(value) => IrExpr::Bool(value),
             HirExpr::Str(value) => IrExpr::Str(value),
             HirExpr::RawPtrNull => IrExpr::RawPtrNull,
+            HirExpr::ForeignCallbackPtr { callback } => IrExpr::ForeignCallbackPtr { callback },
             HirExpr::Local { local, .. } => IrExpr::Local(local.0),
             HirExpr::Unary { op, operand, .. } => IrExpr::Unary {
                 op,

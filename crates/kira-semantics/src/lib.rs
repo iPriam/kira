@@ -35,6 +35,7 @@ mod exports;
 mod ffi_types;
 mod foreign;
 mod foreign_aggregate;
+mod foreign_callback;
 mod generics;
 mod imports;
 mod mutation;

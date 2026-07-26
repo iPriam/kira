@@ -17,7 +17,7 @@
 
 use kira_runtime_abi::{
     ForeignAbi, ForeignAggregate, ForeignAggregateId, ForeignAggregates, ForeignArrayElement,
-    ForeignImport, ForeignMember, ForeignSignature, ForeignType, ForeignTypeSpec,
+    ForeignCallback, ForeignImport, ForeignMember, ForeignSignature, ForeignType, ForeignTypeSpec,
 };
 
 use crate::module::{ModuleDecodeError, Reader, write_bytes, write_u32};
@@ -164,6 +164,52 @@ pub(crate) fn read_foreign_aggregates(
     Ok(aggregates)
 }
 
+/// Writes the callback table: a count, then a `u32` function index and a
+/// signature per row.
+///
+/// Appended after the aggregate table, which a callback signature may index
+/// exactly as an import's does.
+pub(crate) fn write_foreign_callbacks(out: &mut Vec<u8>, callbacks: &[ForeignCallback]) {
+    write_u32(out, callbacks.len() as u32);
+    for callback in callbacks {
+        write_u32(out, callback.function());
+        let signature = callback.signature();
+        write_u32(out, signature.parameters().len() as u32);
+        for parameter in signature.parameters() {
+            write_spec(out, *parameter);
+        }
+        write_spec(out, signature.result());
+    }
+}
+
+/// Reads the callback table, or an empty one when the stream ends first.
+pub(crate) fn read_foreign_callbacks(
+    reader: &mut Reader<'_>,
+) -> Result<Vec<ForeignCallback>, ModuleDecodeError> {
+    if reader.is_at_end() {
+        return Ok(Vec::new());
+    }
+    let count = reader.read_u32()?;
+    let mut callbacks = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let function = reader.read_u32()?;
+        // A callback row names no symbol, so a malformed type tag is reported
+        // against the row's own index rather than an import's name.
+        let named = format!("callback {index}");
+        let param_count = reader.read_u32()?;
+        let mut parameters = Vec::with_capacity(param_count as usize);
+        for _ in 0..param_count {
+            parameters.push(read_spec(reader, &named)?);
+        }
+        let result = read_spec(reader, &named)?;
+        callbacks.push(ForeignCallback::new(
+            function,
+            ForeignSignature::new(parameters, result),
+        ));
+    }
+    Ok(callbacks)
+}
+
 /// Writes one signature position.
 fn write_spec(out: &mut Vec<u8>, spec: ForeignTypeSpec) {
     out.push(spec.tag());
@@ -254,6 +300,7 @@ mod tests {
             strings: Vec::new(),
             exports: Default::default(),
             foreign_aggregates: Default::default(),
+            foreign_callbacks: Vec::new(),
             foreign_imports: vec![
                 ForeignImport::new(
                     "ffimath",
