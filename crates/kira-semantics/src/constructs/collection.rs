@@ -98,10 +98,14 @@ impl<'a> Analyzer<'a> {
         for (source, declaration) in backed {
             self.source = source;
             let name = self.interner.resolve(declaration.name).to_owned();
-            match self.program.types.structs_mut().declare(StructDef {
-                name: name.clone(),
-                fields: Vec::new(),
-            }) {
+            let owner = self.imports.package_of(source).map(str::to_owned);
+            match self.program.types.structs_mut().declare_owned(
+                owner.as_deref(),
+                StructDef {
+                    name: name.clone(),
+                    fields: Vec::new(),
+                },
+            ) {
                 Some(id) => {
                     // A construct-backed declaration is a struct like any
                     // other, so where it was written gates who may name it.
@@ -444,9 +448,10 @@ impl<'a> Analyzer<'a> {
         };
         let name = self.interner.resolve(declaration.name);
         // The declaration's *own* struct, not a name written in some file: this
-        // walk registers what this declaration provides, so it is not gated by
-        // who may name it.
-        let Some(id) = self.program.types.structs().lookup(name) else {
+        // walk registers what this declaration provides, so it looks the
+        // declaration up under its own package rather than by visibility.
+        let owner = self.imports.package_of(source);
+        let Some(id) = self.program.types.structs().lookup_owned(owner, name) else {
             return;
         };
         if !self.constructs.contains_key(&id) {

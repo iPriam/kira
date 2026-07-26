@@ -240,11 +240,14 @@ impl Analyzer<'_> {
                 mutable: field.mutable,
             });
         }
+        // Filed under the declaring package, like every other declaration: two
+        // packages may each declare a class of the same name.
+        let owner = self.imports.package_of(self.source).map(str::to_owned);
         let Some(id) = self
             .program
             .types
             .structs_mut()
-            .declare(StructDef { name, fields })
+            .declare_owned(owner.as_deref(), StructDef { name, fields })
         else {
             let name = self.interner.resolve(declaration.name).to_owned();
             self.emit(
@@ -254,6 +257,7 @@ impl Analyzer<'_> {
             );
             return;
         };
+        self.struct_sources.insert(id, self.source);
         // Pushed only on success, which is what keeps `struct_defaults` indexed
         // by the ids the table mints — classes and structs share that table.
         self.struct_defaults.push(defaults);
@@ -626,8 +630,9 @@ impl<'a> Analyzer<'a> {
         let name = self.interner.resolve(declaration.name);
         // The class's own struct, like `construct_callables`: this registers
         // what the declaration provides rather than resolving a name someone
-        // wrote, so it is not gated.
-        let Some(id) = self.program.types.structs().lookup(name) else {
+        // wrote, so it looks up under the declaring package.
+        let owner = self.imports.package_of(source);
+        let Some(id) = self.program.types.structs().lookup_owned(owner, name) else {
             // The class was not declared — a cycle or a duplicate name, already
             // reported. Registering its methods would give them no receiver.
             return;
