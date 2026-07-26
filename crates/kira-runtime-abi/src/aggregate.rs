@@ -62,6 +62,19 @@ impl ForeignPointerWidth {
     }
 }
 
+/// What an inline fixed-size array member holds, repeated `count` times.
+///
+/// An element is a scalar or a nested aggregate, never another array: a C array
+/// of arrays is described as an array of the one-member aggregate wrapping the
+/// inner array, which has the same layout and keeps this type flat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ForeignArrayElement {
+    /// A seam scalar element.
+    Scalar(ForeignType),
+    /// A nested aggregate element, by table index.
+    Aggregate(ForeignAggregateId),
+}
+
 /// One member of a C-layout aggregate, in declaration order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ForeignMember {
@@ -69,6 +82,17 @@ pub enum ForeignMember {
     Scalar(ForeignType),
     /// A nested aggregate member, by table index.
     Aggregate(ForeignAggregateId),
+    /// An inline fixed-size C array member — `E name[count]`.
+    ///
+    /// Inline storage, not a pointer: the elements live inside the containing
+    /// aggregate's bytes, so the member's size is `count` times the element's.
+    Array {
+        /// What each element is.
+        element: ForeignArrayElement,
+        /// How many elements the C declaration reserves. Never zero — a
+        /// zero-length array is not standard C, and the frontend refuses one.
+        count: u32,
+    },
 }
 
 /// A C-layout aggregate: its members in declaration order.
@@ -173,12 +197,20 @@ impl ForeignAggregates {
     ) -> Result<ForeignAggregateId, ForeignAggregateError> {
         let index = self.entries.len() as u32;
         for member in aggregate.members() {
-            if let ForeignMember::Aggregate(id) = member
-                && id.0 >= index
+            let referenced = match member {
+                ForeignMember::Scalar(_) => None,
+                ForeignMember::Aggregate(id) => Some(id.0),
+                ForeignMember::Array { element, .. } => match element {
+                    ForeignArrayElement::Scalar(_) => None,
+                    ForeignArrayElement::Aggregate(id) => Some(id.0),
+                },
+            };
+            if let Some(referenced) = referenced
+                && referenced >= index
             {
                 return Err(ForeignAggregateError::ForwardReference {
                     container: index,
-                    member: id.0,
+                    member: referenced,
                 });
             }
         }
@@ -220,15 +252,7 @@ impl ForeignAggregates {
             let mut size: u32 = 0;
             let mut align: u32 = 1;
             for member in aggregate.members() {
-                let member_layout = match member {
-                    ForeignMember::Scalar(ty) => scalar_layout(*ty, width),
-                    ForeignMember::Aggregate(id) => *layouts.get(id.0 as usize).ok_or(
-                        ForeignAggregateError::ForwardReference {
-                            container: index,
-                            member: id.0,
-                        },
-                    )?,
-                };
+                let member_layout = member_layout(member, index, width, &layouts)?;
                 align = align.max(member_layout.align);
                 size = round_up(size, member_layout.align)
                     .and_then(|start| start.checked_add(member_layout.size))
@@ -315,9 +339,97 @@ impl ForeignAggregates {
                         .checked_add(layout.size)
                         .ok_or(ForeignAggregateError::TooLarge { index: id.0 })?;
                 }
+                ForeignMember::Array { element, count } => {
+                    let whole = member_layout(member, id.0, width, layouts)?;
+                    let stride = element_layout(*element, id.0, width, layouts)?.size;
+                    offset = round_up(offset, whole.align)
+                        .ok_or(ForeignAggregateError::TooLarge { index: id.0 })?;
+                    // Each element is its own leaf, or its own subtree of them,
+                    // at the element's own stride from the array's start.
+                    for step in 0..*count {
+                        let at = base
+                            .checked_add(offset)
+                            .and_then(|start| start.checked_add(stride.checked_mul(step)?))
+                            .ok_or(ForeignAggregateError::TooLarge { index: id.0 })?;
+                        match element {
+                            ForeignArrayElement::Scalar(ty) => {
+                                leaves.push(ForeignLeaf {
+                                    offset: at,
+                                    ty: *ty,
+                                });
+                            }
+                            ForeignArrayElement::Aggregate(nested) => {
+                                self.collect_leaves(*nested, width, layouts, at, leaves)?;
+                            }
+                        }
+                    }
+                    offset = offset
+                        .checked_add(whole.size)
+                        .ok_or(ForeignAggregateError::TooLarge { index: id.0 })?;
+                }
             }
         }
         Ok(())
+    }
+}
+
+/// The layout of one inline-array element.
+fn element_layout(
+    element: ForeignArrayElement,
+    container: u32,
+    width: ForeignPointerWidth,
+    layouts: &[ForeignLayout],
+) -> Result<ForeignLayout, ForeignAggregateError> {
+    match element {
+        ForeignArrayElement::Scalar(ty) => Ok(scalar_layout(ty, width)),
+        ForeignArrayElement::Aggregate(id) => {
+            layouts
+                .get(id.0 as usize)
+                .copied()
+                .ok_or(ForeignAggregateError::ForwardReference {
+                    container,
+                    member: id.0,
+                })
+        }
+    }
+}
+
+/// The layout one member occupies inside the aggregate at `container`.
+///
+/// Every aggregate a member can name is at a lower index, so `layouts` already
+/// holds it — a reference it does not hold is the forward reference the table's
+/// invariant forbids, reported rather than assumed away.
+fn member_layout(
+    member: &ForeignMember,
+    container: u32,
+    width: ForeignPointerWidth,
+    layouts: &[ForeignLayout],
+) -> Result<ForeignLayout, ForeignAggregateError> {
+    match member {
+        ForeignMember::Scalar(ty) => Ok(scalar_layout(*ty, width)),
+        ForeignMember::Aggregate(id) => {
+            layouts
+                .get(id.0 as usize)
+                .copied()
+                .ok_or(ForeignAggregateError::ForwardReference {
+                    container,
+                    member: id.0,
+                })
+        }
+        ForeignMember::Array { element, count } => {
+            let element = element_layout(*element, container, width, layouts)?;
+            // C sizes an array as `count * sizeof(element)`, with nothing
+            // between elements: an element's own size is already a multiple of
+            // its alignment, so the stride is the size.
+            let size = element
+                .size
+                .checked_mul(*count)
+                .ok_or(ForeignAggregateError::TooLarge { index: container })?;
+            Ok(ForeignLayout {
+                size,
+                align: element.align,
+            })
+        }
     }
 }
 
@@ -352,6 +464,78 @@ const fn round_up(value: u32, align: u32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_inline_array_member_is_sized_by_its_element_and_extent() {
+        // struct { int8_t; int32_t[3] } — one byte, three of padding, twelve.
+        let mut table = ForeignAggregates::new();
+        let id = table
+            .push(ForeignAggregate::new(vec![
+                ForeignMember::Scalar(ForeignType::I8),
+                ForeignMember::Array {
+                    element: ForeignArrayElement::Scalar(ForeignType::I32),
+                    count: 3,
+                },
+            ]))
+            .expect("pushes");
+        let layout = table
+            .layout_of(id, ForeignPointerWidth::Bits64)
+            .expect("layout");
+        assert_eq!(layout, ForeignLayout { size: 16, align: 4 });
+
+        let leaves = table
+            .leaves_of(id, ForeignPointerWidth::Bits64)
+            .expect("leaves");
+        let offsets: Vec<u32> = leaves.iter().map(|leaf| leaf.offset).collect();
+        assert_eq!(offsets, [0, 4, 8, 12], "each element is its own leaf");
+    }
+
+    #[test]
+    fn an_array_of_aggregates_expands_each_elements_leaves() {
+        let mut table = ForeignAggregates::new();
+        let pair = table
+            .push(ForeignAggregate::new(vec![
+                ForeignMember::Scalar(ForeignType::I32),
+                ForeignMember::Scalar(ForeignType::I32),
+            ]))
+            .expect("pushes");
+        let id = table
+            .push(ForeignAggregate::new(vec![ForeignMember::Array {
+                element: ForeignArrayElement::Aggregate(pair),
+                count: 2,
+            }]))
+            .expect("pushes");
+        assert_eq!(
+            table
+                .layout_of(id, ForeignPointerWidth::Bits64)
+                .expect("layout"),
+            ForeignLayout { size: 16, align: 4 }
+        );
+        let offsets: Vec<u32> = table
+            .leaves_of(id, ForeignPointerWidth::Bits64)
+            .expect("leaves")
+            .iter()
+            .map(|leaf| leaf.offset)
+            .collect();
+        assert_eq!(offsets, [0, 4, 8, 12]);
+    }
+
+    #[test]
+    fn an_array_element_may_not_name_a_forward_aggregate() {
+        let mut table = ForeignAggregates::new();
+        // Nothing is in the table yet, so element id 0 is this very row.
+        let refused = table.push(ForeignAggregate::new(vec![ForeignMember::Array {
+            element: ForeignArrayElement::Aggregate(ForeignAggregateId(0)),
+            count: 2,
+        }]));
+        assert_eq!(
+            refused,
+            Err(ForeignAggregateError::ForwardReference {
+                container: 0,
+                member: 0
+            })
+        );
+    }
 
     /// `struct { i32; i32; i32 }` — three words, no padding.
     fn flat_i32s() -> ForeignAggregate {

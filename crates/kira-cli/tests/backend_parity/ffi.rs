@@ -325,6 +325,43 @@ fn every_backend_agrees_on_c_layout_structs_by_value() {
     let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
 }
 
+/// Inline `@FFI.Array` members cross by value, in both directions, on every
+/// backend.
+///
+/// The two element shapes are covered: `ffi_grid` holds four `int`s inline
+/// beside a `double`, and `ffi_board` holds three C structs inline beside an
+/// `int`. Three writes prove the fill rule the two engines have to agree on —
+/// a full array, a short one whose remaining C storage stays zero, and a
+/// zero-filled construction with no elements at all — and the reads prove the
+/// whole declared extent comes back, not a prefix.
+#[test]
+fn every_backend_agrees_on_inline_c_arrays() {
+    let entry = write_ffi_package(include_str!("../fixtures/ffi/ffi_program_array.kira"));
+
+    // gridSum full (20), short (11), zero-filled (3); gridMake(7)'s first and
+    // last cells, its element count and weight; boardSum (27); boardMake(3)'s
+    // third slot `p`, first slot `q`, and tag.
+    const EXPECTED_ARRAY: &str = "20\n11\n3\n7\n10\n4\n70\n27\n5\n2\n300\n";
+
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            EXPECTED_ARRAY,
+            "the {backend} backend disagreed on an inline C array\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "the {backend} backend did not exit cleanly\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
+}
+
 /// A single-scalar-field C handle struct crosses the seam as its field: the
 /// result of `ffi_make_handle` (a `struct { unsigned int id; }` by value) is
 /// rebuilt into the Kira `Handle`, and `ffi_handle_id` reads the field back out

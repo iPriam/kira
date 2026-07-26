@@ -25,8 +25,9 @@ pub mod native_state;
 pub mod ownership;
 
 pub use aggregate::{
-    ForeignAggregate, ForeignAggregateError, ForeignAggregateId, ForeignAggregates, ForeignLayout,
-    ForeignLeaf, ForeignMember, ForeignPointerWidth, scalar_layout,
+    ForeignAggregate, ForeignAggregateError, ForeignAggregateId, ForeignAggregates,
+    ForeignArrayElement, ForeignLayout, ForeignLeaf, ForeignMember, ForeignPointerWidth,
+    scalar_layout,
 };
 pub use bridge::{BridgeData, BridgeValue, BridgeValueTag};
 pub use enum_payload::EnumPayloadKind;

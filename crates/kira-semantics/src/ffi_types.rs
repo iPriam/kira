@@ -27,6 +27,7 @@ use kira_source::Span;
 use kira_syntax_model::ast::{FfiTypeKind, StructDecl};
 
 use crate::analyze::Analyzer;
+use crate::types::{AggregateKind, NameContext};
 
 /// Which of the three struct-minting `@FFI.*` forms a struct id came from.
 ///
@@ -89,7 +90,85 @@ pub(crate) fn is_alias_shaped(decl: &StructDecl) -> bool {
     )
 }
 
+/// The name of the one field an `@FFI.Array` type carries its elements in.
+///
+/// A C array typedef has no members of its own, so the storage needs a name to
+/// be reachable from Kira at all — and naming it rather than hiding it means
+/// `handle.elements[3]` is ordinary array indexing with no new machinery.
+pub(crate) const FFI_ARRAY_FIELD: &str = "elements";
+
 impl Analyzer<'_> {
+    /// Gives an `@FFI.Array` declaration its element storage: one field holding
+    /// a Kira array of the annotation's element type.
+    ///
+    /// Returns the C extent, which the seam needs and the Kira type does not
+    /// carry — a Kira array's length is its own, while the C declaration
+    /// reserves exactly `count` elements.
+    pub(crate) fn ffi_array_storage(
+        &mut self,
+        declaration: &StructDecl,
+        def: &mut kira_semantics_model::StructDef,
+    ) -> Option<u32> {
+        let mark = declaration.ffi.as_ref()?;
+        let FfiTypeKind::Array { element, count } = &mark.kind else {
+            return None;
+        };
+        let name = self.interner.resolve(declaration.name).to_owned();
+        if !def.fields.is_empty() {
+            self.emit(
+                mark.block_span,
+                "KSEM243",
+                format!(
+                    "`{name}` is `@FFI.Array`, whose storage is the annotation's `element` and \
+                     `count`: its body declares fields, which have no place in a C array"
+                ),
+            );
+            return None;
+        }
+        let Some(element) = element else {
+            self.emit(
+                mark.block_span,
+                "KSEM243",
+                format!("`{name}` is `@FFI.Array` but names no `element` type"),
+            );
+            return None;
+        };
+        let context = NameContext::Field {
+            owner_kind: AggregateKind::Struct,
+            owner: name.clone(),
+        };
+        let element = self.resolve_type_in(*element, &context);
+        let Some((count, count_span)) = *count else {
+            self.emit(
+                mark.block_span,
+                "KSEM243",
+                format!("`{name}` is `@FFI.Array` but names no element `count`"),
+            );
+            return None;
+        };
+        // C has no zero-length array, and a negative one is not a count at all.
+        let extent = u32::try_from(count).ok().filter(|count| *count > 0);
+        let Some(count) = extent else {
+            self.emit(
+                count_span,
+                "KSEM243",
+                format!("`{name}` declares {count} elements; a C array holds at least one"),
+            );
+            return None;
+        };
+        def.fields.push(kira_semantics_model::FieldDef {
+            name: FFI_ARRAY_FIELD.to_owned(),
+            ty: self.program.types.array_of(element),
+            mutable: true,
+        });
+        Some(count)
+    }
+
+    /// The C extent of an `@FFI.Array` type, when `id` is one.
+    pub(crate) fn ffi_array_count(&self, id: StructId) -> Option<u32> {
+        self.ffi_array_counts.get(&id).copied()
+    }
+
     /// The struct id of `name` when it is a `@FFI.Struct { layout: c }` type,
     /// for the `StructType()` construction path.
     pub(crate) fn ffi_c_layout_named(&self, name: &str) -> Option<StructId> {
@@ -171,22 +250,17 @@ impl Analyzer<'_> {
             Type::Struct(id) if self.ffi_structs.contains_key(&id) => {
                 return Some(self.ffi_zero_filled_struct(id, span));
             }
+            // An `@FFI.Array`'s storage zeroes to an empty Kira array, not to
+            // `count` zero elements: the seam zeroes the C bytes it does not
+            // receive an element for, so the two agree, and a `count` of 8176
+            // costs nothing to construct.
+            Type::Array(_) => HirExpr::ArrayNew {
+                ty,
+                elements: Vec::new(),
+            },
             _ => return None,
         };
         Some(self.program.exprs.alloc(expr))
-    }
-
-    /// Refuses a use of a `@FFI.Array`/`@FFI.Callback` type whose runtime
-    /// behavior is not yet executable, with a message precise to the form.
-    /// Returns an error node.
-    pub(crate) fn refuse_ffi_not_executable(
-        &mut self,
-        kind: FfiStructKind,
-        id: StructId,
-        span: Span,
-    ) -> HirExprId {
-        self.emit_ffi_not_executable(kind, id, span);
-        self.program.exprs.alloc(HirExpr::Error)
     }
 
     /// Emits the "not yet executable" refusal for a `@FFI.Array`/`@FFI.Callback`
@@ -200,9 +274,14 @@ impl Analyzer<'_> {
     ) {
         let name = self.program.types.type_name(Type::Struct(id));
         let detail = match kind {
+            // Inline storage crosses as a struct member, where C keeps it
+            // inline. In a parameter or result position C decays an array to a
+            // pointer, which is a different type with different ownership, so
+            // the seam refuses it rather than picking one.
             FfiStructKind::Array => {
-                "an inline fixed-size C array; indexing and element storage are declared but \
-                 not yet executable"
+                "an inline fixed-size C array. It crosses as a member of a `@FFI.Struct \
+                 { layout: c }`; on its own, C decays an array to a pointer, so declare \
+                 `RawPtr` when that is what the symbol takes"
             }
             FfiStructKind::Callback => {
                 "a native function-pointer typedef; passing a Kira function across the C ABI is \

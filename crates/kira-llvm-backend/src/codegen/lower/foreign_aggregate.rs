@@ -21,7 +21,7 @@
 //! whether the VM or the native backend made it. Zeroing costs one `memset` and
 //! makes the two engines agree byte for byte.
 
-use kira_runtime_abi::{ForeignAggregateId, ForeignMember, scalar_layout};
+use kira_runtime_abi::{ForeignAggregateId, ForeignArrayElement, ForeignMember, scalar_layout};
 use kira_semantics_model::Type;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
@@ -30,11 +30,13 @@ use super::FunctionLowering;
 use crate::LlvmError;
 
 impl FunctionLowering<'_, '_> {
-    /// Writes the Kira struct `value` into a fresh C-layout buffer.
+    /// Writes the Kira struct `value` of Kira type `ty` into a fresh C-layout
+    /// buffer.
     pub(super) fn write_aggregate_buffer(
         &mut self,
         id: ForeignAggregateId,
         value: LLVMValueRef,
+        ty: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
         let buffer = self.aggregate_alloca(id)?;
         let layout = self
@@ -56,7 +58,7 @@ impl FunctionLowering<'_, '_> {
                 layout.align,
             );
         }
-        self.write_members(id, value, buffer, 0)?;
+        self.write_members(id, value, ty, buffer, 0)?;
         Ok(buffer)
     }
 
@@ -65,6 +67,7 @@ impl FunctionLowering<'_, '_> {
         &mut self,
         id: ForeignAggregateId,
         value: LLVMValueRef,
+        ty: Type,
         buffer: LLVMValueRef,
         base: u32,
     ) -> Result<(), LlvmError> {
@@ -76,6 +79,7 @@ impl FunctionLowering<'_, '_> {
             .ok_or(LlvmError::Unsupported("an aggregate not in the table"))?
             .members()
             .to_vec();
+        let field_types = self.struct_field_types(ty, members.len())?;
         let mut offset = 0u32;
         for (index, member) in members.iter().enumerate() {
             let field = self.extract_field(value, index as u32)?;
@@ -111,9 +115,32 @@ impl FunctionLowering<'_, '_> {
                     let at = base
                         .checked_add(offset)
                         .ok_or(LlvmError::Unsupported("an aggregate offset past 4GiB"))?;
-                    self.write_members(*nested, field, buffer, at)?;
+                    self.write_members(*nested, field, field_types[index], buffer, at)?;
                     offset = offset
                         .checked_add(layout.size)
+                        .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?;
+                }
+                ForeignMember::Array { element, count } => {
+                    let (stride, align) = self.element_layout(*element)?;
+                    offset = round_up(offset, align)?;
+                    let at = base
+                        .checked_add(offset)
+                        .ok_or(LlvmError::Unsupported("an aggregate offset past 4GiB"))?;
+                    let slot = self.byte_offset_ptr(buffer, at)?;
+                    self.write_array_member(
+                        *element,
+                        *count,
+                        stride,
+                        field,
+                        field_types[index],
+                        slot,
+                    )?;
+                    offset = offset
+                        .checked_add(
+                            stride
+                                .checked_mul(*count)
+                                .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?,
+                        )
                         .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?;
                 }
             }
@@ -140,22 +167,6 @@ impl FunctionLowering<'_, '_> {
         base: u32,
         ty: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
-        let Type::Struct(struct_id) = ty else {
-            return Err(LlvmError::Unsupported(
-                "an aggregate result whose Kira type is not a struct",
-            ));
-        };
-        let field_types: Vec<Type> = self
-            .codegen
-            .program
-            .types
-            .structs()
-            .get(struct_id)
-            .ok_or(LlvmError::Unsupported("an aggregate naming no struct"))?
-            .fields
-            .iter()
-            .map(|field| field.ty)
-            .collect();
         let members = self
             .codegen
             .program
@@ -164,11 +175,7 @@ impl FunctionLowering<'_, '_> {
             .ok_or(LlvmError::Unsupported("an aggregate not in the table"))?
             .members()
             .to_vec();
-        if members.len() != field_types.len() {
-            return Err(LlvmError::Unsupported(
-                "an aggregate whose member count does not match its Kira struct",
-            ));
-        }
+        let field_types = self.struct_field_types(ty, members.len())?;
 
         let llvm_type = self.codegen.llvm_type(ty)?;
         // SAFETY: `llvm_type` is this struct's type in this live context.
@@ -216,10 +223,314 @@ impl FunctionLowering<'_, '_> {
                         .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?;
                     inner
                 }
+                ForeignMember::Array { element, count } => {
+                    let (stride, align) = self.element_layout(*element)?;
+                    offset = round_up(offset, align)?;
+                    let at = base
+                        .checked_add(offset)
+                        .ok_or(LlvmError::Unsupported("an aggregate offset past 4GiB"))?;
+                    let slot = self.byte_offset_ptr(buffer, at)?;
+                    let array =
+                        self.read_array_member(*element, *count, stride, field_types[index], slot)?;
+                    offset = offset
+                        .checked_add(
+                            stride
+                                .checked_mul(*count)
+                                .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?,
+                        )
+                        .ok_or(LlvmError::Unsupported("an aggregate larger than 4GiB"))?;
+                    array
+                }
             };
             value = self.insert_field(value, field, index as u32)?;
         }
         Ok(value)
+    }
+
+    /// The Kira field types of the struct `ty`, checked against the member count
+    /// the aggregate table holds for it.
+    fn struct_field_types(&self, ty: Type, members: usize) -> Result<Vec<Type>, LlvmError> {
+        let Type::Struct(struct_id) = ty else {
+            return Err(LlvmError::Unsupported(
+                "an aggregate whose Kira type is not a struct",
+            ));
+        };
+        let field_types: Vec<Type> = self
+            .codegen
+            .program
+            .types
+            .structs()
+            .get(struct_id)
+            .ok_or(LlvmError::Unsupported("an aggregate naming no struct"))?
+            .fields
+            .iter()
+            .map(|field| field.ty)
+            .collect();
+        if field_types.len() != members {
+            return Err(LlvmError::Unsupported(
+                "an aggregate whose member count does not match its Kira struct",
+            ));
+        }
+        Ok(field_types)
+    }
+
+    /// The stride and alignment of one inline-array element.
+    fn element_layout(&self, element: ForeignArrayElement) -> Result<(u32, u32), LlvmError> {
+        let layout = match element {
+            ForeignArrayElement::Scalar(ty) => scalar_layout(ty, self.codegen.pointer_width),
+            ForeignArrayElement::Aggregate(id) => self
+                .codegen
+                .program
+                .foreign_aggregates
+                .layout_of(id, self.codegen.pointer_width)
+                .map_err(|_| LlvmError::Unsupported("an aggregate with no computable C layout"))?,
+        };
+        Ok((layout.size, layout.align))
+    }
+
+    /// Writes a Kira array into `count` inline C elements starting at `base`.
+    ///
+    /// The buffer was zeroed, so a Kira array shorter than the C extent leaves
+    /// the remaining elements zero — the same value a zero-filled construction
+    /// carries, and what the VM's walk produces for the same array. A longer one
+    /// traps: the elements past the extent have nowhere to go, and writing only
+    /// the ones that fit would hand C a value the program did not write.
+    fn write_array_member(
+        &mut self,
+        element: ForeignArrayElement,
+        count: u32,
+        stride: u32,
+        array: LLVMValueRef,
+        array_ty: Type,
+        base: LLVMValueRef,
+    ) -> Result<(), LlvmError> {
+        let element_ty = self.codegen.element_of(array_ty)?;
+        let esize = self.codegen.abi_size(element_ty)?;
+        let len = self.call(self.codegen.runtime.array_len, &mut [array], c"agg.arr.len");
+        self.trap_if_longer_than(len, count)?;
+        let llvm_element = self.codegen.llvm_type(element_ty)?;
+        self.emit_index_loop(len, |lowering, index| {
+            let slot = lowering.call(
+                lowering.codegen.runtime.array_slot,
+                &mut [array, index, esize],
+                c"agg.arr.slot",
+            );
+            // SAFETY: `slot` addresses a live element of `llvm_element`, and the
+            // builder is on the loop body.
+            let value = unsafe {
+                LLVMBuildLoad2(
+                    lowering.codegen.builder,
+                    llvm_element,
+                    slot,
+                    c"agg.arr.elem".as_ptr(),
+                )
+            };
+            let destination = lowering.element_ptr(base, index, stride)?;
+            match element {
+                ForeignArrayElement::Scalar(ty) => {
+                    let converted = lowering.codegen.kira_value_to_c(value, ty)?;
+                    let align = scalar_layout(ty, lowering.codegen.pointer_width).align;
+                    // SAFETY: `destination` addresses this element's bytes inside
+                    // the buffer, and `converted` has exactly this scalar's C
+                    // type.
+                    unsafe {
+                        let store =
+                            LLVMBuildStore(lowering.codegen.builder, converted, destination);
+                        LLVMSetAlignment(store, align);
+                    }
+                    Ok(())
+                }
+                ForeignArrayElement::Aggregate(nested) => {
+                    lowering.write_members(nested, value, element_ty, destination, 0)
+                }
+            }
+        })
+    }
+
+    /// Reads `count` inline C elements starting at `base` into a fresh Kira
+    /// array.
+    ///
+    /// Always the whole declared extent: C fixed storage carries no length of
+    /// its own, so a shorter array would be a guess about which elements the
+    /// callee meant.
+    fn read_array_member(
+        &mut self,
+        element: ForeignArrayElement,
+        count: u32,
+        stride: u32,
+        array_ty: Type,
+        base: LLVMValueRef,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let element_ty = self.codegen.element_of(array_ty)?;
+        let esize = self.codegen.abi_size(element_ty)?;
+        let extent = self.codegen.const_int(i64::from(count));
+        let handle = self.call(
+            self.codegen.runtime.array_new,
+            &mut [extent, esize],
+            c"agg.arr.new",
+        );
+        self.emit_index_loop(extent, |lowering, index| {
+            let source = lowering.element_ptr(base, index, stride)?;
+            let value = match element {
+                ForeignArrayElement::Scalar(ty) => {
+                    let c_type = lowering.codegen.foreign_c_type(ty);
+                    let align = scalar_layout(ty, lowering.codegen.pointer_width).align;
+                    // SAFETY: `source` addresses this element's bytes inside the
+                    // buffer the call filled, and `c_type` is the element's C
+                    // type.
+                    let loaded = unsafe {
+                        let load = LLVMBuildLoad2(
+                            lowering.codegen.builder,
+                            c_type,
+                            source,
+                            c"agg.arr.c".as_ptr(),
+                        );
+                        LLVMSetAlignment(load, align);
+                        load
+                    };
+                    lowering.codegen.c_value_to_kira(loaded, ty)?
+                }
+                ForeignArrayElement::Aggregate(nested) => {
+                    lowering.read_members(nested, source, 0, element_ty)?
+                }
+            };
+            let slot = lowering.call(
+                lowering.codegen.runtime.array_slot,
+                &mut [handle, index, esize],
+                c"agg.arr.slot",
+            );
+            // SAFETY: `slot` is a fresh element slot of this array — allocated
+            // full above, so the index is in range — and `value` has its type.
+            unsafe { LLVMBuildStore(lowering.codegen.builder, value, slot) };
+            Ok(())
+        })?;
+        Ok(handle)
+    }
+
+    /// A pointer to element `index` of an inline array starting at `base`.
+    fn element_ptr(
+        &mut self,
+        base: LLVMValueRef,
+        index: LLVMValueRef,
+        stride: u32,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let types = self.codegen.types;
+        let builder = self.codegen.builder;
+        // SAFETY: the builder is on a live block; `index` is below the array's
+        // extent, so `index * stride` stays inside the member's own bytes.
+        Ok(unsafe {
+            let stride = LLVMConstInt(types.i64, u64::from(stride), 0);
+            let mut offset = LLVMBuildMul(builder, index, stride, c"agg.arr.off".as_ptr());
+            LLVMBuildInBoundsGEP2(
+                builder,
+                types.i8,
+                base,
+                &raw mut offset,
+                1,
+                c"agg.arr.at".as_ptr(),
+            )
+        })
+    }
+
+    /// Traps when a Kira array holds more elements than the C extent takes.
+    fn trap_if_longer_than(&mut self, len: LLVMValueRef, count: u32) -> Result<(), LlvmError> {
+        let context = self.codegen.context;
+        let builder = self.codegen.builder;
+        let types = self.codegen.types;
+        // SAFETY: the builder is on a live block of the function being lowered,
+        // so it has a parent to append blocks to.
+        let (overflow, ok, too_long) = unsafe {
+            let function = LLVMGetBasicBlockParent(LLVMGetInsertBlock(builder));
+            let overflow =
+                LLVMAppendBasicBlockInContext(context, function, c"agg.arr.overflow".as_ptr());
+            let ok = LLVMAppendBasicBlockInContext(context, function, c"agg.arr.fits".as_ptr());
+            let extent = LLVMConstInt(types.i64, u64::from(count), 0);
+            let too_long = LLVMBuildICmp(
+                builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntSGT,
+                len,
+                extent,
+                c"agg.arr.long".as_ptr(),
+            );
+            (overflow, ok, too_long)
+        };
+        // SAFETY: both blocks belong to this function and are still empty.
+        unsafe {
+            LLVMBuildCondBr(builder, too_long, overflow, ok);
+            LLVMPositionBuilderAtEnd(builder, overflow);
+        }
+        let extent = self.codegen.const_int(i64::from(count));
+        self.call(
+            self.codegen.runtime.trap_foreign_array,
+            &mut [extent, len],
+            c"",
+        );
+        // SAFETY: the trap does not return, so the block ends here; the builder
+        // then moves to the block the fitting case continues in.
+        unsafe {
+            LLVMBuildUnreachable(builder);
+            LLVMPositionBuilderAtEnd(builder, ok);
+        }
+        Ok(())
+    }
+
+    /// Emits `for index in 0..limit { body }` around whatever `body` builds.
+    ///
+    /// The induction variable is a phi rather than an alloca, because this loop
+    /// can nest — an array of structs holding their own arrays — and an alloca
+    /// inside a loop grows the frame once per iteration.
+    fn emit_index_loop<F>(&mut self, limit: LLVMValueRef, body: F) -> Result<(), LlvmError>
+    where
+        F: FnOnce(&mut Self, LLVMValueRef) -> Result<(), LlvmError>,
+    {
+        let context = self.codegen.context;
+        let builder = self.codegen.builder;
+        let types = self.codegen.types;
+        // SAFETY: the builder is on a live block of the function being lowered.
+        let (head, body_block, done, index, entry) = unsafe {
+            let function = LLVMGetBasicBlockParent(LLVMGetInsertBlock(builder));
+            let head = LLVMAppendBasicBlockInContext(context, function, c"agg.arr.head".as_ptr());
+            let body_block =
+                LLVMAppendBasicBlockInContext(context, function, c"agg.arr.body".as_ptr());
+            let done = LLVMAppendBasicBlockInContext(context, function, c"agg.arr.done".as_ptr());
+            let entry = LLVMGetInsertBlock(builder);
+            LLVMBuildBr(builder, head);
+            LLVMPositionBuilderAtEnd(builder, head);
+            let index = LLVMBuildPhi(builder, types.i64, c"agg.arr.i".as_ptr());
+            let more = LLVMBuildICmp(
+                builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntSLT,
+                index,
+                limit,
+                c"agg.arr.more".as_ptr(),
+            );
+            LLVMBuildCondBr(builder, more, body_block, done);
+            LLVMPositionBuilderAtEnd(builder, body_block);
+            (head, body_block, done, index, entry)
+        };
+
+        body(self, index)?;
+
+        // The body may have built blocks of its own, so the back edge leaves
+        // whichever block the builder ended on, not `body_block`.
+        // SAFETY: the builder is on an unterminated block reachable from the
+        // loop body, and `head`'s phi is still open for its second incoming.
+        unsafe {
+            let latch = LLVMGetInsertBlock(builder);
+            let next = LLVMBuildAdd(
+                builder,
+                index,
+                LLVMConstInt(types.i64, 1, 0),
+                c"agg.arr.next".as_ptr(),
+            );
+            LLVMBuildBr(builder, head);
+            let mut incoming = [LLVMConstInt(types.i64, 0, 0), next];
+            let mut blocks = [entry, latch];
+            LLVMAddIncoming(index, incoming.as_mut_ptr(), blocks.as_mut_ptr(), 2);
+            LLVMPositionBuilderAtEnd(builder, done);
+        }
+        let _ = body_block;
+        Ok(())
     }
 
     /// A pointer `offset` bytes into `buffer`.

@@ -83,6 +83,20 @@ pub enum VmError {
     /// VM-only host gives.
     #[error("foreign call failed: {0}")]
     ForeignCall(ForeignCallError),
+    /// A Kira array held more elements than the inline C array of a
+    /// `@FFI.Array` member reserves.
+    ///
+    /// The elements past the extent have nowhere to go, and writing only the
+    /// ones that fit would hand C a different value than the program wrote. The
+    /// native half traps in the same words through
+    /// `kira_rt_trap_foreign_array`.
+    #[error("{len} elements do not fit the inline C array of {count} at the foreign seam")]
+    ForeignArrayTooLong {
+        /// The C extent, in elements.
+        count: u32,
+        /// The Kira array's length.
+        len: usize,
+    },
     /// An opaque native callback-state operation failed deterministically.
     #[error("native callback state failed: {0}")]
     NativeState(NativeStateError),

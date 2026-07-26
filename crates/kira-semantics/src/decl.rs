@@ -130,7 +130,14 @@ impl<'a> Analyzer<'a> {
         for &(id, declaration, source) in headers {
             // Field types resolve against the imports of the declaring file.
             self.source = source;
-            let (def, defaults) = self.resolve_struct_def(declaration);
+            let (mut def, mut defaults) = self.resolve_struct_def(declaration);
+            // An `@FFI.Array` declares its storage in the annotation rather than
+            // the body, so its one field is synthesized here — after the body's
+            // own fields, which the same pass refuses.
+            if let Some(count) = self.ffi_array_storage(declaration, &mut def) {
+                defaults.push(None);
+                self.ffi_array_counts.insert(id, count);
+            }
             // A class may extend a struct, so a struct's methods have to be
             // inheritable — which means recording them the same way a class's
             // are.
