@@ -259,7 +259,7 @@ impl Analyzer<'_> {
             callee: kira_semantics_model::hir::Callee::User(target),
             args,
             ty: result,
-            writeback: None,
+            writebacks: Vec::new(),
         });
         let body = if result == Type::Void {
             vec![

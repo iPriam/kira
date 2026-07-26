@@ -9,8 +9,11 @@
 //! and `print` are the two that do not, and they are the two that are not
 //! calls to a user function.
 
+use kira_semantics_model::OwnershipMode;
 use kira_semantics_model::Type;
-use kira_semantics_model::hir::{Builtin, Callee, HirExpr, HirExprId, HirPlace, LocalId};
+use kira_semantics_model::hir::{
+    Builtin, Callee, HirExpr, HirExprId, HirPlace, HirWriteback, LocalId,
+};
 use kira_syntax_model::ast::{CallArg, Expr, ExprId, FieldInit};
 
 use crate::analyze::{Analyzer, FnCtx};
@@ -37,7 +40,7 @@ impl Analyzer<'_> {
             return;
         }
         match self.resolve_place(ctx, receiver, PlacePurpose::MutCall) {
-            Some((place, _)) => self.set_writeback(call, place),
+            Some((place, _)) => self.add_writeback(call, HirWriteback { param: 0, place }),
             None => self.program.exprs[call] = HirExpr::Error,
         }
     }
@@ -57,11 +60,14 @@ impl Analyzer<'_> {
         if !self.callee_mutates(call, qualified) {
             return;
         }
-        self.set_writeback(
+        self.add_writeback(
             call,
-            HirPlace {
-                local: self_local,
-                path: Vec::new(),
+            HirWriteback {
+                param: 0,
+                place: HirPlace {
+                    local: self_local,
+                    path: Vec::new(),
+                },
             },
         );
     }
@@ -75,10 +81,19 @@ impl Analyzer<'_> {
                 .is_some_and(|(id, _, _)| self.mutates_self(id))
     }
 
-    /// Sets the writeback place on a call node, if it is one.
-    fn set_writeback(&mut self, call: HirExprId, place: HirPlace) {
-        if let HirExpr::Call { writeback, .. } = &mut self.program.exprs[call] {
-            *writeback = Some(place);
+    /// Adds a writeback to a call node, keeping the list in parameter order.
+    ///
+    /// A method call records its receiver here *after* the call node exists,
+    /// while a `borrow mut` argument records its own slot while the arguments
+    /// are still being bound, so the two arrive out of order and the list is
+    /// kept sorted rather than appended to. A slot already recorded is left
+    /// alone: it names the same place, and a second entry would write it twice.
+    fn add_writeback(&mut self, call: HirExprId, writeback: HirWriteback) {
+        if let HirExpr::Call { writebacks, .. } = &mut self.program.exprs[call] {
+            match writebacks.binary_search_by_key(&writeback.param, |entry| entry.param) {
+                Ok(_) => {}
+                Err(index) => writebacks.insert(index, writeback),
+            }
         }
     }
 
@@ -415,7 +430,7 @@ impl Analyzer<'_> {
             callee: Callee::Builtin(Builtin::Print),
             args: args.to_vec(),
             ty: Type::Void,
-            writeback: None,
+            writebacks: Vec::new(),
         })
     }
 
@@ -518,6 +533,11 @@ impl Analyzer<'_> {
             self.bind_call_arguments(args, leading.len(), &param_names, &has_default, name, span);
         let ownership = self.param_ownership(id);
         let mut all = leading.to_vec();
+        // Where each `borrow mut` argument's final value has to land. Collected
+        // while the arguments are bound, because that is the only point where a
+        // parameter slot and the *syntax* the caller wrote for it are both in
+        // hand; attached once the call node exists.
+        let mut writebacks: Vec<HirWriteback> = Vec::new();
         for (index, slot_value) in positional.into_iter().enumerate() {
             let slot = index + leading.len();
             // A slot no argument filled takes its parameter's default, when one
@@ -539,6 +559,9 @@ impl Analyzer<'_> {
             match (params.get(slot), ownership.get(slot)) {
                 (Some(&expected), Some(&mode)) => {
                     all.push(self.analyze_call_argument(ctx, arg, expected, mode, name));
+                    if mode == OwnershipMode::BorrowMut {
+                        self.record_borrow_mut_argument(ctx, arg, slot, name, &mut writebacks);
+                    }
                 }
                 _ => all.push(self.analyze_expr(ctx, arg)),
             }
@@ -546,13 +569,68 @@ impl Analyzer<'_> {
         // A positional call that omitted trailing arguments fills them from
         // their defaults, left to right, stopping at the first parameter that
         // declares none — a genuine shortfall the arity check then reports.
+        //
+        // A `borrow mut` parameter is never filled this way: a default is a
+        // value, and there is nowhere in the caller to write one back, so the
+        // shortfall is reported instead.
         while all.len() < params.len() {
+            if ownership.get(all.len()) == Some(&OwnershipMode::BorrowMut) {
+                break;
+            }
             match self.resolve_param_default(id, all.len()) {
                 Some(default) => all.push(default),
                 None => break,
             }
         }
-        self.analyze_user_call(name, &all, span)
+        let call = self.analyze_user_call(name, &all, span);
+        for writeback in writebacks {
+            self.add_writeback(call, writeback);
+        }
+        call
+    }
+
+    /// Resolves the caller storage a `borrow mut` argument names, recording
+    /// where the callee's final value has to land.
+    ///
+    /// A `borrow mut` parameter is the callee writing through the caller's
+    /// binding, so the argument has to *be* a binding: a temporary would be
+    /// mutated and then discarded, which is why that is refused rather than
+    /// silently accepted. Two arguments rooted at the same local are refused
+    /// for the same reason in reverse — both writes would land in one place and
+    /// the later one would erase the earlier.
+    fn record_borrow_mut_argument(
+        &mut self,
+        ctx: &mut FnCtx,
+        arg: ExprId,
+        slot: usize,
+        callee: &str,
+        writebacks: &mut Vec<HirWriteback>,
+    ) {
+        let span = self.tree.expr(arg).span();
+        let Some((place, _)) = self.resolve_place(ctx, arg, PlacePurpose::BorrowMut) else {
+            return;
+        };
+        if let Some(existing) = writebacks
+            .iter()
+            .find(|entry| entry.place.local == place.local)
+        {
+            let name = ctx.local_name(place.local);
+            let other = existing.param;
+            self.emit(
+                span,
+                "KSEM247",
+                format!(
+                    "`{callee}` mutably borrows `{name}` twice in one call (parameters \
+                     {other} and {slot}); the two writes would land in the same place and \
+                     the later one would erase the earlier"
+                ),
+            );
+            return;
+        }
+        writebacks.push(HirWriteback {
+            param: slot as u32,
+            place,
+        });
     }
 
     fn analyze_user_call(
@@ -604,7 +682,7 @@ impl Analyzer<'_> {
             callee: Callee::User(id),
             args: args.to_vec(),
             ty: ret,
-            writeback: None,
+            writebacks: Vec::new(),
         })
     }
 }

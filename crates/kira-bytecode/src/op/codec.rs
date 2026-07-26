@@ -10,7 +10,7 @@
 //! a typed [`DecodeError`] — nothing here panics on malformed input, and an
 //! unknown opcode is rejected rather than guessed at.
 
-use super::{FieldPath, Instruction, PathStep, PlacePath, opcode as o, step_tag};
+use super::{FieldPath, Instruction, PathStep, PlacePath, WritebackTarget, opcode as o, step_tag};
 
 /// An error decoding a byte stream back into instructions.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -82,6 +82,18 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.push(o::CALL_MUT);
             out.extend_from_slice(&func.to_le_bytes());
             encode_place(*slot, path, out);
+        }
+        Instruction::CallWriteback { func, targets } => {
+            out.push(o::CALL_WRITEBACK);
+            out.extend_from_slice(&func.to_le_bytes());
+            // The count is a `u16`, and the compiler cannot build more targets
+            // than a function has parameters — itself a `u16` slot count — so
+            // the cast is exact by construction.
+            out.extend_from_slice(&(targets.len() as u16).to_le_bytes());
+            for target in targets {
+                out.extend_from_slice(&target.param.to_le_bytes());
+                encode_place(target.slot, &target.path, out);
+            }
         }
         Instruction::NativeState(type_id) => {
             out.push(o::NATIVE_STATE);
@@ -294,6 +306,17 @@ impl Cursor<'_> {
                 let func = u32::from_le_bytes(self.take()?);
                 let (slot, path) = self.next_place(opcode_offset)?;
                 Instruction::CallMut { func, slot, path }
+            }
+            o::CALL_WRITEBACK => {
+                let func = u32::from_le_bytes(self.take()?);
+                let count = u16::from_le_bytes(self.take()?);
+                let mut targets = Vec::with_capacity(count as usize);
+                for _ in 0..count {
+                    let param = u16::from_le_bytes(self.take()?);
+                    let (slot, path) = self.next_place(opcode_offset)?;
+                    targets.push(WritebackTarget { param, slot, path });
+                }
+                Instruction::CallWriteback { func, targets }
             }
             o::NEW_ENUM => {
                 let tag = u16::from_le_bytes(self.take()?);

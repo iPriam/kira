@@ -211,6 +211,84 @@ fn a_mutating_call_with_a_truncated_place_is_reported() {
 }
 
 #[test]
+fn the_writeback_call_opcode_is_appended_after_the_callback_address() {
+    // Append-only, spelled literally: `CALL_WRITEBACK` starts one past
+    // `FOREIGN_CALLBACK`, which was the last opcode before it, and nothing
+    // earlier moved — `CALL_MUT` in particular keeps 0x48, so every module
+    // already on disk still decodes to the same instruction.
+    assert_eq!(opcode::FOREIGN_CALLBACK, 0x4e);
+    assert_eq!(opcode::CALL_WRITEBACK, 0x4f);
+    assert_eq!(opcode::CALL_MUT, 0x48);
+}
+
+#[test]
+fn round_trips_a_writeback_call() {
+    // No targets, one target, and several with different path shapes — a
+    // decoder that lost the count, the parameter, or a step fails here.
+    let code = vec![
+        Instruction::CallWriteback {
+            func: 0,
+            targets: Vec::new(),
+        },
+        Instruction::CallWriteback {
+            func: 4_294_967_295,
+            targets: vec![WritebackTarget {
+                param: 3,
+                slot: 9,
+                path: PlacePath::new(vec![]).expect("an empty path"),
+            }],
+        },
+        Instruction::CallWriteback {
+            func: 12,
+            targets: vec![
+                WritebackTarget {
+                    param: 0,
+                    slot: 1,
+                    path: PlacePath::new(vec![PathStep::Field(2), PathStep::Index])
+                        .expect("a two-step path"),
+                },
+                WritebackTarget {
+                    param: 2,
+                    slot: 5,
+                    path: PlacePath::new(vec![PathStep::Index]).expect("a one-step path"),
+                },
+            ],
+        },
+        Instruction::ReturnVoid,
+    ];
+    let bytes = encode(&code);
+    assert_eq!(decode(&bytes).unwrap(), code);
+}
+
+#[test]
+fn a_truncated_writeback_call_target_is_reported() {
+    // A full function index and a promised target whose bytes never arrive.
+    let mut bytes = vec![opcode::CALL_WRITEBACK];
+    bytes.extend_from_slice(&0u32.to_le_bytes()); // func
+    bytes.extend_from_slice(&1u16.to_le_bytes()); // one target promised
+    bytes.extend_from_slice(&0u16.to_le_bytes()); // param
+    // ...but no place follows.
+    let err = decode(&bytes).unwrap_err();
+    assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
+}
+
+#[test]
+fn a_writeback_call_with_an_unknown_place_step_is_reported() {
+    let mut bytes = vec![opcode::CALL_WRITEBACK];
+    bytes.extend_from_slice(&0u32.to_le_bytes()); // func
+    bytes.extend_from_slice(&1u16.to_le_bytes()); // one target
+    bytes.extend_from_slice(&0u16.to_le_bytes()); // param
+    bytes.extend_from_slice(&0u16.to_le_bytes()); // slot
+    bytes.extend_from_slice(&1u16.to_le_bytes()); // one step
+    bytes.push(0xff); // an unknown step tag
+    let err = decode(&bytes).unwrap_err();
+    assert!(matches!(
+        err,
+        DecodeError::UnknownOpcode { opcode: 0xff, .. }
+    ));
+}
+
+#[test]
 fn a_mutating_call_with_an_unknown_place_step_is_reported() {
     let mut bytes = vec![opcode::CALL_MUT];
     bytes.extend_from_slice(&0u32.to_le_bytes()); // func

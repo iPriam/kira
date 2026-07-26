@@ -11,13 +11,14 @@
 //! is an *error* was already decided upstream, by
 //! [`kira_semantics::BuildKind`].
 
+use kira_semantics_model::OwnershipMode;
 use kira_semantics_model::hir::{
     Callee, HirExpr, HirExprId, HirPlace, HirPlaceStep, HirProgram, HirStmt, HirStmtId,
 };
 
 use crate::ir::{
     IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport, IrFunction, IrPlace, IrPlaceStep,
-    IrProgram, IrStmt,
+    IrProgram, IrStmt, IrWriteback,
 };
 
 /// Lowers an analyzed program to IR.
@@ -75,6 +76,33 @@ struct Lowerer<'a> {
     ir: &'a mut IrProgram,
 }
 
+/// The parameter slots a function takes by reference, ascending.
+///
+/// Two declarations put a slot here and they are read from two places: a
+/// mutating method's receiver is slot 0 and comes from the method flag, while a
+/// `borrow mut` parameter announces itself on its own local. Both mean the same
+/// thing below the IR — the caller hands over storage, not a copy.
+fn by_reference_params(function: &kira_semantics_model::hir::HirFunction) -> Vec<u32> {
+    let mut slots = Vec::new();
+    if function.mutates_self {
+        slots.push(0);
+    }
+    for slot in 0..function.param_count {
+        if slots.contains(&slot) {
+            continue;
+        }
+        if function
+            .locals
+            .get(slot as usize)
+            .is_some_and(|local| local.ownership == OwnershipMode::BorrowMut)
+        {
+            slots.push(slot);
+        }
+    }
+    slots.sort_unstable();
+    slots
+}
+
 impl Lowerer<'_> {
     fn lower_function(&mut self, function: &kira_semantics_model::hir::HirFunction) -> IrFunction {
         let body = self.lower_stmts(&function.body);
@@ -89,7 +117,7 @@ impl Lowerer<'_> {
                 .collect(),
             return_type: function.return_type,
             execution: function.execution,
-            mutates_self: function.mutates_self,
+            by_reference_params: by_reference_params(function),
             body,
         }
     }
@@ -165,14 +193,21 @@ impl Lowerer<'_> {
                 callee,
                 args,
                 ty,
-                writeback,
+                writebacks,
             } => {
                 let ir_args = args.iter().map(|&arg| self.lower_expr(arg)).collect();
+                let writebacks = writebacks
+                    .iter()
+                    .map(|writeback| IrWriteback {
+                        param: writeback.param,
+                        place: self.lower_place(&writeback.place),
+                    })
+                    .collect();
                 IrExpr::Call {
                     callee: lower_callee(callee),
                     args: ir_args,
                     result: ty,
-                    writeback: writeback.as_ref().map(|place| self.lower_place(place)),
+                    writebacks,
                 }
             }
             HirExpr::StructNew { struct_id, fields } => {
