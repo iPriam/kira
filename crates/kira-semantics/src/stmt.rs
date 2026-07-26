@@ -212,11 +212,20 @@ impl Analyzer<'_> {
                 ..
             } => {
                 let cond_expr = self.analyze_condition(ctx, cond);
+                // The two arms are alternatives, so each is analyzed from the
+                // state at the `if` — a move in one is not a move in the other.
+                let mut branch = crate::ownership::BranchMoves::start(ctx);
                 let then_body = self.analyze_block(ctx, &then_block);
+                branch.leave_arm(ctx, self.body_definitely_returns(&then_body));
+                branch.enter_arm(ctx);
                 let else_body = match &else_block {
                     Some(block) => self.analyze_block(ctx, block),
                     None => Vec::new(),
                 };
+                if else_block.is_some() {
+                    branch.leave_arm(ctx, self.body_definitely_returns(&else_body));
+                }
+                branch.finish(ctx, else_block.is_some());
                 let hir = self.program.stmts.alloc(HirStmt::If {
                     cond: cond_expr,
                     then_body,
@@ -370,15 +379,27 @@ impl Analyzer<'_> {
         // that order, then the chain is assembled from the back — an `else`
         // has to exist before the `if` that points at it.
         let mut arms = Vec::with_capacity(cases.len());
+        // At most one case runs, so each is analyzed from the state at the
+        // `switch` rather than from whatever the previous case left behind.
+        let mut branch = crate::ownership::BranchMoves::start(ctx);
         for case in cases {
+            branch.enter_arm(ctx);
             let cond = self.switch_condition(ctx, slot, subject_ty, case.label);
             let body = self.analyze_block(ctx, &case.body);
+            branch.leave_arm(ctx, self.body_definitely_returns(&body));
             arms.push((cond, body));
         }
+        branch.enter_arm(ctx);
         let mut chain = match default_block {
             Some(block) => self.analyze_block(ctx, block),
             None => Vec::new(),
         };
+        if default_block.is_some() {
+            branch.leave_arm(ctx, self.body_definitely_returns(&chain));
+        }
+        // Without a `default` a switch covers nothing in particular: the path
+        // where no label matched reaches the join too.
+        branch.finish(ctx, default_block.is_some());
         for (cond, body) in arms.into_iter().rev() {
             let hir = self.program.stmts.alloc(HirStmt::If {
                 cond,

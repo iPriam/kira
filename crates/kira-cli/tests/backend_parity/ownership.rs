@@ -449,3 +449,44 @@ function main() {
     );
     assert_eq!(output, "12\n");
 }
+
+/// A value moved in each arm of a branch runs the same on every backend.
+///
+/// Newly accepted by the move checker's branch merge; the arms are
+/// alternatives, so exactly one move happens per call and the value reaches
+/// exactly one callee.
+#[test]
+fn moving_the_same_value_in_sibling_branches_agrees() {
+    let output = assert_parity(
+        r#"
+struct Mesh {
+    var id: Int
+    var label: String
+}
+
+function asMetal(mesh: Mesh) -> String {
+    return mesh.label + "/metal"
+}
+
+function asVulkan(mesh: Mesh) -> String {
+    return mesh.label + "/vulkan"
+}
+
+function describe(useMetal: Bool, mesh: Mesh) -> String {
+    if useMetal {
+        return asMetal(move mesh)
+    } else {
+        return asVulkan(move mesh)
+    }
+}
+
+@Main
+function main() {
+    print(describe(true, Mesh { id: 1, label: "a" }))
+    print(describe(false, Mesh { id: 2, label: "b" }))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "a/metal\nb/vulkan\n");
+}

@@ -475,6 +475,71 @@ fn assigning_to_a_field_of_a_moved_local_is_still_rejected() {
     assert_eq!(codes(text), vec!["KSEM107"]);
 }
 
+/// Two arms of a branch are alternatives, so each may move the same value.
+///
+/// The shape the corpus writes: one `match` over a platform enum, every arm
+/// handing the same value to its own handler and returning.
+#[test]
+fn sibling_branches_may_each_move_the_same_local() {
+    let text = "enum Platform { Metal  Vulkan }\n\
+                    struct Mesh { let id: Int }\n\
+                    function metal(mesh: Mesh) -> Int { return mesh.id }\n\
+                    function vulkan(mesh: Mesh) -> Int { return mesh.id + 1 }\n\
+                    function pick(p: Platform, mesh: Mesh) -> Int { \
+                    match p { Metal -> return metal(move mesh) \
+                    Vulkan -> return vulkan(move mesh) } }\n\
+                    @Main function main() { print(pick(Platform.Metal, Mesh { id: 1 })) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// The same rule for the two arms of an `if`, and for a `switch`'s cases.
+#[test]
+fn if_and_switch_arms_may_each_move_the_same_local() {
+    let if_else = "struct Mesh { let id: Int }\n\
+                       function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+                       function pick(flag: Bool, mesh: Mesh) -> Int { \
+                       if flag { return consume(move mesh) } else { return consume(move mesh) } }\n\
+                       @Main function main() { print(pick(true, Mesh { id: 1 })) return }";
+    assert!(
+        diagnostics(if_else).is_empty(),
+        "{:?}",
+        diagnostics(if_else)
+    );
+
+    let switch = "struct Mesh { let id: Int }\n\
+                      function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+                      function pick(n: Int, mesh: Mesh) -> Int { \
+                      switch n { case 0 { return consume(move mesh) } \
+                      default { return consume(move mesh) } } }\n\
+                      @Main function main() { print(pick(0, Mesh { id: 1 })) return }";
+    assert!(diagnostics(switch).is_empty(), "{:?}", diagnostics(switch));
+}
+
+/// A move inside a branch still reaches the code after it: the compiler does
+/// not know which arm ran, so a value one of them gave away may be gone.
+#[test]
+fn a_move_in_one_branch_still_poisons_a_later_read() {
+    let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+                    function inspect(mesh: borrow Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } \
+                    if true { print(consume(move mesh)) } print(inspect(mesh)) return }";
+    assert_eq!(codes(text), vec!["KSEM107"]);
+}
+
+/// An arm that definitely returns contributes nothing to the join: its move
+/// happened on a path that never rejoins.
+#[test]
+fn a_move_in_a_returning_branch_does_not_reach_the_code_after_it() {
+    let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+                    function inspect(mesh: borrow Mesh) -> Int { return mesh.id }\n\
+                    function pick(flag: Bool, mesh: Mesh) -> Int { \
+                    if flag { return consume(move mesh) } return inspect(mesh) }\n\
+                    @Main function main() { print(pick(true, Mesh { id: 1 })) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
 /// The oracle's `FsbOwnershipMoveTwice`.
 #[test]
 fn moving_the_same_local_twice_is_rejected() {
