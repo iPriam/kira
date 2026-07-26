@@ -446,6 +446,8 @@ mod aggregate;
 mod native_state;
 mod seam;
 
+pub use aggregate::AggregateMismatch;
+
 #[cfg(test)]
 #[path = "value_tests.rs"]
 mod tests;

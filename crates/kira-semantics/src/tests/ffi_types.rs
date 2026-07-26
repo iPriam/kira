@@ -186,11 +186,20 @@ fn an_ffi_array_declaration_type_checks_as_a_field() {
 }
 
 #[test]
-fn indexing_an_ffi_array_is_refused_as_not_executable() {
+fn indexing_an_ffi_array_points_at_the_field_holding_its_elements() {
     let text = "@FFI.Array { element: U8; count: 4; }\nstruct Bytes4 {}\n\
          @FFI.Struct { layout: c; }\nstruct Holder { var bytes: Bytes4 }\n\
          @Main function main() { let h = Holder {}\n print(h.bytes[0])\n return }";
-    assert!(codes(text).contains(&"KSEM187"), "{:?}", codes(text));
+    assert!(codes(text).contains(&"KSEM244"), "{:?}", codes(text));
+    // And the field it names does index.
+    let through_field = "@FFI.Array { element: U8; count: 4; }\nstruct Bytes4 {}\n\
+         @FFI.Struct { layout: c; }\nstruct Holder { var bytes: Bytes4 }\n\
+         @Main function main() { let h = Holder {}\n print(h.bytes.elements.count)\n return }";
+    assert!(
+        diagnostics(through_field).is_empty(),
+        "{:?}",
+        diagnostics(through_field)
+    );
 }
 
 #[test]

@@ -57,11 +57,11 @@ impl FunctionLowering<'_, '_> {
         // to it — the same contract the VM host follows, so both sides hand the
         // adapter the identical thing.
         let mut aggregate_buffers = Vec::new();
-        for ((value, _), spec) in values.iter().copied().zip(params.iter().copied()) {
+        for ((value, ty), spec) in values.iter().copied().zip(params.iter().copied()) {
             let Some(id) = spec.aggregate() else {
                 continue;
             };
-            aggregate_buffers.push(self.write_aggregate_buffer(id, value)?);
+            aggregate_buffers.push(self.write_aggregate_buffer(id, value, ty)?);
         }
 
         // SAFETY: every type and value belongs to this live module and the

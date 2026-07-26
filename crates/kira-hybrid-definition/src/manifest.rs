@@ -24,16 +24,20 @@
 
 use kira_runtime_abi::{
     BridgeValueTag, Execution, ForeignAbi, ForeignAggregate, ForeignAggregateError,
-    ForeignAggregateId, ForeignAggregates, ForeignImport, ForeignMember, ForeignSignature,
-    ForeignType, ForeignTypeSpec, Ownership,
+    ForeignAggregateId, ForeignAggregates, ForeignArrayElement, ForeignImport, ForeignMember,
+    ForeignSignature, ForeignType, ForeignTypeSpec, Ownership,
 };
 
 /// The magic bytes that open a serialized manifest: "KHM1".
 pub const MAGIC: [u8; 4] = *b"KHM1";
 
 /// The aggregate-member byte that introduces a nested aggregate; anything else
-/// is a scalar's own foreign-type tag, none of which reaches `0xff`.
+/// is a scalar's own foreign-type tag, none of which reaches `0xfe`.
 const NESTED_MEMBER_TAG: u8 = 0xff;
+
+/// The aggregate-member byte that introduces an inline fixed-size array: the
+/// element's own member byte follows, then a `u32` count.
+const ARRAY_MEMBER_TAG: u8 = 0xfe;
 
 /// The entrypoint slot's value when a hybrid module has no entrypoint (a
 /// library).
@@ -301,6 +305,17 @@ impl HybridManifest {
                             out.push(NESTED_MEMBER_TAG);
                             write_u32(&mut out, id.0);
                         }
+                        ForeignMember::Array { element, count } => {
+                            out.push(ARRAY_MEMBER_TAG);
+                            match element {
+                                ForeignArrayElement::Scalar(ty) => out.push(ty.tag()),
+                                ForeignArrayElement::Aggregate(id) => {
+                                    out.push(NESTED_MEMBER_TAG);
+                                    write_u32(&mut out, id.0);
+                                }
+                            }
+                            write_u32(&mut out, *count);
+                        }
                     }
                 }
             }
@@ -501,8 +516,35 @@ fn read_member(reader: &mut Reader<'_>, index: u32) -> Result<ForeignMember, Man
     if tag == NESTED_MEMBER_TAG {
         return Ok(ForeignMember::Aggregate(ForeignAggregateId(reader.u32()?)));
     }
+    if tag == ARRAY_MEMBER_TAG {
+        let element = read_array_element(reader, index)?;
+        return Ok(ForeignMember::Array {
+            element,
+            count: reader.u32()?,
+        });
+    }
     ForeignType::from_tag(tag)
         .map(ForeignMember::Scalar)
+        .ok_or(ManifestDecodeError::UnknownForeignAggregateMember { index, tag })
+}
+
+/// Reads an inline array's element: a scalar tag, or a nested aggregate index.
+///
+/// An element is never itself an array — a C array of arrays is written as an
+/// array of the aggregate wrapping the inner one — so an [`ARRAY_MEMBER_TAG`]
+/// here is as unknown as any tag the writer never emits.
+fn read_array_element(
+    reader: &mut Reader<'_>,
+    index: u32,
+) -> Result<ForeignArrayElement, ManifestDecodeError> {
+    let tag = reader.byte()?;
+    if tag == NESTED_MEMBER_TAG {
+        return Ok(ForeignArrayElement::Aggregate(ForeignAggregateId(
+            reader.u32()?,
+        )));
+    }
+    ForeignType::from_tag(tag)
+        .map(ForeignArrayElement::Scalar)
         .ok_or(ManifestDecodeError::UnknownForeignAggregateMember { index, tag })
 }
 
@@ -712,6 +754,40 @@ mod tests {
             decoded.entry_function().expect("an entrypoint").name,
             "main"
         );
+    }
+
+    #[test]
+    fn an_aggregate_table_with_an_inline_array_round_trips() {
+        let mut aggregates = ForeignAggregates::new();
+        let pair = aggregates
+            .push(ForeignAggregate::new(vec![
+                ForeignMember::Scalar(ForeignType::I32),
+                ForeignMember::Scalar(ForeignType::I32),
+            ]))
+            .expect("pushes");
+        aggregates
+            .push(ForeignAggregate::new(vec![
+                ForeignMember::Array {
+                    element: ForeignArrayElement::Scalar(ForeignType::I32),
+                    count: 4,
+                },
+                ForeignMember::Array {
+                    element: ForeignArrayElement::Aggregate(pair),
+                    count: 2,
+                },
+            ]))
+            .expect("pushes");
+
+        // The table is written after the imports that index it, so a manifest
+        // carrying one always carries the import that named it.
+        let mut original = foreign_manifest();
+        original.foreign[0].signature = ForeignSignature::new(
+            vec![ForeignTypeSpec::Aggregate(ForeignAggregateId(1))],
+            ForeignTypeSpec::Scalar(ForeignType::Void),
+        );
+        original.foreign_aggregates = aggregates;
+        let decoded = HybridManifest::from_bytes(&original.to_bytes()).expect("decodes");
+        assert_eq!(decoded.foreign_aggregates, original.foreign_aggregates);
     }
 
     #[test]
