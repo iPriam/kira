@@ -276,7 +276,7 @@ impl Analyzer<'_> {
             }
             return self.program.exprs.alloc(HirExpr::Error);
         };
-        let Some(id) = self.program.types.structs().lookup(&struct_name) else {
+        let Some(id) = self.visible_struct(&struct_name) else {
             // A function of this name is the likely mistake, so say which.
             let message = if self.lookup_function(&struct_name).is_some() {
                 format!("`{struct_name}` is a function, not a struct")
@@ -446,7 +446,7 @@ impl Analyzer<'_> {
         // `ClsAccount.gross()` inside a subclass method: the parent's body run
         // against `self`. Checked before the module table, because a parent
         // type name is nearer than a module name.
-        if self.program.types.structs().lookup(&root).is_some() {
+        if self.visible_struct(&root).is_some() {
             // Once the root is known to be a type name, this path owns the
             // call: falling through would analyze the type name as a value and
             // report it undefined on top of whatever was already said.

@@ -227,7 +227,7 @@ impl Analyzer<'_> {
     /// construction rule for `@FFI.Struct` and the only sensible reading of the
     /// other two.
     pub(crate) fn ffi_c_layout_named(&self, name: &str) -> Option<StructId> {
-        let id = self.program.types.structs().lookup(name)?;
+        let id = self.visible_struct(name)?;
         self.ffi_structs.contains_key(&id).then_some(id)
     }
 

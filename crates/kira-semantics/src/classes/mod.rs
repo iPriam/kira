@@ -294,7 +294,7 @@ impl Analyzer<'_> {
         let mut parents: Vec<StructId> = Vec::new();
         for parent in &declaration.parents {
             let written = self.interner.resolve(parent.name).to_owned();
-            let Some(id) = self.program.types.structs().lookup(&written) else {
+            let Some(id) = self.visible_struct(&written) else {
                 // A parent dropped for a cycle already produced its diagnostic;
                 // reporting it missing here would blame the wrong declaration.
                 if !self.unflattenable_classes.contains(&written) {
@@ -624,6 +624,9 @@ impl<'a> Analyzer<'a> {
         callables: &mut Vec<crate::analyze::Callable<'a>>,
     ) {
         let name = self.interner.resolve(declaration.name);
+        // The class's own struct, like `construct_callables`: this registers
+        // what the declaration provides rather than resolving a name someone
+        // wrote, so it is not gated.
         let Some(id) = self.program.types.structs().lookup(name) else {
             // The class was not declared — a cycle or a duplicate name, already
             // reported. Registering its methods would give them no receiver.

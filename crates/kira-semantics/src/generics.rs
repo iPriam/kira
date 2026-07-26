@@ -108,7 +108,7 @@ impl<'a> Analyzer<'a> {
         }
         if self.generic_enums.contains_key(&name)
             || self.program.types.enums().lookup(&name).is_some()
-            || self.program.types.structs().lookup(&name).is_some()
+            || self.visible_struct(&name).is_some()
         {
             self.emit(
                 declaration.name_span,
@@ -204,7 +204,7 @@ impl<'a> Analyzer<'a> {
     fn report_not_generic(&mut self, text: &str, name_span: Span, span: Span) {
         let known = Type::from_name(text).is_some()
             || self.program.types.enums().lookup(text).is_some()
-            || self.program.types.structs().lookup(text).is_some()
+            || self.visible_struct(text).is_some()
             || self.aliases.contains_key(text);
         if known {
             self.emit(

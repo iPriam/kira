@@ -102,7 +102,12 @@ impl<'a> Analyzer<'a> {
                 name: name.clone(),
                 fields: Vec::new(),
             }) {
-                Some(id) => declared.push((source, declaration, id)),
+                Some(id) => {
+                    // A construct-backed declaration is a struct like any
+                    // other, so where it was written gates who may name it.
+                    self.struct_sources.insert(id, source);
+                    declared.push((source, declaration, id));
+                }
                 None => self.emit(
                     declaration.name_span,
                     "KSEM004",
@@ -438,6 +443,9 @@ impl<'a> Analyzer<'a> {
             return;
         };
         let name = self.interner.resolve(declaration.name);
+        // The declaration's *own* struct, not a name written in some file: this
+        // walk registers what this declaration provides, so it is not gated by
+        // who may name it.
         let Some(id) = self.program.types.structs().lookup(name) else {
             return;
         };

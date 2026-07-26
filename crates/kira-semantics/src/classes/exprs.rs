@@ -17,7 +17,7 @@ use crate::classes::{Member, Qualifier};
 impl Analyzer<'_> {
     /// Whether `name` names a class.
     pub(crate) fn class_named(&self, name: &str) -> Option<StructId> {
-        let id = self.program.types.structs().lookup(name)?;
+        let id = self.visible_struct(name)?;
         self.classes.contains_key(&id).then_some(id)
     }
 
@@ -143,7 +143,7 @@ impl Analyzer<'_> {
         if ctx.resolve(&root).is_some() {
             return Qualifier::NotAType;
         }
-        if self.program.types.structs().lookup(&root).is_none() {
+        if self.visible_struct(&root).is_none() {
             return Qualifier::NotAType;
         }
         match self.resolve_parent_qualifier(ctx, &root, span) {
@@ -171,7 +171,7 @@ impl Analyzer<'_> {
         if ctx.resolve(root).is_some() {
             return None;
         }
-        let qualifier = self.program.types.structs().lookup(root)?;
+        let qualifier = self.visible_struct(root)?;
         let Some(receiver) = ctx.receiver else {
             self.emit(
                 root_span,
