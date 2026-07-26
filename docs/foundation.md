@@ -135,7 +135,13 @@ this compiler has not built, so they wait on it rather than being ported in a
 form that would not compile. `Vec2`, `Vec4`, and `Quaternion` themselves are
 unported for the same reason: nothing in the corpus constructs them.
 
-The reference implementation's Foundation also carries seven more files. Each
+`Derive.kira` and `DeriveSerde.kira` ship the four builtin derive macros —
+`Equatable`, `Clone`, `Serializable`, and `Deserializable` — written in pure
+Kira on top of `comptime macro`. `docs/macros.md` documents what each generates,
+the field classification they share, and the wire format the serde pair reads
+and writes.
+
+The reference implementation's Foundation also carries four more files. Each
 waits on a language subsystem this compiler has not built, and each is named
 here rather than stubbed — a file that compiles and does nothing is worse than
 an import that fails.
@@ -145,8 +151,6 @@ an import that fails.
 | `Result.kira` | nothing; generic enums landed, and it is the next file to port |
 | `Printable.kira` | `construct` declarations |
 | `Test.kira` | `comptime` and `construct` |
-| `Derive.kira` | `comptime macro` |
-| `DeriveSerde.kira` | `comptime macro` |
 | `Web.kira` | FFI, and the DOM bindings |
 
 Foundation is the consumer of nearly every remaining subsystem, which is why it

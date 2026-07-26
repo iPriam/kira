@@ -150,9 +150,12 @@ impl IrProgram {
             | IrExpr::FileSystem { ty, .. }
             | IrExpr::Index { ty, .. } => *ty,
             IrExpr::Select { ty, .. } => *ty,
-            IrExpr::ArrayLen { .. } | IrExpr::StringLen { .. } | IrExpr::EnumTag { .. } => {
-                Type::INT
-            }
+            IrExpr::ArrayLen { .. }
+            | IrExpr::StringLen { .. }
+            | IrExpr::StringCharAt { .. }
+            | IrExpr::StringIndexOf { .. }
+            | IrExpr::EnumTag { .. } => Type::INT,
+            IrExpr::StringSubstring { .. } | IrExpr::StringOf { .. } => Type::String,
             IrExpr::CStringNew { .. } => Type::CString,
             IrExpr::CLayoutAddress { .. } => Type::RawPtr,
             IrExpr::NativeUserData { .. } => Type::RawPtr,
@@ -556,10 +559,39 @@ pub enum IrExpr {
         /// The array-typed expression being measured.
         array: IrExprId,
     },
-    /// A string's character count (`s.count`).
+    /// A string's length in bytes (`s.count`).
     StringLen {
         /// The string-typed expression being measured.
         text: IrExprId,
+    },
+    /// The byte at an index of a string (`s.charAt(i)`); traps out of range.
+    StringCharAt {
+        /// The string being read.
+        text: IrExprId,
+        /// The byte index.
+        index: IrExprId,
+    },
+    /// A half-open byte slice of a string (`s.substring(start, end)`); traps on
+    /// an inverted or out-of-range range.
+    StringSubstring {
+        /// The string being sliced.
+        text: IrExprId,
+        /// The inclusive lower bound, in bytes.
+        start: IrExprId,
+        /// The exclusive upper bound, in bytes.
+        end: IrExprId,
+    },
+    /// The byte index of the first occurrence of a needle, or `-1`.
+    StringIndexOf {
+        /// The string being searched.
+        text: IrExprId,
+        /// The string being searched for.
+        needle: IrExprId,
+    },
+    /// A scalar rendered as text (`String(x)`).
+    StringOf {
+        /// The value being rendered.
+        value: IrExprId,
     },
     /// The address of a C-layout struct's image, in storage that outlives the
     /// call. See [`kira_semantics_model::hir::HirExpr::CLayoutAddress`].

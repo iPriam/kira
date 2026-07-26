@@ -466,13 +466,54 @@ pub enum HirExpr {
         /// The array-typed expression being measured.
         array: HirExprId,
     },
-    /// A string's character count (`s.count`) — a property, not a call.
+    /// A string's length in bytes (`s.count`) — a property, not a call.
     ///
-    /// Characters, not bytes: `charAt` and `substring` index the same units, so
-    /// a count in bytes would disagree with the two primitives it sits beside.
+    /// Bytes, not characters: `charAt` and `substring` index the same units,
+    /// and a UTF-8 byte index is what the wire formats built on these
+    /// primitives carve at.
     StringLen {
         /// The string-typed expression being measured.
         text: HirExprId,
+    },
+    /// The byte at an index of a string (`s.charAt(i)`).
+    ///
+    /// Traps when the index is outside `0 ..< s.count`, which is what makes an
+    /// out-of-range read a deterministic failure on every backend rather than a
+    /// value nothing agrees on.
+    StringCharAt {
+        /// The string being read.
+        text: HirExprId,
+        /// The byte index.
+        index: HirExprId,
+    },
+    /// A half-open byte slice of a string (`s.substring(start, end)`).
+    ///
+    /// Traps when `start > end` or either bound is outside `0 ..= s.count`.
+    StringSubstring {
+        /// The string being sliced.
+        text: HirExprId,
+        /// The inclusive lower bound, in bytes.
+        start: HirExprId,
+        /// The exclusive upper bound, in bytes.
+        end: HirExprId,
+    },
+    /// The byte index of the first occurrence of a needle (`s.indexOf(n)`), or
+    /// `-1` when there is none.
+    ///
+    /// An empty needle matches at the front, so it answers `0`.
+    StringIndexOf {
+        /// The string being searched.
+        text: HirExprId,
+        /// The string being searched for.
+        needle: HirExprId,
+    },
+    /// A scalar rendered as text (`String(x)`).
+    ///
+    /// The rendering is the one `print` gives, so a value printed and a value
+    /// converted never disagree.
+    StringOf {
+        /// The value being rendered.
+        value: HirExprId,
     },
     /// The address of a C-layout struct's image, in storage that outlives the
     /// call.
@@ -684,9 +725,12 @@ impl HirExpr {
             HirExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),
             // `.count` and a tag read are both `Int`; `.append` yields nothing.
             // None has a type that can vary, so none carries one.
-            HirExpr::ArrayLen { .. } | HirExpr::StringLen { .. } | HirExpr::EnumTag { .. } => {
-                Type::INT
-            }
+            HirExpr::ArrayLen { .. }
+            | HirExpr::StringLen { .. }
+            | HirExpr::StringCharAt { .. }
+            | HirExpr::StringIndexOf { .. }
+            | HirExpr::EnumTag { .. } => Type::INT,
+            HirExpr::StringSubstring { .. } | HirExpr::StringOf { .. } => Type::String,
             HirExpr::NativeUserData { .. } => Type::RawPtr,
             HirExpr::ArrayAppend { .. } | HirExpr::NativeStateFree { .. } => Type::Void,
             HirExpr::Error => Type::Error,

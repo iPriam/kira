@@ -447,6 +447,10 @@ impl<'a> Analyzer<'a> {
         // Every type a payload could name now has an id, so the variants the
         // header pass left empty are filled here.
         self.resolve_enum_payloads(&enum_headers);
+        // `@Derive(Copy)` asks a question about a whole reachable shape, so it
+        // is answered once every struct, class, enum, and construct-backed type
+        // exists and every payload is resolved.
+        self.check_copy_derives();
         let callables = self.callables();
         // Every synthesized function sits after every declared one, so the
         // declared count is the offset a reserved id is measured from. Fixed

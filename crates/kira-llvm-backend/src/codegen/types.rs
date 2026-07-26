@@ -123,8 +123,23 @@ pub(crate) struct Runtime {
     /// storage the callee keeps, which is how a returned C string becomes an
     /// owned Kira `String` with nothing to free on this side.
     pub(super) str_from_cstr: Callable,
-    /// `kira_rt_str_count`: a string's character count, consuming it.
+    /// `kira_rt_str_count`: a string's length in bytes, consuming it.
     pub(super) str_count: Callable,
+    /// `kira_rt_str_char_at`: the byte at an index, consuming the string.
+    pub(super) str_char_at: Callable,
+    /// `kira_rt_str_substring`: a half-open byte slice as a fresh string,
+    /// consuming the original.
+    pub(super) str_substring: Callable,
+    /// `kira_rt_str_index_of`: the first byte index of a needle, or `-1`,
+    /// consuming both strings.
+    pub(super) str_index_of: Callable,
+    /// `kira_rt_str_of_int` / `_float` / `_bool`: a scalar rendered as a fresh
+    /// string, in exactly the spelling `print` gives it.
+    pub(super) str_of_int: Callable,
+    /// See [`RuntimeCallables::str_of_int`].
+    pub(super) str_of_float: Callable,
+    /// See [`RuntimeCallables::str_of_int`].
+    pub(super) str_of_bool: Callable,
     /// `kira_rt_cstring_new`: builds transient NUL-terminated C storage from a
     /// Kira string handle for one foreign call (null on interior NUL).
     pub(super) cstring_new: Callable,
@@ -292,6 +307,24 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             ),
             str_from_cstr: declare(c"kira_rt_str_from_cstr", types.ptr, &mut [types.ptr]),
             str_count: declare(c"kira_rt_str_count", types.i64, &mut [types.ptr]),
+            str_char_at: declare(
+                c"kira_rt_str_char_at",
+                types.i64,
+                &mut [types.ptr, types.i64],
+            ),
+            str_substring: declare(
+                c"kira_rt_str_substring",
+                types.ptr,
+                &mut [types.ptr, types.i64, types.i64],
+            ),
+            str_index_of: declare(
+                c"kira_rt_str_index_of",
+                types.i64,
+                &mut [types.ptr, types.ptr],
+            ),
+            str_of_int: declare(c"kira_rt_str_of_int", types.ptr, &mut [types.i64]),
+            str_of_float: declare(c"kira_rt_str_of_float", types.ptr, &mut [types.f64]),
+            str_of_bool: declare(c"kira_rt_str_of_bool", types.ptr, &mut [types.i1]),
             call_runtime: declare(
                 c"kira_hybrid_call_runtime",
                 types.void,

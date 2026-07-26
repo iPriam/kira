@@ -38,6 +38,12 @@ pub(crate) struct Annotations {
     /// The `@FFI.Struct`/`Pointer`/`Alias`/`Array`/`Callback` marker, when one
     /// was written. These ride a struct declaration, not a function.
     pub(crate) ffi_type: Option<FfiTypeMark>,
+    /// The span of a `@Derive(Copy)` written on the declaration.
+    ///
+    /// `Copy` is the one derive the compiler owns: macro expansion leaves it in
+    /// place precisely so the type checker can see it, because it generates
+    /// nothing and asserts something only the field types can settle.
+    pub(crate) derives_copy: Option<Span>,
 }
 
 impl Default for Annotations {
@@ -48,6 +54,7 @@ impl Default for Annotations {
             export: None,
             foreign: None,
             ffi_type: None,
+            derives_copy: None,
         }
     }
 }
@@ -187,8 +194,18 @@ impl Parser<'_> {
             }
             if let Some(mut declaration) = self.parse_struct() {
                 declaration.ffi = annotations.ffi_type;
+                declaration.derives_copy = annotations.derives_copy;
                 declaration.span = Span::from_bounds(start.start, self.previous_end());
                 self.tree.push_item(self.source, Item::Struct(declaration));
+            }
+        } else if self.at(TokenKind::Enum) {
+            // An enum reaches an annotation for exactly one reason —
+            // `@Derive(Copy)` — so it is parsed as an enum rather than falling
+            // to parse-don't-crash, which would have taken its variants with it.
+            if let Some(mut declaration) = self.parse_enum() {
+                declaration.derives_copy = annotations.derives_copy;
+                declaration.span = Span::from_bounds(start.start, self.previous_end());
+                self.tree.push_item(self.source, Item::Enum(declaration));
             }
         } else {
             // Annotated non-function construct: parse-don't-crash.
@@ -222,6 +239,7 @@ impl Parser<'_> {
                 continue;
             }
             let name_span = self.current().span;
+            let is_derive = self.text_of(name_span) == "Derive";
             let is_export = match self.text_of(name_span) {
                 "Main" => {
                     annotations.is_main = true;
@@ -261,6 +279,15 @@ impl Parser<'_> {
                 let open = self.current().span;
                 self.skip_balanced(TokenKind::LBrace, TokenKind::RBrace);
                 payload_span = Some(Span::from_bounds(open.start, self.previous_end()));
+            }
+            // `@Derive(Copy)` is the compiler's own derive: it generates
+            // nothing, so it survives macro expansion and is read here. Every
+            // other name in the list belonged to a macro and is gone by now.
+            if is_derive
+                && let Some(payload) = payload_span
+                && self.text_of(payload).contains("Copy")
+            {
+                annotations.derives_copy = Some(Span::from_bounds(name_span.start, payload.end()));
             }
             if is_export {
                 // A repeated `@Export` keeps the first mark; the payload of

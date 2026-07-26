@@ -15,13 +15,15 @@ use kira_syntax_model::ast::{BinaryOp, Expr, ExprId};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::classes::Qualifier;
-use crate::operators::{resolve_binary, resolve_unary, unary_spelling, unify_branches};
+use crate::operators::{resolve_binary, resolve_unary, unary_spelling};
 
 mod calls;
+mod conditional;
 mod file_system;
 mod labels;
 mod memberwise;
 mod native_state;
+mod print;
 
 impl Analyzer<'_> {
     /// Type-checks an AST expression, returning its HIR handle.
@@ -354,6 +356,12 @@ impl Analyzer<'_> {
                 if let Some(call) = self.analyze_scalar_conversion(ctx, &name, &args, callee_span) {
                     return call;
                 }
+                // `String(x)` renders a scalar as text, and is recognized here
+                // for the same reason: a conversion is never an undefined
+                // function.
+                if let Some(call) = self.analyze_string_conversion(ctx, &name, &args, callee_span) {
+                    return call;
+                }
                 if name == "print" {
                     // `print` borrows: it renders its argument and consumes
                     // nothing the caller could miss.
@@ -421,12 +429,9 @@ impl Analyzer<'_> {
                     return self.analyze_array_property(base_hir, &name, field_span);
                 }
                 // A `String` has no fields either, and the same one property:
-                // its character count, written exactly as an array's is.
-                if base_ty == Type::String && name == "count" {
-                    return self
-                        .program
-                        .exprs
-                        .alloc(HirExpr::StringLen { text: base_hir });
+                // its byte count, written exactly as an array's is.
+                if base_ty == Type::String {
+                    return self.analyze_string_property(base_hir, &name, field_span);
                 }
                 if let Type::Enum(family_id) = base_ty
                     && self.construct_family_computed_member(family_id, &name)
@@ -502,92 +507,6 @@ impl Analyzer<'_> {
             }
             Expr::Error { .. } => self.program.exprs.alloc(HirExpr::Error),
         }
-    }
-
-    /// Type-checks `cond ? then : otherwise`.
-    ///
-    /// The expected-type hint is forwarded to both branches so an empty array
-    /// literal keeps working in either one — `flag ? [] : xs` needs the hint to
-    /// reach the `[]` exactly as `var xs: [Int] = []` does. A leading-dot member
-    /// resolves the same way: whichever branch types concretely anchors the
-    /// other, so `flag ? .Red : tone` and `flag ? tone : .Red` both work.
-    fn analyze_conditional(
-        &mut self,
-        ctx: &mut FnCtx,
-        cond: ExprId,
-        then: ExprId,
-        otherwise: ExprId,
-        span: kira_source::Span,
-        expected: Option<Type>,
-    ) -> HirExprId {
-        let cond_hir = self.analyze_expr(ctx, cond);
-        let cond_ty = self.program.expr(cond_hir).type_of();
-        if cond_ty != Type::Error && cond_ty != Type::Bool {
-            let name = self.type_name(cond_ty);
-            self.emit(
-                self.tree.expr(cond).span(),
-                "KSEM131",
-                format!("the condition of `? :` must be `Bool`, not `{name}`"),
-            );
-            return self.program.exprs.alloc(HirExpr::Error);
-        }
-
-        // As in `analyze_binary`, the concrete branch is analyzed first when the
-        // other is a leading dot, so the dot inherits a type to resolve against.
-        let then_is_dot = matches!(self.tree.expr(then), Expr::DotMember { .. });
-        let otherwise_is_dot = matches!(self.tree.expr(otherwise), Expr::DotMember { .. });
-        let (then_hir, otherwise_hir) = if then_is_dot && !otherwise_is_dot {
-            let otherwise_hir = self.analyze_expr_expecting(ctx, otherwise, expected);
-            let hint = self.program.expr(otherwise_hir).type_of();
-            let then_hir = self.analyze_expr_expecting(ctx, then, Some(hint));
-            (then_hir, otherwise_hir)
-        } else {
-            let then_hir = self.analyze_expr_expecting(ctx, then, expected);
-            let hint = self.program.expr(then_hir).type_of();
-            let otherwise_hir = if otherwise_is_dot {
-                self.analyze_expr_expecting(ctx, otherwise, Some(hint))
-            } else {
-                self.analyze_expr_expecting(ctx, otherwise, expected.or(Some(hint)))
-            };
-            (then_hir, otherwise_hir)
-        };
-
-        let then_ty = self.program.expr(then_hir).type_of();
-        let otherwise_ty = self.program.expr(otherwise_hir).type_of();
-        if then_ty == Type::Error || otherwise_ty == Type::Error {
-            return self.program.exprs.alloc(HirExpr::Error);
-        }
-
-        let Some(ty) = unify_branches(then_ty, otherwise_ty) else {
-            let (then_name, otherwise_name) =
-                (self.type_name(then_ty), self.type_name(otherwise_ty));
-            self.emit(
-                span,
-                "KSEM132",
-                format!("the branches of `? :` disagree: `{then_name}` and `{otherwise_name}`"),
-            );
-            return self.program.exprs.alloc(HirExpr::Error);
-        };
-
-        // A `? :` is an expression, so it must produce a value. Two `Void`
-        // branches agree on a type but leave nothing on the stack for the
-        // surrounding expression to consume, which no backend can lower; it is
-        // rejected here rather than reaching one.
-        if ty == Type::Void {
-            self.emit(
-                span,
-                "KSEM133",
-                "a `? :` expression must produce a value, but both branches are `Void`".to_owned(),
-            );
-            return self.program.exprs.alloc(HirExpr::Error);
-        }
-
-        self.program.exprs.alloc(HirExpr::Select {
-            cond: cond_hir,
-            then: then_hir,
-            otherwise: otherwise_hir,
-            ty,
-        })
     }
 
     /// Type-checks a binary operation, threading expected types so a

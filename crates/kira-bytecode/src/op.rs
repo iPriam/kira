@@ -245,11 +245,31 @@ pub enum Instruction {
     /// Pop an `Int`, push the `Float` its bits denote. The exact inverse of
     /// [`Instruction::ConvertFloatToBits`].
     ConvertBitsToFloat,
-    /// Pop a string, push its character count as an `Int`, and drop the string.
+    /// Pop a string, push its length in bytes as an `Int`, and drop the string.
     ///
-    /// Characters, not bytes: `charAt` and `substring` index the same units, so
-    /// a byte count would disagree with the primitives it sits beside.
+    /// Bytes, not characters: `charAt` and `substring` index the same units, so
+    /// a character count would disagree with the primitives it sits beside.
     StringLen,
+    /// Pop an index and a string, push the byte at that index as an `Int`, and
+    /// drop the string.
+    ///
+    /// Traps when the index is outside `0 ..< len`, so an out-of-range read
+    /// fails the same way on every engine instead of producing a value.
+    StringCharAt,
+    /// Pop an end, a start, and a string; push the half-open byte slice as a
+    /// fresh string and drop the original.
+    ///
+    /// Traps when `start > end` or either bound is outside `0 ..= len`.
+    StringSubstring,
+    /// Pop a needle and a haystack, push the byte index of the first occurrence
+    /// as an `Int` (or `-1`), and drop both.
+    StringIndexOf,
+    /// Pop a value, push its text rendering as a fresh string, and drop the
+    /// value.
+    ///
+    /// The rendering `print` gives, so a value printed and a value converted
+    /// never disagree.
+    StringOf,
     /// Pop a string, push a pointer word to a copy of its bytes in C storage
     /// that is never released, and drop the string.
     ///
@@ -607,6 +627,12 @@ mod opcode {
     // The address of a retained C-layout image. Appended after `CSTRING_NEW`;
     // carries the `u32` aggregate row describing the layout.
     pub const CLAYOUT_ADDRESS: u8 = 0x55;
+    // The four remaining string primitives. Appended after `CLAYOUT_ADDRESS`;
+    // adding an opcode is not an ABI change.
+    pub const STRING_CHAR_AT: u8 = 0x56;
+    pub const STRING_SUBSTRING: u8 = 0x57;
+    pub const STRING_INDEX_OF: u8 = 0x58;
+    pub const STRING_OF: u8 = 0x59;
     // One file-system operation. Appended after the bit reinterpretations;
     // carries one `FileSystemOp` byte, whose own numbering is append-only, so a
     // new operation costs neither an opcode nor a version.

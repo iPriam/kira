@@ -239,6 +239,9 @@ pub struct EnumDecl {
     pub type_params: Vec<TypeParamDecl>,
     /// The variants, in declaration order.
     pub variants: Vec<VariantDecl>,
+    /// The `@Derive(Copy)` assertion, when the declaration carried one. See
+    /// [`StructDecl::derives_copy`].
+    pub derives_copy: Option<Span>,
     /// Span covering the whole declaration.
     pub span: Span,
 }
@@ -282,6 +285,13 @@ pub struct StructDecl {
     /// written. Present for `@FFI.Struct`/`Pointer`/`Alias`/`Array`/`Callback`;
     /// absent for a plain struct. `@FFI.Extern` never rides a struct.
     pub ffi: Option<FfiTypeMark>,
+    /// The `@Derive(Copy)` assertion, when the declaration carried one.
+    ///
+    /// `Copy` is a compiler builtin rather than a macro: it generates nothing
+    /// and is an opt-in claim that the type is structurally copyable, checked
+    /// where the field types are known. The span is the annotation's, so the
+    /// refusal points at the claim rather than at the type.
+    pub derives_copy: Option<Span>,
     /// Span covering the whole declaration.
     pub span: Span,
 }
