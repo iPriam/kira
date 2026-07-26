@@ -153,6 +153,8 @@ impl IrProgram {
             IrExpr::ArrayLen { .. } | IrExpr::StringLen { .. } | IrExpr::EnumTag { .. } => {
                 Type::INT
             }
+            IrExpr::CStringNew { .. } => Type::CString,
+            IrExpr::CLayoutAddress { .. } => Type::RawPtr,
             IrExpr::NativeUserData { .. } => Type::RawPtr,
             IrExpr::ArrayAppend { .. } | IrExpr::NativeStateFree { .. } => Type::Void,
         }
@@ -557,6 +559,23 @@ pub enum IrExpr {
     /// A string's character count (`s.count`).
     StringLen {
         /// The string-typed expression being measured.
+        text: IrExprId,
+    },
+    /// The address of a C-layout struct's image, in storage that outlives the
+    /// call. See [`kira_semantics_model::hir::HirExpr::CLayoutAddress`].
+    CLayoutAddress {
+        /// The struct value whose image is written.
+        value: IrExprId,
+        /// The aggregate row describing its C layout.
+        aggregate: kira_runtime_abi::ForeignAggregateId,
+    },
+    /// A `String` copied into C storage that outlives the call.
+    ///
+    /// See [`kira_semantics_model::hir::HirExpr::CStringNew`]. The null case
+    /// lowers to [`IrExpr::RawPtrNull`] instead, because a null C string and a
+    /// null pointer are the same zero word.
+    CStringNew {
+        /// The string whose bytes are copied.
         text: IrExprId,
     },
     /// One file-system operation, performed by the engine on the host's behalf.

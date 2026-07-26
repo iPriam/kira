@@ -259,6 +259,16 @@ impl Lowerer<'_> {
             HirExpr::StringLen { text } => IrExpr::StringLen {
                 text: self.lower_expr(text),
             },
+            HirExpr::CLayoutAddress { value, aggregate } => IrExpr::CLayoutAddress {
+                value: self.lower_expr(value),
+                aggregate,
+            },
+            HirExpr::CStringNew { text } => IrExpr::CStringNew {
+                text: self.lower_expr(text),
+            },
+            // A null C string and a null pointer are one zero word, so this
+            // needs no node of its own below the type checker.
+            HirExpr::CStringNull => IrExpr::RawPtrNull,
             HirExpr::FileSystem { op, args, ty } => IrExpr::FileSystem {
                 op,
                 args: args.into_iter().map(|arg| self.lower_expr(arg)).collect(),

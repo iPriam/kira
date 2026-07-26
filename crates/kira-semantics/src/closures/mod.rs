@@ -115,6 +115,14 @@ pub(crate) struct Capture {
     pub(crate) inner: LocalId,
     /// The representation struct field it travels in.
     pub(crate) field: u32,
+    /// Whether the field holds the value behind a one-element array rather than
+    /// inline.
+    ///
+    /// Set when storing it inline would make the representation struct contain
+    /// itself — a closure capturing a function value of its own type. An array
+    /// is a heap handle, so the struct stays a fixed size, and the value it
+    /// holds is the same value with the same copy semantics.
+    pub(crate) boxed: bool,
 }
 
 /// What resolving a name against the enclosing closure frames produced.

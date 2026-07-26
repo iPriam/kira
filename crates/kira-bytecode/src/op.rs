@@ -250,6 +250,19 @@ pub enum Instruction {
     /// Characters, not bytes: `charAt` and `substring` index the same units, so
     /// a byte count would disagree with the primitives it sits beside.
     StringLen,
+    /// Pop a string, push a pointer word to a copy of its bytes in C storage
+    /// that is never released, and drop the string.
+    ///
+    /// See [`kira_runtime_abi::c_storage`]: a `CString` member of a struct C
+    /// keeps is read long after the call that handed it over, so the only
+    /// pointer that is safe there is one nothing frees.
+    CStringNew,
+    /// Pop a struct, write its C-layout image into storage that is never
+    /// released, and push that storage's address as a pointer word.
+    ///
+    /// The operand names the aggregate row describing the layout. See
+    /// [`kira_runtime_abi::c_storage`] for why the image outlives the call.
+    CLayoutAddress(u32),
     /// Perform one file-system operation through the host.
     ///
     /// The operands are popped in reverse source order — the last argument is on
@@ -589,6 +602,11 @@ mod opcode {
     // adding an opcode is not an ABI change.
     pub const CONVERT_FLOAT_TO_BITS: u8 = 0x51;
     pub const CONVERT_BITS_TO_FLOAT: u8 = 0x52;
+    // Retained C string storage. Appended after `FILE_SYSTEM`; nullary.
+    pub const CSTRING_NEW: u8 = 0x54;
+    // The address of a retained C-layout image. Appended after `CSTRING_NEW`;
+    // carries the `u32` aggregate row describing the layout.
+    pub const CLAYOUT_ADDRESS: u8 = 0x55;
     // One file-system operation. Appended after the bit reinterpretations;
     // carries one `FileSystemOp` byte, whose own numbering is append-only, so a
     // new operation costs neither an opcode nor a version.

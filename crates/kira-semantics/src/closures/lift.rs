@@ -418,11 +418,28 @@ impl Analyzer<'_> {
                 local: env,
                 ty: Type::Struct(repr),
             });
-            let init = self.program.exprs.alloc(HirExpr::Field {
+            let field_ty = if capture.boxed {
+                self.program.types.array_of(ty)
+            } else {
+                ty
+            };
+            let read = self.program.exprs.alloc(HirExpr::Field {
                 base,
                 index: capture.field,
-                ty,
+                ty: field_ty,
             });
+            // A boxed capture travels as a one-element array; element zero is
+            // the value.
+            let init = if capture.boxed {
+                let zero = self.program.exprs.alloc(HirExpr::Int(0));
+                self.program.exprs.alloc(HirExpr::Index {
+                    base: read,
+                    index: zero,
+                    ty,
+                })
+            } else {
+                read
+            };
             stmts.push(self.program.stmts.alloc(HirStmt::Let {
                 local: capture.inner,
                 init,
@@ -460,10 +477,19 @@ impl Analyzer<'_> {
         let mut capture_values = Vec::with_capacity(closure.captures.len());
         for capture in &closure.captures {
             let ty = ctx.local_type(capture.outer);
-            capture_values.push(self.program.exprs.alloc(HirExpr::Local {
+            let value = self.program.exprs.alloc(HirExpr::Local {
                 local: capture.outer,
                 ty,
-            }));
+            });
+            capture_values.push(if capture.boxed {
+                let array = self.program.types.array_of(ty);
+                self.program.exprs.alloc(HirExpr::ArrayNew {
+                    ty: array,
+                    elements: vec![value],
+                })
+            } else {
+                value
+            });
         }
         let expr = self.program.exprs.alloc(HirExpr::StructNew {
             struct_id: repr,
@@ -562,29 +588,17 @@ impl Analyzer<'_> {
         }
         // A capture becomes a *field* of the closure's representation struct, so
         // capturing a function value whose type reaches this one would make that
-        // struct contain itself by value: a value of infinite size. It is
-        // refused here rather than pushed, because pushing it is what makes the
-        // rest of the analyzer recurse forever over a cyclic type.
-        //
-        // The self-capture case — a closure of `(borrow mut Frame) -> Void`
-        // capturing another value of exactly that type — is the one an
-        // application hits, and lifting it needs a function value to carry its
-        // environment behind an indirection rather than inline. That is a change
-        // to the representation, not to this check.
-        if self.capture_would_be_cyclic(repr, ty) {
-            self.emit(
-                span,
-                "KSEM251",
-                format!(
-                    "closure captures `{name}` of type `{}`, which is the closure's own \
-                     function type: the captured value would have to be stored inside a \
-                     value of its own type, which has no size. Call it where it is bound, \
-                     or pass it in as a parameter of the closure.",
-                    self.type_name(ty)
-                ),
-            );
-            return Captured::Refused;
-        }
+        // struct contain itself by value: a value of infinite size. The value is
+        // put behind a one-element array instead — a heap handle, so the struct
+        // has a fixed size again — and the prologue reads element zero back out.
+        // Copying an array copies its elements, so the captured function value
+        // has exactly the semantics an inline field would have given it.
+        let boxed = self.capture_would_be_cyclic(repr, ty);
+        let field_ty = if boxed {
+            self.program.types.array_of(ty)
+        } else {
+            ty
+        };
         // The literal's tag is in the name because one representation struct
         // holds the captures of *every* literal of its type: two literals that
         // each capture an `x` first would otherwise mint two fields named `x$0`
@@ -598,7 +612,7 @@ impl Analyzer<'_> {
                     "{name}${tag}_{}",
                     ctx.closure.as_ref().map_or(0, |c| c.captures.len())
                 ),
-                ty,
+                ty: field_ty,
                 mutable: false,
             },
         ) else {
@@ -619,6 +633,7 @@ impl Analyzer<'_> {
                 outer: outer_local,
                 inner,
                 field,
+                boxed,
             });
         }
         Captured::Local(inner)

@@ -190,7 +190,7 @@ impl Analyzer<'_> {
     /// A written type as it was spelled, for comparing two declarations without
     /// resolving either — the tables they would resolve against are not built
     /// when the comparison is needed.
-    fn written_type_name(&self, id: kira_syntax_model::ast::TypeRefId) -> String {
+    pub(crate) fn written_type_name(&self, id: kira_syntax_model::ast::TypeRefId) -> String {
         use kira_syntax_model::ast::TypeRef;
         match self.tree.type_ref(id) {
             TypeRef::Named { name, .. } => self.interner.resolve(*name).to_owned(),
@@ -433,8 +433,11 @@ impl Analyzer<'_> {
                 return Some(self.ffi_zero_filled_struct(id, span));
             }
             // A pointer's zero is `NULL`, which is what C zero-fills a function
-            // pointer or an opaque handle member to.
+            // pointer or an opaque handle member to. A `CString` member is a
+            // pointer too, and its zero is the same `NULL` — which is a
+            // different value from a pointer to `""`, and C tells them apart.
             Type::RawPtr => HirExpr::RawPtrNull,
+            Type::CString => HirExpr::CStringNull,
             // An `@FFI.Array`'s storage zeroes to an empty Kira array, not to
             // `count` zero elements: the seam zeroes the C bytes it does not
             // receive an element for, so the two agree, and a `count` of 8176

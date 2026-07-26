@@ -152,4 +152,17 @@ typedef int (*ffi_labeler)(const char *text, int n);
 int ffi_call_labeler(ffi_labeler label, const char *text, int n);
 int ffi_call_labeler_null(ffi_labeler label, int n);
 
+/* A descriptor with a `const char*` member, the shape a windowing library hands
+ * over once and reads for the rest of the run. `ffi_desc_keep` stashes the
+ * pointer instead of reading it, so `ffi_desc_recall` afterwards is what proves
+ * the storage outlived the call rather than dangling. */
+struct ffi_desc {
+    int tag;
+    const char *title;
+};
+int ffi_desc_by_value(struct ffi_desc d);
+int ffi_desc_by_pointer(const struct ffi_desc *d);
+void ffi_desc_keep(const struct ffi_desc *d);
+int ffi_desc_recall(void);
+
 #endif /* KIRA_FFI_FIXTURE_H */

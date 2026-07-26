@@ -146,6 +146,11 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::StringLen => out.push(o::STRING_LEN),
         Instruction::ConvertFloatToBits => out.push(o::CONVERT_FLOAT_TO_BITS),
         Instruction::ConvertBitsToFloat => out.push(o::CONVERT_BITS_TO_FLOAT),
+        Instruction::CStringNew => out.push(o::CSTRING_NEW),
+        Instruction::CLayoutAddress(aggregate) => {
+            out.push(o::CLAYOUT_ADDRESS);
+            out.extend_from_slice(&aggregate.to_le_bytes());
+        }
         Instruction::FileSystem(op) => {
             out.push(o::FILE_SYSTEM);
             out.push(op.as_byte());
@@ -333,6 +338,7 @@ impl Cursor<'_> {
                 let has_payload = self.take::<1>()?[0] != 0;
                 Instruction::NewEnum { tag, has_payload }
             }
+            o::CLAYOUT_ADDRESS => Instruction::CLayoutAddress(u32::from_le_bytes(self.take()?)),
             o::FILE_SYSTEM => {
                 let tag_offset = self.offset;
                 let [tag] = self.take::<1>()?;
@@ -436,6 +442,7 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::STRING_LEN => Instruction::StringLen,
         o::CONVERT_FLOAT_TO_BITS => Instruction::ConvertFloatToBits,
         o::CONVERT_BITS_TO_FLOAT => Instruction::ConvertBitsToFloat,
+        o::CSTRING_NEW => Instruction::CStringNew,
         o::ENUM_TAG => Instruction::EnumTag,
         o::ENUM_PAYLOAD => Instruction::EnumPayload,
         o::CONVERT_INT_TO_FLOAT => Instruction::ConvertIntToFloat,

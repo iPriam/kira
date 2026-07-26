@@ -201,3 +201,51 @@ int ffi_call_labeler_null(ffi_labeler label, int n) {
     }
     return label(0, n);
 }
+
+/* 0 = the title was NULL, 1 = empty, 2 = "kira", 3 = anything else; combined
+ * with the tag so one integer carries both facts. */
+static int ffi_classify_title(const char *t) {
+    if (t == 0) {
+        return 0;
+    }
+    if (t[0] == 0) {
+        return 1;
+    }
+    /* No libc here: the fixture is compiled without a sysroot, so the
+       comparison is spelled out rather than borrowed from <string.h>. */
+    const char *want = "kira";
+    int i = 0;
+    while (want[i] != 0 && t[i] == want[i]) {
+        i++;
+    }
+    if (want[i] == 0 && t[i] == 0) {
+        return 2;
+    }
+    return 3;
+}
+
+int ffi_desc_by_value(struct ffi_desc d) {
+    return ffi_classify_title(d.title) * 10 + d.tag;
+}
+
+int ffi_desc_by_pointer(const struct ffi_desc *d) {
+    if (d == 0) {
+        return -1;
+    }
+    return ffi_classify_title(d->title) * 10 + d->tag;
+}
+
+static const char *ffi_kept_title;
+static int ffi_kept_tag;
+
+void ffi_desc_keep(const struct ffi_desc *d) {
+    if (d == 0) {
+        return;
+    }
+    ffi_kept_title = d->title;
+    ffi_kept_tag = d->tag;
+}
+
+int ffi_desc_recall(void) {
+    return ffi_classify_title(ffi_kept_title) * 10 + ffi_kept_tag;
+}

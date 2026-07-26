@@ -120,6 +120,7 @@ impl<'a> Analyzer<'a> {
                 abi: ForeignAbi::C,
                 signature: mapped.signature,
                 param_wrappers: mapped.param_wrappers,
+                param_pointees: mapped.param_pointees,
                 result_wrapper: mapped.result_wrapper,
                 name_span: function.name_span,
             }),
@@ -271,12 +272,14 @@ impl<'a> Analyzer<'a> {
     fn map_foreign_signature(&mut self, function: &Function) -> Option<MappedForeign> {
         let mut params = Vec::with_capacity(function.params.len());
         let mut param_wrappers = Vec::with_capacity(function.params.len());
+        let mut param_pointees = Vec::with_capacity(function.params.len());
         let mut ok = true;
         for param in &function.params {
             match self.map_foreign_param(param) {
                 Some(seam) => {
                     params.push(seam.spec);
                     param_wrappers.push(seam.wrapper);
+                    param_pointees.push(seam.pointee);
                 }
                 None => ok = false,
             }
@@ -286,6 +289,7 @@ impl<'a> Analyzer<'a> {
             (true, Some(result)) => Some(MappedForeign {
                 signature: ForeignSignature::new(params, result.spec),
                 param_wrappers: param_wrappers.into(),
+                param_pointees: param_pointees.into(),
                 result_wrapper: result.wrapper,
             }),
             _ => None,
@@ -300,7 +304,27 @@ impl<'a> Analyzer<'a> {
             return None;
         }
         let ty = self.resolve_foreign_type(param.ty);
-        self.foreign_seam_of(ty, span, Position::Param)
+        let mut seam = self.foreign_seam_of(ty, span, Position::Param)?;
+        // A parameter written as an `@FFI.Pointer` to a C-layout struct is a
+        // pointer word at the wire and also accepts the struct itself, which the
+        // call hands over by address.
+        if ty == Type::RawPtr {
+            let written = self.written_type_name(param.ty);
+            if let Some(target) = self.pointer_targets.get(&written).cloned()
+                // Resolved by the same visibility rules any written type name
+                // takes — own package first — but silently: a pointer to a C
+                // type nobody declared is an opaque handle, not a mistake.
+                && let Some(struct_id) = self.visible_struct(&target)
+                && self.ffi_struct_kind(struct_id) == Some(FfiStructKind::CLayout)
+                && let Some(aggregate) = self.aggregate_seam_of(struct_id, span)
+            {
+                seam.pointee = Some(kira_semantics_model::hir::ForeignPointee {
+                    struct_id,
+                    aggregate,
+                });
+            }
+        }
+        Some(seam)
     }
 
     /// Maps the written result to its seam type; an absent result is
@@ -338,6 +362,7 @@ impl<'a> Analyzer<'a> {
         {
             if let Some(field_ty) = self.single_scalar_field_seam(id) {
                 return Some(ForeignSeam {
+                    pointee: None,
                     spec: ForeignTypeSpec::Scalar(field_ty),
                     wrapper: Some(id),
                 });
@@ -350,6 +375,7 @@ impl<'a> Analyzer<'a> {
                 return self
                     .aggregate_seam_of(id, span)
                     .map(|aggregate| ForeignSeam {
+                        pointee: None,
                         spec: ForeignTypeSpec::Aggregate(aggregate),
                         wrapper: Some(id),
                     });
@@ -532,11 +558,12 @@ impl<'a> Analyzer<'a> {
         // alongside: a single-scalar-field handle struct crosses as its field's
         // scalar, so the Kira side reads that field out of an argument and
         // rebuilds the struct around the result.
-        let (params, param_wrappers, result, result_wrapper, name) = {
+        let (params, param_wrappers, param_pointees, result, result_wrapper, name) = {
             let foreign = &self.program.foreign[id.0 as usize];
             (
                 foreign.signature.parameters().to_vec(),
                 foreign.param_wrappers.clone(),
+                foreign.param_pointees.clone(),
                 foreign.signature.result(),
                 foreign.result_wrapper,
                 foreign.kira_name.clone(),
@@ -570,7 +597,14 @@ impl<'a> Analyzer<'a> {
             );
             arg_hirs
         } else {
-            self.check_and_lower_foreign_args(&arg_hirs, &params, &param_wrappers, &name, span)
+            self.check_and_lower_foreign_args(
+                &arg_hirs,
+                &params,
+                &param_wrappers,
+                &param_pointees,
+                &name,
+                span,
+            )
         };
         // An aggregate result *is* the struct on the Kira side — the seam carries
         // its C-layout bytes and hands back the whole value — so the call's own
@@ -605,6 +639,7 @@ impl<'a> Analyzer<'a> {
         arg_hirs: &[HirExprId],
         params: &[ForeignTypeSpec],
         param_wrappers: &[Option<StructId>],
+        param_pointees: &[Option<kira_semantics_model::hir::ForeignPointee>],
         name: &str,
         span: Span,
     ) -> Vec<HirExprId> {
@@ -640,6 +675,18 @@ impl<'a> Analyzer<'a> {
                     }
                 }
                 None => {
+                    // A pointer parameter also accepts the struct it points at:
+                    // the seam writes that struct's C-layout image and passes
+                    // its address, which is what `sapp_run(move desc)` means.
+                    if let Some(pointee) = param_pointees[index]
+                        && actual == Type::Struct(pointee.struct_id)
+                    {
+                        seam_args.push(self.program.exprs.alloc(HirExpr::CLayoutAddress {
+                            value: arg,
+                            aggregate: pointee.aggregate,
+                        }));
+                        continue;
+                    }
                     let param = params[index];
                     if actual != Type::Error && !foreign_arg_matches(actual, param) {
                         let expected = match param.scalar() {
@@ -675,6 +722,10 @@ struct ForeignSeam {
     /// single-scalar-field handle, whose wire position is its field's scalar,
     /// and a C-layout aggregate, whose wire position is its table index.
     wrapper: Option<StructId>,
+    /// The C-layout struct this position points at, when it was written as an
+    /// `@FFI.Pointer`. The wire position stays a pointer word; this is what lets
+    /// a call pass the struct and have its address taken.
+    pointee: Option<kira_semantics_model::hir::ForeignPointee>,
 }
 
 impl ForeignSeam {
@@ -683,6 +734,7 @@ impl ForeignSeam {
         Self {
             spec: ForeignTypeSpec::Scalar(ty),
             wrapper: None,
+            pointee: None,
         }
     }
 }
@@ -694,6 +746,9 @@ struct MappedForeign {
     signature: ForeignSignature,
     /// One wrapper per parameter, `Some` for a single-scalar-field handle.
     param_wrappers: Box<[Option<StructId>]>,
+    /// One pointee per parameter, `Some` for an `@FFI.Pointer` to a C-layout
+    /// struct.
+    param_pointees: Box<[Option<kira_semantics_model::hir::ForeignPointee>]>,
     /// The result's wrapper, if it is a single-scalar-field handle.
     result_wrapper: Option<StructId>,
 }

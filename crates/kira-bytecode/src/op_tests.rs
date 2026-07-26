@@ -353,6 +353,27 @@ fn an_unknown_file_system_operation_is_rejected() {
     assert!(matches!(truncated, DecodeError::UnexpectedEnd { .. }));
 }
 
+/// The two retained-C-storage opcodes, appended after the file-system one.
+#[test]
+fn c_storage_opcodes_are_appended_and_round_trip() {
+    assert_eq!(opcode::CSTRING_NEW, 0x54);
+    assert_eq!(opcode::CLAYOUT_ADDRESS, 0x55);
+
+    let code = vec![
+        Instruction::CStringNew,
+        Instruction::CLayoutAddress(0),
+        Instruction::CLayoutAddress(u32::MAX),
+    ];
+    let bytes = encode(&code);
+    assert_eq!(decode(&bytes).unwrap(), code);
+}
+
+#[test]
+fn a_truncated_clayout_aggregate_index_is_reported() {
+    let err = decode(&[opcode::CLAYOUT_ADDRESS, 1, 2]).unwrap_err();
+    assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
+}
+
 #[test]
 fn unknown_opcode_is_reported() {
     let err = decode(&[0xff]).unwrap_err();

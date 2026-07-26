@@ -190,6 +190,16 @@ pub(crate) struct Analyzer<'a> {
     /// Registered before anything is resolved and consulted from
     /// `resolve_named_type`, so an alias reaches every type position at once.
     pub(crate) aliases: AliasTable,
+    /// What each `@FFI.Pointer` alias points at, by name — alias name to
+    /// written target name.
+    ///
+    /// Names only, recorded when the alias is collected and never resolved: a
+    /// generated binding points at plenty of C types nobody declares, and those
+    /// are opaque handles rather than mistakes. A parameter written as one of
+    /// these is a pointer word at the seam and *also* accepts the struct that
+    /// name refers to, when there is one, which is how `sapp_run(move desc)`
+    /// hands a descriptor over by address.
+    pub(crate) pointer_targets: HashMap<String, String>,
     /// Per-class flattening results, keyed by the struct id the class was
     /// declared as.
     ///
@@ -373,6 +383,7 @@ impl<'a> Analyzer<'a> {
             instantiation_depth: 0,
             payload_blame: None,
             aliases: AliasTable::new(),
+            pointer_targets: HashMap::new(),
             classes: HashMap::new(),
             constructs: HashMap::new(),
             construct_families: BTreeMap::new(),

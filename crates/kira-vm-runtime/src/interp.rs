@@ -480,6 +480,34 @@ impl Vm<'_> {
                 let value = self.pop_float()?;
                 self.stack.push(Value::Int(value.to_bits() as i64));
             }
+            Instruction::CStringNew => {
+                let value = self.pop()?;
+                let Value::Str(id) = value else {
+                    self.heap.drop_value(value);
+                    return Err(VmError::NotAString);
+                };
+                let word = kira_runtime_abi::c_storage::retain_text(self.heap.get(id));
+                self.heap.drop_value(value);
+                self.stack.push(Value::RawPtr(word));
+            }
+            Instruction::CLayoutAddress(aggregate) => {
+                let value = self.pop()?;
+                let id = kira_runtime_abi::ForeignAggregateId(aggregate);
+                let bytes = self.heap.aggregate_bytes(
+                    &module.foreign_aggregates,
+                    id,
+                    value,
+                    kira_runtime_abi::ForeignPointerWidth::HOST,
+                );
+                self.heap.drop_value(value);
+                let bytes = bytes.map_err(|_| VmError::TypeMismatch {
+                    expected: "a C-layout struct",
+                })?;
+                self.stack
+                    .push(Value::RawPtr(kira_runtime_abi::c_storage::retain_bytes(
+                        &bytes,
+                    )));
+            }
             Instruction::FileSystem(op) => self.file_system(op)?,
             Instruction::ConvertBitsToFloat => {
                 let value = self.pop_int()?;
