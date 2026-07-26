@@ -42,7 +42,7 @@ mod tests {
                 native_state_locals: vec![None; local_count as usize],
                 return_type: kira_semantics_model::Type::Void,
                 execution: kira_runtime_abi::Execution::Inherited,
-                mutates_self: false,
+                by_reference_params: Vec::new(),
                 body,
             }],
             types: Default::default(),
@@ -65,7 +65,7 @@ mod tests {
             callee: IrCallee::User(1),
             args: vec![],
             result: kira_semantics_model::Type::Void,
-            writeback: None,
+            writebacks: Vec::new(),
         });
         let mut program = single_main(vec![IrStmt::Eval { expr: call }], exprs, 0);
         program.functions.push(IrFunction {
@@ -75,7 +75,7 @@ mod tests {
             native_state_locals: Vec::new(),
             return_type: kira_semantics_model::Type::Void,
             execution: Execution::Native,
-            mutates_self: false,
+            by_reference_params: Vec::new(),
             body: Vec::new(),
         });
 
@@ -110,7 +110,7 @@ mod tests {
             callee: IrCallee::Print,
             args: vec![arg],
             result: kira_semantics_model::Type::Void,
-            writeback: None,
+            writebacks: Vec::new(),
         });
         let program = single_main(vec![IrStmt::Eval { expr: call }], exprs, 0);
         let module = compile(&program).expect("compiles");
@@ -133,7 +133,7 @@ mod tests {
             callee: IrCallee::Print,
             args: vec![arg],
             result: kira_semantics_model::Type::Void,
-            writeback: None,
+            writebacks: Vec::new(),
         });
         let program = single_main(vec![IrStmt::Eval { expr: call }], exprs, 0);
         let module = compile(&program).expect("compiles");
@@ -161,7 +161,7 @@ mod tests {
                 native_state_locals: vec![None],
                 return_type: Type::Void,
                 execution: kira_runtime_abi::Execution::Inherited,
-                mutates_self: false,
+                by_reference_params: Vec::new(),
                 body: vec![IrStmt::Return { value: None }],
             }],
             types: Default::default(),

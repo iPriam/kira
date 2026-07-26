@@ -187,13 +187,13 @@ fn build_body(program: &mut HirProgram, body: &mut Vec<kira_semantics_model::hir
         callee: Callee::Foreign(ForeignId(9)),
         args: vec![],
         ty: Type::RawPtr,
-        writeback: None,
+        writebacks: Vec::new(),
     });
     let ptr_word = program.exprs.alloc(HirExpr::Call {
         callee: Callee::Foreign(ForeignId(10)),
         args: vec![make_ptr],
         ty: Type::INT,
-        writeback: None,
+        writebacks: Vec::new(),
     });
     body.push(print_stmt(program, ptr_word, Type::INT));
 }
@@ -213,7 +213,7 @@ fn call_print(
         callee: Callee::Foreign(ForeignId(foreign_index)),
         args: arg_ids,
         ty: result_ty,
-        writeback: None,
+        writebacks: Vec::new(),
     });
     print_stmt(program, call, result_ty)
 }
@@ -229,7 +229,7 @@ fn print_stmt(
         callee: Callee::Builtin(Builtin::Print),
         args: vec![value],
         ty: Type::Void,
-        writeback: None,
+        writebacks: Vec::new(),
     });
     program.stmts.alloc(HirStmt::Expr { expr: print })
 }

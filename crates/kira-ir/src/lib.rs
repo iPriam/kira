@@ -18,7 +18,7 @@ pub mod lower;
 
 pub use ir::{
     ConvertKind, IrBinOp, IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport, IrFunction,
-    IrPlace, IrPlaceStep, IrProgram, IrStmt, IrUnOp,
+    IrPlace, IrPlaceStep, IrProgram, IrStmt, IrUnOp, IrWriteback,
 };
 pub use lower::lower;
 
@@ -39,7 +39,7 @@ mod tests {
             callee: Callee::Builtin(Builtin::Print),
             args: vec![one],
             ty: Type::Void,
-            writeback: None,
+            writebacks: Vec::new(),
         });
         let print_stmt = program.stmts.alloc(HirStmt::Expr { expr: call });
         let return_stmt = program.stmts.alloc(HirStmt::Return { value: None });
@@ -117,7 +117,7 @@ mod tests {
             callee: Callee::Foreign(ForeignId(0)),
             args: vec![a, b],
             ty: Type::Int(kira_semantics_model::IntSpelling::I32),
-            writeback: None,
+            writebacks: Vec::new(),
         });
         let eval = program.stmts.alloc(HirStmt::Expr { expr: call });
         program.functions[0].body = vec![eval];

@@ -280,10 +280,10 @@ impl FunctionLowering<'_, '_> {
     /// freed here.
     pub(super) fn emit_return(&mut self, value: Option<LLVMValueRef>) -> Result<(), LlvmError> {
         for slot in 0..self.function.locals.len() as u32 {
-            // A mutating method's slot 0 is the caller's storage, borrowed
+            // A written-through parameter is the caller's storage, borrowed
             // through a pointer; freeing it here would release a value the
             // caller still owns and will free itself.
-            if (self.function.mutates_self && slot == 0)
+            if self.function.param_by_reference(slot)
                 || self
                     .function
                     .native_state_locals

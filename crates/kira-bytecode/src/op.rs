@@ -166,6 +166,22 @@ pub enum Instruction {
         /// Steps to walk to the writeback location; may be empty.
         path: PlacePath,
     },
+    /// Call the function at the given index, then write one or more of its
+    /// final parameter slots back through places in the caller's frame.
+    ///
+    /// The general form of [`Instruction::CallMut`], which is the single-target
+    /// case with the target fixed at callee slot 0. The arguments are already on
+    /// the stack, exactly as [`Instruction::Call`]; each target's place indices
+    /// are pushed after them, targets in order and indices outermost first, per
+    /// the [`PlacePath`] convention. On return the runtime moves each named
+    /// callee slot into its caller place, dropping what was there, before
+    /// pushing the call's result.
+    CallWriteback {
+        /// The function index to call.
+        func: u32,
+        /// Where each written-through parameter lands, in parameter order.
+        targets: Vec<WritebackTarget>,
+    },
     /// Pop a value, box it as opaque callback state, and push its state handle.
     NativeState(u64),
     /// Pop a callback-state handle and push its stable raw userdata token.
@@ -346,6 +362,18 @@ impl PlacePath {
     }
 }
 
+/// One target of an [`Instruction::CallWriteback`]: which callee parameter is
+/// written back, and where in the caller it lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WritebackTarget {
+    /// The callee's local slot — its parameter — whose final value is moved out.
+    pub param: u16,
+    /// The caller-frame local slot the place is rooted at.
+    pub slot: u16,
+    /// Steps to walk to the writeback location; may be empty.
+    pub path: PlacePath,
+}
+
 /// A field path inside a [`Instruction::StoreField`], short enough to encode.
 ///
 /// The length is a `u16` on the wire, so a path is capped at `u16::MAX` steps.
@@ -518,6 +546,14 @@ mod opcode {
     // The address C enters a Kira function at. Appended after `RAW_PTR_NULL`;
     // carries a `u32` callback index, which the host resolves to a thunk.
     pub const FOREIGN_CALLBACK: u8 = 0x4e;
+
+    // The general writeback call. Appended after `FOREIGN_CALLBACK`; adding an
+    // opcode is not an ABI change. `CALL_MUT` is its one-target special case
+    // and stays exactly as it was, so every module already written still
+    // decodes and runs — this carries a count and one (parameter, place) row
+    // per target, which is what a call with several `borrow mut` arguments
+    // needs and `CALL_MUT`'s fixed slot-0 target cannot express.
+    pub const CALL_WRITEBACK: u8 = 0x4f;
 }
 
 #[cfg(test)]

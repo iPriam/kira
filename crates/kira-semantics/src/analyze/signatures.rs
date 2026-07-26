@@ -124,41 +124,18 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// The mode a parameter declares, reporting the one mode this port does
-    /// not implement.
+    /// The mode a parameter declares.
     ///
-    /// `borrow mut` is the single ownership mode that is **observable at run
-    /// time**: a callee writing through it must change the caller's binding.
-    /// Every other mode reduces to the deep copy the runtime already does, so
-    /// it lands as a pure static check. Accepting `borrow mut` without the
-    /// by-reference calling convention would not be an incomplete feature —
-    /// it would silently compute wrong answers, because the callee would
-    /// mutate a copy and the caller would never see the write.
-    ///
-    /// So it is refused with a typed error until the backends carry it,
-    /// following the oracle's own precedent for a reserved-but-unimplemented
-    /// mode (`copy` of a non-trivial value is `KSEM116` there for exactly this
-    /// reason). `KSEM112` is the free code in the ownership band.
+    /// `borrow mut` is the one ownership mode that is **observable at run
+    /// time**: a callee writing through it changes the caller's binding, where
+    /// every other mode reduces to the deep copy the runtime already does. It
+    /// is carried by the by-reference calling convention — the parameter joins
+    /// [`kira_ir::IrFunction::by_reference_params`] and every call site records
+    /// a writeback for it — rather than being refused here.
     pub(crate) fn check_param_ownership(
         &mut self,
         param: &kira_syntax_model::ast::Param,
     ) -> OwnershipMode {
-        if param.ownership == OwnershipMode::BorrowMut {
-            let span = param.ownership_span.unwrap_or(param.span);
-            self.emit(
-                span,
-                "KSEM112",
-                "Kira parsed `borrow mut`, but a mutable borrow is not implemented yet: \
-                 the callee would write to a copy the caller never sees. Take the value \
-                 with `move` and return the updated one, or use `borrow` to read it.",
-            );
-        }
-        // The mode is returned unchanged even when refused. Rewriting it to
-        // something implementable would make the body and the call sites check
-        // against a signature nobody wrote — a `borrow mut` body writing to
-        // its parameter would collect a spurious "cannot assign" on top of the
-        // real problem. The program is already rejected; every other
-        // diagnostic it collects should still be about what it said.
         param.ownership
     }
 

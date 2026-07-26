@@ -31,6 +31,9 @@ pub(crate) enum PlacePurpose {
     /// (`g.mutate()`), which must name mutable storage so the mutation can be
     /// written back.
     MutCall,
+    /// An argument passed to a `borrow mut` parameter (`step(tree, 1)`), which
+    /// must name mutable storage so the callee's writes reach the caller.
+    BorrowMut,
 }
 
 impl PlacePurpose {
@@ -53,6 +56,11 @@ impl PlacePurpose {
                  value would mutate something discarded immediately"
                     .to_owned()
             }
+            PlacePurpose::BorrowMut => {
+                "a `borrow mut` parameter needs a variable to write back into; passing a \
+                 temporary value would mutate something discarded immediately"
+                    .to_owned()
+            }
         }
     }
 
@@ -64,6 +72,7 @@ impl PlacePurpose {
         match self {
             PlacePurpose::Assign | PlacePurpose::Append => "KSEM025",
             PlacePurpose::MutCall => "KSEM211",
+            PlacePurpose::BorrowMut => "KSEM248",
         }
     }
 
@@ -80,6 +89,9 @@ impl PlacePurpose {
                 "cannot call a mutating method through immutable binding `{name}` \
                  (declare it with `var`)"
             ),
+            PlacePurpose::BorrowMut => {
+                format!("cannot mutably borrow immutable binding `{name}` (declare it with `var`)")
+            }
         }
     }
 }

@@ -8,11 +8,12 @@
 
 use kira_bytecode::module::Module;
 use kira_bytecode::op::Instruction;
-use kira_runtime_abi::{HostCapabilities, NativeArg};
+use kira_runtime_abi::HostCapabilities;
 
 use crate::error::VmError;
 use crate::value::{Heap, Value};
 
+mod frames;
 mod host;
 mod native_state;
 mod operators;
@@ -22,33 +23,11 @@ mod program;
 pub(crate) use self::program::check_signature;
 pub use self::program::{Program, RunOutcome, execute};
 
+use self::frames::{Frame, Writeback, new_frame};
 use self::place::{ResolvedStep, check_index};
 
 /// Guards against unbounded recursion turning into unbounded memory use.
 const MAX_CALL_DEPTH: usize = 1 << 20;
-
-/// One call frame: its function, program counter, and local slots.
-struct Frame {
-    func: u32,
-    pc: usize,
-    locals: Vec<Value>,
-    /// Where this frame's final receiver (slot 0) is written back on return.
-    ///
-    /// `Some` only for a frame entered by [`Instruction::CallMut`] — a mutating
-    /// method. On return the callee's mutated receiver moves into the caller's
-    /// place before the callee's locals are dropped, which is the whole of
-    /// value-semantics writeback. `None` for every ordinary call.
-    writeback: Option<Writeback>,
-}
-
-/// A resolved receiver-writeback target on a callee frame.
-struct Writeback {
-    /// The caller-frame local slot the place is rooted at.
-    slot: u16,
-    /// The steps to walk into the caller's storage, indices already resolved;
-    /// empty writes the caller's local slot itself.
-    steps: Vec<ResolvedStep>,
-}
 
 /// The running interpreter: a host, a heap, an operand stack, and scratch.
 pub(crate) struct Vm<'h> {
@@ -66,138 +45,7 @@ pub(crate) struct Vm<'h> {
     steps: Vec<ResolvedStep>,
 }
 
-impl<'h> Vm<'h> {
-    /// A VM that runs on `heap` and reaches the world through `host`.
-    ///
-    /// The heap is taken rather than created here because it does not always
-    /// belong to one run: [`crate::Instance`] lends the VM a heap that outlives
-    /// the call and takes it back afterwards.
-    pub(crate) fn new(host: &'h mut dyn HostCapabilities, heap: Heap) -> Self {
-        Vm {
-            host,
-            heap,
-            stack: Vec::new(),
-            steps: Vec::new(),
-        }
-    }
-
-    /// Gives the heap back, whatever the run did with it.
-    pub(crate) fn into_heap(self) -> Heap {
-        self.heap
-    }
-
-    /// Runs `function_id` with `args` in its parameter slots, to completion.
-    ///
-    /// Arguments are lowered into this run's own heap, so the caller's storage
-    /// is only read: a `&str` argument is copied in rather than aliased.
-    fn enter(
-        &mut self,
-        module: &Module,
-        function_id: u32,
-        args: &[NativeArg<'_>],
-    ) -> Result<Value, VmError> {
-        let mut lowered = Vec::with_capacity(args.len());
-        for argument in args {
-            match self.heap.lower(*argument) {
-                Some(value) => lowered.push(value),
-                None => {
-                    // The arguments already lowered are this heap's; a refused
-                    // call frees them rather than leaving them behind.
-                    self.discard(lowered);
-                    return Err(VmError::HandleAtSeam {
-                        function: function_id,
-                    });
-                }
-            }
-        }
-        self.enter_values(module, function_id, lowered)
-    }
-
-    /// Runs `function_id` with values already lowered into this VM's heap.
-    ///
-    /// Takes ownership of `args`: every one of them is either moved into a
-    /// parameter slot — and dropped with the frame — or freed here, on every
-    /// path out, including the ones that never start the function.
-    pub(crate) fn enter_values(
-        &mut self,
-        module: &Module,
-        function_id: u32,
-        args: Vec<Value>,
-    ) -> Result<Value, VmError> {
-        let mut frame = match new_frame(module, function_id) {
-            Ok(frame) => frame,
-            Err(error) => {
-                self.discard(args);
-                return Err(error);
-            }
-        };
-        if args.len() > frame.locals.len() {
-            // Validation proves `param_count <= local_count` and the entry
-            // points check arity, so this is unreachable through either door —
-            // it is here so the impossible case frees rather than panics. The
-            // count is read before the values are freed, so the refusal names
-            // what actually arrived rather than a placeholder.
-            let got = args.len();
-            self.discard(args);
-            self.discard(frame.locals);
-            return Err(VmError::ArityMismatch {
-                function: function_id,
-                expected: module.functions[function_id as usize].param_count,
-                got,
-            });
-        }
-        for (slot, value) in args.into_iter().enumerate() {
-            frame.locals[slot] = value;
-        }
-        self.run(module, frame)
-    }
-
-    /// Frees a batch of values this VM owns.
-    fn discard(&mut self, values: impl IntoIterator<Item = Value>) {
-        for value in values {
-            self.heap.drop_value(value);
-        }
-    }
-
-    /// Writes a returning mutating method's final receiver back into the
-    /// caller's place — the whole of value-semantics writeback.
-    ///
-    /// The caller is the frame just beneath the one that returned, always
-    /// present because a mutating method is only ever entered by
-    /// [`Instruction::CallMut`] from a caller. An empty path overwrites the
-    /// caller's local itself (`g.mutate()`); a non-empty one walks into it,
-    /// exactly as [`Vm::store_place`] does. The value overwritten is dropped;
-    /// `receiver` is moved into the place, so it is not double-freed with the
-    /// callee's other locals. The `slot` was bounds-checked against the caller's
-    /// function by [`Module::validate`], so the direct index matches the
-    /// discipline every other place walk follows.
-    fn write_back(
-        &mut self,
-        frames: &mut [Frame],
-        writeback: &Writeback,
-        receiver: Value,
-    ) -> Result<(), VmError> {
-        let Some(caller) = frames.last_mut() else {
-            self.heap.drop_value(receiver);
-            return Err(VmError::FrameUnderflow);
-        };
-        if writeback.steps.is_empty() {
-            let previous = std::mem::replace(&mut caller.locals[writeback.slot as usize], receiver);
-            self.heap.drop_value(previous);
-            return Ok(());
-        }
-        match self.store_place(caller, writeback.slot, &writeback.steps, receiver) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                // A malformed place — unreachable past validation and typing —
-                // leaves the receiver unstored, so it is freed rather than
-                // leaked into a heap whose accounting a trap still checks.
-                self.heap.drop_value(receiver);
-                Err(error)
-            }
-        }
-    }
-
+impl Vm<'_> {
     /// Runs to completion, reclaiming everything still live if it traps.
     ///
     /// A trap leaves live frames and a non-empty operand stack, and both hold
@@ -244,20 +92,25 @@ impl<'h> Vm<'h> {
                     let Some(mut finished) = frames.pop() else {
                         return Err(VmError::FrameUnderflow);
                     };
-                    // A mutating method writes its final receiver — slot 0 —
-                    // back into the caller's place before its own locals are
-                    // dropped, so the receiver moves into the place rather than
-                    // being freed with the frame.
-                    if let Some(writeback) = finished.writeback.take()
-                        && let Some(receiver) = finished
+                    // A written-through parameter moves into the caller's place
+                    // before this frame's locals are dropped, so its value lands
+                    // in the place rather than being freed with the frame. Every
+                    // target names a distinct parameter, so taking each in turn
+                    // leaves the rest intact.
+                    let writebacks = std::mem::take(&mut finished.writebacks);
+                    for writeback in writebacks {
+                        let Some(value) = finished
                             .locals
-                            .first_mut()
+                            .get_mut(writeback.param as usize)
                             .map(|slot| std::mem::replace(slot, Value::Void))
-                        && let Err(error) = self.write_back(frames, &writeback, receiver)
-                    {
-                        self.discard(finished.locals);
-                        self.heap.drop_value(result);
-                        return Err(error);
+                        else {
+                            continue;
+                        };
+                        if let Err(error) = self.write_back(frames, &writeback, value) {
+                            self.discard(finished.locals);
+                            self.heap.drop_value(result);
+                            return Err(error);
+                        }
                     }
                     for local in finished.locals {
                         self.heap.drop_value(local);
@@ -300,32 +153,53 @@ impl<'h> Vm<'h> {
                         self.discard(callee.locals);
                         return Err(error);
                     }
-                    callee.writeback = Some(Writeback { slot, steps });
+                    callee.writebacks = vec![Writeback {
+                        param: 0,
+                        slot,
+                        steps,
+                    }];
+                    frames.push(callee);
+                }
+                Instruction::CallWriteback { func, targets } => {
+                    if frames.len() >= MAX_CALL_DEPTH {
+                        return Err(VmError::CallDepthExceeded);
+                    }
+                    let mut callee = new_frame(module, func)?;
+                    // Every target's place indices sit on top of the operand
+                    // stack, pushed after the arguments and targets in order, so
+                    // they are resolved back to front — the last target's
+                    // indices are the ones on top.
+                    let mut writebacks = Vec::with_capacity(targets.len());
+                    let mut failure = None;
+                    for target in targets.iter().rev() {
+                        let mut steps = Vec::new();
+                        if let Err(error) = self.fill_steps(&target.path, &mut steps) {
+                            failure = Some(error);
+                            break;
+                        }
+                        writebacks.push(Writeback {
+                            param: target.param,
+                            slot: target.slot,
+                            steps,
+                        });
+                    }
+                    if let Some(error) = failure {
+                        self.discard(callee.locals);
+                        return Err(error);
+                    }
+                    // Back to parameter order, so a return writes the targets in
+                    // the order the call declared them.
+                    writebacks.reverse();
+                    if let Err(error) = self.fill_params(module, func, &mut callee) {
+                        self.discard(callee.locals);
+                        return Err(error);
+                    }
+                    callee.writebacks = writebacks;
                     frames.push(callee);
                 }
                 other => self.step(module, &mut frames[depth], other)?,
             }
         }
-    }
-
-    /// Pops arguments off the operand stack into a fresh callee frame's
-    /// parameter slots (arguments were pushed left to right).
-    ///
-    /// Fills in place rather than taking the frame, so a mid-fill failure hands
-    /// the caller back a frame holding the slots already written — which it must
-    /// free, because a partially filled frame never reaches the frame stack the
-    /// unwind walks.
-    fn fill_params(
-        &mut self,
-        module: &Module,
-        index: u32,
-        frame: &mut Frame,
-    ) -> Result<(), VmError> {
-        let param_count = module.functions[index as usize].param_count as usize;
-        for slot in (0..param_count).rev() {
-            frame.locals[slot] = self.pop()?;
-        }
-        Ok(())
     }
 
     /// Executes one non-control-flow-frame instruction against `frame`.
@@ -668,17 +542,4 @@ impl<'h> Vm<'h> {
             }
         }
     }
-}
-
-fn new_frame(module: &Module, index: u32) -> Result<Frame, VmError> {
-    let function = module
-        .functions
-        .get(index as usize)
-        .ok_or(VmError::UnknownFunction(index))?;
-    Ok(Frame {
-        func: index,
-        pc: 0,
-        locals: vec![Value::Void; function.local_count as usize],
-        writeback: None,
-    })
 }

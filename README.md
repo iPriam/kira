@@ -322,17 +322,31 @@ build a new one.
 
 Two edges are deliberate:
 
-- **`borrow mut` is refused (`KSEM112`).** It is the one mode that is
-  observable at run time — a callee writing through the caller's binding — and
-  no backend carries the by-reference calling convention yet. Accepting it
-  would not be an incomplete feature; it would silently compute wrong answers,
-  because the callee would write to a copy the caller never sees. Take the
-  value with `move` and return the updated one.
-- **Ownership costs no backend anything.** For today's types a `move` and a
-  `borrow` are both indistinguishable from the deep copy the runtime already
-  performs — a caller that moved a value can never look at it again, which is
-  exactly what the checker guarantees — so the whole subsystem is a static
-  check. See [.codex/work/ownership.md](.codex/work/ownership.md).
+- **`borrow mut` writes through the caller's binding.** It is the one mode
+  observable at run time, so it is the one mode a backend carries: the
+  parameter is passed by reference, and the call site records where the
+  callee's final value lands.
+
+  ```kira
+  function bump(c: borrow mut Counter, by: Int) {
+      c.n = c.n + by
+      return
+  }
+
+  var counter = Counter { n: 1 }
+  bump(counter, 4)
+  print(counter.n)          // 5 — the callee wrote through
+  ```
+
+  The argument has to name storage, not a temporary (`KSEM248`), and one call
+  may not mutably borrow the same binding twice (`KSEM247`) — both writes would
+  land in one place and the later would erase the earlier.
+- **The other four modes cost no backend anything.** For today's types a `move`
+  and a `borrow` are both indistinguishable from the deep copy the runtime
+  already performs — a caller that moved a value can never look at it again
+  until it assigns the binding a new one, which is exactly what the checker
+  guarantees — so those four are a static check. See
+  [.codex/work/ownership.md](.codex/work/ownership.md).
 
 ## Parameter defaults
 

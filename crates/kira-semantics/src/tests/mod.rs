@@ -26,9 +26,19 @@ mod widths;
 
 use super::*;
 use kira_semantics_model::Type;
+use kira_semantics_model::hir::{HirExpr, HirProgram, HirStmt};
 
 fn diagnostics(text: &str) -> Vec<Diagnostic> {
     module_diagnostics(text, &[])
+}
+
+/// The analyzed HIR of a single-file program, for the few cases that check the
+/// shape analysis produced rather than the diagnostics it did not.
+fn analyze_text(text: &str) -> HirProgram {
+    let db = salsa::DatabaseImpl::new();
+    let source =
+        SourceProgram::application(&db, text.to_owned(), "test.kira".to_owned(), Vec::new());
+    analyzed(&db, source)
 }
 
 /// The diagnostics of a program built from an entry file plus named modules.
@@ -559,15 +569,65 @@ fn binding_a_struct_does_not_move_it() {
     assert!(diagnostics(text).is_empty());
 }
 
-/// `borrow mut` is the one mode that would be observable at run time, and
-/// no backend carries it yet. It is refused rather than silently
-/// miscompiled into a write the caller never sees.
+/// `borrow mut` is the one mode observable at run time: the callee writes
+/// through the caller's binding, and the call site records where that write
+/// lands.
 #[test]
-fn a_mutable_borrow_is_refused_rather_than_miscompiled() {
+fn a_mutable_borrow_is_accepted_and_carries_a_writeback() {
     let text = "struct Mesh { var id: Int }\n\
                     function bump(mesh: borrow mut Mesh) { mesh.id = mesh.id + 1 return }\n\
                     @Main function main() { var mesh = Mesh { id: 1 } bump(mesh) return }";
-    assert_eq!(codes(text), vec!["KSEM112"]);
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+    let program = analyze_text(text);
+    let main = program
+        .functions
+        .iter()
+        .find(|function| function.is_main)
+        .expect("the program declares a main");
+    let call = main
+        .body
+        .iter()
+        .find_map(|&stmt| match program.stmt(stmt) {
+            HirStmt::Expr { expr } => Some(*expr),
+            _ => None,
+        })
+        .expect("main evaluates the call");
+    let HirExpr::Call { writebacks, .. } = program.expr(call) else {
+        panic!("expected a call expression");
+    };
+    assert_eq!(writebacks.len(), 1, "{writebacks:?}");
+    assert_eq!(writebacks[0].param, 0);
+    assert!(writebacks[0].place.path.is_empty());
+}
+
+/// A `borrow mut` argument has to name storage: a temporary would be mutated
+/// and then discarded, which is a write nobody can observe.
+#[test]
+fn a_mutable_borrow_of_a_temporary_is_refused() {
+    let text = "struct Mesh { var id: Int }\n\
+                    function bump(mesh: borrow mut Mesh) { mesh.id = mesh.id + 1 return }\n\
+                    @Main function main() { bump(Mesh { id: 1 }) return }";
+    assert_eq!(codes(text), vec!["KSEM248"]);
+}
+
+/// One call cannot mutably borrow the same binding twice: both writes would
+/// land in one place and the later one would erase the earlier.
+#[test]
+fn mutably_borrowing_one_binding_twice_in_a_call_is_refused() {
+    let text = "struct Mesh { var id: Int }\n\
+                    function merge(a: borrow mut Mesh, b: borrow mut Mesh) { a.id = b.id return }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } merge(mesh, mesh) return }";
+    assert_eq!(codes(text), vec!["KSEM247"]);
+}
+
+/// Two distinct bindings are two distinct places, so the same call is fine.
+#[test]
+fn mutably_borrowing_two_bindings_in_one_call_is_accepted() {
+    let text = "struct Mesh { var id: Int }\n\
+                    function merge(a: borrow mut Mesh, b: borrow mut Mesh) { a.id = b.id return }\n\
+                    @Main function main() { var one = Mesh { id: 1 } var two = Mesh { id: 2 } \
+                    merge(one, two) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
 
 /// `move` and `copy` are contextual identifiers, not reserved keywords:

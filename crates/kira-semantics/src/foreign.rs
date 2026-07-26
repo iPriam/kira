@@ -591,7 +591,7 @@ impl<'a> Analyzer<'a> {
             callee: Callee::Foreign(id),
             args: seam_args,
             ty: call_type,
-            writeback: None,
+            writebacks: Vec::new(),
         });
         match result_wrapper {
             Some(struct_id) if !aggregate_result => self.program.exprs.alloc(HirExpr::StructNew {

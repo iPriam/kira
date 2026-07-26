@@ -12,7 +12,7 @@ pub mod ty;
 
 pub use hir::{
     Builtin, Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirLocal, HirPlace,
-    HirPlaceStep, HirProgram, HirStmt, HirStmtId, HirUnaryOp, LocalId,
+    HirPlaceStep, HirProgram, HirStmt, HirStmtId, HirUnaryOp, HirWriteback, LocalId,
 };
 /// The engine a function's body runs on, anchored in `kira-runtime-abi` and
 /// re-exported here so the analyzer names it from one place.

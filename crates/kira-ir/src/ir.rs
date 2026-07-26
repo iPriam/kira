@@ -258,14 +258,15 @@ pub struct IrFunction {
     /// A hybrid build splits the program on this; a single-backend build
     /// resolves it against that backend's default.
     pub execution: Execution,
-    /// Whether this function is a method that mutates its receiver.
+    /// The parameter slots this function takes by reference, ascending.
     ///
-    /// A statically-typed backend reads this to give the function a by-reference
-    /// receiver (parameter slot 0), so a call site that carries a writeback
-    /// place mutates the caller's storage in place. The VM ignores it: its
-    /// writeback is driven entirely by the call instruction. `false` for every
-    /// ordinary function.
-    pub mutates_self: bool,
+    /// A statically-typed backend reads this to give those parameters a pointer
+    /// type, so a call site that carries the matching writeback mutates the
+    /// caller's storage in place. Two declarations put a slot here: a mutating
+    /// method's receiver (slot 0) and a `borrow mut` parameter, wherever it
+    /// sits. The VM ignores the list — its writeback is driven entirely by the
+    /// call instruction. Empty for every ordinary function.
+    pub by_reference_params: Vec<u32>,
     /// The function body.
     pub body: Vec<IrStmt>,
 }
@@ -281,6 +282,12 @@ impl IrFunction {
         (index < self.param_count)
             .then(|| self.locals.get(index as usize).copied())
             .flatten()
+    }
+
+    /// Whether parameter slot `index` is passed as a pointer to the caller's
+    /// storage rather than by value.
+    pub fn param_by_reference(&self, index: u32) -> bool {
+        self.by_reference_params.contains(&index)
     }
 }
 
@@ -393,6 +400,18 @@ impl IrPlace {
     }
 }
 
+/// One argument a call writes back into the caller when it returns.
+///
+/// The lowered form of [`kira_semantics_model::HirWriteback`]: which parameter
+/// the callee may write through, and where in the caller its final value goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IrWriteback {
+    /// The callee parameter slot whose final value is written back.
+    pub param: u32,
+    /// Where in the caller that value lands.
+    pub place: IrPlace,
+}
+
 /// An expression in the IR.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrExpr {
@@ -454,14 +473,15 @@ pub enum IrExpr {
         args: Vec<IrExprId>,
         /// The result type (`Void` for `print`).
         result: Type,
-        /// The place the callee's final `self` is written back into, set only
-        /// when the callee is a method that mutates its receiver.
+        /// Every argument the callee writes back into the caller, in parameter
+        /// order.
         ///
-        /// `None` for every ordinary call, which behaves exactly as before.
-        /// When it is `Some`, `args[0]` is the receiver and the mutated receiver
-        /// lands in this place after the call — the side effect that makes a
-        /// receiver mutation observable while the call still yields `result`.
-        writeback: Option<IrPlace>,
+        /// Empty for every ordinary call, which behaves exactly as before. Each
+        /// entry names a parameter the callee may write through — a mutating
+        /// method's receiver, or a `borrow mut` parameter — and the caller place
+        /// its final value lands in after the call, which is what makes that
+        /// write observable while the call still yields `result`.
+        writebacks: Vec<IrWriteback>,
     },
     /// Construction of a struct value: one initializer per field, in
     /// declaration order, with defaults already filled in by analysis.

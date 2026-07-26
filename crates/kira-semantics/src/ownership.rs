@@ -13,7 +13,7 @@
 //!    borrowed (`KSEM109`) and a borrowed parameter cannot be moved onward
 //!    (`KSEM111`).
 //!
-//! ## Why no backend learns any of this
+//! ## Why only one mode reaches a backend
 //!
 //! For the type lattice as it stands — scalars, `String`, and structs — a
 //! `move` and a `borrow` are both **observationally identical to the deep copy
@@ -25,12 +25,14 @@
 //! `borrow` parameter is read-only, so the callee cannot write anything back
 //! for the caller to observe either.
 //!
-//! That is why this whole subsystem is a static check with **zero** IR,
-//! bytecode, VM, LLVM, or wasm change, and why it is honest to say so rather
-//! than thread an unused mode through fourteen files. The first mode that
-//! *does* become observable is `borrow mut` — a callee writing through the
-//! caller's binding — and it is refused here rather than silently miscompiled;
-//! see [`Analyzer::reject_borrow_mut`].
+//! So four of the five modes are a static check with **zero** IR, bytecode, VM,
+//! LLVM, or wasm change, and it is honest to say so rather than thread an
+//! unused mode through fourteen files. `borrow mut` is the one that *is*
+//! observable — the callee writes through the caller's binding — and it is
+//! carried rather than erased: the parameter joins the callee's by-reference
+//! list and every call site records where the write lands (a
+//! [`kira_semantics_model::HirWriteback`]), which is the same machinery a
+//! mutating method's receiver already used.
 //!
 //! ## What the aggregates will need
 //!

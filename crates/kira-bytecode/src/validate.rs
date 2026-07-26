@@ -178,6 +178,19 @@ impl Module {
                             && !self.functions[*func as usize].is_native()
                             && *slot < function.local_count
                     }
+                    // The general writeback call is bounded on both sides: the
+                    // callee like `CallMut`'s, each target's caller slot against
+                    // this frame, and each target's `param` against the callee's
+                    // own slot count — the callee's frame is what the runtime
+                    // moves that slot out of.
+                    Instruction::CallWriteback { func, targets } => {
+                        *func < function_count
+                            && !self.functions[*func as usize].is_native()
+                            && targets.iter().all(|target| {
+                                target.slot < function.local_count
+                                    && target.param < self.functions[*func as usize].local_count
+                            })
+                    }
                     // A `CallNative` id names a function in the *program*, and
                     // is resolved by the host against the hybrid manifest — not
                     // an index into this module's table, so there is nothing

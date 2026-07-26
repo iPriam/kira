@@ -461,11 +461,11 @@ impl<'a> Codegen<'a> {
             let ty = function.param_type(slot).ok_or(LlvmError::Unsupported(
                 "a function with a missing parameter",
             ))?;
-            // A mutating method takes its receiver by reference: parameter 0 is a
-            // pointer to the caller's storage so a write to `self` lands there
-            // and is observable after the call. Every other parameter — and every
-            // parameter of an ordinary function — is passed by value.
-            if function.mutates_self && slot == 0 {
+            // A written-through parameter — a mutating method's receiver, or one
+            // declared `borrow mut` — is a pointer to the caller's storage, so a
+            // write to it lands there and is observable after the call. Every
+            // other parameter is passed by value.
+            if function.param_by_reference(slot) {
                 params.push(self.types.ptr);
             } else {
                 params.push(self.llvm_type(ty)?);

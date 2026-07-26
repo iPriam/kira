@@ -292,3 +292,160 @@ function main() {
     // 1 + 2 = 3, then + (0+1+2+3) = 9.
     assert_eq!(output, "3\n9\nroot\n");
 }
+
+/// A `borrow mut` parameter writes through the caller's binding, and every
+/// backend sees the same write.
+///
+/// The VM copies the argument into the callee's slot and moves it back on
+/// return; native passes a pointer into the caller's storage and the callee
+/// writes through it. Two mechanisms, one observable answer — which is the
+/// whole claim this case exists to check.
+#[test]
+fn a_mutable_borrow_writes_through_on_every_backend() {
+    let output = assert_parity(
+        r#"
+struct Counter {
+    var n: Int
+    var label: String
+}
+
+function bump(c: borrow mut Counter, by: Int) {
+    c.n = c.n + by
+    return
+}
+
+function rename(c: borrow mut Counter, to: String) -> Int {
+    c.label = to
+    return c.n
+}
+
+@Main
+function main() {
+    var counter = Counter { n: 1, label: "start" }
+    bump(counter, 4)
+    bump(counter, 5)
+    print(counter.n)
+    print(rename(counter, "done"))
+    print(counter.label)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "10\n10\ndone\n");
+}
+
+/// Several `borrow mut` parameters in one call each land in their own place.
+///
+/// This is the shape `CallMut` cannot encode — its writeback target is fixed at
+/// callee slot 0 — so it is the case that exercises `CallWriteback` on the VM
+/// and two pointer parameters on native.
+#[test]
+fn several_mutable_borrows_in_one_call_agree() {
+    let output = assert_parity(
+        r#"
+struct Bucket {
+    var total: Int
+}
+
+function move(from: borrow mut Bucket, to: borrow mut Bucket, amount: Int) {
+    from.total = from.total - amount
+    to.total = to.total + amount
+    return
+}
+
+function drain(left: borrow mut [Int], right: borrow mut [Int]) {
+    left.append(7)
+    right.append(8)
+    right.append(9)
+    return
+}
+
+@Main
+function main() {
+    var a = Bucket { total: 100 }
+    var b = Bucket { total: 5 }
+    move(a, b, 30)
+    move(a, b, 20)
+    print(a.total)
+    print(b.total)
+    var xs = [1]
+    var ys = [2]
+    drain(xs, ys)
+    print(xs.count)
+    print(ys.count)
+    print(ys[2])
+    return
+}
+"#,
+    );
+    assert_eq!(output, "50\n55\n2\n3\n9\n");
+}
+
+/// A `borrow mut` argument may be a field or an element, not just a bare name,
+/// and the write lands exactly there.
+#[test]
+fn a_mutable_borrow_of_a_nested_place_agrees() {
+    let output = assert_parity(
+        r#"
+struct Cell {
+    var value: Int
+}
+
+struct Grid {
+    var origin: Cell
+    var cells: [Cell]
+}
+
+function bump(cell: borrow mut Cell) {
+    cell.value = cell.value + 1
+    return
+}
+
+@Main
+function main() {
+    var grid = Grid { origin: Cell { value: 10 }, cells: [Cell { value: 20 }, Cell { value: 30 }] }
+    bump(grid.origin)
+    bump(grid.cells[1])
+    bump(grid.cells[1])
+    print(grid.origin.value)
+    print(grid.cells[0].value)
+    print(grid.cells[1].value)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "11\n20\n32\n");
+}
+
+/// A `borrow mut` parameter passed onward as a `borrow mut` argument keeps
+/// writing through to the original binding.
+#[test]
+fn a_mutable_borrow_passed_onward_still_reaches_the_caller() {
+    let output = assert_parity(
+        r#"
+struct Counter {
+    var n: Int
+}
+
+function inner(c: borrow mut Counter) {
+    c.n = c.n * 2
+    return
+}
+
+function outer(c: borrow mut Counter) {
+    inner(c)
+    inner(c)
+    return
+}
+
+@Main
+function main() {
+    var counter = Counter { n: 3 }
+    outer(counter)
+    print(counter.n)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "12\n");
+}
