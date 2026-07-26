@@ -16,8 +16,8 @@
 //! ahead of the rows would change bytes that already exist.
 
 use kira_runtime_abi::{
-    ForeignAbi, ForeignAggregate, ForeignAggregateId, ForeignAggregates, ForeignImport,
-    ForeignMember, ForeignSignature, ForeignType, ForeignTypeSpec,
+    ForeignAbi, ForeignAggregate, ForeignAggregateId, ForeignAggregates, ForeignArrayElement,
+    ForeignImport, ForeignMember, ForeignSignature, ForeignType, ForeignTypeSpec,
 };
 
 use crate::module::{ModuleDecodeError, Reader, write_bytes, write_u32};
@@ -25,6 +25,10 @@ use crate::module::{ModuleDecodeError, Reader, write_bytes, write_u32};
 /// The member byte that introduces a nested aggregate; anything else is a
 /// scalar's own foreign-type tag.
 const NESTED_MEMBER_TAG: u8 = 0xff;
+
+/// The member byte that introduces an inline fixed-size array: the element's own
+/// member byte (with its index when nested) follows, then a `u32` count.
+const ARRAY_MEMBER_TAG: u8 = 0xfe;
 
 /// Writes the foreign-import section: a count, then one row per import.
 ///
@@ -49,9 +53,10 @@ pub(crate) fn write_foreign(out: &mut Vec<u8>, imports: &[ForeignImport]) {
 /// Writes the aggregate table: a count, then each aggregate's members in
 /// declaration order.
 ///
-/// A member is one byte — a scalar's foreign-type tag, or [`NESTED_MEMBER_TAG`]
-/// followed by a `u32` index. The tag is unambiguous because no scalar tag
-/// reaches `0xff`.
+/// A member is one byte — a scalar's foreign-type tag, [`NESTED_MEMBER_TAG`]
+/// followed by a `u32` index, or [`ARRAY_MEMBER_TAG`] followed by the element's
+/// own member bytes and a `u32` count. The tags are unambiguous because no
+/// scalar tag reaches `0xfe`.
 pub(crate) fn write_foreign_aggregates(out: &mut Vec<u8>, aggregates: &ForeignAggregates) {
     write_u32(out, aggregates.len() as u32);
     for aggregate in aggregates.iter() {
@@ -62,6 +67,17 @@ pub(crate) fn write_foreign_aggregates(out: &mut Vec<u8>, aggregates: &ForeignAg
                 ForeignMember::Aggregate(id) => {
                     out.push(NESTED_MEMBER_TAG);
                     write_u32(out, id.0);
+                }
+                ForeignMember::Array { element, count } => {
+                    out.push(ARRAY_MEMBER_TAG);
+                    match element {
+                        ForeignArrayElement::Scalar(ty) => out.push(ty.tag()),
+                        ForeignArrayElement::Aggregate(id) => {
+                            out.push(NESTED_MEMBER_TAG);
+                            write_u32(out, id.0);
+                        }
+                    }
+                    write_u32(out, *count);
                 }
             }
         }
@@ -182,8 +198,35 @@ fn read_member(reader: &mut Reader<'_>, index: u32) -> Result<ForeignMember, Mod
             reader.read_u32()?,
         )));
     }
+    if tag == ARRAY_MEMBER_TAG {
+        let element = read_array_element(reader, index)?;
+        return Ok(ForeignMember::Array {
+            element,
+            count: reader.read_u32()?,
+        });
+    }
     ForeignType::from_tag(tag)
         .map(ForeignMember::Scalar)
+        .ok_or(ModuleDecodeError::UnknownForeignAggregateMember { index, tag })
+}
+
+/// Reads an inline array's element: a scalar tag, or a nested aggregate index.
+///
+/// An element is never itself an array — a C array of arrays is written as an
+/// array of the aggregate wrapping the inner one — so an [`ARRAY_MEMBER_TAG`]
+/// here is as unknown as any other tag the writer never emits.
+fn read_array_element(
+    reader: &mut Reader<'_>,
+    index: u32,
+) -> Result<ForeignArrayElement, ModuleDecodeError> {
+    let tag = reader.take(1)?[0];
+    if tag == NESTED_MEMBER_TAG {
+        return Ok(ForeignArrayElement::Aggregate(ForeignAggregateId(
+            reader.read_u32()?,
+        )));
+    }
+    ForeignType::from_tag(tag)
+        .map(ForeignArrayElement::Scalar)
         .ok_or(ModuleDecodeError::UnknownForeignAggregateMember { index, tag })
 }
 
@@ -356,6 +399,45 @@ mod tests {
             Module::from_bytes(&bytes),
             Err(ModuleDecodeError::UnknownForeignType { tag: 0x6d, .. })
         ));
+    }
+
+    #[test]
+    fn an_aggregate_table_with_an_inline_array_round_trips() {
+        let mut aggregates = ForeignAggregates::new();
+        let pair = aggregates
+            .push(ForeignAggregate::new(vec![
+                ForeignMember::Scalar(ForeignType::I32),
+                ForeignMember::Scalar(ForeignType::I32),
+            ]))
+            .expect("pushes");
+        let grid = aggregates
+            .push(ForeignAggregate::new(vec![
+                ForeignMember::Array {
+                    element: ForeignArrayElement::Scalar(ForeignType::I32),
+                    count: 4,
+                },
+                ForeignMember::Array {
+                    element: ForeignArrayElement::Aggregate(pair),
+                    count: 2,
+                },
+                ForeignMember::Scalar(ForeignType::F64),
+            ]))
+            .expect("pushes");
+
+        let mut module = foreign_module();
+        module.foreign_aggregates = aggregates;
+        module.foreign_imports = vec![ForeignImport::new(
+            "fixture",
+            "takes_grid",
+            ForeignAbi::C,
+            ForeignSignature::new(
+                vec![ForeignTypeSpec::Aggregate(grid)],
+                ForeignTypeSpec::Scalar(ForeignType::Void),
+            ),
+        )];
+
+        let decoded = Module::from_bytes(&module.to_bytes()).expect("decodes");
+        assert_eq!(decoded, module);
     }
 
     #[test]

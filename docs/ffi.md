@@ -148,9 +148,41 @@ taking every aggregate through a pointer. The target's own C compiler builds it
 — the managed clang for a host build, `emcc` for wasm — and applies the ABI it
 defines. Everything Kira emits speaks only pointers and scalars.
 
-A field the seam cannot carry is refused by name, and the deferred forms keep
-their refusals as members: a `@FFI.Callback`, an inline `@FFI.Array`, a
-`CString`, and any Kira heap type.
+A field the seam cannot carry is refused by name. A `@FFI.Callback` member, a
+`CString`, and any Kira heap type still are.
+
+### Inline arrays
+
+A C struct that reserves storage inline — `int cells[4]` — is spelled with an
+`@FFI.Array` typedef, and the struct names that type as a field:
+
+```text
+@FFI.Array { element: I32; count: 4; }
+struct Cells4 {}
+
+@FFI.Struct { layout: c; }
+struct Grid { var cells: Cells4
+var weight: F64 }
+```
+
+The elements live in one Kira field named `elements`, so `grid.cells.elements[2]`
+is ordinary array indexing and `Cells4 { elements: [1, 2] }` is an ordinary
+struct literal. Indexing the typedef itself (`grid.cells[2]`) names that field
+instead of guessing.
+
+Kira's array length and the C extent are different things, so the seam fixes
+what happens when they differ. Fewer elements than the extent fill from the
+front and leave the rest **zero** — the same value a zero-filled construction
+carries, and the same bytes on every backend. More elements than the extent is a
+trap, on the VM and in native code alike: the elements past the extent have
+nowhere to go, and writing only the ones that fit would hand C a value the
+program did not write. A result always carries the whole extent back, because C
+storage has no length of its own.
+
+An `@FFI.Array` type crosses as a **member**. In a parameter or result position
+C decays an array to a pointer — a different type with different ownership — so
+the seam refuses it there and asks for `RawPtr` when that is what the symbol
+takes.
 
 ## Wasm
 
@@ -182,7 +214,7 @@ mechanism; delete the file once autobind emits the typedefs into the binding.
 
 ## Deferred to later milestones
 
-`CString` results, aggregates (structs, arrays, enums) across the seam, callbacks
-and function pointers, non-C ABIs, variadics, generic externs, header parsing and
+`CString` results, Kira enums and heap types across the seam, callbacks and
+function pointers, non-C ABIs, variadics, generic externs, header parsing and
 autobind, dynamic-only C libraries, and compiling native-library sources. Each is
 refused today with a typed diagnostic rather than mislowered.

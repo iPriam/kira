@@ -256,6 +256,22 @@ pub extern "C" fn kira_rt_trap_foreign(status: u32) -> ! {
     std::process::exit(1);
 }
 
+/// Reports a Kira array that does not fit the inline C array it was crossing as,
+/// and exits with a failure code.
+///
+/// A `@FFI.Array` member reserves `count` elements of C storage. A Kira array
+/// holding more has elements with nowhere to go, and writing only the ones that
+/// fit would hand C a different value than the program wrote — so both engines
+/// trap here instead. The VM's `ForeignArrayTooLong` says the same thing in the
+/// same words.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_trap_foreign_array(count: u64, len: u64) -> ! {
+    eprintln!(
+        "kira: runtime trap: {len} elements do not fit the inline C array of {count} at the foreign seam"
+    );
+    std::process::exit(1);
+}
+
 /// The ABI marker for this archive's version of the `kira_rt_*` contract.
 ///
 /// Does nothing and costs nothing; its *name* is the point. Generated code

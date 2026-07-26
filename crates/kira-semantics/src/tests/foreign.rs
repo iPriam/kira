@@ -295,6 +295,80 @@ fn naming_one_aggregate_twice_adds_one_table_row() {
 }
 
 #[test]
+fn an_ffi_array_member_crosses_as_one_inline_array_row() {
+    let text = "@FFI.Array { element: I32; count: 4; }\n\
+                struct Cells {}\n\
+                @FFI.Struct { layout: c; }\n\
+                struct Grid { var cells: Cells\n var weight: F64 }\n\
+                @Main function main() { return }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; } function f(g: Grid) -> Grid;";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+    let program = program(text);
+    let outer = program.foreign[0].signature.parameters()[0]
+        .aggregate()
+        .expect("an aggregate");
+    let entry = program.foreign_aggregates.get(outer).expect("the row");
+    // The array typedef is its own row, held by the struct as a member — the
+    // two spellings have the same C layout, and this one keeps the extent.
+    let [kira_runtime_abi::ForeignMember::Aggregate(cells), ..] = entry.members() else {
+        panic!("the first member is the array row: {entry:?}");
+    };
+    assert!(cells.0 < outer.0);
+    assert_eq!(
+        program
+            .foreign_aggregates
+            .get(*cells)
+            .expect("the array row")
+            .members(),
+        &[kira_runtime_abi::ForeignMember::Array {
+            element: kira_runtime_abi::ForeignArrayElement::Scalar(ForeignType::I32),
+            count: 4,
+        }]
+    );
+}
+
+#[test]
+fn an_ffi_array_holds_its_elements_in_a_named_field() {
+    let text = "@FFI.Array { element: I32; count: 3; }\n\
+                struct Cells {}\n\
+                @Main function main() { let c = Cells { elements: [1, 2] }\n \
+                print(c.elements[1]) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+#[test]
+fn an_ffi_array_on_its_own_at_the_seam_is_refused_because_c_decays_it() {
+    // C turns an array parameter into a pointer, which is a different type with
+    // different ownership, so the seam refuses it rather than choosing one.
+    let text = "@FFI.Array { element: I32; count: 4; }\n\
+                struct Cells {}\n\
+                @Main function main() { return }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; } function f(c: Cells) -> I32;";
+    assert_eq!(codes(text), vec!["KSEM187"]);
+}
+
+#[test]
+fn an_ffi_array_without_an_element_or_a_positive_count_is_refused() {
+    let missing = "@FFI.Array { element: I32; }\n\
+                   struct Cells {}\n\
+                   @Main function main() { return }";
+    assert_eq!(codes(missing), vec!["KSEM243"]);
+    let empty = "@FFI.Array { element: I32; count: 0; }\n\
+                 struct Cells {}\n\
+                 @Main function main() { return }";
+    assert_eq!(codes(empty), vec!["KSEM243"]);
+}
+
+#[test]
+fn indexing_an_ffi_array_type_points_at_its_elements_field() {
+    let text = "@FFI.Array { element: I32; count: 3; }\n\
+                struct Cells {}\n\
+                @Main function main() { let c = Cells { elements: [1] }\n \
+                print(c[0]) return }";
+    assert_eq!(codes(text), vec!["KSEM244"]);
+}
+
+#[test]
 fn a_c_layout_struct_with_an_unseamable_field_is_refused_by_field_name() {
     let text = "@FFI.Struct { layout: c; }\n\
                 struct Bad { var x: F64\n var label: String }\n\

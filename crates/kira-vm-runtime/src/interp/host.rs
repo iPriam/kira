@@ -5,7 +5,7 @@ use kira_runtime_abi::{ForeignArg, ForeignPointerWidth, ForeignResult, NativeArg
 
 use super::Vm;
 use crate::error::VmError;
-use crate::value::Value;
+use crate::value::{AggregateMismatch, Value};
 
 impl Vm<'_> {
     /// Calls into the native half through the embedder.
@@ -76,6 +76,7 @@ impl Vm<'_> {
         let width = ForeignPointerWidth::HOST;
         let mut aggregate_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
         let mut mismatch = None;
+        let mut too_long: Option<(u32, usize)> = None;
         for (offset, &expected) in params.iter().enumerate() {
             let Some(id) = expected.aggregate() else {
                 continue;
@@ -85,8 +86,15 @@ impl Vm<'_> {
                 .heap
                 .aggregate_bytes(&module.foreign_aggregates, id, value, width)
             {
-                Some(bytes) => aggregate_bytes.push((offset, bytes)),
-                None => {
+                Ok(bytes) => aggregate_bytes.push((offset, bytes)),
+                // An array that does not fit is the program's own mistake, so it
+                // is reported as itself rather than folded into the shape
+                // mismatch that means the compiler built the table wrong.
+                Err(AggregateMismatch::ArrayTooLong { count, len }) => {
+                    too_long = Some((count, len));
+                    break;
+                }
+                Err(AggregateMismatch::Shape) => {
                     mismatch = Some(expected);
                     break;
                 }
@@ -94,7 +102,7 @@ impl Vm<'_> {
         }
 
         let mut lowered = Vec::with_capacity(count);
-        if mismatch.is_none() {
+        if mismatch.is_none() && too_long.is_none() {
             for (offset, &expected) in params.iter().enumerate() {
                 let value = self.stack[first + offset];
                 let argument =
@@ -116,12 +124,13 @@ impl Vm<'_> {
                 }
             }
         }
-        let outcome = match mismatch {
-            Some(expected) => Err(VmError::ForeignArgMismatch {
+        let outcome = match (too_long, mismatch) {
+            (Some((count, len)), _) => Err(VmError::ForeignArrayTooLong { count, len }),
+            (None, Some(expected)) => Err(VmError::ForeignArgMismatch {
                 foreign: id,
                 expected,
             }),
-            None => self
+            (None, None) => self
                 .host
                 .call_foreign(id, &lowered)
                 .map_err(VmError::ForeignCall),

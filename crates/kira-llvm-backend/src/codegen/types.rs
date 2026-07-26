@@ -107,6 +107,9 @@ pub(crate) struct Runtime {
     /// `kira_rt_trap_foreign`: how a generated adapter's non-success status
     /// becomes a native trap at a foreign call site.
     pub(super) trap_foreign: Callable,
+    /// `kira_rt_trap_foreign_array`: a Kira array too long for the inline C
+    /// array a `@FFI.Array` member reserves.
+    pub(super) trap_foreign_array: Callable,
     /// The version marker every emitted program references; see
     /// [`kira_runtime_abi::RUNTIME_ABI_MARKER`].
     pub(super) abi_marker: Callable,
@@ -249,6 +252,11 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             box_free: declare(c"kira_rt_box_free", types.void, &mut [types.ptr, types.i64]),
             trap_div_zero: declare(c"kira_rt_trap_div_zero", types.void, &mut []),
             trap_foreign: declare(c"kira_rt_trap_foreign", types.void, &mut [types.i32]),
+            trap_foreign_array: declare(
+                c"kira_rt_trap_foreign_array",
+                types.void,
+                &mut [types.i64, types.i64],
+            ),
             abi_marker: declare(&abi_marker_symbol(), types.void, &mut []),
             // Appended after the runtime marker; the foreign helpers are an
             // append-only addition to the `kira_rt_*` surface. An adapter

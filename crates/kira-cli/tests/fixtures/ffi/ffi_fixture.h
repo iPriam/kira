@@ -100,4 +100,21 @@ struct ffi_outer ffi_outer_make(int p, int q, double w);
 long long ffi_mixed_sum(struct ffi_mixed m);
 struct ffi_mixed ffi_mixed_make(signed char t, double v, unsigned int c);
 
+/* Inline fixed-size array members: storage held inside the struct, not a
+ * pointer to it. `ffi_grid` holds scalars, `ffi_board` holds structs — the two
+ * shapes an `@FFI.Array` element can take. */
+struct ffi_grid {
+    int cells[4];
+    double weight;
+};
+struct ffi_board {
+    struct ffi_inner slots[3];
+    int tag;
+};
+
+int ffi_grid_sum(struct ffi_grid g);
+struct ffi_grid ffi_grid_make(int base);
+int ffi_board_sum(struct ffi_board b);
+struct ffi_board ffi_board_make(int seed);
+
 #endif /* KIRA_FFI_FIXTURE_H */

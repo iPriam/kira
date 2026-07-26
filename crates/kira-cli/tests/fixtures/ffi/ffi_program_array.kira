@@ -1,0 +1,47 @@
+@FFI.Array { element: I32; count: 4; }
+struct Cells4 {}
+
+@FFI.Struct { layout: c; }
+struct Grid { var cells: Cells4
+var weight: F64 }
+
+@FFI.Struct { layout: c; }
+struct Slot { var p: I32
+var q: I32 }
+
+@FFI.Array { element: Slot; count: 3; }
+struct Slots3 {}
+
+@FFI.Struct { layout: c; }
+struct Board { var slots: Slots3
+var tag: I32 }
+
+@FFI.Extern { library: ffifixture; symbol: ffi_grid_sum; abi: c; }
+function gridSum(g: Grid) -> I32;
+@FFI.Extern { library: ffifixture; symbol: ffi_grid_make; abi: c; }
+function gridMake(base: I32) -> Grid;
+@FFI.Extern { library: ffifixture; symbol: ffi_board_sum; abi: c; }
+function boardSum(b: Board) -> I32;
+@FFI.Extern { library: ffifixture; symbol: ffi_board_make; abi: c; }
+function boardMake(seed: I32) -> Board;
+
+@Main function main() {
+    // Every element written: 1+2+3+4 + 10.
+    print(gridSum(Grid { cells: Cells4 { elements: [1, 2, 3, 4] }, weight: 10.0 }))
+    // Fewer elements than the C extent: the rest stay zero, so 5+6.
+    print(gridSum(Grid { cells: Cells4 { elements: [5, 6] }, weight: 0.0 }))
+    // Zero-filled construction: no elements at all, so only the weight.
+    print(gridSum(Grid { weight: 3.0 }))
+    let g = gridMake(7)
+    print(g.cells.elements[0])
+    print(g.cells.elements[3])
+    print(g.cells.elements.count)
+    print(g.weight)
+    // An array of structs, partly filled: 2*3 + 4*5 + 0 + 1.
+    print(boardSum(Board { slots: Slots3 { elements: [Slot { p: 2, q: 3 }, Slot { p: 4, q: 5 }] }, tag: 1 }))
+    let b = boardMake(3)
+    print(b.slots.elements[2].p)
+    print(b.slots.elements[0].q)
+    print(b.tag)
+    return
+}

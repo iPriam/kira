@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 
-use kira_runtime_abi::{ForeignAggregate, ForeignAggregateId, ForeignMember};
+use kira_runtime_abi::{ForeignAggregate, ForeignAggregateId, ForeignArrayElement, ForeignMember};
 use kira_semantics_model::{StructId, Type};
 use kira_source::Span;
 
@@ -61,8 +61,14 @@ impl Analyzer<'_> {
         if let Some(built) = self.foreign_aggregates.built.get(&id) {
             return Some(*built);
         }
-        if self.ffi_struct_kind(id) != Some(FfiStructKind::CLayout) {
-            return None;
+        match self.ffi_struct_kind(id) {
+            Some(FfiStructKind::CLayout) => {}
+            // An `@FFI.Array` type is a C array typedef, and a struct holding
+            // only that array has the array's own size and alignment — so it
+            // crosses as a one-member row, and every place that names one is an
+            // ordinary aggregate reference.
+            Some(FfiStructKind::Array) => return self.array_seam_of(id, span),
+            _ => return None,
         }
         if self.foreign_aggregates.in_progress.contains(&id) {
             self.emit(
@@ -125,6 +131,97 @@ impl Analyzer<'_> {
         }
     }
 
+    /// The aggregate id an `@FFI.Array` type crosses as: a row holding one
+    /// inline array member.
+    ///
+    /// The element is a seam scalar or another C-layout aggregate, to any depth
+    /// — including another `@FFI.Array`, which is how a C array of arrays is
+    /// spelled.
+    fn array_seam_of(&mut self, id: StructId, span: Span) -> Option<ForeignAggregateId> {
+        let count = self.ffi_array_count(id)?;
+        let element = self
+            .program
+            .types
+            .structs()
+            .get(id)
+            .and_then(|def| def.fields.first())
+            .map(|field| field.ty)
+            .and_then(|ty| self.program.types.element_of(ty))?;
+        if self.foreign_aggregates.in_progress.contains(&id) {
+            self.emit(
+                span,
+                "KSEM182",
+                format!(
+                    "`{}` contains itself, so it has no C layout: a struct crossing the \
+                     C seam by value must be finite",
+                    self.struct_name(id)
+                ),
+            );
+            return None;
+        }
+
+        self.foreign_aggregates.in_progress.push(id);
+        let member = self.array_element_of(element, id, span);
+        self.foreign_aggregates.in_progress.pop();
+        let member = member?;
+
+        match self
+            .program
+            .foreign_aggregates
+            .push(ForeignAggregate::new(vec![ForeignMember::Array {
+                element: member,
+                count,
+            }])) {
+            Ok(built) => {
+                self.foreign_aggregates.built.insert(id, built);
+                Some(built)
+            }
+            Err(error) => {
+                self.emit(
+                    span,
+                    "KSEM182",
+                    format!(
+                        "`{}` cannot be described at the C seam: {error}",
+                        self.struct_name(id)
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// One array element's entry, or `None` after reporting why it cannot cross.
+    fn array_element_of(
+        &mut self,
+        ty: Type,
+        container: StructId,
+        span: Span,
+    ) -> Option<ForeignArrayElement> {
+        if ty == Type::Error {
+            return None;
+        }
+        if let Some(scalar) = crate::foreign::scalar_foreign_type(ty) {
+            return Some(ForeignArrayElement::Scalar(scalar));
+        }
+        if let Type::Struct(nested) = ty {
+            return self
+                .aggregate_seam_of(nested, span)
+                .map(ForeignArrayElement::Aggregate);
+        }
+        self.emit(
+            span,
+            "KSEM182",
+            format!(
+                "`{}` holds `{}`, which cannot cross the C seam: an inline C array's elements \
+                 are fixed-width scalars, `Bool`, `RawPtr`, and `@FFI.Struct {{ layout: c }}` \
+                 or `@FFI.Array` types",
+                self.struct_name(container),
+                self.type_name(ty),
+            ),
+        );
+        None
+    }
+
     /// One field's member entry, or `None` after reporting why it cannot cross.
     fn aggregate_member_of(
         &mut self,
@@ -141,7 +238,10 @@ impl Analyzer<'_> {
             return Some(ForeignMember::Scalar(scalar));
         }
         if let Type::Struct(nested) = ty
-            && self.ffi_struct_kind(nested) == Some(FfiStructKind::CLayout)
+            && matches!(
+                self.ffi_struct_kind(nested),
+                Some(FfiStructKind::CLayout | FfiStructKind::Array)
+            )
         {
             return self
                 .aggregate_seam_of(nested, span)
@@ -153,7 +253,7 @@ impl Analyzer<'_> {
             format!(
                 "field `{field}` of `{}` cannot cross the C seam as `{}`: a C-layout \
                  struct's fields are fixed-width scalars, `Bool`, `RawPtr`, and other \
-                 `@FFI.Struct {{ layout: c }}` structs",
+                 `@FFI.Struct {{ layout: c }}` or `@FFI.Array` types",
                 self.struct_name(container),
                 self.type_name(ty),
             ),

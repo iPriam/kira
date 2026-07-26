@@ -99,3 +99,38 @@ struct ffi_mixed ffi_mixed_make(signed char t, double v, unsigned int c) {
     m.count = c;
     return m;
 }
+
+int ffi_grid_sum(struct ffi_grid g) {
+    int total = (int)g.weight;
+    for (int i = 0; i < 4; i++) {
+        total += g.cells[i];
+    }
+    return total;
+}
+
+struct ffi_grid ffi_grid_make(int base) {
+    struct ffi_grid g;
+    for (int i = 0; i < 4; i++) {
+        g.cells[i] = base + i;
+    }
+    g.weight = base * 10;
+    return g;
+}
+
+int ffi_board_sum(struct ffi_board b) {
+    int total = b.tag;
+    for (int i = 0; i < 3; i++) {
+        total += b.slots[i].p * b.slots[i].q;
+    }
+    return total;
+}
+
+struct ffi_board ffi_board_make(int seed) {
+    struct ffi_board b;
+    for (int i = 0; i < 3; i++) {
+        b.slots[i].p = seed + i;
+        b.slots[i].q = 2;
+    }
+    b.tag = seed * 100;
+    return b;
+}

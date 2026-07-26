@@ -39,8 +39,8 @@
 //! direct C call identically.
 
 use kira_runtime_abi::{
-    ForeignAggregateId, ForeignAggregates, ForeignImport, ForeignMember, ForeignSignature,
-    ForeignType, ForeignTypeSpec,
+    ForeignAggregateId, ForeignAggregates, ForeignArrayElement, ForeignImport, ForeignMember,
+    ForeignSignature, ForeignType, ForeignTypeSpec,
 };
 
 /// The C name of the aggregate at `id` in the generated translation unit.
@@ -106,14 +106,28 @@ fn write_aggregates(out: &mut String, table: &ForeignAggregates) {
             out.push_str(" char kira_empty;");
         }
         for (field, member) in aggregate.members().iter().enumerate() {
-            let ty = match member {
-                ForeignMember::Scalar(ty) => scalar_c_type(*ty).to_owned(),
-                ForeignMember::Aggregate(id) => format!("struct {}", aggregate_name(*id)),
+            let (ty, extent) = match member {
+                ForeignMember::Scalar(ty) => (scalar_c_type(*ty).to_owned(), String::new()),
+                ForeignMember::Aggregate(id) => {
+                    (format!("struct {}", aggregate_name(*id)), String::new())
+                }
+                // An inline array is written as a C array member, so the C
+                // compiler sizes and aligns it — and classifies the containing
+                // struct with it — exactly as the header does.
+                ForeignMember::Array { element, count } => {
+                    let ty = match element {
+                        ForeignArrayElement::Scalar(ty) => scalar_c_type(*ty).to_owned(),
+                        ForeignArrayElement::Aggregate(id) => {
+                            format!("struct {}", aggregate_name(*id))
+                        }
+                    };
+                    (ty, format!("[{count}]"))
+                }
             };
             // `void *f0` and `int32_t f0` differ in where the space goes; the
             // pointer spellings already carry their own trailing space.
             let separator = if ty.ends_with('*') { "" } else { " " };
-            out.push_str(&format!(" {ty}{separator}f{field};"));
+            out.push_str(&format!(" {ty}{separator}f{field}{extent};"));
         }
         out.push_str(" };\n");
     }
@@ -524,12 +538,31 @@ mod tests {
                 ForeignMember::Scalar(ForeignType::U32),
             ]))
             .expect("pushes");
+        // Inline arrays of both element shapes: the size of one is the extent
+        // times the element, and the alignment stays the element's own.
+        let cells = table
+            .push(ForeignAggregate::new(vec![
+                ForeignMember::Array {
+                    element: ForeignArrayElement::Scalar(ForeignType::I32),
+                    count: 3,
+                },
+                ForeignMember::Scalar(ForeignType::I8),
+            ]))
+            .expect("pushes");
+        let slots = table
+            .push(ForeignAggregate::new(vec![ForeignMember::Array {
+                element: ForeignArrayElement::Aggregate(point),
+                count: 2,
+            }]))
+            .expect("pushes");
         let imports = [import(
             "anchor",
             ForeignSignature::new(
                 vec![
                     ForeignTypeSpec::Aggregate(point),
                     ForeignTypeSpec::Aggregate(nested),
+                    ForeignTypeSpec::Aggregate(cells),
+                    ForeignTypeSpec::Aggregate(slots),
                 ],
                 ForeignTypeSpec::Scalar(ForeignType::Void),
             ),
@@ -582,6 +615,46 @@ mod tests {
         }
         if let Err(stderr) = compiles(&text) {
             panic!("clang disagrees with Kira's computed layout:\n{stderr}");
+        }
+    }
+
+    #[test]
+    fn an_inline_array_member_is_written_as_a_c_array() {
+        let mut table = ForeignAggregates::new();
+        let point = table
+            .push(ForeignAggregate::new(vec![
+                ForeignMember::Scalar(ForeignType::F64),
+                ForeignMember::Scalar(ForeignType::F64),
+            ]))
+            .expect("pushes");
+        let id = table
+            .push(ForeignAggregate::new(vec![
+                ForeignMember::Array {
+                    element: ForeignArrayElement::Scalar(ForeignType::I32),
+                    count: 4,
+                },
+                ForeignMember::Array {
+                    element: ForeignArrayElement::Aggregate(point),
+                    count: 2,
+                },
+            ]))
+            .expect("pushes");
+        let imports = [import(
+            "takes_grid",
+            ForeignSignature::new(
+                vec![ForeignTypeSpec::Aggregate(id)],
+                ForeignTypeSpec::Scalar(ForeignType::Void),
+            ),
+        )];
+        let text = generate(&imports, &table).expect("a shim");
+        // Inline storage, so the extent rides on the member name — a pointer
+        // member would be a different type with different ownership.
+        assert!(
+            text.contains("struct kira_ffi_agg_1 { int32_t f0[4]; struct kira_ffi_agg_0 f1[2]; };"),
+            "{text}"
+        );
+        if let Err(stderr) = compiles(&text) {
+            panic!("the generated unit is not valid C:\n{stderr}\n--- unit ---\n{text}");
         }
     }
 
