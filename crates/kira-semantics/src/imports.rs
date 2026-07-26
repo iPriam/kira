@@ -7,14 +7,24 @@
 //! and it is why the table is keyed by [`SourceId`] rather than being a single
 //! program-wide map.
 //!
-//! # What an import does not do
+//! # What an import gates
 //!
-//! It does not gate bare names. Every top-level declaration in a package is
-//! visible bare in every file of that package — the oracle keys its
-//! file-scope gate by *owner package*, and same-package symbols carry no owner
-//! — so `import support` never changes whether `hello()` resolves. What it
-//! changes is whether `Support.hello()` does, and whether `support.kira` is
-//! part of the program at all.
+//! Visibility is keyed by **owner package**, so an import decides whether
+//! another package's declarations are nameable here at all — bare or qualified.
+//! Three rules, and nothing else ([`ImportTable::sees`]):
+//!
+//! * **One program is one flat scope.** Every top-level declaration in an app
+//!   or library is visible bare in every one of its own files, so `import
+//!   support` never changes whether a sibling's `hello()` resolves.
+//! * **A dependency arrives through an import.** Importing any module of a
+//!   package makes what that package declares nameable in *that file*.
+//! * **Visibility does not compose.** What a dependency itself imports stays
+//!   its own business: importing `Outer` never lends you `Inner`, and an import
+//!   written in one file gates that file only.
+//!
+//! Without the third rule a program's vocabulary is whatever its dependency
+//! graph happens to reach, and two packages that each declare a `Text` become
+//! one name that the loader order picks between.
 //!
 //! # Cycles are not an error
 //!
@@ -149,6 +159,68 @@ impl ImportTable {
     #[must_use]
     pub fn package_module_identity(package: &str, module: &str) -> String {
         format!("{package}{PACKAGE_MODULE_SEPARATOR}{module}")
+    }
+
+    /// The dependency package a file belongs to, or `None` for a file of the
+    /// project itself.
+    ///
+    /// Two declarations of the same name in different packages are two
+    /// declarations, not one; this is what lets a resolver tell them apart.
+    #[must_use]
+    pub fn package_of(&self, source: SourceId) -> Option<&str> {
+        self.modules
+            .source_packages
+            .get(&source)
+            .map(String::as_str)
+    }
+
+    /// Whether a declaration written in `declaration` is nameable, bare, from
+    /// `file`.
+    ///
+    /// Two things are, and nothing else is:
+    ///
+    /// * **This program's own work.** Every file of one app or library shares
+    ///   one flat scope, so a sibling's declaration needs no import.
+    /// * **What a package this file imports provides.** The import is what
+    ///   makes the package's own declarations nameable here.
+    ///
+    /// What an imported package *itself* imports is not included: visibility
+    /// does not compose, so a library's dependencies stay its own business and
+    /// do not become a consumer's vocabulary. Nor does an import in one file
+    /// reach another file — imports are written per file and gate per file.
+    #[must_use]
+    pub fn sees(&self, file: SourceId, declaration: SourceId) -> bool {
+        if file == declaration {
+            return true;
+        }
+        let owner = self.package_of(declaration);
+        if self.package_of(file) == owner {
+            return true;
+        }
+        self.imports_owner_of(file, declaration, owner)
+    }
+
+    /// Whether one of `file`'s imports reaches the declaration's home.
+    ///
+    /// Two shapes of home, because a program has two kinds of module. A
+    /// dependency package is imported *as a package*: importing any of its
+    /// modules makes what the package provides nameable, which is what a
+    /// package is for. A module with no package — a bundled library like
+    /// `Foundation`, or another file of this program — is imported as itself,
+    /// so it is the module that has to be named.
+    fn imports_owner_of(&self, file: SourceId, declaration: SourceId, owner: Option<&str>) -> bool {
+        let Some(imports) = self.files.get(&file) else {
+            return false;
+        };
+        imports.roots.values().any(|binding| {
+            let Some(source) = self.module_source_for(file, &binding.module) else {
+                return false;
+            };
+            match owner {
+                Some(package) => self.package_of(source) == Some(package),
+                None => source == declaration,
+            }
+        })
     }
 
     /// Builds the table from the modules the program was loaded with and the

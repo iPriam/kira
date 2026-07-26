@@ -19,7 +19,7 @@ impl Analyzer<'_> {
     /// a construct-backed declaration, or an `@FFI.Struct`, each of which owns
     /// its own construction path and is handled before this one.
     pub(crate) fn plain_struct_named(&self, name: &str) -> Option<StructId> {
-        let id = self.program.types.structs().lookup(name)?;
+        let id = self.visible_struct(name)?;
         let specialized = self.classes.contains_key(&id)
             || self.constructs.contains_key(&id)
             || self.ffi_struct_kind(id).is_some();

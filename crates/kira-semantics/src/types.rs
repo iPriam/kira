@@ -214,7 +214,7 @@ impl Analyzer<'_> {
             self.link_type_name(&text, span);
             return Type::Enum(id);
         }
-        if let Some(id) = self.program.types.structs().lookup(&text) {
+        if let Some(id) = self.visible_struct(&text) {
             self.link_type_name(&text, span);
             return Type::Struct(id);
         }

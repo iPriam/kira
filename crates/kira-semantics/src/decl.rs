@@ -104,6 +104,7 @@ impl<'a> Analyzer<'a> {
                     {
                         self.ffi_structs.insert(id, kind);
                     }
+                    self.struct_sources.insert(id, source);
                     // Reserve the defaults slot now, in id order, so a function
                     // type minted while the second pass resolves fields (which
                     // pushes its own slot) cannot land on this struct's id.

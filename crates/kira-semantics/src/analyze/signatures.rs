@@ -163,9 +163,23 @@ impl<'a> Analyzer<'a> {
     }
 
     /// Looks up a signature by name (for call resolution).
+    ///
+    /// A **bare** name is gated the way a type name is: a function declared in
+    /// another package is nameable only from a file that imports that package
+    /// (see [`crate::imports::ImportTable::sees`]).
+    ///
+    /// A **qualified** `Owner.method` is not. A method is reached through a
+    /// value, and naming the value's type was already gated; gating the method
+    /// again would mean an imported type whose methods cannot be called, and
+    /// would break the compiler's own walks over a family's implementations —
+    /// which resolve a method while standing in the *family's* file, not the
+    /// caller's.
     pub(crate) fn lookup_function(&self, name: &str) -> Option<(FuncId, &[Type], Type)> {
         let id = *self.sig_index.get(name)?;
         let sig = &self.sigs[id.0 as usize];
+        if !name.contains('.') && !self.imports.sees(self.source, sig.source) {
+            return None;
+        }
         Some((id, &sig.params, sig.return_type))
     }
 

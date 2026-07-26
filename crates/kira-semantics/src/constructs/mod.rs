@@ -118,7 +118,7 @@ pub(crate) struct ConstructFamilyInfo<'a> {
 impl crate::analyze::Analyzer<'_> {
     /// The struct a construct-backed declaration named `name` became.
     pub(crate) fn construct_backed_named(&self, name: &str) -> Option<StructId> {
-        let id = self.program.types.structs().lookup(name)?;
+        let id = self.visible_struct(name)?;
         self.constructs.contains_key(&id).then_some(id)
     }
 
