@@ -103,6 +103,52 @@ fn run_on(source_path: &std::path::Path, backend: &str) -> Output {
 /// Every backend a program must behave identically on.
 const BACKENDS: [&str; 3] = ["vm", "llvm", "hybrid"];
 
+/// Asserts every backend agrees on a program that touches the filesystem.
+///
+/// Same contract as [`assert_parity`], with one addition: each run's working
+/// directory is the program's own temp directory, so a relative path the
+/// program writes lands there and not in whatever directory the test runner was
+/// started from. The three runs are sequential and share that directory on
+/// purpose — a program here starts by clearing what it is about to build, so
+/// each backend sees the same world the one before it did.
+fn assert_parity_on_disk(source: &str) -> String {
+    let path = write_source(source);
+    let directory = path.parent().expect("program directory").to_path_buf();
+    let runs: Vec<(&str, Output)> = BACKENDS
+        .iter()
+        .map(|backend| {
+            let run = Command::new(env!("CARGO_BIN_EXE_kirac"))
+                .args(["run", "--backend", backend, path.to_str().unwrap()])
+                .current_dir(&directory)
+                .output()
+                .expect("run kirac");
+            (*backend, run)
+        })
+        .collect();
+
+    let (_, reference) = &runs[0];
+    let expected = String::from_utf8_lossy(&reference.stdout).into_owned();
+    for (backend, run) in &runs[1..] {
+        assert_eq!(
+            expected,
+            String::from_utf8_lossy(&run.stdout),
+            "the vm and {backend} backends disagree on output for:\n{source}\n\
+             vm stderr: {}\n{backend} stderr: {}",
+            String::from_utf8_lossy(&reference.stderr),
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            reference.status.code(),
+            run.status.code(),
+            "the vm and {backend} backends disagree on exit code for:\n{source}\n\
+             {backend} stderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+    expected
+}
+
 /// Asserts every backend agrees on `source`, returning the output they produced.
 ///
 /// The VM is the reference: it is the simplest of the three and the one whose
@@ -180,6 +226,7 @@ mod enums;
 mod examples;
 mod ffi;
 mod ffi_types;
+mod file_system;
 mod foundation;
 mod generics;
 mod imports;

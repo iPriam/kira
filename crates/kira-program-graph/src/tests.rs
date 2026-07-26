@@ -119,6 +119,10 @@ fn remove_package(package: &PackageRoot) {
 
 /// The mechanism: a module the program's directory does not hold is read
 /// out of a package that ships with the toolchain.
+///
+/// The bare name loads it *as a package*, so the root file arrives under the
+/// package-scoped identity a dependency's root file gets — which is what lets a
+/// bundle hold more than one file (see the sibling case below).
 #[test]
 fn a_bundled_module_resolves_without_a_path() {
     let bundle = write_bundle(
@@ -133,7 +137,7 @@ fn a_bundled_module_resolves_without_a_path() {
     let loaded = load_modules_with(&entry, "import Foundation\n", &[bundle]);
     let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
     assert_eq!(loaded.len(), 1, "{loaded:?}");
-    assert_eq!(loaded[0].module, "Foundation");
+    assert_eq!(loaded[0].module, "Foundation::Foundation");
     assert!(loaded[0].text.contains("printLine"), "{:?}", loaded[0].text);
     // The path is the bundle's, so a diagnostic in Foundation renders
     // against Foundation's own file.
@@ -462,4 +466,40 @@ fn same_named_files_from_two_packages_do_not_collide() {
 fn a_string_containing_the_word_import_is_not_an_import() {
     let names = imports_of("@Main function main() { print(\"import support\") return }");
     assert!(names.is_empty(), "{names:?}");
+}
+
+/// A bundle is a package, so its bare-name import pulls in every file below its
+/// source directory — the rule a dependency import already followed.
+///
+/// Foundation grew a second file the moment it grew a filesystem. Reading only
+/// `Foundation.kira` would have left that file unreachable by any spelling: it
+/// is not a submodule anyone writes an import for, it is more of Foundation.
+#[test]
+fn a_bare_bundle_import_loads_every_file_in_the_bundle() {
+    let bundle = write_bundle(
+        "aggregate",
+        "Foundation",
+        &[
+            (
+                "Foundation",
+                "function printLine(text: borrow String) { print(text) return }",
+            ),
+            (
+                "FileSystem",
+                "function fileExists(path: borrow String) -> Bool { return fsFileExists(path) }",
+            ),
+        ],
+    );
+    let entry = write_modules("bundled-aggregate", &[]);
+    let loaded = load_modules_with(&entry, "import Foundation\n", &[bundle]);
+    let _ = std::fs::remove_dir_all(entry.parent().expect("program directory"));
+    assert_eq!(loaded.len(), 2, "{loaded:?}");
+    assert!(
+        loaded.iter().any(|read| read.text.contains("printLine")),
+        "{loaded:?}"
+    );
+    assert!(
+        loaded.iter().any(|read| read.text.contains("fileExists")),
+        "{loaded:?}"
+    );
 }

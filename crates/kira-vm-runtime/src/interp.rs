@@ -13,6 +13,7 @@ use kira_runtime_abi::HostCapabilities;
 use crate::error::VmError;
 use crate::value::{Heap, Value};
 
+mod file_system;
 mod frames;
 mod host;
 mod native_state;
@@ -479,6 +480,7 @@ impl Vm<'_> {
                 let value = self.pop_float()?;
                 self.stack.push(Value::Int(value.to_bits() as i64));
             }
+            Instruction::FileSystem(op) => self.file_system(op)?,
             Instruction::ConvertBitsToFloat => {
                 let value = self.pop_int()?;
                 self.stack.push(Value::Float(f64::from_bits(value as u64)));

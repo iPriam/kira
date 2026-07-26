@@ -88,6 +88,13 @@ impl FnCompiler<'_> {
                 self.compile_expr(text)?;
                 self.code.push(Instruction::StringLen);
             }
+            IrExpr::FileSystem { op, args, .. } => {
+                let (op, args) = (*op, args.clone());
+                for arg in args {
+                    self.compile_expr(arg)?;
+                }
+                self.code.push(Instruction::FileSystem(op));
+            }
             IrExpr::NativeState { value, type_id, .. } => {
                 let (value, type_id) = (*value, *type_id);
                 self.compile_expr(value)?;

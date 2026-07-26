@@ -31,9 +31,9 @@ use std::path::{Path, PathBuf};
 use kira_bytecode::module::Module;
 use kira_hybrid_definition::HybridManifest;
 use kira_runtime_abi::{
-    BridgeValue, Execution, ForeignArg, ForeignCallError, ForeignResult, HostCapabilities,
-    NativeArg, NativeCallError, NativeResult, NativeStateError, NativeStateToken,
-    NativeStateTypeId, NativeStateValue,
+    BridgeValue, Execution, FileRequest, FileResponse, FileSystemError, ForeignArg,
+    ForeignCallError, ForeignResult, HostCapabilities, NativeArg, NativeCallError, NativeResult,
+    NativeStateError, NativeStateToken, NativeStateTypeId, NativeStateValue, file_system,
 };
 use kira_vm_runtime::Program;
 
@@ -250,6 +250,15 @@ impl HostCapabilities for Host<'_> {
             .library
             .callback_address(callback_id)
             .ok_or(ForeignCallError::NoForeignHost)
+    }
+
+    /// Straight to the process's filesystem, exactly as the VM-only host does.
+    ///
+    /// The two halves of a hybrid program run in one process, so a `@Runtime`
+    /// function and a `@Native` one reach the same files — and through the same
+    /// implementation, since `kira_rt_fs_*` calls this very function.
+    fn file_system(&mut self, request: FileRequest<'_>) -> Result<FileResponse, FileSystemError> {
+        Ok(file_system::perform(request))
     }
 
     fn native_state_create(

@@ -20,6 +20,7 @@ pub mod aggregate;
 pub mod bridge;
 pub mod enum_payload;
 pub mod execution;
+pub mod file_system;
 pub mod foreign;
 pub mod native_state;
 pub mod ownership;
@@ -32,6 +33,7 @@ pub use aggregate::{
 pub use bridge::{BridgeData, BridgeValue, BridgeValueTag};
 pub use enum_payload::EnumPayloadKind;
 pub use execution::Execution;
+pub use file_system::{FileRequest, FileResponse, FileSystemError, FileSystemHost, FileSystemOp};
 pub use foreign::{
     FOREIGN_ADAPTER_ABI_MARKER, FOREIGN_ADAPTER_ABI_VERSION, FOREIGN_STRING_DATA_SYMBOL,
     FOREIGN_STRING_FREE_SYMBOL, FOREIGN_STRING_LEN_SYMBOL, FOREIGN_STRING_NEW_SYMBOL, ForeignAbi,
@@ -304,6 +306,21 @@ pub trait HostCapabilities {
     fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
         let _ = token;
         Err(NativeStateError::NoStateHost)
+    }
+
+    /// Performs one file-system operation on the embedder's behalf.
+    ///
+    /// The default refuses, for the same reason [`Self::call_foreign`] does: the
+    /// VM core reaches nothing outside itself, so an embedder — a browser tab, a
+    /// test, a sandbox — grants filesystem access explicitly by wrapping its
+    /// host in [`FileSystemHost`] or implementing this itself.
+    ///
+    /// A *failed* operation is not an error here: a missing file answers
+    /// [`FileResponse::Flag(false)`](FileResponse::Flag) or an empty result. The
+    /// error is only for a host with no filesystem at all.
+    fn file_system(&mut self, request: FileRequest<'_>) -> Result<FileResponse, FileSystemError> {
+        let _ = request;
+        Err(FileSystemError::NoFileSystemHost)
     }
 }
 

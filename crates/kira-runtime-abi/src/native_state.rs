@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use crate::{
-    ForeignArg, ForeignCallError, ForeignResult, HostCapabilities, NativeArg, NativeCallError,
-    NativeResult,
+    FileRequest, FileResponse, FileSystemError, ForeignArg, ForeignCallError, ForeignResult,
+    HostCapabilities, NativeArg, NativeCallError, NativeResult,
 };
 
 /// The program-stable identity of a type stored in native callback state.
@@ -320,6 +320,10 @@ impl<H: HostCapabilities> HostCapabilities for NativeStateHost<H> {
         self.inner.call_foreign(foreign_id, args)
     }
 
+    fn foreign_callback(&mut self, callback_id: u32) -> Result<u64, ForeignCallError> {
+        self.inner.foreign_callback(callback_id)
+    }
+
     fn native_state_create(
         &mut self,
         ty: NativeStateTypeId,
@@ -347,6 +351,10 @@ impl<H: HostCapabilities> HostCapabilities for NativeStateHost<H> {
 
     fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
         self.store.free(token)
+    }
+
+    fn file_system(&mut self, request: FileRequest<'_>) -> Result<FileResponse, FileSystemError> {
+        self.inner.file_system(request)
     }
 }
 

@@ -66,6 +66,7 @@ impl FunctionLowering<'_, '_> {
             IrExpr::Index { base, index, ty } => self.lower_index(base, index, ty),
             IrExpr::ArrayLen { array } => self.lower_array_len(array),
             IrExpr::StringLen { text } => self.lower_string_len(text),
+            IrExpr::FileSystem { op, args, ty } => self.lower_file_system(op, &args, ty),
             IrExpr::ArrayAppend { place, value } => self.lower_array_append(&place, value),
             IrExpr::NativeState { value, type_id, .. } => {
                 self.lower_native_state_new(value, type_id)

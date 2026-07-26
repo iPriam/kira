@@ -259,6 +259,11 @@ impl Lowerer<'_> {
             HirExpr::StringLen { text } => IrExpr::StringLen {
                 text: self.lower_expr(text),
             },
+            HirExpr::FileSystem { op, args, ty } => IrExpr::FileSystem {
+                op,
+                args: args.into_iter().map(|arg| self.lower_expr(arg)).collect(),
+                ty,
+            },
             HirExpr::ArrayAppend { place, value } => IrExpr::ArrayAppend {
                 place: self.lower_place(&place),
                 value: self.lower_expr(value),

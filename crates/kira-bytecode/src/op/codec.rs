@@ -10,7 +10,10 @@
 //! a typed [`DecodeError`] — nothing here panics on malformed input, and an
 //! unknown opcode is rejected rather than guessed at.
 
-use super::{FieldPath, Instruction, PathStep, PlacePath, WritebackTarget, opcode as o, step_tag};
+use super::{
+    FieldPath, FileSystemOp, Instruction, PathStep, PlacePath, WritebackTarget, opcode as o,
+    step_tag,
+};
 
 /// An error decoding a byte stream back into instructions.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -143,6 +146,10 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::StringLen => out.push(o::STRING_LEN),
         Instruction::ConvertFloatToBits => out.push(o::CONVERT_FLOAT_TO_BITS),
         Instruction::ConvertBitsToFloat => out.push(o::CONVERT_BITS_TO_FLOAT),
+        Instruction::FileSystem(op) => {
+            out.push(o::FILE_SYSTEM);
+            out.push(op.as_byte());
+        }
         Instruction::EnumTag => out.push(o::ENUM_TAG),
         Instruction::EnumPayload => out.push(o::ENUM_PAYLOAD),
         Instruction::ConvertIntToFloat => out.push(o::CONVERT_INT_TO_FLOAT),
@@ -325,6 +332,15 @@ impl Cursor<'_> {
                 let tag = u16::from_le_bytes(self.take()?);
                 let has_payload = self.take::<1>()?[0] != 0;
                 Instruction::NewEnum { tag, has_payload }
+            }
+            o::FILE_SYSTEM => {
+                let tag_offset = self.offset;
+                let [tag] = self.take::<1>()?;
+                let op = FileSystemOp::from_byte(tag).ok_or(DecodeError::UnknownOpcode {
+                    opcode: tag,
+                    offset: tag_offset,
+                })?;
+                Instruction::FileSystem(op)
             }
             other => nullary_from_opcode(other).ok_or(DecodeError::UnknownOpcode {
                 opcode: other,

@@ -13,6 +13,7 @@ mod definitions;
 mod enums;
 mod exports;
 mod ffi_types;
+mod file_system;
 mod foreign;
 mod generics;
 mod imports;

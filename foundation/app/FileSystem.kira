@@ -1,0 +1,168 @@
+// Foundation's filesystem.
+//
+// The surface, and every answer it gives, matches the reference implementation
+// — measured by differential run rather than asserted; `.codex/work/foundation-
+// filesystem.md` records what was measured. What differs is underneath: the
+// reference reaches the filesystem through a bundled C library, while these sit
+// on compiler intrinsics (`fs*`) that the VM routes through its host and native
+// code routes through `kira_rt_fs_*`. That is what lets a Kira program read a
+// file on every backend without a C toolchain, and keeps the portable VM core
+// free of a filesystem it could not have on the web.
+//
+// Nothing here fails. A missing file, a path whose parent does not exist, a
+// directory where a file was wanted — each is an ordinary answer: `false`, a
+// zero, an empty array. A program has to be able to ask and hear no.
+
+// A file's contents, and whether there was a file to read.
+//
+// `text` stops at the first NUL byte while `size` counts the whole file, so a
+// caller reading binary data can tell truncation from a short file — and should
+// use `readFileRange`, which is binary-safe.
+struct FileContents {
+    var ok: Bool = false
+    var text: String = ""
+    var size: U64 = 0
+}
+
+// One directory's entry names.
+//
+// The names are read once, when the listing is made, and the listing owns them
+// from then on — so `close` has nothing to release and exists to match the
+// shape a caller writes.
+struct DirectoryListing {
+    var names: [String] = []
+
+    // How many entries the directory held.
+    function count() -> Int {
+        return self.names.count
+    }
+
+    // The name at `index`, or the empty string when there is none there.
+    //
+    // Out of range is an answer rather than a trap, because a listing is a
+    // snapshot of something that changes underneath it.
+    function entry(index: Int) -> String {
+        if index < 0 {
+            return ""
+        }
+        if index >= self.names.count {
+            return ""
+        }
+        return self.names[index]
+    }
+
+    // Releases the listing. The names are its own, so this frees nothing.
+    function close(): Void {
+        return
+    }
+}
+
+// A file opened for reading, named by its path.
+struct File {
+    var path: String = ""
+
+    // Whether there is a regular file at this path.
+    function isOpen() -> Bool {
+        return fsFileExists(self.path)
+    }
+
+    // The whole file, as text.
+    function readAll() -> FileContents {
+        return readFile(self.path)
+    }
+
+    // Closes the file. Reading is one operation here, so there is no descriptor
+    // to give back.
+    function close(): Void {
+        return
+    }
+}
+
+// Opens `path` for reading.
+function openFile(path: borrow String) -> File {
+    return File {
+        path: path
+    }
+}
+
+// Reads a whole file as text.
+//
+// `ok` is false for a missing path and for a directory, and then nothing else
+// is read — which is why the size comes from the file rather than from the
+// path: a directory has a size on disk, and reporting it here would say a read
+// happened.
+function readFile(path: borrow String) -> FileContents {
+    if fsFileExists(path) == false {
+        return FileContents {
+            ok: false
+            text: ""
+            size: 0
+        }
+    }
+    return FileContents {
+        ok: true
+        text: fsReadText(path)
+        size: fsFileSize(path)
+    }
+}
+
+// Writes `text` over a file's whole contents, creating it when it is missing.
+function writeFile(path: borrow String, text: borrow String) -> Bool {
+    return fsWriteText(path, text)
+}
+
+// True when `path` exists and is a regular file.
+function fileExists(path: borrow String) -> Bool {
+    return fsFileExists(path)
+}
+
+// True when `path` exists as any entry (file, directory, symlink); use over
+// fileExists when a directory should also count.
+function pathExists(path: borrow String) -> Bool {
+    return fsPathExists(path)
+}
+
+// True when `path` exists and is a directory.
+function isDirectory(path: borrow String) -> Bool {
+    return fsIsDirectory(path)
+}
+
+// Create a single directory (idempotent; does not create parents). Returns
+// whether the directory exists afterward.
+function makeDirectory(path: borrow String) -> Bool {
+    return fsMakeDirectory(path)
+}
+
+// Renames a path, replacing an existing target.
+function renamePath(oldPath: borrow String, newPath: borrow String) -> Bool {
+    return fsRenamePath(oldPath, newPath)
+}
+
+// Removes a file, or a directory and everything under it.
+function removePath(path: borrow String) -> Bool {
+    return fsRemovePath(path)
+}
+
+// A file's size in bytes; zero when there is no file.
+function fileSize(path: borrow String) -> U64 {
+    return fsFileSize(path)
+}
+
+// The entries directly inside a directory, in the platform's own order.
+function listDirectory(path: borrow String) -> DirectoryListing {
+    return DirectoryListing {
+        names: fsListDirectory(path)
+    }
+}
+
+// Write a byte array to a file (explicit size — bytes may contain NULs).
+function writeBytesFile(path: borrow String, bytes: borrow [U8]) -> Bool {
+    return fsWriteBytes(path, bytes)
+}
+
+// Read `count` bytes starting at `offset` — a true partial read (the file is
+// never read past the requested range). Returns the bytes actually read (short
+// at EOF, empty when there is nothing there).
+function readFileRange(path: borrow String, offset: Int, count: Int) -> [U8] {
+    return fsReadRange(path, offset, count)
+}

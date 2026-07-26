@@ -8,7 +8,8 @@
 
 use crate::ty::{EnumId, StructId, Type, TypeTable};
 use kira_runtime_abi::{
-    Execution, ForeignAbi, ForeignAggregates, ForeignCallback, ForeignSignature, NativeStateTypeId,
+    Execution, FileSystemOp, ForeignAbi, ForeignAggregates, ForeignCallback, ForeignSignature,
+    NativeStateTypeId,
 };
 use kira_source::Span;
 use kira_syntax_model::ownership::OwnershipMode;
@@ -454,6 +455,20 @@ pub enum HirExpr {
         /// The string-typed expression being measured.
         text: HirExprId,
     },
+    /// One file-system operation, performed by the engine on the host's behalf.
+    ///
+    /// An intrinsic rather than a call because reaching the outside world is an
+    /// effect no Kira function body can express. The result type is carried
+    /// rather than derived: it follows from the operation alone, and storing it
+    /// keeps every consumer from re-deriving the same table.
+    FileSystem {
+        /// Which operation this performs.
+        op: FileSystemOp,
+        /// Its arguments, in source order.
+        args: Vec<HirExprId>,
+        /// What the operation produces.
+        ty: Type,
+    },
     /// `xs.append(v)`: push one element onto an array, in place.
     ///
     /// The receiver is a **place**, not an expression, and that is the whole
@@ -614,6 +629,7 @@ impl HirExpr {
             | HirExpr::NativeState { ty, .. }
             | HirExpr::NativeRecover { ty, .. }
             | HirExpr::Convert { ty, .. }
+            | HirExpr::FileSystem { ty, .. }
             | HirExpr::Index { ty, .. } => *ty,
             HirExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
             HirExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),

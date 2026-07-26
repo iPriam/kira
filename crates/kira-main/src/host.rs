@@ -15,7 +15,7 @@
 //! [`CapturingHost`](kira_runtime_abi::CapturingHost) is the one every test
 //! here uses.
 
-use kira_runtime_abi::HostCapabilities;
+use kira_runtime_abi::{FileRequest, FileResponse, FileSystemError, HostCapabilities, file_system};
 
 /// A host that writes each line of program output to process stdout.
 ///
@@ -32,5 +32,20 @@ pub struct StdoutHost;
 impl HostCapabilities for StdoutHost {
     fn write_line(&mut self, text: &str) {
         println!("{text}");
+    }
+
+    /// Reaches the process's own filesystem.
+    ///
+    /// The same grant `write_line` already makes, in the other direction: a host
+    /// that writes to this process's stdout is a host standing in this process,
+    /// and a program running under it reads the files this process can read. An
+    /// embedder that wants a narrower world supplies its own host, exactly as it
+    /// does to redirect output.
+    ///
+    /// On `wasm32-unknown-unknown` there is no filesystem behind this, and every
+    /// operation answers the way a missing file does — which is an answer, not a
+    /// crash, so a program that asks still runs.
+    fn file_system(&mut self, request: FileRequest<'_>) -> Result<FileResponse, FileSystemError> {
+        Ok(file_system::perform(request))
     }
 }

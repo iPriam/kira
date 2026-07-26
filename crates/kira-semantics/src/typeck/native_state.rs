@@ -219,7 +219,12 @@ impl Analyzer<'_> {
         }
     }
 
-    fn reject_intrinsic_type_args(&mut self, name: &str, type_args: &[TypeRefId], span: Span) {
+    pub(super) fn reject_intrinsic_type_args(
+        &mut self,
+        name: &str,
+        type_args: &[TypeRefId],
+        span: Span,
+    ) {
         if !type_args.is_empty() {
             self.emit(
                 span,
