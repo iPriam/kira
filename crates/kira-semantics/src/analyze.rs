@@ -278,19 +278,55 @@ impl Analyzer<'_> {
     /// its own package's declaration, and an import cannot take a name away
     /// from the package that wrote it.
     pub(crate) fn visible_struct(&self, name: &str) -> Option<StructId> {
-        let structs = self.program.types.structs();
-        let home = self.imports.package_of(self.source);
         // This file's own package first: an import cannot take a name away from
         // the package that wrote it.
-        if let Some(id) = structs.lookup_owned(home, name) {
-            return Some(id);
-        }
-        // Then the declarations no package owns — a bundled library like
+        let home = self.imports.package_of(self.source);
+        self.program
+            .types
+            .structs()
+            .lookup_owned(home, name)
+            .or_else(|| self.struct_beyond_own_package(name))
+    }
+
+    /// The struct a module-qualified name denotes here.
+    ///
+    /// The qualifier answers the question the bare rule answers with "mine": a
+    /// file that writes `KiraUIFoundation.Color` inside a package that declares
+    /// its own `Color` means the other one, so the package owning the qualified
+    /// *module* gets first refusal instead of this file's own.
+    ///
+    /// A package that declares nothing by that name falls through to the same
+    /// tail a bare name takes — this file's imports, and nothing further. That
+    /// is what lets `KiraUIFoundation.Color` mean the `Color` KiraGraphics
+    /// declares (which is what KiraUIFoundation's own API speaks) without
+    /// letting visibility compose: the name still has to be one this file can
+    /// see on its own.
+    pub(crate) fn visible_struct_qualified(
+        &self,
+        name: &crate::types::QualifiedName,
+    ) -> Option<StructId> {
+        let Some(module) = name.qualifier else {
+            return self.visible_struct(&name.text);
+        };
+        let owner = self.imports.package_of(module);
+        self.program
+            .types
+            .structs()
+            .lookup_owned(owner, &name.text)
+            .or_else(|| self.struct_beyond_own_package(&name.text))
+    }
+
+    /// Resolution that does not depend on which package the file itself belongs
+    /// to: the declarations no package owns, then what this file's imports
+    /// provide.
+    fn struct_beyond_own_package(&self, name: &str) -> Option<StructId> {
+        let structs = self.program.types.structs();
+        // The declarations no package owns — a bundled library like
         // `Foundation`, another module of the program, or a struct the compiler
         // synthesized — each on its own terms: a synthesized one belongs to
         // whoever is asking, and a written one needs this file to have imported
         // its module.
-        if home.is_some()
+        if self.imports.package_of(self.source).is_some()
             && let Some(id) = structs.lookup(name)
             && match self.struct_sources.get(&id) {
                 Some(declared) => self.imports.sees(self.source, *declared),
