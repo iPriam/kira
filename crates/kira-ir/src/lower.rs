@@ -137,6 +137,7 @@ impl Lowerer<'_> {
             HirExpr::Float(value) => IrExpr::Float(value),
             HirExpr::Bool(value) => IrExpr::Bool(value),
             HirExpr::Str(value) => IrExpr::Str(value),
+            HirExpr::RawPtrNull => IrExpr::RawPtrNull,
             HirExpr::Local { local, .. } => IrExpr::Local(local.0),
             HirExpr::Unary { op, operand, .. } => IrExpr::Unary {
                 op,

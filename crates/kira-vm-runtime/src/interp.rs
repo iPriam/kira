@@ -340,6 +340,7 @@ impl<'h> Vm<'h> {
             Instruction::ConstFloat(value) => self.stack.push(Value::Float(value)),
             Instruction::ConstBool(value) => self.stack.push(Value::Bool(value)),
             Instruction::ConstVoid => self.stack.push(Value::Void),
+            Instruction::ConstRawPtrNull => self.stack.push(Value::RawPtr(0)),
             Instruction::ConstStr(index) => {
                 let text = module.strings[index as usize].clone();
                 let id = self.heap.alloc(text);

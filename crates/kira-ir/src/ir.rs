@@ -117,6 +117,7 @@ impl IrProgram {
             IrExpr::Float(_) => Type::FLOAT,
             IrExpr::Bool(_) => Type::Bool,
             IrExpr::Str(_) => Type::String,
+            IrExpr::RawPtrNull => Type::RawPtr,
             IrExpr::Local(slot) => function
                 .locals
                 .get(*slot as usize)
@@ -395,6 +396,8 @@ pub enum IrExpr {
     Bool(bool),
     /// A string constant.
     Str(String),
+    /// The null raw pointer — the zero a C-layout pointer member fills with.
+    RawPtrNull,
     /// A read of a local slot.
     Local(u32),
     /// A unary operation.

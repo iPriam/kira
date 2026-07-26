@@ -62,7 +62,10 @@ impl Analyzer<'_> {
             return Some(*built);
         }
         match self.ffi_struct_kind(id) {
-            Some(FfiStructKind::CLayout) => {}
+            // A callback's one `RawPtr` field walks the same generic path: a
+            // struct holding one pointer has a pointer's size, alignment, and
+            // ABI class, so the row describes the C member exactly.
+            Some(FfiStructKind::CLayout | FfiStructKind::Callback) => {}
             // An `@FFI.Array` type is a C array typedef, and a struct holding
             // only that array has the array's own size and alignment — so it
             // crosses as a one-member row, and every place that names one is an
@@ -240,7 +243,7 @@ impl Analyzer<'_> {
         if let Type::Struct(nested) = ty
             && matches!(
                 self.ffi_struct_kind(nested),
-                Some(FfiStructKind::CLayout | FfiStructKind::Array)
+                Some(FfiStructKind::CLayout | FfiStructKind::Array | FfiStructKind::Callback)
             )
         {
             return self
@@ -253,7 +256,7 @@ impl Analyzer<'_> {
             format!(
                 "field `{field}` of `{}` cannot cross the C seam as `{}`: a C-layout \
                  struct's fields are fixed-width scalars, `Bool`, `RawPtr`, and other \
-                 `@FFI.Struct {{ layout: c }}` or `@FFI.Array` types",
+                 `@FFI.Struct {{ layout: c }}`, `@FFI.Array`, or `@FFI.Callback` types",
                 self.struct_name(container),
                 self.type_name(ty),
             ),

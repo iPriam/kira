@@ -125,6 +125,28 @@ int ffi_board_sum(struct ffi_board b) {
     return total;
 }
 
+static int ffi_adder_impl(int a, int b) {
+    return a + b;
+}
+
+ffi_adder ffi_default_adder(void) {
+    return ffi_adder_impl;
+}
+
+int ffi_hooks_apply(struct ffi_hooks h, int a, int b) {
+    if (h.add == 0) {
+        return -1;
+    }
+    return h.add(a, b) * h.scale;
+}
+
+int ffi_call_adder(ffi_adder add, int a, int b) {
+    if (add == 0) {
+        return -1;
+    }
+    return add(a, b);
+}
+
 struct ffi_board ffi_board_make(int seed) {
     struct ffi_board b;
     for (int i = 0; i < 3; i++) {
