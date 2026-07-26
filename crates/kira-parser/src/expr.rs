@@ -184,7 +184,7 @@ impl Parser<'_> {
             // `HStack(spacing: 8) { Text("a") Text("b") }`. It follows a call
             // only, since a construction is a call — a name is promoted to a
             // call at the no-paren site, not here.
-            if self.at_content_block()
+            if self.at_trailing_block()
                 && let Some(next) = self.attach_content_block(base)
             {
                 base = next;

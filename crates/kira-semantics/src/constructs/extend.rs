@@ -77,7 +77,6 @@ impl<'a> Analyzer<'a> {
                     source,
                     computed: false,
                     params: Vec::new(),
-                    param_names: Vec::new(),
                     ownership: Vec::new(),
                     result: Type::Error,
                     uniform: true,

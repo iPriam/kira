@@ -1,167 +1,39 @@
-//! Binding labeled call arguments to the callee's parameters.
+//! Binding a call's written arguments to the callee's parameter slots.
 //!
-//! Split out of [`super::calls`] because it answers one self-contained
-//! question: given the arguments a call wrote and the names its callee
-//! declared, which value fills each parameter slot? A labeled argument
-//! (`f(index: x)`, `f(index = x)`) names the parameter it binds, so the answer
-//! is a permutation of the written arguments into declaration order — the same
-//! positional list an unlabeled call already produces, which is why nothing
-//! below this point ever learns a label was written.
+//! **A label on a call argument is decorative.** `f(width = 2.0)` binds the
+//! same slot `f(2.0)` does — the label documents which parameter the reader is
+//! looking at and has no effect on where the value lands. So a call may label
+//! some arguments and not others, may label them all, or none, and means the
+//! same thing every time.
 //!
-//! Kira's binder is unified with a struct literal's: `=` is canonical, `:`
-//! stays valid for the transition window, and both reach here as one node. A
-//! label is the parameter's own name, checked against the declaration; an
-//! unknown one, a duplicate, a missing parameter, and a call that mixes
-//! labeled and positional arguments each land a typed refusal.
+//! This is measured behaviour, not a simplification. The reference
+//! implementation binds a call positionally and ignores labels entirely:
+//! `tag(c = 3, b = 2, a = 1)` calls `tag(3, 2, 1)` there. Resolving labels to
+//! parameter names instead — which this compiler did until the two were run
+//! against each other — makes that program mean something different without
+//! either compiler complaining, which is the one failure a differential exists
+//! to catch.
+//!
+//! A **construction** is the exception, and it is not one: `Widget(b = 2, a = 1)`
+//! binds by name, because a construction's inputs are fields and a field
+//! initializer names its field. That path is [`crate::constructs`], not this
+//! one, and both implementations agree on it.
 
-use kira_core::Symbol;
-use kira_source::Span;
 use kira_syntax_model::ast::{CallArg, ExprId};
 
 use crate::analyze::Analyzer;
 
 impl Analyzer<'_> {
-    /// Resolves `args` into positional order for a call to `name`.
+    /// The written arguments as parameter slots, in order, labels dropped.
     ///
-    /// `leading` is the number of parameter slots already filled ahead of the
-    /// written arguments — a method's receiver occupies slot 0 — so labels are
-    /// matched against `param_names[leading..]`. `param_names` carries `None`
-    /// for a receiver slot, which no label can name.
-    ///
-    /// Each entry is the value bound to one parameter slot, in declaration
-    /// order, or `None` for a slot no argument filled. The ownership and type
-    /// checks downstream see the same positional shape an unlabeled call
-    /// produces; an unfilled slot is a missing argument, already reported here,
-    /// that the caller stands in for so no second, vaguer arity error follows.
-    /// An all-positional call keeps its written order untouched, as does the
-    /// recovery from a structural mistake — an unknown or duplicate label, or a
-    /// mix of labeled and positional arguments — because the program is already
-    /// rejected and its remaining arguments should still be checked where they
-    /// were written.
-    ///
-    /// `has_default` is aligned with `param_names[leading..]`: a slot marked
-    /// `true` may be left unfilled without a missing-argument diagnostic,
-    /// because the caller fills it from the parameter's default instead.
-    pub(crate) fn bind_call_arguments(
-        &mut self,
-        args: &[CallArg],
-        leading: usize,
-        param_names: &[Option<Symbol>],
-        has_default: &[bool],
-        name: &str,
-        span: Span,
-    ) -> Vec<Option<ExprId>> {
-        let labeled = args.iter().filter(|arg| arg.label.is_some()).count();
-        if labeled == 0 {
-            return args.iter().map(|arg| Some(arg.value)).collect();
-        }
-        if labeled != args.len() {
-            // The first positional argument is the one that reads as the
-            // mistake once the call has committed to labels.
-            let culprit = args
-                .iter()
-                .find(|arg| arg.label.is_none())
-                .map_or(span, |arg| arg.span);
-            self.emit(
-                culprit,
-                "KSEM189",
-                format!(
-                    "call to `{name}` mixes labeled and positional arguments; label every \
-                     argument or none"
-                ),
-            );
-            return args.iter().map(|arg| Some(arg.value)).collect();
-        }
-
-        // Every argument is labeled. Match each to the parameter slot whose name
-        // it names, refusing an unknown or duplicated label. The receiver slots
-        // are skipped: `param_names[..leading]` are `None` and unnameable.
-        let written = &param_names[leading.min(param_names.len())..];
-        let mut bound: Vec<Option<ExprId>> = vec![None; written.len()];
-        let mut ok = true;
-        for arg in args {
-            let Some(label) = arg.label else {
-                continue;
-            };
-            let label_span = arg.label_span.unwrap_or(arg.span);
-            match written.iter().position(|slot| *slot == Some(label)) {
-                Some(index) if bound[index].is_some() => {
-                    ok = false;
-                    self.emit(
-                        label_span,
-                        "KSEM188",
-                        format!(
-                            "duplicate argument label `{}` in call to `{name}`",
-                            self.interner.resolve(label)
-                        ),
-                    );
-                }
-                Some(index) => bound[index] = Some(arg.value),
-                None => {
-                    ok = false;
-                    self.emit(
-                        label_span,
-                        "KSEM187",
-                        format!(
-                            "`{name}` has no parameter named `{}`",
-                            self.interner.resolve(label)
-                        ),
-                    );
-                }
-            }
-        }
-        if !ok {
-            // A bad label already spoke; keep the written order so the values
-            // still type-check where they were written rather than piling a
-            // spurious arity error on top.
-            return args.iter().map(|arg| Some(arg.value)).collect();
-        }
-        // A slot left unfilled is a missing argument, named by its parameter —
-        // unless the parameter declares a default, in which case the caller
-        // fills it and this is no error. The `None` is kept either way so the
-        // caller fills the slot rather than letting an arity mismatch re-report
-        // the same shortfall without the name.
-        for (index, slot) in bound.iter().enumerate() {
-            if slot.is_none()
-                && !has_default.get(index).copied().unwrap_or(false)
-                && let Some(param) = written[index]
-            {
-                self.emit(
-                    span,
-                    "KSEM190",
-                    format!(
-                        "call to `{name}` is missing an argument for parameter `{}`",
-                        self.interner.resolve(param)
-                    ),
-                );
-            }
-        }
-        bound
-    }
-
-    /// Reports labeled arguments on a call surface that binds no parameter
-    /// names, keeping the values so they still type-check.
-    ///
-    /// A call through a function value, a `print`, a foreign function, or a
-    /// class constructor exposes no named parameters to bind against here, so a
-    /// label on one is a mistake rather than a binder. `surface` names the form
-    /// for the message.
-    pub(crate) fn reject_argument_labels(&mut self, args: &[CallArg], surface: &str) {
-        for arg in args {
-            if let Some(span) = arg.label_span {
-                self.emit(
-                    span,
-                    "KSEM191",
-                    format!("{surface} does not take argument labels"),
-                );
-            }
-        }
+    /// Every entry is `Some`: a written argument always fills the next slot.
+    /// The `Option` is the caller's vocabulary for a slot no argument reached,
+    /// which it fills from that parameter's default.
+    pub(crate) fn argument_slots(args: &[CallArg]) -> Vec<Option<ExprId>> {
+        args.iter().map(|arg| Some(arg.value)).collect()
     }
 
     /// The value expressions of `args`, in written order, dropping any labels.
-    ///
-    /// Used by a surface that does not bind labels, after
-    /// [`Self::reject_argument_labels`] has reported them.
     pub(crate) fn argument_values(args: &[CallArg]) -> Vec<ExprId> {
         args.iter().map(|arg| arg.value).collect()
     }

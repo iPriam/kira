@@ -593,12 +593,31 @@ impl Parser<'_> {
         let Some(&last) = body.stmts.last() else {
             return;
         };
-        if let Stmt::Expr { expr, span } = self.tree.stmt(last) {
-            let (expr, span) = (*expr, *span);
-            self.tree.stmts[last] = Stmt::Return {
-                value: Some(expr),
-                span,
-            };
+        match self.tree.stmt(last) {
+            Stmt::Expr { expr, span } => {
+                let (expr, span) = (*expr, *span);
+                self.tree.stmts[last] = Stmt::Return {
+                    value: Some(expr),
+                    span,
+                };
+            }
+            // A member whose value is chosen by a condition ends in the `if`
+            // rather than in an expression, and each arm is then a tail of its
+            // own. Recursing gives every arm the return the single-expression
+            // case gets — including a nested `else if`, which is an `if` in the
+            // else block. An `if` with no `else` is left alone: one arm returning
+            // does not make the member total, and the definite-return check is
+            // what should say so.
+            Stmt::If {
+                then_block,
+                else_block: Some(else_block),
+                ..
+            } => {
+                let (then_block, else_block) = (then_block.clone(), else_block.clone());
+                self.make_block_return_its_tail(&then_block);
+                self.make_block_return_its_tail(&else_block);
+            }
+            _ => {}
         }
     }
 

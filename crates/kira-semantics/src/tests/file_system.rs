@@ -81,12 +81,8 @@ fn writing_bytes_requires_a_byte_array() {
     );
 }
 
-/// An intrinsic binds no argument labels: a label names a parameter, and an
-/// intrinsic has an operand list rather than a signature to resolve one against.
+/// An intrinsic takes a label and ignores it, like every other call surface.
 #[test]
-fn an_intrinsic_binds_no_argument_labels() {
-    assert_eq!(
-        codes(r#"@Main function main() { fsReadText(path: "a"); return }"#),
-        vec!["KSEM191"]
-    );
+fn an_intrinsic_accepts_and_ignores_an_argument_label() {
+    assert!(diagnostics(r#"@Main function main() { fsReadText(path: "a"); return }"#).is_empty());
 }

@@ -36,7 +36,6 @@ impl Analyzer<'_> {
         span: Span,
     ) -> HirExprId {
         self.reject_intrinsic_type_args("nativeState", type_args, span);
-        self.reject_argument_labels(args, "the `nativeState` intrinsic");
         let Some(value) = self.one_intrinsic_arg(ctx, "nativeState", args, span) else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
@@ -71,7 +70,6 @@ impl Analyzer<'_> {
         span: Span,
     ) -> HirExprId {
         self.reject_intrinsic_type_args("nativeUserData", type_args, span);
-        self.reject_argument_labels(args, "the `nativeUserData` intrinsic");
         let Some(state) = self.one_intrinsic_arg(ctx, "nativeUserData", args, span) else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
@@ -97,7 +95,6 @@ impl Analyzer<'_> {
         args: &[CallArg],
         span: Span,
     ) -> HirExprId {
-        self.reject_argument_labels(args, "the `nativeRecover` intrinsic");
         let target = match type_args {
             [target] => self.resolve_type_ref(*target),
             _ => {
@@ -171,7 +168,6 @@ impl Analyzer<'_> {
         span: Span,
     ) -> HirExprId {
         self.reject_intrinsic_type_args("nativeStateFree", type_args, span);
-        self.reject_argument_labels(args, "the `nativeStateFree` intrinsic");
         let Some(token) = self.one_intrinsic_arg(ctx, "nativeStateFree", args, span) else {
             return self.program.exprs.alloc(HirExpr::Error);
         };

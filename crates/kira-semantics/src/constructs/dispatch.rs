@@ -13,7 +13,6 @@ use crate::analyze::{Analyzer, FnCtx};
 /// The dispatch-facing signature of one construct-family method.
 struct FamilyMethodShape {
     params: Vec<Type>,
-    param_names: Vec<Option<kira_core::Symbol>>,
     ownership: Vec<OwnershipMode>,
     /// Resolved parameter defaults, aligned with `params`. A `None` slot is
     /// mandatory; a `Some` fills a call that omits it.
@@ -110,7 +109,6 @@ impl Analyzer<'_> {
         };
         let FamilyMethodShape {
             params,
-            param_names,
             ownership,
             defaults,
             result,
@@ -126,11 +124,8 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         };
         let callable = format!("{}.{}", self.type_name(Type::Enum(family_id)), method);
-        // A slot with a default may be omitted without a missing-argument
-        // diagnostic; the caller fills it below.
-        let has_default: Vec<bool> = defaults.iter().map(Option::is_some).collect();
-        let positional =
-            self.bind_call_arguments(args, 0, &param_names, &has_default, &callable, span);
+        // A method call binds by position, label or no label.
+        let positional = Analyzer::argument_slots(args);
         let mut values = vec![receiver];
         for (index, slot_value) in positional.into_iter().enumerate() {
             let Some(arg) = slot_value else {
@@ -213,7 +208,6 @@ impl Analyzer<'_> {
         let method = self.construct_families.get(family)?.methods.get(method)?;
         Some(FamilyMethodShape {
             params: method.params.clone(),
-            param_names: method.param_names.clone(),
             ownership: method.ownership.clone(),
             defaults: method.defaults.clone(),
             result: method.result,
