@@ -1,0 +1,227 @@
+//! What lowering decides, checked end to end from KSL source.
+
+use kira_ksl_semantics::{Module, check};
+use kira_shader_model::{BackendTarget, Builtin, ResourceKind, Stage};
+use kira_source::SourceId;
+
+use crate::{ShaderIr, decode, lower};
+
+/// Parses, checks, and lowers `text` for `target`.
+fn build(text: &str, target: BackendTarget) -> ShaderIr {
+    let parsed = kira_ksl_parser::parse(SourceId::new(0), text);
+    assert!(parsed.is_clean(), "{:?}", parsed.diagnostics);
+    let checked = check(
+        &Module {
+            source: SourceId::new(0),
+            tree: parsed.tree,
+            interner: parsed.interner,
+        },
+        &[],
+    );
+    assert!(
+        checked.is_clean(),
+        "{:?}",
+        checked
+            .diagnostics
+            .iter()
+            .map(|d| (d.code, d.message.clone()))
+            .collect::<Vec<_>>()
+    );
+    lower(checked.module, target)
+}
+
+const TEXTURED: &str = r#"
+type Camera {
+    let view_projection: Float4x4
+}
+
+type Surface {
+    let albedo: Float3
+    let alpha: Float
+}
+
+type VIn {
+    let position: Float3
+    let uv: Float2
+}
+
+type VOut {
+    @builtin(position)
+    let clip_position: Float4
+    let uv: Float2
+}
+
+type FOut {
+    let color: Float4
+}
+
+shader Textured {
+    option use_tint: Bool = true
+
+    group Frame {
+        uniform camera: Camera
+    }
+
+    group Material {
+        uniform surface: Surface
+        texture albedo: Texture2d
+        sampler linear: Sampler
+    }
+
+    vertex {
+        input VIn
+        output VOut
+        function entry(v: VIn) -> VOut {
+            let r: VOut
+            r.clip_position = mul(camera.view_projection, Float4(v.position, 1.0))
+            r.uv = v.uv
+            return r
+        }
+    }
+
+    fragment {
+        input VOut
+        output FOut
+        function entry(f: VOut) -> FOut {
+            let r: FOut
+            r.color = sample(albedo, linear, f.uv)
+            return r
+        }
+    }
+}
+"#;
+
+#[test]
+fn metal_numbers_buffers_from_one_and_textures_from_zero() {
+    // Metal's vertex buffer 0 carries the attribute stream, so a resource
+    // buffer can never take it.
+    let ir = build(TEXTURED, BackendTarget::Msl);
+    let reflection = ir.reflection.expect("a shader");
+    let binding = |name: &str| {
+        reflection
+            .resources
+            .iter()
+            .find(|resource| resource.resource_name == name)
+            .and_then(|resource| {
+                resource
+                    .backend_bindings
+                    .iter()
+                    .find(|binding| binding.target == BackendTarget::Msl)
+            })
+            .map(|binding| binding.binding_index)
+            .expect(name)
+    };
+    assert_eq!(binding("camera"), 1);
+    assert_eq!(binding("surface"), 2);
+    assert_eq!(binding("albedo"), 0);
+    assert_eq!(binding("linear"), 0);
+}
+
+#[test]
+fn wgsl_takes_the_group_a_shader_wrote_as_its_set() {
+    let ir = build(TEXTURED, BackendTarget::Wgsl);
+    let reflection = ir.reflection.expect("a shader");
+    let surface = reflection
+        .resources
+        .iter()
+        .find(|resource| resource.resource_name == "surface")
+        .expect("surface");
+    let binding = surface
+        .backend_bindings
+        .iter()
+        .find(|binding| binding.target == BackendTarget::Wgsl)
+        .expect("wgsl");
+    assert_eq!(binding.group_index, 1, "`Material` is the second group");
+    assert_eq!(binding.binding_index, 0, "and its first resource");
+}
+
+#[test]
+fn glsl_carries_the_name_a_host_looks_the_binding_up_by() {
+    let ir = build(TEXTURED, BackendTarget::Glsl330);
+    let reflection = ir.reflection.expect("a shader");
+    let albedo = reflection
+        .resources
+        .iter()
+        .find(|resource| resource.resource_name == "albedo")
+        .expect("albedo");
+    let binding = albedo
+        .backend_bindings
+        .iter()
+        .find(|binding| binding.target == BackendTarget::Glsl330)
+        .expect("glsl");
+    assert_eq!(binding.glsl_name.as_deref(), Some("albedo"));
+}
+
+#[test]
+fn a_builtin_field_takes_no_location_and_the_rest_are_numbered_in_order() {
+    let ir = build(TEXTURED, BackendTarget::Msl);
+    let reflection = ir.reflection.expect("a shader");
+    let vertex = &reflection.stages[0];
+    assert_eq!(vertex.stage, Stage::Vertex);
+    assert_eq!(vertex.inputs[0].location, Some(0));
+    assert_eq!(vertex.inputs[1].location, Some(1));
+    let clip = &vertex.outputs[0];
+    assert_eq!(clip.builtin, Some(Builtin::Position));
+    assert_eq!(clip.location, None, "a builtin consumes no location slot");
+    assert_eq!(vertex.outputs[1].location, Some(0));
+}
+
+#[test]
+fn a_uniform_layout_is_measured_and_reflected() {
+    let ir = build(TEXTURED, BackendTarget::Msl);
+    let reflection = ir.reflection.expect("a shader");
+    let surface = reflection
+        .types
+        .iter()
+        .find(|declared| declared.name == "Surface")
+        .expect("Surface");
+    let layout = surface.uniform_layout.as_ref().expect("a layout");
+    assert_eq!(layout.fields[0].offset, 0);
+    assert_eq!(layout.fields[1].offset, 16, "the Float3 is padded to 16");
+    assert_eq!(layout.size, 32);
+}
+
+#[test]
+fn the_reflection_text_round_trips_through_its_own_decoder() {
+    let ir = build(TEXTURED, BackendTarget::Msl);
+    let decoded = decode(&ir.reflection_text()).expect("decodes");
+    assert_eq!(Some(&decoded), ir.reflection.as_ref());
+}
+
+#[test]
+fn a_compute_shader_reflects_its_workgroup_size() {
+    let ir = build(
+        r#"
+type QIn {
+    @builtin(thread_id)
+    let gid: UInt3
+}
+
+shader Step {
+    group Work {
+        storage read_write out: [UInt]
+    }
+    compute {
+        input QIn
+        threads(64, 2, 1)
+        function entry(q: QIn) {
+            out[q.gid.x] = 1
+            return
+        }
+    }
+}
+"#,
+        BackendTarget::Msl,
+    );
+    let reflection = ir.reflection.clone().expect("a shader");
+    assert_eq!(
+        reflection.shader_kind,
+        kira_shader_model::ShaderKind::Compute
+    );
+    assert_eq!(reflection.stages[0].threads, Some([64, 2, 1]));
+    assert_eq!(reflection.resources[0].resource_kind, ResourceKind::Storage);
+    // Round-tripping matters most here: `threads` is the one record that
+    // extends the stage above it rather than standing alone.
+    let decoded = decode(&ir.reflection_text()).expect("decodes");
+    assert_eq!(decoded.stages[0].threads, Some([64, 2, 1]));
+}
