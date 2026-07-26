@@ -174,6 +174,8 @@ pub enum Instruction {
     NativeRecover(u64),
     /// Pop a callback-state handle or raw token, release it, and push unit.
     NativeStateFree,
+    /// Push the null raw pointer.
+    ConstRawPtrNull,
     /// Pop a value, format it, emit one output line, and push unit.
     Print,
     /// Return the stack top from the current function.
@@ -506,6 +508,10 @@ mod opcode {
     pub const NATIVE_USER_DATA: u8 = 0x4a;
     pub const NATIVE_RECOVER: u8 = 0x4b;
     pub const NATIVE_STATE_FREE: u8 = 0x4c;
+
+    // The null raw pointer. Appended after the callback-state group; nullary,
+    // and the only `RawPtr` constant the language spells.
+    pub const RAW_PTR_NULL: u8 = 0x4d;
 }
 
 #[cfg(test)]

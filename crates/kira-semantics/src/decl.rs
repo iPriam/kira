@@ -138,6 +138,11 @@ impl<'a> Analyzer<'a> {
                 defaults.push(None);
                 self.ffi_array_counts.insert(id, count);
             }
+            // An `@FFI.Callback` likewise: its value is the C function pointer,
+            // and the annotation says what that pointer's signature is.
+            if self.ffi_callback_storage(declaration, &mut def) {
+                defaults.push(None);
+            }
             // A class may extend a struct, so a struct's methods have to be
             // inheritable — which means recording them the same way a class's
             // are.

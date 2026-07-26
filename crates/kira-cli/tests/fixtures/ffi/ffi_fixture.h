@@ -117,4 +117,17 @@ struct ffi_grid ffi_grid_make(int base);
 int ffi_board_sum(struct ffi_board b);
 struct ffi_board ffi_board_make(int seed);
 
+/* A function-pointer member, and the two directions it travels: C hands one out,
+ * Kira stores it in a struct, and C calls it back through that struct. A null
+ * member is the zero-filled case and must be observable as such. */
+typedef int (*ffi_adder)(int, int);
+struct ffi_hooks {
+    ffi_adder add;
+    int scale;
+};
+
+ffi_adder ffi_default_adder(void);
+int ffi_hooks_apply(struct ffi_hooks h, int a, int b);
+int ffi_call_adder(ffi_adder add, int a, int b);
+
 #endif /* KIRA_FFI_FIXTURE_H */

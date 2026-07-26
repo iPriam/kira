@@ -128,7 +128,11 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         IrExpr::NativeRecover { raw, .. } => walk_expr(program, *raw, found),
         IrExpr::NativeStateFree { token } => walk_expr(program, *token, found),
         // Leaves: nothing inside can be a call.
-        IrExpr::Int(_) | IrExpr::Float(_) | IrExpr::Bool(_) | IrExpr::Str(_) | IrExpr::Local(_) => {
-        }
+        IrExpr::Int(_)
+        | IrExpr::Float(_)
+        | IrExpr::Bool(_)
+        | IrExpr::Str(_)
+        | IrExpr::RawPtrNull
+        | IrExpr::Local(_) => {}
     }
 }

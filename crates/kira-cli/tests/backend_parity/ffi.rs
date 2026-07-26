@@ -362,6 +362,38 @@ fn every_backend_agrees_on_inline_c_arrays() {
     let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
 }
 
+/// A C function pointer crosses as a member and on its own, on every backend.
+///
+/// Three cases in one program: a zero-filled `@FFI.Callback` member is NULL and
+/// C sees it as null; a pointer C handed out survives a round trip through a
+/// Kira struct and is called back through it; and the same pointer passed on its
+/// own reaches C as the pointer a function pointer is.
+#[test]
+fn every_backend_agrees_on_a_c_function_pointer() {
+    let entry = write_ffi_package(include_str!("../fixtures/ffi/ffi_program_callback.kira"));
+
+    // A null member (-1), (2 + 5) * 3, and 20 + 22.
+    const EXPECTED_CALLBACK: &str = "-1\n21\n42\n";
+
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            EXPECTED_CALLBACK,
+            "the {backend} backend disagreed on a C function pointer\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "the {backend} backend did not exit cleanly\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
+}
+
 /// A single-scalar-field C handle struct crosses the seam as its field: the
 /// result of `ffi_make_handle` (a `struct { unsigned int id; }` by value) is
 /// rebuilt into the Kira `Handle`, and `ffi_handle_id` reads the field back out

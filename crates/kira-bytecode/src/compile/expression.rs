@@ -17,6 +17,7 @@ impl FnCompiler<'_> {
                 let pool = self.strings.intern(value)?;
                 self.code.push(Instruction::ConstStr(pool));
             }
+            IrExpr::RawPtrNull => self.code.push(Instruction::ConstRawPtrNull),
             IrExpr::Local(slot) => {
                 let slot = self.local_slot(*slot)?;
                 self.code.push(Instruction::LoadLocal(slot));

@@ -159,11 +159,20 @@ fn a_nested_c_layout_field_zero_fills_recursively() {
 
 #[test]
 fn a_c_layout_field_with_no_zero_is_refused_when_omitted() {
-    // `RawPtr` has no literal zero in this slice, so omitting it is refused
+    // A `String` is a Kira heap value with no C zero, so omitting it is refused
     // precisely rather than mis-initialized.
-    let text = "@FFI.Struct { layout: c; }\nstruct V { var p: RawPtr }\n\
+    let text = "@FFI.Struct { layout: c; }\nstruct V { var label: String }\n\
          @Main function main() { let v = V {}\n return }";
     assert!(codes(text).contains(&"KSEM186"), "{:?}", codes(text));
+}
+
+#[test]
+fn a_pointer_field_zero_fills_to_null() {
+    // `NULL` is what C zero-fills a pointer member to, so the omitted field has
+    // a zero and the construction is clean.
+    let text = "@FFI.Struct { layout: c; }\nstruct V { var p: RawPtr }\n\
+         @Main function main() { let v = V {}\n return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
 
 #[test]
@@ -203,12 +212,12 @@ fn indexing_an_ffi_array_points_at_the_field_holding_its_elements() {
 }
 
 #[test]
-fn an_ffi_callback_as_an_extern_param_is_refused_as_not_executable() {
+fn an_ffi_callback_as_an_extern_param_crosses_as_the_pointer_it_is() {
     let text = "@FFI.Callback { abi: c; params: [I32]; result: Void; }\nstruct Handler {}\n\
          @FFI.Extern { library: l; symbol: s; abi: c; }\n\
          function register(h: Handler) -> Void;\n\
          @Main function main() { return }";
-    assert!(codes(text).contains(&"KSEM187"), "{:?}", codes(text));
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
 
 #[test]
