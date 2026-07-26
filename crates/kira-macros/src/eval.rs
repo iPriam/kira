@@ -19,6 +19,7 @@ use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::{Block, Expr, ExprId, ForIterable, Item, Stmt, StmtId};
 
 use crate::diagnostics;
+use crate::ksl::ShaderCompiler;
 use crate::quote::{self, Chunk, Template};
 use crate::value::Value;
 
@@ -49,7 +50,7 @@ impl EvalError {
     }
 
     /// A failure with a specific code.
-    fn coded(code: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn coded(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -122,11 +123,19 @@ pub(crate) struct Outcome {
 }
 
 /// Runs `body` with `arguments` bound to its `expand` parameters.
-pub(crate) fn run(body: &Body, arguments: Vec<(String, Value)>) -> Result<Outcome, EvalError> {
+///
+/// `shaders` is the KSL pipeline the `Ksl` namespace reaches, or `None` when
+/// the caller supplied none.
+pub(crate) fn run(
+    body: &Body,
+    arguments: Vec<(String, Value)>,
+    shaders: Option<&dyn ShaderCompiler>,
+) -> Result<Outcome, EvalError> {
     let mut evaluator = Evaluator {
         body,
         scopes: vec![arguments.into_iter().collect()],
         reported: Vec::new(),
+        shaders,
     };
     let value = match evaluator.block(&body.block)? {
         Flow::Return(value) => value,
@@ -164,6 +173,8 @@ struct Evaluator<'a> {
     body: &'a Body,
     scopes: Vec<HashMap<String, Value>>,
     reported: Vec<String>,
+    /// The KSL pipeline `Ksl.compile` reaches, when one was supplied.
+    shaders: Option<&'a dyn ShaderCompiler>,
 }
 
 impl Evaluator<'_> {
@@ -407,7 +418,7 @@ mod tests {
 
     fn run_body(text: &str, arguments: Vec<(String, Value)>) -> Result<Outcome, EvalError> {
         let body = compile(text).expect("a parseable expand body");
-        run(&body, arguments)
+        run(&body, arguments, None)
     }
 
     #[test]

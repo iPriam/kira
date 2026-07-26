@@ -8,6 +8,7 @@ use kira_syntax_model::ast::{BinaryOp, CallArg, Expr, ExprId, UnaryOp};
 
 use super::{EvalError, Evaluator, FIELD_TYPE};
 use crate::diagnostics;
+use crate::ksl;
 use crate::syntax_ops::{self, SyntaxError};
 use crate::value::{DeclarationValue, Value};
 
@@ -194,6 +195,7 @@ impl Evaluator<'_> {
                 self.reported.push(message.clone());
                 Ok(Value::Void)
             }
+            (ksl::NAMESPACE, "compile", values) => ksl::compile(self.shaders, values),
             _ => Err(EvalError::unsupported(format!(
                 "`{namespace}.{method}` with {} argument(s)",
                 values.len()
@@ -224,6 +226,17 @@ fn member(value: &Value, name: &str) -> Result<Value, EvalError> {
         (Value::Field(field), "syntax") => Ok(Value::Syntax(field.syntax.clone())),
         (Value::Array(items), "count") => Ok(Value::Int(items.len() as i64)),
         (Value::Str(text), "count") => Ok(Value::Int(text.chars().count() as i64)),
+        (Value::Record(record), name) => record
+            .members
+            .iter()
+            .find(|(member, _)| member == name)
+            .map(|(_, value)| value.clone())
+            .ok_or_else(|| {
+                EvalError::unsupported(format!(
+                    "reading `{name}` on a `{}`, which has no such member",
+                    record.name
+                ))
+            }),
         (other, name) => Err(EvalError::unsupported(format!(
             "reading `{name}` on a `{}`",
             other.type_name()

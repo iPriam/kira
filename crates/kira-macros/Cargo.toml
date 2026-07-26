@@ -15,3 +15,4 @@ kira-diagnostics.workspace = true
 kira-syntax-model.workspace = true
 kira-lexer.workspace = true
 kira-parser.workspace = true
+thiserror.workspace = true

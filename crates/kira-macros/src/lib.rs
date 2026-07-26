@@ -35,6 +35,7 @@ mod diagnostics;
 mod edits;
 mod eval;
 mod invoke;
+mod ksl;
 mod probe;
 mod procedural;
 mod quote;
@@ -45,16 +46,18 @@ mod syntax_ops;
 mod tokens;
 mod value;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use kira_diagnostics::Diagnostic;
 use kira_source::SourceId;
 
 use crate::diagnostics::Reporter;
 use crate::edits::EditBuffer;
-use crate::registry::Registry;
+use crate::procedural::Program;
 use crate::rename::Gensym;
 use crate::tokens::Lexed;
+
+pub use crate::ksl::{CompiledShader, ShaderCompileError, ShaderCompiler};
 
 /// How many times expansion re-runs over its own output before giving up.
 ///
@@ -80,8 +83,22 @@ pub struct Expansion {
 ///
 /// Total: a malformed macro is reported and left unexpanded, so the file still
 /// reaches the parser and everything else wrong with it is still reported.
+///
+/// No KSL pipeline is supplied, so a macro that calls `Ksl.compile` is refused
+/// under [`KMAC022`](diagnostics::SHADER_COMPILE). Use [`expand_with`] to hand
+/// expansion one.
 #[must_use]
 pub fn expand(files: &[(SourceId, &str)]) -> Expansion {
+    expand_with(files, None)
+}
+
+/// Expands every macro in `files` with `shaders` behind the `Ksl` namespace.
+///
+/// Separate from [`expand`] because this crate is layer 1 and the KSL pipeline
+/// is above it: the caller that owns the pipeline is the one that can supply
+/// it. See [`ShaderCompiler`].
+#[must_use]
+pub fn expand_with(files: &[(SourceId, &str)], shaders: Option<&dyn ShaderCompiler>) -> Expansion {
     let identity: Vec<String> = files.iter().map(|(_, text)| (*text).to_owned()).collect();
     let lexed: Vec<Lexed<'_>> = files
         .iter()
@@ -126,10 +143,14 @@ pub fn expand(files: &[(SourceId, &str)]) -> Expansion {
             for span in &blanks {
                 buffer.blank(*span, &text);
             }
+            let program = Program {
+                registry: &registry,
+                templates: &templates,
+                shaders,
+            };
             expand_file(
                 &file,
-                &registry,
-                &templates,
+                program,
                 &blanks,
                 &mut gensym,
                 &mut buffer,
@@ -183,20 +204,22 @@ pub fn expand(files: &[(SourceId, &str)]) -> Expansion {
 /// blanked and expand a template that has no arguments bound yet.
 fn expand_file(
     file: &Lexed<'_>,
-    registry: &Registry,
-    templates: &HashMap<String, procedural::WrapperTemplate>,
+    program: Program<'_>,
     blanked: &[kira_source::Span],
     gensym: &mut Gensym,
     buffer: &mut EditBuffer,
     reporter: &mut Reporter,
 ) {
+    let Program {
+        registry, shaders, ..
+    } = program;
     for declaration in procedural::top_level(file) {
         if blanked.iter().any(|span| {
             span.start <= declaration.span.start && declaration.span.end() <= span.end()
         }) {
             continue;
         }
-        procedural::expand_declaration(file, &declaration, registry, templates, buffer, reporter);
+        procedural::expand_declaration(file, &declaration, program, buffer, reporter);
     }
     let all = invoke::find(file);
     for call in invoke::innermost(&all) {
@@ -216,7 +239,9 @@ fn expand_file(
             continue;
         }
         if let Some(declared) = registry.procedural(&call.name) {
-            if let Some(expansion) = procedural::expand_call(file, declared, &call, reporter) {
+            if let Some(expansion) =
+                procedural::expand_call(file, declared, &call, shaders, reporter)
+            {
                 match call.position {
                     invoke::Position::Declaration => {
                         buffer.blank(call.span, file.text);
@@ -574,5 +599,89 @@ struct Plain {
             "{:?}",
             expansion.texts
         );
+    }
+
+    /// A pipeline stand-in, so the seam can be proven without one.
+    struct OneShader;
+
+    impl ShaderCompiler for OneShader {
+        fn compile(&self, path: &str, target: &str) -> Result<CompiledShader, ShaderCompileError> {
+            Ok(CompiledShader {
+                combined_source: format!("// {target} of {path}\nvertex void v() {{}}"),
+                vertex_entry: "v".to_owned(),
+                fragment_entry: "f".to_owned(),
+                ..CompiledShader::default()
+            })
+        }
+    }
+
+    /// The userland `ksl` the KSL migration is aiming at.
+    ///
+    /// Note what is *not* in the compiler here: `KslArtifact`, its field names,
+    /// and how many backends get inlined are all Kira source.
+    const USERLAND_KSL: &str = r#"
+comptime macro ksl {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        let msl = Ksl.compile(input, "msl")
+        return quote {
+            KslArtifact(combinedMsl: #{msl.combinedSource}, vertexEntry: #{msl.vertexEntry})
+        }
+    }
+}
+
+function load() -> KslArtifact {
+    return ksl!("Shaders/Tri.ksl")
+}
+"#;
+
+    #[test]
+    fn a_userland_ksl_macro_shadows_the_builtin() {
+        // The guardrail for deleting `shader.rs`: the builtin is consulted only
+        // after the registry, so a declared `ksl` wins. Were that ever to
+        // regress, the engine could not take ownership of its own shader macro.
+        let expansion = expand_one(USERLAND_KSL);
+        assert!(
+            expansion
+                .diagnostics
+                .iter()
+                .all(|d| d.code != Some("KMAC024")),
+            "the builtin answered instead of the declared macro: {:?}",
+            expansion.diagnostics
+        );
+    }
+
+    #[test]
+    fn with_no_pipeline_the_userland_macro_refuses_under_the_shader_code() {
+        let expansion = expand_one(USERLAND_KSL);
+        assert!(
+            expansion
+                .diagnostics
+                .iter()
+                .any(|d| d.code == Some("KMAC022")),
+            "{:?}",
+            expansion.diagnostics
+        );
+    }
+
+    #[test]
+    fn a_userland_ksl_macro_inlines_what_the_pipeline_compiled() {
+        let shaders = OneShader;
+        let expansion = expand_with(&[(SourceId::new(0), USERLAND_KSL)], Some(&shaders));
+        assert!(
+            expansion.diagnostics.is_empty(),
+            "{:?}",
+            expansion.diagnostics
+        );
+        let text = &expansion.texts[0];
+        // The shader source crossed into generated Kira as a string literal,
+        // newlines escaped — which is what makes inlining a whole backend's
+        // output into an artifact work at all.
+        assert!(
+            text.contains(r#"combinedMsl: "// msl of Shaders/Tri.ksl\nvertex void v() {}""#),
+            "{text}"
+        );
+        assert!(text.contains(r#"vertexEntry: "v""#), "{text}");
+        assert!(!text.contains("ksl!"), "{text}");
     }
 }
