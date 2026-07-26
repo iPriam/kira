@@ -83,6 +83,11 @@ impl FnCompiler<'_> {
                 self.compile_expr(array)?;
                 self.code.push(Instruction::ArrayLen);
             }
+            IrExpr::StringLen { text } => {
+                let text = *text;
+                self.compile_expr(text)?;
+                self.code.push(Instruction::StringLen);
+            }
             IrExpr::NativeState { value, type_id, .. } => {
                 let (value, type_id) = (*value, *type_id);
                 self.compile_expr(value)?;
@@ -114,6 +119,8 @@ impl FnCompiler<'_> {
                     ConvertKind::IntToInt | ConvertKind::FloatToFloat => {}
                     ConvertKind::IntToFloat => self.code.push(Instruction::ConvertIntToFloat),
                     ConvertKind::FloatToInt => self.code.push(Instruction::ConvertFloatToInt),
+                    ConvertKind::FloatToBits => self.code.push(Instruction::ConvertFloatToBits),
+                    ConvertKind::BitsToFloat => self.code.push(Instruction::ConvertBitsToFloat),
                 }
             }
             IrExpr::ArrayAppend { place, value } => {

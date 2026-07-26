@@ -345,6 +345,9 @@ impl Analyzer<'_> {
                 // scalar set is a value conversion, not a call — recognized here
                 // before the undefined-function path so a cast is never reported
                 // as a missing function.
+                if let Some(call) = self.analyze_bit_reinterpret(ctx, &name, &args, callee_span) {
+                    return call;
+                }
                 if let Some(call) = self.analyze_scalar_conversion(ctx, &name, &args, callee_span) {
                     return call;
                 }
@@ -415,6 +418,14 @@ impl Analyzer<'_> {
                 // property, written with the same syntax a field read uses.
                 if base_ty.is_array() {
                     return self.analyze_array_property(base_hir, &name, field_span);
+                }
+                // A `String` has no fields either, and the same one property:
+                // its character count, written exactly as an array's is.
+                if base_ty == Type::String && name == "count" {
+                    return self
+                        .program
+                        .exprs
+                        .alloc(HirExpr::StringLen { text: base_hir });
                 }
                 if let Type::Enum(family_id) = base_ty
                     && self.construct_family_computed_member(family_id, &name)

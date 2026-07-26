@@ -168,6 +168,9 @@ pub enum VmError {
     /// An array instruction found something other than an array.
     #[error("indexed a value that is not an array")]
     NotAnArray,
+    /// A string instruction found something other than a string.
+    #[error("measured a value that is not a string")]
+    NotAString,
     /// An array index was at or past the end.
     ///
     /// A real program error, not an invariant guard: an index is generally not

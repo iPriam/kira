@@ -256,6 +256,9 @@ impl Lowerer<'_> {
             HirExpr::ArrayLen { array } => IrExpr::ArrayLen {
                 array: self.lower_expr(array),
             },
+            HirExpr::StringLen { text } => IrExpr::StringLen {
+                text: self.lower_expr(text),
+            },
             HirExpr::ArrayAppend { place, value } => IrExpr::ArrayAppend {
                 place: self.lower_place(&place),
                 value: self.lower_expr(value),
