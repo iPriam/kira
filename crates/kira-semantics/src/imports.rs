@@ -393,6 +393,17 @@ impl Analyzer<'_> {
             .and_then(|file| file.module_for_root(root))
     }
 
+    /// The file a namespace root names in the file being analyzed.
+    ///
+    /// A qualifier is not only a scope check: `KiraUIFoundation.Color` says
+    /// *whose* `Color` is meant, and the package that owns this file is what
+    /// answers that. Resolving the root to its module is the step that makes the
+    /// owner knowable.
+    pub(crate) fn module_source_for_root(&self, root: &str) -> Option<SourceId> {
+        let module = self.module_for_root(root)?;
+        self.imports.module_source_for(self.source, module)
+    }
+
     /// Reports a namespace root this file cannot name, distinguishing a module
     /// it merely failed to import from a name that is nothing at all.
     ///

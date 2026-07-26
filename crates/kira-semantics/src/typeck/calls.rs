@@ -264,19 +264,20 @@ impl Analyzer<'_> {
         name_span: kira_source::Span,
         inits: &[FieldInit],
     ) -> HirExprId {
-        // A module-qualified literal (`Support.Point { … }`) names the same
-        // struct the module declares bare: stripping the qualifier against this
-        // file's imports is the whole of it, exactly as a qualified *type*
-        // reference is resolved. An unimported root is reported there and the
-        // literal's own fields are still analyzed so their mistakes surface.
+        // A module-qualified literal (`Support.Point { … }`) resolves exactly as
+        // a qualified *type* reference does: the qualifier is checked against
+        // this file's imports and then decides which package's declaration is
+        // meant. An unimported root is reported there and the literal's own
+        // fields are still analyzed so their mistakes surface.
         let written = self.interner.resolve(name).to_owned();
-        let Some(struct_name) = self.strip_module_qualifier(&written, name_span) else {
+        let Some(qualified) = self.split_module_qualifier(&written, name_span) else {
             for init in inits {
                 self.analyze_expr(ctx, init.value);
             }
             return self.program.exprs.alloc(HirExpr::Error);
         };
-        let Some(id) = self.visible_struct(&struct_name) else {
+        let struct_name = qualified.text.clone();
+        let Some(id) = self.visible_struct_qualified(&qualified) else {
             // A function of this name is the likely mistake, so say which.
             let message = if self.lookup_function(&struct_name).is_some() {
                 format!("`{struct_name}` is a function, not a struct")

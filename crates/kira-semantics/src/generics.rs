@@ -153,7 +153,12 @@ impl<'a> Analyzer<'a> {
         context: &NameContext,
     ) -> Type {
         let written = self.interner.resolve(name).to_owned();
-        let Some(text) = self.strip_module_qualifier(&written, name_span) else {
+        // A generic template is keyed by its bare name, so the qualifier here
+        // buys only the file-scope check the split performs.
+        let Some(text) = self
+            .split_module_qualifier(&written, name_span)
+            .map(|qualified| qualified.text)
+        else {
             // Reported already; still resolve the arguments so their own
             // mistakes are not hidden behind one unimported module.
             for &arg in args {
