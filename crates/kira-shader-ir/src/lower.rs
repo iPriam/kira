@@ -183,7 +183,24 @@ fn reflect_resources(module: &CheckedModule, shader: &CheckedShader) -> Vec<Refl
                     .iter()
                     .map(|&target| counters.assign(target, resource, group_index, within))
                     .collect(),
+                length_bindings: Vec::new(),
             });
+            if matches!(resource.ty, Type::RuntimeArray(_)) {
+                counters.msl_length.push(resource.name.clone());
+            }
+        }
+    }
+    // Metal reads an array's length from a buffer of its own, and those come
+    // after every resource buffer so adding one never renumbers the others.
+    for name in &counters.msl_length {
+        counters.msl_buffer += 1;
+        if let Some(resource) = reflected
+            .iter_mut()
+            .find(|resource| resource.resource_name == *name)
+        {
+            resource
+                .length_bindings
+                .push((BackendTarget::Msl, counters.msl_buffer));
         }
     }
     reflected
@@ -192,6 +209,9 @@ fn reflect_resources(module: &CheckedModule, shader: &CheckedShader) -> Vec<Refl
 /// The per-target binding counters, which run over the whole shader.
 #[derive(Default)]
 struct Counters {
+    /// Metal's array-length buffers, assigned after every other buffer so a
+    /// shader with no runtime array numbers exactly as it would without them.
+    msl_length: Vec<String>,
     /// Metal numbers buffers, textures, and samplers in three spaces.
     msl_buffer: u32,
     msl_texture: u32,

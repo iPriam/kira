@@ -119,6 +119,12 @@ pub struct ReflectedResource {
     pub visibility: Vec<types::Stage>,
     pub access: Option<types::AccessMode>,
     pub backend_bindings: Vec<BackendBinding>,
+    /// Where a target that cannot ask the GPU for an array's length reads it
+    /// from instead. Metal is the only one of the five: WGSL has
+    /// `arrayLength`, GLSL has `.length()`, HLSL has `GetDimensions`, and
+    /// SPIR-V has `OpArrayLength`, but MSL has nothing, so a host binds the
+    /// count as its own small buffer.
+    pub length_bindings: Vec<(BackendTarget, u32)>,
 }
 
 /// The complete reflection blob for one lowered shader.
