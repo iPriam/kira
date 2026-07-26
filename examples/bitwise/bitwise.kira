@@ -65,12 +65,15 @@ function packing() {
     let signed: I64 = -1
     print(signed >> 60)
 
-    // Unsigned: zeros are. `unsigned` holds the same 64 bits as `signed` —
-    // all ones — built by wrapping rather than written as a literal, because
-    // `U64`'s maximum does not fit in the `i64` a literal is read as.
-    var unsigned: U64 = 0
-    unsigned = unsigned - 1
+    // Unsigned: zeros are. `unsigned` holds the same 64 bits as `signed` — all
+    // ones — written in hex, which is how a mask is spelled: a hexadecimal
+    // literal is a bit pattern rather than a number, so all sixty-four bits set
+    // is a literal rather than an overflow.
+    let unsigned: U64 = 0xffffffffffffffff
     print(unsigned >> 60)
+
+    // The same in the small: a byte mask reads as its bits, not as 255.
+    print(0xff & 0x0f)
 
     // Counts of 64 and beyond wrap rather than trapping.
     var count = 64
