@@ -1,4 +1,4 @@
-# Test-run scheduling. Two facts shape it:
+# Test-run scheduling. Three facts shape it:
 #
 # * Most of this workspace's slow tests block on subprocesses (kirac builds,
 #   cargo builds, watched live sessions), not on CPU — so running more of
@@ -6,11 +6,33 @@
 # * Wall time is set by the longest tests when they start late. The overrides
 #   below start the known long poles first, so the thousand fast tests fill
 #   in around them instead of queueing behind them.
+# * A few tests drive `cargo build` against *this* checkout and then copy the
+#   binaries out of its `target/debug`. Those share one directory with each
+#   other, so they are the one group here that may not overlap.
 
 [profile.default]
 test-threads = 16
 
-# Higher priority starts earlier; the default is 0.
+# `binstall` and `sinstall` build the toolchain from the checkout and install
+# what cargo wrote to `target/debug`. Run two at once and one test copies a
+# binary while the other's cargo is relinking it — the copy lands on a file
+# that is half-written or briefly absent, and the installed tool then fails to
+# run. Both failures seen were exactly that: a different test each time, each
+# passing alone and on a rerun.
+#
+# Capping the group at one makes the overlap impossible rather than unlikely,
+# which is the only fix that holds under load. It costs little: the builds are
+# no-ops once the target directory is warm, which it is by the time tests run.
+[test-groups]
+shared-cargo-target = { max-threads = 1 }
+
 [[profile.default.overrides]]
-filter = "binary_id(kira-cli::live_hybrid) | test(=every_example_agrees_on_every_backend) | test(/installed_toolchain/) | binary_id(kira-knvm::knvm_binstall)"
+filter = "binary_id(kira-knvm::knvm_binstall) | binary_id(kira-knvm::knvm_sinstall)"
+test-group = "shared-cargo-target"
+
+# Higher priority starts earlier; the default is 0. The cargo-driven installs
+# are in a group of one, so they are also the first thing that group should
+# start — everything behind them queues.
+[[profile.default.overrides]]
+filter = "binary_id(kira-cli::live_hybrid) | test(=every_example_agrees_on_every_backend) | test(/installed_toolchain/) | binary_id(kira-knvm::knvm_binstall) | binary_id(kira-knvm::knvm_sinstall)"
 priority = 50
