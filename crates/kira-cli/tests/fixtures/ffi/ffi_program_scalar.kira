@@ -1,8 +1,8 @@
-// The scalar subset of the FFI fixture: every supported type except `CString`,
-// which needs a Kira string. Used for the wasm proof, where a program that
-// creates no Kira strings links the emscripten C archive and its adapters and
-// runs under node. `CString` length is proven on the host backends, where string
-// creation is sound. See docs/ffi.md for the wasm string limitation.
+// The scalar subset of the FFI fixture: every supported type except `CString`.
+// It creates no Kira strings, which is what makes it the narrow wasm proof —
+// the C archive, its generated adapters, and the scalar seam, with nothing else
+// in the way. `ffi_program_wasm_string.kira` is the string half of the same
+// proof.
 
 @FFI.Extern { library: ffifixture; symbol: ffi_add_i32; abi: c; }
 function addI32(a: I32, b: I32) -> I32;

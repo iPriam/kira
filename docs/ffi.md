@@ -252,12 +252,16 @@ adapters to `emcc` and runs under a JS host. Every supported scalar and `RawPtr`
 type works; the example's scalar program links its emscripten archive and runs
 under node.
 
-`CString` on wasm is not yet usable, and the reason is not FFI: Kira string
-creation on `wasm32` is blocked by a width mismatch in the `kira_rt_str_new`
-runtime helper (its length is emitted as 64-bit but the wasm runtime archive
-expects a 32-bit `usize`), which affects any wasm program that builds a string at
-all. `CString` length is proven on the host backends, where string creation is
-sound, and wasm `CString` follows once that helper's width is fixed.
+`CString` works on wasm in both directions — a Kira string copied into transient
+C storage for a call, and a returned `const char*` copied back out into an owned
+Kira `String` — and so do Kira strings on their own. Both are proven under node
+by `a_wasm_build_creates_kira_strings_and_crosses_the_cstring_seam`.
+
+They were not, until the length passed to `kira_rt_str_new` stopped being
+emitted at the *host's* pointer width. The emscripten archive expects a 32-bit
+`usize`; the 64-bit call resolved by name at link time and every wasm string
+trapped. The backend now declares that parameter at the target's width, which is
+also why `Types` carries a `usize_ty` rather than reusing `i64`.
 
 ## Binding type vocabulary (`bind-types/`)
 
