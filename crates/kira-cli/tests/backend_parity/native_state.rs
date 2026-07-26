@@ -190,3 +190,76 @@ function main() {
     // 10 bumped to 11, then scaled to 33 — each state reached its own handler.
     assert_eq!(output, "4\n11\n9\n33\n");
 }
+
+/// Callback state may hold an enum whose variants carry payloads of any shape —
+/// a struct, an array, a nested enum — and every backend recovers the same one.
+///
+/// This is the shape an application's view tree has: an enum of kinds, each with
+/// its own record. The boxed value model has always carried a tag beside a
+/// payload of any of its own forms, so nothing here is new machinery; what the
+/// test pins is that the *tag* and the payload both survive, which a box that
+/// merely copied bytes could get wrong.
+#[test]
+fn callback_state_holding_an_enum_with_payloads_round_trips() {
+    let output = assert_parity(
+        r#"
+struct Rect {
+    var w: Int
+    var h: Int
+}
+
+enum Shape { Empty Box(Rect) Nested(Inner) Label(String) }
+
+struct Inner {
+    var tag: Int
+}
+
+struct Tree {
+    var shape: Shape
+    var depth: Int
+}
+
+function describe(shape: Shape) -> String {
+    match shape {
+        Empty -> return "empty";
+        Box(r) -> return "box";
+        Nested(i) -> return "nested";
+        Label(s) -> return s;
+    }
+    return "?"
+}
+
+@Main
+function main() {
+    let boxed = nativeState(Tree { shape: Shape.Box(Rect { w: 3, h: 4 }), depth: 1 })
+    var back = nativeRecover<Tree>(nativeUserData(boxed))
+    print(describe(back.shape))
+    match back.shape {
+        Empty -> print(0);
+        Box(r) -> print(r.w * r.h);
+        Nested(i) -> print(i.tag);
+        Label(s) -> print(s.count);
+    }
+    print(back.depth)
+    nativeStateFree(boxed)
+
+    let listed = nativeState(Tree { shape: Shape.Nested(Inner { tag: 11 }), depth: 2 })
+    var second = nativeRecover<Tree>(nativeUserData(listed))
+    match second.shape {
+        Empty -> print(0);
+        Box(r) -> print(r.w);
+        Nested(i) -> print(i.tag);
+        Label(s) -> print(s.count);
+    }
+    nativeStateFree(listed)
+
+    let named = nativeState(Tree { shape: Shape.Label("kira"), depth: 3 })
+    var third = nativeRecover<Tree>(nativeUserData(named))
+    print(describe(third.shape))
+    nativeStateFree(named)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "box\n12\n1\n11\nkira\n");
+}
