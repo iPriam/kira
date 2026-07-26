@@ -69,6 +69,7 @@ fn foreign(symbol: &str, params: &[ForeignType], result: ForeignType) -> HirFore
         symbol: symbol.to_owned(),
         abi: ForeignAbi::C,
         signature: ForeignSignature::scalars(params.iter().copied(), result),
+        param_pointees: Box::new([]),
         param_wrappers: params.iter().map(|_| None).collect(),
         result_wrapper: None,
         name_span: Span::new(0, 0),

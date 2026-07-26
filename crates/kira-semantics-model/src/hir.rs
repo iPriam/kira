@@ -8,8 +8,8 @@
 
 use crate::ty::{EnumId, StructId, Type, TypeTable};
 use kira_runtime_abi::{
-    Execution, FileSystemOp, ForeignAbi, ForeignAggregates, ForeignCallback, ForeignSignature,
-    NativeStateTypeId,
+    Execution, FileSystemOp, ForeignAbi, ForeignAggregateId, ForeignAggregates, ForeignCallback,
+    ForeignSignature, NativeStateTypeId,
 };
 use kira_source::Span;
 use kira_syntax_model::ownership::OwnershipMode;
@@ -113,11 +113,30 @@ pub struct HirForeign {
     /// that field out of the argument. `None` is an ordinary scalar parameter.
     /// This is a Kira-side rebuild detail; it never reaches the wire signature.
     pub param_wrappers: Box<[Option<StructId>]>,
+    /// Per-parameter pointee struct, one entry per signature parameter.
+    ///
+    /// `Some(id)` marks a parameter written as an `@FFI.Pointer` to a C-layout
+    /// struct. The wire position is a pointer word either way; this records what
+    /// it points at, so a call may pass the struct and have its address taken.
+    pub param_pointees: Box<[Option<ForeignPointee>]>,
     /// The result's wrapper struct, `Some(id)` when the result is a
     /// single-scalar-field struct rebuilt from the seam scalar at the call.
     pub result_wrapper: Option<StructId>,
     /// Span of the function's name, for diagnostics.
     pub name_span: Span,
+}
+
+/// What an `@FFI.Pointer` parameter points at.
+///
+/// A pointer parameter's wire position is one pointer word. This is the extra
+/// fact a *call* needs: which struct it may be handed instead, and how that
+/// struct's C-layout image is described, so the seam can take its address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForeignPointee {
+    /// The Kira struct a call may pass by address.
+    pub struct_id: StructId,
+    /// Its row in the program's C-layout aggregate table.
+    pub aggregate: ForeignAggregateId,
 }
 
 /// One function a library offers its consumer.
@@ -455,6 +474,34 @@ pub enum HirExpr {
         /// The string-typed expression being measured.
         text: HirExprId,
     },
+    /// The address of a C-layout struct's image, in storage that outlives the
+    /// call.
+    ///
+    /// What a call passes where a parameter was written as an `@FFI.Pointer` to
+    /// that struct. The image is built once and never released, for the same
+    /// reason a `CString` member is not: nothing here knows whether the callee
+    /// kept the pointer, and a buffer freed when the call returns is a dangling
+    /// pointer for every callee that did.
+    CLayoutAddress {
+        /// The struct value whose image is written.
+        value: HirExprId,
+        /// The aggregate row describing its C layout.
+        aggregate: ForeignAggregateId,
+    },
+    /// A `String` copied into C storage that outlives the call.
+    ///
+    /// Inserted where a `String` fills a `CString` member of a C-layout struct.
+    /// A `CString` *parameter* stays transient — C reads it during the call and
+    /// the seam frees it after — but a member of a struct C keeps is read long
+    /// after the call returns, so its storage is never released. See
+    /// [`kira_runtime_abi::c_storage`] for why that is the safe answer rather
+    /// than the lazy one.
+    CStringNew {
+        /// The string whose bytes are copied.
+        text: HirExprId,
+    },
+    /// The null C string: what a `CString` member zero-fills to.
+    CStringNull,
     /// One file-system operation, performed by the engine on the host's behalf.
     ///
     /// An intrinsic rather than a call because reaching the outside world is an
@@ -618,6 +665,8 @@ impl HirExpr {
             HirExpr::Bool(_) => Type::Bool,
             HirExpr::Str(_) => Type::String,
             HirExpr::RawPtrNull | HirExpr::ForeignCallbackPtr { .. } => Type::RawPtr,
+            HirExpr::CStringNew { .. } | HirExpr::CStringNull => Type::CString,
+            HirExpr::CLayoutAddress { .. } => Type::RawPtr,
             HirExpr::Local { ty, .. }
             | HirExpr::Unary { ty, .. }
             | HirExpr::Binary { ty, .. }

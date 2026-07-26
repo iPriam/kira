@@ -119,6 +119,8 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         }
         IrExpr::ArrayLen { array } => walk_expr(program, *array, found),
         IrExpr::StringLen { text } => walk_expr(program, *text, found),
+        IrExpr::CStringNew { text } => walk_expr(program, *text, found),
+        IrExpr::CLayoutAddress { value, .. } => walk_expr(program, *value, found),
         IrExpr::FileSystem { args, .. } => {
             for &arg in args {
                 walk_expr(program, arg, found);
