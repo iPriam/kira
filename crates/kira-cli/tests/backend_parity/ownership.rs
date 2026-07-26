@@ -490,3 +490,46 @@ function main() {
     );
     assert_eq!(output, "a/metal\nb/vulkan\n");
 }
+
+/// Two sibling fields of one binding, both mutably borrowed in one call, write
+/// to their own storage on every backend.
+///
+/// The pair the overlap rule exists to allow. If either backend had resolved
+/// both pointers to the same place, one field's write would land on the other
+/// and the totals would diverge.
+#[test]
+fn mutably_borrowing_two_fields_of_one_binding_agrees() {
+    let output = assert_parity(
+        r#"
+struct Doc {
+    var edits: Int
+}
+
+struct World {
+    var entities: Int
+}
+
+struct Session {
+    var doc: Doc
+    var world: World
+}
+
+function apply(d: borrow mut Doc, w: borrow mut World, by: Int) {
+    d.edits = d.edits + by
+    w.entities = w.entities + (by * 10)
+    return
+}
+
+@Main
+function main() {
+    var session = Session { doc: Doc { edits: 0 }, world: World { entities: 0 } }
+    apply(session.doc, session.world, 3)
+    apply(session.doc, session.world, 4)
+    print(session.doc.edits)
+    print(session.world.entities)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "7\n70\n");
+}

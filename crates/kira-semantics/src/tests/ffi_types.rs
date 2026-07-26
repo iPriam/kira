@@ -226,3 +226,121 @@ fn an_ffi_callback_declaration_alone_type_checks() {
          @Main function main() { return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
+
+// ----- the same C type described more than once ----------------------------
+
+/// Autobind writes a description of a C type into every binding that uses it,
+/// so the same declaration arrives in several files. Two identical descriptions
+/// of one name describe one C type, not a collision.
+#[test]
+fn the_same_foreign_type_may_be_described_in_two_files() {
+    const POINTER: &str = "@FFI.Pointer { target: char; ownership: borrowed; }\n\
+                           struct char_ptr {}";
+    const ARRAY: &str = "@FFI.Array { element: U32; count: 2; }\nstruct U32_array_2 {}";
+    let diagnostics = module_diagnostics(
+        "import sokol\nimport vulkan\n@Main function main() { return }",
+        &[
+            ("sokol", &format!("{POINTER}\n{ARRAY}")),
+            ("vulkan", &format!("{POINTER}\n{ARRAY}")),
+        ],
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+/// Two *different* descriptions under one name are still one name given two
+/// meanings, which is exactly what the duplicate rule exists to catch.
+#[test]
+fn a_foreign_type_described_two_different_ways_still_collides() {
+    let arrays = module_diagnostics(
+        "import first\nimport second\n@Main function main() { return }",
+        &[
+            (
+                "first",
+                "@FFI.Array { element: U32; count: 2; }\nstruct U32_array_2 {}",
+            ),
+            (
+                "second",
+                "@FFI.Array { element: U32; count: 4; }\nstruct U32_array_2 {}",
+            ),
+        ],
+    );
+    assert!(
+        arrays
+            .iter()
+            .any(|diagnostic| diagnostic.code == Some("KSEM004")),
+        "a different element count is a different type: {arrays:?}"
+    );
+
+    let pointers = module_diagnostics(
+        "import first\nimport second\n@Main function main() { return }",
+        &[
+            (
+                "first",
+                "@FFI.Pointer { target: char; ownership: borrowed; }\nstruct thing_ptr {}",
+            ),
+            (
+                "second",
+                "@FFI.Pointer { target: U32; ownership: borrowed; }\nstruct thing_ptr {}",
+            ),
+        ],
+    );
+    assert!(
+        pointers
+            .iter()
+            .any(|diagnostic| diagnostic.code == Some("KSEM130")),
+        "a different pointee is a different type: {pointers:?}"
+    );
+}
+
+/// A C header forward-declares a type before defining it (`typedef union X X;`),
+/// and autobind carries that across as an alias-shaped declaration with an empty
+/// body. The definition that follows is what the name means.
+#[test]
+fn a_foreign_forward_declaration_yields_to_the_definition() {
+    let text = "@FFI.Alias { target: union Version; }\n\
+                struct Version {}\n\
+                @FFI.Struct { layout: c; }\n\
+                struct Version {\n    var major: U32\n    var minor: U32\n}\n\
+                @Main function main() { let v = Version { major: 1, minor: 2 } print(v.major) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+    // The name resolves to the struct, so its fields are reachable.
+    let analyzed = program(text);
+    assert!(
+        analyzed
+            .types
+            .structs()
+            .lookup("Version")
+            .and_then(|id| analyzed.types.structs().get(id))
+            .is_some_and(|def| def.fields.len() == 2),
+        "`Version` should name the two-field definition"
+    );
+}
+
+/// A forward declaration with nothing to yield to is an ordinary alias, and
+/// still means what it says.
+#[test]
+fn a_foreign_alias_with_no_definition_is_still_an_alias() {
+    let text = "@FFI.Alias { target: U32; }\n\
+                struct Handle {}\n\
+                @Main function main() { let h: Handle = 7 print(h) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// The idempotence is for *foreign* declarations only. Two plain Kira structs
+/// of one name are two declarations however alike they look.
+#[test]
+fn two_plain_structs_of_one_name_still_collide() {
+    let diagnostics = module_diagnostics(
+        "import first\nimport second\n@Main function main() { return }",
+        &[
+            ("first", "struct Point { var x: Int }"),
+            ("second", "struct Point { var x: Int }"),
+        ],
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == Some("KSEM004")),
+        "{diagnostics:?}"
+    );
+}

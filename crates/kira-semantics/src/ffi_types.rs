@@ -101,6 +101,128 @@ pub(crate) const FFI_ARRAY_FIELD: &str = "elements";
 /// pointer in.
 pub(crate) const FFI_CALLBACK_FIELD: &str = "pointer";
 
+/// Whether a foreign declaration is a **forward declaration**: it names a C type
+/// without describing it.
+///
+/// The C `typedef union X X;` / `typedef struct _GUID GUID;` idiom, which a
+/// header emits ahead of the real definition. Autobind carries it across as an
+/// alias-shaped declaration with an empty body, and the definition that
+/// completes it arrives later in the same file.
+pub(crate) fn is_forward_declaration(decl: &StructDecl) -> bool {
+    is_alias_shaped(decl) && decl.fields.is_empty() && decl.methods.is_empty()
+}
+
+/// Whether a foreign declaration **describes** the type it names, rather than
+/// only naming it.
+pub(crate) fn is_foreign_definition(decl: &StructDecl) -> bool {
+    matches!(
+        decl.ffi.as_ref().map(|mark| &mark.kind),
+        Some(FfiTypeKind::Struct { .. })
+    ) && !decl.fields.is_empty()
+}
+
+impl Analyzer<'_> {
+    /// A foreign declaration's description of the C type it names, as written,
+    /// or `None` for a declaration that is not foreign at all.
+    ///
+    /// Autobind emits a description of a C type into every binding that uses it,
+    /// so the same type arrives more than once: `@FFI.Pointer { target: char;
+    /// ownership: borrowed; } struct char_ptr {}` is written in both
+    /// `sokol.kira` and `vulkan.kira`, and `struct U32_array_2 {}` in every
+    /// binding whose header has a `uint32_t[2]`. Two declarations of one name
+    /// with equal descriptions describe **one** C type, so the repeat is
+    /// idempotent rather than a collision.
+    ///
+    /// Two with *different* descriptions still collide: that is one name given
+    /// two meanings, which is the thing the duplicate rule exists to catch.
+    pub(crate) fn foreign_description(&self, decl: &StructDecl) -> Option<String> {
+        let kind = &decl.ffi.as_ref()?.kind;
+        let word = |value: &Option<(kira_core::Symbol, Span)>| match value {
+            Some((symbol, _)) => self.interner.resolve(*symbol).to_owned(),
+            None => "?".to_owned(),
+        };
+        let ty = |target: &Option<kira_syntax_model::ast::TypeRefId>| match target {
+            Some(id) => self.written_type_name(*id),
+            None => "?".to_owned(),
+        };
+        let head = match kind {
+            FfiTypeKind::Alias { target } => format!("alias({})", ty(target)),
+            FfiTypeKind::Pointer { target, ownership } => {
+                format!("pointer({},{})", ty(target), word(ownership))
+            }
+            FfiTypeKind::Array { element, count } => format!(
+                "array({},{})",
+                ty(element),
+                count.map_or("?".to_owned(), |(count, _)| count.to_string())
+            ),
+            FfiTypeKind::Callback {
+                abi,
+                params,
+                result,
+            } => {
+                let params: Vec<String> = params
+                    .iter()
+                    .map(|&param| self.written_type_name(param))
+                    .collect();
+                format!(
+                    "callback({},[{}],{})",
+                    word(abi),
+                    params.join(","),
+                    ty(result)
+                )
+            }
+            FfiTypeKind::Struct { layout } => format!("struct({})", word(layout)),
+        };
+        let fields: Vec<String> = decl
+            .fields
+            .iter()
+            .map(|field| {
+                format!(
+                    "{}:{}",
+                    self.interner.resolve(field.name),
+                    self.written_type_name(field.ty)
+                )
+            })
+            .collect();
+        Some(format!("{head}{{{}}}", fields.join(",")))
+    }
+
+    /// A written type as it was spelled, for comparing two declarations without
+    /// resolving either — the tables they would resolve against are not built
+    /// when the comparison is needed.
+    fn written_type_name(&self, id: kira_syntax_model::ast::TypeRefId) -> String {
+        use kira_syntax_model::ast::TypeRef;
+        match self.tree.type_ref(id) {
+            TypeRef::Named { name, .. } => self.interner.resolve(*name).to_owned(),
+            TypeRef::Array { element, .. } => format!("[{}]", self.written_type_name(*element)),
+            TypeRef::Generic { name, args, .. } => {
+                let args: Vec<String> = args
+                    .iter()
+                    .map(|&arg| self.written_type_name(arg))
+                    .collect();
+                format!("{}<{}>", self.interner.resolve(*name), args.join(","))
+            }
+            TypeRef::Function { params, result, .. } => {
+                let params: Vec<String> = params
+                    .iter()
+                    .map(|&param| self.written_type_name(param))
+                    .collect();
+                format!(
+                    "({})->{}",
+                    params.join(","),
+                    self.written_type_name(*result)
+                )
+            }
+            TypeRef::AnyConstruct { family, .. } => {
+                format!("Any {}", self.interner.resolve(*family))
+            }
+            // The parser already reported this; two unresolvable spellings are
+            // never treated as the same description.
+            TypeRef::Error { span } => format!("<error@{}>", span.start),
+        }
+    }
+}
+
 impl Analyzer<'_> {
     /// Gives an `@FFI.Array` declaration its element storage: one field holding
     /// a Kira array of the annotation's element type.

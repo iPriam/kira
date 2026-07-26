@@ -81,6 +81,10 @@ impl<'a> Analyzer<'a> {
     fn declare_struct_headers(&mut self) -> Vec<(StructId, &'a StructDecl, SourceId)> {
         let tree: &'a SyntaxTree = self.tree;
         let mut headers = Vec::new();
+        // What each accepted name already describes, so a repeat can be told
+        // from a redescription. Keyed the way the table is — by owner package
+        // and name — because that is the scope a name is unique in.
+        let mut described: HashMap<(Option<String>, String), String> = HashMap::new();
         for (source, item) in tree.items_with_source() {
             let Item::Struct(declaration) = item else {
                 continue;
@@ -119,13 +123,30 @@ impl<'a> Analyzer<'a> {
                     // type minted while the second pass resolves fields (which
                     // pushes its own slot) cannot land on this struct's id.
                     self.struct_defaults.push(Vec::new());
+                    if let Some(description) = self.foreign_description(declaration) {
+                        described.insert((owner, name), description);
+                    }
                     headers.push((id, declaration, source));
                 }
-                None => self.emit(
-                    declaration.name_span,
-                    "KSEM004",
-                    format!("struct `{name}` is already defined"),
-                ),
+                // The name is taken in this package. A *foreign* declaration
+                // that describes exactly what the accepted one describes is the
+                // same C type arriving twice — autobind writes it into every
+                // binding whose header uses it — so it is idempotent rather than
+                // a collision. Anything else is one name given two meanings.
+                None => {
+                    let repeat = self
+                        .foreign_description(declaration)
+                        .is_some_and(|description| {
+                            described.get(&(owner, name.clone())) == Some(&description)
+                        });
+                    if !repeat {
+                        self.emit(
+                            declaration.name_span,
+                            "KSEM004",
+                            format!("struct `{name}` is already defined"),
+                        );
+                    }
+                }
             }
         }
         headers

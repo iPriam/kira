@@ -612,7 +612,7 @@ impl Analyzer<'_> {
         };
         if let Some(existing) = writebacks
             .iter()
-            .find(|entry| entry.place.local == place.local)
+            .find(|entry| crate::place::places_overlap(&entry.place, &place))
         {
             let name = ctx.local_name(place.local);
             let other = existing.param;
@@ -620,9 +620,9 @@ impl Analyzer<'_> {
                 span,
                 "KSEM247",
                 format!(
-                    "`{callee}` mutably borrows `{name}` twice in one call (parameters \
-                     {other} and {slot}); the two writes would land in the same place and \
-                     the later one would erase the earlier"
+                    "`{callee}` mutably borrows the same storage through `{name}` twice in \
+                     one call (parameters {other} and {slot}); the two writes would land in \
+                     the same place and the later one would erase the earlier"
                 ),
             );
             return;
