@@ -7,7 +7,9 @@
 //! instead of panicking.
 
 use kira_bytecode::ModuleValidateError;
-use kira_runtime_abi::{ForeignCallError, ForeignTypeSpec, NativeCallError, NativeStateError};
+use kira_runtime_abi::{
+    FileSystemError, ForeignCallError, ForeignTypeSpec, NativeCallError, NativeStateError,
+};
 
 /// A trap raised while executing bytecode.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -89,6 +91,13 @@ pub enum VmError {
     /// VM-only host gives.
     #[error("foreign call failed: {0}")]
     ForeignCall(ForeignCallError),
+    /// A `FileSystem` instruction reached a host with no filesystem.
+    ///
+    /// Not a failed operation — a missing file or a refused write is an ordinary
+    /// value the program reads. This is a host that cannot even be asked, which
+    /// is a build-time mistake surfacing at run time.
+    #[error("file-system operation failed: {0}")]
+    FileSystem(FileSystemError),
     /// A Kira array held more elements than the inline C array of a
     /// `@FFI.Array` member reserves.
     ///

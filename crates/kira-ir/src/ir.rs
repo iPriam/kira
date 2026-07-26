@@ -8,7 +8,7 @@
 //! entrypoint.
 
 use kira_runtime_abi::{
-    Execution, ForeignAggregates, ForeignCallback, ForeignImport, NativeStateTypeId,
+    Execution, FileSystemOp, ForeignAggregates, ForeignCallback, ForeignImport, NativeStateTypeId,
 };
 use kira_semantics_model::{EnumId, StructId, Type, TypeTable};
 use la_arena::{Arena, Idx};
@@ -147,6 +147,7 @@ impl IrProgram {
             | IrExpr::NativeState { ty, .. }
             | IrExpr::NativeRecover { ty, .. }
             | IrExpr::Convert { ty, .. }
+            | IrExpr::FileSystem { ty, .. }
             | IrExpr::Index { ty, .. } => *ty,
             IrExpr::Select { ty, .. } => *ty,
             IrExpr::ArrayLen { .. } | IrExpr::StringLen { .. } | IrExpr::EnumTag { .. } => {
@@ -557,6 +558,19 @@ pub enum IrExpr {
     StringLen {
         /// The string-typed expression being measured.
         text: IrExprId,
+    },
+    /// One file-system operation, performed by the engine on the host's behalf.
+    ///
+    /// See [`kira_semantics_model::hir::HirExpr::FileSystem`]: an effect no Kira
+    /// body can express, so each engine performs it its own way and the node
+    /// survives lowering intact.
+    FileSystem {
+        /// Which operation this performs.
+        op: FileSystemOp,
+        /// Its arguments, in source order.
+        args: Vec<IrExprId>,
+        /// What the operation produces.
+        ty: Type,
     },
     /// `xs.append(v)`: push one element onto an array, in place.
     ///
