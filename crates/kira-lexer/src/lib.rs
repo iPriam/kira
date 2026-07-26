@@ -127,6 +127,21 @@ impl<'a> Lexer<'a> {
 
     fn lex_number(&mut self) {
         let start = self.pos;
+        // `0x…` is one integer token, digits and all. Only when a hex digit
+        // actually follows: `0xyz` is not a number with a typo in it, it is the
+        // literal `0` and the name `xyz`, which is what it lexed as before hex
+        // existed and what it still has to lex as.
+        if self.peek() == Some(b'0')
+            && matches!(self.peek_at(1), Some(b'x') | Some(b'X'))
+            && self.peek_at(2).is_some_and(|b| b.is_ascii_hexdigit())
+        {
+            self.pos += 2;
+            while self.peek().is_some_and(|b| b.is_ascii_hexdigit()) {
+                self.pos += 1;
+            }
+            self.emit(TokenKind::IntLiteral, start);
+            return;
+        }
         while self.peek().is_some_and(|b| b.is_ascii_digit()) {
             self.pos += 1;
         }
@@ -350,6 +365,41 @@ mod tests {
                 TokenKind::Eof
             ]
         );
+    }
+
+    /// The text each token covers, so a hex literal's extent is checked rather
+    /// than just its kind.
+    fn texts(text: &str) -> Vec<String> {
+        lex(SourceId::new(0), text)
+            .tokens
+            .into_iter()
+            .filter(|token| token.kind != TokenKind::Eof)
+            .map(|token| text[token.span.start as usize..token.span.end() as usize].to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn a_hex_literal_is_one_integer_token() {
+        assert_eq!(
+            kinds("0xff"),
+            vec![TokenKind::IntLiteral, TokenKind::Eof],
+            "the digits belong to the literal, not to a name after it"
+        );
+        assert_eq!(texts("0x1bc6ea02"), vec!["0x1bc6ea02"]);
+        // Upper-case prefix and digits, and a hex literal ending at a delimiter.
+        assert_eq!(texts("0XdeadBEEF, 1"), vec!["0XdeadBEEF", ",", "1"]);
+    }
+
+    #[test]
+    fn a_zero_followed_by_a_name_is_still_two_tokens() {
+        // `0x` only opens a literal when a hex digit follows, so nothing that
+        // lexed as a number and a name before hex existed changed meaning.
+        assert_eq!(
+            kinds("0xyz"),
+            vec![TokenKind::IntLiteral, TokenKind::Identifier, TokenKind::Eof]
+        );
+        assert_eq!(texts("0xyz"), vec!["0", "xyz"]);
+        assert_eq!(texts("0x"), vec!["0", "x"]);
     }
 
     #[test]

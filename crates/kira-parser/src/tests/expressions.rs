@@ -5,6 +5,71 @@ use kira_syntax_model::ast::{Expr, Item};
 
 use super::{first_stmt, parse_text};
 
+// ----- integer literals ----------------------------------------------
+
+/// The value of the single `let` initializer in `text`.
+fn let_int(text: &str) -> i64 {
+    let result = parse_text(text);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let kira_syntax_model::ast::Stmt::Let { init, .. } = first_stmt(&result) else {
+        panic!("expected let");
+    };
+    let Expr::Int { value, .. } = result.tree.expr(*init) else {
+        panic!(
+            "expected an integer literal, got {:?}",
+            result.tree.expr(*init)
+        );
+    };
+    *value
+}
+
+#[test]
+fn a_hex_literal_carries_its_value() {
+    assert_eq!(let_int("function f() { let n = 0xff }"), 255);
+    assert_eq!(let_int("function f() { let n = 0x1bc6ea02 }"), 0x1bc6_ea02);
+    assert_eq!(let_int("function f() { let n = 0Xdead }"), 0xdead);
+}
+
+#[test]
+fn a_hex_literal_is_a_bit_pattern_and_a_decimal_one_is_a_number() {
+    // Sixty-four bits set is `-1` written as C writes a mask, not an overflow.
+    assert_eq!(let_int("function f() { let n = 0xffffffffffffffff }"), -1);
+    // A decimal literal keeps its own range, whichever way the same value could
+    // have been spelled.
+    let refused = parse_text("function f() { let n = 18446744073709551615 }");
+    assert!(
+        refused
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == Some("KPAR021")),
+        "{:?}",
+        refused.diagnostics
+    );
+    // And a hex literal past sixty-four bits is refused the same way.
+    let too_wide = parse_text("function f() { let n = 0x1ffffffffffffffff }");
+    assert!(
+        too_wide
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == Some("KPAR021")),
+        "{:?}",
+        too_wide.diagnostics
+    );
+}
+
+#[test]
+fn a_hex_literal_is_an_ordinary_argument_inside_a_struct_literal() {
+    // The shape the corpus writes: a newline-separated literal whose field value
+    // is a call taking several hex arguments.
+    let result = parse_text(
+        "function f() { let e = Entry {
+         iid: guid(0x1bc6ea02, 0xef36, 0x464f)
+         tag: 3
+         } }",
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
 // ----- struct literals and field access ------------------------------
 
 #[test]
