@@ -14,18 +14,28 @@ impl Analyzer<'_> {
     ///
     /// Idempotent by shape, so `(Int) -> Void` written in two files is one
     /// type and a closure made for one fits the other.
-    pub(crate) fn function_type(&mut self, params: Vec<Type>, result: Type) -> Type {
+    ///
+    /// The parameter *modes* are part of that shape. `(borrow Event) -> Void`
+    /// and `(Event) -> Void` are two types, because a call through the first
+    /// leaves the caller's value alone and a call through the second takes it —
+    /// so a value of one is not a value of the other.
+    pub(crate) fn function_type(
+        &mut self,
+        params: Vec<Type>,
+        param_ownership: Vec<OwnershipMode>,
+        result: Type,
+    ) -> Type {
         // An unresolvable part makes the whole type unresolvable, exactly as it
         // does for an array element: interning `(<error>) -> Int` would mint a
         // row a second bad type would compare *equal* to.
         if params.contains(&Type::Error) || result == Type::Error {
             return Type::Error;
         }
-        let key = (params.clone(), result);
+        let key = (params.clone(), param_ownership.clone(), result);
         if let Some(id) = self.fn_types.lookup(&key) {
             return Type::Struct(id);
         }
-        let name = self.function_type_name(&params, result);
+        let name = self.function_type_name(&params, &param_ownership, result);
         // The name carries parentheses and an arrow, so it can collide with no
         // declared struct: an identifier holds neither.
         let Some(id) = self.program.types.structs_mut().declare(StructDef {
@@ -46,6 +56,7 @@ impl Analyzer<'_> {
             id,
             FnTypeInfo {
                 params,
+                param_ownership,
                 result,
                 dispatcher: None,
                 impls: Vec::new(),
@@ -58,8 +69,27 @@ impl Analyzer<'_> {
     /// The canonical spelling of a function type, which is also the name its
     /// representation struct is declared under — so every diagnostic that
     /// names a type names this one as it was written.
-    fn function_type_name(&self, params: &[Type], result: Type) -> String {
-        let written: Vec<String> = params.iter().map(|&ty| self.type_name(ty)).collect();
+    ///
+    /// The modes are spelled too, because they are part of the type: two
+    /// function types that differ only in a mode must not print the same, or a
+    /// mismatch between them reads as a type not matching itself.
+    pub(crate) fn function_type_name(
+        &self,
+        params: &[Type],
+        param_ownership: &[OwnershipMode],
+        result: Type,
+    ) -> String {
+        let written: Vec<String> = params
+            .iter()
+            .enumerate()
+            .map(|(index, &ty)| {
+                let name = self.type_name(ty);
+                match param_ownership.get(index) {
+                    Some(OwnershipMode::Owned) | None => name,
+                    Some(mode) => format!("{} {name}", mode.spelling()),
+                }
+            })
+            .collect();
         format!("({}) -> {}", written.join(", "), self.type_name(result))
     }
 
@@ -152,19 +182,23 @@ impl Analyzer<'_> {
         let (target, params, result) = self
             .lookup_function(name)
             .map(|(id, params, result)| (id, params.to_vec(), result))?;
+        // A named function's own parameter modes are part of the type it has,
+        // so they take part in the match: `graphicsApplicationDefaultEvent`
+        // declares `borrow`, and it fits a `(borrow GraphicsEvent) -> Void`
+        // slot rather than an owned one.
+        let modes = self.param_ownership(target);
         let repr = match expected {
             Some(Type::Struct(id)) if self.fn_types.get(id).is_some() => {
-                let matches = self
-                    .fn_types
-                    .get(id)
-                    .is_some_and(|info| info.params == params && info.result == result);
+                let matches = self.fn_types.get(id).is_some_and(|info| {
+                    info.params == params && info.param_ownership == modes && info.result == result
+                });
                 if !matches {
                     self.emit(
                         span,
                         "KSEM212",
                         format!(
                             "function `{name}` has type `{}`, which does not match expected `{}`",
-                            self.function_type_name(&params, result),
+                            self.function_type_name(&params, &modes, result),
                             self.type_name(Type::Struct(id))
                         ),
                     );
@@ -184,7 +218,7 @@ impl Analyzer<'_> {
                 );
                 return Some(self.program.exprs.alloc(HirExpr::Error));
             }
-            None => match self.function_type(params.clone(), result) {
+            None => match self.function_type(params.clone(), modes.clone(), result) {
                 Type::Struct(id) => id,
                 _ => return Some(self.program.exprs.alloc(HirExpr::Error)),
             },

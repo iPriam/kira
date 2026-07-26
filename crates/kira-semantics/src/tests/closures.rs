@@ -1,7 +1,7 @@
 //! Semantic-analysis tests for closures: function types, capture rules, and
 //! what calling a closure value checks.
 
-use super::codes;
+use super::{codes, diagnostics};
 
 #[test]
 fn a_function_type_checks_in_every_position() {
@@ -221,4 +221,64 @@ fn a_function_value_has_no_members() {
         ),
         vec!["KSEM136"]
     );
+}
+
+// ----- ownership modes on a function type ---------------------------------
+
+/// A `borrow` parameter on a function type is checked at the indirect call:
+/// the callee only reads, so the argument needs no `move`.
+#[test]
+fn a_borrow_parameter_on_a_function_type_takes_no_move() {
+    let text = "struct Event { let code: Int }\n\
+                    function handle(event: borrow Event) { print(event.code) return }\n\
+                    @Main function main() { \
+                    let onEvent: (borrow Event) -> Void = handle \
+                    let e = Event { code: 1 } onEvent(e) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// Without the mode the parameter is owned, and the same call does need `move`
+/// — which is the whole reason the mode is carried rather than dropped.
+#[test]
+fn an_owned_parameter_on_a_function_type_still_demands_move() {
+    let text = "struct Event { let code: Int }\n\
+                    function handle(event: Event) { print(event.code) return }\n\
+                    @Main function main() { \
+                    let onEvent: (Event) -> Void = handle \
+                    let e = Event { code: 1 } onEvent(e) return }";
+    assert_eq!(codes(text), vec!["KSEM108"]);
+}
+
+/// The mode is part of the type, so a function declaring one mode does not fit
+/// a slot declaring another.
+#[test]
+fn a_function_type_does_not_match_one_differing_only_in_a_mode() {
+    let text = "struct Event { let code: Int }\n\
+                    function handle(event: Event) { print(event.code) return }\n\
+                    @Main function main() { \
+                    let onEvent: (borrow Event) -> Void = handle return }";
+    assert_eq!(codes(text), vec!["KSEM212"]);
+}
+
+/// A `borrow mut` parameter may be *written* on a function type and a matching
+/// function assigned to it — what cannot happen yet is a call through it, and
+/// that is refused where it happens rather than at the declaration.
+#[test]
+fn a_borrow_mut_function_type_declares_but_does_not_call() {
+    let declaring = "struct Frame { var n: Int }\n\
+                         function bump(frame: borrow mut Frame) { frame.n = frame.n + 1 return }\n\
+                         @Main function main() { \
+                         let onFrame: (borrow mut Frame) -> Void = bump print(1) return }";
+    assert!(
+        diagnostics(declaring).is_empty(),
+        "{:?}",
+        diagnostics(declaring)
+    );
+
+    let calling = "struct Frame { var n: Int }\n\
+                       function bump(frame: borrow mut Frame) { frame.n = frame.n + 1 return }\n\
+                       @Main function main() { \
+                       let onFrame: (borrow mut Frame) -> Void = bump \
+                       var f = Frame { n: 1 } onFrame(f) return }";
+    assert_eq!(codes(calling), vec!["KSEM249"]);
 }

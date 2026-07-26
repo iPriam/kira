@@ -622,13 +622,22 @@ pub enum TypeRef {
         /// Span covering the brackets and their contents.
         span: Span,
     },
-    /// A function type: `(Int) -> Void`, `() -> Void`, `(Int, Int) -> Int`.
+    /// A function type: `(Int) -> Void`, `() -> Void`, `(borrow Event) -> Void`.
     ///
     /// The result is always written — `->` and a type — because a function type
     /// has no "absent means `Void`" spelling the way a declaration does.
     Function {
         /// The written parameter types, in order; empty for `() -> R`.
         params: Vec<TypeRefId>,
+        /// The ownership mode written on each parameter, index-aligned with
+        /// `params`; [`OwnershipMode::Owned`] where none was written.
+        ///
+        /// Kept rather than dropped because it is what an indirect call checks
+        /// its arguments against. Dropping it makes every parameter owned, so a
+        /// call through `(borrow Event) -> Void` demands `move` for a value the
+        /// source declared `borrow` — the mode is invisible at run time and
+        /// decisive at the ownership check.
+        param_ownership: Vec<OwnershipMode>,
         /// The written result type.
         result: TypeRefId,
         /// Span covering the parameter list through the result.
