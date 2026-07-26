@@ -25,10 +25,14 @@ use kira_syntax_model::ast::{ForeignMark, Function, Item, Param, TypeRef};
 use crate::analyze::{Analyzer, FnCtx};
 use crate::ffi_types::FfiStructKind;
 
-/// Whether a `@FFI.*` struct kind is one whose runtime behavior is not yet
-/// executable — an array or a callback, but not a C-layout struct.
+/// Whether a `@FFI.*` struct kind has no meaning of its own in a parameter or
+/// result position.
+///
+/// Only the inline array: C decays an array there to a pointer, which is a
+/// different type with different ownership. A `@FFI.Callback` *is* a pointer,
+/// and a `@FFI.Struct` crosses by value, so both are at home there.
 fn is_deferred_ffi(kind: FfiStructKind) -> bool {
-    matches!(kind, FfiStructKind::Array | FfiStructKind::Callback)
+    matches!(kind, FfiStructKind::Array)
 }
 
 /// Whether a foreign type sits in a parameter or the result position.
@@ -322,8 +326,12 @@ impl<'a> Analyzer<'a> {
     /// annotation, and because it is the shape already proven end to end. A
     /// `@FFI.Struct { layout: c }` of any other shape crosses by value as a
     /// C-layout aggregate. Everything else falls to [`Self::foreign_type_of`],
-    /// which maps the scalars and refuses the rest — including a deferred
-    /// `@FFI.Callback`/`@FFI.Array` struct, whose own refusal names the form.
+    /// which maps the scalars and refuses the rest — including an `@FFI.Array`
+    /// on its own, whose refusal names the form.
+    ///
+    /// A `@FFI.Callback` needs no case of its own: its storage is one `RawPtr`
+    /// field, so the single-scalar-field rule crosses it as the pointer a C
+    /// function pointer is.
     fn foreign_seam_of(&mut self, ty: Type, span: Span, position: Position) -> Option<ForeignSeam> {
         if let Type::Struct(id) = ty
             && !self.ffi_struct_kind(id).is_some_and(is_deferred_ffi)

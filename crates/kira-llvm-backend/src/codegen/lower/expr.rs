@@ -29,6 +29,8 @@ impl FunctionLowering<'_, '_> {
                 let length = self.codegen.const_int(text.len() as i64);
                 Ok(self.call(self.codegen.runtime.str_new, &mut [data, length], c"str"))
             }
+            // A `RawPtr` is an `i64` here, so the null pointer is that zero.
+            IrExpr::RawPtrNull => Ok(self.codegen.const_int(0)),
             IrExpr::Local(slot) => self.load_local(slot),
             IrExpr::Unary { op, operand } => {
                 let value = self.lower_expr(operand)?;

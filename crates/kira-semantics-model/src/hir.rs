@@ -299,6 +299,12 @@ pub enum HirExpr {
     Bool(bool),
     /// A string constant.
     Str(String),
+    /// The null raw pointer.
+    ///
+    /// The one `RawPtr` constant Kira spells. It exists because a C-layout
+    /// struct zero-fills a pointer member to `NULL`, and a zero-fill that could
+    /// not name its own zero would have to refuse the field instead.
+    RawPtrNull,
     /// A read of a local slot.
     Local {
         /// The referenced local.
@@ -544,6 +550,7 @@ impl HirExpr {
             HirExpr::Float(_) => Type::FLOAT,
             HirExpr::Bool(_) => Type::Bool,
             HirExpr::Str(_) => Type::String,
+            HirExpr::RawPtrNull => Type::RawPtr,
             HirExpr::Local { ty, .. }
             | HirExpr::Unary { ty, .. }
             | HirExpr::Binary { ty, .. }

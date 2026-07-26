@@ -97,6 +97,10 @@ pub(crate) fn is_alias_shaped(decl: &StructDecl) -> bool {
 /// `handle.elements[3]` is ordinary array indexing with no new machinery.
 pub(crate) const FFI_ARRAY_FIELD: &str = "elements";
 
+/// The name of the one field an `@FFI.Callback` type carries its C function
+/// pointer in.
+pub(crate) const FFI_CALLBACK_FIELD: &str = "pointer";
+
 impl Analyzer<'_> {
     /// Gives an `@FFI.Array` declaration its element storage: one field holding
     /// a Kira array of the annotation's element type.
@@ -167,6 +171,44 @@ impl Analyzer<'_> {
     /// The C extent of an `@FFI.Array` type, when `id` is one.
     pub(crate) fn ffi_array_count(&self, id: StructId) -> Option<u32> {
         self.ffi_array_counts.get(&id).copied()
+    }
+
+    /// Gives an `@FFI.Callback` declaration its storage: one `RawPtr` field
+    /// holding the C function pointer.
+    ///
+    /// A callback typedef *is* a pointer in C, and a Kira struct wrapping one
+    /// pointer has a pointer's size, alignment, and ABI class — so the type
+    /// stays nominal (its declared signature is what a Kira function is checked
+    /// against) while its value is the address C calls.
+    pub(crate) fn ffi_callback_storage(
+        &mut self,
+        declaration: &StructDecl,
+        def: &mut kira_semantics_model::StructDef,
+    ) -> bool {
+        let Some(mark) = declaration.ffi.as_ref() else {
+            return false;
+        };
+        if !matches!(mark.kind, FfiTypeKind::Callback { .. }) {
+            return false;
+        }
+        if !def.fields.is_empty() {
+            let name = self.interner.resolve(declaration.name).to_owned();
+            self.emit(
+                mark.block_span,
+                "KSEM243",
+                format!(
+                    "`{name}` is `@FFI.Callback`, whose shape is the annotation's `params` and \
+                     `result`: its body declares fields, which have no place in a function pointer"
+                ),
+            );
+            return false;
+        }
+        def.fields.push(kira_semantics_model::FieldDef {
+            name: FFI_CALLBACK_FIELD.to_owned(),
+            ty: Type::RawPtr,
+            mutable: true,
+        });
+        true
     }
 
     /// The struct id of `name` when it is a `@FFI.Struct { layout: c }` type,
@@ -250,6 +292,9 @@ impl Analyzer<'_> {
             Type::Struct(id) if self.ffi_structs.contains_key(&id) => {
                 return Some(self.ffi_zero_filled_struct(id, span));
             }
+            // A pointer's zero is `NULL`, which is what C zero-fills a function
+            // pointer or an opaque handle member to.
+            Type::RawPtr => HirExpr::RawPtrNull,
             // An `@FFI.Array`'s storage zeroes to an empty Kira array, not to
             // `count` zero elements: the seam zeroes the C bytes it does not
             // receive an element for, so the two agree, and a `count` of 8176
