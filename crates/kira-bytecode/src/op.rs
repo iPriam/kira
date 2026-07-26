@@ -235,6 +235,20 @@ pub enum Instruction {
     ArrayGet,
     /// Pop an array, push its element count as an `Int`, and drop the array.
     ArrayLen,
+    /// Pop a `Float`, push its IEEE-754 bit pattern as an `Int`.
+    ///
+    /// A reinterpretation, not a conversion: nothing rounds, nothing saturates,
+    /// and a NaN keeps its exact payload — which is what makes it usable for
+    /// serializing a float byte for byte.
+    ConvertFloatToBits,
+    /// Pop an `Int`, push the `Float` its bits denote. The exact inverse of
+    /// [`Instruction::ConvertFloatToBits`].
+    ConvertBitsToFloat,
+    /// Pop a string, push its character count as an `Int`, and drop the string.
+    ///
+    /// Characters, not bytes: `charAt` and `substring` index the same units, so
+    /// a byte count would disagree with the primitives it sits beside.
+    StringLen,
     /// Pop a value and store it through a place that may index arrays.
     ///
     /// The general form of [`Instruction::StoreField`], which stays for the
@@ -554,6 +568,13 @@ mod opcode {
     // per target, which is what a call with several `borrow mut` arguments
     // needs and `CALL_MUT`'s fixed slot-0 target cannot express.
     pub const CALL_WRITEBACK: u8 = 0x4f;
+    // A string's character count. Appended after `CALL_WRITEBACK`; adding an
+    // opcode is not an ABI change.
+    pub const STRING_LEN: u8 = 0x50;
+    // The two IEEE-754 bit reinterpretations. Appended after `STRING_LEN`;
+    // adding an opcode is not an ABI change.
+    pub const CONVERT_FLOAT_TO_BITS: u8 = 0x51;
+    pub const CONVERT_BITS_TO_FLOAT: u8 = 0x52;
 }
 
 #[cfg(test)]

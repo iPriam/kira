@@ -235,6 +235,33 @@ pub unsafe extern "C" fn kira_rt_str_len(value: KStr) -> usize {
     unsafe { bytes_of(value) }.len()
 }
 
+/// A string's character count (`s.count`), freeing the string.
+///
+/// Characters, not bytes — the same units `charAt` and `substring` index, and
+/// the same count the VM's own `StringLen` produces, which is what keeps the
+/// two engines agreeing on text that is not all ASCII. Invalid UTF-8 counts by
+/// the replacement characters a lossy decode yields, so a byte sequence no
+/// Kira operation could have produced still gets an answer rather than a trap.
+///
+/// Consumes its argument, like every other operation that reads a string here.
+///
+/// Appended after the string helpers, so it is not an ABI change.
+///
+/// # Safety
+/// `value` must be null or a live handle; it is freed here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_str_count(value: KStr) -> i64 {
+    // SAFETY: caller passes a live (or null) handle that outlives this read.
+    let counted = String::from_utf8_lossy(unsafe { bytes_of(value) })
+        .chars()
+        .count();
+    // SAFETY: the same handle, consumed exactly once here.
+    unsafe { drop_handle(value) };
+    // A string longer than `i64::MAX` characters cannot be built on any target
+    // this runs on; saturating says so without a panic in an `extern "C"` frame.
+    i64::try_from(counted).unwrap_or(i64::MAX)
+}
+
 /// Copies a NUL-terminated C string into a fresh owned handle.
 ///
 /// The native half of a `CString` **result**: a foreign function hands back a

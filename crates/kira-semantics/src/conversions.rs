@@ -16,8 +16,8 @@
 //! only `Int`<->`Float` does runtime work. See [`ConvertKind`] for the exact
 //! rules each kind carries.
 
-use kira_semantics_model::Type;
 use kira_semantics_model::hir::{ConvertKind, HirExpr, HirExprId};
+use kira_semantics_model::{IntSpelling, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::CallArg;
 
@@ -98,6 +98,81 @@ impl Analyzer<'_> {
             operand,
             kind,
             ty: target,
+        }))
+    }
+
+    /// Recognizes `floatToBits(x)` / `bitsToFloat(x)`, the two IEEE-754
+    /// **reinterpretations**.
+    ///
+    /// These are not conversions and are deliberately not spelled like one:
+    /// `U64(x)` on a `Float` rounds and saturates, which is the right answer for
+    /// a number and the wrong one for a bit pattern. Serializing a float byte
+    /// for byte needs the bits exactly as they are, NaN payload included, so it
+    /// gets a name of its own.
+    ///
+    /// Returns `None` when the call is not one of the two, or when a local of
+    /// that name shadows it — the same rule a conversion follows.
+    pub(super) fn analyze_bit_reinterpret(
+        &mut self,
+        ctx: &mut FnCtx,
+        name: &str,
+        args: &[CallArg],
+        span: Span,
+    ) -> Option<HirExprId> {
+        let (kind, from, to) = match name {
+            "floatToBits" => (
+                ConvertKind::FloatToBits,
+                Type::FLOAT,
+                Type::Int(IntSpelling::U64),
+            ),
+            "bitsToFloat" => (
+                ConvertKind::BitsToFloat,
+                Type::Int(IntSpelling::U64),
+                Type::FLOAT,
+            ),
+            _ => return None,
+        };
+        if ctx.resolve(name).is_some() {
+            return None;
+        }
+        self.reject_argument_labels(args, "a bit reinterpretation");
+        let values = Self::argument_values(args);
+        if values.len() != 1 {
+            for &value in &values {
+                self.analyze_expr(ctx, value);
+            }
+            self.emit(
+                span,
+                "KSEM210",
+                format!(
+                    "`{name}` takes exactly one argument, found {}",
+                    values.len()
+                ),
+            );
+            return Some(self.program.exprs.alloc(HirExpr::Error));
+        }
+
+        let operand = self.analyze_expr(ctx, values[0]);
+        let operand_ty = self.program.expr(operand).type_of();
+        if operand_ty == Type::Error {
+            return Some(self.program.exprs.alloc(HirExpr::Error));
+        }
+        if !operand_ty.assignable_to(from) {
+            self.emit(
+                span,
+                "KSEM209",
+                format!(
+                    "`{name}` takes a `{}`, found `{}`",
+                    self.type_name(from),
+                    self.type_name(operand_ty)
+                ),
+            );
+            return Some(self.program.exprs.alloc(HirExpr::Error));
+        }
+        Some(self.program.exprs.alloc(HirExpr::Convert {
+            operand,
+            kind,
+            ty: to,
         }))
     }
 }

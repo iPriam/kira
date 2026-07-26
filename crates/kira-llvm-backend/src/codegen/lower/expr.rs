@@ -65,6 +65,7 @@ impl FunctionLowering<'_, '_> {
             IrExpr::ArrayNew { ty, elements } => self.lower_array_new(ty, &elements),
             IrExpr::Index { base, index, ty } => self.lower_index(base, index, ty),
             IrExpr::ArrayLen { array } => self.lower_array_len(array),
+            IrExpr::StringLen { text } => self.lower_string_len(text),
             IrExpr::ArrayAppend { place, value } => self.lower_array_append(&place, value),
             IrExpr::NativeState { value, type_id, .. } => {
                 self.lower_native_state_new(value, type_id)
@@ -167,6 +168,15 @@ impl FunctionLowering<'_, '_> {
         let len = self.call(self.codegen.runtime.array_len, &mut [array_value], c"len");
         self.drop_value(array_value, array_ty)?;
         Ok(len)
+    }
+
+    /// A string's character count (`s.count`), the VM's `StringLen`.
+    ///
+    /// The helper consumes the string, which is the lowering convention for
+    /// every operation that reads one — so there is nothing to drop here.
+    fn lower_string_len(&mut self, text: IrExprId) -> Result<LLVMValueRef, LlvmError> {
+        let value = self.lower_expr(text)?;
+        Ok(self.call(self.codegen.runtime.str_count, &mut [value], c"s.count"))
     }
 
     /// Appends one element to the array a place names (`xs.append(v)`), yielding

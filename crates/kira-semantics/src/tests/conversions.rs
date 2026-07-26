@@ -116,3 +116,40 @@ fn a_local_named_like_a_scalar_type_shadows_the_conversion() {
         "a shadowing local must not be analyzed as a conversion, got {reported:?}",
     );
 }
+
+// ----- the bit reinterpretations ------------------------------------------
+
+/// `floatToBits` takes a `Float` and yields a `U64`; `bitsToFloat` is the
+/// inverse. Both check as ordinary expressions of those types.
+#[test]
+fn the_bit_reinterpretations_have_the_types_they_name() {
+    assert!(
+        codes("@Main function main() { let b: U64 = floatToBits(1.5) let f: Float = bitsToFloat(b) print(f) return }")
+            .is_empty()
+    );
+}
+
+/// They are not conversions, so they do not take whatever a conversion would.
+#[test]
+fn a_bit_reinterpretation_checks_its_operand_type() {
+    assert_eq!(
+        codes("@Main function main() { print(floatToBits(1)) return }"),
+        vec!["KSEM209"]
+    );
+    assert_eq!(
+        codes("@Main function main() { print(bitsToFloat(1.5)) return }"),
+        vec!["KSEM209"]
+    );
+}
+
+/// A local of the name shadows the builtin, exactly as it shadows a conversion.
+#[test]
+fn a_local_shadows_a_bit_reinterpretation() {
+    assert_eq!(
+        codes(
+            "@Main function main() { let floatToBits: (Int) -> Int = { v in return v } \
+             print(floatToBits(3)) return }"
+        ),
+        Vec::<&str>::new()
+    );
+}

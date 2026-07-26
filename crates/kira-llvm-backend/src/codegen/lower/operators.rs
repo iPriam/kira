@@ -54,6 +54,18 @@ impl FunctionLowering<'_, '_> {
             ConvertKind::IntToFloat => unsafe {
                 LLVMBuildSIToFP(builder, value, types.f64, c"conv.sitofp".as_ptr())
             },
+            // A reinterpretation of the same 64 bits, which is exactly what the
+            // VM's `to_bits`/`from_bits` do.
+            //
+            // SAFETY: `value` has the type the conversion fixes and the builder
+            // is on a live block; a bitcast builds a pure value.
+            ConvertKind::FloatToBits => unsafe {
+                LLVMBuildBitCast(builder, value, types.i64, c"conv.f2b".as_ptr())
+            },
+            // SAFETY: as above, in the other direction.
+            ConvertKind::BitsToFloat => unsafe {
+                LLVMBuildBitCast(builder, value, types.f64, c"conv.b2f".as_ptr())
+            },
             // SAFETY: `value` is the `f64` the typed conversion fixes and the
             // builder is on a live block; every call below builds a pure value,
             // and the selected operand is never the poison `fptosi` for an input
