@@ -9,7 +9,7 @@ use std::ffi::{CStr, CString};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 
-use kira_runtime_abi::FileSystemOp;
+use kira_runtime_abi::{FileSystemOp, ForeignPointerWidth};
 
 use super::ffi::c_string;
 
@@ -40,6 +40,14 @@ pub(crate) struct Types {
     pub(super) f64: LLVMTypeRef,
     /// The opaque pointer every `String` handle is.
     pub(super) ptr: LLVMTypeRef,
+    /// The **target**'s `usize`, for the runtime helpers that take one.
+    ///
+    /// Not this machine's: a wasm32 module links against a `kira-native-bridge`
+    /// compiled for wasm32, where `usize` is 32 bits. Declaring it as `i64`
+    /// there is a signature the linker resolves by name and the module traps
+    /// on, which is exactly what happened to every wasm string before this
+    /// field existed.
+    pub(super) usize_ty: LLVMTypeRef,
     /// `BridgeValue`: `{ i8 tag, [7 x i8] reserved, i64 payload }`.
     ///
     /// Mirrors `kira_runtime_abi::BridgeValue` exactly; that crate's layout test
@@ -49,10 +57,15 @@ pub(crate) struct Types {
 
 impl Types {
     /// Creates every type in `context`.
-    pub(super) fn new(context: LLVMContextRef) -> Types {
+    pub(super) fn new(context: LLVMContextRef, pointer_width: ForeignPointerWidth) -> Types {
         // SAFETY: every type below is created in this live context.
         unsafe {
+            let usize_ty = match pointer_width {
+                ForeignPointerWidth::Bits32 => LLVMInt32TypeInContext(context),
+                ForeignPointerWidth::Bits64 => LLVMInt64TypeInContext(context),
+            };
             Types {
+                usize_ty,
                 void: LLVMVoidTypeInContext(context),
                 i1: LLVMInt1TypeInContext(context),
                 i8: LLVMInt8TypeInContext(context),
@@ -219,7 +232,11 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             print_float: declare(c"kira_rt_print_float", types.void, &mut [types.f64]),
             print_bool: declare(c"kira_rt_print_bool", types.void, &mut [types.i8]),
             print_str: declare(c"kira_rt_print_str", types.void, &mut [types.ptr]),
-            str_new: declare(c"kira_rt_str_new", types.ptr, &mut [types.ptr, types.i64]),
+            str_new: declare(
+                c"kira_rt_str_new",
+                types.ptr,
+                &mut [types.ptr, types.usize_ty],
+            ),
             str_clone: declare(c"kira_rt_str_clone", types.ptr, &mut [types.ptr]),
             str_concat: declare(
                 c"kira_rt_str_concat",

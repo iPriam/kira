@@ -1,0 +1,35 @@
+// Kira strings and `CString` on wasm.
+//
+// Every line here builds a Kira string, which is what a wasm module could not
+// do while `kira_rt_str_new`'s length was emitted at the host's pointer width
+// rather than the target's. The `CString` calls ride on that: the seam copies a
+// Kira string into transient C storage for the call, and copies a returned
+// `const char*` back out into an owned Kira `String`.
+
+@FFI.Extern { library: ffifixture; symbol: ffi_strlen; abi: c; }
+function cstrLen(s: CString) -> U64;
+
+@FFI.Extern { library: ffifixture; symbol: ffi_greeting; abi: c; }
+function greeting() -> CString;
+
+@FFI.Extern { library: ffifixture; symbol: ffi_echo_or_null; abi: c; }
+function echoOrNull(s: CString) -> CString;
+
+@Main function main() {
+    // Kira strings on their own: a literal, a concatenation, and the four
+    // primitives every wire format is carved with.
+    let joined = "cat" + "dog"
+    print(joined)
+    print(joined.count)
+    print(joined.charAt(0))
+    print(joined.substring(1, 4))
+    print(joined.indexOf("dog"))
+    print(String(42) + "!")
+
+    // The same strings crossing the C seam.
+    print(cstrLen("hello"))
+    print(cstrLen(joined))
+    print(greeting())
+    print(echoOrNull("round trip"))
+    return
+}
