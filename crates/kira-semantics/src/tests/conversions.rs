@@ -2,7 +2,7 @@
 //! conversion type-checks, and every invalid one is refused with a typed code
 //! rather than reported as an undefined function.
 
-use super::codes;
+use super::{codes, diagnostics};
 
 /// Each of the four numeric conversion directions type-checks cleanly, across a
 /// spread of width spellings.
@@ -82,14 +82,13 @@ fn a_conversion_with_the_wrong_arity_is_refused() {
     );
 }
 
-/// A conversion binds its operand by position, so a label on it is refused
-/// (`KSEM191`) exactly as on the other unlabeled surfaces.
+/// A conversion binds its operand by position, and a label binds nothing, so a
+/// label on one is decoration exactly as it is on a call.
 #[test]
-fn a_labeled_conversion_argument_is_refused() {
-    assert_eq!(
-        codes(r#"@Main function main() { print(Int(value: 2.5)) return }"#),
-        vec!["KSEM191"],
-    );
+fn a_labeled_conversion_argument_is_accepted_and_ignored() {
+    // A conversion takes one value and a label binds nothing, so the label is
+    // decoration here exactly as it is on a call.
+    assert!(diagnostics(r#"@Main function main() { print(Int(value: 2.5)) return }"#).is_empty());
 }
 
 /// `Bool` is not a numeric conversion, so `Bool(x)` is *not* recognized here and

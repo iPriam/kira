@@ -56,7 +56,6 @@ impl Analyzer<'_> {
         //
         // A conversion binds its operand by position, so a label on it is a
         // mistake.
-        self.reject_argument_labels(args, "a numeric conversion");
         let values = Self::argument_values(args);
         if values.len() != 1 {
             // Analyze every argument so mistakes inside them still surface, then
@@ -135,7 +134,6 @@ impl Analyzer<'_> {
         if ctx.resolve(name).is_some() {
             return None;
         }
-        self.reject_argument_labels(args, "a bit reinterpretation");
         let values = Self::argument_values(args);
         if values.len() != 1 {
             for &value in &values {

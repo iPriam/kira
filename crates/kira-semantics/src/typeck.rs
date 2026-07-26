@@ -279,7 +279,6 @@ impl Analyzer<'_> {
                 if let Some(call) =
                     self.analyze_local_closure_call(ctx, &name, &values, callee_span)
                 {
-                    self.reject_argument_labels(&args, "a call through a function value");
                     return call;
                 }
                 // A class is constructed by calling it, so a call whose callee
@@ -290,7 +289,6 @@ impl Analyzer<'_> {
                     self.link_type_name(&name, callee_span);
                     // A constructor fills fields by position; binding them by
                     // name is not supported on this surface yet.
-                    self.reject_argument_labels(&args, "a class constructor");
                     return self.analyze_class_new(ctx, id, &values, callee_span);
                 }
                 // A construct-backed declaration is constructed by calling it,
@@ -309,7 +307,6 @@ impl Analyzer<'_> {
                     && ctx.resolve(&name).is_none()
                 {
                     self.link_type_name(&name, callee_span);
-                    self.reject_argument_labels(&args, "a C-layout struct constructor");
                     if !values.is_empty() {
                         let struct_name = self.program.types.type_name(Type::Struct(id));
                         for &value in &values {
@@ -360,7 +357,6 @@ impl Analyzer<'_> {
                 if name == "print" {
                     // `print` borrows: it renders its argument and consumes
                     // nothing the caller could miss.
-                    self.reject_argument_labels(&args, "the `print` builtin");
                     let arg_hirs: Vec<HirExprId> = values
                         .iter()
                         .map(|&arg| self.analyze_expr(ctx, arg))
@@ -370,7 +366,6 @@ impl Analyzer<'_> {
                     // A bare call whose name is a recorded `@FFI.Extern`
                     // callable is an ordinary Kira call — no `@Native`, no
                     // ceremony — resolved to `Callee::Foreign`.
-                    self.reject_argument_labels(&args, "a foreign function");
                     self.analyze_foreign_call(ctx, id, &values, callee_span)
                 } else {
                     self.analyze_user_call_from_syntax(ctx, &name, &[], &args, callee_span)

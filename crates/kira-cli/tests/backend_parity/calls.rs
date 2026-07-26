@@ -34,7 +34,8 @@ function main() {
     print(step(1, 20))
     // No default taken.
     print(step(1, 20, 300))
-    // A labeled call omitting a middle defaulted parameter.
+    // Labels bind nothing, so this fills `by` and leaves `tag` to its default —
+    // it does not skip `by`, whatever the label says.
     print(step(base: 1, tag: 300))
     // A method call taking its default, then passing it.
     let c = Counter { at = 5 }
@@ -44,7 +45,7 @@ function main() {
 }
 "#,
     );
-    assert_eq!(output, "111\n121\n321\n311\n8\n45\n");
+    assert_eq!(output, "111\n121\n321\n401\n8\n45\n");
 }
 
 /// An omitted argument is the value the callee's module resolved, even when
@@ -72,7 +73,7 @@ fn a_cross_module_parameter_default_agrees() {
 }
 
 #[test]
-fn labeled_arguments_bind_by_name_on_every_backend() {
+fn argument_labels_are_decorative_on_every_backend() {
     let output = assert_parity(
         r#"
 function measure(tree: Int, index: Int, available: Int) -> Int {
@@ -81,23 +82,26 @@ function measure(tree: Int, index: Int, available: Int) -> Int {
 
 @Main
 function main() {
-    // Declaration order, `:` binder.
+    // Declaration order, `:` binder: the label agrees with the position.
     print(measure(tree: 1, index: 2, available: 3))
-    // Reordered: the label, not the position, decides the binding.
+    // Reordered. The *position* decides, so this is `measure(3, 1, 2)` and the
+    // labels are three pieces of wrong documentation.
     print(measure(available: 3, tree: 1, index: 2))
-    // `=` is the canonical binder and produces the same call.
+    // `=` is the canonical binder and binds the same way.
     print(measure(tree = 4, index = 5, available = 6))
-    // A positional call still means the same thing.
+    // A bare positional call.
     print(measure(7, 8, 9))
+    // Labeling only the middle argument is allowed and changes nothing.
+    print(measure(1, index = 2, 3))
     return
 }
 "#,
     );
-    assert_eq!(output, "123\n123\n456\n789\n");
+    assert_eq!(output, "123\n312\n456\n789\n123\n");
 }
 
 #[test]
-fn labeled_method_arguments_bind_by_name_on_every_backend() {
+fn labels_on_a_method_call_are_decorative_on_every_backend() {
     let output = assert_parity(
         r#"
 struct Grid {
@@ -106,7 +110,7 @@ struct Grid {
         return row * self.w + col
     }
     function first() -> Int {
-        // An implicit self-method call, labeled and reordered.
+        // An implicit self-method call, labeled and reordered: `at(2, 1)`.
         return self.at(col: 2, row: 1)
     }
 }
@@ -121,17 +125,14 @@ function main() {
 }
 "#,
     );
-    assert_eq!(output, "34\n34\n12\n");
+    assert_eq!(output, "34\n43\n21\n");
 }
 
 #[test]
-fn a_reordered_labeled_call_evaluates_in_resolved_parameter_order() {
-    // A labeled call lowers to the same positional call an unlabeled one does,
-    // so its arguments evaluate in the order the parameters were declared, not
-    // the order they were written. The value that matters is that every backend
-    // resolves that one order identically: `first` (note(2)) runs before
-    // `second` (note(1)), so `2` prints before `1`, and the result is the same
-    // `21` on the VM, the native build, and the hybrid bundle.
+fn a_labeled_call_evaluates_in_written_order() {
+    // Labels bind nothing, so this is `record(note(1), note(2))`: the arguments
+    // evaluate left to right as written — `1` before `2` — and bind in that same
+    // order, giving `12`. Every backend agrees on both the order and the result.
     let output = assert_parity(
         r#"
 function record(first: Int, second: Int) -> Int {
@@ -150,5 +151,5 @@ function main() {
 }
 "#,
     );
-    assert_eq!(output, "2\n1\n21\n");
+    assert_eq!(output, "1\n2\n12\n");
 }

@@ -126,7 +126,6 @@ impl Analyzer<'_> {
         // tell an enum name from a value; the analyzer, holding the enum table
         // and the import table, can.
         if let Some(enum_id) = self.qualified_enum_at(ctx, receiver) {
-            self.reject_argument_labels(args, "an enum variant payload");
             let values = Some(Self::argument_values(args));
             return self.analyze_dot_member(
                 ctx,
@@ -164,7 +163,6 @@ impl Analyzer<'_> {
             ctx.restore_ownership(ownership);
             // An array builtin binds its argument by shape, not by a parameter
             // name, so a label on one is a mistake.
-            self.reject_argument_labels(args, "an array method");
             let name = self.interner.resolve(method).to_owned();
             let values = Self::argument_values(args);
             return self.analyze_array_method(ctx, receiver, &name, method_span, &values);
@@ -215,7 +213,6 @@ impl Analyzer<'_> {
                 method_span,
             ) {
                 // A closure stored in a field exposes no parameter names here.
-                self.reject_argument_labels(args, "a call through a function value");
                 return call;
             }
         }
@@ -520,17 +517,9 @@ impl Analyzer<'_> {
             all.extend(args.iter().map(|arg| self.analyze_expr(ctx, arg.value)));
             return self.analyze_user_call(name, &all, span);
         };
-        // A labeled call is resolved to declaration order first, so the
-        // ownership and type checks below see the same positional list an
-        // unlabeled call produces.
-        let param_names = self.param_names(id);
-        // Which written (non-receiver) slots carry a default, so a labeled call
-        // may omit one without a missing-argument diagnostic.
-        let has_default: Vec<bool> = (leading.len()..params.len())
-            .map(|slot| self.param_default(id, slot).is_some())
-            .collect();
-        let positional =
-            self.bind_call_arguments(args, leading.len(), &param_names, &has_default, name, span);
+        // Arguments bind by position; a label on one is decorative. See
+        // `super::labels` for the measurement behind that.
+        let positional = Self::argument_slots(args);
         let ownership = self.param_ownership(id);
         let mut all = leading.to_vec();
         // Where each `borrow mut` argument's final value has to land. Collected

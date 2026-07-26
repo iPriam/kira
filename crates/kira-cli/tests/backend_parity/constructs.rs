@@ -476,3 +476,46 @@ function pair() -> [Int] {
     );
     assert_eq!(output, "120\n");
 }
+
+/// A `body` whose value is chosen by a condition, on every backend.
+///
+/// The shorthand's block ends in an `if`/`else if`/`else` rather than in an
+/// expression, so each arm is the tail: the arm that runs is the one whose
+/// widget the member returns. The reference implementation accepts exactly this
+/// shape and rejects the same block with the `else` removed, which is what the
+/// `else`-less case below pins.
+#[test]
+fn a_body_may_choose_its_widget_with_a_condition_on_every_backend() {
+    let output = assert_parity(
+        r#"
+construct Widget {
+    @Required let body: Widget
+    function total() -> Int { return body.total() }
+}
+
+Widget Leaf(number: Int) {
+    function total() -> Int { return number }
+}
+
+Widget Chain(kind: Int) {
+    body {
+        if kind == 1 {
+            Leaf(number = 10)
+        } else if kind == 2 {
+            Leaf(number = 20)
+        } else {
+            Leaf(number = 30)
+        }
+    }
+}
+
+@Main function main() {
+    print(Chain(kind = 1).total())
+    print(Chain(kind = 2).total())
+    print(Chain(kind = 9).total())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "10\n20\n30\n");
+}

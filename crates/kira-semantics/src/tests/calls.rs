@@ -16,9 +16,9 @@ fn a_labeled_call_in_declaration_order_type_checks() {
 }
 
 #[test]
-fn a_labeled_call_may_reorder_its_arguments() {
-    // The label names the parameter, so the written order need not match the
-    // declared one — the argument still binds where its name says.
+fn a_labeled_call_binds_in_written_order() {
+    // Both parameters are `Int`, so writing the labels in the other order is
+    // accepted — and means `measure(2, 1)`, because position decides.
     assert!(
         diagnostics(
             "function measure(tree: Int, index: Int) -> Int { return tree + index }\n\
@@ -55,9 +55,9 @@ fn a_labeled_method_call_type_checks() {
 }
 
 #[test]
-fn a_labeled_call_still_checks_argument_types_after_reordering() {
-    // Reordering binds `index` to the `String`; the type error lands on the
-    // parameter the label chose, not the position it was written in.
+fn a_labeled_argument_is_type_checked_where_it_is_written() {
+    // The `String` is written first, so it is checked against the first
+    // parameter — the label it carries does not move it.
     assert_eq!(
         codes(
             "function measure(tree: Int, index: Int) -> Int { return tree + index }\n\
@@ -67,57 +67,50 @@ fn a_labeled_call_still_checks_argument_types_after_reordering() {
     );
 }
 
+/// A label binds nothing, so none of the shapes that used to be refused as
+/// label mistakes are mistakes: the reference implementation accepts every one
+/// of them and binds by position. Refusing them here would reject programs that
+/// run there, which is the wrong direction to differ in.
 #[test]
-fn an_unknown_label_is_refused() {
-    assert_eq!(
-        codes(
-            "function measure(tree: Int, index: Int) -> Int { return tree + index }\n\
-             @Main function main() { print(measure(tree: 1, nope: 2)) return }"
-        ),
-        vec!["KSEM187"]
-    );
+fn a_label_that_names_nothing_is_still_accepted() {
+    const MEASURE: &str =
+        "function measure(tree: Int, index: Int) -> Int { return tree + index }\n";
+    for call in [
+        // A label naming no parameter at all.
+        "measure(tree: 1, nope: 2)",
+        // The same label twice.
+        "measure(tree: 1, tree: 2)",
+        // Some arguments labeled and some not.
+        "measure(tree: 1, 2)",
+        // Labels in the wrong order — this is `measure(2, 1)`.
+        "measure(index: 2, tree: 1)",
+    ] {
+        let source = format!("{MEASURE}@Main function main() {{ print({call}) return }}");
+        assert!(
+            diagnostics(&source).is_empty(),
+            "{call} should type-check: {:?}",
+            codes(&source)
+        );
+    }
 }
 
+/// An argument count is still checked. A label cannot stand in for a value, so
+/// a call one argument short is short whatever it labels.
 #[test]
-fn a_duplicate_label_is_refused() {
-    assert_eq!(
-        codes(
-            "function measure(tree: Int, index: Int) -> Int { return tree + index }\n\
-             @Main function main() { print(measure(tree: 1, tree: 2)) return }"
-        ),
-        vec!["KSEM188"]
-    );
-}
-
-#[test]
-fn mixing_labeled_and_positional_arguments_is_refused() {
-    assert_eq!(
-        codes(
-            "function measure(tree: Int, index: Int) -> Int { return tree + index }\n\
-             @Main function main() { print(measure(tree: 1, 2)) return }"
-        ),
-        vec!["KSEM189"]
-    );
-}
-
-#[test]
-fn a_missing_labeled_argument_is_refused_by_name_only() {
-    // The named refusal stands alone: no second, unnamed arity error follows.
+fn a_labeled_call_is_still_checked_for_arity() {
     assert_eq!(
         codes(
             "function measure(tree: Int, index: Int) -> Int { return tree + index }\n\
              @Main function main() { print(measure(tree: 1)) return }"
         ),
-        vec!["KSEM190"]
+        vec!["KSEM062"]
     );
 }
 
+/// Surfaces that bind no parameter names at all take a label too, and ignore it.
 #[test]
-fn a_label_on_the_print_builtin_is_refused() {
-    assert_eq!(
-        codes("@Main function main() { print(value: 1) return }"),
-        vec!["KSEM191"]
-    );
+fn a_label_on_a_builtin_is_accepted_and_ignored() {
+    assert!(diagnostics("@Main function main() { print(value: 1) return }").is_empty());
 }
 
 // ----- parameter defaults ------------------------------------------------

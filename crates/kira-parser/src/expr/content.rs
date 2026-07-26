@@ -11,7 +11,7 @@
 use kira_core::Symbol;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
-use kira_syntax_model::ast::{Expr, ExprId};
+use kira_syntax_model::ast::{CallArg, Expr, ExprId};
 
 use crate::Parser;
 
@@ -65,6 +65,76 @@ impl Parser<'_> {
         });
         self.expect(TokenKind::RBrace);
         children
+    }
+
+    /// Whether the cursor sits on a `{` that closes a construction.
+    ///
+    /// Looser than [`Self::at_content_block`] on purpose, and only usable where
+    /// the cursor has just left a call's `)`: there a `{` cannot be a struct
+    /// literal, because the literal's own name was consumed by the call. So an
+    /// empty `{ }` and a `{ let field = value }` override block — neither of
+    /// which opens *children* — still belong to the construction here, where in
+    /// bare-name position they would be a struct literal.
+    pub(crate) fn at_trailing_block(&self) -> bool {
+        self.at(TokenKind::LBrace) && !self.no_struct_literal && !self.at_closure_start()
+    }
+
+    /// Parses the braced block that closes a construction, returning its
+    /// children and appending its `let field = value` overrides to `args`.
+    ///
+    /// One block holds both because the language spells them the same way. An
+    /// override is a field initializer written after the argument list rather
+    /// than inside it, so it becomes an ordinary labeled argument and every
+    /// later check — unknown label, duplicate label, missing argument — reads it
+    /// the way it reads one written between the parentheses.
+    fn parse_trailing_block(&mut self, args: &mut Vec<CallArg>) -> Vec<ExprId> {
+        self.bump(); // `{`
+        let mut children = Vec::new();
+        self.with_struct_literals(|parser| {
+            while !parser.at(TokenKind::RBrace) && !parser.at_eof() {
+                let before = parser.pos;
+                while parser.eat(TokenKind::Semicolon) {}
+                if parser.at(TokenKind::RBrace) || parser.at_eof() {
+                    break;
+                }
+                match parser.parse_override() {
+                    Some(argument) => args.push(argument),
+                    None => children.push(parser.parse_content_item()),
+                }
+                parser.eat(TokenKind::Comma);
+                if parser.pos == before {
+                    parser.bump();
+                }
+            }
+        });
+        self.expect(TokenKind::RBrace);
+        children
+    }
+
+    /// Parses `let field = value` as a labeled argument, or nothing.
+    ///
+    /// `None` leaves the cursor untouched, so the caller reads the item as a
+    /// child instead.
+    fn parse_override(&mut self) -> Option<CallArg> {
+        if !self.at(TokenKind::Let)
+            || self.peek(1).kind != TokenKind::Identifier
+            || self.peek(2).kind != TokenKind::Equals
+        {
+            return None;
+        }
+        let start = self.current().span.start;
+        self.bump(); // `let`
+        let label_span = self.current().span;
+        let label = self.intern_span(label_span);
+        self.bump(); // name
+        self.bump(); // `=`
+        let value = self.parse_expr();
+        Some(CallArg {
+            label: Some(label),
+            label_span: Some(label_span),
+            value,
+            span: Span::from_bounds(start, self.previous_end()),
+        })
     }
 
     /// Parses one item of a content block: a `For`/`if` builder, or a bare
@@ -169,7 +239,8 @@ impl Parser<'_> {
         if !existing.is_empty() {
             return None;
         }
-        let children = self.parse_content_block();
+        let mut args = args;
+        let children = self.parse_trailing_block(&mut args);
         let span = Span::from_bounds(base_span.start, self.previous_end());
         Some(self.tree.add_expr(Expr::Call {
             callee,

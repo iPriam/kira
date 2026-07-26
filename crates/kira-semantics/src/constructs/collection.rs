@@ -68,7 +68,6 @@ impl<'a> Analyzer<'a> {
                         source,
                         computed: method.computed,
                         params: Vec::new(),
-                        param_names: Vec::new(),
                         ownership: Vec::new(),
                         result: Type::Error,
                         uniform: false,
@@ -331,11 +330,6 @@ impl<'a> Analyzer<'a> {
                 .iter()
                 .map(|param| self.resolve_type_ref(param.ty))
                 .collect();
-            let param_names = function
-                .params
-                .iter()
-                .map(|param| Some(param.name))
-                .collect();
             let ownership = function
                 .params
                 .iter()
@@ -351,7 +345,6 @@ impl<'a> Analyzer<'a> {
                 .and_then(|info| info.methods.get_mut(&name))
             {
                 method.params = params;
-                method.param_names = param_names;
                 method.ownership = ownership;
                 method.result = result;
             }

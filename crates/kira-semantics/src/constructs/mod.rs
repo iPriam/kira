@@ -17,7 +17,6 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use kira_core::Symbol;
 use kira_semantics_model::hir::{FuncId, HirExprId};
 use kira_semantics_model::{EnumId, OwnershipMode, StructId, Type};
 use kira_source::SourceId;
@@ -77,8 +76,6 @@ pub(crate) struct ConstructFamilyMethod<'a> {
     pub(crate) computed: bool,
     /// Resolved written parameters, excluding the receiver.
     pub(crate) params: Vec<Type>,
-    /// Written parameter names, aligned with [`Self::params`].
-    pub(crate) param_names: Vec<Option<Symbol>>,
     /// Parameter ownership modes, aligned with [`Self::params`].
     pub(crate) ownership: Vec<OwnershipMode>,
     /// Resolved result type.
