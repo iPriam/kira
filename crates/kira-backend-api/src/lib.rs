@@ -218,7 +218,7 @@ pub trait Backend {
 mod tests {
     use super::*;
     use kira_native_lib_definition::{
-        Interner, NativeLibraryManifest, NativeTargetRow, ResolvedNativeLibrary,
+        Interner, LinkMode, NativeLibrarySpec, NativeTargetSpec, ResolvedNativeLibrary,
     };
     use kira_runtime_abi::{ForeignAbi, ForeignSignature, ForeignType};
     use std::path::Path;
@@ -230,12 +230,13 @@ mod tests {
     fn catalog(name: &str, rows: &[(&str, &str)]) -> ResolvedNativeLibraries {
         let targets = rows
             .iter()
-            .map(|(t, path)| NativeTargetRow::new(triple(t), *path))
+            .map(|(t, path)| NativeTargetSpec::static_archive(triple(t), *path))
             .collect();
-        let resolved: ResolvedNativeLibrary = NativeLibraryManifest::new(name, targets)
-            .expect("a valid manifest")
-            .resolve(Path::new("/pkg/NativeLibs"), |_| true)
-            .expect("resolution");
+        let resolved: ResolvedNativeLibrary =
+            NativeLibrarySpec::new(name, LinkMode::Static, targets)
+                .expect("a valid declaration")
+                .resolve(Path::new("/pkg/NativeLibs"), |_| true)
+                .expect("resolution");
         // The catalog owns its interner; a fresh, empty one seeds it.
         ResolvedNativeLibraries::from_resolved(Interner::new(), vec![resolved]).expect("a catalog")
     }

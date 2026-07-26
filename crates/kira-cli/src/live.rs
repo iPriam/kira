@@ -333,9 +333,14 @@ fn build_hybrid_bundle(
     runner: RunnerId,
 ) -> Result<Bundle, LiveError> {
     // Live sessions do not build a foreign surface in this milestone; a program
-    // with `@FFI.Extern` imports would link no archives here.
-    let bundle = hybrid::build(program, source, false, &[])
-        .map_err(|error| LiveError::build(LiveBackend::Hybrid, &error))?;
+    // with `@FFI.Extern` imports would link nothing foreign here.
+    let bundle = hybrid::build(
+        program,
+        source,
+        false,
+        &kira_llvm_backend::NativeLinkInputs::EMPTY,
+    )
+    .map_err(|error| LiveError::build(LiveBackend::Hybrid, &error))?;
     let artifacts = Artifacts::for_source(source).map_err(|source| LiveError::Io {
         path: PathBuf::from("."),
         source,

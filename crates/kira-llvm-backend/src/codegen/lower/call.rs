@@ -22,6 +22,7 @@ impl FunctionLowering<'_, '_> {
         callee: IrCallee,
         args: &[IrExprId],
         writeback: Option<&IrPlace>,
+        result_ty: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
         match callee {
             IrCallee::Print => {
@@ -117,7 +118,7 @@ impl FunctionLowering<'_, '_> {
             }
             // A foreign C function: marshal the arguments to the import's
             // exact-width signature and invoke the generated adapter directly.
-            IrCallee::Foreign(index) => self.lower_foreign_call(index, args),
+            IrCallee::Foreign(index) => self.lower_foreign_call(index, args, result_ty),
         }
     }
 

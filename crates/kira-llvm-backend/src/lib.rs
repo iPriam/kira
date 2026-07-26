@@ -37,6 +37,11 @@ use std::path::PathBuf;
 use kira_ir::IrProgram;
 use kira_toolchain::LlvmDiscoveryError;
 
+// Re-exported because it is the type of a public option field: a caller
+// building a `NativeBuildOptions` must be able to name it without taking a
+// dependency of its own on the model crate.
+pub use kira_native_lib_definition::NativeLinkInputs;
+
 mod codegen;
 mod exports;
 #[cfg(test)]
@@ -45,10 +50,13 @@ mod link;
 // Not gated: the platform link list is data about a host rather than something
 // LLVM answers, and a consumer's build script reads it on a machine with none.
 mod platform;
+pub mod shim;
+mod shim_build;
 
 pub use exports::{NativeClass, NativeExport, NativeExportSurface};
 pub use link::LinkError;
 pub use platform::{PLATFORM_LINK_LISTS, PlatformLinkList, host_link_list, link_list_for};
+pub use shim_build::ShimObject;
 
 /// The exported symbol of the generated adapter for foreign import `index`.
 ///
@@ -116,6 +124,19 @@ pub enum LlvmError {
          bundle (`llvm-metadata.toml` now pins `host;WebAssembly` targets)"
     )]
     WasmTargetMissing,
+    /// The managed clang refused the generated C shim — always a backend bug,
+    /// since Kira wrote every line of it.
+    ///
+    /// The source path is named rather than the text inlined: the file is left
+    /// on disk beside the object, so the diagnostic points at something that can
+    /// be read and compiled by hand.
+    #[error("the managed clang refused the generated foreign shim `{source_path}`:\n{stderr}", source_path = source_path.display())]
+    ShimUncompilable {
+        /// The generated C file, left in place for inspection.
+        source_path: PathBuf,
+        /// The compiler's diagnostics.
+        stderr: String,
+    },
     /// Lowering produced a module LLVM rejected — always a backend bug.
     #[error("LLVM rejected the generated module (this is a compiler bug): {0}")]
     InvalidModule(String),
@@ -164,9 +185,11 @@ pub struct NativeBuildOptions {
     pub ir_path: Option<PathBuf>,
     /// The native runtime archive (`libkira_native_bridge.a`) to link against.
     pub runtime_archive: PathBuf,
-    /// The selected C static archives that satisfy the program's `@FFI.Extern`
-    /// imports, in link order. Empty for a program with no foreign imports.
-    pub foreign_archives: Vec<PathBuf>,
+    /// The resolved C link inputs that satisfy the program's `@FFI.Extern`
+    /// imports: archives in link order plus the frameworks, system libraries,
+    /// and linker flags declared beside them. Empty for a program with no
+    /// foreign imports.
+    pub foreign_link: NativeLinkInputs,
 }
 
 /// The artifacts a native build produced.
@@ -192,13 +215,34 @@ pub struct NativeArtifacts {
     pub ir: Option<PathBuf>,
 }
 
+/// Compiles the C shim `program` needs to carry aggregates across the seam.
+///
+/// `None` for a program that passes no struct by value, which is every program
+/// that has always worked — those never invoke clang for a shim.
+fn build_foreign_shim(
+    program: &IrProgram,
+    object_path: &std::path::Path,
+    llvm: &kira_toolchain::LlvmInstallation,
+) -> Result<Option<ShimObject>, LlvmError> {
+    let imports: Vec<_> = program
+        .foreign_imports
+        .iter()
+        .map(|entry| entry.import.clone())
+        .collect();
+    shim_build::build(&imports, &program.foreign_aggregates, object_path, llvm)
+}
+
 /// Compiles `program` to a native object, and links an executable when
 /// [`NativeBuildOptions::executable_path`] asks for one.
 pub fn build_native(
     program: &IrProgram,
     options: &NativeBuildOptions,
 ) -> Result<NativeArtifacts, LlvmError> {
-    let module = codegen::Module::build(program, &options.module_name)?;
+    let module = codegen::Module::build(
+        program,
+        &options.module_name,
+        kira_runtime_abi::ForeignPointerWidth::HOST,
+    )?;
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
@@ -207,11 +251,13 @@ pub fn build_native(
     let executable = match &options.executable_path {
         Some(path) => {
             let llvm = kira_toolchain::discover(None)?;
+            let shim = build_foreign_shim(program, &options.object_path, &llvm)?;
             link::link_executable(
                 &llvm,
                 &options.object_path,
                 &options.runtime_archive,
-                &options.foreign_archives,
+                &options.foreign_link,
+                shim.as_ref().map(|shim| shim.object.as_path()),
                 path,
             )?;
             Some(path.clone())
@@ -242,9 +288,10 @@ pub struct AdapterSidecarOptions {
     pub library_path: PathBuf,
     /// The native runtime archive (`libkira_native_bridge.a`) to link against.
     pub runtime_archive: PathBuf,
-    /// The selected C static archives that satisfy the program's foreign
-    /// imports, in link order.
-    pub foreign_archives: Vec<PathBuf>,
+    /// The resolved C link inputs that satisfy the program's foreign imports:
+    /// archives in link order plus the frameworks, system libraries, and
+    /// linker flags declared beside them.
+    pub foreign_link: NativeLinkInputs,
 }
 
 /// Compiles the program's foreign adapters into one loadable sidecar library.
@@ -264,11 +311,13 @@ pub fn build_adapter_sidecar(
     let adapter_symbols: Vec<String> = (0..program.foreign_imports.len())
         .map(adapter_name)
         .collect();
+    let shim = build_foreign_shim(program, &options.object_path, &llvm)?;
     link::link_adapter_sidecar(
         &llvm,
         &options.object_path,
         &options.runtime_archive,
-        &options.foreign_archives,
+        &options.foreign_link,
+        shim.as_ref().map(|shim| shim.object.as_path()),
         &adapter_symbols,
         &options.library_path,
     )?;
@@ -287,7 +336,13 @@ pub fn build_wasm_object(
     object_path: &std::path::Path,
     device: kira_backend_api::WasmDevice,
 ) -> Result<(), LlvmError> {
-    let module = codegen::Module::build(program, module_name)?;
+    // A wasm module lays out a pointer in four bytes whatever host builds it,
+    // and the aggregate offsets are computed during lowering.
+    let width = match device {
+        kira_backend_api::WasmDevice::Wasm32 => kira_runtime_abi::ForeignPointerWidth::Bits32,
+        kira_backend_api::WasmDevice::Wasm64 => kira_runtime_abi::ForeignPointerWidth::Bits64,
+    };
+    let module = codegen::Module::build(program, module_name, width)?;
     module.emit_wasm_object(object_path, device)
 }
 
@@ -381,11 +436,13 @@ pub fn build_hybrid_library(
     let adapter_symbols: Vec<String> = (0..program.foreign_imports.len())
         .map(adapter_name)
         .collect();
+    let shim = build_foreign_shim(program, &options.object_path, &llvm)?;
     link::link_hybrid_library(
         &llvm,
         &options.object_path,
         &options.runtime_archive,
-        &options.foreign_archives,
+        &options.foreign_link,
+        shim.as_ref().map(|shim| shim.object.as_path()),
         &adapter_symbols,
         &library,
     )?;

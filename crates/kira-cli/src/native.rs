@@ -7,7 +7,9 @@
 use std::path::{Path, PathBuf};
 
 use kira_ir::IrProgram;
-use kira_llvm_backend::{AdapterSidecarOptions, LlvmError, NativeArtifacts, NativeBuildOptions};
+use kira_llvm_backend::{
+    AdapterSidecarOptions, LlvmError, NativeArtifacts, NativeBuildOptions, NativeLinkInputs,
+};
 
 /// Where a program's build artifacts live: `<source-dir>/.kira-build/`.
 ///
@@ -112,7 +114,7 @@ fn shared_library_name(stem: &str) -> String {
     }
 }
 
-/// Builds `program` into a native executable, linking `foreign_archives`.
+/// Builds `program` into a native executable, linking `foreign_link`.
 ///
 /// The archives are the selected C static libraries that satisfy the program's
 /// `@FFI.Extern` imports; each generated adapter references its C symbol, so
@@ -121,7 +123,7 @@ pub fn build(
     program: &IrProgram,
     source: &Path,
     emit_llvm_ir: bool,
-    foreign_archives: &[PathBuf],
+    foreign_link: &NativeLinkInputs,
 ) -> Result<NativeArtifacts, NativeError> {
     let artifacts =
         Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
@@ -136,7 +138,7 @@ pub fn build(
         exports: kira_llvm_backend::NativeExportSurface::default(),
         ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
         runtime_archive: runtime_archive()?,
-        foreign_archives: foreign_archives.to_vec(),
+        foreign_link: foreign_link.clone(),
     };
     Ok(kira_llvm_backend::build_native(program, &options)?)
 }
@@ -150,7 +152,7 @@ pub fn build(
 pub fn build_adapter_sidecar(
     program: &IrProgram,
     source: &Path,
-    foreign_archives: &[PathBuf],
+    foreign_link: &NativeLinkInputs,
 ) -> Result<PathBuf, NativeError> {
     let artifacts =
         Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
@@ -159,7 +161,7 @@ pub fn build_adapter_sidecar(
         object_path: artifacts.foreign_object(),
         library_path: artifacts.foreign_sidecar(),
         runtime_archive: runtime_archive()?,
-        foreign_archives: foreign_archives.to_vec(),
+        foreign_link: foreign_link.clone(),
     };
     Ok(kira_llvm_backend::build_adapter_sidecar(program, &options)?)
 }
