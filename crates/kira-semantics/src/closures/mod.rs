@@ -131,14 +131,71 @@ pub(crate) enum Captured {
 
 /// Whether a value of `ty` may be copied into a closure without a `copy`.
 ///
-/// The oracle's `isTriviallyCopyable`: the scalars and nothing else. A
-/// `String`, a struct, an array, and an enum all own heap storage, and copying
-/// one into a closure is exactly the "non-Copy owned capture" `KSEM117` names.
+/// The oracle's `isTriviallyCopyable`: the scalars, and a `RawPtr`, which is an
+/// opaque word that copies bits and frees nothing. A `String`, a struct, an
+/// array, and an enum all own heap storage, and copying one into a closure is
+/// exactly the "non-Copy owned capture" `KSEM117` names.
+///
+/// A **function type** is decided by [`Analyzer::capture_is_trivially_copyable`]
+/// instead, because answering it needs the function-type table this cannot see.
 pub(crate) fn is_trivially_copyable(ty: Type) -> bool {
     matches!(
         ty,
-        Type::Int(_) | Type::Float(_) | Type::Bool | Type::Void | Type::Error
+        Type::Int(_) | Type::Float(_) | Type::Bool | Type::Void | Type::Error | Type::RawPtr
     )
+}
+
+impl crate::analyze::Analyzer<'_> {
+    /// Whether a capture of `ty` copies without owning anything.
+    ///
+    /// [`is_trivially_copyable`] plus the case it cannot see: a **function
+    /// value**. Its representation is a tag and this program's captures of that
+    /// type, and every one of those had to pass this same test to become a
+    /// capture at all — so a function value owns nothing transitively, and
+    /// copying one into a closure copies words.
+    ///
+    /// That is what lets a callback be threaded through a closure, which is how
+    /// an application hands a frame handler to a loop it builds inline.
+    pub(crate) fn capture_is_trivially_copyable(&self, ty: Type) -> bool {
+        is_trivially_copyable(ty) || self.as_function_type(ty).is_some()
+    }
+
+    /// Whether storing a value of `ty` in `repr` would let `repr` reach itself.
+    ///
+    /// Only a function value can raise the question: every other capturable type
+    /// is a scalar. Two function types may nest freely — a `(Int) -> Int` value
+    /// captured by a `() -> Void` closure is one struct holding another — and it
+    /// is exactly the *cycle* that has no representation, because the struct
+    /// would contain a value of its own type.
+    pub(crate) fn capture_would_be_cyclic(&self, repr: StructId, ty: Type) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        self.type_reaches_struct(ty, repr, &mut seen)
+    }
+
+    /// Whether `ty` contains a value of `target` by value, at any depth.
+    fn type_reaches_struct(
+        &self,
+        ty: Type,
+        target: StructId,
+        seen: &mut std::collections::HashSet<StructId>,
+    ) -> bool {
+        let Type::Struct(id) = ty else {
+            return false;
+        };
+        if id == target {
+            return true;
+        }
+        if !seen.insert(id) {
+            return false;
+        }
+        let field_types: Vec<Type> = match self.program.types.structs().get(id) {
+            Some(def) => def.fields.iter().map(|field| field.ty).collect(),
+            None => return false,
+        };
+        field_types
+            .into_iter()
+            .any(|field| self.type_reaches_struct(field, target, seen))
+    }
 }
 
 /// The interning key for a function type: its parameters, their ownership

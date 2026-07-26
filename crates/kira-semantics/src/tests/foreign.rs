@@ -435,7 +435,7 @@ fn a_function_whose_signature_does_not_fit_the_callback_is_refused() {
 fn a_callback_declaring_a_type_the_seam_cannot_carry_is_refused_where_it_is_filled() {
     // Declaring it is clean: a generated binding declares every callback its
     // headers name, and most are never filled.
-    let declared = "@FFI.Callback { abi: c; params: [String]; result: Void; }\n\
+    let declared = "@FFI.Callback { abi: c; params: [[I32]]; result: Void; }\n\
                     struct Sink {}\n\
                     @Main function main() { return }";
     assert!(
@@ -445,13 +445,39 @@ fn a_callback_declaring_a_type_the_seam_cannot_carry_is_refused_where_it_is_fill
     );
 
     // Handing a Kira function to one is where it cannot work, and is reported.
-    let filled = "@FFI.Callback { abi: c; params: [String]; result: Void; }\n\
+    let filled = "@FFI.Callback { abi: c; params: [[I32]]; result: Void; }\n\
                   struct Sink {}\n\
-                  function takes(x: String) -> Void { return }\n\
+                  function takes(x: [I32]) -> Void { return }\n\
                   @FFI.Extern { library: l; symbol: s; abi: c; }\n\
                   function use_it(a: Sink) -> Void;\n\
                   @Main function main() { use_it(takes) return }";
     assert_eq!(codes(filled), vec!["KSEM245"]);
+}
+
+/// A `String` callback parameter is the one Kira type that *does* fit a C
+/// position: it carries the `const char*` C hands over, copied by the thunk.
+#[test]
+fn a_string_callback_parameter_carries_a_c_string() {
+    let text = "@FFI.Callback { abi: c; params: [CString]; result: Void; }\n\
+                struct Sink {}\n\
+                function takes(x: String) -> Void { print(x) return }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; }\n\
+                function use_it(a: Sink) -> Void;\n\
+                @Main function main() { use_it(takes) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// The other direction has no answer: C would be handed a pointer somebody has
+/// to free, and a Kira `String` belongs to Kira.
+#[test]
+fn a_string_callback_result_is_refused() {
+    let text = "@FFI.Callback { abi: c; params: []; result: CString; }\n\
+                struct Sink {}\n\
+                function gives() -> String { return \"x\" }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; }\n\
+                function use_it(a: Sink) -> Void;\n\
+                @Main function main() { use_it(gives) return }";
+    assert_eq!(codes(text), vec!["KSEM245"]);
 }
 
 #[test]
@@ -516,9 +542,21 @@ fn a_struct_whose_one_field_is_a_bare_int_is_refused() {
 }
 
 #[test]
-fn a_cstring_result_is_refused() {
-    let text = "@Main function main() { return }\n\
+fn a_cstring_result_is_accepted_and_is_a_string_in_kira() {
+    // The callee returns a `const char*` it keeps and the seam copies the bytes,
+    // so the Kira side of the call is an ordinary owned `String` — which is what
+    // makes the result assignable to one and printable.
+    let text = "@Main function main() { let s: String = f() print(s) return }\n\
                 @FFI.Extern { library: l; symbol: s; abi: c; } function f() -> CString;";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+#[test]
+fn a_string_result_is_still_refused_at_the_seam() {
+    // `String` is Kira's spelling, not C's: naming it at the seam says nothing
+    // about the C type, which is why `CString` is the one that crosses.
+    let text = "@Main function main() { return }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; } function f() -> String;";
     assert_eq!(codes(text), vec!["KSEM182"]);
 }
 

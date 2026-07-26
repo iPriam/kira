@@ -103,17 +103,69 @@ struct FlatField {
 }
 
 impl<'a> Analyzer<'a> {
-    /// Declares every class, flattening each into the struct table.
+    /// Declares every class's *name* as an empty row in the struct table.
     ///
-    /// Runs after [`collect_structs`](Analyzer::collect_structs) because a
-    /// class may extend a struct, and in dependency order among classes so a
-    /// parent is always flattened before its child.
-    pub(crate) fn collect_classes(&mut self) {
+    /// Runs before [`collect_structs`](Analyzer::collect_structs) for the reason
+    /// enum headers run before it: a struct field may name a class
+    /// (`var currentEncoder: RenderEncoder`) and a class field may name a struct,
+    /// so each kind needs the other's names to exist before either resolves a
+    /// field. Splitting the id from the fields is what lets both be true at once.
+    ///
+    /// Declaration order, not inheritance order: a header needs no parent, and
+    /// the ordering that does — flattening — happens in [`Self::fill_classes`].
+    ///
+    /// Returns the id minted for each declaration, or `None` where the name lost
+    /// a collision and was reported here.
+    pub(crate) fn declare_class_headers(&mut self) -> Vec<Option<StructId>> {
+        let declarations = self.class_declarations();
+        let mut ids = Vec::with_capacity(declarations.len());
+        for (source, declaration) in &declarations {
+            self.source = *source;
+            let name = self.interner.resolve(declaration.name).to_owned();
+            // Filed under the declaring package, like every other declaration:
+            // two packages may each declare a class of the same name.
+            let owner = self.imports.package_of(*source).map(str::to_owned);
+            let id = self.program.types.structs_mut().declare_owned(
+                owner.as_deref(),
+                StructDef {
+                    name: name.clone(),
+                    fields: Vec::new(),
+                },
+            );
+            match id {
+                Some(id) => {
+                    self.struct_sources.insert(id, *source);
+                    // Kept in step with the table, which classes and structs
+                    // share: `struct_defaults` is indexed by the ids it mints,
+                    // and the real defaults land here in the fill pass.
+                    self.struct_defaults.push(Vec::new());
+                }
+                None => self.emit(
+                    declaration.name_span,
+                    "KSEM004",
+                    format!("class `{name}` is already defined"),
+                ),
+            }
+            ids.push(id);
+        }
+        ids
+    }
+
+    /// Fills every declared class: flattens its inherited fields into the row
+    /// its header reserved, and records its methods.
+    ///
+    /// In dependency order among classes, so a parent is always flattened before
+    /// its child — which is what `extends` means and the one thing headers could
+    /// not do on their own.
+    pub(crate) fn collect_classes(&mut self, headers: &[Option<StructId>]) {
         let declarations = self.class_declarations();
         for index in self.class_order(&declarations) {
             let (source, declaration) = declarations[index];
+            let Some(Some(id)) = headers.get(index).copied() else {
+                continue;
+            };
             self.source = source;
-            self.declare_class(declaration);
+            self.fill_class(id, declaration);
         }
     }
 
@@ -218,8 +270,8 @@ impl Analyzer<'_> {
         order
     }
 
-    /// Flattens one class and adds it to the struct table.
-    fn declare_class(&mut self, declaration: &ClassDecl) {
+    /// Flattens one class into the row its header reserved.
+    fn fill_class(&mut self, id: StructId, declaration: &ClassDecl) {
         let name = self.interner.resolve(declaration.name).to_owned();
         let parents = self.resolve_parents(declaration);
         let ancestors: BTreeSet<StructId> = parents
@@ -240,27 +292,13 @@ impl Analyzer<'_> {
                 mutable: field.mutable,
             });
         }
-        // Filed under the declaring package, like every other declaration: two
-        // packages may each declare a class of the same name.
-        let owner = self.imports.package_of(self.source).map(str::to_owned);
-        let Some(id) = self
-            .program
-            .types
-            .structs_mut()
-            .declare_owned(owner.as_deref(), StructDef { name, fields })
-        else {
-            let name = self.interner.resolve(declaration.name).to_owned();
-            self.emit(
-                declaration.name_span,
-                "KSEM004",
-                format!("class `{name}` is already defined"),
-            );
-            return;
-        };
-        self.struct_sources.insert(id, self.source);
-        // Pushed only on success, which is what keeps `struct_defaults` indexed
-        // by the ids the table mints — classes and structs share that table.
-        self.struct_defaults.push(defaults);
+        self.program.types.structs_mut().set_fields(id, fields);
+        // Written rather than pushed: the header pass reserved this slot when it
+        // minted the id, which is what keeps `struct_defaults` indexed by the
+        // ids the table mints — classes and structs share that table.
+        if let Some(slot) = self.struct_defaults.get_mut(id.index() as usize) {
+            *slot = defaults;
+        }
         let mut info = ClassInfo {
             ancestors,
             ..ClassInfo::default()

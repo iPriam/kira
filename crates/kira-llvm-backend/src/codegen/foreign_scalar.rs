@@ -201,8 +201,22 @@ impl Codegen<'_> {
                 ForeignType::RawPtr => {
                     LLVMBuildPtrToInt(builder, rc, types.i64, c"r.word".as_ptr())
                 }
+                // A returned C string leaves the adapter as a **string handle**,
+                // exactly as an argument enters it as one: the adapter owns the
+                // C-side conversion in both directions, so no engine ever holds
+                // a `const char*`.
+                //
+                // Copying here rather than at the call site is what makes it
+                // correct, not just tidy. The cleanup block below frees this
+                // call's transient argument copies, and a C function may return
+                // a pointer *into* one of them — `strchr` does, and so does any
+                // "return the input unchanged" path. Reading it afterwards is a
+                // use-after-free nothing downstream could detect, so the bytes
+                // are taken while the pointer is still good.
                 ForeignType::CString => {
-                    return Err(LlvmError::Unsupported("a foreign CString result"));
+                    let handle =
+                        self.call_runtime(self.runtime.str_from_cstr, &mut [rc], c"r.cstr.str");
+                    LLVMBuildPtrToInt(builder, handle, types.i64, c"r.handle".as_ptr())
                 }
             }
         };
@@ -373,8 +387,12 @@ impl Codegen<'_> {
                 // A `Void` foreign call yields no value; the caller `Eval`s it and
                 // never names the placeholder.
                 ForeignType::Void => LLVMConstInt(types.i1, 0, 0),
+                // The adapter already copied the callee's bytes into a string
+                // handle, so this is the ordinary owned Kira `String` and there
+                // is nothing here to free — the same value the VM's seam and the
+                // hybrid host lift out of the same word.
                 ForeignType::CString => {
-                    return Err(LlvmError::Unsupported("a foreign CString result"));
+                    LLVMBuildIntToPtr(builder, payload, types.ptr, c"r.str".as_ptr())
                 }
             }
         })

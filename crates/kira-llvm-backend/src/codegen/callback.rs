@@ -54,11 +54,9 @@ fn kira_type_of(ft: ForeignType) -> Result<Type, LlvmError> {
         ForeignType::Bool => Type::Bool,
         ForeignType::RawPtr => Type::RawPtr,
         ForeignType::Void => Type::Void,
-        ForeignType::CString => {
-            return Err(LlvmError::Unsupported(
-                "a `CString` in a callback signature, whose storage has no owner at the boundary",
-            ));
-        }
+        // C hands the thunk a `const char*` it keeps; the thunk copies the
+        // bytes, so what the Kira function receives is an owned `String`.
+        ForeignType::CString => Type::String,
     })
 }
 
@@ -196,6 +194,28 @@ impl Codegen<'_> {
         }
     }
 
+    /// Converts one C argument the thunk was entered with into the Kira value
+    /// the function expects.
+    ///
+    /// Everything but a `CString` is the shared scalar conversion. A `CString`
+    /// is the one position where the thunk *allocates*: C hands over a pointer
+    /// into storage it keeps, and the Kira function is entered with an owned
+    /// `String` copied from it. That copy has to happen here rather than
+    /// anywhere later, because a callback's argument is only guaranteed valid
+    /// for the length of the call C made.
+    fn callback_argument_to_kira(
+        &self,
+        value: LLVMValueRef,
+        ty: ForeignType,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        if ty != ForeignType::CString {
+            return self.c_value_to_kira(value, ty);
+        }
+        // SAFETY: `value` is the thunk's `ptr` parameter on its live entry
+        // block, which is exactly what this helper takes.
+        Ok(unsafe { self.call_runtime(self.runtime.str_from_cstr, &mut [value], c"cb.str") })
+    }
+
     /// Calls the lowered Kira function directly, converting across the C types.
     ///
     /// `None` when the callback returns nothing.
@@ -216,7 +236,7 @@ impl Codegen<'_> {
             ))?;
         let mut values = Vec::with_capacity(arguments.len());
         for (value, ty) in arguments.iter().zip(params) {
-            values.push(self.c_value_to_kira(*value, *ty)?);
+            values.push(self.callback_argument_to_kira(*value, *ty)?);
         }
         // SAFETY: `target` is a lowered Kira function of this module and
         // `values` matches its parameter list, converted one for one.
@@ -246,7 +266,7 @@ impl Codegen<'_> {
             let argv =
                 LLVMBuildArrayAlloca(builder, types.bridge_value, count, c"cb.args".as_ptr());
             for (slot, (value, ty)) in arguments.iter().zip(params).enumerate() {
-                let kira = self.c_value_to_kira(*value, *ty)?;
+                let kira = self.callback_argument_to_kira(*value, *ty)?;
                 let mut offset = [LLVMConstInt(types.i32, slot as u64, 0)];
                 let element = LLVMBuildInBoundsGEP2(
                     builder,

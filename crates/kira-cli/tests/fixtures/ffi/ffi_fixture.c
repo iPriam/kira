@@ -176,3 +176,28 @@ struct ffi_board ffi_board_make(int seed) {
     b.tag = seed * 100;
     return b;
 }
+
+const char *ffi_greeting(void) {
+    return "hello from C";
+}
+
+const char *ffi_echo_or_null(const char *s) {
+    if (s == 0 || s[0] == 0) {
+        return 0;
+    }
+    return s;
+}
+
+int ffi_call_labeler(ffi_labeler label, const char *text, int n) {
+    if (label == 0) {
+        return -1;
+    }
+    return label(text, n);
+}
+
+int ffi_call_labeler_null(ffi_labeler label, int n) {
+    if (label == 0) {
+        return -1;
+    }
+    return label(0, n);
+}

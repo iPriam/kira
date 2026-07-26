@@ -57,6 +57,15 @@ function loadCell() -> I32;
 @FFI.Extern { library: ffifixture; symbol: ffi_bump; abi: c; }
 function bump() -> I64;
 
+// A `CString` result: C returns a pointer into storage it keeps, and the seam
+// copies the bytes out of it, so the Kira side of this call is an ordinary
+// owned `String`.
+@FFI.Extern { library: ffifixture; symbol: ffi_greeting; abi: c; }
+function greeting() -> CString;
+
+@FFI.Extern { library: ffifixture; symbol: ffi_echo_or_null; abi: c; }
+function echoOrNull(s: CString) -> CString;
+
 // One wrapper per engine: the hybrid backend runs the first on the VM half and
 // the second as machine code, and both reach the same C counter.
 @Runtime function bumpRuntime() -> I64 { return bump() }
@@ -79,6 +88,10 @@ function bump() -> I64;
     print(ptrWord(nullPtr()))
     storeCell(7)
     print(loadCell())
+    print(greeting())
+    print(echoOrNull("round trip"))
+    print(echoOrNull("") + "|")
+    print(greeting() + "!")
     print(bumpRuntime())
     print(bumpNative())
     return
