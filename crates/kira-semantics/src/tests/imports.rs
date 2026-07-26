@@ -528,6 +528,118 @@ fn a_local_declaration_wins_over_a_same_named_one_in_another_package() {
     );
 }
 
+/// The package that declares `Color`, the package that speaks it, and a
+/// consumer that declares a `Color` of its own — the corpus shape behind the
+/// qualified-name rule.
+fn palette_modules() -> Vec<ModuleSource> {
+    vec![
+        ModuleSource {
+            module: ImportTable::package_module_identity("Palette", "Palette"),
+            path: "Palette/Palette.kira".to_owned(),
+            text: "struct Color { var rgba: Int }".to_owned(),
+        },
+        ModuleSource {
+            module: ImportTable::package_module_identity("Views", "Views"),
+            path: "Views/Views.kira".to_owned(),
+            text: "import Palette\nstruct View { var fill: Color }".to_owned(),
+        },
+    ]
+}
+
+/// A qualifier picks the package that declares the name, not the file's own.
+///
+/// `Widgets` declares a `Color` of its own, so a bare `Color` there means that
+/// one. Writing `Palette.Color` is how a file says it means the other, and the
+/// fields prove which one was resolved.
+#[test]
+fn a_qualifier_names_the_package_it_points_at() {
+    let db = salsa::DatabaseImpl::new();
+    let mut modules = palette_modules();
+    modules.push(ModuleSource {
+        module: ImportTable::package_module_identity("Widgets", "Widgets"),
+        path: "Widgets/Widgets.kira".to_owned(),
+        text: "import Palette\n\
+               struct Color { var name: Int }\n\
+               function ownColor() -> Int { return Color { name: 2 }.name }\n\
+               function paletteColor() -> Int { return Palette.Color { rgba: 1 }.rgba }"
+            .to_owned(),
+    });
+    let source = SourceProgram::application(
+        &db,
+        "import Widgets\n\
+         @Main function main() { print(ownColor()) print(paletteColor()) return }"
+            .to_owned(),
+        "main.kira".to_owned(),
+        modules,
+    );
+    let diagnostics = analyzed::accumulated::<DiagnosticAccumulator>(&db, source);
+    assert!(
+        diagnostics.is_empty(),
+        "`Palette.Color` has `rgba` and the bare `Color` has `name`: {diagnostics:?}"
+    );
+}
+
+/// A qualifier naming a package that declares nothing by that name resolves to
+/// what the file itself can see.
+///
+/// `Views` speaks `Color` without declaring one, so `Views.Color` is the `Color`
+/// that `Views`'s own API means — the one `Palette` declares. Resolving it as
+/// `Widgets`'s own `Color` is what made a field reject a value of its own type.
+#[test]
+fn a_qualifier_resolves_past_a_package_that_declares_no_such_name() {
+    let db = salsa::DatabaseImpl::new();
+    let mut modules = palette_modules();
+    modules.push(ModuleSource {
+        module: ImportTable::package_module_identity("Widgets", "Widgets"),
+        path: "Widgets/Widgets.kira".to_owned(),
+        text: "import Palette\nimport Views\n\
+               struct Color { var name: Int }\n\
+               function viewFill() -> Views.Color { return Palette.Color { rgba: 1 } }\n\
+               function makeView() -> View { return View { fill: viewFill() } }"
+            .to_owned(),
+    });
+    let source = SourceProgram::application(
+        &db,
+        "import Widgets\n@Main function main() { print(makeView().fill.rgba) return }".to_owned(),
+        "main.kira".to_owned(),
+        modules,
+    );
+    let diagnostics = analyzed::accumulated::<DiagnosticAccumulator>(&db, source);
+    assert!(
+        diagnostics.is_empty(),
+        "`Views.Color` is the `Color` `Views` speaks, which is `Palette`'s: {diagnostics:?}"
+    );
+}
+
+/// The fall-through does not let visibility compose.
+///
+/// `Widgets` importing `Views` does not lend it `Palette`, so `Views.Color`
+/// resolves to nothing a file that never imported `Palette` can name.
+#[test]
+fn a_qualifier_does_not_reach_a_package_this_file_never_imported() {
+    let db = salsa::DatabaseImpl::new();
+    let mut modules = palette_modules();
+    modules.push(ModuleSource {
+        module: ImportTable::package_module_identity("Widgets", "Widgets"),
+        path: "Widgets/Widgets.kira".to_owned(),
+        text: "import Views\nfunction viewFill(color: Views.Color) -> Int { return 0 }".to_owned(),
+    });
+    let source = SourceProgram::application(
+        &db,
+        "import Widgets\n@Main function main() { return }".to_owned(),
+        "main.kira".to_owned(),
+        modules,
+    );
+    let diagnostics = analyzed::accumulated::<DiagnosticAccumulator>(&db, source);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.0.code == Some("KSEM050")),
+        "`Views` importing `Palette` does not lend `Palette` to whoever imports \
+         `Views`: {diagnostics:?}"
+    );
+}
+
 /// Equal relative module names retain their package identity for both imports.
 #[test]
 fn same_named_modules_in_two_packages_link_to_their_own_sources() {

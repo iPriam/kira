@@ -6,7 +6,7 @@
 //! unresolvable **name** is reported, which is what [`NameContext`] carries.
 
 use kira_semantics_model::Type;
-use kira_source::Span;
+use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{Item, TypeRef, TypeRefId};
 
 use crate::analyze::Analyzer;
@@ -27,6 +27,18 @@ pub(crate) enum NameContext {
         /// The aggregate whose field this is.
         owner: String,
     },
+}
+
+/// A written name with its module qualifier resolved and set aside.
+///
+/// The qualifier survives the split because it decides *which* declaration the
+/// name means when more than one package declares it.
+#[derive(Debug, Clone)]
+pub(crate) struct QualifiedName {
+    /// The name with any module qualifier removed.
+    pub(crate) text: String,
+    /// The module the qualifier named, or `None` for a bare name.
+    pub(crate) qualifier: Option<SourceId>,
 }
 
 /// The kind of aggregate a field belongs to, so a diagnostic can name it.
@@ -68,9 +80,10 @@ impl Analyzer<'_> {
                 ..
             } => {
                 let written = self.interner.resolve(family).to_owned();
-                let Some(name) = self.strip_module_qualifier(&written, family_span) else {
+                let Some(qualified) = self.split_module_qualifier(&written, family_span) else {
                     return Type::Error;
                 };
+                let name = qualified.text;
                 match self.construct_family_type(&name) {
                     Some(id) => {
                         self.link_type_name(&name, family_span);
@@ -135,20 +148,27 @@ impl Analyzer<'_> {
         }
     }
 
-    /// Strips a module qualifier off a written type name, or reports why the
+    /// Splits a module qualifier off a written type name, or reports why the
     /// qualifier does not resolve.
     ///
-    /// A module-qualified spelling (`Support.Point`) names the same type the
-    /// module declares bare. Stripping the qualifier is the whole of it:
-    /// top-level names are unique across a package, so `Support.Point` and
-    /// `Point` cannot be two different types — what the qualifier buys is the
-    /// file-scope check that this file actually imported `Support`.
+    /// Top-level names are unique *within* a package, so `Support.Point` and
+    /// `Point` name the same type whenever `Support` is a module of the package
+    /// that wrote them. Across packages they need not: two packages may each
+    /// declare a `Color`, and then `KiraUIFoundation.Color` is written precisely
+    /// to say which one is meant. So the qualifier is kept rather than dropped —
+    /// [`Analyzer::visible_struct_qualified`] resolves against the package that
+    /// owns the module it names, and the file-scope check that this file
+    /// actually imported the root happens here.
     ///
     /// Returns `None` once that check has failed and been reported.
-    pub(crate) fn strip_module_qualifier(&mut self, written: &str, span: Span) -> Option<String> {
+    pub(crate) fn split_module_qualifier(
+        &mut self,
+        written: &str,
+        span: Span,
+    ) -> Option<QualifiedName> {
         match written.split_once('.') {
             Some((root, member)) => {
-                if self.module_for_root(root).is_none() {
+                let Some(module) = self.module_source_for_root(root) else {
                     if !self.report_unimported_root(root, span) {
                         self.emit(
                             span,
@@ -157,10 +177,16 @@ impl Analyzer<'_> {
                         );
                     }
                     return None;
-                }
-                Some(member.to_owned())
+                };
+                Some(QualifiedName {
+                    text: member.to_owned(),
+                    qualifier: Some(module),
+                })
             }
-            None => Some(written.to_owned()),
+            None => Some(QualifiedName {
+                text: written.to_owned(),
+                qualifier: None,
+            }),
         }
     }
 
@@ -172,9 +198,10 @@ impl Analyzer<'_> {
         context: &NameContext,
     ) -> Type {
         let written = self.interner.resolve(name).to_owned();
-        let Some(text) = self.strip_module_qualifier(&written, span) else {
+        let Some(qualified) = self.split_module_qualifier(&written, span) else {
             return Type::Error;
         };
+        let text = qualified.text.clone();
         // A type parameter binding beats everything: inside `Result`'s body,
         // `Value` is whatever the instantiation said it is. A parameter may not
         // shadow a builtin (`KSEM170` refuses that at the declaration), so this
@@ -214,7 +241,7 @@ impl Analyzer<'_> {
             self.link_type_name(&text, span);
             return Type::Enum(id);
         }
-        if let Some(id) = self.visible_struct(&text) {
+        if let Some(id) = self.visible_struct_qualified(&qualified) {
             self.link_type_name(&text, span);
             return Type::Struct(id);
         }
