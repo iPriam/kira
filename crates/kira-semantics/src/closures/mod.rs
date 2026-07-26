@@ -44,7 +44,7 @@
 use std::collections::HashMap;
 
 use kira_semantics_model::hir::{FuncId, LocalId};
-use kira_semantics_model::{StructId, Type};
+use kira_semantics_model::{OwnershipMode, StructId, Type};
 
 mod calls;
 mod lift;
@@ -54,6 +54,11 @@ mod lift;
 pub(crate) struct FnTypeInfo {
     /// The parameter types, in order.
     pub(crate) params: Vec<Type>,
+    /// The ownership mode of each parameter, index-aligned with `params`.
+    ///
+    /// What an indirect call checks its arguments against: a `borrow`
+    /// parameter takes no `move`, an owned one does.
+    pub(crate) param_ownership: Vec<OwnershipMode>,
     /// The result type.
     pub(crate) result: Type,
     /// The dispatcher's id, minted on the first call *through* a value of this
@@ -136,8 +141,13 @@ pub(crate) fn is_trivially_copyable(ty: Type) -> bool {
     )
 }
 
-/// The interning key for a function type: its parameters and its result.
-pub(crate) type FnTypeKey = (Vec<Type>, Type);
+/// The interning key for a function type: its parameters, their ownership
+/// modes, and its result.
+///
+/// The modes are part of the key because they are part of the type: a call
+/// through `(borrow Event) -> Void` leaves the caller its value and a call
+/// through `(Event) -> Void` takes it, so the two cannot share a row.
+pub(crate) type FnTypeKey = (Vec<Type>, Vec<OwnershipMode>, Type);
 
 /// Every function type the program mentions, and the struct each became.
 #[derive(Debug, Default)]

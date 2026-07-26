@@ -134,13 +134,18 @@ impl Analyzer<'_> {
             // captures of every closure literal that has this type. Resolving
             // it here is what puts it in every type position at once — a
             // parameter, a field, a `let` annotation, a return type.
-            TypeRef::Function { params, result, .. } => {
+            TypeRef::Function {
+                params,
+                param_ownership,
+                result,
+                ..
+            } => {
                 let resolved: Vec<Type> = params
                     .iter()
                     .map(|&param| self.resolve_type_in(param, context))
                     .collect();
                 let result_ty = self.resolve_type_in(result, context);
-                self.function_type(resolved, result_ty)
+                self.function_type(resolved, param_ownership, result_ty)
             }
             // The parser already said what was wrong here. Saying "unknown type
             // `<error>`" on top of it would name a type nobody wrote.

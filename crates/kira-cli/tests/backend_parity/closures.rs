@@ -416,3 +416,45 @@ function main() {
     );
     assert_eq!(output, "3\n");
 }
+
+/// Calling through a function type whose parameter is `borrow` runs the same on
+/// every backend, and leaves the caller's value alone.
+///
+/// The mode is a static check with no lowering — the value crosses by copy
+/// whatever it says — so this case exists to prove exactly that: the answer is
+/// identical to the owned spelling, and the caller can still read its value
+/// afterwards.
+#[test]
+fn calling_through_a_borrow_function_type_agrees() {
+    let output = assert_parity(
+        r#"
+struct Event {
+    var code: Int
+    var label: String
+}
+
+function intText(n: Int) -> String {
+    if n == 1 {
+        return "one"
+    }
+    return "many"
+}
+
+function describe(event: borrow Event) {
+    print(event.label + "/" + intText(event.code))
+    return
+}
+
+@Main
+function main() {
+    let onEvent: (borrow Event) -> Void = describe
+    let e = Event { code: 1, label: "down" }
+    onEvent(e)
+    onEvent(e)
+    print(e.label)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "down/one\ndown/one\ndown\n");
+}
