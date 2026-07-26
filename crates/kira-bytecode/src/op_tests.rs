@@ -329,6 +329,31 @@ fn truncated_native_state_type_ids_are_reported() {
 }
 
 #[test]
+fn file_system_opcodes_are_appended_and_round_trip() {
+    assert_eq!(opcode::FILE_SYSTEM, 0x53);
+
+    let code: Vec<Instruction> = FileSystemOp::ALL
+        .into_iter()
+        .map(Instruction::FileSystem)
+        .collect();
+    let bytes = encode(&code);
+    assert_eq!(decode(&bytes).unwrap(), code);
+}
+
+/// A decoder never guesses: an operation byte past the end of the table is
+/// rejected rather than folded into a neighbouring operation.
+#[test]
+fn an_unknown_file_system_operation_is_rejected() {
+    let err = decode(&[opcode::FILE_SYSTEM, 0xfe]).unwrap_err();
+    assert!(matches!(
+        err,
+        DecodeError::UnknownOpcode { opcode: 0xfe, .. }
+    ));
+    let truncated = decode(&[opcode::FILE_SYSTEM]).unwrap_err();
+    assert!(matches!(truncated, DecodeError::UnexpectedEnd { .. }));
+}
+
+#[test]
 fn unknown_opcode_is_reported() {
     let err = decode(&[0xff]).unwrap_err();
     assert!(matches!(

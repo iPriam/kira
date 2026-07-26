@@ -674,3 +674,69 @@ struct would contain itself. `ui-foundation` writes exactly that
 (`RunFoundationApp.kira:322`). Carrying one needs a function value to hold its
 environment behind an indirection instead of inline — a change to the
 representation, not to the check that currently refuses it.
+
+---
+
+## Foundation's filesystem — LANDED (2026-07-26, 69 → 48)
+
+`readFile`, `writeFile`, `readFileRange`, `writeBytesFile`, `listDirectory`,
+`openFile`, `fileExists`, `pathExists`, `isDirectory`, `fileSize`,
+`makeDirectory`, `renamePath`, and `removePath` run on VM, LLVM/native, and
+hybrid. The `KSEM061` bucket the editor's `main.kira` sat behind — it reads its
+project manifest through `readFileRange` — is gone, along with its cascade.
+
+**Parity was measured, not matched by reading.** The reference implementation
+reaches the filesystem through a bundled C library, which is exactly what this
+repo may not ship, so its *behaviour* was the specification and its internals
+were left alone. Probe programs ran under `kira-zig/zig-out/bin/kira` and then
+under `kirac` on each backend, and the two outputs were diffed byte for byte.
+`.codex/work/foundation-filesystem.md` records every answer that pinned;
+`.codex/tmp/{probes,diff.sh}` is the harness. Two answers would not have been
+guessed: `removePath` is **recursive**, and `readFile`'s `text` stops at the
+first NUL while its `size` counts the whole file. Nothing traps — a missing
+path, a bad parent, a directory where a file was wanted each answer `false`,
+`0`, or an empty array.
+
+Getting a usable oracle took two steps worth remembering. `zig-out/bin/kira` was
+stale (built 2026-07-15, before `CBool` and `floatToBits` existed) and was
+rebuilt with `zig build`; and it resolves Foundation out of
+`~/.kira/toolchains/dev/1.7.3`, which is *not* the 1.7.4 directory kira-rusty
+installs into, so the two toolchains do not collide. Its fs library only links
+under `--backend llvm`; a VM run cannot `dlopen` a static archive.
+
+**One instruction, not twelve.** `FileSystem` (opcode `0x53`) carries one
+append-only `FileSystemOp` byte, so a future operation costs neither an opcode
+nor a version. The VM pops the operands and hands a `FileRequest` to
+`HostCapabilities::file_system`, whose default refuses — which is what keeps
+`kira-vm-runtime` buildable for `wasm32-unknown-unknown`. Native code calls one
+of twelve appended `kira_rt_fs_*` symbols (`RUNTIME_ABI_VERSION` unmoved; the
+declarations are generated from `FileSystemOp::ALL`, so backend and runtime
+cannot drift). Both engines end up in **one** `kira_runtime_abi::file_system::perform`
+— byte-identical output is enforced by sharing the implementation, not by
+writing it twice to one specification.
+
+The intrinsics are `fsReadRange`/`fsWriteBytes`/`fsReadText`/… , each with one
+fixed signature; Foundation's `FileSystem.kira` is the surface over them.
+`KSEM252` is the wrong argument count, `KSEM253` an argument of the wrong type.
+
+**A bundled package is now a package.** `import Foundation` read exactly
+`app/Foundation.kira`, so the moment Foundation grew a second file that file was
+unreachable by any spelling. A bare bundle-root import now aggregates every
+`.kira` under the bundle's `app/` into one flat scope — the rule a dependency
+import by bare name already followed. One test asserted the old identity and now
+asserts the new one; nothing else in 1884 moved. This is what unblocks porting
+the rest of Foundation file by file.
+
+Green: fmt, clippy `-D warnings`, `build --workspace`, nextest **1884/1884**,
+wasm32 VM-core, plus the differential runs above on all three backends. The dev
+toolchain was reinstalled (`knvm binstall`) so the installed Foundation carries
+the new file.
+
+**What is left, at 48:** the macro system (`KLEX001` ×22 plus `KSEM900`,
+`KSEM214` ×4 and `KSEM050` `Wrapped` ×6 — one feature, ~33 of the 48), four
+autobind C typedefs in `directx12.kira`/`vulkan.kira` this host never links, and
+a tail of nine: the `CString`-in-a-C-layout-field ownership question
+(`KSEM094`/`KSEM186`/`KSEM183`), two constructs missing a required field
+(`KSEM095`), mixed labelled and positional arguments (`KSEM189` ×2), a `body`
+that can finish without returning (`KSEM033`), the self-typed closure capture
+(`KSEM251`), and the `Center.kira` parse cluster (`KPAR020`/`KPAR002`).

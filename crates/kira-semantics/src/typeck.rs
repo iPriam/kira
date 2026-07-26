@@ -18,6 +18,7 @@ use crate::classes::Qualifier;
 use crate::operators::{resolve_binary, resolve_unary, unary_spelling, unify_branches};
 
 mod calls;
+mod file_system;
 mod labels;
 mod memberwise;
 mod native_state;
@@ -251,6 +252,11 @@ impl Analyzer<'_> {
                 }
                 if let Some(intrinsic) =
                     self.analyze_native_state_intrinsic(ctx, &name, &type_args, &args, callee_span)
+                {
+                    return intrinsic;
+                }
+                if let Some(intrinsic) =
+                    self.analyze_file_system_intrinsic(ctx, &name, &type_args, &args, callee_span)
                 {
                     return intrinsic;
                 }

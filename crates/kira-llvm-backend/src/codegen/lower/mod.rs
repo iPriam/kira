@@ -18,6 +18,7 @@
 
 mod call;
 mod expr;
+mod file_system;
 mod foreign;
 mod foreign_aggregate;
 mod operators;

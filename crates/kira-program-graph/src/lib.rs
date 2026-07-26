@@ -274,6 +274,18 @@ fn read_module(
         if !bundle.owns(module) {
             continue;
         }
+        if module == bundle.module_root() {
+            // A bundled package is a package: importing it by its bare name
+            // pulls in its whole top-level surface, exactly as importing a
+            // dependency by name does. Foundation grew a second file the moment
+            // it grew a filesystem, and reading only `Foundation.kira` would
+            // have made that file unreachable by any spelling.
+            let package = PackageRoot::new(bundle.module_root(), bundle.source_dir());
+            let aggregate = read_aggregate_modules(&package);
+            if !aggregate.is_empty() {
+                return aggregate;
+            }
+        }
         let path = module_path(bundle.source_dir(), module);
         if let Ok(text) = std::fs::read_to_string(&path) {
             return vec![ReadModule {

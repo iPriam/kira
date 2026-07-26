@@ -17,6 +17,7 @@
 mod codec;
 
 pub use codec::{DecodeError, decode, encode, encode_one};
+pub use kira_runtime_abi::FileSystemOp;
 
 /// One decoded VM instruction.
 #[derive(Debug, Clone, PartialEq)]
@@ -249,6 +250,19 @@ pub enum Instruction {
     /// Characters, not bytes: `charAt` and `substring` index the same units, so
     /// a byte count would disagree with the primitives it sits beside.
     StringLen,
+    /// Perform one file-system operation through the host.
+    ///
+    /// The operands are popped in reverse source order — the last argument is on
+    /// top — and dropped, and the operation's own result is pushed. Which
+    /// operands there are, and what the result is, follow from the
+    /// [`FileSystemOp`]: it is the whole instruction, not a hint.
+    ///
+    /// A file that is missing, a directory that will not open, a write that is
+    /// refused: none of those is a trap. Each is an ordinary value — `false`, an
+    /// empty array, a zero — because a program has to be able to ask the outside
+    /// world a question and hear no. The one failure is a host with no
+    /// filesystem, which is a build-time mistake surfacing late.
+    FileSystem(FileSystemOp),
     /// Pop a value and store it through a place that may index arrays.
     ///
     /// The general form of [`Instruction::StoreField`], which stays for the
@@ -575,6 +589,10 @@ mod opcode {
     // adding an opcode is not an ABI change.
     pub const CONVERT_FLOAT_TO_BITS: u8 = 0x51;
     pub const CONVERT_BITS_TO_FLOAT: u8 = 0x52;
+    // One file-system operation. Appended after the bit reinterpretations;
+    // carries one `FileSystemOp` byte, whose own numbering is append-only, so a
+    // new operation costs neither an opcode nor a version.
+    pub const FILE_SYSTEM: u8 = 0x53;
 }
 
 #[cfg(test)]

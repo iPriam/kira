@@ -37,6 +37,31 @@ already had. A field the call does not reach takes its declared default, so
 `Mat4()` is the all-defaulted value. The constructor lowers to the same struct
 value a literal produces, so it runs identically on every backend.
 
+## The filesystem
+
+`FileSystem.kira` reads and writes files on every backend. `readFile` and
+`writeFile` work in text, `readFileRange` and `writeBytesFile` in bytes,
+`listDirectory` walks a directory, and `fileExists`, `pathExists`,
+`isDirectory`, `fileSize`, `makeDirectory`, `renamePath`, and `removePath`
+answer questions about a path.
+
+Nothing here fails. A missing file, a parent directory that does not exist, a
+directory where a file was wanted — each answers `false`, `0`, or an empty
+array, because a program has to be able to ask the outside world a question and
+hear no. Two answers are worth knowing before relying on them: `removePath` is
+recursive on a directory, and `readFile`'s `text` stops at the first NUL byte
+while its `size` counts the whole file, so binary data belongs in
+`readFileRange`. Both match the reference implementation, measured by
+differential run rather than assumed.
+
+Underneath, these sit on compiler intrinsics rather than on a bundled C library.
+The VM describes each operation and hands it to its host through
+`HostCapabilities`; native code calls `kira_rt_fs_*`. Both reach one
+implementation in `kira-runtime-abi`, which is what makes the three backends
+agree byte for byte, and it is why the portable VM core still builds for
+`wasm32-unknown-unknown` — a host that grants no filesystem simply refuses, and
+the web has no files to grant.
+
 ## Where the compiler looks
 
 An installed toolchain is `<root>/bin/kirac` and `<root>/foundation/`, so
@@ -80,10 +105,12 @@ declares. Foundation can resolve `Foundation` and `Foundation.Web`; it can never
 resolve `support`. A toolchain able to satisfy any import would make every
 program's meaning depend on what happened to be installed.
 
-Below that gate nothing is special-cased. A module path is a path under the
-package's `app/` directory with dots as separators, exactly as it is under a
-program's own directory, so `Foundation` is `app/Foundation.kira` and
-`Foundation.Web` would be `app/Foundation/Web.kira`.
+Below that gate nothing is special-cased. `import Foundation` names the package,
+so it loads every `.kira` file under `app/` into one flat scope — the same thing
+a dependency import by bare name does, and what lets Foundation hold
+`Foundation.kira` and `FileSystem.kira` without either being reachable only by a
+spelling nobody writes. A dotted import is a path instead: `Foundation.Web`
+loads `app/Foundation/Web.kira` and nothing else.
 
 ## Collisions
 
@@ -120,7 +147,6 @@ an import that fails.
 | `Test.kira` | `comptime` and `construct` |
 | `Derive.kira` | `comptime macro` |
 | `DeriveSerde.kira` | `comptime macro` |
-| `FileSystem.kira` | FFI, and the native-library build that binds `fs.c` |
 | `Web.kira` | FFI, and the DOM bindings |
 
 Foundation is the consumer of nearly every remaining subsystem, which is why it

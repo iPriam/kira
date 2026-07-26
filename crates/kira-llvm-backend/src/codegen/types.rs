@@ -9,6 +9,8 @@ use std::ffi::{CStr, CString};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 
+use kira_runtime_abi::FileSystemOp;
+
 use super::ffi::c_string;
 
 /// A callable LLVM value together with its function type.
@@ -152,6 +154,12 @@ pub(crate) struct Runtime {
     pub(super) native_state_replace: Callable,
     pub(super) native_state_free: Callable,
     pub(super) trap_native_state: Callable,
+    /// The `kira_rt_fs_*` helpers, indexed by [`FileSystemOp::as_byte`].
+    ///
+    /// An array rather than twelve fields, and indexed by a total function
+    /// rather than searched: adding an operation adds a row to
+    /// [`FileSystemOp::ALL`] and nothing here has to be remembered.
+    pub(super) file_system: [Callable; FileSystemOp::ALL.len()],
 }
 
 /// The LLVM form of `kira_runtime_abi::BridgeValue`.
@@ -364,7 +372,39 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             ),
             native_state_free: declare(c"kira_rt_native_state_free", types.i32, &mut [types.i64]),
             trap_native_state: declare(c"kira_rt_trap_native_state", types.void, &mut [types.i32]),
+            // Appended after the callback-state helpers. Each row's shape comes
+            // from the operation itself, so the twelve declarations are one
+            // table walk rather than twelve hand-written lines that could
+            // disagree with the runtime.
+            file_system: FileSystemOp::ALL.map(|op| {
+                let name = c_string(op.runtime_symbol());
+                let (ret, mut params) = file_system_signature(op, types);
+                declare(&name, ret, &mut params)
+            }),
         }
+    }
+}
+
+/// The C-ABI shape of one `kira_rt_fs_*` helper.
+///
+/// A path is a string handle (`ptr`), a flag comes back as an `i8`, a size as an
+/// `i64`, and an operation that builds an array takes the element stride the
+/// backend computed for the target and returns the array's handle.
+fn file_system_signature(op: FileSystemOp, types: &Types) -> (LLVMTypeRef, Vec<LLVMTypeRef>) {
+    match op {
+        FileSystemOp::ReadRange => (types.ptr, vec![types.ptr, types.i64, types.i64, types.i64]),
+        FileSystemOp::WriteBytes => (types.i8, vec![types.ptr, types.ptr, types.i64]),
+        FileSystemOp::ReadText => (types.ptr, vec![types.ptr]),
+        FileSystemOp::WriteText | FileSystemOp::RenamePath => {
+            (types.i8, vec![types.ptr, types.ptr])
+        }
+        FileSystemOp::ListDirectory => (types.ptr, vec![types.ptr, types.i64]),
+        FileSystemOp::FileSize => (types.i64, vec![types.ptr]),
+        FileSystemOp::IsDirectory
+        | FileSystemOp::MakeDirectory
+        | FileSystemOp::RemovePath
+        | FileSystemOp::FileExists
+        | FileSystemOp::PathExists => (types.i8, vec![types.ptr]),
     }
 }
 
