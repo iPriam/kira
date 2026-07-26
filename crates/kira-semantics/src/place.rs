@@ -96,6 +96,33 @@ impl PlacePurpose {
     }
 }
 
+/// Whether two places can name the same storage.
+///
+/// Two writes collide when one place is the other, or contains it: `ws` and
+/// `ws.doc` overlap, and so do `ws.doc` and `ws.doc.nodes`. Two *sibling*
+/// fields do not — `ws.doc` and `ws.world` are separate storage, which is what
+/// lets one call write through both.
+///
+/// An array index is compared conservatively: `xs[i]` and `xs[j]` are treated
+/// as the same element, because the indices are expressions and nothing here
+/// evaluates them. Refusing a pair that might alias is the safe direction; the
+/// alternative is a write silently erasing another.
+pub(crate) fn places_overlap(left: &HirPlace, right: &HirPlace) -> bool {
+    if left.local != right.local {
+        return false;
+    }
+    left.path
+        .iter()
+        .zip(right.path.iter())
+        .all(|(left, right)| match (left, right) {
+            (HirPlaceStep::Field(left), HirPlaceStep::Field(right)) => left == right,
+            (HirPlaceStep::Index(_), HirPlaceStep::Index(_)) => true,
+            // A value is a struct or an array, never both, so a well-typed
+            // program never walks one step of each into the same place.
+            _ => false,
+        })
+}
+
 impl Analyzer<'_> {
     /// Resolves a written expression into a [`HirPlace`] plus the type stored
     /// there, or `None` when it does not name a writable place.

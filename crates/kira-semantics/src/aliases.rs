@@ -29,7 +29,7 @@ use crate::types::NameContext;
 /// [`AliasBody::Written`]), and `@FFI.Pointer { target: Target }`
 /// ([`AliasBody::RawPtr`], since a native pointer is one machine word whatever
 /// it points at).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct AliasHeader {
     /// What the alias resolves to.
     body: AliasBody,
@@ -37,6 +37,10 @@ pub(crate) struct AliasHeader {
     name_span: Span,
     /// How far this alias has got through resolution.
     state: AliasState,
+    /// What a foreign declaration said about the C type it names, when this
+    /// alias came from one. `None` for a written `type Name = Target`, which is
+    /// a Kira declaration and may be written only once.
+    description: Option<String>,
 }
 
 /// What an [`AliasHeader`] stands for.
@@ -86,6 +90,7 @@ impl Analyzer<'_> {
                         name,
                         declaration.name_span,
                         AliasBody::Written(declaration.target),
+                        None,
                     );
                 }
                 // `@FFI.Alias`/`@FFI.Pointer` declare a typedef, not a struct:
@@ -107,8 +112,22 @@ impl Analyzer<'_> {
                         Some(FfiTypeKind::Pointer { .. }) => AliasBody::RawPtr,
                         _ => continue,
                     };
+                    // A forward declaration only names a C type; whatever
+                    // describes that name is what it means. `typedef union X X;`
+                    // ahead of `X`'s own definition is the shape, and registering
+                    // the alias would put it in front of the definition.
+                    if crate::ffi_types::is_forward_declaration(declaration)
+                        && self.has_foreign_definition(declaration.name)
+                    {
+                        continue;
+                    }
                     let name = self.interner.resolve(declaration.name).to_owned();
-                    self.register_alias(name, declaration.name_span, body);
+                    self.register_alias(
+                        name,
+                        declaration.name_span,
+                        body,
+                        self.foreign_description(declaration),
+                    );
                 }
                 _ => continue,
             }
@@ -116,7 +135,26 @@ impl Analyzer<'_> {
     }
 
     /// Registers one alias, rejecting a name that already means something else.
-    fn register_alias(&mut self, name: String, name_span: Span, body: AliasBody) {
+    ///
+    /// `description` is what a foreign declaration says about the C type it
+    /// names, when it is one. An earlier alias of the same name describing the
+    /// same type is that type arriving twice — autobind writes `@FFI.Pointer {
+    /// target: char; ownership: borrowed; } struct char_ptr {}` into every
+    /// binding that needs a `char *` — so the repeat is idempotent. A *different*
+    /// description under the same name is still one name given two meanings.
+    fn register_alias(
+        &mut self,
+        name: String,
+        name_span: Span,
+        body: AliasBody,
+        description: Option<String>,
+    ) {
+        if let Some(existing) = self.aliases.get(&name)
+            && description.is_some()
+            && existing.description == description
+        {
+            return;
+        }
         if let Some(what) = self.alias_name_collision(&name) {
             self.emit(
                 name_span,
@@ -131,8 +169,22 @@ impl Analyzer<'_> {
                 body,
                 name_span,
                 state: AliasState::Unresolved,
+                description,
             },
         );
+    }
+
+    /// Whether some declaration in the program describes the C type `name`,
+    /// rather than only naming it.
+    ///
+    /// What decides whether a forward declaration has a definition to yield to.
+    fn has_foreign_definition(&self, name: kira_core::Symbol) -> bool {
+        self.tree.items().iter().any(|item| match item {
+            Item::Struct(other) => {
+                other.name == name && crate::ffi_types::is_foreign_definition(other)
+            }
+            _ => false,
+        })
     }
 
     /// What `name` already means, when an alias may not claim it.
@@ -172,7 +224,7 @@ impl Analyzer<'_> {
     /// span through its own [`NameContext`] rather than inheriting whichever
     /// site happened to touch the alias first.
     pub(crate) fn resolve_alias_name(&mut self, name: &str, context: &NameContext) -> Option<Type> {
-        let header = *self.aliases.get(name)?;
+        let header = self.aliases.get(name)?.clone();
         match header.state {
             AliasState::Resolved(ty) => return Some(ty),
             AliasState::Resolving => {
