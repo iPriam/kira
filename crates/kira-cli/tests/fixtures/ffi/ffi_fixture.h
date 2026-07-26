@@ -127,6 +127,14 @@ struct ffi_hooks {
 };
 
 ffi_adder ffi_default_adder(void);
+/* Calls the adder it is handed twice and folds the results, so a Kira callback
+ * has to survive more than one crossing and its arguments have to arrive in
+ * order. */
+int ffi_fold_adder(ffi_adder add, int a, int b);
+/* Stores a callback and calls it later, which is the shape a native API with a
+ * descriptor struct uses. */
+void ffi_store_adder(struct ffi_hooks h);
+int ffi_run_stored(int a, int b);
 int ffi_hooks_apply(struct ffi_hooks h, int a, int b);
 int ffi_call_adder(ffi_adder add, int a, int b);
 

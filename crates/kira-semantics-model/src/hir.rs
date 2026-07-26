@@ -8,7 +8,7 @@
 
 use crate::ty::{EnumId, StructId, Type, TypeTable};
 use kira_runtime_abi::{
-    Execution, ForeignAbi, ForeignAggregates, ForeignSignature, NativeStateTypeId,
+    Execution, ForeignAbi, ForeignAggregates, ForeignCallback, ForeignSignature, NativeStateTypeId,
 };
 use kira_source::Span;
 use kira_syntax_model::ownership::OwnershipMode;
@@ -74,6 +74,12 @@ pub struct HirProgram {
     /// every position naming it holds the same index. Empty for a program whose
     /// externs pass only scalars.
     pub foreign_aggregates: ForeignAggregates,
+    /// The Kira functions reachable from C as function pointers.
+    ///
+    /// One row per distinct (function, signature) pair a `@FFI.Callback`-typed
+    /// position was filled with. The id a row sits at is what the backend names
+    /// its generated entry thunk after, so nothing has to match up by name.
+    pub foreign_callbacks: Vec<ForeignCallback>,
     /// Arena backing every [`HirExprId`].
     pub exprs: Arena<HirExpr>,
     /// Arena backing every [`HirStmtId`].
@@ -299,6 +305,16 @@ pub enum HirExpr {
     Bool(bool),
     /// A string constant.
     Str(String),
+    /// The address C enters a Kira function at, for callback `callback`.
+    ///
+    /// An index into [`HirProgram::foreign_callbacks`]. The value is a
+    /// `RawPtr`: the backend generates one entry thunk per row and this is its
+    /// address, so nothing about a function value has to exist for C to hold
+    /// one.
+    ForeignCallbackPtr {
+        /// The callback entry this address enters.
+        callback: u32,
+    },
     /// The null raw pointer.
     ///
     /// The one `RawPtr` constant Kira spells. It exists because a C-layout
@@ -550,7 +566,7 @@ impl HirExpr {
             HirExpr::Float(_) => Type::FLOAT,
             HirExpr::Bool(_) => Type::Bool,
             HirExpr::Str(_) => Type::String,
-            HirExpr::RawPtrNull => Type::RawPtr,
+            HirExpr::RawPtrNull | HirExpr::ForeignCallbackPtr { .. } => Type::RawPtr,
             HirExpr::Local { ty, .. }
             | HirExpr::Unary { ty, .. }
             | HirExpr::Binary { ty, .. }

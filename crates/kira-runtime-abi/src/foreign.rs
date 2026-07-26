@@ -653,3 +653,38 @@ mod tests {
         assert!(in_result.has_aggregate());
     }
 }
+
+/// One Kira function reachable from C as a function pointer.
+///
+/// A `@FFI.Callback`-typed value is the address of a generated entry thunk, and
+/// this row is what the thunk was generated from: which function it enters and
+/// the exact-width C signature it is entered with. A program's rows are indexed
+/// by the id the frontend assigned, so the backend that emits the thunks and the
+/// host that resolves one by name agree without either inspecting the other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignCallback {
+    /// The function index the thunk calls.
+    function: u32,
+    /// The C signature the thunk is entered with.
+    signature: ForeignSignature,
+}
+
+impl ForeignCallback {
+    /// Records `function` as callable from C through `signature`.
+    pub fn new(function: u32, signature: ForeignSignature) -> ForeignCallback {
+        ForeignCallback {
+            function,
+            signature,
+        }
+    }
+
+    /// The function index the thunk calls.
+    pub fn function(&self) -> u32 {
+        self.function
+    }
+
+    /// The C signature the thunk is entered with.
+    pub fn signature(&self) -> &ForeignSignature {
+        &self.signature
+    }
+}

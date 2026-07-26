@@ -83,6 +83,8 @@ mod fixture;
 // The native foreign host `dlopen`s a generated sidecar, so it is native-only:
 // gated out for wasm exactly as its `kira-dynamic-ffi` dependency is.
 #[cfg(not(target_family = "wasm"))]
+pub mod callback;
+#[cfg(not(target_family = "wasm"))]
 pub mod foreign;
 pub mod host;
 pub mod instance;
@@ -91,6 +93,8 @@ pub mod library;
 pub use abi::{
     EXPORT_ABI_VERSION, EXPORT_SYMBOL_PREFIX, class_drop_symbol, export_abi_marker, export_symbol,
 };
+#[cfg(not(target_family = "wasm"))]
+pub use callback::ForeignSession;
 pub use error::{ContractError, Error, describe_result, describe_tag};
 #[cfg(not(target_family = "wasm"))]
 pub use foreign::{ForeignBinding, ForeignHost};

@@ -29,6 +29,7 @@ fn printing_module(text: &str) -> Module {
         exports: Default::default(),
         foreign_imports: Vec::new(),
         foreign_aggregates: Default::default(),
+        foreign_callbacks: Vec::new(),
         main: Some(0),
         strings: vec![text.to_owned()],
         functions: vec![FuncProto {

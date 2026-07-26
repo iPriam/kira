@@ -92,6 +92,7 @@ fn module(code: Vec<I>, strings: Vec<String>) -> Module {
         exports: Default::default(),
         foreign_imports: foreign_imports(),
         foreign_aggregates: Default::default(),
+        foreign_callbacks: Vec::new(),
         functions: vec![FuncProto {
             name: "main".to_owned(),
             param_count: 0,

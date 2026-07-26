@@ -140,6 +140,26 @@ int ffi_hooks_apply(struct ffi_hooks h, int a, int b) {
     return h.add(a, b) * h.scale;
 }
 
+int ffi_fold_adder(ffi_adder add, int a, int b) {
+    if (add == 0) {
+        return -1;
+    }
+    return add(add(a, b), b);
+}
+
+static struct ffi_hooks ffi_stored_hooks;
+
+void ffi_store_adder(struct ffi_hooks h) {
+    ffi_stored_hooks = h;
+}
+
+int ffi_run_stored(int a, int b) {
+    if (ffi_stored_hooks.add == 0) {
+        return -1;
+    }
+    return ffi_stored_hooks.add(a, b) * ffi_stored_hooks.scale;
+}
+
 int ffi_call_adder(ffi_adder add, int a, int b) {
     if (add == 0) {
         return -1;

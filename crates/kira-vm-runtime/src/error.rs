@@ -76,6 +76,12 @@ pub enum VmError {
     /// type-checked.
     #[error("call to unknown foreign import id {0}")]
     UnknownForeign(u32),
+    /// A `ForeignCallback` named a callback id outside the module's table.
+    ///
+    /// Validation bounds the id against the callback table, so this is a
+    /// backstop for a module and interpreter that disagree.
+    #[error("unknown foreign callback id {0}")]
+    UnknownForeignCallback(u32),
     /// A `CallForeign` could not be completed by the host.
     ///
     /// The VM never performs the foreign call itself, so it reports the host's

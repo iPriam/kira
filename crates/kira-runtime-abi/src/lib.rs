@@ -35,8 +35,8 @@ pub use execution::Execution;
 pub use foreign::{
     FOREIGN_ADAPTER_ABI_MARKER, FOREIGN_ADAPTER_ABI_VERSION, FOREIGN_STRING_DATA_SYMBOL,
     FOREIGN_STRING_FREE_SYMBOL, FOREIGN_STRING_LEN_SYMBOL, FOREIGN_STRING_NEW_SYMBOL, ForeignAbi,
-    ForeignAdapterFn, ForeignAdapterStatus, ForeignArg, ForeignCallError, ForeignImport,
-    ForeignResult, ForeignSignature, ForeignType, ForeignTypeSpec,
+    ForeignAdapterFn, ForeignAdapterStatus, ForeignArg, ForeignCallError, ForeignCallback,
+    ForeignImport, ForeignResult, ForeignSignature, ForeignType, ForeignTypeSpec,
 };
 pub use native_state::{
     NativeStateError, NativeStateHost, NativeStateStatus, NativeStateStore, NativeStateToken,
@@ -253,6 +253,19 @@ pub trait HostCapabilities {
         args: &[ForeignArg<'_>],
     ) -> Result<ForeignResult, ForeignCallError> {
         let _ = (foreign_id, args);
+        Err(ForeignCallError::NoForeignHost)
+    }
+
+    /// The address C calls to enter the Kira function callback `callback_id`
+    /// names.
+    ///
+    /// The VM has no native code of its own, so the pointer a `@FFI.Callback`
+    /// value carries is one the host produced — the entry thunk in the generated
+    /// sidecar. The default refuses for the same reason [`Self::call_foreign`]
+    /// does: a portable VM acquires no dynamic-loading dependency, and an
+    /// embedder opts into foreign access explicitly.
+    fn foreign_callback(&mut self, callback_id: u32) -> Result<u64, ForeignCallError> {
+        let _ = callback_id;
         Err(ForeignCallError::NoForeignHost)
     }
 

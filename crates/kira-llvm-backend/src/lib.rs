@@ -67,6 +67,15 @@ pub fn adapter_name(index: usize) -> String {
     format!("kira_foreign_adapter_{index}")
 }
 
+/// The exported symbol of the generated entry thunk for callback `index`.
+///
+/// The other half of the same wire contract [`adapter_name`] carries: the
+/// backend defines this symbol, and the VM's host resolves it by name to get the
+/// address a `@FFI.Callback` value holds.
+pub fn callback_name(index: usize) -> String {
+    format!("kira_ffi_callback_{index}")
+}
+
 /// What went wrong producing native code.
 #[derive(Debug, thiserror::Error)]
 pub enum LlvmError {
@@ -308,8 +317,12 @@ pub fn build_adapter_sidecar(
     let module = codegen::Module::build_adapter_sidecar(program, &options.module_name)?;
     module.emit_object(&options.object_path)?;
     let llvm = kira_toolchain::discover(None)?;
+    // Both the adapters and the callback thunks: a thunk is referenced by
+    // nothing inside the sidecar — C is what calls it — so without forcing it by
+    // name the linker is free to drop the very symbol the host resolves.
     let adapter_symbols: Vec<String> = (0..program.foreign_imports.len())
         .map(adapter_name)
+        .chain((0..program.foreign_callbacks.len()).map(callback_name))
         .collect();
     let shim = build_foreign_shim(program, &options.object_path, &llvm)?;
     link::link_adapter_sidecar(
@@ -433,8 +446,12 @@ pub fn build_hybrid_library(
     // One adapter per foreign import lives in this same dylib; force each in and
     // link the C archives that satisfy them, so the hybrid session binds every
     // foreign call out of the one native half.
+    // Both the adapters and the callback thunks: a thunk is referenced by
+    // nothing inside the sidecar — C is what calls it — so without forcing it by
+    // name the linker is free to drop the very symbol the host resolves.
     let adapter_symbols: Vec<String> = (0..program.foreign_imports.len())
         .map(adapter_name)
+        .chain((0..program.foreign_callbacks.len()).map(callback_name))
         .collect();
     let shim = build_foreign_shim(program, &options.object_path, &llvm)?;
     link::link_hybrid_library(

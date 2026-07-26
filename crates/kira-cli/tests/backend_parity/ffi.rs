@@ -394,6 +394,46 @@ fn every_backend_agrees_on_a_c_function_pointer() {
     let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
 }
 
+/// C calls a **Kira** function through a `@FFI.Callback`, on every backend.
+///
+/// The direction the seam was missing: the pointer is the address of a generated
+/// entry thunk, and what it enters differs per backend — the VM's thunk reaches
+/// the interpreter through the sidecar's invoker, while a native build's calls
+/// the compiled function directly. C cannot tell, which is the point, so all
+/// three must print the same numbers.
+///
+/// Three shapes: an immediate call back, two crossings in one call (so argument
+/// order and a result feeding the next call are both observable), and a callback
+/// C stores in a descriptor struct and calls after the call that gave it has
+/// returned.
+#[test]
+fn every_backend_agrees_on_a_kira_function_called_from_c() {
+    let entry = write_ffi_package(include_str!(
+        "../fixtures/ffi/ffi_program_kira_callback.kira"
+    ));
+
+    // combine(3, 4) = 34; combine(combine(3, 4), 4) = 344; combine(5, 6) * 2.
+    const EXPECTED_KIRA_CALLBACK: &str = "34\n344\n112\n";
+
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            EXPECTED_KIRA_CALLBACK,
+            "the {backend} backend disagreed on a Kira function called from C\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "the {backend} backend did not exit cleanly\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
+}
+
 /// A single-scalar-field C handle struct crosses the seam as its field: the
 /// result of `ffi_make_handle` (a `struct { unsigned int id; }` by value) is
 /// rebuilt into the Kira `Handle`, and `ffi_handle_id` reads the field back out

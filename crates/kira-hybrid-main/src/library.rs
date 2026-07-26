@@ -129,11 +129,15 @@ impl HybridLibrary {
                 tried,
             }
         })?;
-        let native = NativeLibrary::load(&path, &self.manifest.functions, &self.manifest.foreign)
-            .map_err(|source| HybridMainError::NativeHalf {
-            library: self.name.clone(),
-            source,
-        })?;
+        // A consumed hybrid library binds no callback thunks: it installs no
+        // runtime invoker either (see below), so nothing could enter Kira
+        // through one.
+        let native =
+            NativeLibrary::load(&path, &self.manifest.functions, &self.manifest.foreign, 0)
+                .map_err(|source| HybridMainError::NativeHalf {
+                    library: self.name.clone(),
+                    source,
+                })?;
         // No runtime invoker is installed. See `instance.rs`: a library instance
         // owns a heap and calls through `&mut self`, so a native function
         // calling back into it would need a second mutable borrow of the same

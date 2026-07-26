@@ -176,6 +176,8 @@ pub enum Instruction {
     NativeStateFree,
     /// Push the null raw pointer.
     ConstRawPtrNull,
+    /// Push the address C enters the Kira function this callback entry names.
+    ForeignCallback(u32),
     /// Pop a value, format it, emit one output line, and push unit.
     Print,
     /// Return the stack top from the current function.
@@ -512,6 +514,10 @@ mod opcode {
     // The null raw pointer. Appended after the callback-state group; nullary,
     // and the only `RawPtr` constant the language spells.
     pub const RAW_PTR_NULL: u8 = 0x4d;
+
+    // The address C enters a Kira function at. Appended after `RAW_PTR_NULL`;
+    // carries a `u32` callback index, which the host resolves to a thunk.
+    pub const FOREIGN_CALLBACK: u8 = 0x4e;
 }
 
 #[cfg(test)]

@@ -244,6 +244,10 @@ pub(crate) struct Analyzer<'a> {
     /// carry: a Kira array's length is its own, while the C declaration reserves
     /// exactly this many elements.
     pub(crate) ffi_array_counts: HashMap<StructId, u32>,
+    /// The C signature each `@FFI.Callback` type declares, resolved once at its
+    /// declaration. A Kira function named where one of these types is expected
+    /// is checked against the signature recorded here.
+    pub(crate) ffi_callback_signatures: HashMap<StructId, kira_runtime_abi::ForeignSignature>,
     /// Keeps each C-layout aggregate in the program table exactly once.
     pub(crate) foreign_aggregates: crate::foreign_aggregate::ForeignAggregateBuilder,
     pub(crate) program: HirProgram,
@@ -297,6 +301,7 @@ impl<'a> Analyzer<'a> {
             current_execution: kira_semantics_model::Execution::Inherited,
             ffi_structs: HashMap::new(),
             ffi_array_counts: HashMap::new(),
+            ffi_callback_signatures: HashMap::new(),
             foreign_aggregates: crate::foreign_aggregate::ForeignAggregateBuilder::default(),
             program: HirProgram::default(),
             diagnostics: Vec::new(),

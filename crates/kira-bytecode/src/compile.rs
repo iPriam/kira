@@ -109,6 +109,7 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
             .map(|foreign| foreign.import.clone())
             .collect(),
         foreign_aggregates: program.foreign_aggregates.clone(),
+        foreign_callbacks: program.foreign_callbacks.clone(),
     })
 }
 
