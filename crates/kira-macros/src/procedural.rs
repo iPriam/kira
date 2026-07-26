@@ -18,6 +18,7 @@ use crate::diagnostics::{self, Reporter};
 use crate::edits::EditBuffer;
 use crate::eval::{self, methods};
 use crate::invoke::{Invocation, Position};
+use crate::ksl::ShaderCompiler;
 use crate::registry::{Procedural, ProceduralKind, Registry, kind_word};
 use crate::tokens::Lexed;
 use crate::value::Value;
@@ -28,6 +29,21 @@ use crate::value::Value;
 /// structurally copyable, checked during IR lowering. Expansion leaves it in
 /// place and never treats it as a missing macro.
 pub(crate) const BUILTIN_DERIVE_COPY: &str = "Copy";
+
+/// What every file in one expansion shares: the macros in scope, the wrapper
+/// templates they registered, and the KSL pipeline their bodies can reach.
+///
+/// Grouped rather than passed one by one because all three travel together
+/// down the whole call chain and none of them changes on the way.
+#[derive(Clone, Copy)]
+pub(crate) struct Program<'a> {
+    /// Every macro the program declares.
+    pub(crate) registry: &'a Registry,
+    /// Every struct registered as a wrapper template.
+    pub(crate) templates: &'a HashMap<String, WrapperTemplate>,
+    /// The KSL pipeline behind the `Ksl` namespace, when one was supplied.
+    pub(crate) shaders: Option<&'a dyn ShaderCompiler>,
+}
 
 /// A struct registered as a wrapper template by a `kind { wrapper }` macro.
 #[derive(Debug, Clone)]
@@ -111,11 +127,13 @@ pub(crate) fn top_level(file: &Lexed<'_>) -> Vec<Declaration> {
 pub(crate) fn expand_declaration(
     file: &Lexed<'_>,
     declaration: &Declaration,
-    registry: &Registry,
-    templates: &HashMap<String, WrapperTemplate>,
+    program: Program<'_>,
     buffer: &mut EditBuffer,
     reporter: &mut Reporter,
 ) {
+    let Program {
+        registry, shaders, ..
+    } = program;
     let mut generated: Vec<String> = Vec::new();
     let mut replacement: Option<String> = None;
     let mut consumed: Vec<Span> = Vec::new();
@@ -127,7 +145,7 @@ pub(crate) fn expand_declaration(
                 file,
                 declaration,
                 annotation,
-                registry,
+                program,
                 &mut generated,
                 reporter,
             );
@@ -154,6 +172,7 @@ pub(crate) fn expand_declaration(
                         methods::declaration_value(declaration),
                     )],
                     annotation.span,
+                    shaders,
                     reporter,
                 ) {
                     if declared.replace {
@@ -192,6 +211,7 @@ pub(crate) fn expand_declaration(
                         (parameter(declared, 1), value),
                     ],
                     annotation.span,
+                    shaders,
                     reporter,
                 ) {
                     generated.push(output);
@@ -227,14 +247,8 @@ pub(crate) fn expand_declaration(
     }
 
     if !is_template
-        && let Some(summoned) = summon_from_fields(
-            file,
-            declaration,
-            registry,
-            templates,
-            &mut generated,
-            reporter,
-        )
+        && let Some(summoned) =
+            summon_from_fields(file, declaration, program, &mut generated, reporter)
     {
         match replacement {
             Some(_) => reporter.error(
@@ -271,10 +285,13 @@ fn run_derives(
     file: &Lexed<'_>,
     declaration: &Declaration,
     annotation: &decl::Annotation,
-    registry: &Registry,
+    program: Program<'_>,
     generated: &mut Vec<String>,
     reporter: &mut Reporter,
 ) -> Option<String> {
+    let Program {
+        registry, shaders, ..
+    } = program;
     let mut kept: Vec<&str> = Vec::new();
     for name in &annotation.arguments {
         if name == BUILTIN_DERIVE_COPY {
@@ -313,6 +330,7 @@ fn run_derives(
                 methods::declaration_value(declaration),
             )],
             annotation.span,
+            shaders,
             reporter,
         ) {
             generated.push(output);
@@ -330,11 +348,15 @@ fn run_derives(
 fn summon_from_fields(
     file: &Lexed<'_>,
     declaration: &Declaration,
-    registry: &Registry,
-    templates: &HashMap<String, WrapperTemplate>,
+    program: Program<'_>,
     generated: &mut Vec<String>,
     reporter: &mut Reporter,
 ) -> Option<String> {
+    let Program {
+        registry,
+        templates,
+        shaders,
+    } = program;
     let mut summoned: Option<String> = None;
     let mut already: Vec<String> = Vec::new();
     for field in &declaration.fields {
@@ -361,6 +383,7 @@ fn summon_from_fields(
                         ),
                     ],
                     annotation.span,
+                    shaders,
                     reporter,
                 );
                 summoned = replace_once(summoned, output, file, declaration, reporter);
@@ -384,6 +407,7 @@ fn summon_from_fields(
                     methods::declaration_value(declaration),
                 )],
                 annotation.span,
+                shaders,
                 reporter,
             );
             if declared.replace {
@@ -463,6 +487,7 @@ pub(crate) fn run(
     declared: &Procedural,
     arguments: Vec<(String, Value)>,
     span: Span,
+    shaders: Option<&dyn ShaderCompiler>,
     reporter: &mut Reporter,
 ) -> Option<String> {
     let Some(body) = eval::compile(&declared.body) else {
@@ -474,7 +499,7 @@ pub(crate) fn run(
         );
         return None;
     };
-    match eval::run(&body, arguments) {
+    match eval::run(&body, arguments, shaders) {
         Ok(outcome) => {
             let failed = !outcome.reported.is_empty();
             for message in outcome.reported {
@@ -494,6 +519,7 @@ pub(crate) fn expand_call(
     file: &Lexed<'_>,
     declared: &Procedural,
     call: &Invocation,
+    shaders: Option<&dyn ShaderCompiler>,
     reporter: &mut Reporter,
 ) -> Option<String> {
     if declared.kind != ProceduralKind::Function {
@@ -520,6 +546,7 @@ pub(crate) fn expand_call(
         declared,
         vec![(parameter(declared, 0), Value::Syntax(input))],
         call.span,
+        shaders,
         reporter,
     )?;
     let trimmed = output.trim().to_owned();

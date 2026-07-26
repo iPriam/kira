@@ -816,3 +816,74 @@ Corpus: six C typedefs (`kira-graphics 31673d1`), two placeholder fields
 
 Green throughout: fmt, clippy `-D warnings`, build, nextest **1890/1890**,
 wasm32 VM-core, plus differential runs against the real oracle on every shape.
+
+## KSL is the whole remaining tail, and it lands in userland (2026-07-27)
+
+The editor is at **12 errors, all one cause**: four `ksl!("Shaders/*.ksl")` call
+sites in `apps/editor/app/main.kira`, each raising `KMAC022` plus the
+`KSEM060`/`KSEM070` cascade of an unexpanded macro. The other 25 files across
+the nine-package graph are clean. Twelve is a floor rather than a guarantee —
+everything downstream of the four artifact bindings currently types as error and
+stops being checked, so landing KSL will surface whatever those paths hide.
+
+`project-matter/.codex/todo-ksl-userland-macro.md` was written against kira-zig
+and never landed there; the user has transferred it here. `ksl!` must end as an
+ordinary `comptime macro` the engine owns, so `crates/kira-macros/src/shader.rs`
+is bootstrap to delete, never the shape to build on.
+
+### The seam, landed
+
+The layer DAG decides the design. `kira-macros` is layer 1 and the KSL pipeline
+runs from layer 1 to layer 7, all above it, so the macro crate can never call
+the pipeline directly — which is exactly why kira-zig hardcoded the builtin
+inside `kira_build`, where the pipeline already was. Expansion now states what
+it needs as a `ShaderCompiler` trait and takes an implementation from its
+caller, the `kira-backend-api` pattern. `expand_with` is the entry point that
+supplies one; `expand` stays as it was and supplies none.
+
+A macro body reaches it through a new `Ksl` compile-time namespace, alongside
+`Syntax` and `Diagnostics`. `Ksl.compile(path, target)` returns a `Value::Record`
+— a named bag with no splice rule, read member by member — carrying
+`combinedSource`, the three per-stage sources, the three entry names, and
+`uniformReflection`. That vocabulary is deliberately the *pipeline's*, not the
+engine's: `KslArtifact`, its field names, and how many backends get inlined stay
+Kira source, which is the whole point of the move. Every member is a `String`,
+so each splices into a `quote` as an escaped Kira literal, which is what makes
+inlining a whole shader source into generated Kira work.
+
+With no pipeline supplied, `Ksl.compile` refuses under `KMAC022` rather than
+returning an empty `CompiledShader`. A shader that silently compiled to nothing
+would take a render path down at runtime instead of at build time.
+
+Three acceptance tests hold the destination in place. A declared
+`comptime macro ksl` shadows the builtin, because the registry is consulted
+before it — the guardrail that makes deleting `shader.rs` safe. Without a
+pipeline that userland macro refuses under `KMAC022`. With a stand-in pipeline
+it expands end to end, inlining the compiled source into a `KslArtifact` the
+compiler knows nothing about. Only the pipeline is stubbed there; the macro path
+under test is entirely real.
+
+Clippy's `too_many_arguments` fired on the threaded parameter and was fixed
+rather than silenced: `registry`, `templates`, and `shaders` travel together
+unchanged down the whole chain, so they became one `Program<'_>`, which shortened
+three signatures instead of lengthening one.
+
+Editor re-measured after the change: still 12, unchanged. Green: fmt, clippy
+`-D warnings`, build, nextest **2021/2021**, wasm32 VM-core.
+
+### What is left of KSL
+
+The front end, the IR, and five backends — roughly 7,700 lines in the reference,
+so 12–15k here under this workspace's Rust laws. The crates all exist as stubs
+except `kira-shader-model`, which is real at 431 lines and already fixes the
+type, stage, and reflection vocabulary. The corpus to satisfy is 84 `.ksl` files
+totalling 4,146 lines, and its feature surface is small: no generics, no
+pointers, no recursion, but textures, samplers, `Float4x4`, `option`, `threads`,
+free helper functions, and KSL's own `import`.
+
+Order the work so the builtin cannot survive as a convenient fast path: front
+end, then IR, then MSL, WGSL, and GLSL — the three the editor's call site
+actually reads — then implement `ShaderCompiler` where the pipeline lives, write
+the userland `comptime macro ksl` in the engine, and delete `shader.rs`. HLSL and
+SPIR-V follow; SPIR-V is a binary emitter and is the one structurally unlike the
+rest.

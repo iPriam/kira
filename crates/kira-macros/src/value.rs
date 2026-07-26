@@ -29,8 +29,25 @@ pub(crate) enum Value {
     Declaration(Box<DeclarationValue>),
     /// One field or enum variant of a declaration.
     Field(Box<FieldValue>),
+    /// A named bag of members a compile-time namespace handed back.
+    Record(Box<RecordValue>),
     /// An array of values.
     Array(Vec<Value>),
+}
+
+/// A record a compile-time namespace returns, read member by member.
+///
+/// Deliberately not a Kira value the macro can construct: it is how a namespace
+/// answers with more than one thing at once. Its members are named by the
+/// namespace that built it, and a macro body maps them onto whatever Kira type
+/// it wants — which is what keeps the shape of `Ksl.compile`'s answer from
+/// having to know the engine's artifact type.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RecordValue {
+    /// What the record calls itself, for diagnostics.
+    pub(crate) name: &'static str,
+    /// Its members, in the order the namespace listed them.
+    pub(crate) members: Vec<(String, Value)>,
 }
 
 /// A `Declaration` as the reflection API exposes it.
@@ -108,6 +125,7 @@ impl Value {
             Value::TypeRef(_) => "TypeRef",
             Value::Declaration(_) => "Declaration",
             Value::Field(_) => "Field",
+            Value::Record(record) => record.name,
             Value::Array(_) => "[T]",
         }
     }
@@ -139,7 +157,10 @@ impl Value {
                 // separator.
                 Some(parts.join("\n"))
             }
-            Value::Void | Value::Declaration(_) | Value::Field(_) => None,
+            // A record has no splice rule for the same reason a `Declaration`
+            // has none: there is no one Kira form it obviously becomes. Its
+            // members splice; it does not.
+            Value::Void | Value::Declaration(_) | Value::Field(_) | Value::Record(_) => None,
         }
     }
 
@@ -210,6 +231,16 @@ mod tests {
             kind: "struct",
         }));
         assert_eq!(declaration.splice(), None);
+    }
+
+    #[test]
+    fn a_record_has_no_splice_rule() {
+        let record = Value::Record(Box::new(RecordValue {
+            name: "KslCompiled",
+            members: vec![("vertexEntry".to_owned(), Value::Str("v".to_owned()))],
+        }));
+        assert_eq!(record.splice(), None);
+        assert_eq!(record.type_name(), "KslCompiled");
     }
 
     #[test]
