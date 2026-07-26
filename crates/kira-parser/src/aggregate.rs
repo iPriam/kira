@@ -104,6 +104,13 @@ impl Parser<'_> {
     }
 
     /// Parses one `let`/`var` struct member, with the keyword at the cursor.
+    ///
+    /// A block-bodied member (`let Green: Color { … }`) is deliberately *not*
+    /// accepted here. A computed member is a construct-backed surface — see
+    /// [`Parser::parse_construct_let`] — and a plain `struct`/`class` has no
+    /// such form: the oracle rejects one with this same `KPAR009`, and reading
+    /// it back as `Color.Green` would need static members, which the language
+    /// does not have.
     fn parse_field(&mut self, mutable: bool) -> Option<FieldDecl> {
         let start = self.current().span;
         self.bump(); // `let` / `var`
