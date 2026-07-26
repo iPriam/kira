@@ -294,6 +294,21 @@ pub struct HirPlace {
     pub path: Vec<HirPlaceStep>,
 }
 
+/// One argument a call writes back into the caller when it returns.
+///
+/// A callee that may write through a parameter — a mutating method's receiver,
+/// or a `borrow mut` parameter — is given the caller's storage rather than a
+/// copy of it. This says which parameter, and where in the caller its final
+/// value belongs; it is the only shape in which a callee's write is observable
+/// to its caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirWriteback {
+    /// The callee parameter slot whose final value is written back.
+    pub param: u32,
+    /// Where in the caller that value lands.
+    pub place: HirPlace,
+}
+
 /// An expression, carrying its resolved type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirExpr {
@@ -374,16 +389,17 @@ pub enum HirExpr {
         args: Vec<HirExprId>,
         /// The call's result type.
         ty: Type,
-        /// The place the callee's final `self` is written back into, set only
-        /// when the callee is a method that mutates its receiver.
+        /// Every argument the callee writes back into the caller's storage, in
+        /// parameter order.
         ///
-        /// `None` for every ordinary call, which then behaves exactly as it did
-        /// before value-semantics writeback existed. When it is `Some`, `args[0]`
-        /// is the receiver and the mutated receiver is stored back into this
-        /// place after the call — the side effect that makes `self.field = x`
-        /// inside a method observable to the caller, while the call still yields
-        /// the method's declared return value.
-        writeback: Option<HirPlace>,
+        /// Empty for every ordinary call, which then behaves exactly as it did
+        /// before value-semantics writeback existed. A mutating method
+        /// contributes one entry for its receiver (`args[0]`); a `borrow mut`
+        /// parameter contributes one for its own position. Each entry's final
+        /// callee-side value is stored back into its place after the call — the
+        /// side effect that makes a write inside the callee observable to the
+        /// caller, while the call still yields the declared return value.
+        writebacks: Vec<HirWriteback>,
     },
     /// Construction of a struct value.
     ///

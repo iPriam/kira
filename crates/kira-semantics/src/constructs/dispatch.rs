@@ -192,7 +192,7 @@ impl Analyzer<'_> {
             callee: Callee::User(dispatcher),
             args: values,
             ty: result,
-            writeback: None,
+            writebacks: Vec::new(),
         })
     }
 
@@ -446,7 +446,7 @@ impl Analyzer<'_> {
             callee: Callee::User(target),
             args,
             ty: result,
-            writeback: None,
+            writebacks: Vec::new(),
         });
         if result == Type::Void {
             vec![

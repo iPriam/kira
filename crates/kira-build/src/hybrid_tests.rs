@@ -42,7 +42,7 @@ fn function(name: &str, execution: Execution, body: Vec<IrStmt>) -> IrFunction {
         native_state_locals: Vec::new(),
         return_type: Type::Void,
         execution,
-        mutates_self: false,
+        by_reference_params: Vec::new(),
         body,
     }
 }
@@ -53,7 +53,7 @@ fn call(exprs: &mut Arena<IrExpr>, index: u32) -> IrStmt {
         callee: IrCallee::User(index),
         args: Vec::new(),
         result: Type::Void,
-        writeback: None,
+        writebacks: Vec::new(),
     });
     IrStmt::Eval { expr }
 }
@@ -314,7 +314,7 @@ fn every_type_a_v1_signature_can_have_gets_a_bridge_tag() {
                 native_state_locals: vec![None; 5],
                 return_type: Type::Void,
                 execution: Execution::Runtime,
-                mutates_self: false,
+                by_reference_params: Vec::new(),
                 body: Vec::new(),
             }],
             Arena::new(),
@@ -356,7 +356,7 @@ fn the_error_type_is_refused_rather_than_encoded() {
             native_state_locals: Vec::new(),
             return_type: Type::Error,
             execution: Execution::Runtime,
-            mutates_self: false,
+            by_reference_params: Vec::new(),
             body: Vec::new(),
         }],
         Arena::new(),

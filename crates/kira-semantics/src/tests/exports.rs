@@ -304,13 +304,13 @@ fn an_exported_parameter_may_not_declare_move() {
 
 #[test]
 fn an_exported_parameter_may_not_declare_borrow_mut() {
-    // `borrow mut` collects the standing KSEM112 too: it is unimplemented
-    // everywhere, and refused at the boundary for a second, independent
-    // reason. Both are real, so both are reported.
+    // `borrow mut` runs everywhere inside Kira; what the export boundary cannot
+    // honor is a consumer holding storage for Kira to write through, so it is
+    // refused there and only there.
     let text = "@Export\nclass Button { var width: Int = 1 }\n\
                 @Export\nfunction bump(b: borrow mut Button) { return }";
     let reported = library_codes(text);
-    assert!(reported.contains(&"KSEM165"), "{reported:?}");
+    assert_eq!(reported, vec!["KSEM165"], "{reported:?}");
 }
 
 #[test]
