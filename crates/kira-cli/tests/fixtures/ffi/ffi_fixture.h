@@ -59,4 +59,45 @@ struct ffi_handle ffi_make_handle(unsigned int id);
 unsigned int ffi_handle_id(struct ffi_handle h);
 struct ffi_handle ffi_bump_handle(struct ffi_handle h);
 
+
+/* C-layout aggregates crossing by value. `ffi_quad` is four doubles — on
+ * AArch64 a homogeneous float aggregate passed and returned in v0-v3, which is
+ * the register case a `byval`/`sret` lowering could not reach. `ffi_outer`
+ * nests a struct, and `ffi_mixed` pads between a byte and a double.
+ *
+ * Plain C spellings, like the rest of this fixture: no system headers, so the
+ * same source compiles with the managed clang and with emcc. */
+struct ffi_rect {
+    double x;
+    double y;
+};
+struct ffi_quad {
+    double a;
+    double b;
+    double c;
+    double d;
+};
+struct ffi_inner {
+    int p;
+    int q;
+};
+struct ffi_outer {
+    struct ffi_inner inner;
+    double w;
+};
+struct ffi_mixed {
+    signed char tag;
+    double value;
+    unsigned int count;
+};
+
+double ffi_rect_sum(struct ffi_rect r);
+struct ffi_rect ffi_rect_scale(struct ffi_rect r, double k);
+double ffi_quad_sum(struct ffi_quad q);
+struct ffi_quad ffi_quad_make(double a, double b, double c, double d);
+int ffi_outer_sum(struct ffi_outer o);
+struct ffi_outer ffi_outer_make(int p, int q, double w);
+long long ffi_mixed_sum(struct ffi_mixed m);
+struct ffi_mixed ffi_mixed_make(signed char t, double v, unsigned int c);
+
 #endif /* KIRA_FFI_FIXTURE_H */

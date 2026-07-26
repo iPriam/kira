@@ -18,7 +18,7 @@ use std::process::Command;
 
 use kira_backend_api::WasmDevice;
 use kira_ir::IrProgram;
-use kira_llvm_backend::LlvmError;
+use kira_llvm_backend::{LlvmError, NativeLinkInputs};
 
 use crate::native::Artifacts;
 use crate::serve::{ServeError, Server, open_browser};
@@ -69,6 +69,11 @@ pub enum WebError {
         name = WASM_RUNTIME_ARCHIVE
     )]
     RuntimeArchiveMissing,
+    /// `emcc` compiled the generated foreign shim and refused it.
+    #[error(
+        "`emcc` could not compile the generated foreign shim; its output above names the error"
+    )]
+    ShimUncompilable,
     /// `emcc` is required to link the module and is not on PATH.
     #[error("`emcc` was not found on PATH; the Web link is driven by emscripten")]
     EmccUnavailable,
@@ -92,6 +97,16 @@ pub struct WebArtifacts {
 }
 
 impl WebArtifacts {
+    /// Where the generated foreign C shim source is written.
+    fn shim_source(&self) -> PathBuf {
+        self.directory.join(format!("{}_ffi_shim.c", self.stem))
+    }
+
+    /// Where the shim object `emcc` compiles lands.
+    fn shim_object(&self) -> PathBuf {
+        self.directory.join(format!("{}_ffi_shim.o", self.stem))
+    }
+
     /// Resolves the Web artifact layout for `source`, creating the directory.
     pub fn for_source(source: &Path) -> Result<Self, WebError> {
         let base = Artifacts::for_source(source).map_err(WebError::Artifacts)?;
@@ -134,16 +149,18 @@ pub struct BuiltWeb {
 
 /// Builds a program for `device`: emit the object, link the module and page.
 ///
-/// `foreign_archives` are the selected `wasm32-emscripten` C static libraries
-/// that satisfy the program's `@FFI.Extern` imports. They precede the runtime
+/// `foreign_link` are the resolved `wasm32-emscripten` link inputs that satisfy
+/// the program's `@FFI.Extern` imports. The archives precede the runtime
 /// archive on the `emcc` line so an adapter's reference to a C symbol is
-/// satisfied by the archive that defines it. A program whose wasm target row is
-/// absent was already refused by the caller, before this runs.
+/// satisfied by the archive that defines it, and the flags the wasm rows
+/// declared (`--use-port=…`, `-sERROR_ON_UNDEFINED_SYMBOLS=0`) follow it —
+/// emscripten needs those to link a port at all. A program whose wasm target
+/// row is absent was already refused by the caller, before this runs.
 pub fn build(
     ir: &IrProgram,
     source: &Path,
     device: WasmDevice,
-    foreign_archives: &[PathBuf],
+    foreign_link: &NativeLinkInputs,
 ) -> Result<BuiltWeb, WebError> {
     if ir.main.is_none() {
         return Err(WebError::LibraryUnbuilt);
@@ -155,14 +172,25 @@ pub fn build(
 
     kira_llvm_backend::build_wasm_object(ir, &artifacts.stem, &artifacts.object(), device)?;
 
+    // A program passing a struct by value needs its C shim compiled for wasm
+    // too, and by emcc rather than the host clang: the shim is what applies the
+    // by-value ABI, and wasm32's is emscripten's to define.
+    let shim = build_wasm_shim(ir, &artifacts)?;
+
     let runtime = wasm_runtime_archive().ok_or(WebError::RuntimeArchiveMissing)?;
     let mut command = Command::new("emcc");
     command.arg(artifacts.object());
-    for archive in foreign_archives {
+    if let Some(shim) = &shim {
+        command.arg(shim);
+    }
+    for archive in foreign_link.archives() {
         command.arg(archive);
     }
+    command.arg(&runtime);
+    for argument in foreign_link.driver_arguments() {
+        command.arg(argument);
+    }
     let status = command
-        .arg(&runtime)
         .arg("-o")
         .arg(artifacts.page())
         // `main` returning ends the program, exactly as it does on the host;
@@ -184,6 +212,42 @@ pub fn build(
     })
 }
 
+/// Compiles the program's foreign C shim for wasm with `emcc`, if it needs one.
+///
+/// `None` for a program that passes no struct by value — which is every program
+/// that ever built for the Web before, so no build gains an `emcc -c` step it
+/// does not need. The generated source is the same text the host build compiles;
+/// only the compiler differs, which is the point: each target's own C compiler
+/// decides that target's by-value ABI.
+fn build_wasm_shim(ir: &IrProgram, artifacts: &WebArtifacts) -> Result<Option<PathBuf>, WebError> {
+    let imports: Vec<_> = ir
+        .foreign_imports
+        .iter()
+        .map(|entry| entry.import.clone())
+        .collect();
+    let Some(text) = kira_llvm_backend::shim::generate(&imports, &ir.foreign_aggregates) else {
+        return Ok(None);
+    };
+
+    let source = artifacts.shim_source();
+    let object = artifacts.shim_object();
+    std::fs::write(&source, text).map_err(WebError::Artifacts)?;
+    let status = Command::new("emcc")
+        .arg("-c")
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .status()
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => WebError::EmccUnavailable,
+            _ => WebError::ShimUncompilable,
+        })?;
+    if !status.success() {
+        return Err(WebError::ShimUncompilable);
+    }
+    Ok(Some(object))
+}
+
 /// Builds a program for `device`, then serves it and opens a browser at it.
 ///
 /// Blocks until interrupted: the page is the program's output, so returning
@@ -192,10 +256,10 @@ pub fn run(
     ir: &IrProgram,
     source: &Path,
     device: WasmDevice,
-    foreign_archives: &[PathBuf],
+    foreign_link: &NativeLinkInputs,
 ) -> Result<(), WebError> {
     let artifacts = WebArtifacts::for_source(source)?;
-    let built = build(ir, source, device, foreign_archives)?;
+    let built = build(ir, source, device, foreign_link)?;
 
     let server = Server::bind(artifacts.directory().to_path_buf())?;
     let page = built

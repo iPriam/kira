@@ -45,8 +45,9 @@ impl FunctionLowering<'_, '_> {
                 callee,
                 args,
                 writeback,
+                result,
                 ..
-            } => self.lower_call(callee, &args, writeback.as_ref()),
+            } => self.lower_call(callee, &args, writeback.as_ref(), result),
             IrExpr::StructNew { struct_id, fields } => self.lower_struct_new(struct_id, &fields),
             IrExpr::EnumNew {
                 enum_id,

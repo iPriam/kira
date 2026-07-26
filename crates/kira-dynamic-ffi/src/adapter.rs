@@ -220,11 +220,7 @@ fn validate_symbol(symbol: &str) -> Result<(), ForeignAdapterError> {
 
 /// The pointer width of this process, which is the target an adapter library
 /// loaded here was compiled for.
-const HOST_POINTER_WIDTH: ForeignPointerWidth = if size_of::<usize>() == 8 {
-    ForeignPointerWidth::Bits64
-} else {
-    ForeignPointerWidth::Bits32
-};
+const HOST_POINTER_WIDTH: ForeignPointerWidth = ForeignPointerWidth::HOST;
 
 fn call_adapter(
     adapter: ForeignAdapterFn,

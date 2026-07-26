@@ -240,6 +240,8 @@ pub(crate) struct Analyzer<'a> {
     /// where a C-layout struct's zero-fill construction and an array's or
     /// callback's typed "not yet executable" refusals read their answer.
     pub(crate) ffi_structs: HashMap<StructId, crate::ffi_types::FfiStructKind>,
+    /// Keeps each C-layout aggregate in the program table exactly once.
+    pub(crate) foreign_aggregates: crate::foreign_aggregate::ForeignAggregateBuilder,
     pub(crate) program: HirProgram,
     pub(crate) diagnostics: Vec<Diagnostic>,
     /// Reference→definition links, recorded as names resolve.
@@ -290,6 +292,7 @@ impl<'a> Analyzer<'a> {
             closure_sites: Vec::new(),
             current_execution: kira_semantics_model::Execution::Inherited,
             ffi_structs: HashMap::new(),
+            foreign_aggregates: crate::foreign_aggregate::ForeignAggregateBuilder::default(),
             program: HirProgram::default(),
             diagnostics: Vec::new(),
             definitions: Vec::new(),

@@ -1,5 +1,7 @@
 //! Root project manifest model (the `Package` declaration in `package.kira`).
 
+use kira_native_lib_definition::NativeLibrarySpec;
+
 use crate::dependency::DependencySpec;
 use crate::platform_config::{ExecutionPolicy, ResolvedConfig, default_resolved_config};
 use crate::tests_config::TestsConfig;
@@ -30,9 +32,6 @@ impl PackageKind {
 
 /// The root manifest model loaded from a `package.kira` declaration (or a
 /// legacy `kira.toml`).
-///
-/// Inline native-library entries (`NativeLibrary { ... }`) land here once the
-/// native-library spec types are designed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectManifest {
     pub name: String,
@@ -40,8 +39,12 @@ pub struct ProjectManifest {
     pub kind: PackageKind,
     pub kira_version: String,
     pub module_root: Option<String>,
-    /// Paths to `NativeLibs/*.toml` native library manifests.
-    pub native_libraries: Vec<String>,
+    /// The C libraries declared inline as `let nativeLibraries = [...]`.
+    ///
+    /// A package may instead ship a `NativeLibs/<name>.toml` per library; both
+    /// spellings decode into the same [`NativeLibrarySpec`], and a build reads
+    /// both sources.
+    pub native_libraries: Vec<NativeLibrarySpec>,
     /// Project-root-relative directories (or files) bundled into a
     /// self-contained `wasm32-emscripten` package via emcc `--preload-file`.
     /// Accepted (and validated) on every target; only wasm builds package

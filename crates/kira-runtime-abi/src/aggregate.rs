@@ -41,6 +41,18 @@ pub enum ForeignPointerWidth {
 }
 
 impl ForeignPointerWidth {
+    /// The width of the target this code is running on.
+    ///
+    /// Every side that marshals an aggregate at run time — the VM, the dynamic
+    /// FFI host, the hybrid native half — lays it out for the machine executing
+    /// the call, so all three read this one constant rather than each deciding
+    /// what "the host" means.
+    pub const HOST: Self = if size_of::<usize>() == 8 {
+        Self::Bits64
+    } else {
+        Self::Bits32
+    };
+
     /// The size in bytes of a pointer on this target.
     pub const fn bytes(self) -> u32 {
         match self {

@@ -32,6 +32,7 @@ use kira_backend_api::BackendMode;
 use kira_build::{Compiled, FrontendError};
 use kira_diagnostics::{Diagnostic, renderer};
 use kira_ir::IrProgram;
+use kira_llvm_backend::NativeLinkInputs;
 use kira_source::SourceMap;
 
 use kira_backend_api::WasmDevice;
@@ -108,20 +109,20 @@ pub fn run(args: &[String]) -> i32 {
         Ok(foreign) => foreign,
         Err(code) => return code,
     };
-    let archives = foreign_archives(&foreign);
+    let link = foreign_link(&foreign);
 
     if let Device::Web(device) = options.device {
-        return run_web(&ir, &options, device, archives);
+        return run_web(&ir, &options, device, link);
     }
 
     match options.backend {
-        BackendMode::VmBytecode => run_on_vm(&ir, std::path::Path::new(&options.path), archives),
-        BackendMode::LlvmNative => run_native(&ir, &options, archives),
-        BackendMode::Hybrid => run_hybrid(&ir, &options, archives),
+        BackendMode::VmBytecode => run_on_vm(&ir, std::path::Path::new(&options.path), link),
+        BackendMode::LlvmNative => run_native(&ir, &options, link),
+        BackendMode::Hybrid => run_hybrid(&ir, &options, link),
     }
 }
 
-/// Resolves the program's `@FFI.Extern` imports to archives for `device`'s
+/// Resolves the program's `@FFI.Extern` imports to link inputs for `device`'s
 /// target, reporting a resolution failure as an exit code.
 ///
 /// `None` when the program declares no foreign imports.
@@ -129,7 +130,7 @@ fn resolve_foreign(
     source: &str,
     ir: &IrProgram,
     device: Device,
-) -> Result<Option<Vec<std::path::PathBuf>>, i32> {
+) -> Result<Option<NativeLinkInputs>, i32> {
     let target = crate::foreign_libs::target_for_device(device);
     crate::foreign_libs::resolve(std::path::Path::new(source), ir, target).map_err(|error| {
         eprintln!("kirac: {error}");
@@ -137,10 +138,13 @@ fn resolve_foreign(
     })
 }
 
-/// The archive slice a backend links, empty when there are no foreign imports.
-fn foreign_archives(foreign: &Option<Vec<std::path::PathBuf>>) -> &[std::path::PathBuf] {
-    foreign.as_ref().map(Vec::as_slice).unwrap_or(&[])
+/// The link inputs a backend uses, empty when there are no foreign imports.
+fn foreign_link(foreign: &Option<NativeLinkInputs>) -> &NativeLinkInputs {
+    foreign.as_ref().unwrap_or(&EMPTY_FOREIGN_LINK)
 }
+
+/// The inputs a program with no foreign imports links: nothing at all.
+static EMPTY_FOREIGN_LINK: NativeLinkInputs = NativeLinkInputs::EMPTY;
 
 /// Runs `kirac live [runner] <file> [--backend vm|hybrid]`: build a bundle,
 /// serve it, and run it on a runner client.
@@ -284,7 +288,7 @@ pub fn build(args: &[String]) -> i32 {
     // can start.
     let is_library = ir.main.is_none();
 
-    // Resolve the program's foreign imports to archives for the selected target
+    // Resolve the program's foreign imports to link inputs for the selected target
     // once, and thread them into whichever backend runs. A library's foreign
     // surface is not built in this milestone, so only program arms link them.
     let foreign = match resolve_foreign(&options.path, ir, options.device) {
@@ -294,10 +298,10 @@ pub fn build(args: &[String]) -> i32 {
             return EXIT_FAILURE;
         }
     };
-    let archives = foreign_archives(&foreign);
+    let link = foreign_link(&foreign);
 
     if let Device::Web(device) = options.device {
-        return match wasm::build(ir, std::path::Path::new(&options.path), device, archives) {
+        return match wasm::build(ir, std::path::Path::new(&options.path), device, link) {
             Ok(artifacts) => {
                 println!("Successfully built {}", artifacts.wasm.display());
                 EXIT_OK
@@ -339,7 +343,7 @@ pub fn build(args: &[String]) -> i32 {
                         && let Err(error) = native::build_adapter_sidecar(
                             ir,
                             std::path::Path::new(&options.path),
-                            archives,
+                            link,
                         )
                     {
                         eprintln!("kirac: {error}");
@@ -377,7 +381,7 @@ pub fn build(args: &[String]) -> i32 {
                 }
             }
         }
-        BackendMode::LlvmNative => match build_native(ir, &options, archives) {
+        BackendMode::LlvmNative => match build_native(ir, &options, link) {
             Some(_) => {
                 println!("Successfully built");
                 EXIT_OK
@@ -412,7 +416,7 @@ pub fn build(args: &[String]) -> i32 {
             ir,
             std::path::Path::new(&options.path),
             options.emit_llvm_ir,
-            archives,
+            link,
         ) {
             Ok(_) => {
                 println!("Successfully built");

@@ -1,16 +1,22 @@
-//! Disk resolution of a package's native-library manifests into a catalog.
+//! Disk resolution of a package's native-library declarations into a catalog.
 //!
 //! This is the I/O layer the pure model in `kira-native-lib-definition` leaves
-//! open: it reads each `NativeLibs/*.toml` a manifest lists, parses it with
-//! `kira-manifest`, and resolves each archive against the TOML's own directory
-//! using `Path::exists` as the existence predicate. The result is a
+//! open. A package declares its C libraries in two places and both are read
+//! here: inline in `package.kira` (`let nativeLibraries = [...]`, already
+//! decoded into the manifest) and as `NativeLibs/*.toml` files, parsed with
+//! `kira-manifest`. Each declaration's paths resolve against its own base
+//! directory — the package root for an inline entry, the TOML's own parent for
+//! a file — using `Path::exists` as the existence predicate. The result is one
 //! [`NativeLinkResolution`] the build path threads to the backend.
 
 use std::path::Path;
 
 use kira_core::Interner;
 use kira_manifest::{NativeLibParseError, parse_native_lib_manifest};
-use kira_native_lib_definition::{NativeLibraryError, ResolvedNativeLibraries, TargetTriple};
+use kira_native_lib_definition::{
+    NativeLibraryError, NativeLibrarySpec, ResolvedNativeLibraries, ResolvedNativeLibrary,
+    TargetTriple,
+};
 
 /// A resolved native-library catalog together with the target it was resolved
 /// for, ready to hand to a code-generation backend.
@@ -51,21 +57,33 @@ pub enum NativeLibraryResolveError {
     Model(#[from] NativeLibraryError),
 }
 
-/// Resolves every native-library manifest a package lists into one catalog.
+/// Resolves everything a package declares about its C libraries into one
+/// catalog.
 ///
-/// `package_root` is the resolved package directory, `native_libraries` are the
-/// `NativeLibs/*.toml` paths relative to it (from
-/// [`kira_manifest::ProjectManifest::native_libraries`]), and `target` is the
-/// selected build target. Each manifest's archives resolve relative to that
-/// TOML file's own parent directory, so a manifest may sit anywhere under the
-/// package and still name its archives relative to itself.
+/// `package_root` is the resolved package directory, `inline` are the
+/// declarations read out of `package.kira`
+/// ([`kira_manifest::ProjectManifest::native_libraries`]), `manifest_paths` are
+/// the `NativeLibs/*.toml` files relative to the package root, and `target` is
+/// the selected build target.
+///
+/// The two sources differ only in where their relative paths are anchored: an
+/// inline entry writes paths relative to the package root it was declared in, a
+/// TOML file relative to its own parent directory — so a manifest may sit
+/// anywhere under the package and still name its archives relative to itself.
+/// A library declared in both places is a
+/// [`NativeLibraryError::DuplicateLibrary`], the same as declaring it twice in
+/// either one.
 pub fn resolve_native_libraries(
     package_root: &Path,
-    native_libraries: &[String],
+    inline: &[NativeLibrarySpec],
+    manifest_paths: &[String],
     target: &TargetTriple,
 ) -> Result<NativeLinkResolution, NativeLibraryResolveError> {
-    let mut resolved = Vec::with_capacity(native_libraries.len());
-    for relative in native_libraries {
+    let mut resolved = Vec::with_capacity(inline.len() + manifest_paths.len());
+    for spec in inline {
+        resolved.push(locate(spec, package_root)?);
+    }
+    for relative in manifest_paths {
         let manifest_path = package_root.join(relative);
         let text = std::fs::read_to_string(&manifest_path).map_err(|error| {
             NativeLibraryResolveError::Unreadable {
@@ -73,20 +91,28 @@ pub fn resolve_native_libraries(
                 message: error.to_string(),
             }
         })?;
-        let manifest = parse_native_lib_manifest(&text).map_err(|source| {
+        let spec = parse_native_lib_manifest(&text).map_err(|source| {
             NativeLibraryResolveError::Malformed {
                 path: manifest_path.display().to_string(),
                 source: Box::new(source),
             }
         })?;
         let base_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-        resolved.push(manifest.resolve(base_dir, |candidate| candidate.exists())?);
+        resolved.push(locate(&spec, base_dir)?);
     }
     let catalog = ResolvedNativeLibraries::from_resolved(Interner::new(), resolved)?;
     Ok(NativeLinkResolution {
         catalog,
         target: target.clone(),
     })
+}
+
+/// Locates one declaration's files against `base_dir`, reading the disk.
+fn locate(
+    spec: &NativeLibrarySpec,
+    base_dir: &Path,
+) -> Result<ResolvedNativeLibrary, NativeLibraryError> {
+    spec.resolve(base_dir, |candidate| candidate.exists())
 }
 
 #[cfg(test)]
@@ -153,7 +179,7 @@ staticLib = "lib/libffimath-wasm.a"
         write(&root.join("NativeLibs/lib/libffimath-wasm.a"), "");
 
         let mut resolution =
-            resolve_native_libraries(root, &["NativeLibs/ffimath.toml".to_owned()], &host())
+            resolve_native_libraries(root, &[], &["NativeLibs/ffimath.toml".to_owned()], &host())
                 .expect("resolution succeeds");
         assert_eq!(resolution.catalog.len(), 1);
         let symbol = resolution
@@ -164,16 +190,98 @@ staticLib = "lib/libffimath-wasm.a"
             resolution
                 .catalog
                 .resolve_import(symbol, &host())
-                .expect("host archive"),
-            root.join("NativeLibs/lib/libffimath-macos.a"),
+                .expect("host archive")
+                .artifact(),
+            Some(root.join("NativeLibs/lib/libffimath-macos.a").as_path()),
         );
         assert_eq!(
             resolution
                 .catalog
                 .resolve_import(symbol, &wasm())
-                .expect("wasm archive"),
-            root.join("NativeLibs/lib/libffimath-wasm.a"),
+                .expect("wasm archive")
+                .artifact(),
+            Some(root.join("NativeLibs/lib/libffimath-wasm.a").as_path()),
         );
+    }
+
+    #[test]
+    fn an_inline_declaration_resolves_against_the_package_root() {
+        // The blocker this whole path exists for: a package that declares its
+        // libraries in `package.kira` and ships no `NativeLibs/*.toml` at all.
+        let dir = TempDir::new("inline");
+        let root = dir.path();
+        write(&root.join("generated/native/aarch64-macos/libsokol.a"), "");
+        let manifest = kira_manifest::load_declaration(
+            r#"
+Package Demo {
+    let nativeLibraries = [
+        NativeLibrary {
+            name: "sokol",
+            linkMode: LinkMode.Static,
+            nativeTargets: [
+                NativeTarget { triple: "aarch64-macos-none", staticLib: "generated/native/aarch64-macos/libsokol.a", frameworks: ["AppKit"] }
+            ],
+        }
+    ]
+}
+"#,
+        )
+        .expect("a readable manifest");
+
+        let mut resolution =
+            resolve_native_libraries(root, &manifest.native_libraries, &[], &host())
+                .expect("resolution succeeds");
+        let symbol = resolution
+            .catalog
+            .intern_library("sokol")
+            .expect("interned");
+        let row = resolution
+            .catalog
+            .resolve_import(symbol, &host())
+            .expect("the host row");
+        assert_eq!(
+            row.artifact(),
+            Some(
+                root.join("generated/native/aarch64-macos/libsokol.a")
+                    .as_path()
+            ),
+        );
+        assert_eq!(row.attributes().frameworks, ["AppKit"]);
+    }
+
+    #[test]
+    fn a_library_declared_inline_and_in_a_toml_is_a_typed_error() {
+        let dir = TempDir::new("bothsources");
+        let root = dir.path();
+        write(&root.join("NativeLibs/ffimath.toml"), FFIMATH_TOML);
+        write(&root.join("NativeLibs/lib/libffimath-macos.a"), "");
+        write(&root.join("NativeLibs/lib/libffimath-wasm.a"), "");
+        let manifest = kira_manifest::load_declaration(
+            r#"
+Package Demo {
+    let nativeLibraries = [
+        NativeLibrary {
+            name: "ffimath",
+            linkMode: LinkMode.Dynamic,
+            nativeTargets: [NativeTarget { triple: "aarch64-macos-none", dynamicLib: "" }],
+        }
+    ]
+}
+"#,
+        )
+        .expect("a readable manifest");
+
+        let error = resolve_native_libraries(
+            root,
+            &manifest.native_libraries,
+            &["NativeLibs/ffimath.toml".to_owned()],
+            &host(),
+        )
+        .expect_err("one library from two sources is rejected");
+        assert!(matches!(
+            error,
+            NativeLibraryResolveError::Model(NativeLibraryError::DuplicateLibrary { .. })
+        ));
     }
 
     #[test]
@@ -185,7 +293,7 @@ staticLib = "lib/libffimath-wasm.a"
         write(&root.join("NativeLibs/lib/libffimath-macos.a"), "");
 
         let error =
-            resolve_native_libraries(root, &["NativeLibs/ffimath.toml".to_owned()], &host())
+            resolve_native_libraries(root, &[], &["NativeLibs/ffimath.toml".to_owned()], &host())
                 .expect_err("a missing archive is rejected");
         assert!(matches!(
             error,
@@ -204,6 +312,7 @@ staticLib = "lib/libffimath-wasm.a"
 
         let error = resolve_native_libraries(
             root,
+            &[],
             &[
                 "NativeLibs/a.toml".to_owned(),
                 "NativeLibs/b.toml".to_owned(),
@@ -220,9 +329,13 @@ staticLib = "lib/libffimath-wasm.a"
     #[test]
     fn an_unreadable_manifest_is_a_typed_error() {
         let dir = TempDir::new("unreadable");
-        let error =
-            resolve_native_libraries(dir.path(), &["NativeLibs/absent.toml".to_owned()], &host())
-                .expect_err("a missing manifest file is rejected");
+        let error = resolve_native_libraries(
+            dir.path(),
+            &[],
+            &["NativeLibs/absent.toml".to_owned()],
+            &host(),
+        )
+        .expect_err("a missing manifest file is rejected");
         assert!(matches!(
             error,
             NativeLibraryResolveError::Unreadable { .. }

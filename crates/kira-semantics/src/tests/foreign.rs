@@ -229,6 +229,105 @@ fn a_single_scalar_field_struct_crosses_as_its_field() {
     assert_eq!(row.param_wrappers[0], row.result_wrapper);
 }
 
+// ----- C-layout aggregates by value ---------------------------------------
+
+#[test]
+fn a_c_layout_struct_crosses_by_value_as_an_aggregate() {
+    let text = "@FFI.Struct { layout: c; }\n\
+                struct Rect { var x: F64\n var y: F64\n var w: F64\n var h: F64 }\n\
+                @Main function main() { return }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; } function f(r: Rect) -> Rect;";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+    let program = program(text);
+    let row = &program.foreign[0];
+
+    // Both positions name the one table row, and both carry the Kira struct the
+    // value is marshalled from and back into.
+    let aggregate = row.signature.result().aggregate().expect("an aggregate");
+    assert_eq!(row.signature.parameters()[0].aggregate(), Some(aggregate));
+    assert!(row.param_wrappers[0].is_some());
+    assert_eq!(row.param_wrappers[0], row.result_wrapper);
+
+    // Four `F64` members — the `MetalCGRect` shape, an AArch64 HFA.
+    assert_eq!(program.foreign_aggregates.len(), 1);
+    let entry = program
+        .foreign_aggregates
+        .get(aggregate)
+        .expect("the table row");
+    assert_eq!(
+        entry.members(),
+        &[kira_runtime_abi::ForeignMember::Scalar(ForeignType::F64); 4]
+    );
+}
+
+#[test]
+fn a_nested_c_layout_struct_is_one_table_row_below_its_container() {
+    let text = "@FFI.Struct { layout: c; }\n\
+                struct Origin { var x: F64\n var y: F64 }\n\
+                @FFI.Struct { layout: c; }\n\
+                struct Frame { var origin: Origin\n var w: F64\n var h: F64 }\n\
+                @Main function main() { return }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; } function f(fr: Frame) -> I32;";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+    let program = program(text);
+    let outer = program.foreign[0].signature.parameters()[0]
+        .aggregate()
+        .expect("an aggregate");
+    // The nested member was pushed first, so it holds a lower id — the
+    // invariant that makes layout a forward pass.
+    let entry = program.foreign_aggregates.get(outer).expect("the row");
+    let [kira_runtime_abi::ForeignMember::Aggregate(inner), ..] = entry.members() else {
+        panic!("the first member is the nested aggregate: {entry:?}");
+    };
+    assert!(inner.0 < outer.0);
+    assert_eq!(program.foreign_aggregates.len(), 2);
+}
+
+#[test]
+fn naming_one_aggregate_twice_adds_one_table_row() {
+    let text = "@FFI.Struct { layout: c; }\n\
+                struct P { var x: F64\n var y: F64 }\n\
+                @Main function main() { return }\n\
+                @FFI.Extern { library: l; symbol: a; abi: c; } function f(p: P) -> P;\n\
+                @FFI.Extern { library: l; symbol: b; abi: c; } function g(p: P) -> I32;";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+    assert_eq!(program(text).foreign_aggregates.len(), 1);
+}
+
+#[test]
+fn a_c_layout_struct_with_an_unseamable_field_is_refused_by_field_name() {
+    let text = "@FFI.Struct { layout: c; }\n\
+                struct Bad { var x: F64\n var label: String }\n\
+                @Main function main() { return }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; } function f(b: Bad) -> I32;";
+    assert_eq!(codes(text), vec!["KSEM182"]);
+    let message = &diagnostics(text)[0].message;
+    assert!(message.contains("label"), "names the field: {message}");
+}
+
+#[test]
+fn a_c_layout_struct_whose_field_is_a_bare_int_is_refused() {
+    // The same ambiguity the seam refuses at a parameter: `Int` has no fixed C
+    // width, so a member of one has no offset a shim could agree on.
+    let text = "@FFI.Struct { layout: c; }\n\
+                struct Bad { var a: F64\n var n: Int }\n\
+                @Main function main() { return }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; } function f(b: Bad) -> I32;";
+    assert_eq!(codes(text), vec!["KSEM182"]);
+}
+
+#[test]
+fn a_multi_field_struct_without_the_annotation_is_still_refused() {
+    // The annotation is the author's statement that this type mirrors a C
+    // declaration. Without it, adding a Kira field would silently change what
+    // the C function receives, so the plain struct keeps its refusal.
+    let text = "struct Loose { var x: F64\n var y: F64 }\n\
+                @Main function main() { return }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; } function f(p: Loose) -> I32;";
+    assert_eq!(codes(text), vec!["KSEM182"]);
+    assert!(program(text).foreign_aggregates.is_empty());
+}
+
 #[test]
 fn a_struct_whose_one_field_is_a_bare_int_is_refused() {
     // `Int` has no fixed C width, so a struct wrapping one is not a handle: it

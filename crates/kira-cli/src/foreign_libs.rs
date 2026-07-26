@@ -1,11 +1,17 @@
-//! Resolving a program's `@FFI.Extern` imports to the C archives that satisfy
-//! them, for the target this build is for.
+//! Resolving a program's `@FFI.Extern` imports to the C link inputs that
+//! satisfy them, for the target this build is for.
 //!
 //! Every backend needs the same two answers: which target is being built, and
-//! which static archive each foreign import's library resolves to on it. This
-//! module produces both from the package's `NativeLibs/*.toml` manifests and the
-//! program's foreign table, so the LLVM link, the hybrid dylib, the VM sidecar,
-//! and the wasm `emcc` link all select archives one way.
+//! what each foreign import's library puts on the link line for it. This module
+//! produces both from the package's declarations — inline `nativeLibraries` in
+//! `package.kira` *and* any `NativeLibs/*.toml` it ships — plus the program's
+//! foreign table, so the LLVM link, the hybrid dylib, the VM sidecar, and the
+//! wasm `emcc` link all select one way.
+//!
+//! An archive is not the whole answer: a selected row may also carry Apple
+//! frameworks, system libraries, and linker flags, and may carry those and no
+//! archive at all. So what comes back is a [`NativeLinkInputs`], not a path
+//! list.
 //!
 //! Selection is exact and structured: a host-only library asked for on wasm is a
 //! clean structural miss, named as such before any code generation.
@@ -13,7 +19,9 @@
 use std::path::{Path, PathBuf};
 
 use kira_ir::IrProgram;
-use kira_native_lib_definition::{ImportResolveError, TargetTriple};
+use kira_native_lib_definition::{
+    ImportResolveError, NativeLibrarySpec, NativeLinkInputs, TargetTriple,
+};
 use kira_project::NativeLibraryResolveError;
 
 use crate::options::Device;
@@ -33,12 +41,19 @@ pub enum ForeignResolveError {
         #[source]
         source: std::io::Error,
     },
+    /// The package's `package.kira` was found but could not be read or decoded.
+    #[error("cannot read the package declaration: {message}")]
+    Manifest {
+        /// Why it could not be read or decoded, path included.
+        message: String,
+    },
     /// An import named a library the package does not declare for this target.
     #[error(
         "foreign import names native library `{library}`, which this package does not declare \
          for target `{target}`\n\
-         note: add `NativeLibs/{library}.toml` with a `[[target]]` row whose `triple` is \
-         `{target}` and a `staticLib` path"
+         note: declare it in `package.kira` as a `NativeLibrary` entry with a `NativeTarget` \
+         whose `triple` is `{target}`, or add `NativeLibs/{library}.toml` with a matching \
+         `[target.{target}]` section"
     )]
     UndeclaredLibrary {
         /// The undeclared library name.
@@ -46,10 +61,10 @@ pub enum ForeignResolveError {
         /// The target this build selected.
         target: TargetTriple,
     },
-    /// A declared library has no archive for the selected target.
+    /// A declared library has no row for the selected target.
     #[error(
         "native library `{library}` has no native artifact for target `{target}`\n\
-         note: this is the host-only-library-on-wasm case; add a `[[target]]` row for \
+         note: this is the host-only-library-on-wasm case; add a target row for \
          `{target}`"
     )]
     NoArtifactForTarget {
@@ -93,27 +108,29 @@ fn host_triple() -> TargetTriple {
     TargetTriple::new(std::env::consts::ARCH, os, abi)
 }
 
-/// Resolves `program`'s foreign imports to archives for `target`.
+/// Resolves `program`'s foreign imports to link inputs for `target`.
 ///
 /// Returns `None` when the program declares no foreign imports — the common case
-/// that keeps a build with no FFI from touching the filesystem for a `NativeLibs`
+/// that keeps a build with no FFI from reading a manifest or a `NativeLibs`
 /// directory that need not exist. Otherwise every distinct library an import
-/// names is resolved to its archive for `target`, in first-use order.
+/// names is resolved to its row for `target`, and the rows are gathered into one
+/// [`NativeLinkInputs`] in first-use order.
 pub fn resolve(
     source: &Path,
     program: &IrProgram,
     target: TargetTriple,
-) -> Result<Option<Vec<PathBuf>>, ForeignResolveError> {
+) -> Result<Option<NativeLinkInputs>, ForeignResolveError> {
     if program.foreign_imports.is_empty() {
         return Ok(None);
     }
 
-    let package_root = package_root_of(source);
+    let (package_root, inline) = package_declarations(source)?;
     let manifests = native_lib_manifests(&package_root)?;
-    let resolution = kira_project::resolve_native_libraries(&package_root, &manifests, &target)?;
+    let resolution =
+        kira_project::resolve_native_libraries(&package_root, &inline, &manifests, &target)?;
     let mut catalog = resolution.catalog;
 
-    let mut archives: Vec<PathBuf> = Vec::new();
+    let mut inputs = NativeLinkInputs::default();
     for entry in &program.foreign_imports {
         let library = entry.import.library();
         let symbol = catalog.intern_library(library).map_err(|_| {
@@ -121,7 +138,7 @@ pub fn resolve(
                 library: library.to_owned(),
             }
         })?;
-        let archive = catalog
+        let row = catalog
             .resolve_import(symbol, &target)
             .map_err(|error| match error {
                 ImportResolveError::UndeclaredLibrary { library } => {
@@ -133,43 +150,52 @@ pub fn resolve(
                 ImportResolveError::NoArtifactForTarget { library, target } => {
                     ForeignResolveError::NoArtifactForTarget { library, target }
                 }
-            })?
-            .to_path_buf();
-        if !archives.contains(&archive) {
-            archives.push(archive);
-        }
+            })?;
+        inputs.push_row(row);
     }
 
-    Ok(Some(archives))
+    Ok(Some(inputs))
 }
 
-/// The package directory `source` belongs to, or its own directory.
+/// The package directory `source` belongs to and the libraries it declares
+/// inline.
 ///
-/// A `NativeLibs/*.toml` is resolved relative to the package that owns the
+/// A declaration's paths are resolved relative to the package that owns the
 /// build, which is the directory of the `package.kira` above the source; a bare
-/// `.kira` file with no package uses its own directory.
-fn package_root_of(source: &Path) -> PathBuf {
-    if let Ok(Some(manifest)) = kira_project::manifest_for(source) {
-        let manifest_path = PathBuf::from(&manifest.path);
-        if let Some(parent) = manifest_path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            return parent.to_path_buf();
-        }
-    }
-    source
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
+/// `.kira` file with no package uses its own directory and declares nothing
+/// inline.
+fn package_declarations(
+    source: &Path,
+) -> Result<(PathBuf, Vec<NativeLibrarySpec>), ForeignResolveError> {
+    // A manifest that exists but does not read is a real fault worth naming: a
+    // build with foreign imports would otherwise fail later as an undeclared
+    // library, blaming the import for an unreadable manifest.
+    let located =
+        kira_project::manifest_for(source).map_err(|error| ForeignResolveError::Manifest {
+            message: error.to_string(),
+        })?;
+    let Some(located) = located else {
+        let root = source
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        return Ok((root, Vec::new()));
+    };
+    let root = match PathBuf::from(&located.path).parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    Ok((root, located.manifest.native_libraries))
 }
 
 /// Every `NativeLibs/*.toml` the package ships, as package-relative paths.
 ///
-/// A package declares its native libraries by shipping their manifests under
-/// `NativeLibs/`; each one found there is a declared library. A missing
-/// directory is no libraries, not an error — a program with foreign imports and
-/// no `NativeLibs` is caught later as an undeclared-library diagnostic that names
-/// the library rather than the directory.
+/// This is the file-per-library spelling; the other is the inline
+/// `nativeLibraries` array read from `package.kira`, and a package may use
+/// either or both. A missing directory is no libraries, not an error — a
+/// program with foreign imports and no declaration anywhere is caught later as
+/// an undeclared-library diagnostic that names the library rather than the
+/// directory.
 fn native_lib_manifests(package_root: &Path) -> Result<Vec<String>, ForeignResolveError> {
     let dir = package_root.join("NativeLibs");
     let entries = match std::fs::read_dir(&dir) {

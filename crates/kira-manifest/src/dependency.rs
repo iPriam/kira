@@ -146,11 +146,35 @@ mod tests {
     }
 
     #[test]
-    fn tolerates_kira_graphics_native_libraries() {
+    fn reads_kira_graphics_native_libraries() {
+        // The corpus manifest verbatim, all three libraries: the static one with
+        // headers, sources, autobind, and ten target rows; the dynamic one whose
+        // every row is `dynamicLib: ""`; and the one that is frameworks only.
         let manifest = load_declaration(KIRA_GRAPHICS_MANIFEST).unwrap();
         assert!(manifest.dependencies.is_empty());
         assert_eq!(manifest.execution_mode, "llvm");
         assert_eq!(manifest.build_target, "host");
+
+        let names: Vec<&str> = manifest
+            .native_libraries
+            .iter()
+            .map(kira_native_lib_definition::NativeLibrarySpec::name)
+            .collect();
+        assert_eq!(names, ["sokol", "vulkan", "kira_metal"]);
+
+        let sokol = &manifest.native_libraries[0];
+        assert_eq!(sokol.targets().len(), 10);
+        assert_eq!(sokol.sources(), ["NativeLibs/Sokol/sokol_impl.c"]);
+        assert_eq!(
+            sokol.autobind().expect("an autobind record").headers.len(),
+            3
+        );
+        let wasm = sokol
+            .targets()
+            .iter()
+            .find(|row| row.triple().os() == "emscripten")
+            .expect("the wasm row");
+        assert_eq!(wasm.attributes().linker_flags, ["--use-port=emdawnwebgpu"]);
     }
 
     #[test]

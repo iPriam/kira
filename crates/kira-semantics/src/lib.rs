@@ -34,6 +34,7 @@ mod enums;
 mod exports;
 mod ffi_types;
 mod foreign;
+mod foreign_aggregate;
 mod generics;
 mod imports;
 mod mutation;

@@ -64,24 +64,93 @@ sign/zero-extends at the C boundary, rounds `F32`, builds and frees transient
 
 ## Native libraries
 
-A package declares a native library with a `NativeLibs/<name>.toml` manifest that
-names the library and one `[[target]]` row per target it ships an archive for:
+A package declares a native library in `package.kira`, or in a
+`NativeLibs/<name>.toml` beside it. Both spellings mean the same thing, and a
+package may use either or both — the only difference is where relative paths are
+anchored: the package root for an inline entry, the file's own directory for a
+TOML.
 
-```toml
-name = "ffimath"
-[[target]]
-triple = "aarch64-macos-none"
-staticLib = "lib/libffimath.a"
-[[target]]
-triple = "wasm32-emscripten-unknown"
-staticLib = "lib/libffimath-wasm.a"
+```text
+let nativeLibraries = [
+    NativeLibrary {
+        name: "sokol",
+        linkMode: LinkMode.Static,
+        headers: Headers { entrypoint: "NativeLibs/Sokol/sokol.h", defines: ["SOKOL_NO_ENTRY"] },
+        sources: ["NativeLibs/Sokol/sokol_impl.c"],
+        nativeTargets: [
+            NativeTarget { triple: "aarch64-macos-none", staticLib: "generated/libsokol.a",
+                           frameworks: ["AppKit", "QuartzCore"] },
+            NativeTarget { triple: "x86_64-linux-gnu", staticLib: "generated/libsokol.a",
+                           systemLibs: ["X11", "GL"] }
+        ],
+    }
+]
 ```
 
-Paths resolve relative to the manifest. Target selection is exact and
-structural: a host build picks the row whose triple matches this machine, and
-`--device wasm32` picks the `wasm32-emscripten-unknown` row. A library declared
-only for the host and asked for wasm is refused before `emcc` runs, with a
-diagnostic naming the library and the target.
+```toml
+[library]
+name = "ffimath"
+link_mode = "static"
+
+[target.aarch64-macos-none]
+static_lib = "lib/libffimath.a"
+
+[target.wasm32-emscripten-unknown]
+static_lib = "lib/libffimath-wasm.a"
+compiler_flags = ["--use-port=emdawnwebgpu"]
+```
+
+Target selection is exact and structural: a host build picks the row whose
+triple matches this machine, and `--device wasm32` picks the
+`wasm32-emscripten-unknown` row. A library declared only for the host and asked
+for wasm is refused before `emcc` runs, with a diagnostic naming the library and
+the target.
+
+A selected row contributes more than an archive. Its `frameworks`, `systemLibs`,
+and `linkerFlags` go on the same link line, so a library whose symbols come from
+Apple frameworks needs no archive at all — write the row with neither
+`staticLib` nor `dynamicLib`. Under `LinkMode.Dynamic`, a row that names nothing
+whatsoever links the library by its own name (`dynamicLib: ""` on a library
+called `vulkan` is `-lvulkan`); the same row under `LinkMode.Static` is refused,
+because it says nothing about what to link.
+
+`headers`, `sources`, and `autobind` are read and carried, and not yet acted on:
+a library's own C sources are not compiled for it, and bindings are not
+generated. Ship the archive.
+
+## Structs by value
+
+A `@FFI.Struct { layout: c }` crosses the seam **by value**, as a parameter or a
+result, when every field is a fixed-width scalar, `Bool`, `RawPtr`, or another
+such struct — to any depth:
+
+```text
+@FFI.Struct { layout: c; }
+struct Rect { var x: F64
+var y: F64 }
+
+@FFI.Extern { library: graphics; symbol: rect_scale; abi: c; }
+function rectScale(r: Rect, k: F64) -> Rect;
+```
+
+The annotation is required. An ordinary Kira struct is refused even when its
+fields would all map, because the annotation is what says this type mirrors a C
+declaration field for field — without it, adding a Kira field would silently
+change what the C function receives.
+
+**Kira never classifies the ABI.** Passing a struct by value is the one place
+the C ABI cannot be derived from the type alone: x86-64 System V classifies
+eightbytes, AArch64 AAPCS detects homogeneous float aggregates and returns large
+ones indirectly, and wasm32 has its own rules. So for each import naming a
+struct, `kirac` generates a small C file that redeclares the struct, redeclares
+the real symbol with its true by-value signature, and wraps the call in a shim
+taking every aggregate through a pointer. The target's own C compiler builds it
+— the managed clang for a host build, `emcc` for wasm — and applies the ABI it
+defines. Everything Kira emits speaks only pointers and scalars.
+
+A field the seam cannot carry is refused by name, and the deferred forms keep
+their refusals as members: a `@FFI.Callback`, an inline `@FFI.Array`, a
+`CString`, and any Kira heap type.
 
 ## Wasm
 

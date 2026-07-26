@@ -51,3 +51,51 @@ struct ffi_handle ffi_bump_handle(struct ffi_handle h) {
     r.id = h.id + 1;
     return r;
 }
+
+double ffi_rect_sum(struct ffi_rect r) {
+    return r.x + r.y;
+}
+
+struct ffi_rect ffi_rect_scale(struct ffi_rect r, double k) {
+    struct ffi_rect out;
+    out.x = r.x * k;
+    out.y = r.y * k;
+    return out;
+}
+
+double ffi_quad_sum(struct ffi_quad q) {
+    return q.a + q.b + q.c + q.d;
+}
+
+struct ffi_quad ffi_quad_make(double a, double b, double c, double d) {
+    struct ffi_quad q;
+    q.a = a;
+    q.b = b;
+    q.c = c;
+    q.d = d;
+    return q;
+}
+
+int ffi_outer_sum(struct ffi_outer o) {
+    return o.inner.p + o.inner.q + (int)o.w;
+}
+
+struct ffi_outer ffi_outer_make(int p, int q, double w) {
+    struct ffi_outer o;
+    o.inner.p = p;
+    o.inner.q = q;
+    o.w = w;
+    return o;
+}
+
+long long ffi_mixed_sum(struct ffi_mixed m) {
+    return (long long)m.tag + (long long)m.value + (long long)m.count;
+}
+
+struct ffi_mixed ffi_mixed_make(signed char t, double v, unsigned int c) {
+    struct ffi_mixed m;
+    m.tag = t;
+    m.value = v;
+    m.count = c;
+    return m;
+}

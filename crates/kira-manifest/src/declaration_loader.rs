@@ -22,12 +22,16 @@
 //! }
 //! ```
 //!
-//! Version, Kira version, module root, kind, dependencies, and defaults are
-//! decoded. Unknown keys are ignored rather than rejected, because this crate's
-//! model covers a subset of the fields a manifest may carry and rejecting the
-//! rest would make every new field a breaking change. A key this reader *does*
-//! know but cannot make sense of is an error, never a guess.
+//! Version, Kira version, module root, kind, dependencies, defaults, and the
+//! inline `nativeLibraries` array (read by [`crate::declaration_native_libs`])
+//! are decoded. Unknown keys are ignored rather than rejected, because this
+//! crate's model covers a subset of the fields a manifest may carry and
+//! rejecting the rest would make every new field a breaking change. A key this
+//! reader *does* know but cannot make sense of is an error, never a guess.
 
+use kira_native_lib_definition::{NativeLibraryError, TripleError};
+
+use crate::declaration_native_libs::native_libraries_value;
 use crate::dependency::{DependencySource, DependencySpec, GitSource, PathSource, RegistrySource};
 use crate::project_manifest::{PackageKind, ProjectManifest};
 
@@ -49,6 +53,23 @@ pub enum DeclarationError {
         /// The key whose value could not be read.
         key: String,
     },
+    /// A `nativeTargets` row named a triple that is not `arch-os-abi`.
+    #[error(transparent)]
+    Triple(#[from] TripleError),
+    /// A `nativeLibraries` entry was well-formed but did not validate.
+    ///
+    /// Boxed because it is by far the largest thing that can go wrong here (a
+    /// library name, a triple, and a path), and every `kirac` verb reads a
+    /// manifest — an unboxed variant would widen the `Result` of every function
+    /// that returns this, and of `kira-project`'s discovery errors above it.
+    #[error("the `nativeLibraries` declaration is invalid: {0}")]
+    InvalidNativeLibrary(#[source] Box<NativeLibraryError>),
+}
+
+impl From<NativeLibraryError> for DeclarationError {
+    fn from(error: NativeLibraryError) -> Self {
+        Self::InvalidNativeLibrary(Box::new(error))
+    }
 }
 
 /// Reads a `package.kira` declaration into a [`ProjectManifest`].
@@ -56,7 +77,8 @@ pub enum DeclarationError {
 /// Takes the text rather than a path: this crate stays filesystem-free at its
 /// core, and the caller that found the file is the one that read it.
 pub fn load(text: &str) -> Result<ProjectManifest, DeclarationError> {
-    let (name, body) = split_header(text)?;
+    let text = strip_comments(text);
+    let (name, body) = split_header(&text)?;
     let mut manifest = ProjectManifest::new(name, "0.1.0");
     for (key, value) in entries(body) {
         match key {
@@ -65,6 +87,7 @@ pub fn load(text: &str) -> Result<ProjectManifest, DeclarationError> {
             "moduleRoot" => manifest.module_root = Some(string_value(key, value)?),
             "kind" => manifest.kind = kind_value(value)?,
             "dependencies" => manifest.dependencies = dependencies_value(value)?,
+            "nativeLibraries" => manifest.native_libraries = native_libraries_value(value)?,
             "defaults" => {
                 let (execution_mode, build_target) = defaults_value(value)?;
                 if let Some(mode) = execution_mode {
@@ -80,6 +103,61 @@ pub fn load(text: &str) -> Result<ProjectManifest, DeclarationError> {
         }
     }
     Ok(manifest)
+}
+
+/// Blanks out `//` line comments, preserving the text's length.
+///
+/// A manifest is commented like the Kira source it resembles, and a comment may
+/// sit anywhere — including between two entries of a `nativeLibraries` array,
+/// where it would otherwise become part of the record name that follows it. The
+/// reader is offset-based throughout, so each comment byte becomes a space
+/// rather than disappearing: nothing else has to know this ran.
+///
+/// String literals are respected. `Dependency { url: "https://example.test/r.git" }`
+/// is a real corpus line, and a stripper that did not track quoting would eat
+/// the rest of it.
+fn strip_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut commented = false;
+    let mut chars = text.char_indices().peekable();
+    while let Some((_, ch)) = chars.next() {
+        if commented {
+            if ch == '\n' {
+                commented = false;
+                out.push(ch);
+            } else {
+                // One space per byte keeps every later offset in place, whatever
+                // the comment happened to contain.
+                out.push_str(&" ".repeat(ch.len_utf8()));
+            }
+            continue;
+        }
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                quoted = false;
+            }
+            out.push(ch);
+            continue;
+        }
+        match ch {
+            '"' => {
+                quoted = true;
+                out.push(ch);
+            }
+            '/' if chars.peek().is_some_and(|(_, next)| *next == '/') => {
+                commented = true;
+                out.push(' ');
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 /// True when `text[start..end]` is a whole word rather than part of a longer
@@ -234,7 +312,7 @@ fn group_end(text: &str, open: usize) -> Option<usize> {
 }
 
 /// Reads a `"quoted"` value.
-fn string_value(key: &str, value: &str) -> Result<String, DeclarationError> {
+pub(crate) fn string_value(key: &str, value: &str) -> Result<String, DeclarationError> {
     let trimmed = value.trim();
     trimmed
         .strip_prefix('"')
@@ -328,7 +406,7 @@ fn defaults_value(value: &str) -> Result<(Option<String>, Option<String>), Decla
 }
 
 /// Returns the comma-separated items inside a balanced array.
-fn array_items<'a>(key: &str, value: &'a str) -> Result<Vec<&'a str>, DeclarationError> {
+pub(crate) fn array_items<'a>(key: &str, value: &'a str) -> Result<Vec<&'a str>, DeclarationError> {
     let trimmed = value.trim();
     if !trimmed.starts_with('[') || group_end(trimmed, 0) != Some(trimmed.len()) {
         return Err(malformed(key));
@@ -337,7 +415,7 @@ fn array_items<'a>(key: &str, value: &'a str) -> Result<Vec<&'a str>, Declaratio
 }
 
 /// Returns the fields of a named brace record.
-fn record_fields<'a>(
+pub(crate) fn record_fields<'a>(
     key: &str,
     record: &str,
     value: &'a str,
@@ -416,7 +494,7 @@ fn top_level_comma(text: &str) -> Result<Option<usize>, ()> {
 }
 
 /// Reads a non-empty quoted string.
-fn non_empty_string(key: &str, value: &str) -> Result<String, DeclarationError> {
+pub(crate) fn non_empty_string(key: &str, value: &str) -> Result<String, DeclarationError> {
     let value = string_value(key, value)?;
     if value.is_empty() {
         Err(malformed(key))
@@ -426,14 +504,14 @@ fn non_empty_string(key: &str, value: &str) -> Result<String, DeclarationError> 
 }
 
 /// Constructs the uniform error for a known key with an unreadable value.
-fn malformed(key: &str) -> DeclarationError {
+pub(crate) fn malformed(key: &str) -> DeclarationError {
     DeclarationError::MalformedValue {
         key: key.to_owned(),
     }
 }
 
 /// Returns the final case name from `.Case` or `Qualified.Case`.
-fn qualified_case(value: &str) -> &str {
+pub(crate) fn qualified_case(value: &str) -> &str {
     let trimmed = value.trim();
     trimmed.rsplit('.').next().unwrap_or(trimmed).trim()
 }
@@ -607,6 +685,51 @@ mod tests {
         // And a genuine binding named `outlet` still reads as one.
         let bound = "Package p {\n let outlet = \"x\"\n let kind = .Library\n}";
         assert_eq!(load(bound).unwrap().kind, PackageKind::Library);
+    }
+
+    #[test]
+    fn a_comment_between_array_entries_is_not_part_of_the_next_entry() {
+        // Regression: `ui-foundation`'s manifest comments its third
+        // `NativeLibrary`, and the comment ran into the record name that
+        // followed it — so the whole package failed to load and every module
+        // importing it went undefined.
+        let text = "Package p {\n\
+            \x20   let dependencies = [\n\
+            \x20       Dependency { name: \"A\", path: \"../a\" },\n\
+            \x20       // why B is here\n\
+            \x20       Dependency { name: \"B\", path: \"../b\" }\n\
+            \x20   ]\n\
+            }";
+        let manifest = load(text).expect("a commented array reads");
+        let names: Vec<&str> = manifest
+            .dependencies
+            .iter()
+            .map(|dependency| dependency.name.as_str())
+            .collect();
+        assert_eq!(names, ["A", "B"]);
+    }
+
+    #[test]
+    fn a_double_slash_inside_a_string_is_not_a_comment() {
+        let text = "Package p {\n \
+            let dependencies = [Dependency { name: \"G\", url: \"https://x.test/r.git\" }]\n \
+            let kind = .Library\n}";
+        let manifest = load(text).expect("a url survives comment stripping");
+        assert_eq!(manifest.kind, PackageKind::Library);
+        assert_eq!(
+            manifest.dependencies[0].source,
+            DependencySource::Git(GitSource {
+                url: "https://x.test/r.git".to_owned(),
+                rev: None,
+                tag: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_comment_holding_multi_byte_text_does_not_shift_what_follows() {
+        let text = "Package p {\n // héllo → wörld\n let kind = .Library\n}";
+        assert_eq!(load(text).unwrap().kind, PackageKind::Library);
     }
 
     #[test]

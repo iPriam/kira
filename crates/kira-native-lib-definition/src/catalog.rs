@@ -1,11 +1,10 @@
 //! The resolved-library catalog and foreign-import resolution against it.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use kira_core::{Interner, Symbol};
 
-use crate::manifest::{NativeLibraryError, ResolvedNativeLibrary};
+use crate::resolved::{NativeLibraryError, ResolvedNativeLibrary, ResolvedTargetRow};
 use crate::triple::TargetTriple;
 
 /// A set of resolved native libraries keyed by interned library name.
@@ -61,7 +60,12 @@ impl ResolvedNativeLibraries {
             .map_err(|_| NativeLibraryError::NameSpaceExhausted)
     }
 
-    /// Resolves an interned library and selected target to its archive path.
+    /// Resolves an interned library and selected target to its link row.
+    ///
+    /// The row — not just an archive path — is what comes back, because a
+    /// target's contribution to the link line is a library file *and* the
+    /// frameworks, system libraries, and flags declared beside it, and a row
+    /// may legitimately be all attributes and no file.
     ///
     /// The `library` symbol must come from this catalog's own interner (via
     /// [`ResolvedNativeLibraries::intern_library`]). Returns
@@ -73,7 +77,7 @@ impl ResolvedNativeLibraries {
         &self,
         library: Symbol,
         target: &TargetTriple,
-    ) -> Result<&Path, ImportResolveError> {
+    ) -> Result<&ResolvedTargetRow, ImportResolveError> {
         let Some(resolved) = self.libraries.get(&library) else {
             return Err(ImportResolveError::UndeclaredLibrary {
                 library: self.name_of(library),
@@ -83,7 +87,6 @@ impl ResolvedNativeLibraries {
             .targets()
             .iter()
             .find(|row| row.triple() == target)
-            .map(|row| row.archive())
             .ok_or_else(|| ImportResolveError::NoArtifactForTarget {
                 library: resolved.name().to_owned(),
                 target: target.clone(),
@@ -135,7 +138,8 @@ pub enum ImportResolveError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{NativeLibraryManifest, NativeTargetRow};
+    use crate::spec::{LinkMode, NativeLibrarySpec, NativeTargetSpec};
+    use std::path::Path;
 
     fn triple(text: &str) -> TargetTriple {
         TargetTriple::parse(text).expect("a valid triple")
@@ -144,10 +148,10 @@ mod tests {
     fn resolved(name: &str, rows: &[(&str, &str)]) -> ResolvedNativeLibrary {
         let targets = rows
             .iter()
-            .map(|(t, path)| NativeTargetRow::new(triple(t), *path))
+            .map(|(t, path)| NativeTargetSpec::static_archive(triple(t), *path))
             .collect();
-        NativeLibraryManifest::new(name, targets)
-            .expect("a valid manifest")
+        NativeLibrarySpec::new(name, LinkMode::Static, targets)
+            .expect("a valid declaration")
             .resolve(Path::new("/pkg/NativeLibs"), |_| true)
             .expect("resolution")
     }
@@ -188,14 +192,16 @@ mod tests {
         assert_eq!(
             catalog
                 .resolve_import(symbol, &triple("aarch64-macos-none"))
-                .expect("host row"),
-            Path::new("/pkg/NativeLibs/lib/host.a"),
+                .expect("host row")
+                .artifact(),
+            Some(Path::new("/pkg/NativeLibs/lib/host.a")),
         );
         assert_eq!(
             catalog
                 .resolve_import(symbol, &triple("wasm32-emscripten-unknown"))
-                .expect("wasm row"),
-            Path::new("/pkg/NativeLibs/lib/wasm.a"),
+                .expect("wasm row")
+                .artifact(),
+            Some(Path::new("/pkg/NativeLibs/lib/wasm.a")),
         );
     }
 

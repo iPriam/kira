@@ -442,6 +442,7 @@ impl Heap {
     }
 }
 
+mod aggregate;
 mod native_state;
 mod seam;
 

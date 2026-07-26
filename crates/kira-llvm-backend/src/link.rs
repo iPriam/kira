@@ -13,6 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use kira_native_lib_definition::NativeLinkInputs;
 use kira_toolchain::LlvmInstallation;
 
 /// Why linking failed.
@@ -67,6 +68,16 @@ pub enum LinkError {
     #[error("the foreign native archive `{path}` is missing")]
     ForeignArchiveMissing {
         /// Where the archive was expected.
+        path: PathBuf,
+    },
+    /// The compiled foreign shim object was not where the build left it.
+    ///
+    /// Named on its own because every adapter in a by-value program calls into
+    /// this object: without it the link fails on a wall of undefined
+    /// `kira_ffi_shim_*` symbols that says nothing about the missing file.
+    #[error("the generated foreign shim object `{path}` is missing")]
+    ShimObjectMissing {
+        /// Where the object was expected.
         path: PathBuf,
     },
     /// The linker driver could not be run at all.
@@ -125,7 +136,15 @@ pub fn link_shared_library(
     };
     let mut arguments = vec![shared_flag.to_owned()];
     arguments.extend(force_host_symbols());
-    link_with(llvm, object, runtime_archive, &[], library, &arguments)
+    link_with(
+        llvm,
+        object,
+        runtime_archive,
+        &NativeLinkInputs::default(),
+        None,
+        library,
+        &arguments,
+    )
 }
 
 /// Combines `object` and the native runtime archive into one static archive.
@@ -234,23 +253,32 @@ fn mri_script(object: &Path, runtime_archive: &Path, archive: &Path) -> String {
 
 /// Links `object` against the native runtime archive into `executable`.
 ///
-/// `foreign_archives` are the selected C static archives that satisfy the
-/// program's `@FFI.Extern` imports. Each generated adapter references its C
-/// symbol, so naming the archives on the link line is enough for the linker to
-/// pull in exactly the members those symbols need — no force-loading, and a
-/// missing symbol becomes a named link error rather than a silent empty binary.
+/// `foreign_link` are the resolved C link inputs that satisfy the program's
+/// `@FFI.Extern` imports. Each generated adapter references its C symbol, so
+/// naming the archives on the link line is enough for the linker to pull in
+/// exactly the members those symbols need — no force-loading, and a missing
+/// symbol becomes a named link error rather than a silent empty binary. The
+/// frameworks, system libraries, and linker flags declared beside those
+/// archives follow them on the line, because a library may supply its symbols
+/// through those alone.
+///
+/// `shim` is the compiled C shim object, present only for a program that passes
+/// a struct by value. Each adapter calls `kira_ffi_shim_<i>` instead of the real
+/// symbol in that case, so without it the link fails on an undefined shim.
 pub fn link_executable(
     llvm: &LlvmInstallation,
     object: &Path,
     runtime_archive: &Path,
-    foreign_archives: &[PathBuf],
+    foreign_link: &NativeLinkInputs,
+    shim: Option<&Path>,
     executable: &Path,
 ) -> Result<(), LinkError> {
     link_with(
         llvm,
         object,
         runtime_archive,
-        foreign_archives,
+        foreign_link,
+        shim,
         executable,
         &[],
     )
@@ -268,7 +296,8 @@ pub fn link_adapter_sidecar(
     llvm: &LlvmInstallation,
     object: &Path,
     runtime_archive: &Path,
-    foreign_archives: &[PathBuf],
+    foreign_link: &NativeLinkInputs,
+    shim: Option<&Path>,
     adapter_symbols: &[String],
     library: &Path,
 ) -> Result<(), LinkError> {
@@ -283,7 +312,8 @@ pub fn link_adapter_sidecar(
         llvm,
         object,
         runtime_archive,
-        foreign_archives,
+        foreign_link,
+        shim,
         library,
         &arguments,
     )
@@ -304,7 +334,8 @@ pub fn link_hybrid_library(
     llvm: &LlvmInstallation,
     object: &Path,
     runtime_archive: &Path,
-    foreign_archives: &[PathBuf],
+    foreign_link: &NativeLinkInputs,
+    shim: Option<&Path>,
     adapter_symbols: &[String],
     library: &Path,
 ) -> Result<(), LinkError> {
@@ -324,7 +355,8 @@ pub fn link_hybrid_library(
         llvm,
         object,
         runtime_archive,
-        foreign_archives,
+        foreign_link,
+        shim,
         library,
         &arguments,
     )
@@ -399,7 +431,8 @@ fn link_with(
     llvm: &LlvmInstallation,
     object: &Path,
     runtime_archive: &Path,
-    foreign_archives: &[PathBuf],
+    foreign_link: &NativeLinkInputs,
+    shim: Option<&Path>,
     output: &Path,
     extra: &[String],
 ) -> Result<(), LinkError> {
@@ -413,7 +446,7 @@ fn link_with(
             path: runtime_archive.to_path_buf(),
         });
     }
-    for archive in foreign_archives {
+    for archive in foreign_link.archives() {
         if !archive.is_file() {
             return Err(LinkError::ForeignArchiveMissing {
                 path: archive.clone(),
@@ -421,14 +454,33 @@ fn link_with(
         }
     }
 
+    if let Some(shim) = shim
+        && !shim.is_file()
+    {
+        return Err(LinkError::ShimObjectMissing {
+            path: shim.to_path_buf(),
+        });
+    }
+
     let mut command = Command::new(&driver);
     command.arg(object);
+    // The shim object sits between the program and the archives: the adapters in
+    // `object` call into it, and it calls the real C symbols the archives define.
+    if let Some(shim) = shim {
+        command.arg(shim);
+    }
     // The foreign archives precede the runtime archive so an adapter's reference
     // to a C symbol is satisfied by the archive that defines it.
-    for archive in foreign_archives {
+    for archive in foreign_link.archives() {
         command.arg(archive);
     }
     command.arg(runtime_archive).arg("-o").arg(executable);
+    // The frameworks, system libraries, and linker flags the selected rows
+    // declared. They follow the archives for the same reason the archives
+    // precede the runtime: a system library resolves symbols left of it.
+    for argument in foreign_link.driver_arguments() {
+        command.arg(argument);
+    }
     for argument in extra {
         command.arg(argument);
     }

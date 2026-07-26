@@ -1,0 +1,61 @@
+@FFI.Struct { layout: c; }
+struct Rect { var x: F64
+var y: F64 }
+
+@FFI.Struct { layout: c; }
+struct Quad { var a: F64
+var b: F64
+var c: F64
+var d: F64 }
+
+@FFI.Struct { layout: c; }
+struct Inner { var p: I32
+var q: I32 }
+
+@FFI.Struct { layout: c; }
+struct Outer { var inner: Inner
+var w: F64 }
+
+@FFI.Struct { layout: c; }
+struct Mixed { var tag: I8
+var value: F64
+var count: U32 }
+
+@FFI.Extern { library: ffifixture; symbol: ffi_rect_sum; abi: c; }
+function rectSum(r: Rect) -> F64;
+@FFI.Extern { library: ffifixture; symbol: ffi_rect_scale; abi: c; }
+function rectScale(r: Rect, k: F64) -> Rect;
+@FFI.Extern { library: ffifixture; symbol: ffi_quad_sum; abi: c; }
+function quadSum(q: Quad) -> F64;
+@FFI.Extern { library: ffifixture; symbol: ffi_quad_make; abi: c; }
+function quadMake(a: F64, b: F64, c: F64, d: F64) -> Quad;
+@FFI.Extern { library: ffifixture; symbol: ffi_outer_sum; abi: c; }
+function outerSum(o: Outer) -> I32;
+@FFI.Extern { library: ffifixture; symbol: ffi_outer_make; abi: c; }
+function outerMake(p: I32, q: I32, w: F64) -> Outer;
+@FFI.Extern { library: ffifixture; symbol: ffi_mixed_sum; abi: c; }
+function mixedSum(m: Mixed) -> I64;
+@FFI.Extern { library: ffifixture; symbol: ffi_mixed_make; abi: c; }
+function mixedMake(t: I8, v: F64, c: U32) -> Mixed;
+
+@Main function main() {
+    print(rectSum(Rect { x: 1.5, y: 2.5 }))
+    let scaled = rectScale(Rect { x: 1.5, y: 2.5 }, 2.0)
+    print(scaled.x)
+    print(scaled.y)
+    print(quadSum(Quad { a: 1.0, b: 2.0, c: 3.0, d: 4.0 }))
+    let q = quadMake(5.0, 6.0, 7.0, 8.0)
+    print(q.a)
+    print(q.d)
+    print(outerSum(Outer { inner: Inner { p: 3, q: 4 }, w: 5.0 }))
+    let o = outerMake(11, 22, 33.0)
+    print(o.inner.p)
+    print(o.inner.q)
+    print(o.w)
+    print(mixedSum(Mixed { tag: 2, value: 3.0, count: 4 }))
+    let m = mixedMake(7, 8.0, 9)
+    print(m.tag)
+    print(m.value)
+    print(m.count)
+    return
+}
