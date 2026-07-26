@@ -196,13 +196,29 @@ Win32 typedefs (`VkDeviceSize`, `WCHAR`, …) the corpus's `bind-types/` sidecar
 do not define yet. Honest new diagnostics against an annotation nobody read
 before, not a regression.
 
-**Next: `@FFI.Callback` members** — 86 refusals, now the largest FFI bucket and
-the last thing between sokol's descriptor structs and crossing. A callback member
-is a C function pointer; the oracle's model is that a callback typedef lowers to
-a real native function pointer and a `@Native`/extern Kira function may fill one
-(`sapp_desc { init_userdata_cb: init }`). That needs a C-ABI entry thunk per
-Kira function on each backend — including one that re-enters the interpreter for
-the VM — so it is its own slice, not a member-marshalling detail.
+**C function pointers cross — LANDED (2026-07-26).** First half of the callback
+slice. An `@FFI.Callback` now has storage of its own: one `RawPtr` field,
+`pointer`. A C function pointer therefore crosses as a struct member (its row is
+one `Scalar(RawPtr)`, and a struct wrapping one pointer has a pointer's size,
+alignment, and ABI class) and on its own in a parameter or result position,
+where the existing single-scalar-field handle rule carries it. Zero-fill needed
+a zero for a pointer, so `RawPtrNull` was added as the one `RawPtr` constant the
+language spells — HIR, IR, append-only opcode `RAW_PTR_NULL=0x4d`, and an `i64`
+zero in LLVM. Proven byte-identical vm/llvm/hybrid by
+`backend_parity/ffi.rs::every_backend_agrees_on_a_c_function_pointer`: a
+zero-filled member reaching C as null, a pointer C handed out surviving a round
+trip through a Kira struct and being called back through it, and that pointer
+passed on its own. **Editor 943 → 852** (−91); the 86 `@FFI.Callback` member
+refusals are gone.
+
+**Next: a Kira function as a callback.** Pointers C owns now cross; what does
+not yet is `sapp_desc { init_userdata_cb: init }`, where `init` is a Kira
+function. The oracle's model is that a callback typedef lowers to a real native
+function pointer a Kira function may fill. That needs a C-ABI entry thunk per
+callback target on each backend: native code can point straight at a generated
+thunk, while the VM has no native code of its own and must reach the interpreter
+back through the adapter sidecar — the same shape `kira-hybrid-runtime`'s
+`invoke_runtime` already has for the native half calling a `@Runtime` function.
 
 **The design call, for the record — clang computes the ABI, Kira never
 classifies.** Full reasoning in `.codex/work/ffi-aggregate-abi.md`. For each
