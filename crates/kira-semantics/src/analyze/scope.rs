@@ -173,6 +173,16 @@ impl FnCtx {
         self.ownership[local.0 as usize].moved = Some(span);
     }
 
+    /// Records that `local` holds a value again.
+    ///
+    /// Assigning to a binding reinitializes it, so a local that was moved out
+    /// becomes readable again — `tree = step(move tree)` is the loop-shaped way
+    /// a program threads an owned value through a sequence of steps, and
+    /// leaving it moved would make every later use a use-after-move.
+    pub(crate) fn mark_live(&mut self, local: LocalId) {
+        self.ownership[local.0 as usize].moved = None;
+    }
+
     /// Snapshots the ownership state so an *effectful* trial analysis can be
     /// rolled back.
     ///

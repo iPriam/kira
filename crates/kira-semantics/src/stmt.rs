@@ -174,6 +174,13 @@ impl Analyzer<'_> {
                         ),
                     );
                 }
+                // Assigning to the binding itself gives it a value again. The
+                // value is analyzed first, so `x = f(move x)` still reads the
+                // live `x` and only then restores it; `x.f = …` writes into a
+                // value the binding must already hold, and restores nothing.
+                if place.path.is_empty() {
+                    ctx.mark_live(place.local);
+                }
                 let hir = self.program.stmts.alloc(HirStmt::Assign {
                     place,
                     value: value_expr,

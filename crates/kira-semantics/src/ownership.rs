@@ -19,8 +19,9 @@
 //! `move` and a `borrow` are both **observationally identical to the deep copy
 //! the VM already performs**. Reading a local copies it; a struct's fields are
 //! copied with it; the callee drops its own copy at frame exit. A caller that
-//! moved a value can never look at it again (that is exactly what the checker
-//! guarantees), so it cannot tell whether the callee aliased or copied. A
+//! moved a value can never look at it again until it assigns the binding a new
+//! one (that is exactly what the checker guarantees), so it cannot tell whether
+//! the callee aliased or copied. A
 //! `borrow` parameter is read-only, so the callee cannot write anything back
 //! for the caller to observe either.
 //!
