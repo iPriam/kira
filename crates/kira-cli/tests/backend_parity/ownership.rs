@@ -249,3 +249,46 @@ function main() {
     );
     assert_eq!(output, "42\n42\n21\n");
 }
+
+/// A binding reassigned from a move of itself carries the value forward, and
+/// every backend sees the same one.
+///
+/// The analyzer accepts this because an assignment reinitializes the binding.
+/// If any backend had aliased the moved value instead of copying it, the loop
+/// would read a stale or freed one and the totals would diverge.
+#[test]
+fn threading_a_value_through_a_reassigned_binding_agrees() {
+    let output = assert_parity(
+        r#"
+struct Tree {
+    var depth: Int
+    var label: String
+}
+
+function grow(tree: Tree, by: Int) -> Tree {
+    return Tree { depth: tree.depth + by, label: tree.label }
+}
+
+function describe(tree: borrow Tree) -> Int {
+    return tree.depth
+}
+
+@Main
+function main() {
+    var tree = Tree { depth: 1, label: "root" }
+    tree = grow(move tree, 2)
+    print(describe(tree))
+    var i = 0
+    while i < 4 {
+        tree = grow(move tree, i)
+        i = i + 1
+    }
+    print(describe(tree))
+    print(tree.label)
+    return
+}
+"#,
+    );
+    // 1 + 2 = 3, then + (0+1+2+3) = 9.
+    assert_eq!(output, "3\n9\nroot\n");
+}
