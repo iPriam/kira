@@ -285,20 +285,21 @@ impl Analyzer<'_> {
             .all(|field| self.native_state_eligible_inner(field.ty, visiting))
     }
 
+    /// Whether an enum may be boxed as callback state.
+    ///
+    /// A variant's payload answers by the same rule as any other value, with no
+    /// list of admitted shapes: [`kira_runtime_abi::NativeStateValue`] carries a
+    /// tag beside an optional payload of *any* of its own forms, so a struct or
+    /// an array payload boxes exactly as one held directly in a field does. The
+    /// shorter list this used to carry predated a variant being able to hold a
+    /// struct at all, and outliving that is what kept an application's own view
+    /// tree — an enum of shapes, each with its own payload — out of a box.
     fn native_state_enum_eligible(&self, id: EnumId, visiting: &mut HashSet<Type>) -> bool {
         self.program.types.enums().get(id).is_some_and(|def| {
             def.variants.iter().all(|variant| {
-                variant.payload.is_none_or(|payload| {
-                    matches!(
-                        payload,
-                        Type::Int(_)
-                            | Type::Float(_)
-                            | Type::Bool
-                            | Type::String
-                            | Type::RawPtr
-                            | Type::Enum(_)
-                    ) && self.native_state_eligible_inner(payload, visiting)
-                })
+                variant
+                    .payload
+                    .is_none_or(|payload| self.native_state_eligible_inner(payload, visiting))
             })
         })
     }
