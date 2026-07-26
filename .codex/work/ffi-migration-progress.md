@@ -264,6 +264,32 @@ now-false claim about masks needing to be built by wrapping is corrected. Green
 Only `0x` — the corpus writes 74 of them and no `0b`/`0o`, and there is no
 oracle evidence for the other bases, so they were not invented.
 
+**Bare names are gated by owner package — LANDED (2026-07-26, `49112bf`).** The
+`KSEM205` bucket (105, "takes 1 construction input, found more") was not a
+construct bug: every package's declarations shared one table keyed by the bare
+name, so `ui-foundation`'s calls to its own
+`Text(content, color, size, weight)` resolved to `kira_ui`'s one-parameter
+`Widget Text`, from a package it never imports. Visibility is now: one program
+is one flat scope; a dependency arrives through an import, per file; and
+visibility does not compose (importing `Outer` does not lend you `Inner`).
+
+What is gated is a name a file *wrote*. A qualified `Owner.method` is not — a
+method is reached through a value whose type was already gated. Neither are the
+compiler's own walks (registering what a declaration provides, checking a
+family's implementations while standing in the family's file); both resolve by
+identity, and gating them was what briefly produced 84 bogus `KSEM234`s while
+this was being built.
+
+**Editor 745 → 687.** `KSEM205` → 0; `KSEM050` 48 → 93 and `KSEM061` up, which
+is the honest half: files naming things they never imported, answered until now
+by the leak.
+
+**Still open on this rule:** two packages cannot yet *declare* the same name —
+`StructTable` keys by bare name, so the second declaration is `KSEM004`
+"already defined" (48, all generated FFI typedefs like `U32_array_2` repeated
+across binding packages). Fixing that needs the table keyed by (owner, name),
+which is the next step of the same slice.
+
 **The design call, for the record — clang computes the ABI, Kira never
 classifies.** Full reasoning in `.codex/work/ffi-aggregate-abi.md`. For each
 import naming an aggregate, the backend generates a C translation unit that
