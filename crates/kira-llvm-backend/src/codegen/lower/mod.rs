@@ -136,6 +136,16 @@ impl<'a> Codegen<'a> {
         unsafe { LLVMConstInt(self.types.i64, value as u64, 1) }
     }
 
+    /// A `usize` constant at the **target**'s pointer width.
+    ///
+    /// The runtime helpers that take a length take a `usize`, and on wasm32
+    /// that is 32 bits. A 64-bit constant there is a signature mismatch the
+    /// linker resolves by name and the module traps on.
+    pub(super) fn const_usize(&self, value: u64) -> LLVMValueRef {
+        // SAFETY: `usize_ty` belongs to this module's live context.
+        unsafe { LLVMConstInt(self.types.usize_ty, value, 0) }
+    }
+
     /// A `Float` constant.
     pub(super) fn const_float(&self, value: f64) -> LLVMValueRef {
         // SAFETY: `f64` belongs to this module's live context.

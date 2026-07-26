@@ -352,7 +352,7 @@ impl<'a> Codegen<'a> {
         exports: &NativeExportSurface,
         pointer_width: ForeignPointerWidth,
     ) -> Result<Self, LlvmError> {
-        let types = Types::new(owned.context);
+        let types = Types::new(owned.context, pointer_width);
         let runtime = declare_runtime(owned.module, &types);
 
         // The module needs the host's data layout in place before any element

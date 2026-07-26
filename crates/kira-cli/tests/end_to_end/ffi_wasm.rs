@@ -6,12 +6,10 @@
 //! does; a machine without them fails here rather than skipping, so a green run
 //! means the whole path was exercised.
 //!
-//! The wasm program is the scalar subset of the fixture — every supported type
-//! except `CString`. `CString` needs a Kira string, and Kira string creation on
-//! wasm32 is blocked by a pre-existing width mismatch in `kira_rt_str_new` that
-//! is independent of FFI (any wasm program printing a string literal hits it).
-//! `CString` length is proven on the host backends, where string creation is
-//! sound; see `docs/ffi.md`.
+//! Two programs run here. The first is the scalar subset of the fixture, which
+//! creates no Kira strings at all; the second is the string half — literals,
+//! concatenation, the string primitives, and `CString` in both directions —
+//! which proves the width `kira_rt_str_new` is called at is the *target*'s.
 
 use std::path::Path;
 use std::process::Command;
@@ -21,6 +19,9 @@ use crate::ffi::{HOST_MANIFEST, build_host_archive, scratch};
 /// The scalar subset's output, line for line.
 const EXPECTED: &str =
     "42\n-5\n200\n-9\n40000\n4000000000\n1975\n5000000000\nfalse\n3.75\n1.75\n42\n0\n7\n";
+
+/// The string program's output, line for line.
+const EXPECTED_STRINGS: &str = "catdog\n6\n99\natd\n3\n42!\n5\n6\nhello from C\nround trip\n";
 
 /// Compiles the checked-in C fixture into an emscripten static archive under
 /// `dir` with `emcc` and `emar`.
@@ -110,6 +111,60 @@ fn a_wasm_build_links_the_emscripten_archive_and_runs_under_node() {
         String::from_utf8_lossy(&node.stdout),
         EXPECTED,
         "the wasm FFI program produced unexpected output",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Kira strings, the string primitives, and `CString` in both directions, run
+/// as wasm under node.
+///
+/// This is the case a wasm module could not do at all while the length passed
+/// to `kira_rt_str_new` was emitted at the host's pointer width: the emscripten
+/// archive expects a 32-bit `usize`, the mismatch resolved by name, and every
+/// string trapped.
+#[test]
+fn a_wasm_build_creates_kira_strings_and_crosses_the_cstring_seam() {
+    let dir = scratch("wasm-strings");
+    build_wasm_archive(&dir);
+    std::fs::write(
+        dir.join("NativeLibs/ffifixture.toml"),
+        "name = \"ffifixture\"\n\
+         [[target]]\n\
+         triple = \"wasm32-emscripten-unknown\"\n\
+         staticLib = \"lib/libffifixture-wasm.a\"\n",
+    )
+    .expect("manifest");
+    let entry = dir.join("main.kira");
+    std::fs::write(
+        &entry,
+        include_str!("../fixtures/ffi/ffi_program_wasm_string.kira"),
+    )
+    .expect("program");
+
+    let build = Command::new(env!("CARGO_BIN_EXE_kirac"))
+        .args(["build", "--device", "wasm32", entry.to_str().unwrap()])
+        .output()
+        .expect("run kirac");
+    assert!(
+        build.status.success(),
+        "the wasm string build failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    let node = Command::new("node")
+        .arg(dir.join(".kira-build/web/main.js"))
+        .output()
+        .expect("run node (required for the wasm FFI test)");
+    assert!(
+        node.status.success(),
+        "the wasm module must run to completion under node: {}",
+        String::from_utf8_lossy(&node.stderr),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&node.stdout),
+        EXPECTED_STRINGS,
+        "the wasm string program produced unexpected output",
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
