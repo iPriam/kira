@@ -278,13 +278,11 @@ pub unsafe extern "C" fn kira_rt_str_len(value: KStr) -> usize {
     unsafe { bytes_of(value) }.len()
 }
 
-/// A string's character count (`s.count`), freeing the string.
+/// A string's length in bytes (`s.count`), freeing the string.
 ///
-/// Characters, not bytes — the same units `charAt` and `substring` index, and
+/// Bytes, not characters — the same units `charAt` and `substring` index, and
 /// the same count the VM's own `StringLen` produces, which is what keeps the
-/// two engines agreeing on text that is not all ASCII. Invalid UTF-8 counts by
-/// the replacement characters a lossy decode yields, so a byte sequence no
-/// Kira operation could have produced still gets an answer rather than a trap.
+/// two engines agreeing on text that is not all ASCII.
 ///
 /// Consumes its argument, like every other operation that reads a string here.
 ///
@@ -295,14 +293,154 @@ pub unsafe extern "C" fn kira_rt_str_len(value: KStr) -> usize {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_str_count(value: KStr) -> i64 {
     // SAFETY: caller passes a live (or null) handle that outlives this read.
-    let counted = String::from_utf8_lossy(unsafe { bytes_of(value) })
-        .chars()
-        .count();
+    let counted = unsafe { bytes_of(value) }.len();
     // SAFETY: the same handle, consumed exactly once here.
     unsafe { drop_handle(value) };
-    // A string longer than `i64::MAX` characters cannot be built on any target
-    // this runs on; saturating says so without a panic in an `extern "C"` frame.
+    // A string longer than `i64::MAX` bytes cannot be built on any target this
+    // runs on; saturating says so without a panic in an `extern "C"` frame.
     i64::try_from(counted).unwrap_or(i64::MAX)
+}
+
+/// The byte at `index` of a string (`s.charAt(i)`), freeing the string.
+///
+/// Traps on an index outside `0 ..< len` rather than answering, which is the
+/// same trap the VM raises: a program that walks off the end of a string fails
+/// identically on both engines instead of one of them inventing a byte.
+///
+/// # Safety
+/// `value` must be null or a live handle; it is freed here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_str_char_at(value: KStr, index: i64) -> i64 {
+    // SAFETY: caller passes a live (or null) handle that outlives this read.
+    let read = usize::try_from(index)
+        .ok()
+        .and_then(|at| unsafe { bytes_of(value) }.get(at).copied());
+    // SAFETY: the same handle, consumed exactly once here.
+    unsafe { drop_handle(value) };
+    match read {
+        Some(byte) => i64::from(byte),
+        None => kira_rt_trap_string_range(),
+    }
+}
+
+/// A half-open byte slice of a string (`s.substring(start, end)`), freeing the
+/// original and returning a fresh handle.
+///
+/// Traps when the range is inverted, out of bounds, or would split a multi-byte
+/// character — the last because no Kira `String` can hold the result, so
+/// answering would mean handing back bytes that are not text.
+///
+/// # Safety
+/// `value` must be null or a live handle; it is freed here, and the result is a
+/// fresh handle the caller owns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_str_substring(value: KStr, start: i64, end: i64) -> KStr {
+    // SAFETY: caller passes a live (or null) handle that outlives this read.
+    let bytes = unsafe { bytes_of(value) };
+    let inverted = start > end;
+    let carved = match (usize::try_from(start), usize::try_from(end)) {
+        (Ok(from), Ok(to)) if from <= to => core::str::from_utf8(bytes)
+            .ok()
+            .and_then(|text| text.get(from..to))
+            .map(str::to_owned),
+        _ => None,
+    };
+    // SAFETY: the same handle, consumed exactly once here.
+    unsafe { drop_handle(value) };
+    match carved {
+        Some(text) => bytes_to_handle(text.into_bytes()),
+        None if inverted => kira_rt_trap_substring_inverted(),
+        None => kira_rt_trap_string_range(),
+    }
+}
+
+/// The byte index of the first occurrence of `needle` in `value`, or `-1`,
+/// freeing both.
+///
+/// An empty needle matches at the front, so it answers `0` — the same answer
+/// the VM's `StringIndexOf` gives.
+///
+/// # Safety
+/// Both arguments must be null or live handles; both are freed here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_str_index_of(value: KStr, needle: KStr) -> i64 {
+    // SAFETY: caller passes live (or null) handles that outlive these reads.
+    let found = unsafe {
+        let haystack = bytes_of(value);
+        let pattern = bytes_of(needle);
+        find_bytes(haystack, pattern)
+    };
+    // SAFETY: the same handles, each consumed exactly once here.
+    unsafe {
+        drop_handle(value);
+        drop_handle(needle);
+    }
+    found.and_then(|at| i64::try_from(at).ok()).unwrap_or(-1)
+}
+
+/// Wraps owned bytes in a handle, using the runtime's one empty-string
+/// representation for an empty result.
+fn bytes_to_handle(bytes: Vec<u8>) -> KStr {
+    if bytes.is_empty() {
+        return std::ptr::null_mut();
+    }
+    into_handle(bytes.into_boxed_slice())
+}
+
+/// The index of the first occurrence of `pattern` in `haystack`.
+fn find_bytes(haystack: &[u8], pattern: &[u8]) -> Option<usize> {
+    if pattern.is_empty() {
+        return Some(0);
+    }
+    if pattern.len() > haystack.len() {
+        return None;
+    }
+    (0..=haystack.len() - pattern.len()).find(|&at| &haystack[at..at + pattern.len()] == pattern)
+}
+
+/// An `Int` rendered as a fresh string (`String(x)`).
+///
+/// The same spelling [`kira_rt_print_int`] gives, so a value printed and a
+/// value converted never disagree.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_str_of_int(value: i64) -> KStr {
+    bytes_to_handle(value.to_string().into_bytes())
+}
+
+/// A `Float` rendered as a fresh string; see [`kira_rt_str_of_int`].
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_str_of_float(value: f64) -> KStr {
+    bytes_to_handle(value.to_string().into_bytes())
+}
+
+/// A `Bool` rendered as a fresh string; see [`kira_rt_str_of_int`].
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_str_of_bool(value: u8) -> KStr {
+    let text: &[u8] = if value != 0 { b"true" } else { b"false" };
+    bytes_to_handle(text.to_vec())
+}
+
+/// Reports a string index out of bounds and exits with a failure code.
+///
+/// The native mirror of the VM's `StringIndexOutOfBounds`, worded identically:
+/// the two engines have to fail the same way, and a trap that reads differently
+/// on one backend is not the same trap.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_trap_string_range() -> ! {
+    eprintln!("kira: runtime trap: string index is out of bounds");
+    std::process::exit(1);
+}
+
+/// Reports an inverted `substring` range and exits with a failure code.
+///
+/// The native mirror of the VM's `InvertedSubstring`. Kept distinct from
+/// [`kira_rt_trap_string_range`] for the same reason the VM keeps its two
+/// apart: a bound past the end and a start past its own end are different
+/// mistakes, and one message for both would say less.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_trap_substring_inverted() -> ! {
+    eprintln!("kira: runtime trap: substring range is inverted");
+    std::process::exit(1);
 }
 
 /// Copies a NUL-terminated C string into a fresh owned handle.

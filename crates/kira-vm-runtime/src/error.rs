@@ -214,6 +214,17 @@ pub enum VmError {
         /// The function at the boundary.
         function: u32,
     },
+    /// A string index was outside the string.
+    ///
+    /// `charAt` reads one byte and `substring` carves a half-open range; both
+    /// trap rather than clamp, so a program that walks off the end of a string
+    /// fails the same way on every backend instead of producing a value that
+    /// only one of them agrees with.
+    #[error("string index is out of bounds")]
+    StringIndexOutOfBounds,
+    /// A `substring` was given a start past its end.
+    #[error("substring range is inverted")]
+    InvertedSubstring,
     /// An array holds more elements than `Int` can count.
     ///
     /// Only reachable on a 64-bit host by an array of more than `i64::MAX`

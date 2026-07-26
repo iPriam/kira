@@ -9,6 +9,7 @@ mod classes;
 mod closures;
 mod constructs;
 mod conversions;
+mod copyable;
 mod definitions;
 mod enums;
 mod exports;
@@ -23,6 +24,7 @@ mod memberwise;
 mod mutation;
 mod native_state;
 mod operators;
+mod strings;
 mod widths;
 
 use super::*;

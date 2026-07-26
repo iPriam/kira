@@ -28,6 +28,7 @@ mod classes;
 mod closures;
 mod constructs;
 mod conversions;
+mod copyable;
 mod decl;
 mod definitions;
 mod enums;
@@ -43,6 +44,7 @@ mod operators;
 mod ownership;
 mod place;
 pub(crate) mod stmt;
+mod strings;
 mod typeck;
 mod types;
 
