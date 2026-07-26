@@ -15,7 +15,7 @@ Known honest gap: wasm `CString` is not proven — a **pre-existing** `kira_rt_s
 - **Foreign ABI + loader** (`kira-runtime-abi`, `kira-dynamic-ffi`): `ForeignType` tags 0–13, `BridgeValue::RAW_PTR=9` (16-byte layout unchanged), adapter marker `kira_foreign_adapter_abi_version_1`, transparent-`u32` status 0–4, default `HostCapabilities::call_foreign` returns `NoForeignHost`, typed adapter loader with marker check + signature-keyed cache.
 - **Frontend** (`kira-syntax-model`, `kira-parser`, `kira-semantics*`, `kira-diagnostic-messages`): `@FFI.Extern { library; symbol; abi: c; }` + bodyless-`;`, `Type::RawPtr`/`CString`, foreign-callable registry (`Callee::Foreign`), seamless calls, `String→CString` coercion, typed refusals `KPAR048–055` / `KSEM176–186`.
 - **IR + bytecode + VM** (`kira-ir`, `kira-bytecode`, `kira-vm-runtime`): `IrProgram.foreign_imports` + `IrCallee::Foreign`; append-only `CALL_FOREIGN=0x45` and KBC1 foreign section after exports (forced empty-export prelude); `Value::RawPtr`; interpreter path builds `ForeignArg`s, calls the host, cleans args on every exit; old modules decode as zero imports. VM path proven with an in-test host.
-- **Library resolution** (`kira-native-lib-definition`, `kira-manifest`, `kira-project`, `kira-backend-api`): structured `TargetTriple`, `NativeLibs/*.toml` parser, catalog keyed by interned symbol, exact host/wasm matching, typed errors (undeclared library, missing archive, host-only-for-wasm).
+- **Library resolution** (`kira-native-lib-definition`, `kira-manifest`, `kira-project`, `kira-backend-api`): structured `TargetTriple`, both declaration spellings (inline `nativeLibraries` and `NativeLibs/*.toml`) decoding into one `NativeLibrarySpec`, catalog keyed by interned symbol, exact host/wasm matching, per-row link attributes on every link line, typed errors (undeclared library, missing archive, host-only-for-wasm).
 - **LLVM adapters + link** (`kira-llvm-backend`, `kira-native-bridge`): one uniform `extern "C"` adapter per import, exact C ABI (modulo narrowing, sign/zero extension, F32 rounding, C `_Bool`, target-width RawPtr, transient CString alloc/free with interior-NUL status), `link_executable` links C archives, `build_adapter_sidecar`, forced adapter symbols; append-only `kira_rt_cstring_new/free` (`RUNTIME_ABI_VERSION` stays 2). Proven by a real native compile → llvm-ar → link → run test asserting byte-exact output for every supported width, Bool, F32/F64, CString length, RawPtr round-trip.
 
 Supported surface: `Void`, `I8/I16/I32/I64`, `U8/U16/U32/U64`, `Bool`, `F32/F64`, `RawPtr`, `CString` params. Deferred to later slices: CString results, aggregates, callbacks, autobind, dynamic libraries, source compilation.
@@ -114,7 +114,97 @@ no `kira_rt_*` signature moved. The VM host and hybrid native half marshal both
 directions already. Green: fmt, clippy `-D warnings`, build, nextest **1706/1706**,
 wasm32 VM-core.
 
-**The design call for the second half — clang computes the ABI, Kira never
+**Struct-by-value at the C seam — LANDED, executing (2026-07-26).** The second
+half of the aggregate slice. A `@FFI.Struct { layout: c }` now crosses by value
+as a parameter or a result, on VM, LLVM/native, and hybrid, proven byte-identical
+by `backend_parity/ffi.rs::every_backend_agrees_on_c_layout_structs_by_value` over
+four shapes chosen for the cases a hand-written classifier gets wrong: a 4×`F64`
+HFA (AArch64 `v0`–`v3`, which `byval`/`sret` cannot express), a nested struct, a
+padded `{i8, f64, u32}`, and scalar/aggregate mixes both directions.
+
+Kira classifies nothing. The frontend builds the aggregate table from the
+annotated struct (`kira-semantics/src/foreign_aggregate.rs`, recursing so a
+nested member always holds a lower id); `kira-llvm-backend/src/shim.rs` generates
+a C translation unit redeclaring each struct and wrapping the real symbol in a
+shim that takes every aggregate by pointer; the target's own compiler builds it
+— managed clang for a host, `emcc` for wasm, each defining its own ABI. The
+adapter calls `kira_ffi_shim_<i>` instead of the C symbol and never holds a
+by-value struct in its IR. Marshalling is a lockstep walk of the member tree and
+the Kira struct's fields, written twice against one contract:
+`kira-vm-runtime/src/value/aggregate.rs` and
+`kira-llvm-backend/src/codegen/lower/foreign_aggregate.rs`. Buffers are zeroed
+before use, so padding cannot differ between engines.
+
+Layout agreement with clang is a compile-time assertion, not a claim: the shim
+tests emit `_Static_assert` on `sizeof`/`_Alignof` per shape and `offsetof` per
+flat field, and mutation-checking confirmed a one-byte perturbation fails them.
+The codegen pointer width is threaded from the target (`Bits32` for wasm32), so
+a pointer member is not laid out at host width in a wasm module.
+
+**Editor 902 → 972, and that is not a regression.** `KSEM182` 61 → 131: 120 of
+the new ones are inline `@FFI.Array` members (`sg_shader_view_array_32` and
+friends), which the design defers as members. What changed is granularity — a
+struct that used to draw one "an aggregate has no single-word C representation"
+now names each field that cannot cross. **Inline `@FFI.Array` members are the
+next thing blocking sokol's by-value structs**, not the ABI. The other 11 are the
+unchanged `CString`-result refusal.
+
+Green: fmt, clippy `-D warnings`, build --workspace, nextest **1757/1757**,
+wasm32 VM-core.
+
+**Inline `@FFI.Array` members cross the seam — LANDED (2026-07-26).** The thing
+the struct-by-value slice named as its next blocker. An `@FFI.Array { element: E;
+count: N }` now has real storage: one Kira field, `elements: [E]`, so
+`Cells4 { elements: [1, 2] }` is an ordinary struct literal and
+`grid.cells.elements[2]` ordinary indexing — no new value kind, no new type
+constructor. At the seam the typedef is its own aggregate row holding one new
+`ForeignMember::Array { element, count }` member, which the shim writes as a C
+array member (`int32_t f0[4];`) and lets clang size, align, and classify. A
+struct wrapping only an array has that array's layout, so naming the row where a
+field names the typedef is layout-identical to inlining it, and an array of
+arrays needs nothing new.
+
+Wire: member byte `0xfe` opens an array (element byte, then a `u32` count),
+appended in KBC1 and KHM1 beside the `0xff` nested-aggregate byte; no version
+moved. One `kira_rt_*` symbol appended, `kira_rt_trap_foreign_array`.
+
+The two lengths differ, so the rule is pinned rather than assumed: fewer Kira
+elements than the C extent fill from the front and leave the rest zero (what a
+zero-filled construction already means, and identical bytes on both engines);
+more is a trap in the VM (`ForeignArrayTooLong`) and in native code (the new
+trap symbol), in the same words, because dropping the overflow would hand C a
+value the program did not write; a result always carries the whole extent back.
+On its own at the seam an `@FFI.Array` is still refused — C decays an array
+parameter to a pointer, which is a different type with different ownership.
+
+Native marshalling emits a real loop (a phi induction variable, not an alloca,
+so nested arrays do not grow the frame) rather than unrolling — sokol's
+`I8_array_8176` would otherwise be 8176 inline stores per call site.
+
+Proven byte-identical vm/llvm/hybrid by
+`backend_parity/ffi.rs::every_backend_agrees_on_inline_c_arrays` over a real C
+fixture: `struct { int cells[4]; double weight; }` and
+`struct { struct ffi_inner slots[3]; int tag; }`, both directions, including a
+full array, a short one, and a zero-filled construction. clang confirms the
+computed size and alignment of both array shapes by `_Static_assert`.
+
+**Editor 972 → 943** (−29). `KSEM182` 131 → 97: every one of the 34 inline-array
+member refusals is gone, and what is left is **86 `@FFI.Callback` members** plus
+the 11 unchanged `CString`-result refusals. `KSEM050` moved 43 → 48 because an
+`@FFI.Array`'s `element:` type is *resolved* for the first time — five Vulkan and
+Win32 typedefs (`VkDeviceSize`, `WCHAR`, …) the corpus's `bind-types/` sidecars
+do not define yet. Honest new diagnostics against an annotation nobody read
+before, not a regression.
+
+**Next: `@FFI.Callback` members** — 86 refusals, now the largest FFI bucket and
+the last thing between sokol's descriptor structs and crossing. A callback member
+is a C function pointer; the oracle's model is that a callback typedef lowers to
+a real native function pointer and a `@Native`/extern Kira function may fill one
+(`sapp_desc { init_userdata_cb: init }`). That needs a C-ABI entry thunk per
+Kira function on each backend — including one that re-enters the interpreter for
+the VM — so it is its own slice, not a member-marshalling detail.
+
+**The design call, for the record — clang computes the ABI, Kira never
 classifies.** Full reasoning in `.codex/work/ffi-aggregate-abi.md`. For each
 import naming an aggregate, the backend generates a C translation unit that
 redeclares the struct and the real symbol and wraps the call in a shim taking
@@ -126,13 +216,7 @@ thirds would ship asserted. `byval`/`sret` do not substitute: both force the
 memory class, and the corpus needs the register cases (`MetalCGRect` is a 4×`F64`
 HFA, `MetalNSPoint` 2×`F64`).
 
-Remaining for the slice: frontend acceptance (build the table from
-`@FFI.Struct { layout: c }`, keep refusing members that are callbacks, inline
-arrays, `CString`, or Kira heap types), the C shim generator plus its clang step
-wired into the executable / sidecar / hybrid / emcc links, LLVM marshalling
-between a Kira struct value and a C-layout alloca, VM marshalling between
-`Value::Struct` and the bytes, and a differential parity test against a real C
-fixture plus a `sizeof`/`offsetof` check that pins the layout to clang's.
+All of that is now built; see the LANDED note above.
 
 **Path-less CLI invocations — LANDED (2026-07-26, `b032d39`).** `kirac run`,
 `build`, and `check` required an explicit path; a bare invocation inside an app
@@ -140,20 +224,50 @@ directory was a usage error. It now defaults to `.` and goes through the same
 package discovery, so a directory with no `package.kira` is still refused by
 name.
 
-**`package.kira` drops its `nativeLibraries` — OPEN, blocks FFI from the
-corpus.** `kira-manifest`'s declaration loader handles `version`, `kira`,
-`moduleRoot`, `kind`, `dependencies`, and `defaults`, and routes every other key
-into a silent catch-all — including `nativeLibraries` and `assets`.
-`ProjectManifest::native_libraries` is consequently never populated by anything.
-The only path that feeds it is `NativeLibs/*.toml`, a schema this repo invented:
-the corpus's one such file, `kira-graphics/NativeLibs/DirectX12.toml`, uses
-`[library] name` and `[target.<triple>]` where the parser expects top-level
-`name` and `[[target]]`, so it would not parse either, and sokol — what the
-editor actually links on macOS — is declared only in `package.kira`. So no native
-library resolves for a real Project Matter app and no `@FFI.Extern` can link.
-The inline schema is also richer than the TOML: `headers`, `sources`, `autobind`,
-and `nativeTargets` rows carrying `defines` and macOS `frameworks`, which the
-link line needs. Fix this before claiming any aggregate work runs end to end.
+**Native-library declarations — LANDED (2026-07-26).** A corpus package's
+`@FFI.Extern` now links: both declaration spellings are read, and both reach the
+link line. `package.kira`'s inline `let nativeLibraries = [NativeLibrary { … }]`
+was previously routed into the loader's silent catch-all, so
+`ProjectManifest::native_libraries` was never populated by anything and sokol —
+what the editor actually links on macOS — resolved nowhere. The `NativeLibs/*.toml`
+path did not cover for it: the corpus writes `[library] name` and
+`[target.<triple>]` where the parser expected top-level `name` and `[[target]]`.
+
+One model now backs both: `NativeLibrarySpec` carries the name, link mode,
+headers, sources, autobind record, and per-target rows, and the TOML parser
+accepts the sectioned corpus shape alongside the flat one. Resolution yields a
+row rather than a path, because an archive is not the whole answer — a row may
+name a static archive, a shared library, or no file at all, and carries the
+frameworks, system libraries, and compiler/linker flags declared beside it. Those
+gather into a `NativeLinkInputs` that the LLVM link, the hybrid dylib, the VM
+sidecar, and the `emcc` line all consume, so `-framework Metal` and
+`--use-port=emdawnwebgpu` reach the driver instead of being dropped.
+
+Two rules came out of the corpus rather than from design. A blank path is no
+path, so `dynamicLib: ""` never joins to the base directory. And a pathless row
+is only empty under `LinkMode.Static`: under `Dynamic` it means "find the library
+by its own name", which is `-lvulkan` — while a dynamic row that *does* name
+frameworks is taken at its word, because there is no `libkira_metal` to find.
+
+Proven, not asserted: a backend-parity test builds the C fixture, declares it
+inline with no TOML anywhere, and gets byte-identical output on VM, LLVM, and
+hybrid; a negative test declares `linkerFlags: ["-lkira_no_such_system_library"]`
+and requires the link to fail naming it, since `-lm` would link whether or not it
+arrived. The kira-graphics manifest is read verbatim as a fixture. Green: fmt,
+clippy `-D warnings`, build, nextest **1731/1731**, wasm32 VM-core.
+
+Still deferred, and carried in the model rather than acted on: compiling a
+library's own `sources` (the aggregate slice's clang step is the same machinery)
+and `autobind`.
+
+A key that starts being *read* starts being able to *fail*. `ui-foundation`
+comments its third `NativeLibrary`, and the comment ran into the record name
+after it — the manifest stopped loading, so every module importing
+`KiraUIFoundation` went undefined and the editor read 1378 instead of 902. The
+declaration reader now blanks `//` comments before anything else, quote-aware
+(`url: "https://…"` is a real corpus line) and length-preserving, since the rest
+of the reader is offset-based. Editor re-measured at **902**, matching the
+number recorded before this slice.
 
 --- (superseded design notes below) ---
 
