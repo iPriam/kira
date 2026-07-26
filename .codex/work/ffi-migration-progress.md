@@ -295,6 +295,210 @@ receiver up by bare name, and the duplicate diagnostic rendered in whichever
 file the pass had visited last. **Editor 687 → 651**; the 32 duplicates left are
 real (`_opaque_pthread_t` declared in two binding files of one package).
 
+**A qualified name resolves against the package it names — LANDED (2026-07-26,
+`505f1aa`).** A module qualifier was stripped and the bare name then resolved as
+usual, which means own package first. In a package declaring its own `Color`,
+that made `KiraUIFoundation.Color` mean the local one — so a field of the
+package's own `Color` rejected a value of exactly that type, reading *"expects
+`Color`, found `Color`"*. The qualifier now survives the split and picks the
+home: the package owning the module it names gets first refusal, and a package
+declaring no such name falls through to the same tail a bare name takes — this
+file's own imports, and nothing further, so visibility still does not compose.
+Frontend-only. **Editor 651 → 601**; `KSEM094` 30 → 0, `KSEM095` 22 → 5.
+
+**A moved-out binding lives again on assignment — LANDED (2026-07-26,
+`cc0fb63`).** A local marked moved stayed moved for the rest of the body, so the
+shape a program threads an owned value through steps with — `tree = step(move
+tree)` — reported the target as moved, then every later read as a use-after-move,
+then the next such assignment as a second move. The place walk now separates the
+target from a base it writes *through*: a bare name being assigned may be moved
+out, while `tree.node = …`, an `append`, and a mutating call still need the value
+that is gone. The binding is marked live only after its new value is analyzed, so
+`x = f(move x, read(x))` is still a use-after-move. **Editor 601 → 486**;
+`KSEM107` 103 → 0, `KSEM110` 18 → 0.
+
+**`borrow mut` executes — LANDED (2026-07-26, `8b26266`).** The mode that parsed
+and was then refused. It generalizes the mutating-receiver machinery: a `borrow
+mut` parameter joins the callee's by-reference list and every call site records
+where its final value lands. VM copies in and moves back on return; native gives
+the parameter a pointer type and the caller hands over a pointer into its own
+storage. A mutating receiver is the same thing at parameter 0.
+
+The model shape had to change — one optional receiver place per call and one
+`mutates_self` flag per function cannot express a call with two written-through
+arguments, which the corpus writes (`foundationLayoutAppendNode(nodes: borrow mut
+[LayoutNode], descriptors: borrow mut [LayoutDescriptor], …)`) — so a list of
+(parameter, place) replaces both in `kira-semantics-model` and `kira-ir`.
+
+Wire: `CallWriteback` = **0x4f**, appended after `FOREIGN_CALLBACK`. `CallMut`
+keeps 0x48 and its exact meaning and is still what a single slot-0 target
+compiles to, so every module already written decodes and runs unchanged. Two new
+refusals: a `borrow mut` argument must name storage, not a temporary
+(`KSEM248`), and one call may not mutably borrow the same binding twice
+(`KSEM247`). `interp.rs` crossed 700 lines, so frame entry, parameter filling,
+and writeback moved to `interp/frames.rs`. Proven byte-identical vm/llvm/hybrid
+by four `backend_parity/ownership.rs` cases. Green: fmt, clippy `-D warnings`,
+build --workspace, nextest **1810/1810**, wasm32 VM-core. **Editor 486 → 389**;
+`KSEM112` 98 → 0.
+
+**Branch arms each start from the state at the branch — LANDED (2026-07-26,
+`d2ba34f`).** The move checker ran the arms of an `if`/`switch`/`match` one
+after another in a single ownership state, so a move in the first arm was a
+use-after-move in the second. Arms are alternatives: at most one runs. Each now
+starts from the state at the branch point, and what reaches the code after is
+the **union** of the arms that can get there — so a later use-after-move is
+still caught. An arm that definitely returns contributes nothing (its move never
+rejoins), and a non-exhaustive branch adds the no-arm-ran path carrying the
+state it started in. `attempt` handlers are left alone: their lowering nests the
+continuation inside the `try` rather than flatly alternating. **Editor 389 →
+383**; `KSEM110` 6 → 0.
+
+One gate had to change with it: `the_real_editor_directory_resolves_dependency_package_sources`
+proved dependency sources load by finding a `modules/core` path in the output —
+`Core` is now clean, so it renders no path. It asserts per-dependency resolution
+plus a bound on undefined-name diagnostics instead, which survives the corpus
+reaching zero. Watch for the same shape in other gates as buckets empty.
+
+**A repeated foreign type declaration is one C type — LANDED (2026-07-26,
+`78a64c2`).** Autobind emits a description of a C type into every binding that
+uses it, so the same declaration arrives more than once: `@FFI.Pointer { target:
+char; ownership: borrowed; } struct char_ptr {}` in both `sokol.kira` and
+`vulkan.kira`, `struct U32_array_2 {}` in every binding whose header has a
+`uint32_t[2]`, and a C `typedef union X X;` as an alias-shaped `struct X {}`
+ahead of `X`'s own definition. All three read as collisions and none is one — a
+foreign declaration *names* a C type rather than defining a Kira one. Identical
+descriptions of a name are idempotent; a declaration that only names the type
+yields to the one that describes it; two *different* descriptions still collide,
+and plain Kira structs keep the strict rule. Comparison is on the declaration as
+written, because the tables it would resolve against are not built when the
+question is asked. **Editor 382 → 321**; `KSEM004` 32 → 0, `KSEM130` 29 → 0.
+
+Riding in that commit, and not named in its message: **the `KSEM247` overlap
+fix.** The duplicate-`borrow mut` refusal keyed on the root local, so
+`sceneApplyEdit(ws.doc, ws.world, op)` — two *disjoint* fields — was refused.
+It now compares whole places: overlap means one path is a prefix of the other,
+with two array indices treated as possibly-equal since nothing evaluates them.
+382 was 383 before it.
+
+**Corrected diagnosis — the earlier "one lexer gap cascading" guess was wrong.**
+`KLEX001` (22) and `KPAR009`/`KPAR002` are two unrelated things:
+
+* **`KLEX001` 22, all in `kira_ui/app/PropertyWrapper.kira`** — the declarative
+  **macro system**: `comptime macro`, `quote { }`, `#{…}` interpolation. The
+  deferred multi-session feature from the mandate, not a lexer gap.
+* **`KPAR009` 36 + `KPAR002` 20, all in `kira_ui/app/WidgetModel.kira`** — a
+  **static computed member**: `let Green: Color { return Color { … } }`, 17 of
+  them, read as `Color.Green` / `SurfaceMaterial.Subtle`. The parser accepts
+  `let name: Type` and `let name: Type = expr`, not a block body.
+
+  **Attempted, then reverted — it is a corpus bug (`9e7b77f`).** The parser
+  change was easy and wrong. A differential run settles it: the oracle rejects
+  the same program with the same two codes, `KPAR009` on the block and
+  `KSEM069` on `Color.Green`. Block-bodied members are a construct-backed
+  surface only, and reading one off the *type* needs static members, which
+  `kira-zig/docs/macros.md:623` says the language does not have. Accepting it
+  would put kira-rusty ahead of the oracle in the permissive direction and hide
+  the corpus bug behind a half-feature — the member would parse and still be
+  unreadable. The refusal and its reason are now written into `parse_field`.
+
+**The palette became free functions — LANDED in the corpus (2026-07-26).** The
+static-member finding above, acted on. `kira_ui` `6d80c64` rewrites
+`struct Color`'s 17 block-bodied members and `class SurfaceMaterial`'s one as
+zero-argument free functions (`Color.Green` → `colorGreen()`), matching the
+naming `transparentFoundationColor()` already used in that file; `project-matter`
+`e3774db` updates the two HUD call sites. A free function is not a preference
+here — the oracle has no top-level constants either, so it is the only form the
+language offers. **Editor 321 → 245.** Six call sites in all, across two
+examples and the HUD.
+
+**An enum variant may carry a struct — LANDED (2026-07-26, `d8cc741`).** Enum
+collection resolved names *and* payloads in one pass that ran before structs
+were declared, so no struct name could ever resolve as a payload — fifteen lines
+reproduce it, and a test recorded the hole as accepted behavior. The enum now
+arrives in two parts the way a struct's fields already do: `declare_enum_headers`
+before structs, `resolve_enum_payloads` after every struct, class, and
+construct-backed type. Nothing below semantics changed — a struct payload was
+already representable (`EnumPayloadKind::AGGREGATE`), it just could not be
+*named*. The oracle has the same hole, but its own message says declared structs
+are supported, so it is a defect there rather than a rule to match. **Editor 245
+→ 240.**
+
+**Ownership modes on a function type — LANDED (2026-07-26, `b7c2623`).** The
+mode is carried on `TypeRef::Function` and joins the interning key, so
+`(borrow Event) -> Void` and `(Event) -> Void` are two types; an indirect call
+checks each argument against the mode the type declares, and a named function
+fits a slot only when its own modes match. `borrow mut` on a function type now
+declares and assigns — only a *call* through one is refused (`KSEM249`), which
+is what lets the declarations bind and kills the cascade behind them. No
+IR/opcode/backend change; parity pinned by
+`backend_parity/closures.rs::calling_through_a_borrow_function_type_agrees`.
+**Editor 240 → 238**, and the shape matters more than the count: `KSEM050`
+46 → 17, `KSEM061` 36 → 22, while 19 real `KSEM021`s surface — every one a
+`borrow` receiver calling a mutating method, a corpus bug the parse failure
+had been hiding.
+
+**Still open: `borrow mut` through a function value (`KSEM249`, 5).** The
+design is known and the pieces exist. An indirect call already goes through a
+synthesized *dispatcher* (`FnTypeInfo::dispatcher`, a real `FuncId`), so
+`CallWriteback { func: dispatcher, … }` is expressible — the dispatcher takes
+the same parameter by reference and forwards it to each concrete arm, each arm
+carrying its own writeback. That is a VM + LLVM + hybrid slice on top of the
+frontend work already landed.
+
+**The record of the wrong turn, kept because it is cheap to repeat.** `(borrow GraphicsEvent) -> Void` reports `borrow` as an unknown
+type and the local then fails to bind, so ~50 errors across the corpus sit on
+this between `KSEM050` and the `KSEM061` cascade. Reading the prefix in
+`parse_function_type` and dropping it looks free — at a function type the value
+crosses by copy whatever the mode says. Measured: it traded 29 cascade errors
+for **46 new ones**, 16 of them false-positive `KSEM108`s, because an owned
+parameter makes every indirect call site demand `move` for a value the source
+declared `borrow`. The mode is not observable at run time; it is exactly what
+the *static* check reads.
+
+The real slice: carry the modes on `TypeRef::Function` and check them at the
+indirect call. `borrow mut` there needs more again — the writeback instruction
+names its callee by index, and a function value's callee is not known until run
+time, so an indirect writeback would need a dynamic-target form. Reverted, with
+the reason written into `parse_function_type` (`485dec1`).
+
+## The blocker: what is left is mostly corpus, not compiler
+
+Differential runs against `kira-zig/zig-out/bin/kira` on the exact shapes, at
+**321**. kira-rusty emits the *same code with the same message* as the oracle
+for every one of these, so they are not gaps here:
+
+| Shape | Count | Oracle |
+|---|---|---|
+| `CString` in a field/result (`KSEM176`/`KSEM182`) | 62 | same `KSEM176`, byte-identical |
+| `let Green: Color { … }` + `Color.Green` (`KPAR009`/`KPAR002`) | 56 | same `KPAR009` + `KSEM069` |
+| `String.count` (`KSEM090`) | 14 | same `KSEM090` |
+| ownership mode inside a function type — `(borrow mut Frame) -> Void` (`KSEM050`) | 32 | same `KSEM050` on `borrow` and `mut` |
+| a type used without importing its package (`KSEM050` `Color`, `KSEM051`) | ~10 | the diagnostic already names the fix |
+
+That is **~174 of 321** confirmed corpus-side. Clearing them means editing
+`kira_ui`, `ui-foundation`, and `kira-graphics` — separate repos, and
+`Color.Green` in particular is a public API shape with more than one
+reasonable replacement. **That is a source decision, not a compiler one, and
+it needs the user.**
+
+Still genuinely compiler-side, unmeasured against the oracle: `KSEM061` 36
+(undefined functions — needs per-name triage), `KSEM900` 16 (unsupported
+declaration), `KSEM214` 14 (`nativeRecover` on a non-Kira-owned type),
+`KSEM060` 4 (`ksl` shader blocks), and the `KLEX001` 22 macro system.
+
+**One parity note, deliberate:** the oracle still refuses `borrow mut` with
+`KSEM112`. kira-rusty now executes it (`8b26266`), so the oracle is no longer a
+differential reference for a program that uses one — as intended by the mandate,
+but worth knowing before reaching for a differential run on that surface.
+
+**Next levers, by count:** `KSEM050` 52 and
+`KSEM061` 36 (undefined names — `Glow`/`Wrapped`/`Foundation*Paint`), `KSEM176`
+51 + `KSEM182` 11 (the `CString`-result ownership refusal, a design call not yet
+made), `KPAR009` 36 / `KLEX001` 22 / `KPAR002` 21 (parser gaps, the last two
+likely one lexer gap cascading), `KSEM004` 32 + `KSEM130` 29 (synthesized array
+structs and aliases still keyed by bare name — the same owner-keying fix already
+applied to structs), `KSEM900` 16, `KSEM214` 14, `KSEM090` 14 (`String.count`).
+
 **Still keyed by bare name:** functions (`sig_index`), enums, aliases, and
 construct families. Two packages declaring the same *function* name still
 collide, and a method is registered as `Owner.method`, so same-named structs in
@@ -385,3 +589,88 @@ Prior note: PM's UI layer is built on construct-backed declarations — `Widget 
 ## How this compares to kira-zig
 
 kira-zig's VM already called C without `@Native` — but via **libffi baked into the VM**, and its LLVM/hybrid backends still **required** `@Native`. This slice is seamless **uniformly** across all backends, carries **no libffi** in the VM (routed through `HostCapabilities` + a Kira-generated adapter sidecar, so `kira-vm-runtime` stays wasm-portable), and drives one adapter ABI across VM/native/hybrid/wasm with byte-identical output required.
+
+---
+
+## Project Matter migration — 2026-07-26 (238 → 69)
+
+Six slices, each committed green (fmt, clippy `-D warnings`, build, full nextest,
+wasm32 VM-core) and each re-measured against the editor.
+
+**`f65c95d` Carry a mutable borrow through a function value and a binding.**
+A `borrow mut` parameter on a function type parsed and assigned but could not be
+called: the writeback names its callee by index, and a function value fixes one
+only at run time. It does have an index — the dispatcher's. The dispatcher now
+declares the slot `borrow mut`, forwards it to the arm the tag selects, and
+carries the write back out; the named-function adapter shifts the slot by one on
+the way through. The same hole made a well-typed program *panic* the bytecode
+compiler rather than be refused. A binding may now carry the same ownership
+prefix a parameter may (`let f: borrow (…) -> Void = g`), accepted only where
+owned and borrowed coincide and refused as KSEM250 where they would not.
+
+**`501e186` Let C text and C layouts cross the seam in both directions.**
+Five refusals, each answering a question that now has an answer. `CString` in a
+*layout* is a pointer word, not a direction, so an `@FFI.*` declaration's fields
+resolve as the C signature they are. A `CString` **result** crosses: the callee
+keeps its storage and the seam copies the bytes, so nobody frees. The copy runs
+*inside the adapter*, before its cleanup frees this call's transient argument
+copies — a C function may return a pointer into one of them, and that
+use-after-free is undetectable downstream. A callback may be entered with a
+`const char*` and see owned `String`. `RawPtr` and function values became
+capturable; a capture of the closure's *own* function type was a compiler stack
+overflow and is now KSEM251. Class names join the struct table before struct
+fields resolve, and the value-cycle walk moved to the finished table so a cycle
+through a class is caught rather than recursed.
+
+**`a710d76` Give a string a character count and a float its bits.**
+`s.count` (characters, matching `charAt`/`substring`), plus `floatToBits` /
+`bitsToFloat` — reinterpretations, deliberately not spelled like conversions,
+because `U64(x)` on a float rounds and a serializer needs the bits.
+
+**`150139c` Let callback state hold an enum with any payload.**
+The payload was checked against a list that predated a variant being able to
+hold a struct. It now answers by the same rule as any other value.
+
+Corpus, in the sibling repos: `kira-graphics 01719a5` (C-text annotations and
+mutating receivers spelled as what they are), `ui-foundation 3381218` and
+`6d1bf3e` (a mutable binding, and the import Surface takes its colours from).
+
+### What is left, by root cause
+
+**The macro system — ~40 of the 69.** `KLEX001` ×22 is `#{…}` interpolation and
+`quote{}` in `kira_ui/app/PropertyWrapper.kira`; `Wrapped` (`KSEM050` ×6) is the
+wrapper-template placeholder the `@PropertyWrapper` macro monomorphizes, and the
+`KSEM214` ×4 in `State.kira` are its cascade; `ksl!("…")` in the editor's own
+`main.kira` is `KSEM060`/`KSEM070` ×8. One feature, multi-session: a
+compile-time expander with hygiene, `quote`, interpolation, and the derive and
+shader-embed clients.
+
+**Foundation's file system — 13 (`KSEM061`).** `readFileRange`, `readFile`,
+`writeBytesFile`, `listDirectory`, `isDirectory`, `makeDirectory`, `renamePath`,
+`removePath`. The editor's `main.kira` reads its project manifest through
+`readFileRange`, so this is on its critical path. The oracle builds these on
+`fs_*` primitives baked into its runtime; here they want the same treatment
+`print` has — an intrinsic routed through `HostCapabilities` on the VM and
+`kira_rt_*` natively — because the byte buffer has to cross as a Kira array and
+neither a C helper nor a Python step may ship.
+
+**Deferred autobind — 4 (`KSEM050`).** `WCHAR`, `RECT`, `DXGI_FORMAT`,
+`VkDeviceSize` and friends are the C primitive typedefs autobind generates from
+headers. Only in `directx12.kira`/`vulkan.kira`, which this host never links.
+
+**A tail of 12,** each its own small question: a `String` literal in a `CString`
+C-layout field (`KSEM094`/`KSEM186`, who owns the storage sokol reads later), an
+aggregate passed where the binding wrote `RawPtr` (`KSEM183`), a construct
+missing a required field (`KSEM095` ×2), mixed labelled and positional arguments
+(`KSEM189` ×2), an unsupported `declaration` form (`KSEM900`), a `body` that can
+finish without returning (`KSEM033`), and one parse cluster in `Center.kira`
+(`KPAR020`/`KPAR002`).
+
+### Queued, with the design settled
+
+**A function value that carries its own type.** `KSEM251` refuses a closure
+capturing a function value of the closure's own type, because the representation
+struct would contain itself. `ui-foundation` writes exactly that
+(`RunFoundationApp.kira:322`). Carrying one needs a function value to hold its
+environment behind an indirection instead of inline — a change to the
+representation, not to the check that currently refuses it.
