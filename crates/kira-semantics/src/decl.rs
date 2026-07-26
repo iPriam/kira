@@ -91,11 +91,21 @@ impl<'a> Analyzer<'a> {
             if crate::ffi_types::is_alias_shaped(declaration) {
                 continue;
             }
+            // The diagnostic below renders in the file the declaration was
+            // written in, not in whichever file this pass happened to visit
+            // last.
+            self.source = source;
             let name = self.interner.resolve(declaration.name).to_owned();
-            match self.program.types.structs_mut().declare(StructDef {
-                name: name.clone(),
-                fields: Vec::new(),
-            }) {
+            // Filed under the package that wrote it, so two packages may each
+            // declare the name and only a repeat *within* one is a duplicate.
+            let owner = self.imports.package_of(source).map(str::to_owned);
+            match self.program.types.structs_mut().declare_owned(
+                owner.as_deref(),
+                StructDef {
+                    name: name.clone(),
+                    fields: Vec::new(),
+                },
+            ) {
                 Some(id) => {
                     // A `@FFI.Struct`/`Array`/`Callback` mints a nominal id; the
                     // kind decides zero-fill construction and use-site refusals.
@@ -324,14 +334,9 @@ impl<'a> Analyzer<'a> {
 
     /// Resolves every declared field default once, in its declaring file.
     pub(crate) fn resolve_struct_defaults(&mut self) {
-        let ids: Vec<StructId> = self
-            .program
-            .types
-            .structs()
-            .defs()
-            .iter()
-            .filter_map(|def| self.program.types.structs().lookup(&def.name))
-            .collect();
+        // Every declared struct, by id: a name no longer identifies one row,
+        // because two packages may each declare it.
+        let ids: Vec<StructId> = self.program.types.structs().ids().collect();
         for id in ids {
             let field_count = self
                 .struct_defaults

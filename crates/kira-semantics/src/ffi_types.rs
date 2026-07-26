@@ -205,8 +205,13 @@ impl Analyzer<'_> {
             return false;
         }
         let name = self.interner.resolve(declaration.name).to_owned();
+        let owner = self.imports.package_of(self.source).map(str::to_owned);
         if let Some(signature) = self.resolve_callback_signature(&params, result)
-            && let Some(id) = self.program.types.structs().lookup(&name)
+            && let Some(id) = self
+                .program
+                .types
+                .structs()
+                .lookup_owned(owner.as_deref(), &name)
         {
             self.ffi_callback_signatures.insert(id, signature);
         }

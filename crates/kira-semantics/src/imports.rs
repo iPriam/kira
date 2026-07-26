@@ -200,6 +200,28 @@ impl ImportTable {
         self.imports_owner_of(file, declaration, owner)
     }
 
+    /// The packages `file` imports, in no particular order.
+    ///
+    /// A name a file writes may come from any of them; which one it resolves
+    /// against is the resolver's question, and this is the candidate set.
+    #[must_use]
+    pub fn imported_packages(&self, file: SourceId) -> Vec<String> {
+        let Some(imports) = self.files.get(&file) else {
+            return Vec::new();
+        };
+        let mut packages: Vec<String> = imports
+            .roots
+            .values()
+            .filter_map(|binding| {
+                let source = self.module_source_for(file, &binding.module)?;
+                self.package_of(source).map(str::to_owned)
+            })
+            .collect();
+        packages.sort();
+        packages.dedup();
+        packages
+    }
+
     /// Whether one of `file`'s imports reaches the declaration's home.
     ///
     /// Two shapes of home, because a program has two kinds of module. A

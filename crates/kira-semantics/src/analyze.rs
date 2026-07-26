@@ -268,25 +268,42 @@ impl Analyzer<'_> {
     /// The struct `name` denotes *here*, or `None` when no declaration of that
     /// name is visible from the file being analyzed.
     ///
-    /// The table is program-wide because one program is compiled at once, but a
-    /// name is not: a declaration is nameable bare only from its own package or
-    /// from a file that imports that package. See
-    /// [`crate::imports::ImportTable::sees`] for the rule, and why it does not
-    /// compose through a dependency's own imports.
+    /// Two packages may each declare a `Text`, so the table holds both and this
+    /// picks: the file's own package first, then the packages it imports. A
+    /// declaration reachable through neither is not nameable here — see
+    /// [`crate::imports::ImportTable::sees`] for why that does not compose
+    /// through a dependency's own imports.
+    ///
+    /// Own package first is not a tie-break so much as the rule: a file means
+    /// its own package's declaration, and an import cannot take a name away
+    /// from the package that wrote it.
     pub(crate) fn visible_struct(&self, name: &str) -> Option<StructId> {
-        let id = self.program.types.structs().lookup(name)?;
-        self.struct_is_visible(id).then_some(id)
-    }
-
-    /// Whether the declaration behind `id` is nameable from the current file.
-    pub(crate) fn struct_is_visible(&self, id: StructId) -> bool {
-        match self.struct_sources.get(&id) {
-            Some(declared) => self.imports.sees(self.source, *declared),
-            // A struct with no recorded declaration is synthesized (a closure's
-            // environment, a construct family's dispatcher): the compiler made
-            // it for this program, so it belongs to whoever is asking.
-            None => true,
+        let structs = self.program.types.structs();
+        let home = self.imports.package_of(self.source);
+        // This file's own package first: an import cannot take a name away from
+        // the package that wrote it.
+        if let Some(id) = structs.lookup_owned(home, name) {
+            return Some(id);
         }
+        // Then the declarations no package owns — a bundled library like
+        // `Foundation`, another module of the program, or a struct the compiler
+        // synthesized — each on its own terms: a synthesized one belongs to
+        // whoever is asking, and a written one needs this file to have imported
+        // its module.
+        if home.is_some()
+            && let Some(id) = structs.lookup(name)
+            && match self.struct_sources.get(&id) {
+                Some(declared) => self.imports.sees(self.source, *declared),
+                None => true,
+            }
+        {
+            return Some(id);
+        }
+        // And finally what the packages this file imports declare.
+        self.imports
+            .imported_packages(self.source)
+            .into_iter()
+            .find_map(|package| structs.lookup_owned(Some(&package), name))
     }
 }
 
@@ -458,11 +475,15 @@ impl<'a> Analyzer<'a> {
                     source,
                 }),
                 Item::Struct(declaration) => {
+                    // The struct this declaration minted, under its own
+                    // package: a bare name is not unique across packages, and
+                    // this is registering what *this* declaration provides.
+                    let package = self.imports.package_of(source);
                     let owner = self
                         .program
                         .types
                         .structs()
-                        .lookup(self.interner.resolve(declaration.name));
+                        .lookup_owned(package, self.interner.resolve(declaration.name));
                     for method in &declaration.methods {
                         callables.push(Callable {
                             receiver: owner,
