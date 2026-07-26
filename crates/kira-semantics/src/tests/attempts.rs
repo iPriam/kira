@@ -2,7 +2,7 @@
 //! `try` demands, the positions it is allowed in, and the four checks the
 //! reference pins on the handlers.
 
-use super::codes;
+use super::{codes, diagnostics};
 
 /// A `Result`-shaped enum is recognized structurally. Nothing declares a type
 /// named `Result` here, and the reference's own failing tests `try` a locally
@@ -227,19 +227,31 @@ fn an_array_payload_is_still_refused() {
     );
 }
 
-/// A struct payload is refused too, though it never reaches the payload check:
-/// enums are declared *before* structs, so a struct name does not resolve as a
-/// payload type at all. Recorded rather than corrected — the program is
-/// rejected either way, and reordering declaration would be a change to enum
-/// resolution that nothing here asks for.
+/// A struct payload resolves: enum *names* are declared before structs so a
+/// struct field may name an enum, and enum *payloads* are resolved after every
+/// struct exists so a payload may name a struct. Both directions work because
+/// the enum declaration arrives in two parts.
+///
+/// This case previously recorded the opposite — a struct payload could not
+/// resolve at all — as accepted behavior. It was a hole, not a rule.
 #[test]
-fn a_struct_payload_is_refused_as_an_unresolved_name() {
-    assert_eq!(
-        codes(
+fn a_struct_payload_resolves_against_a_struct_declared_anywhere() {
+    assert!(
+        diagnostics(
             "struct P { let x: Int = 0 }\n\
              enum E { Held: P }\n\
              @Main function main() { print(1) return }"
-        ),
-        ["KSEM050"]
+        )
+        .is_empty()
+    );
+    // Declaration order does not matter in either direction: the struct may
+    // also come *after* the enum that carries it.
+    assert!(
+        diagnostics(
+            "enum E { Held: P }\n\
+             struct P { let x: Int = 0 }\n\
+             @Main function main() { print(1) return }"
+        )
+        .is_empty()
     );
 }

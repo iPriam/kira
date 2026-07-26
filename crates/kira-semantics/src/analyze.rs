@@ -404,9 +404,11 @@ impl<'a> Analyzer<'a> {
         // below may name one; they resolve lazily on first use, so registering
         // them here does not require the struct or enum table to exist yet.
         self.collect_type_aliases();
-        // Enums are declared before structs, so a struct field may name one; a
-        // struct is declared before signatures, so a parameter may name either.
-        self.collect_enums();
+        // Enum *names* are declared before structs, so a struct field may name
+        // one; a struct is declared before signatures, so a parameter may name
+        // either. Enum *payloads* wait until every struct exists, because a
+        // payload may name one — the two declaration kinds each need the other.
+        let enum_headers = self.declare_enum_headers();
         // A family type must exist before ordinary structs resolve fields that
         // name it; concrete variants are filled after backed structs exist.
         self.collect_construct_family_headers();
@@ -423,6 +425,9 @@ impl<'a> Analyzer<'a> {
         // declared once every one of those exists and before signatures — a
         // backed declaration's methods take signature slots.
         self.collect_constructs();
+        // Every type a payload could name now has an id, so the variants the
+        // header pass left empty are filled here.
+        self.resolve_enum_payloads(&enum_headers);
         let callables = self.callables();
         // Every synthesized function sits after every declared one, so the
         // declared count is the offset a reserved id is measured from. Fixed
