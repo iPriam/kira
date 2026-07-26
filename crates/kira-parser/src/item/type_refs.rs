@@ -227,22 +227,20 @@ impl Parser<'_> {
     /// a missing arrow is reported and the whole type recovers to
     /// [`TypeRef::Error`] rather than silently becoming `() -> Void`.
     ///
-    /// An ownership prefix on a parameter — `(borrow GraphicsEvent) -> Void` —
-    /// is *not* accepted here yet, and the reason is worth writing down because
-    /// the cheap version of accepting it is wrong. Reading the prefix and
-    /// dropping it makes the parameter owned, so every indirect call site then
-    /// demands `move` for a value the source correctly declared `borrow` — 16
-    /// false positives across the corpus when tried. The mode has to be carried
-    /// on [`TypeRef::Function`] and checked at the indirect call, which is a
-    /// slice of its own; `borrow mut` needs more still, since the writeback
-    /// instruction names its callee by index and a function value's callee is
-    /// not known until run time.
+    /// A parameter may carry an ownership prefix — `(borrow GraphicsEvent) ->
+    /// Void` — exactly as a declared parameter may. The mode is carried on the
+    /// type rather than dropped: it is invisible at run time but decisive at the
+    /// ownership check, so an indirect call reads it to decide whether an
+    /// argument needs `move`.
     fn parse_function_type(&mut self) -> TypeRefId {
         let start = self.current().span;
         self.bump(); // `(`
         let mut params = Vec::new();
+        let mut param_ownership = Vec::new();
         while !self.at(TokenKind::RParen) && !self.at_eof() {
             let before = self.pos;
+            let (mode, _) = self.parse_param_ownership();
+            param_ownership.push(mode);
             params.push(self.parse_type_ref());
             self.eat(TokenKind::Comma);
             // A parameter that consumed nothing would spin; force progress.
@@ -260,6 +258,7 @@ impl Parser<'_> {
         let span = Span::from_bounds(start.start, self.previous_end());
         self.tree.add_type(TypeRef::Function {
             params,
+            param_ownership,
             result,
             span,
         })

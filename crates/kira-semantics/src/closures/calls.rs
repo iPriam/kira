@@ -79,13 +79,39 @@ impl Analyzer<'_> {
         args: &[ExprId],
         span: Span,
     ) -> HirExprId {
-        let Some((params, result)) = self
-            .fn_types
-            .get(repr)
-            .map(|info| (info.params.clone(), info.result))
-        else {
+        let Some((params, modes, result)) = self.fn_types.get(repr).map(|info| {
+            (
+                info.params.clone(),
+                info.param_ownership.clone(),
+                info.result,
+            )
+        }) else {
             return self.program.exprs.alloc(HirExpr::Error);
         };
+        // A `borrow mut` parameter is carried by writing the callee's final
+        // value back into the caller, and the instruction that does it names its
+        // callee by index. Through a function *value* the callee is not known
+        // until run time, so there is no index to name — the call is refused
+        // rather than compiled into one that drops the write.
+        if let Some(slot) = modes
+            .iter()
+            .position(|&mode| mode == OwnershipMode::BorrowMut)
+        {
+            self.emit(
+                span,
+                "KSEM249",
+                format!(
+                    "cannot call through `{}`: parameter {slot} is `borrow mut`, and the \
+                     writeback that carries one names its callee, which a function value \
+                     does not fix until run time",
+                    self.type_name(Type::Struct(repr))
+                ),
+            );
+            for &arg in args {
+                self.analyze_expr(ctx, arg);
+            }
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
         let dispatcher = self.dispatcher_for(repr);
         if args.len() != params.len() {
             self.emit(
@@ -102,17 +128,13 @@ impl Analyzer<'_> {
         let mut all = vec![expr];
         for (index, &arg) in args.iter().enumerate() {
             match params.get(index) {
-                // A closure's parameters are owned and unannotated, so each
-                // argument is checked exactly as a bare parameter's is.
+                // Each argument is checked against the mode the *type* declares
+                // — a `borrow` parameter takes no `move`, an unannotated one
+                // does — exactly as a declared parameter's is.
                 Some(&expected) => {
                     let name = self.type_name(Type::Struct(repr));
-                    all.push(self.analyze_call_argument(
-                        ctx,
-                        arg,
-                        expected,
-                        OwnershipMode::Owned,
-                        &name,
-                    ));
+                    let mode = modes.get(index).copied().unwrap_or(OwnershipMode::Owned);
+                    all.push(self.analyze_call_argument(ctx, arg, expected, mode, &name));
                 }
                 None => all.push(self.analyze_expr(ctx, arg)),
             }
