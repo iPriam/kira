@@ -54,6 +54,7 @@ fn a_library_records_no_entrypoint() {
         "test.kira".to_owned(),
         Vec::new(),
         BuildKind::Library,
+        kira_macros::PrecompiledShaders::default(),
     );
     let program = analyzed(&db, source);
     assert!(program.main.is_none());

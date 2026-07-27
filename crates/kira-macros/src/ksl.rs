@@ -61,7 +61,7 @@ pub(crate) const RECORD_NAME: &str = "KslCompiled";
 /// absent member: a macro body reads a member that is always there and asks
 /// whether it is empty, instead of branching on a shape that varies per
 /// target.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct CompiledShader {
     /// The whole module, for a target that emits one (Metal does).
     pub combined_source: String,
@@ -118,6 +118,45 @@ pub trait ShaderCompiler {
     /// `path` is relative to the project the shader is written in; resolving it
     /// is the implementation's job, because this crate has no filesystem.
     fn compile(&self, path: &str, target: &str) -> Result<CompiledShader, ShaderCompileError>;
+}
+
+/// A [`ShaderCompiler`] backed by shaders compiled before expansion ran.
+///
+/// The KSL pipeline reads files, and macro expansion sits inside salsa queries
+/// that must stay pure — so the build layer scans for shader call sites,
+/// compiles each one up front, and hands the results in here. The trait is
+/// still the seam; this is just the implementation that does no work.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct PrecompiledShaders {
+    /// One entry per (path, target) pair that was compiled.
+    entries: Vec<(String, String, CompiledShader)>,
+}
+
+impl PrecompiledShaders {
+    /// Builds a table from `entries`, each a path, a target, and its output.
+    #[must_use]
+    pub fn new(entries: Vec<(String, String, CompiledShader)>) -> Self {
+        Self { entries }
+    }
+
+    /// Whether the table holds nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+impl ShaderCompiler for PrecompiledShaders {
+    fn compile(&self, path: &str, target: &str) -> Result<CompiledShader, ShaderCompileError> {
+        self.entries
+            .iter()
+            .find(|(entry_path, entry_target, _)| entry_path == path && entry_target == target)
+            .map(|(_, _, compiled)| compiled.clone())
+            .ok_or_else(|| ShaderCompileError::Rejected {
+                path: path.to_owned(),
+                summary: format!("no `{target}` output was compiled for it"),
+            })
+    }
 }
 
 /// Runs one `Ksl.compile(path, target)` call.

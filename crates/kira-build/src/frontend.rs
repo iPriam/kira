@@ -157,9 +157,37 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
         Some(kira_manifest::PackageKind::App) | None => BuildKind::Application,
     };
 
+    // Shaders are compiled before analysis: expansion runs inside salsa
+    // queries, which may not read files, so the paths its call sites name are
+    // scanned out and compiled here and handed in as an input.
+    // A shader path is written relative to the *package* root, the same way
+    // `assets` in a manifest is — `ksl!("Shaders/X.ksl")` in `app/main.kira`
+    // names `Shaders/X.ksl` beside `package.kira`, not beside the entry file.
+    let shader_root = package
+        .as_ref()
+        .and_then(|found| Path::new(&found.path).parent())
+        .or_else(|| path.parent())
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let mut shader_files: Vec<(kira_source::SourceId, &str)> =
+        vec![(FILE_SOURCE_ID, text.as_str())];
+    shader_files.extend(modules.iter().enumerate().map(|(index, module)| {
+        (
+            kira_semantics::module_source_id(index),
+            module.text.as_str(),
+        )
+    }));
+    // Shader sources are numbered after the entry file and every module, which
+    // is where the `SourceMap` below has room for them.
+    let shader_base = u32::try_from(modules.len() + 1).unwrap_or(u32::MAX);
+    let (shaders, shader_diagnostics, shader_sources) =
+        crate::shader::precompile(&shader_root, &shader_files, shader_base);
+    diagnostics.extend(shader_diagnostics);
+    drop(shader_files);
+
     let db = salsa::DatabaseImpl::new();
     let module_paths: Vec<String> = modules.iter().map(|module| module.path.clone()).collect();
-    let source = SourceProgram::new(&db, text, display.clone(), modules, build_kind);
+    let source = SourceProgram::new(&db, text, display.clone(), modules, build_kind, shaders);
 
     // The SourceMap mirrors the salsa input file for file and in the same order,
     // so diagnostic spans render against the file they were written in: the
@@ -186,6 +214,15 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
                     message: full.to_string(),
                 })?;
         debug_assert_eq!(id, kira_semantics::module_source_id(index));
+    }
+    // Then the shaders, at the ids their diagnostics were written against, so a
+    // KSL error renders with the shader's own text and line.
+    for (path, text) in shader_sources {
+        sources
+            .insert(path, text)
+            .map_err(|full| FrontendError::SourceMapFull {
+                message: full.to_string(),
+            })?;
     }
 
     let ir = lowered(&db, source);

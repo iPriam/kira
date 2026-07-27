@@ -89,11 +89,11 @@ pub(crate) const NOT_AN_EXPRESSION: &str = "KMAC017";
 pub(crate) const UNSUPPORTED_IN_EXPAND: &str = "KMAC020";
 /// KMAC021 — a macro raised `Diagnostics.error`.
 pub(crate) const MACRO_REPORTED: &str = "KMAC021";
-/// KMAC022 — `ksl!` could not compile the shader it names.
+/// KMAC022 — `Ksl.compile` could not compile the shader it names.
 pub(crate) const SHADER_COMPILE: &str = "KMAC022";
-/// KMAC023 — `ksl!` was passed other than one argument.
+/// KMAC023 — `Ksl.compile` was passed other than two arguments.
 pub(crate) const SHADER_ARGUMENT_COUNT: &str = "KMAC023";
-/// KMAC024 — `ksl!` was passed a path that is not a string literal.
+/// KMAC024 — `Ksl.compile` was passed a path that is not a string literal.
 pub(crate) const SHADER_PATH_NOT_LITERAL: &str = "KMAC024";
 /// KMAC025 — `Syntax.dropField` named a field the declaration does not have.
 pub(crate) const NO_SUCH_FIELD: &str = "KMAC025";
