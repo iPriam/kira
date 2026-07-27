@@ -21,6 +21,7 @@ pub mod foreign;
 pub mod hybrid;
 pub mod live;
 pub mod native_state;
+pub mod raw_memory;
 pub mod runtime;
 
 pub use array::{KArray, KiraArray};

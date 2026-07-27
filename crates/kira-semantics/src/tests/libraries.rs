@@ -6,6 +6,7 @@
 //! backend split.
 
 use super::*;
+use crate::host_platform;
 
 #[test]
 fn a_library_without_main_analyzes_clean() {
@@ -55,6 +56,7 @@ fn a_library_records_no_entrypoint() {
         Vec::new(),
         BuildKind::Library,
         kira_macros::PrecompiledShaders::default(),
+        host_platform(),
     );
     let program = analyzed(&db, source);
     assert!(program.main.is_none());

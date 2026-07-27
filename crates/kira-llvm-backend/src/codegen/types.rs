@@ -125,6 +125,9 @@ pub(crate) struct Runtime {
     /// `kira_rt_trap_foreign_array`: a Kira array too long for the inline C
     /// array a `@FFI.Array` member reserves.
     pub(super) trap_foreign_array: Callable,
+    /// `kira_rt_trap_foreign_unavailable`: a call into a native library this
+    /// platform does not have, named rather than numbered.
+    pub(super) trap_foreign_unavailable: Callable,
     /// The version marker every emitted program references; see
     /// [`kira_runtime_abi::RUNTIME_ABI_MARKER`].
     pub(super) abi_marker: Callable,
@@ -303,6 +306,11 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             box_new: declare(c"kira_rt_box_new", types.ptr, &mut [types.i64]),
             box_free: declare(c"kira_rt_box_free", types.void, &mut [types.ptr, types.i64]),
             trap_div_zero: declare(c"kira_rt_trap_div_zero", types.void, &mut []),
+            trap_foreign_unavailable: declare(
+                c"kira_rt_trap_foreign_unavailable",
+                types.void,
+                &mut [types.ptr, types.ptr],
+            ),
             trap_foreign: declare(c"kira_rt_trap_foreign", types.void, &mut [types.i32]),
             trap_foreign_array: declare(
                 c"kira_rt_trap_foreign_array",
