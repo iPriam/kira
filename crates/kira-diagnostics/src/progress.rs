@@ -23,7 +23,32 @@ use std::sync::{Arc, RwLock};
 pub trait ProgressSink: Send + Sync {
     /// Reports that `phase` has started.
     fn phase(&self, phase: &str);
+
+    /// Takes the display down so something else can write.
+    ///
+    /// A surface that redraws in place and a diagnostic printed underneath it
+    /// interleave into nonsense — half a status block, a note, then a status
+    /// block that scrolled. Anything writing its own output says so first.
+    fn suspend(&self);
 }
+
+/// Takes the installed display down for the life of the returned guard.
+///
+/// Nothing to restore: the surface redraws itself on the next phase, and a
+/// build that reports no further phase had nothing left to show anyway.
+pub fn suspended() -> Suspended {
+    if let Ok(slot) = SINK.read()
+        && let Some(sink) = slot.as_ref()
+    {
+        sink.suspend();
+    }
+    Suspended
+}
+
+/// The guard [`suspended`] returns.
+#[derive(Debug)]
+#[must_use = "the display stays down only while the guard is alive"]
+pub struct Suspended;
 
 /// The installed sink, or `None` when nobody is listening.
 ///
@@ -95,6 +120,12 @@ mod tests {
                 seen.push(phase.to_owned());
             }
         }
+
+        fn suspend(&self) {
+            if let Ok(mut seen) = self.0.lock() {
+                seen.push("<suspended>".to_owned());
+            }
+        }
     }
 
     #[test]
@@ -102,6 +133,22 @@ mod tests {
         uninstall();
         assert!(!listening());
         report("a phase nobody hears");
+    }
+
+    #[test]
+    fn suspending_reaches_the_installed_sink() {
+        let recorder = Arc::new(Recorder::default());
+        install(recorder.clone());
+        let _guard = suspended();
+        uninstall();
+        let seen = recorder.0.lock().expect("the recorder");
+        assert!(seen.contains(&"<suspended>".to_owned()), "{seen:?}");
+    }
+
+    #[test]
+    fn suspending_with_no_sink_installed_does_nothing() {
+        uninstall();
+        let _guard = suspended();
     }
 
     #[test]

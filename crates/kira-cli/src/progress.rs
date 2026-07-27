@@ -92,6 +92,12 @@ impl Surface {
 }
 
 impl ProgressSink for Surface {
+    fn suspend(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            erase(&mut state);
+        }
+    }
+
     fn phase(&self, phase: &str) {
         let Ok(mut state) = self.state.lock() else {
             return;
