@@ -1,9 +1,9 @@
 //! Parses `NativeLibs/<name>.toml` text into the native-library model.
 
 use kira_native_lib_definition::{
-    AutobindMode, AutobindProfile, AutobindSpec, LinkMode, NativeArtifact, NativeHeaders,
-    NativeLibraryError, NativeLibrarySpec, NativeLinkAttributes, NativeTargetSpec, TargetTriple,
-    TripleError,
+    AutobindMode, AutobindProfile, AutobindSpec, Availability, LinkMode, NativeArtifact,
+    NativeHeaders, NativeLibraryError, NativeLibrarySpec, NativeLinkAttributes, NativeTargetSpec,
+    TargetTriple, TripleError,
 };
 
 use crate::native_lib_manifest::{RawFlatManifest, RawSectionedManifest, RawSectionedTarget};
@@ -52,7 +52,17 @@ fn sectioned(raw: RawSectionedManifest) -> Result<NativeLibrarySpec, NativeLibPa
         rows.push(target_row(TargetTriple::parse(&triple)?, target));
     }
 
-    let mut spec = NativeLibrarySpec::new(raw.library.name, link_mode, rows)?;
+    let availability = match raw.library.availability.as_deref() {
+        None => Availability::Required,
+        Some(text) => {
+            Availability::parse(text).ok_or_else(|| NativeLibParseError::UnknownAvailability {
+                value: text.to_owned(),
+            })?
+        }
+    };
+
+    let mut spec =
+        NativeLibrarySpec::new(raw.library.name, link_mode, rows)?.with_availability(availability);
     if let Some(headers) = raw.headers {
         spec = spec.with_headers(NativeHeaders {
             entrypoint: headers.entrypoint,
@@ -109,10 +119,16 @@ pub enum NativeLibParseError {
     /// A row named a triple that is not `arch-os-abi`.
     #[error(transparent)]
     Triple(#[from] TripleError),
-    /// `link_mode` named neither `static` nor `dynamic`.
-    #[error("`{value}` is not a link mode (expected `static` or `dynamic`)")]
+    /// `link_mode` named none of the three modes.
+    #[error("`{value}` is not a link mode (expected `static`, `dynamic`, or `runtime`)")]
     UnknownLinkMode {
         /// The unreadable link mode.
+        value: String,
+    },
+    /// `availability` named neither `required` nor `optional`.
+    #[error("`{value}` is not an availability (expected `required` or `optional`)")]
+    UnknownAvailability {
+        /// The unreadable availability.
         value: String,
     },
     /// The binding `mode` named neither `all_public` nor `selected`.
