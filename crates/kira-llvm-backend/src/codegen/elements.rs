@@ -62,6 +62,22 @@ impl Codegen<'_> {
         Ok(unsafe { LLVMConstInt(self.types.i64, size, 0) })
     }
 
+    /// The ABI alignment of `ty`, as an `i64` constant.
+    ///
+    /// LLVM's answer for the target, for the same reason [`Self::abi_size`]
+    /// takes its answer from there: a box the runtime allocates for a value has
+    /// to satisfy the alignment the target gives that value, not one guessed at
+    /// here.
+    pub(super) fn abi_align(&self, ty: Type) -> Result<LLVMValueRef, LlvmError> {
+        let llvm_type = self.llvm_type(ty)?;
+        // SAFETY: `llvm_type` belongs to this module's context, and the data
+        // layout was set when the module was created.
+        let align =
+            unsafe { llvm_sys::target::LLVMABIAlignmentOfType(self.target_data, llvm_type) };
+        // SAFETY: `types.i64` is this context's `i64`.
+        Ok(unsafe { LLVMConstInt(self.types.i64, u64::from(align), 0) })
+    }
+
     /// The clone leaf for an element of `ty`, or a null pointer when the flat
     /// copy already got it right.
     pub(super) fn element_clone(&mut self, ty: Type) -> Result<LLVMValueRef, LlvmError> {
