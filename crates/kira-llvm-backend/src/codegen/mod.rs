@@ -488,9 +488,13 @@ impl<'a> Codegen<'a> {
             ))?;
             // A written-through parameter — a mutating method's receiver, or one
             // declared `borrow mut` — is a pointer to the caller's storage, so a
-            // write to it lands there and is observable after the call. Every
+            // write to it lands there and is observable after the call.
+            //
+            // A read-only `borrow` of something worth copying is a pointer too,
+            // for the opposite reason: the caller keeps the value, so the callee
+            // reads it where it lies rather than taking a duplicate of it. Every
             // other parameter is passed by value.
-            if function.param_by_reference(slot) {
+            if self.param_is_pointer(function, slot) {
                 params.push(self.types.ptr);
             } else {
                 params.push(self.llvm_type(ty)?);
@@ -557,6 +561,19 @@ impl<'a> Codegen<'a> {
     }
 
     /// The LLVM type a Kira value type lowers to.
+    /// Whether parameter `slot` of `function` arrives as a pointer here.
+    ///
+    /// Lending a read-only borrow is a whole-program decision: every call to the
+    /// function has to agree with its signature, so it is only done where this
+    /// module compiles all of them. A hybrid half is called by the VM through a
+    /// trampoline, a library by a consumer through its export surface, and a
+    /// sidecar by a host — none of which knows about a pointer this module
+    /// decided to use, so those keep passing by value.
+    fn param_is_pointer(&self, function: &IrFunction, slot: u32) -> bool {
+        function.param_by_reference(slot)
+            || (matches!(self.kind, ModuleKind::Executable) && function.param_by_pointer(slot))
+    }
+
     fn llvm_type(&self, ty: Type) -> Result<LLVMTypeRef, LlvmError> {
         Ok(match ty {
             Type::Int(_) => self.types.i64,

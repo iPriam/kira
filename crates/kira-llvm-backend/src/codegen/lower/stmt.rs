@@ -277,10 +277,12 @@ impl FunctionLowering<'_, '_> {
     /// freed here.
     pub(super) fn emit_return(&mut self, value: Option<LLVMValueRef>) -> Result<(), LlvmError> {
         for slot in 0..self.function.locals.len() as u32 {
-            // A written-through parameter is the caller's storage, borrowed
-            // through a pointer; freeing it here would release a value the
-            // caller still owns and will free itself.
-            if self.function.param_by_reference(slot)
+            // A parameter that arrived as a pointer is the caller's storage,
+            // borrowed; freeing it here would release a value the caller still
+            // owns and will free itself. True of a written-through parameter and
+            // of a lent read-only borrow alike — neither was ever this
+            // function's to reclaim.
+            if self.codegen.param_is_pointer(self.function, slot)
                 || self
                     .function
                     .native_state_locals
