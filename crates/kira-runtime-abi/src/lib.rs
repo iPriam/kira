@@ -63,13 +63,13 @@ pub use ownership::Ownership;
 /// So the version is baked into a symbol name ([`RUNTIME_ABI_MARKER`]) that the
 /// backend emits a reference to. A stale archive does not define this version's
 /// marker, so the link fails by name instead of the program failing at runtime.
-pub const RUNTIME_ABI_VERSION: u32 = 3;
+pub const RUNTIME_ABI_VERSION: u32 = 4;
 
 /// The marker symbol the runtime archive defines and generated code references.
 ///
 /// Its name carries [`RUNTIME_ABI_VERSION`]; a test in `kira-native-bridge`
 /// fails if the archive's marker and this name ever drift apart.
-pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_3";
+pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_4";
 
 /// The symbols a hybrid host resolves out of a loaded native half by name.
 ///

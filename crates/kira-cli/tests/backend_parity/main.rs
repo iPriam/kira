@@ -230,6 +230,7 @@ fn assert_trap_parity(source: &str, before_the_trap: &str) {
 
 mod aliases;
 mod arithmetic;
+mod array_sharing;
 mod arrays;
 mod attempts;
 mod bitwise;

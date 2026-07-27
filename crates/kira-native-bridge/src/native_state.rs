@@ -8,7 +8,8 @@ use kira_runtime_abi::{
 };
 
 use crate::array::{
-    KArray, kira_rt_array_free, kira_rt_array_len, kira_rt_array_new, kira_rt_array_slot,
+    ElemClone, KArray, kira_rt_array_free, kira_rt_array_len, kira_rt_array_new,
+    kira_rt_array_slot, make_array_unique,
 };
 use crate::runtime::{KStr, kira_rt_str_data, kira_rt_str_free, kira_rt_str_len, kira_rt_str_new};
 
@@ -149,20 +150,30 @@ pub extern "C" fn kira_rt_native_value_aggregate(
 
 /// Encodes an owned Kira array into a generic array node.
 ///
+/// `encode` moves each element out of the block, which is a write: `clone` is
+/// what the runtime makes the block this handle's own with first, on the same
+/// terms as any other write. See `crate::array`.
+///
 /// # Safety
-/// `array` must be a live owned array with element size `esize`; `encode` must
+/// `array` must be a live owned array with element size `esize`; `clone`, when
+/// given, must clone exactly one element of that size; and `encode` must
 /// consume one element from each slot and return one live node.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_native_value_array_from(
     array: KArray,
     esize: usize,
+    clone: Option<ElemClone>,
     encode: NativeStateEncodeElement,
 ) -> KNativeStateValue {
+    // SAFETY: the caller vouches the array and the callback match.
+    unsafe { make_array_unique(array, esize, clone) };
     // SAFETY: the caller vouches the array is live.
     let len = unsafe { kira_rt_array_len(array) };
     let count = usize::try_from(len).unwrap_or(0);
     let node = kira_rt_native_value_aggregate(NativeStateValueTag::ARRAY.0, 0, count);
     for index in 0..count {
+        // The plain read slot: the block is this handle's own by now, so there
+        // is nothing left for a mutable slot to make unique.
         // SAFETY: `index < count == len` and `esize` matches the array.
         let slot = unsafe { kira_rt_array_slot(array, index as i64, esize) };
         // SAFETY: the callback contract matches this live element slot.
@@ -199,6 +210,8 @@ pub unsafe extern "C" fn kira_rt_native_value_array_to(
     for index in 0..count {
         // SAFETY: `node` is live and the index is in range.
         let child = unsafe { kira_rt_native_value_child(node, index) };
+        // A block nobody else has seen yet, so the plain read slot is a write
+        // slot here: there is no other handle for a copy to protect.
         // SAFETY: the fresh array has exactly `count` slots.
         let slot = unsafe { kira_rt_array_slot(array, index as i64, esize) };
         // SAFETY: the callback consumes `child` and initializes this fresh slot.
