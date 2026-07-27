@@ -186,6 +186,64 @@ fn copying_a_struct_deep_copies_an_array_field() {
     assert_eq!(heap.stats().current, 0);
 }
 
+/// A copy shares its elements, and the sharing is what a free has to account
+/// for: the first handle to go releases nothing, the last releases everything.
+///
+/// Getting this wrong is a double free of every string the array holds, which
+/// the heap counters see as `current` going below where it started.
+#[test]
+fn a_copy_shares_its_elements_and_the_last_holder_frees_them() {
+    let mut heap = Heap::new();
+    let text = heap.alloc("shared".to_owned());
+    let original = heap.alloc_array(vec![Value::Str(text)]);
+    let Value::Array(copy) = heap.copy_value(Value::Array(original)) else {
+        panic!("an array copies to an array");
+    };
+    // A slot each, and one string between them — not two.
+    assert_eq!(heap.stats().current, 3, "the copy allocated no element");
+
+    heap.drop_value(Value::Array(original));
+    let Some(Value::Str(still_there)) = heap.element(copy, 0) else {
+        panic!("the copy still holds its string");
+    };
+    assert_eq!(
+        heap.get(still_there),
+        "shared",
+        "the string outlived one hold"
+    );
+    assert_eq!(heap.stats().current, 2);
+
+    heap.drop_value(Value::Array(copy));
+    assert_eq!(heap.stats().current, 0, "the last holder released it");
+}
+
+/// A write through a shared element takes the elements over *before* reading
+/// the handle it writes into. Reading first would hand back the object the
+/// other array holds, and the write would land in both.
+#[test]
+fn writing_a_nested_array_of_a_shared_copy_leaves_the_original_alone() {
+    let mut heap = Heap::new();
+    let inner = heap.alloc_array(vec![Value::Int(1)]);
+    let outer = heap.alloc_array(vec![Value::Array(inner)]);
+    let Value::Array(copy) = heap.copy_value(Value::Array(outer)) else {
+        panic!("an array copies to an array");
+    };
+
+    // The copy's own inner array, reached the way a place walk reaches it.
+    heap.make_array_unique(copy);
+    let Some(Value::Array(copied_inner)) = heap.element(copy, 0) else {
+        panic!("the copy holds an array");
+    };
+    assert_ne!(inner, copied_inner, "taking the elements over copied them");
+    assert!(heap.set_element(copied_inner, 0, Value::Int(99)));
+    assert_eq!(heap.element(inner, 0), Some(Value::Int(1)));
+    assert_eq!(heap.element(copied_inner, 0), Some(Value::Int(99)));
+
+    heap.drop_value(Value::Array(outer));
+    heap.drop_value(Value::Array(copy));
+    assert_eq!(heap.stats().current, 0);
+}
+
 #[test]
 fn overwriting_an_element_drops_what_was_there() {
     let mut heap = Heap::new();
