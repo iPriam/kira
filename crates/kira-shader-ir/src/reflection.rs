@@ -591,6 +591,91 @@ words!(builtin_word, builtin_from, Builtin,
     "local_index" => Builtin::LocalIndex,
 );
 
+/// Renders the uniform blocks in the compact digest a graphics host parses.
+///
+/// Not a second reflection format competing with [`encode`] — a different
+/// contract. `KSLR1` is the whole reflection, versioned and round-trippable,
+/// for anything that wants to read what a shader declares. This is the string
+/// the prebuilt graphics runtime already parses when it configures a pipeline's
+/// uniform blocks, and its shape is that consumer's, not ours:
+///
+/// ```text
+/// name:binding:size:stageMask:memberCount:member,member;…
+/// ```
+///
+/// with each member written `name@offset#size`. Blocks are separated by `;`,
+/// `binding` is the **WGSL** binding — which is also the slot an application
+/// binds against — `size` is the block's `std140` size, and `stageMask` is
+/// bit 0 vertex, bit 1 fragment, bit 2 compute.
+///
+/// A member's `size` is its *natural* size, not its padded one: the host maps
+/// that size onto a GL uniform type, and a 3-wide vector has to arrive as 12 so
+/// it maps to `FLOAT3` rather than `FLOAT4`. Offsets stay `std140`, which is
+/// where the value actually sits.
+#[must_use]
+pub fn uniform_block_digest(reflection: &Reflection) -> String {
+    let mut out = String::new();
+    for resource in &reflection.resources {
+        if resource.resource_kind != ResourceKind::Uniform {
+            continue;
+        }
+        let Some(declared) = reflection
+            .types
+            .iter()
+            .find(|declared| declared.name == resource.type_name)
+        else {
+            continue;
+        };
+        let Some(layout) = &declared.uniform_layout else {
+            continue;
+        };
+        let binding = resource
+            .backend_bindings
+            .iter()
+            .find(|binding| binding.target == BackendTarget::Wgsl)
+            .map_or(0, |binding| binding.binding_index);
+        let mut mask = 0u32;
+        for stage in &resource.visibility {
+            mask |= match stage {
+                Stage::Vertex => 1,
+                Stage::Fragment => 2,
+                Stage::Compute => 4,
+            };
+        }
+        out.push_str(&format!(
+            "{}:{binding}:{}:{mask}:{}",
+            resource.resource_name,
+            layout.size,
+            layout.fields.len()
+        ));
+        for (at, field) in layout.fields.iter().enumerate() {
+            out.push(if at == 0 { ':' } else { ',' });
+            let natural = declared
+                .fields
+                .iter()
+                .find(|member| member.name == field.name)
+                .map_or(field.size, |member| natural_size(&member.type_name));
+            out.push_str(&format!("{}@{}#{natural}", field.name, field.offset));
+        }
+        out.push(';');
+    }
+    out
+}
+
+/// The unpadded size of a member type, as the host's type table expects it.
+fn natural_size(type_name: &str) -> u32 {
+    match type_name {
+        "Float" | "Int" | "UInt" | "Bool" => 4,
+        "Float2" | "Int2" | "UInt2" => 8,
+        "Float3" | "Int3" | "UInt3" => 12,
+        "Float4" | "Int4" | "UInt4" => 16,
+        "Float2x2" => 32,
+        "Float3x3" => 48,
+        "Float4x4" => 64,
+        _ => 16,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

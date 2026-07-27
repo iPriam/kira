@@ -225,3 +225,65 @@ shader Step {
     let decoded = decode(&ir.reflection_text()).expect("decodes");
     assert_eq!(decoded.stages[0].threads, Some([64, 2, 1]));
 }
+
+#[test]
+fn the_uniform_digest_matches_the_shape_the_graphics_host_parses() {
+    // `name:binding:size:stageMask:memberCount:member,member;` with each member
+    // `name@offset#size`. The host already parses this; the shape is its
+    // contract, not ours, so it is pinned literally.
+    let ir = build(TEXTURED, BackendTarget::Msl);
+    let digest = ir.uniform_digest();
+    assert!(
+        digest.contains("camera:0:64:3:1:view_projection@0#64;"),
+        "{digest}"
+    );
+    // `Surface` is `Float3` then `Float`: the vector sits at 0 and the scalar at
+    // 16 because `std140` pads it, but the member's own size stays 12 so the
+    // host maps it onto `FLOAT3` rather than `FLOAT4`.
+    assert!(
+        digest.contains("surface:0:32:3:2:albedo@0#12,alpha@16#4;"),
+        "{digest}"
+    );
+}
+
+#[test]
+fn the_uniform_digest_carries_the_wgsl_binding_not_metals() {
+    // The host matches this against the slot an application binds, which is the
+    // WGSL binding — Metal's buffer index is a different number entirely.
+    let ir = build(TEXTURED, BackendTarget::Msl);
+    let digest = ir.uniform_digest();
+    let surface = digest
+        .split(';')
+        .find(|block| block.starts_with("surface:"))
+        .expect("the surface block");
+    let binding: u32 = surface
+        .split(':')
+        .nth(1)
+        .and_then(|field| field.parse().ok())
+        .expect("a binding");
+    assert_eq!(binding, 0, "`Material`'s first resource is binding 0");
+}
+
+#[test]
+fn a_shader_with_no_uniforms_has_an_empty_digest() {
+    let ir = build(
+        r#"
+type VOut {
+    @builtin(position)
+    let clip_position: Float4
+}
+shader S {
+    vertex {
+        output VOut
+        function entry() -> VOut {
+            let r: VOut
+            r.clip_position = Float4(0.0, 0.0, 0.0, 1.0)
+            return r
+        }
+    }
+}
+"#,
+        BackendTarget::Msl,
+    );
+    assert_eq!(ir.uniform_digest(), "");
+}
