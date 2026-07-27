@@ -5,8 +5,14 @@
 //! Walking moves *handles*, never objects — each step reads the nested object's
 //! handle out of its parent — so a write through the result lands in the object
 //! the local holds rather than rebuilding it. That is only sound because every
-//! object is exclusively owned: the deep copy on every read guarantees no other
-//! value shares it.
+//! object is exclusively owned by the time it is written through.
+//!
+//! An array is the one kind that may not be: copying one shares its elements
+//! until somebody writes. Every walk in this module is a walk *to a write*, so
+//! each index step takes the array's elements over first
+//! ([`crate::value::Heap::make_array_unique`]) and only then reads the handle
+//! out of them — otherwise the handle it read would name an object another
+//! array is still reading, and the write would land in both.
 
 use kira_bytecode::op::{PathStep, PlacePath};
 
@@ -50,7 +56,7 @@ impl Vm<'_> {
     /// Walks `steps` from local `slot`, returning the value the last step lands
     /// *on* — that is, the value the caller is about to write into.
     fn walk_place(
-        &self,
+        &mut self,
         frame: &Frame,
         slot: u16,
         steps: &[ResolvedStep],
@@ -58,15 +64,15 @@ impl Vm<'_> {
         self.walk_value(frame.locals[slot as usize], steps)
     }
 
-    fn walk_value(&self, mut current: Value, steps: &[ResolvedStep]) -> Result<Value, VmError> {
+    fn walk_value(&mut self, mut current: Value, steps: &[ResolvedStep]) -> Result<Value, VmError> {
         for step in steps {
             current = self.walk_step(current, *step)?;
         }
         Ok(current)
     }
 
-    /// Takes one step of a place walk.
-    fn walk_step(&self, current: Value, step: ResolvedStep) -> Result<Value, VmError> {
+    /// Takes one step of a place walk, on the way to a write.
+    fn walk_step(&mut self, current: Value, step: ResolvedStep) -> Result<Value, VmError> {
         match step {
             ResolvedStep::Field(index) => {
                 let Value::Struct(id) = current else {
@@ -81,6 +87,10 @@ impl Vm<'_> {
                     return Err(VmError::NotAnArray);
                 };
                 let index = check_index(index, self.heap.array_len(id))?;
+                // The bounds check first, so an index that is about to trap
+                // copies nothing; then the elements become this array's own,
+                // and only then is the handle read out of them.
+                self.heap.make_array_unique(id);
                 self.heap
                     .element(id, index)
                     .ok_or(VmError::IndexOutOfBounds)

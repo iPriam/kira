@@ -10,6 +10,19 @@
 //! A struct is a plain tuple of values: the VM is structurally typed, so it
 //! never learns a struct's name or its field names. The compiler resolved those
 //! to indices, which is what lets the same heap serve both kinds of object.
+//!
+//! # Arrays copy when they are written, not when they are read
+//!
+//! An array's elements are the one thing here that is *shared*: copying an
+//! array takes a new slot pointing at the same elements, and a write through
+//! either one gives the writer elements of its own first
+//! ([`Heap::make_array_unique`]). Nothing observable changes — the two arrays
+//! behave exactly as two deep copies — but reading an array stops costing the
+//! whole array, which is what an interpreted UI frame is mostly made of. The
+//! native runtime shares an array's item block on the same terms; this is one
+//! design serving both engines rather than two.
+
+use std::rc::Rc;
 
 use kira_runtime_abi::{NativeStateToken, NativeStateTypeId};
 
@@ -73,8 +86,12 @@ enum Object {
     Str(String),
     /// A struct's fields, in declaration order.
     Struct(Vec<Value>),
-    /// An array's elements, in order.
-    Array(Vec<Value>),
+    /// An array's elements, in order, shared until one holder writes.
+    ///
+    /// The one shared object on this heap. Every other kind is exclusively
+    /// owned, which is what lets a place walk move handles; an array earns the
+    /// exception by being the expensive one to copy and the common one to read.
+    Array(Rc<Vec<Value>>),
     /// An enum value: a discriminant tag and its optional single payload.
     Enum {
         /// The variant's declaration index.
@@ -132,7 +149,33 @@ impl Heap {
     /// As with a struct, the elements are taken rather than copied: whatever
     /// produced them hands over ownership.
     pub fn alloc_array(&mut self, elements: Vec<Value>) -> ArrayId {
-        ArrayId(self.alloc_object(Object::Array(elements)))
+        ArrayId(self.alloc_object(Object::Array(Rc::new(elements))))
+    }
+
+    /// Gives an array elements of its own, so a write reaches nothing else.
+    ///
+    /// The deferred half of [`Heap::copy_value`]: an array that shares its
+    /// elements copies them here, deeply, on the first write through *this*
+    /// handle. Sole ownership — the common case — is a count and a compare.
+    ///
+    /// Every write goes through this: an element store, an append, and each
+    /// index step of a place walk, since a walk that passes through an array
+    /// reads a handle *out of* it and is about to write into whatever that
+    /// handle names.
+    pub fn make_array_unique(&mut self, id: ArrayId) {
+        let shared = match self.slots.get(id.0 as usize) {
+            Some(Some(Object::Array(elements))) if Rc::strong_count(elements) > 1 => {
+                Rc::clone(elements)
+            }
+            _ => return,
+        };
+        let mut copies = Vec::with_capacity(shared.len());
+        for element in shared.iter() {
+            copies.push(self.copy_value(*element));
+        }
+        if let Some(Some(Object::Array(elements))) = self.slots.get_mut(id.0 as usize) {
+            *elements = Rc::new(copies);
+        }
     }
 
     /// Borrows the elements of the array behind a handle.
@@ -167,12 +210,21 @@ impl Heap {
     /// Returns `false` — having changed nothing and dropped nothing — when the
     /// handle does not name an array with that element.
     pub fn set_element(&mut self, id: ArrayId, index: usize, value: Value) -> bool {
+        // Bounds first, so an index that is about to trap copies nothing; then
+        // the copy, and only then the read of what is being replaced. In that
+        // order the value dropped below is this array's own — read before the
+        // copy it would be the one every sharer still holds.
+        if !matches!(self.array_len(id), Some(len) if index < len) {
+            return false;
+        }
+        self.make_array_unique(id);
         let Some(previous) = self.element(id, index) else {
             return false;
         };
         self.drop_value(previous);
         match self.slots.get_mut(id.0 as usize) {
-            Some(Some(Object::Array(elements))) => match elements.get_mut(index) {
+            // Sole owner by now, so this hands back the `Vec` itself.
+            Some(Some(Object::Array(elements))) => match Rc::make_mut(elements).get_mut(index) {
                 Some(slot) => {
                     *slot = value;
                     true
@@ -190,16 +242,27 @@ impl Heap {
     /// is that the *caller's* array changes, which is why `append` resolves a
     /// place rather than taking a value.
     pub fn push_element(&mut self, id: ArrayId, value: Value) -> bool {
+        // An append is a write like any other, so it lengthens this array's own
+        // elements rather than the ones it was sharing.
+        self.make_array_unique(id);
         match self.slots.get_mut(id.0 as usize) {
             Some(Some(Object::Array(elements))) => {
-                elements.push(value);
+                // Sole owner by now, so this hands back the `Vec` itself and
+                // copies nothing.
+                Rc::make_mut(elements).push(value);
                 true
             }
             _ => false,
         }
     }
 
-    /// Frees the array behind a handle, recursively dropping its elements.
+    /// Frees the array behind a handle, dropping its elements once the last
+    /// array holding them lets go.
+    ///
+    /// The slot always goes, so the accounting balances per handle exactly as
+    /// it did when every copy was deep. The elements go with the last of them,
+    /// which is what keeps a shared element freed once rather than once per
+    /// sharer.
     ///
     /// Bounded by the program's nesting depth for the same reason
     /// [`Heap::free_struct`] is: an array's element type is resolved during
@@ -215,6 +278,11 @@ impl Heap {
         };
         self.freed += 1;
         self.free_list.push(id.0);
+        // Another array still reads these, so none of what they own is released
+        // here — only this handle's claim on them.
+        let Ok(elements) = Rc::try_unwrap(elements) else {
+            return;
+        };
         for element in elements {
             self.drop_value(element);
         }
@@ -388,22 +456,20 @@ impl Heap {
 
     /// Produces an independent copy of a value.
     ///
-    /// Deep by construction: a struct's copy owns fresh copies of its fields
-    /// and an array's copy owns fresh copies of its elements, so no two live
-    /// values ever share heap storage. That is what makes `var b = a; b.x = 1`
-    /// leave `a` alone, and it is what keeps the drop accounting provable —
-    /// every handle has exactly one owner, so `current == 0` at exit means the
-    /// program balanced rather than that two owners freed one object once.
+    /// Deep as far as any reader can tell: a struct's copy owns fresh copies of
+    /// its fields, and an array's copy owns its elements from the first write
+    /// through either handle. That is what makes `var b = a; b.x = 1` leave `a`
+    /// alone, and the drop accounting stays provable — every *slot* has exactly
+    /// one owner, so `current == 0` at exit still means the program balanced
+    /// rather than that two owners freed one object once.
     ///
-    /// **An array field inside a struct is deep-copied too**, which falls out
+    /// **An array field inside a struct is independent too**, which falls out
     /// of the recursion rather than being a special case: the struct arm copies
     /// each field, and a field that is an array takes the array arm.
     ///
-    /// This is the one place the copy is expensive: reading an array copies all
-    /// of it, so `xs[i]` inside a loop is quadratic. That is the existing cost
-    /// model — a struct field read already deep-copies its struct — and the fix
-    /// is the by-reference load the `borrow mut` work needs, not a special case
-    /// here. See `.codex/work/arrays.md`.
+    /// Deep *by the time anyone can tell*: an array's copy shares its elements
+    /// and takes them over on the first write through either handle, which no
+    /// reader can distinguish from copying them here. See the module header.
     pub fn copy_value(&mut self, value: Value) -> Value {
         match value {
             Value::Str(id) => {
@@ -418,13 +484,18 @@ impl Heap {
                     .collect();
                 Value::Struct(self.alloc_struct(copies))
             }
+            // The elements are shared rather than copied: a fresh handle onto
+            // the same ones, and whichever array is written first copies them
+            // then (`make_array_unique`). Reading an array is most of what an
+            // interpreted frame does, and doing this eagerly made it quadratic.
             Value::Array(id) => {
-                let elements = self.elements(id).to_vec();
-                let copies = elements
-                    .into_iter()
-                    .map(|element| self.copy_value(element))
-                    .collect();
-                Value::Array(self.alloc_array(copies))
+                let shared = match self.slots.get(id.0 as usize) {
+                    Some(Some(Object::Array(elements))) => Rc::clone(elements),
+                    // A handle that names no array copies to an empty one, the
+                    // same answer `elements` gives a reader of one.
+                    _ => Rc::new(Vec::new()),
+                };
+                Value::Array(ArrayId(self.alloc_object(Object::Array(shared))))
             }
             Value::Enum(id) => {
                 // Deep, like a struct or an array: the copy owns a fresh box
