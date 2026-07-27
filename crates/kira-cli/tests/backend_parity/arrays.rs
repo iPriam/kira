@@ -430,3 +430,75 @@ fn an_element_read_out_is_independent_of_the_array() {
 ",
     );
 }
+
+// ----- borrows -------------------------------------------------------
+
+/// A `borrow mut` array given a second name is still the caller's array.
+///
+/// `var out = nodes` binds no value when `nodes` is a borrow — there is none to
+/// bind, only the caller's storage — so an append through the second name has
+/// to reach the first. Every engine used to copy here, agreeing with each other
+/// and with nobody else, which is why this asserts the values rather than
+/// leaving the three backends to confirm one answer among themselves.
+#[test]
+fn appending_through_a_rebound_borrow_reaches_the_caller() {
+    let output = assert_parity(
+        r#"
+function appendOne(nodes: borrow mut [Int], value: Int) {
+    var out = nodes
+    out.append(value)
+    return
+}
+
+function appendTwo(nodes: borrow mut [Int]) {
+    var out = nodes
+    appendOne(out, 10)
+    appendOne(out, 20)
+    print(out.count)
+    return
+}
+
+@Main
+function main() {
+    var xs: [Int] = []
+    appendTwo(xs)
+    print(xs.count)
+    print(xs[0])
+    print(xs[1])
+    return
+}
+"#,
+    );
+    assert_eq!(output, "2\n2\n10\n20\n");
+}
+
+/// A rebound borrow that is written *through* aliases; one that is rebound to
+/// something else does not.
+///
+/// The second name is only the first when it stands for nothing else. Assigning
+/// a whole new array to it makes it an ordinary local again, and the borrow it
+/// started as must not see that value.
+#[test]
+fn a_rebound_borrow_that_is_reassigned_stops_aliasing() {
+    let output = assert_parity(
+        r#"
+function replace(nodes: borrow mut [Int]) {
+    var out = nodes
+    out = [7, 8, 9]
+    out.append(10)
+    print(out.count)
+    return
+}
+
+@Main
+function main() {
+    var xs: [Int] = [1]
+    replace(xs)
+    print(xs.count)
+    print(xs[0])
+    return
+}
+"#,
+    );
+    assert_eq!(output, "4\n1\n1\n");
+}

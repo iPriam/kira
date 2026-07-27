@@ -315,6 +315,7 @@ pub unsafe extern "C" fn kira_rt_array_free(
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_trap_index_out_of_bounds() -> ! {
     eprintln!("kira: runtime trap: array index is out of bounds");
+    crate::runtime::print_trap_backtrace();
     std::process::exit(1);
 }
 
@@ -326,6 +327,7 @@ pub extern "C" fn kira_rt_trap_index_out_of_bounds() -> ! {
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_trap_index_negative() -> ! {
     eprintln!("kira: runtime trap: array index is negative");
+    crate::runtime::print_trap_backtrace();
     std::process::exit(1);
 }
 

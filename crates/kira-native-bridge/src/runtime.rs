@@ -537,7 +537,14 @@ pub const TRAP_BACKTRACE_VAR: &str = "KIRA_TRAP_BACKTRACE";
 /// Off by default: a trap's message names what went wrong, and a wall of
 /// frames after it would bury that. On demand it is the fastest way to find
 /// which call reached a trap in a program with many.
-fn print_trap_backtrace() {
+///
+/// This is how a trap whose *message* cannot name the offender still says
+/// where it came from. An array trap names neither the index nor the length,
+/// on purpose — a wasm trap path cannot format either without allocating
+/// mid-trap, and a trap that reads differently on one backend is not the same
+/// trap. The backtrace carries that detail out of band instead, where asking
+/// for it is the reader's choice and parity is untouched.
+pub(crate) fn print_trap_backtrace() {
     if std::env::var_os(TRAP_BACKTRACE_VAR).is_none() {
         return;
     }
