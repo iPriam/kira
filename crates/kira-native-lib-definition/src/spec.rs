@@ -349,9 +349,19 @@ impl NativeLibrarySpec {
     ///
     /// Joins `base_dir` with each row's relative path (a pure join, no I/O),
     /// then asks the injected `exists` predicate whether the file is present. A
-    /// row whose file is absent is a [`NativeLibraryError::MissingArchive`]; a
     /// row that names no file resolves to its attributes alone. The predicate
     /// is the seam the I/O layer fills with `|path| path.exists()`.
+    ///
+    /// # Only the row being built has to exist
+    ///
+    /// `wanted` is the target this build links for. Its archive is required and
+    /// its absence is a [`NativeLibraryError::MissingArchive`]; every *other*
+    /// row is located but not required. A cross-platform library legitimately
+    /// declares every platform it supports while a given machine has archives
+    /// for one — `kira-graphics` declares ten and a macOS checkout builds one —
+    /// and requiring all of them would make such a library unusable everywhere.
+    /// Passing `None` requires every row, which is what a caller checking a
+    /// whole matrix wants.
     ///
     /// One row gains an attribute it did not declare: a dynamic library whose
     /// row names no file and carries no attributes at all links by its own name
@@ -362,21 +372,27 @@ impl NativeLibrarySpec {
     pub fn resolve(
         &self,
         base_dir: &Path,
+        wanted: Option<&TargetTriple>,
         exists: impl Fn(&Path) -> bool,
     ) -> Result<ResolvedNativeLibrary, NativeLibraryError> {
         let mut rows = Vec::with_capacity(self.targets.len());
         for row in &self.targets {
+            let required = wanted.is_none_or(|wanted| *wanted == row.triple);
             let artifact = match row.artifact.path() {
                 Some(relative) => {
                     let located = base_dir.join(relative);
                     if !exists(&located) {
-                        return Err(NativeLibraryError::MissingArchive {
-                            library: self.name.clone(),
-                            triple: row.triple.clone(),
-                            path: located,
-                        });
+                        if required {
+                            return Err(NativeLibraryError::MissingArchive {
+                                library: self.name.clone(),
+                                triple: row.triple.clone(),
+                                path: located,
+                            });
+                        }
+                        None
+                    } else {
+                        Some(located)
                     }
-                    Some(located)
                 }
                 None => None,
             };
@@ -440,7 +456,7 @@ mod tests {
         )
         .expect("a frameworks-only declaration is valid");
         let resolved = spec
-            .resolve(Path::new("/pkg"), |_| panic!("no path to check"))
+            .resolve(Path::new("/pkg"), None, |_| panic!("no path to check"))
             .expect("resolution touches no path");
         assert_eq!(resolved.targets()[0].artifact(), None);
         assert_eq!(resolved.targets()[0].attributes().frameworks, ["Metal"]);
@@ -479,7 +495,7 @@ mod tests {
         )
         .expect("a pathless dynamic row is a valid declaration");
         let resolved = spec
-            .resolve(Path::new("/pkg"), |_| panic!("no path to check"))
+            .resolve(Path::new("/pkg"), None, |_| panic!("no path to check"))
             .expect("resolution touches no path");
         assert_eq!(resolved.targets()[0].artifact(), None);
         assert_eq!(resolved.targets()[0].attributes().system_libs, ["vulkan"]);
@@ -502,7 +518,7 @@ mod tests {
         )
         .expect("a valid declaration");
         let resolved = spec
-            .resolve(Path::new("/pkg"), |_| true)
+            .resolve(Path::new("/pkg"), None, |_| true)
             .expect("resolution");
         assert!(resolved.targets()[0].attributes().system_libs.is_empty());
     }
@@ -564,7 +580,7 @@ mod tests {
         )
         .expect("a valid declaration");
         let resolved = spec
-            .resolve(Path::new("/pkg/NativeLibs"), |_| true)
+            .resolve(Path::new("/pkg/NativeLibs"), None, |_| true)
             .expect("resolution with a satisfying predicate");
         assert_eq!(
             resolved.targets()[0].artifact(),
@@ -584,7 +600,7 @@ mod tests {
         )
         .expect("a valid declaration");
         let error = spec
-            .resolve(Path::new("/pkg/NativeLibs"), |_| false)
+            .resolve(Path::new("/pkg/NativeLibs"), None, |_| false)
             .expect_err("a missing archive is rejected");
         assert_eq!(
             error,
