@@ -8,6 +8,12 @@ use kira_shader_model::{
     Builtin, ReflectedResource, Reflection, ResourceKind, ScalarType, Stage, TextureDimension, Type,
 };
 
+/// The first Metal buffer index an array-length buffer may take.
+///
+/// Bind-group slots run from the bottom of the table; counts sit above them so
+/// the two can never collide.
+const COUNT_BUFFER_BASE: u32 = 16;
+
 /// The MSL spelling of a type.
 #[must_use]
 pub fn type_name(ty: &Type) -> String {
@@ -299,20 +305,38 @@ impl Emitter<'_> {
             .resources
             .iter()
             .filter(|resource| resource.visibility.contains(&stage))
-            .flat_map(|resource| self.resource_param(resource))
+            .flat_map(|resource| self.resource_param(resource, stage))
             .collect()
     }
 
     /// The parameters one resource contributes, length buffer included.
-    fn resource_param(&self, resource: &ReflectedResource) -> Vec<String> {
+    ///
+    /// # The index is the host's, and it differs per stage
+    ///
+    /// A graphics host binds a bind-group slot into Metal's buffer table, and
+    /// vertex buffer 0 already holds the vertex attribute stream — so a vertex
+    /// uniform lands at `slot + 1` while the same uniform in the fragment stage
+    /// lands at `slot`, where there is no attribute stream in the way. A shader
+    /// that named one index for both stages would read the right buffer in one
+    /// and an unbound one in the other, which draws a black frame and reports
+    /// nothing. Textures and samplers have tables of their own and take the
+    /// slot unchanged.
+    ///
+    /// The slot is the resource's WGSL binding: that is the number an
+    /// application binds against, so it is the one both sides agree on.
+    fn resource_param(&self, resource: &ReflectedResource, stage: Stage) -> Vec<String> {
         let Some(binding) = resource
             .backend_bindings
             .iter()
-            .find(|binding| binding.target == kira_shader_model::BackendTarget::Msl)
+            .find(|binding| binding.target == kira_shader_model::BackendTarget::Wgsl)
         else {
             return Vec::new();
         };
-        let at = binding.binding_index;
+        let slot = binding.binding_index;
+        let at = match (resource.resource_kind, stage) {
+            (ResourceKind::Uniform | ResourceKind::Storage, Stage::Vertex) => slot + 1,
+            _ => slot,
+        };
         let name = &resource.resource_name;
         let mut params = match resource.resource_kind {
             ResourceKind::Uniform => vec![format!(
@@ -339,7 +363,12 @@ impl Emitter<'_> {
         };
         for (target, length) in &resource.length_bindings {
             if *target == kira_shader_model::BackendTarget::Msl {
-                params.push(format!("constant uint& {name}_count [[buffer({length})]]"));
+                // Above every slot a bind group can occupy, so a count buffer
+                // can never land on one the host is already binding into.
+                params.push(format!(
+                    "constant uint& {name}_count [[buffer({})]]",
+                    COUNT_BUFFER_BASE + length
+                ));
             }
         }
         params
