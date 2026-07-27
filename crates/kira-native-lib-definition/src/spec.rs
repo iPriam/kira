@@ -68,6 +68,46 @@ impl LinkMode {
     }
 }
 
+/// Whether a program can be built for a target the library does not support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Availability {
+    /// Every target the build selects must be one this library declares.
+    ///
+    /// The default, and the right answer for a library the program cannot run
+    /// without: a missing row is a mistake worth naming at build time rather
+    /// than a failure at the first call.
+    #[default]
+    Required,
+    /// The library may be absent on some targets, and the program says so.
+    ///
+    /// On a target it declares no row for, the library is *excluded*: nothing
+    /// is linked and no archive is looked for. A call into it there traps,
+    /// naming the library and symbol, instead of the build failing — which is
+    /// what a Direct3D binding needs on macOS and a Vulkan one needs on a
+    /// machine with no driver. The platform-specific code is still compiled and
+    /// still type-checked; only its link-time dependency goes away.
+    Optional,
+}
+
+impl Availability {
+    /// Reads the case name a declaration writes, in either spelling.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "Required" | "required" => Some(Self::Required),
+            "Optional" | "optional" => Some(Self::Optional),
+            _ => None,
+        }
+    }
+
+    /// The lowercase label used in diagnostics.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Required => "required",
+            Self::Optional => "optional",
+        }
+    }
+}
+
 /// The C headers a library is bound and compiled against.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NativeHeaders {
@@ -252,6 +292,7 @@ impl NativeTargetSpec {
 pub struct NativeLibrarySpec {
     name: String,
     link_mode: LinkMode,
+    availability: Availability,
     headers: Option<NativeHeaders>,
     sources: Vec<String>,
     autobind: Option<AutobindSpec>,
@@ -302,11 +343,25 @@ impl NativeLibrarySpec {
         Ok(Self {
             name,
             link_mode,
+            availability: Availability::Required,
             headers: None,
             sources: Vec::new(),
             autobind: None,
             targets,
         })
+    }
+
+    /// Marks the library as one the program can be built without on a target
+    /// it declares no row for.
+    #[must_use]
+    pub fn with_availability(mut self, availability: Availability) -> Self {
+        self.availability = availability;
+        self
+    }
+
+    /// Whether a target this library declares no row for is a build failure.
+    pub fn availability(&self) -> Availability {
+        self.availability
     }
 
     /// Adds the headers the library is bound and compiled against.
@@ -393,9 +448,10 @@ impl NativeLibrarySpec {
     ) -> Result<ResolvedNativeLibrary, NativeLibraryError> {
         let mut rows = Vec::with_capacity(self.targets.len());
         for row in &self.targets {
-            // A runtime library is never linked, so no row of it has an
-            // archive to be missing.
+            // A runtime library is never linked, and an optional one may be
+            // absent, so neither has an archive that can be missing.
             let required = self.link_mode != LinkMode::Runtime
+                && self.availability != Availability::Optional
                 && wanted.is_none_or(|wanted| *wanted == row.triple);
             let artifact = match row.artifact.path() {
                 Some(relative) => {
@@ -428,6 +484,7 @@ impl NativeLibrarySpec {
         Ok(ResolvedNativeLibrary::new(
             self.name.clone(),
             self.link_mode,
+            self.availability,
             rows,
         ))
     }

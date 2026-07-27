@@ -306,6 +306,7 @@ fn a_native_program_calls_c_symbols_through_generated_adapters() {
             ir_path: None,
             runtime_archive: runtime_archive(),
             foreign_link: link_inputs(&archive),
+            unavailable_imports: Vec::new(),
         },
     )
     .expect("the FFI program links");

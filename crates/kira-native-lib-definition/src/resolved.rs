@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::spec::LinkMode;
+use crate::spec::{Availability, LinkMode};
 use crate::triple::TargetTriple;
 
 /// The non-file link inputs a target row contributes.
@@ -88,6 +88,7 @@ impl ResolvedTargetRow {
 pub struct ResolvedNativeLibrary {
     name: String,
     link_mode: LinkMode,
+    availability: Availability,
     targets: Vec<ResolvedTargetRow>,
 }
 
@@ -96,13 +97,27 @@ impl ResolvedNativeLibrary {
     pub fn new(
         name: impl Into<String>,
         link_mode: LinkMode,
+        availability: Availability,
         targets: Vec<ResolvedTargetRow>,
     ) -> Self {
         Self {
             name: name.into(),
             link_mode,
+            availability,
             targets,
         }
+    }
+
+    /// Whether the program can be built for a target this library omits.
+    pub fn availability(&self) -> Availability {
+        self.availability
+    }
+
+    /// Whether the library is absent on `target` and the program said it may
+    /// be, so calls into it there trap rather than linking.
+    pub fn is_excluded_on(&self, target: &TargetTriple) -> bool {
+        self.availability == Availability::Optional
+            && !self.targets.iter().any(|row| row.triple() == target)
     }
 
     /// How the library reaches the program.
@@ -138,9 +153,25 @@ pub struct NativeLinkInputs {
     system_libs: Vec<String>,
     compiler_flags: Vec<String>,
     linker_flags: Vec<String>,
+    unavailable_imports: Vec<usize>,
 }
 
 impl NativeLinkInputs {
+    /// Records that import `index` names a library absent on this target.
+    ///
+    /// Its adapter reports the absence instead of calling a symbol that would
+    /// not link, so the import contributes nothing here.
+    pub fn mark_unavailable(&mut self, index: usize) {
+        if !self.unavailable_imports.contains(&index) {
+            self.unavailable_imports.push(index);
+        }
+    }
+
+    /// The imports whose library is absent on this target.
+    pub fn unavailable_imports(&self) -> &[usize] {
+        &self.unavailable_imports
+    }
+
     /// The inputs of a build that links nothing foreign.
     ///
     /// A `const` rather than [`Default::default`] so a caller with no foreign
@@ -152,6 +183,7 @@ impl NativeLinkInputs {
         system_libs: Vec::new(),
         compiler_flags: Vec::new(),
         linker_flags: Vec::new(),
+        unavailable_imports: Vec::new(),
     };
 
     /// Adds one selected row's artifact and attributes, skipping repeats.

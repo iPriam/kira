@@ -110,6 +110,7 @@ impl Module {
         program: &IrProgram,
         module_name: &str,
         pointer_width: ForeignPointerWidth,
+        unavailable: &[usize],
     ) -> Result<Self, LlvmError> {
         let engines = vec![Execution::Native; program.functions.len()];
         Self::lower(
@@ -119,6 +120,7 @@ impl Module {
             engines,
             &NativeExportSurface::default(),
             pointer_width,
+            unavailable,
         )
     }
 
@@ -140,6 +142,7 @@ impl Module {
             engines,
             exports,
             ForeignPointerWidth::HOST,
+            &[],
         )
     }
 
@@ -161,6 +164,7 @@ impl Module {
             engines,
             &NativeExportSurface::default(),
             ForeignPointerWidth::HOST,
+            &[],
         )
     }
 
@@ -178,6 +182,7 @@ impl Module {
             engines,
             &NativeExportSurface::default(),
             ForeignPointerWidth::HOST,
+            &[],
         )
     }
 
@@ -189,6 +194,7 @@ impl Module {
         engines: Vec<Execution>,
         exports: &NativeExportSurface,
         pointer_width: ForeignPointerWidth,
+        unavailable: &[usize],
     ) -> Result<Self, LlvmError> {
         let name = c_string(module_name);
         // SAFETY: the context, module, and builder are created together and
@@ -205,7 +211,15 @@ impl Module {
             }
         };
 
-        let mut codegen = Codegen::new(&owned, program, kind, engines, exports, pointer_width)?;
+        let mut codegen = Codegen::new(
+            &owned,
+            program,
+            kind,
+            engines,
+            exports,
+            pointer_width,
+            unavailable,
+        )?;
         codegen.lower_program()?;
         owned.verify()?;
         Ok(owned)
@@ -286,6 +300,9 @@ impl Drop for Module {
 /// Lowers a program into an owned [`Module`].
 pub(crate) struct Codegen<'a> {
     program: &'a IrProgram,
+    /// Imports whose library is absent on this target; their adapters return a
+    /// status instead of calling a symbol that would not link.
+    unavailable: Vec<usize>,
     /// The pointer width of the target this module is emitted for.
     ///
     /// Baked into every C-layout aggregate offset the lowering computes, so it
@@ -352,6 +369,7 @@ impl<'a> Codegen<'a> {
         engines: Vec<Execution>,
         exports: &NativeExportSurface,
         pointer_width: ForeignPointerWidth,
+        unavailable: &[usize],
     ) -> Result<Self, LlvmError> {
         let types = Types::new(owned.context, pointer_width);
         let runtime = declare_runtime(owned.module, &types);
@@ -366,6 +384,7 @@ impl<'a> Codegen<'a> {
 
         let mut codegen = Codegen {
             program,
+            unavailable: unavailable.to_vec(),
             context: owned.context,
             module: owned.module,
             builder: owned.builder,
