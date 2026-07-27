@@ -502,3 +502,38 @@ function main() {
     );
     assert_eq!(output, "4\n1\n1\n");
 }
+
+/// Reading one field of an array element reads that field, not the element.
+///
+/// The element is left alone: its own handles are still its own, and writing
+/// through the array afterwards is still visible. Lowered as written this
+/// copies the whole element out to read one word of it, which is what a layout
+/// pass doing it thousands of times a frame cannot afford — so this pins the
+/// behaviour the fast path has to preserve.
+#[test]
+fn reading_one_field_of_an_element_leaves_the_element_alone() {
+    let output = assert_parity(
+        r#"
+struct Node {
+    var name: String
+    var count: Int
+}
+
+@Main
+function main() {
+    var nodes: [Node] = [
+        Node { name: "first" count: 1 },
+        Node { name: "second" count: 2 }
+    ]
+    print(nodes[0].name)
+    print(nodes[1].count)
+    nodes[0].count = 10
+    print(nodes[0].count)
+    print(nodes[0].name)
+    print(nodes.count)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "first\n2\n10\nfirst\n2\n");
+}
