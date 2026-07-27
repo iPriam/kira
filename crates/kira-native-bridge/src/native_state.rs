@@ -1,6 +1,6 @@
 //! Opaque process-lifetime native callback-state storage and value nodes.
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use kira_runtime_abi::{
     NativeStateStatus, NativeStateStore, NativeStateToken, NativeStateTypeId, NativeStateValue,
@@ -28,11 +28,56 @@ pub struct NativeStateNode {
 #[derive(Debug)]
 enum NodeValue {
     Ready(NativeStateValue),
+    /// A read-only window onto live state: the whole tree, plus the steps
+    /// walked into it.
+    ///
+    /// Recovering state hands one of these out instead of a copy, and walking
+    /// into it appends a step instead of copying a subtree. Reading one field
+    /// of a compositor's batch state used to copy its glyph cache; now it
+    /// copies nothing. The tree stays valid however the state is replaced,
+    /// because replacing swaps the handle rather than writing through it — so
+    /// a view reads what the state held when it was recovered.
+    View {
+        root: Arc<NativeStateValue>,
+        path: Vec<usize>,
+    },
     Aggregate {
         tag: NativeStateValueTag,
         enum_tag: u32,
         children: Vec<Option<NativeStateValue>>,
     },
+}
+
+impl NativeStateNode {
+    /// The value this node reads, when it is one a reader can reach.
+    ///
+    /// An `Aggregate` is under construction and has no value yet, which is why
+    /// this is an option rather than a reference.
+    fn value(&self) -> Option<&NativeStateValue> {
+        match &self.value {
+            NodeValue::Ready(value) => Some(value),
+            NodeValue::View { root, path } => walk(root, path),
+            NodeValue::Aggregate { .. } => None,
+        }
+    }
+}
+
+/// Follows `path` from `root`, or `None` when a step leads nowhere.
+fn walk<'a>(root: &'a NativeStateValue, path: &[usize]) -> Option<&'a NativeStateValue> {
+    let mut at = root;
+    for &step in path {
+        at = child_of(at, step)?;
+    }
+    Some(at)
+}
+
+/// The child an aggregate holds at `index`, or `None` for another shape.
+fn child_of(value: &NativeStateValue, index: usize) -> Option<&NativeStateValue> {
+    match value {
+        NativeStateValue::Struct(values) | NativeStateValue::Array(values) => values.get(index),
+        NativeStateValue::Enum { payload, .. } if index == 0 => payload.as_deref(),
+        _ => None,
+    }
 }
 
 fn store() -> &'static Mutex<NativeStateStore> {
@@ -58,6 +103,11 @@ fn finish(node: KNativeStateValue) -> Result<NativeStateValue, NativeStateStatus
     let node = unsafe { Box::from_raw(node) };
     match node.value {
         NodeValue::Ready(value) => Ok(value),
+        // A view is a window on state someone else owns, so handing it on as an
+        // owned value is the one place it has to be copied.
+        NodeValue::View { ref root, ref path } => walk(root, path)
+            .cloned()
+            .ok_or(NativeStateStatus::MALFORMED_VALUE),
         NodeValue::Aggregate {
             tag,
             enum_tag,
@@ -255,10 +305,11 @@ pub unsafe extern "C" fn kira_rt_native_value_tag(node: KNativeStateValue) -> u3
         return 0;
     }
     // SAFETY: the caller vouches the node is live.
-    match unsafe { &(*node).value } {
-        NodeValue::Ready(value) => value_tag(value).0,
-        NodeValue::Aggregate { tag, .. } => tag.0,
+    if let NodeValue::Aggregate { tag, .. } = unsafe { &(*node).value } {
+        return tag.0;
     }
+    // SAFETY: same live node.
+    unsafe { (*node).value() }.map_or(0, |value| value_tag(value).0)
 }
 
 /// Reads an integer node, returning zero for another shape.
@@ -271,8 +322,8 @@ pub unsafe extern "C" fn kira_rt_native_value_read_int(node: KNativeStateValue) 
         return 0;
     }
     // SAFETY: the caller vouches the node is live.
-    match unsafe { &(*node).value } {
-        NodeValue::Ready(NativeStateValue::Int(value)) => *value,
+    match unsafe { (*node).value() } {
+        Some(NativeStateValue::Int(value)) => *value,
         _ => 0,
     }
 }
@@ -287,8 +338,8 @@ pub unsafe extern "C" fn kira_rt_native_value_read_raw_ptr(node: KNativeStateVal
         return 0;
     }
     // SAFETY: the caller vouches the node is live.
-    match unsafe { &(*node).value } {
-        NodeValue::Ready(NativeStateValue::RawPtr(value)) => *value,
+    match unsafe { (*node).value() } {
+        Some(NativeStateValue::RawPtr(value)) => *value,
         _ => 0,
     }
 }
@@ -303,8 +354,8 @@ pub unsafe extern "C" fn kira_rt_native_value_read_float(node: KNativeStateValue
         return 0.0;
     }
     // SAFETY: the caller vouches the node is live.
-    match unsafe { &(*node).value } {
-        NodeValue::Ready(NativeStateValue::Float(value)) => *value,
+    match unsafe { (*node).value() } {
+        Some(NativeStateValue::Float(value)) => *value,
         _ => 0.0,
     }
 }
@@ -319,8 +370,8 @@ pub unsafe extern "C" fn kira_rt_native_value_read_bool(node: KNativeStateValue)
         return 0;
     }
     // SAFETY: the caller vouches the node is live.
-    match unsafe { &(*node).value } {
-        NodeValue::Ready(NativeStateValue::Bool(value)) => u8::from(*value),
+    match unsafe { (*node).value() } {
+        Some(NativeStateValue::Bool(value)) => u8::from(*value),
         _ => 0,
     }
 }
@@ -335,7 +386,7 @@ pub unsafe extern "C" fn kira_rt_native_value_read_string(node: KNativeStateValu
         return std::ptr::null_mut();
     }
     // SAFETY: the caller vouches the node is live.
-    let NodeValue::Ready(NativeStateValue::String(value)) = (unsafe { &(*node).value }) else {
+    let Some(NativeStateValue::String(value)) = (unsafe { (*node).value() }) else {
         return std::ptr::null_mut();
     };
     // SAFETY: the string slice covers exactly its readable bytes.
@@ -352,11 +403,13 @@ pub unsafe extern "C" fn kira_rt_native_value_len(node: KNativeStateValue) -> us
         return 0;
     }
     // SAFETY: the caller vouches the node is live.
-    match unsafe { &(*node).value } {
-        NodeValue::Ready(NativeStateValue::Struct(values))
-        | NodeValue::Ready(NativeStateValue::Array(values)) => values.len(),
-        NodeValue::Ready(NativeStateValue::Enum { payload, .. }) => usize::from(payload.is_some()),
-        NodeValue::Aggregate { children, .. } => children.len(),
+    if let NodeValue::Aggregate { children, .. } = unsafe { &(*node).value } {
+        return children.len();
+    }
+    // SAFETY: same live node.
+    match unsafe { (*node).value() } {
+        Some(NativeStateValue::Struct(values) | NativeStateValue::Array(values)) => values.len(),
+        Some(NativeStateValue::Enum { payload, .. }) => usize::from(payload.is_some()),
         _ => 0,
     }
 }
@@ -371,14 +424,21 @@ pub unsafe extern "C" fn kira_rt_native_value_enum_tag(node: KNativeStateValue) 
         return 0;
     }
     // SAFETY: the caller vouches the node is live.
-    match unsafe { &(*node).value } {
-        NodeValue::Ready(NativeStateValue::Enum { tag, .. }) => *tag,
-        NodeValue::Aggregate { enum_tag, .. } => *enum_tag,
+    if let NodeValue::Aggregate { enum_tag, .. } = unsafe { &(*node).value } {
+        return *enum_tag;
+    }
+    // SAFETY: same live node.
+    match unsafe { (*node).value() } {
+        Some(NativeStateValue::Enum { tag, .. }) => *tag,
         _ => 0,
     }
 }
 
-/// Clones aggregate child `index` into a fresh ready node.
+/// Returns aggregate child `index` as a fresh node.
+///
+/// A view walks: the child node names the same tree one step deeper, and
+/// nothing is copied. Any other node has to hand out a copy, because it owns
+/// its value and the child would outlive the borrow.
 ///
 /// # Safety
 /// `node` must be null or a live node from this runtime.
@@ -391,14 +451,24 @@ pub unsafe extern "C" fn kira_rt_native_value_child(
         return std::ptr::null_mut();
     }
     // SAFETY: the caller vouches the node is live.
-    let value = match unsafe { &(*node).value } {
-        NodeValue::Ready(NativeStateValue::Struct(values))
-        | NodeValue::Ready(NativeStateValue::Array(values)) => values.get(index),
-        NodeValue::Ready(NativeStateValue::Enum { payload, .. }) if index == 0 => {
-            payload.as_deref()
+    if let NodeValue::View { root, path } = unsafe { &(*node).value } {
+        let mut path = path.clone();
+        path.push(index);
+        if walk(root, &path).is_none() {
+            return std::ptr::null_mut();
         }
+        return Box::into_raw(Box::new(NativeStateNode {
+            value: NodeValue::View {
+                root: Arc::clone(root),
+                path,
+            },
+        }));
+    }
+    // SAFETY: same live node.
+    let value = match unsafe { &(*node).value } {
+        NodeValue::Ready(value) => child_of(value, index),
         NodeValue::Aggregate { children, .. } => children.get(index).and_then(Option::as_ref),
-        _ => None,
+        NodeValue::View { .. } => None,
     };
     value.map_or(std::ptr::null_mut(), |value| boxed(value.clone()))
 }
@@ -446,7 +516,12 @@ pub unsafe extern "C" fn kira_rt_native_state_new(
     }
 }
 
-/// Recovers a typed owned copy into `out`.
+/// Recovers a typed read-only view of the live state into `out`.
+///
+/// A view rather than a copy: the caller reads fields out of it and builds a
+/// fresh value to replace the state with, and copying the tree first is work
+/// nothing reads. The view holds the tree it was recovered from, so a later
+/// replace neither disturbs it nor is disturbed by it.
 ///
 /// # Safety
 /// `out` must be writable when non-null.
@@ -463,13 +538,19 @@ pub unsafe extern "C" fn kira_rt_native_state_recover(
         Ok(store) => store,
         Err(poisoned) => poisoned.into_inner(),
     };
-    match store.recover(
+    match store.recover_shared(
         NativeStateToken::from_word(token),
         NativeStateTypeId::new(type_id),
     ) {
-        Ok(value) => {
+        Ok(root) => {
+            let node = NativeStateNode {
+                value: NodeValue::View {
+                    root,
+                    path: Vec::new(),
+                },
+            };
             // SAFETY: the caller supplies one writable pointer slot.
-            unsafe { *out = boxed(value) };
+            unsafe { *out = Box::into_raw(Box::new(node)) };
             NativeStateStatus::OK.0
         }
         Err(error) => status(error),
@@ -587,6 +668,85 @@ mod tests {
         // SAFETY: `out` is writable.
         let unknown_status = unsafe { kira_rt_native_state_recover(999_999, 7, &mut out) };
         assert_eq!(unknown_status, NativeStateStatus::UNKNOWN_TOKEN.0);
+    }
+
+    /// A recovered view reads the state as it was when it was recovered, and
+    /// replacing the state neither disturbs it nor is disturbed by it.
+    ///
+    /// That was true of the copy this replaced, and it has to stay true: a
+    /// generated function recovers, reads its fields, and replaces — reading a
+    /// field *after* the replace and seeing the new value would change what
+    /// the code around it means.
+    #[test]
+    fn a_recovered_view_is_a_snapshot_a_replace_does_not_move() {
+        let node = kira_rt_native_value_aggregate(NativeStateValueTag::STRUCT.0, 0, 1);
+        let before = kira_rt_native_value_int(1);
+        // SAFETY: both nodes are live and slot zero exists.
+        let set = unsafe { kira_rt_native_value_set_child(node, 0, before) };
+        assert_eq!(set, 0);
+        let mut token = 0;
+        // SAFETY: `node` is live and `token` is writable.
+        assert_eq!(unsafe { kira_rt_native_state_new(21, node, &mut token) }, 0);
+
+        let mut view = std::ptr::null_mut();
+        // SAFETY: `view` is writable.
+        let recovered = unsafe { kira_rt_native_state_recover(token, 21, &mut view) };
+        assert_eq!(recovered, 0);
+
+        let replacement = kira_rt_native_value_aggregate(NativeStateValueTag::STRUCT.0, 0, 1);
+        let after = kira_rt_native_value_int(2);
+        // SAFETY: both nodes are live and slot zero exists.
+        let set = unsafe { kira_rt_native_value_set_child(replacement, 0, after) };
+        assert_eq!(set, 0);
+        // SAFETY: `replacement` is live and given up here.
+        let replaced = unsafe { kira_rt_native_state_replace(token, 21, replacement) };
+        assert_eq!(replaced, 0);
+
+        // SAFETY: the view is still live and still names a struct.
+        let child = unsafe { kira_rt_native_value_child(view, 0) };
+        // SAFETY: `child` is a live integer node.
+        assert_eq!(unsafe { kira_rt_native_value_read_int(child) }, 1);
+        // SAFETY: both temporary nodes are live and uniquely owned.
+        unsafe {
+            kira_rt_native_value_free(child);
+            kira_rt_native_value_free(view);
+        }
+
+        let mut fresh = std::ptr::null_mut();
+        // SAFETY: `fresh` is writable.
+        let recovered = unsafe { kira_rt_native_state_recover(token, 21, &mut fresh) };
+        assert_eq!(recovered, 0);
+        // SAFETY: `fresh` is a live struct node.
+        let child = unsafe { kira_rt_native_value_child(fresh, 0) };
+        // SAFETY: `child` is a live integer node.
+        assert_eq!(unsafe { kira_rt_native_value_read_int(child) }, 2);
+        // SAFETY: both temporary nodes are live and uniquely owned.
+        unsafe {
+            kira_rt_native_value_free(child);
+            kira_rt_native_value_free(fresh);
+        }
+        assert_eq!(kira_rt_native_state_free(token), 0);
+    }
+
+    /// Walking a view reports a missing child rather than inventing one.
+    #[test]
+    fn a_view_step_past_the_end_is_null() {
+        let node = kira_rt_native_value_aggregate(NativeStateValueTag::STRUCT.0, 0, 1);
+        let only = kira_rt_native_value_int(5);
+        // SAFETY: both nodes are live and slot zero exists.
+        assert_eq!(unsafe { kira_rt_native_value_set_child(node, 0, only) }, 0);
+        let mut token = 0;
+        // SAFETY: `node` is live and `token` is writable.
+        assert_eq!(unsafe { kira_rt_native_state_new(22, node, &mut token) }, 0);
+        let mut view = std::ptr::null_mut();
+        // SAFETY: `view` is writable.
+        let recovered = unsafe { kira_rt_native_state_recover(token, 22, &mut view) };
+        assert_eq!(recovered, 0);
+        // SAFETY: the view is live; index one is past its only child.
+        assert!(unsafe { kira_rt_native_value_child(view, 1) }.is_null());
+        // SAFETY: the view is live and uniquely owned.
+        unsafe { kira_rt_native_value_free(view) };
+        assert_eq!(kira_rt_native_state_free(token), 0);
     }
 
     #[test]
