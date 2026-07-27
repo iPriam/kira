@@ -33,6 +33,7 @@ kira-hybrid-definition.workspace = true
 kira-hybrid-runtime.workspace = true
 kira-live.workspace = true
 kira-manifest.workspace = true
+kira-package-manager.workspace = true
 # Manifest discovery: `kirac` walks up from the source file to the package that
 # governs it, which is what makes `kind = .Library` reach the frontend.
 kira-project.workspace = true
