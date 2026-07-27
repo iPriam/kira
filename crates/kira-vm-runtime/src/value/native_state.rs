@@ -28,9 +28,16 @@ impl Heap {
                 NativeStateValue::Struct(values)
             }
             Value::Array(id) => {
+                // Moving the elements out is a write like any other: an array
+                // sharing them would be left reading values this took over.
+                self.make_array_unique(id);
                 let elements = match self.take_object(id.0) {
                     Some(Object::Array(elements)) => elements,
                     _ => return None,
+                };
+                // Sole owner by now, and the slot just gave up its hold.
+                let Ok(elements) = std::rc::Rc::try_unwrap(elements) else {
+                    return None;
                 };
                 let mut values = Vec::with_capacity(elements.len());
                 for element in elements {
