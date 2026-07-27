@@ -258,6 +258,7 @@ staticLib = "lib/libffimath-wasm.a"
                 .catalog
                 .resolve_import(symbol, &host())
                 .expect("host archive")
+                .expect("a linked library has a row")
                 .artifact(),
             Some(root.join("NativeLibs/lib/libffimath-macos.a").as_path()),
         );
@@ -266,6 +267,7 @@ staticLib = "lib/libffimath-wasm.a"
                 .catalog
                 .resolve_import(symbol, &wasm())
                 .expect("wasm archive")
+                .expect("a linked library has a row")
                 .artifact(),
             Some(root.join("NativeLibs/lib/libffimath-wasm.a").as_path()),
         );
@@ -305,7 +307,8 @@ Package Demo {
         let row = resolution
             .catalog
             .resolve_import(symbol, &host())
-            .expect("the host row");
+            .expect("the host row")
+            .expect("a linked library has a row");
         assert_eq!(
             row.artifact(),
             Some(

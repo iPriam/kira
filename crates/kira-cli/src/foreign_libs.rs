@@ -165,7 +165,11 @@ pub fn resolve(
                     ForeignResolveError::NoArtifactForTarget { library, target }
                 }
             })?;
-        inputs.push_row(row);
+        // A runtime library contributes nothing to the link line: the runtime
+        // opens it on first call.
+        if let Some(row) = row {
+            inputs.push_row(row);
+        }
     }
 
     Ok(Some(inputs))

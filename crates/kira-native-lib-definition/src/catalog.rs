@@ -77,16 +77,24 @@ impl ResolvedNativeLibraries {
         &self,
         library: Symbol,
         target: &TargetTriple,
-    ) -> Result<&ResolvedTargetRow, ImportResolveError> {
+    ) -> Result<Option<&ResolvedTargetRow>, ImportResolveError> {
         let Some(resolved) = self.libraries.get(&library) else {
             return Err(ImportResolveError::UndeclaredLibrary {
                 library: self.name_of(library),
             });
         };
+        // A runtime library is opened by the runtime, not the linker, so it
+        // contributes no link inputs and needs no row for this target — a
+        // Direct3D import on macOS is a symbol that will never be looked up,
+        // not a build failure.
+        if resolved.is_runtime_loaded() {
+            return Ok(None);
+        }
         resolved
             .targets()
             .iter()
             .find(|row| row.triple() == target)
+            .map(Some)
             .ok_or_else(|| ImportResolveError::NoArtifactForTarget {
                 library: resolved.name().to_owned(),
                 target: target.clone(),
@@ -193,6 +201,7 @@ mod tests {
             catalog
                 .resolve_import(symbol, &triple("aarch64-macos-none"))
                 .expect("host row")
+                .expect("a linked library has a row")
                 .artifact(),
             Some(Path::new("/pkg/NativeLibs/lib/host.a")),
         );
@@ -200,6 +209,7 @@ mod tests {
             catalog
                 .resolve_import(symbol, &triple("wasm32-emscripten-unknown"))
                 .expect("wasm row")
+                .expect("a linked library has a row")
                 .artifact(),
             Some(Path::new("/pkg/NativeLibs/lib/wasm.a")),
         );

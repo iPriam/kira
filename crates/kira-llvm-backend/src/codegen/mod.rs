@@ -42,6 +42,7 @@ use std::path::Path;
 use kira_ir::{IrFunction, IrProgram};
 use kira_runtime_abi::{Execution, ForeignPointerWidth};
 use kira_semantics_model::Type;
+use llvm_sys::LLVMTypeKind;
 use llvm_sys::analysis::{LLVMVerifierFailureAction, LLVMVerifyModule};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
@@ -571,6 +572,13 @@ impl<'a> Codegen<'a> {
 
     /// Emits a call to a runtime helper.
     ///
+    /// A call that returns nothing is emitted unnamed whatever `name` says: an
+    /// LLVM instruction producing `void` may not carry one, and naming it is a
+    /// module the verifier rejects with "instruction has a name, but provides a
+    /// void value". Deciding it here rather than at each call site means a
+    /// helper that gains or loses a result cannot leave a caller emitting an
+    /// invalid module.
+    ///
     /// # Safety
     /// The builder must be positioned at the end of a block, and `args` must
     /// match `callable`'s signature.
@@ -581,8 +589,12 @@ impl<'a> Codegen<'a> {
         name: &CStr,
     ) -> LLVMValueRef {
         // SAFETY: the caller positions the builder and supplies matching
-        // arguments; `args` outlives the call.
+        // arguments; `args` outlives the call. `callable.ty` is the callee's
+        // function type, so its return type is live for the query.
         unsafe {
+            let returns_void =
+                LLVMGetTypeKind(LLVMGetReturnType(callable.ty)) == LLVMTypeKind::LLVMVoidTypeKind;
+            let name = if returns_void { c"" } else { name };
             LLVMBuildCall2(
                 self.builder,
                 callable.ty,

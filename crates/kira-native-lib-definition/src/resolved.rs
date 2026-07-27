@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::spec::LinkMode;
 use crate::triple::TargetTriple;
 
 /// The non-file link inputs a target row contributes.
@@ -86,16 +87,32 @@ impl ResolvedTargetRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedNativeLibrary {
     name: String,
+    link_mode: LinkMode,
     targets: Vec<ResolvedTargetRow>,
 }
 
 impl ResolvedNativeLibrary {
-    /// Builds a resolved library from its name and located rows.
-    pub fn new(name: impl Into<String>, targets: Vec<ResolvedTargetRow>) -> Self {
+    /// Builds a resolved library from its name, link mode, and located rows.
+    pub fn new(
+        name: impl Into<String>,
+        link_mode: LinkMode,
+        targets: Vec<ResolvedTargetRow>,
+    ) -> Self {
         Self {
             name: name.into(),
+            link_mode,
             targets,
         }
+    }
+
+    /// How the library reaches the program.
+    pub fn link_mode(&self) -> LinkMode {
+        self.link_mode
+    }
+
+    /// Whether the runtime finds this library rather than the linker.
+    pub fn is_runtime_loaded(&self) -> bool {
+        self.link_mode == LinkMode::Runtime
     }
 
     /// The library name.
