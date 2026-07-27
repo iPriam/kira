@@ -1,6 +1,7 @@
 //! Portable callback-state values, tokens, stores, and host errors.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -103,6 +104,12 @@ impl From<NativeStateError> for NativeStateStatus {
 }
 
 /// An owned, backend-neutral copy of a Kira value held as callback state.
+///
+/// Cloning one is cheap whatever it holds: an aggregate's children are shared,
+/// so a clone bumps a count instead of walking the tree. That matters because
+/// *recovering* state clones it, and a UI compositor recovers its state on
+/// every quad it draws — a deep copy there made reading one counter cost the
+/// whole cache behind it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NativeStateValue {
     /// A Kira integer value.
@@ -114,9 +121,9 @@ pub enum NativeStateValue {
     /// A Kira string value.
     String(String),
     /// A Kira struct's fields in declaration order.
-    Struct(Vec<NativeStateValue>),
+    Struct(NativeStateValues),
     /// A Kira array's elements in index order.
-    Array(Vec<NativeStateValue>),
+    Array(NativeStateValues),
     /// An opaque raw-pointer word.
     RawPtr(u64),
     /// A Kira enum's tag and optional payload.
@@ -124,8 +131,58 @@ pub enum NativeStateValue {
         /// The declaration-order variant tag.
         tag: u32,
         /// The selected variant's payload, when it has one.
-        payload: Option<Box<NativeStateValue>>,
+        payload: Option<Arc<NativeStateValue>>,
     },
+}
+
+/// The children of a struct or an array, shared between clones.
+///
+/// Reads go through the slice this derefs to. A writer calls [`Self::edit`],
+/// which copies only when the children are actually shared — the value the
+/// caller mutates is its own, and no clone that never writes pays for it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeStateValues(Arc<Vec<NativeStateValue>>);
+
+impl NativeStateValues {
+    /// Takes ownership of `values`.
+    #[must_use]
+    pub fn new(values: Vec<NativeStateValue>) -> Self {
+        Self(Arc::new(values))
+    }
+
+    /// The children, mutable, copied first when another clone shares them.
+    pub fn edit(&mut self) -> &mut Vec<NativeStateValue> {
+        Arc::make_mut(&mut self.0)
+    }
+
+    /// The children as an owned `Vec`, moved when nothing else shares them.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<NativeStateValue> {
+        Arc::try_unwrap(self.0).unwrap_or_else(|shared| (*shared).clone())
+    }
+}
+
+impl From<Vec<NativeStateValue>> for NativeStateValues {
+    fn from(values: Vec<NativeStateValue>) -> Self {
+        Self::new(values)
+    }
+}
+
+impl std::ops::Deref for NativeStateValues {
+    type Target = [NativeStateValue];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl IntoIterator for NativeStateValues {
+    type Item = NativeStateValue;
+    type IntoIter = std::vec::IntoIter<NativeStateValue>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.into_vec().into_iter()
+    }
 }
 
 /// A deterministic failure from the opaque callback-state store.
@@ -390,24 +447,28 @@ mod tests {
         let token = store
             .create(
                 LEFT,
-                NativeStateValue::Struct(vec![NativeStateValue::Int(3)]),
+                NativeStateValue::Struct(vec![NativeStateValue::Int(3)].into()),
             )
             .expect("state allocates");
         assert_ne!(token.as_word(), 0);
         assert_eq!(
             store.recover(token, LEFT),
-            Ok(NativeStateValue::Struct(vec![NativeStateValue::Int(3)]))
+            Ok(NativeStateValue::Struct(
+                vec![NativeStateValue::Int(3)].into()
+            ))
         );
         store
             .replace(
                 token,
                 LEFT,
-                NativeStateValue::Struct(vec![NativeStateValue::Int(7)]),
+                NativeStateValue::Struct(vec![NativeStateValue::Int(7)].into()),
             )
             .expect("state mutates");
         assert_eq!(
             store.recover(token, LEFT),
-            Ok(NativeStateValue::Struct(vec![NativeStateValue::Int(7)]))
+            Ok(NativeStateValue::Struct(
+                vec![NativeStateValue::Int(7)].into()
+            ))
         );
         assert_eq!(store.free(token), Ok(()));
         assert_eq!(
