@@ -488,14 +488,19 @@ impl NativeLibrary {
             }
             // SAFETY: the aggregate owns every child this builds.
             NativeStateValue::Struct(values) => unsafe {
-                self.encode_aggregate(NativeStateValueTag::STRUCT, 0, values)?
+                self.encode_aggregate(NativeStateValueTag::STRUCT, 0, values.into_vec())?
             },
             // SAFETY: the aggregate owns every child this builds.
             NativeStateValue::Array(values) => unsafe {
-                self.encode_aggregate(NativeStateValueTag::ARRAY, 0, values)?
+                self.encode_aggregate(NativeStateValueTag::ARRAY, 0, values.into_vec())?
             },
             NativeStateValue::Enum { tag, payload } => {
-                let values = payload.into_iter().map(|value| *value).collect();
+                let values = payload
+                    .into_iter()
+                    .map(|value| {
+                        std::sync::Arc::try_unwrap(value).unwrap_or_else(|shared| (*shared).clone())
+                    })
+                    .collect();
                 // SAFETY: the aggregate owns every child this builds.
                 unsafe { self.encode_aggregate(NativeStateValueTag::ENUM, tag, values)? }
             }
@@ -569,9 +574,9 @@ impl NativeLibrary {
                     values.push(unsafe { self.decode_state_value(child)? });
                 }
                 if tag == NativeStateValueTag::STRUCT {
-                    NativeStateValue::Struct(values)
+                    NativeStateValue::Struct(values.into())
                 } else {
-                    NativeStateValue::Array(values)
+                    NativeStateValue::Array(values.into())
                 }
             }
             NativeStateValueTag::ENUM => {
@@ -585,7 +590,9 @@ impl NativeLibrary {
                     // SAFETY: child zero exists and is returned owned.
                     let child = unsafe { (self.state_value_child)(node, 0) };
                     // SAFETY: recursion consumes the child.
-                    Some(Box::new(unsafe { self.decode_state_value(child)? }))
+                    Some(std::sync::Arc::new(unsafe {
+                        self.decode_state_value(child)?
+                    }))
                 } else {
                     // SAFETY: `node` is still live and uniquely owned.
                     unsafe { (self.state_value_free)(node) };

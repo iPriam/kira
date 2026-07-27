@@ -25,7 +25,7 @@ impl Heap {
                 for field in fields {
                     values.push(self.into_native_state(field)?);
                 }
-                NativeStateValue::Struct(values)
+                NativeStateValue::Struct(values.into())
             }
             Value::Array(id) => {
                 let elements = match self.take_object(id.0) {
@@ -36,7 +36,7 @@ impl Heap {
                 for element in elements {
                     values.push(self.into_native_state(element)?);
                 }
-                NativeStateValue::Array(values)
+                NativeStateValue::Array(values.into())
             }
             Value::Enum(id) => {
                 let (tag, payload) = match self.take_object(id.0) {
@@ -46,7 +46,7 @@ impl Heap {
                 NativeStateValue::Enum {
                     tag,
                     payload: match payload {
-                        Some(value) => Some(Box::new(self.into_native_state(value)?)),
+                        Some(value) => Some(std::sync::Arc::new(self.into_native_state(value)?)),
                         None => None,
                     },
                 }
@@ -80,7 +80,13 @@ impl Heap {
                 Value::Array(self.alloc_array(elements))
             }
             NativeStateValue::Enum { tag, payload } => {
-                let payload = payload.map(|value| self.from_native_state(*value));
+                let payload = payload.map(|value| {
+                    // The payload is shared, so take it when this is the last
+                    // reference and copy only when it is not.
+                    let value = std::sync::Arc::try_unwrap(value)
+                        .unwrap_or_else(|shared| (*shared).clone());
+                    self.from_native_state(value)
+                });
                 Value::Enum(self.alloc_enum(tag, payload))
             }
         }
