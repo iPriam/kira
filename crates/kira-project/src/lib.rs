@@ -8,7 +8,8 @@ pub mod project;
 pub mod workspace;
 
 pub use native_libraries::{
-    NativeLibraryResolveError, NativeLinkResolution, resolve_native_libraries,
+    NativeLibraryPackage, NativeLibraryResolveError, NativeLinkResolution,
+    resolve_native_libraries, resolve_native_library_packages,
 };
 pub use package_discovery::{
     BIND_TYPES_DIR_NAME, BIND_TYPES_FILE_SUFFIX, DECLARATION_MANIFEST_FILE_NAME, DiscoveryError,

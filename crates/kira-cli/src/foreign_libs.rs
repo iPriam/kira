@@ -26,6 +26,12 @@ use kira_project::NativeLibraryResolveError;
 
 use crate::options::Device;
 
+/// The library name that means "Kira's own runtime".
+///
+/// Not a package's to declare: the runtime archive is linked by the compiler
+/// for every native build, so an import naming it resolves to nothing extra.
+pub const RUNTIME_LIBRARY: &str = "kira_runtime";
+
 /// Why a program's foreign imports could not be resolved to archives.
 #[derive(Debug, thiserror::Error)]
 pub enum ForeignResolveError {
@@ -124,15 +130,23 @@ pub fn resolve(
         return Ok(None);
     }
 
-    let (package_root, inline) = package_declarations(source)?;
-    let manifests = native_lib_manifests(&package_root)?;
-    let resolution =
-        kira_project::resolve_native_libraries(&package_root, &inline, &manifests, &target)?;
+    // Every package in the dependency closure contributes: a library is
+    // declared by the package that owns it, not by every package that uses it.
+    // `kira-graphics` declares `sokol`, `vulkan`, and `kira_metal`; an app
+    // importing their symbols declares none of them.
+    let packages = declaring_packages(source)?;
+    let resolution = kira_project::resolve_native_library_packages(&packages, &target)?;
     let mut catalog = resolution.catalog;
 
     let mut inputs = NativeLinkInputs::default();
     for entry in &program.foreign_imports {
         let library = entry.import.library();
+        // Kira's own runtime is already on every link line — it is what the
+        // compiler emits calls into — so an import naming it contributes no
+        // link input and needs no declaration in a package that uses it.
+        if library == RUNTIME_LIBRARY {
+            continue;
+        }
         let symbol = catalog.intern_library(library).map_err(|_| {
             ForeignResolveError::NameSpaceExhausted {
                 library: library.to_owned(),
@@ -155,6 +169,51 @@ pub fn resolve(
     }
 
     Ok(Some(inputs))
+}
+
+/// Every package whose declarations this build may draw on: the one owning
+/// `source`, then each package it depends on, transitively.
+///
+/// Each group is anchored at its own root, because a declaration's relative
+/// paths are written against the package that made it.
+fn declaring_packages(
+    source: &Path,
+) -> Result<Vec<kira_project::NativeLibraryPackage>, ForeignResolveError> {
+    let (root, inline) = package_declarations(source)?;
+    let mut packages = vec![kira_project::NativeLibraryPackage {
+        manifest_paths: native_lib_manifests(&root)?,
+        root: root.clone(),
+        inline,
+    }];
+    // A dependency's declarations are read from its own `package.kira`. A
+    // dependency that cannot be resolved is not this function's to report: the
+    // frontend already names it, with the span to point at.
+    let Ok(graph) = kira_package_manager::resolve(&root) else {
+        return Ok(packages);
+    };
+    // One package may be reached by more than one path through the graph, and
+    // reading its declarations twice would look like declaring them twice.
+    let mut seen: Vec<PathBuf> = vec![root.clone()];
+    for package in graph.packages {
+        // The graph names each package's `app/` directory; a declaration's
+        // relative paths are written against the package root above it.
+        let Some(package_root) = package.source_dir.parent().map(Path::to_path_buf) else {
+            continue;
+        };
+        if seen.contains(&package_root) {
+            continue;
+        }
+        seen.push(package_root.clone());
+        let Ok(Some(declared)) = kira_project::manifest_for(&package_root) else {
+            continue;
+        };
+        packages.push(kira_project::NativeLibraryPackage {
+            manifest_paths: native_lib_manifests(&package_root)?,
+            root: package_root,
+            inline: declared.manifest.native_libraries,
+        });
+    }
+    Ok(packages)
 }
 
 /// The package directory `source` belongs to and the libraries it declares
