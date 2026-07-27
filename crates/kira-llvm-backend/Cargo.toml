@@ -11,6 +11,7 @@ kira-backend-api.workspace = true
 # The link line is built from the resolved native-library inputs — archives
 # plus the frameworks, system libraries, and flags declared beside them.
 kira-native-lib-definition.workspace = true
+kira-diagnostics.workspace = true
 kira-runtime-abi.workspace = true
 kira-semantics-model.workspace = true
 kira-toolchain.workspace = true

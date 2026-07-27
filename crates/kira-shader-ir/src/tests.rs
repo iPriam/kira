@@ -233,15 +233,17 @@ fn the_uniform_digest_matches_the_shape_the_graphics_host_parses() {
     // contract, not ours, so it is pinned literally.
     let ir = build(TEXTURED, BackendTarget::Msl);
     let digest = ir.uniform_digest();
+    // Stage mask 1 is vertex alone: `camera` is read there and nowhere else.
     assert!(
-        digest.contains("camera:0:64:3:1:view_projection@0#64;"),
+        digest.contains("camera:0:64:1:1:view_projection@0#64;"),
         "{digest}"
     );
     // `Surface` is `Float3` then `Float`: the vector sits at 0 and the scalar at
     // 16 because `std140` pads it, but the member's own size stays 12 so the
     // host maps it onto `FLOAT3` rather than `FLOAT4`.
+    // `surface` is declared and never read, so no stage claims it — mask 0.
     assert!(
-        digest.contains("surface:0:32:3:2:albedo@0#12,alpha@16#4;"),
+        digest.contains("surface:0:32:0:2:albedo@0#12,alpha@16#4;"),
         "{digest}"
     );
 }
@@ -286,4 +288,24 @@ shader S {
         BackendTarget::Msl,
     );
     assert_eq!(ir.uniform_digest(), "");
+}
+
+#[test]
+fn a_resources_stage_visibility_is_measured_rather_than_assumed() {
+    // A host binds a uniform block to every stage the reflection lists, and a
+    // stage has only so many block slots — so a resource one stage reads must
+    // not be reported against the other.
+    let ir = build(TEXTURED, BackendTarget::Msl);
+    let reflection = ir.reflection.expect("a shader");
+    let stages = |name: &str| {
+        reflection
+            .resources
+            .iter()
+            .find(|resource| resource.resource_name == name)
+            .map(|resource| resource.visibility.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(stages("camera"), vec![Stage::Vertex]);
+    assert_eq!(stages("albedo"), vec![Stage::Fragment]);
+    assert!(stages("surface").is_empty(), "declared but never read");
 }

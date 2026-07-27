@@ -67,7 +67,12 @@ unsafe fn initialize_targets() {
 
 impl TargetMachine {
     /// Builds a target machine for the compiling host.
-    pub(super) fn host() -> Result<Self, LlvmError> {
+    ///
+    /// `optimize` chooses the code-generation level. Optimizing dominates the
+    /// cost of emitting a large module — the Project Matter editor takes two
+    /// minutes optimized and seconds unoptimized — so a development build asks
+    /// for none and a shipped one asks for the default.
+    pub(super) fn host(optimize: bool) -> Result<Self, LlvmError> {
         // SAFETY: the initializers are idempotent and safe to call repeatedly;
         // every out-parameter below is a live local, and each LLVM-owned string
         // is disposed of before returning or stored in `Self` for its drop.
@@ -90,7 +95,11 @@ impl TargetMachine {
                 triple,
                 cpu,
                 features,
-                LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault,
+                if optimize {
+                    LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault
+                } else {
+                    LLVMCodeGenOptLevel::LLVMCodeGenLevelNone
+                },
                 // Host executables link position-independent everywhere Kira
                 // targets; PIC is required on macOS and the default on modern
                 // Linux distributions.
