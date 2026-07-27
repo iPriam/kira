@@ -118,12 +118,29 @@ pub struct SourceProgram {
     /// the manifest sets it; a caller with no manifest leaves it at
     /// [`BuildKind::Application`].
     pub build_kind: BuildKind,
+    /// The shaders compiled before analysis ran, for the `Ksl` namespace a
+    /// `comptime macro` reaches during expansion.
+    ///
+    /// An input rather than a parameter for the same reason `build_kind` is:
+    /// changing a shader has to invalidate analysis exactly as changing the
+    /// text does. Compiling one reads files, which a salsa query may not, so
+    /// the build layer does it up front and hands the results in here — empty
+    /// for every caller that has no shaders.
+    #[returns(clone)]
+    pub shaders: kira_macros::PrecompiledShaders,
 }
 
 impl SourceProgram {
     /// Creates a single-file application: an entry file that imports nothing.
     pub fn single(db: &dyn salsa::Database, text: String, path: String) -> Self {
-        Self::new(db, text, path, Vec::new(), BuildKind::Application)
+        Self::new(
+            db,
+            text,
+            path,
+            Vec::new(),
+            BuildKind::Application,
+            kira_macros::PrecompiledShaders::default(),
+        )
     }
 
     /// Creates a program from an entry file and its modules, analyzed as an
@@ -138,7 +155,14 @@ impl SourceProgram {
         path: String,
         modules: Vec<ModuleSource>,
     ) -> Self {
-        Self::new(db, text, path, modules, BuildKind::Application)
+        Self::new(
+            db,
+            text,
+            path,
+            modules,
+            BuildKind::Application,
+            kira_macros::PrecompiledShaders::default(),
+        )
     }
 }
 
@@ -204,7 +228,12 @@ pub fn expanded(db: &dyn salsa::Database, source: SourceProgram) -> ExpandedProg
         .collect();
     files.push((FILE_SOURCE_ID, entry_text.as_str()));
 
-    let expansion = kira_macros::expand(&files);
+    let shaders = source.shaders(db);
+    let expansion = if shaders.is_empty() {
+        kira_macros::expand(&files)
+    } else {
+        kira_macros::expand_with(&files, Some(&shaders))
+    };
     for diagnostic in expansion.diagnostics {
         DiagnosticAccumulator(diagnostic).accumulate(db);
     }
