@@ -237,7 +237,12 @@ impl FunctionLowering<'_, '_> {
                         c"array".as_ptr(),
                     )
                 };
-                let slot = self.element_slot(handle, *index, element)?;
+                // A place walk exists to write at the end of it, and every
+                // array it passes through is written *through* — so each one
+                // takes its item block back from whatever it was sharing it
+                // with. Doing this per step rather than only at the end is what
+                // makes `rows[i].cells[j] = v` land in this `rows` alone.
+                let slot = self.element_slot_mut(handle, *index, element)?;
                 Ok((slot, element))
             }
         }

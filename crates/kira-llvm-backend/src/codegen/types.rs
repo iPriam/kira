@@ -99,6 +99,8 @@ pub(crate) struct Runtime {
     pub(super) array_new: Callable,
     pub(super) array_len: Callable,
     pub(super) array_slot: Callable,
+    /// The address of an element to write, in a block the handle owns alone.
+    pub(super) array_slot_mut: Callable,
     pub(super) array_push_slot: Callable,
     pub(super) array_clone: Callable,
     pub(super) array_free: Callable,
@@ -267,16 +269,23 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 types.ptr,
                 &mut [types.ptr, types.i64, types.i64],
             ),
+            // The two mutating entry points take the element clone as well: a
+            // write is where a shared item block becomes this handle's own, and
+            // the leaf is what makes that copy deep. See `kira-native-bridge`'s
+            // `array` module.
+            array_slot_mut: declare(
+                c"kira_rt_array_slot_mut",
+                types.ptr,
+                &mut [types.ptr, types.i64, types.i64, types.ptr],
+            ),
             array_push_slot: declare(
                 c"kira_rt_array_push_slot",
                 types.ptr,
-                &mut [types.ptr, types.i64],
-            ),
-            array_clone: declare(
-                c"kira_rt_array_clone",
-                types.ptr,
                 &mut [types.ptr, types.i64, types.ptr],
             ),
+            // Copying an array takes a share of its block, which needs neither
+            // the element size nor a leaf: nothing is walked until a write.
+            array_clone: declare(c"kira_rt_array_clone", types.ptr, &mut [types.ptr]),
             array_free: declare(
                 c"kira_rt_array_free",
                 types.void,
@@ -428,7 +437,10 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             native_value_array_from: declare(
                 c"kira_rt_native_value_array_from",
                 types.ptr,
-                &mut [types.ptr, types.i64, types.ptr],
+                // (array, esize, element clone, encode) — encoding moves every
+                // element out of the block, so it takes the same leaf a write
+                // does to make the block the array's own first.
+                &mut [types.ptr, types.i64, types.ptr, types.ptr],
             ),
             native_value_array_to: declare(
                 c"kira_rt_native_value_array_to",

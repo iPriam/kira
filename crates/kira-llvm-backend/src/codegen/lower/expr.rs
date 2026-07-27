@@ -104,6 +104,10 @@ impl FunctionLowering<'_, '_> {
     /// index — the bounds check the runtime does there can never fire here. The
     /// slots are fresh, so a plain store suffices; there is no prior value to
     /// drop, unlike a store into a live element.
+    ///
+    /// The read slot rather than the mutable one, even though this writes: the
+    /// item block was allocated a few instructions ago and no other array has
+    /// ever seen it, so there is nothing for a copy to protect.
     fn lower_array_new(
         &mut self,
         ty: Type,
@@ -271,8 +275,12 @@ impl FunctionLowering<'_, '_> {
         }
     }
 
-    /// Turns an array handle into the address of element `index`, bounds-checked
-    /// by the runtime.
+    /// Turns an array handle into the address of element `index` **to read**,
+    /// bounds-checked by the runtime.
+    ///
+    /// The item block behind the handle may be shared with another array, so
+    /// nothing may be written through the address this gives back;
+    /// [`Self::element_slot_mut`] is the one that may.
     pub(super) fn element_slot(
         &mut self,
         array: LLVMValueRef,
@@ -285,6 +293,31 @@ impl FunctionLowering<'_, '_> {
             self.codegen.runtime.array_slot,
             &mut [array, index_value, esize],
             c"slot",
+        ))
+    }
+
+    /// Turns an array handle into the address of element `index` **to write**,
+    /// bounds-checked by the runtime.
+    ///
+    /// Copying an array only takes a share of its item block, so a write is
+    /// where the copying actually happens: the runtime gives this handle a
+    /// block of its own first, cloning each element with the leaf handed over
+    /// here. Every write into an array goes through this — a store, an append,
+    /// and a step of a place walk that passes through one — and that is the
+    /// whole of what keeps the sharing invisible.
+    pub(super) fn element_slot_mut(
+        &mut self,
+        array: LLVMValueRef,
+        index: IrExprId,
+        element: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let index_value = self.lower_expr(index)?;
+        let esize = self.codegen.abi_size(element)?;
+        let clone = self.codegen.element_clone(element)?;
+        Ok(self.call(
+            self.codegen.runtime.array_slot_mut,
+            &mut [array, index_value, esize, clone],
+            c"slot.mut",
         ))
     }
 
@@ -419,9 +452,10 @@ impl FunctionLowering<'_, '_> {
             };
             let lowered = self.lower_expr(value)?;
             let esize = self.codegen.abi_size(element)?;
+            let clone = self.codegen.element_clone(element)?;
             let element_slot = self.call(
                 self.codegen.runtime.array_push_slot,
-                &mut [handle, esize],
+                &mut [handle, esize, clone],
                 c"push",
             );
             // SAFETY: `element_slot` is one fresh element slot.
@@ -446,9 +480,13 @@ impl FunctionLowering<'_, '_> {
         };
         let lowered = self.lower_expr(value)?;
         let esize = self.codegen.abi_size(element)?;
+        // Appending is a write, so the runtime gives this handle an item block
+        // of its own — with the leaf cloning each element it carries over —
+        // before the new element lands in it.
+        let clone = self.codegen.element_clone(element)?;
         let element_slot = self.call(
             self.codegen.runtime.array_push_slot,
-            &mut [handle, esize],
+            &mut [handle, esize, clone],
             c"push",
         );
         // SAFETY: `element_slot` is a fresh, uninitialized element slot of

@@ -494,10 +494,11 @@ impl Codegen<'_> {
             Type::Array(_) => {
                 let element = self.element_of(ty)?;
                 let esize = self.abi_size(element)?;
+                let clone = self.element_clone(element)?;
                 let encode = self.native_state_element_leaf(element, StateLeaf::Encode)?;
                 self.call(
                     self.runtime.native_value_array_from,
-                    &mut [value, esize, encode],
+                    &mut [value, esize, clone, encode],
                     c"native.array.value",
                 )
             }
