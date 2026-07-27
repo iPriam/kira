@@ -122,6 +122,7 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
         path: display.clone(),
         source,
     })?;
+    kira_diagnostics::progress!("resolving packages");
     let package = package_of(path)?;
     let (package_roots, mut diagnostics) = resolve_package_roots(package.as_ref())?;
 
@@ -204,6 +205,7 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
     // text the parser saw and the text every span is an offset into. A program
     // that declares no macros gets its own bytes back, so this is the file as
     // written for all but a macro-using program.
+    kira_diagnostics::progress!("expanding macros");
     let expansion = kira_semantics::expanded(&db, source);
     let mut sources = SourceMap::new();
     let id =
@@ -233,6 +235,7 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
             })?;
     }
 
+    kira_diagnostics::progress!("analyzing and lowering");
     let ir = lowered(&db, source);
     diagnostics.extend(
         lowered::accumulated::<DiagnosticAccumulator>(&db, source)

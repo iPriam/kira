@@ -13,6 +13,7 @@ mod native;
 mod native_library;
 mod options;
 mod pipeline;
+mod progress;
 mod serve;
 mod supervisor;
 mod wasm;
