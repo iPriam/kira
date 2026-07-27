@@ -83,7 +83,7 @@ impl<'a> Codegen<'a> {
             // every read and write of the parameter goes through it, mutating
             // the caller in place — so it is neither allocated nor initialized
             // here, and (see `emit_return`) never freed here either.
-            if function.param_by_reference(slot as u32) {
+            if self.param_is_pointer(function, slot as u32) {
                 // SAFETY: `value` is this function; this parameter is the
                 // pointer `declare_function` gave it.
                 locals.push(unsafe { LLVMGetParam(value, slot as u32) });

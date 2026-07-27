@@ -7,6 +7,7 @@ use kira_semantics_model::Type;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 
+use super::super::Callable;
 use super::FunctionLowering;
 use crate::LlvmError;
 
@@ -98,29 +99,116 @@ impl FunctionLowering<'_, '_> {
                         )),
                     };
                 }
-                // Arguments evaluate left to right, as the VM pushes them.
-                let mut values = Vec::with_capacity(args.len());
-                for &argument in args {
-                    values.push(self.lower_expr(argument)?);
-                }
                 match target {
                     // The callee is in this half: an ordinary direct call.
-                    Some(target) => {
-                        let returns_value = self.codegen.program.functions[index as usize]
-                            .return_type
-                            != Type::Void;
-                        let name = if returns_value { c"call" } else { c"" };
-                        Ok(self.call(target, &mut values, name))
-                    }
+                    Some(target) => self.lower_direct_call(index, target, args),
                     // The callee runs on the VM: marshal and go through the
                     // bridge, which the host answers.
-                    None => self.lower_runtime_call(index, args, &values),
+                    None => {
+                        // Arguments evaluate left to right, as the VM pushes them.
+                        let mut values = Vec::with_capacity(args.len());
+                        for &argument in args {
+                            values.push(self.lower_expr(argument)?);
+                        }
+                        self.lower_runtime_call(index, args, &values)
+                    }
                 }
             }
             // A foreign C function: marshal the arguments to the import's
             // exact-width signature and invoke the generated adapter directly.
             IrCallee::Foreign(index) => self.lower_foreign_call(index, args, result_ty),
         }
+    }
+
+    /// Lowers a call to a function compiled in this module.
+    ///
+    /// A parameter the callee takes by pointer is *lent* its argument: when the
+    /// argument names a place, its address goes over and nothing is copied —
+    /// which is the whole point, since the values worth lending are the ones
+    /// expensive to copy. An argument that is not a place is evaluated into a
+    /// temporary the caller owns, lent from there, and dropped after the call,
+    /// so the callee sees the same value either way.
+    fn lower_direct_call(
+        &mut self,
+        index: u32,
+        target: Callable,
+        args: &[IrExprId],
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let callee = &self.codegen.program.functions[index as usize];
+        let lends: Vec<bool> = (0..args.len())
+            .map(|position| {
+                self.codegen.param_is_pointer(callee, position as u32)
+                    && !callee.param_by_reference(position as u32)
+            })
+            .collect();
+        // Arguments evaluate left to right, as the VM pushes them.
+        let mut values = Vec::with_capacity(args.len());
+        let mut temporaries = Vec::new();
+        for (position, &argument) in args.iter().enumerate() {
+            if lends.get(position).copied().unwrap_or(false) {
+                let (pointer, temporary) = self.lend_argument(argument)?;
+                if let Some(temporary) = temporary {
+                    temporaries.push(temporary);
+                }
+                values.push(pointer);
+                continue;
+            }
+            values.push(self.lower_expr(argument)?);
+        }
+        let returns_value =
+            self.codegen.program.functions[index as usize].return_type != Type::Void;
+        let name = if returns_value { c"call" } else { c"" };
+        let result = self.call(target, &mut values, name);
+        self.drop_lent_temporaries(temporaries)?;
+        Ok(result)
+    }
+
+    /// Releases the temporaries a call's lent arguments needed.
+    ///
+    /// The callee borrowed them and owns none, so the caller that built them
+    /// drops them once the call is over.
+    fn drop_lent_temporaries(
+        &mut self,
+        temporaries: Vec<(LLVMValueRef, Type)>,
+    ) -> Result<(), LlvmError> {
+        for (pointer, ty) in temporaries {
+            let llvm_type = self.codegen.llvm_type(ty)?;
+            // SAFETY: `pointer` is a live alloca holding a value of `llvm_type`.
+            let value = unsafe {
+                LLVMBuildLoad2(
+                    self.codegen.builder,
+                    llvm_type,
+                    pointer,
+                    c"lent.temp".as_ptr(),
+                )
+            };
+            self.drop_value(value, ty)?;
+        }
+        Ok(())
+    }
+
+    /// The address to lend for one argument, and the temporary it needed.
+    ///
+    /// A place is lent where it lies. Anything else is evaluated once into a
+    /// fresh slot, whose value the caller still owns — so the second element
+    /// names it for the drop that follows the call.
+    fn lend_argument(
+        &mut self,
+        argument: IrExprId,
+    ) -> Result<(LLVMValueRef, Option<(LLVMValueRef, Type)>), LlvmError> {
+        if let Some((pointer, _)) = self.borrowed_place_pointer(argument)? {
+            return Ok((pointer, None));
+        }
+        let ty = self.type_of(argument);
+        let value = self.lower_expr(argument)?;
+        let llvm_type = self.codegen.llvm_type(ty)?;
+        // SAFETY: the builder is on a live block and `llvm_type` is this
+        // module's.
+        let pointer =
+            unsafe { LLVMBuildAlloca(self.codegen.builder, llvm_type, c"lent.arg".as_ptr()) };
+        // SAFETY: a fresh alloca of exactly this value's type.
+        unsafe { LLVMBuildStore(self.codegen.builder, value, pointer) };
+        Ok((pointer, Some((pointer, ty))))
     }
 
     /// Lowers a call whose callee writes through one or more of its parameters.
@@ -186,6 +274,7 @@ impl FunctionLowering<'_, '_> {
             pointers.push((writeback.param, pointer));
         }
         let mut values = Vec::with_capacity(args.len());
+        let mut temporaries = Vec::new();
         for (position, &argument) in args.iter().enumerate() {
             match pointers
                 .iter()
@@ -196,7 +285,23 @@ impl FunctionLowering<'_, '_> {
                 // through it, so lowering the expression as well would compute
                 // the same value twice and discard one.
                 Some((_, pointer)) => values.push(*pointer),
-                None => values.push(self.lower_expr(argument)?),
+                // Every other position follows the callee's signature just as a
+                // call with no write-backs does: a lent parameter takes an
+                // address, everything else its value.
+                None => {
+                    let callee = &self.codegen.program.functions[index as usize];
+                    let lends = self.codegen.param_is_pointer(callee, position as u32)
+                        && !callee.param_by_reference(position as u32);
+                    if lends {
+                        let (pointer, temporary) = self.lend_argument(argument)?;
+                        if let Some(temporary) = temporary {
+                            temporaries.push(temporary);
+                        }
+                        values.push(pointer);
+                    } else {
+                        values.push(self.lower_expr(argument)?);
+                    }
+                }
             }
         }
         let returns_value =
@@ -206,6 +311,7 @@ impl FunctionLowering<'_, '_> {
         for (local, type_id, root_ty, root) in recovered {
             self.write_back_native_state(local, type_id, root_ty, root)?;
         }
+        self.drop_lent_temporaries(temporaries)?;
         Ok(result)
     }
 

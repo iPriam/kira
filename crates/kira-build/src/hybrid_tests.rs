@@ -43,6 +43,7 @@ fn function(name: &str, execution: Execution, body: Vec<IrStmt>) -> IrFunction {
         return_type: Type::Void,
         execution,
         by_reference_params: Vec::new(),
+        by_pointer_params: Vec::new(),
         body,
     }
 }
@@ -315,6 +316,7 @@ fn every_type_a_v1_signature_can_have_gets_a_bridge_tag() {
                 return_type: Type::Void,
                 execution: Execution::Runtime,
                 by_reference_params: Vec::new(),
+                by_pointer_params: Vec::new(),
                 body: Vec::new(),
             }],
             Arena::new(),
@@ -357,6 +359,7 @@ fn the_error_type_is_refused_rather_than_encoded() {
             return_type: Type::Error,
             execution: Execution::Runtime,
             by_reference_params: Vec::new(),
+            by_pointer_params: Vec::new(),
             body: Vec::new(),
         }],
         Arena::new(),

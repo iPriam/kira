@@ -599,3 +599,76 @@ function main() {
     );
     assert_eq!(output, "2\n3\n40\n1\n");
 }
+
+/// Lending a read-only borrow does not let the callee reach the caller.
+///
+/// A `borrow` parameter is passed as a pointer to the caller's storage rather
+/// than a copy of it, which is what keeps a recursive walk over a tree from
+/// copying each subtree. The promise `borrow` makes is unchanged by that: the
+/// callee may read the value and may take its own copy to modify, and neither
+/// the copy nor anything else it does reaches what the caller holds.
+#[test]
+fn a_lent_borrow_is_still_read_only_to_the_callee() {
+    let output = assert_parity(
+        r#"
+struct Node {
+    var name: String
+    var children: [Int]
+}
+
+function reads(node: borrow Node) -> Int {
+    return node.children.count
+}
+
+function copiesThenChanges(node: borrow Node) -> String {
+    var mine = node
+    mine.name = "changed"
+    mine.children.append(99)
+    return mine.name
+}
+
+@Main
+function main() {
+    var node = Node { name: "root" children: [1, 2] }
+    print(reads(node))
+    print(copiesThenChanges(node))
+    print(node.name)
+    print(node.children.count)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "2\nchanged\nroot\n2\n");
+}
+
+/// A lent borrow of an argument that is not a place still behaves.
+///
+/// The value has nowhere to be lent *from*, so the caller builds a temporary,
+/// lends that, and drops it afterwards — the callee cannot tell the difference.
+#[test]
+fn a_lent_borrow_of_a_temporary_agrees() {
+    let output = assert_parity(
+        r#"
+struct Pair {
+    var left: String
+    var right: String
+}
+
+function joined(pair: borrow Pair) -> String {
+    return pair.left + pair.right
+}
+
+function make(left: String, right: String) -> Pair {
+    return Pair { left: left right: right }
+}
+
+@Main
+function main() {
+    print(joined(make("a", "b")))
+    print(joined(Pair { left: "c" right: "d" }))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "ab\ncd\n");
+}

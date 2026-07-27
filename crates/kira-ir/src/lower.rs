@@ -107,9 +107,41 @@ fn by_reference_params(function: &kira_semantics_model::hir::HirFunction) -> Vec
     slots
 }
 
+/// The parameter slots a read-only borrow can be lent through, ascending.
+///
+/// A `borrow` parameter of a type that costs something to copy: the caller
+/// keeps the value, so the callee reads it where it lies instead of taking a
+/// duplicate. A scalar is left alone — a register beats a pointer — and so is a
+/// slot already taken by reference, which is a pointer for a stronger reason.
+fn by_pointer_params(
+    function: &kira_semantics_model::hir::HirFunction,
+    types: &kira_semantics_model::TypeTable,
+    by_reference: &[u32],
+) -> Vec<u32> {
+    (0..function.param_count)
+        .filter(|slot| !by_reference.contains(slot))
+        .filter(|slot| {
+            function.locals.get(*slot as usize).is_some_and(|local| {
+                local.ownership == OwnershipMode::BorrowRead && worth_lending(local.ty, types)
+            })
+        })
+        .collect()
+}
+
+/// Whether a value of this type costs enough to copy to be worth lending.
+///
+/// Anything with storage behind it — a string, an array, an enum box — and any
+/// struct, whose fields may hold all three and which is copied field by field
+/// either way.
+fn worth_lending(ty: kira_semantics_model::Type, types: &kira_semantics_model::TypeTable) -> bool {
+    use kira_semantics_model::Type;
+    matches!(ty, Type::Struct(_)) || types.owns_heap(ty)
+}
+
 impl Lowerer<'_> {
     fn lower_function(&mut self, function: &kira_semantics_model::hir::HirFunction) -> IrFunction {
         self.aliases = crate::borrow_alias::borrow_aliases(self.hir, function);
+        let by_reference = by_reference_params(function);
         let body = self.lower_stmts(&function.body);
         IrFunction {
             name: function.name.clone(),
@@ -122,7 +154,8 @@ impl Lowerer<'_> {
                 .collect(),
             return_type: function.return_type,
             execution: function.execution,
-            by_reference_params: by_reference_params(function),
+            by_reference_params: by_reference.clone(),
+            by_pointer_params: by_pointer_params(function, &self.hir.types, &by_reference),
             body,
         }
     }

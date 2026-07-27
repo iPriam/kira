@@ -214,7 +214,7 @@ impl FunctionLowering<'_, '_> {
     ///
     /// `None` for anything that is not such a place: the caller then evaluates
     /// the expression, uses it, and drops it as before.
-    fn borrowed_place_pointer(
+    pub(super) fn borrowed_place_pointer(
         &mut self,
         expr: IrExprId,
     ) -> Result<Option<(LLVMValueRef, Type)>, LlvmError> {

@@ -25,6 +25,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use kira_semantics_model::OwnershipMode;
 use kira_semantics_model::hir::{HirExpr, HirFunction, HirProgram, HirStmt, HirStmtId};
 
 /// Maps each aliasing local to the local it is a second name for.
@@ -41,21 +42,38 @@ pub(crate) fn borrow_aliases(program: &HirProgram, function: &HirFunction) -> Ha
         function,
         candidates: HashMap::new(),
         disqualified: HashSet::new(),
+        written: HashSet::new(),
     };
     scan.stmts(&function.body);
     let Scan {
         candidates,
         disqualified,
+        written,
         ..
     } = scan;
     let direct: HashMap<u32, u32> = candidates
         .into_iter()
         .filter(|(local, source)| !disqualified.contains(local) && !disqualified.contains(source))
+        // A read-only borrow lends no permission to write. Rebinding one and
+        // then writing *through* the new name is how a callee makes its own
+        // copy to modify, and it has to stay a copy — aliasing there would send
+        // the write to the caller's value, which `borrow` promises it cannot
+        // reach. A `borrow mut` is exactly the permission this needs, so it
+        // aliases whether or not anyone writes.
+        .filter(|(local, source)| !written.contains(local) || is_mutable_borrow(function, *source))
         .collect();
     direct
         .keys()
         .filter_map(|&local| Some((local, resolve(&direct, local)?)))
         .collect()
+}
+
+/// Whether `slot` is a parameter declared `borrow mut`.
+fn is_mutable_borrow(function: &HirFunction, slot: u32) -> bool {
+    function
+        .locals
+        .get(slot as usize)
+        .is_some_and(|local| local.ownership == OwnershipMode::BorrowMut)
 }
 
 /// Follows `local` through the alias chain to the borrow it names.
@@ -80,6 +98,8 @@ struct Scan<'a> {
     function: &'a HirFunction,
     candidates: HashMap<u32, u32>,
     disqualified: HashSet<u32>,
+    /// Locals written through at all, by any path.
+    written: HashSet<u32>,
 }
 
 impl Scan<'_> {
@@ -107,10 +127,13 @@ impl Scan<'_> {
                 }
             }
             HirStmt::Assign { place, .. } => {
-                // Writing *through* a place (`out[0] = x`) is exactly what an
-                // alias is for. Replacing the binding itself is not aliasing.
+                // Writing *through* a place (`out[0] = x`) is what an alias to a
+                // `borrow mut` is for. Replacing the binding itself is not
+                // aliasing at all.
                 if place.path.is_empty() {
                     self.disqualified.insert(place.local.0);
+                } else {
+                    self.written.insert(place.local.0);
                 }
             }
             HirStmt::If {
