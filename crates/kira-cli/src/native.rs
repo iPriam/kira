@@ -164,6 +164,7 @@ pub fn build_adapter_sidecar(
         object_path: artifacts.foreign_object(),
         library_path: artifacts.foreign_sidecar(),
         runtime_archive: runtime_archive()?,
+        unavailable_imports: foreign_link.unavailable_imports().to_vec(),
         foreign_link: foreign_link.clone(),
     };
     Ok(kira_llvm_backend::build_adapter_sidecar(program, &options)?)

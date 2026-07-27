@@ -185,7 +185,8 @@ mod tests {
         });
         let ir = kira_ir::lower(&program);
 
-        let module = Module::build_hybrid(&ir, "reserved_probe").expect("the hybrid half builds");
+        let module =
+            Module::build_hybrid(&ir, "reserved_probe", &[]).expect("the hybrid half builds");
         let dir = std::env::temp_dir().join(format!("kira-bridge-reserved-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the temp dir is creatable");
         let ir_path = dir.join("reserved_probe.ll");
