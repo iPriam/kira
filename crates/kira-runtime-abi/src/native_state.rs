@@ -1,7 +1,6 @@
 //! Portable callback-state values, tokens, stores, and host errors.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -160,9 +159,7 @@ pub enum NativeStateError {
 #[derive(Debug, Clone, PartialEq)]
 struct Entry {
     ty: NativeStateTypeId,
-    /// Behind a handle so a reader can hold the whole tree without copying it,
-    /// and a writer can swap in a new one without disturbing that reader.
-    value: Arc<NativeStateValue>,
+    value: NativeStateValue,
 }
 
 /// A process-lifetime store of opaque, typed callback-state values.
@@ -196,13 +193,7 @@ impl NativeStateStore {
             .checked_add(1)
             .ok_or(NativeStateError::TokenExhausted)?;
         let token = NativeStateToken(word);
-        self.entries.insert(
-            token,
-            Entry {
-                ty,
-                value: Arc::new(value),
-            },
-        );
+        self.entries.insert(token, Entry { ty, value });
         Ok(token)
     }
 
@@ -212,25 +203,9 @@ impl NativeStateStore {
         token: NativeStateToken,
         requested: NativeStateTypeId,
     ) -> Result<NativeStateValue, NativeStateError> {
-        Ok((*self.recover_shared(token, requested)?).clone())
-    }
-
-    /// Returns the live value itself, shared, after validating its type.
-    ///
-    /// The copy [`Self::recover`] makes is the whole tree, and a caller that
-    /// only reads pays for all of it — a UI compositor recovering its batch
-    /// state per quad copied its glyph cache to read one counter. Sharing the
-    /// tree costs a reference count instead, and it stays valid across a
-    /// [`Self::replace`] because replacing swaps the handle rather than
-    /// writing through it.
-    pub fn recover_shared(
-        &self,
-        token: NativeStateToken,
-        requested: NativeStateTypeId,
-    ) -> Result<Arc<NativeStateValue>, NativeStateError> {
         let entry = self.entry(token)?;
         Self::check_type(entry.ty, requested)?;
-        Ok(Arc::clone(&entry.value))
+        Ok(entry.value.clone())
     }
 
     /// Replaces the live value after validating its type.
@@ -242,7 +217,7 @@ impl NativeStateStore {
     ) -> Result<(), NativeStateError> {
         let entry = self.entry_mut(token)?;
         Self::check_type(entry.ty, requested)?;
-        entry.value = Arc::new(value);
+        entry.value = value;
         Ok(())
     }
 
