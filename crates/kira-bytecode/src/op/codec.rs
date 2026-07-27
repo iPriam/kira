@@ -150,6 +150,11 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::StringOf => out.push(o::STRING_OF),
         Instruction::ConvertFloatToBits => out.push(o::CONVERT_FLOAT_TO_BITS),
         Instruction::ConvertBitsToFloat => out.push(o::CONVERT_BITS_TO_FLOAT),
+        Instruction::ConvertBits32ToFloat => out.push(o::CONVERT_BITS32_TO_FLOAT),
+        Instruction::ArrayGetLocal(slot) => {
+            out.push(o::ARRAY_GET_LOCAL);
+            out.extend_from_slice(&slot.to_le_bytes());
+        }
         Instruction::CStringNew => out.push(o::CSTRING_NEW),
         Instruction::CLayoutAddress(aggregate) => {
             out.push(o::CLAYOUT_ADDRESS);
@@ -285,6 +290,7 @@ impl Cursor<'_> {
             o::CONST_STR => Instruction::ConstStr(u32::from_le_bytes(self.take()?)),
             o::CONST_VOID => Instruction::ConstVoid,
             o::LOAD_LOCAL => Instruction::LoadLocal(u16::from_le_bytes(self.take()?)),
+            o::ARRAY_GET_LOCAL => Instruction::ArrayGetLocal(u16::from_le_bytes(self.take()?)),
             o::STORE_LOCAL => Instruction::StoreLocal(u16::from_le_bytes(self.take()?)),
             o::JUMP => Instruction::Jump(u32::from_le_bytes(self.take()?)),
             o::JUMP_IF_FALSE => Instruction::JumpIfFalse(u32::from_le_bytes(self.take()?)),
@@ -450,6 +456,8 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::STRING_OF => Instruction::StringOf,
         o::CONVERT_FLOAT_TO_BITS => Instruction::ConvertFloatToBits,
         o::CONVERT_BITS_TO_FLOAT => Instruction::ConvertBitsToFloat,
+        o::CONVERT_BITS32_TO_FLOAT => Instruction::ConvertBits32ToFloat,
+
         o::CSTRING_NEW => Instruction::CStringNew,
         o::ENUM_TAG => Instruction::EnumTag,
         o::ENUM_PAYLOAD => Instruction::EnumPayload,

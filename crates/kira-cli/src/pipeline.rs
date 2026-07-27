@@ -585,6 +585,10 @@ fn compile(path: &str) -> Result<Compiled, i32> {
 
 /// Renders every diagnostic to stderr in source order.
 fn emit_diagnostics(diagnostics: &[Diagnostic], sources: &SourceMap) {
+    // The status surface redraws in place; a diagnostic printed underneath it
+    // would interleave into half a status block, a note, and a block that
+    // scrolled. It stands aside and redraws on the next phase.
+    let _surface = kira_diagnostics::progress::suspended();
     for diagnostic in diagnostics {
         eprint!("{}", renderer::render(diagnostic, sources));
     }

@@ -245,6 +245,21 @@ pub enum Instruction {
     /// Pop an `Int`, push the `Float` its bits denote. The exact inverse of
     /// [`Instruction::ConvertFloatToBits`].
     ConvertBitsToFloat,
+    /// Pop a `U32`, read it as a 32-bit IEEE-754 float, push it as a `Float`.
+    ///
+    /// Kira's `Float` is 64-bit, so a 32-bit pattern cannot go through
+    /// [`Instruction::ConvertBitsToFloat`] — the same bits mean a different
+    /// number at the two widths. Binary data is full of 32-bit floats, and
+    /// reading one is otherwise a hand-written decode of sign, exponent, and
+    /// mantissa.
+    ConvertBits32ToFloat,
+    /// Pop an `Int` index, push a copy of that element of the array in `slot`.
+    ///
+    /// The same answer as [`Instruction::LoadLocal`] followed by
+    /// [`Instruction::ArrayGet`], without the copy of the whole array that pair
+    /// makes. Reading one element cost the whole array before this, so a loop
+    /// over `n` elements cost `O(n²)`.
+    ArrayGetLocal(u16),
     /// Pop a string, push its length in bytes as an `Int`, and drop the string.
     ///
     /// Bytes, not characters: `charAt` and `substring` index the same units, so
@@ -637,6 +652,12 @@ mod opcode {
     // carries one `FileSystemOp` byte, whose own numbering is append-only, so a
     // new operation costs neither an opcode nor a version.
     pub const FILE_SYSTEM: u8 = 0x53;
+    // A 32-bit float's bits widened to Kira's `Float`. Appended after
+    // `STRING_OF`; adding an opcode is not an ABI change.
+    pub const CONVERT_BITS32_TO_FLOAT: u8 = 0x5a;
+    // Reading one element of an array a local holds, without copying the
+    // array. Appended after `CONVERT_BITS32_TO_FLOAT`; carries the `u32` slot.
+    pub const ARRAY_GET_LOCAL: u8 = 0x5b;
 }
 
 #[cfg(test)]

@@ -136,16 +136,34 @@ impl FunctionLowering<'_, '_> {
 
     /// Reads one element out of an array (`xs[i]`).
     ///
-    /// The VM's `ArrayGet`, in the same order: the base is evaluated (a local
-    /// read clones the whole array), the element is copied out *before* the base
-    /// is dropped — the array owns the element, so handing it out unshared means
-    /// copying it first — and then the base clone is freed.
+    /// The element is copied out — the array owns it, so handing it out
+    /// unshared means copying it first — and that copy is what preserves value
+    /// semantics. The *base* does not need copying at all.
+    ///
+    /// # Reading an element does not copy the array
+    ///
+    /// A general base expression is evaluated, indexed, and dropped. A base
+    /// that is just a local is **borrowed** instead: its handle is read without
+    /// a clone and never freed here, because this expression does not own it.
+    ///
+    /// Cloning it would make one element read cost the whole array, so a loop
+    /// over `n` elements would cost `O(n²)` — reading 200,000 elements took
+    /// seven seconds before this, and loading an 18 MB mesh never finished.
     fn lower_index(
         &mut self,
         base: IrExprId,
         index: IrExprId,
         ty: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
+        if let Some(handle) = self.borrowed_local_handle(base)? {
+            let slot = self.element_slot(handle, index, ty)?;
+            let llvm_type = self.codegen.llvm_type(ty)?;
+            // SAFETY: `slot` points at a live element of `llvm_type`, bounds
+            // checked by the runtime, and the builder is on a live block.
+            let element =
+                unsafe { LLVMBuildLoad2(self.codegen.builder, llvm_type, slot, c"elem".as_ptr()) };
+            return self.copy_value(element, ty);
+        }
         let base_ty = self.type_of(base);
         let base_value = self.lower_expr(base)?;
         let slot = self.element_slot(base_value, index, ty)?;
@@ -157,6 +175,37 @@ impl FunctionLowering<'_, '_> {
         let copy = self.copy_value(element, ty)?;
         self.drop_value(base_value, base_ty)?;
         Ok(copy)
+    }
+
+    /// The handle a local holds, read without copying it.
+    ///
+    /// `None` when the expression is not a plain local, or is one the backend
+    /// reads through another path — a native-state local recovers a value
+    /// rather than holding a handle, so it is left to the general route.
+    fn borrowed_local_handle(&mut self, base: IrExprId) -> Result<Option<LLVMValueRef>, LlvmError> {
+        let IrExpr::Local(slot) = *self.codegen.program.expr(base) else {
+            return Ok(None);
+        };
+        if self
+            .function
+            .native_state_locals
+            .get(slot as usize)
+            .copied()
+            .flatten()
+            .is_some()
+        {
+            return Ok(None);
+        }
+        let ty = self.local_type(slot)?;
+        let llvm_type = self.codegen.llvm_type(ty)?;
+        let pointer = self.local_pointer(slot)?;
+        let name = c_string(&format!("local.{slot}.borrow"));
+        // SAFETY: `pointer` is this slot's alloca of `llvm_type`; the handle is
+        // read, not copied, and is not freed here because this expression does
+        // not own it.
+        Ok(Some(unsafe {
+            LLVMBuildLoad2(self.codegen.builder, llvm_type, pointer, name.as_ptr())
+        }))
     }
 
     /// Turns an array handle into the address of element `index`, bounds-checked
