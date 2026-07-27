@@ -80,17 +80,15 @@ pub fn emit(ir: &ShaderIr) -> String {
 
 /// Emits every struct the module declares, in declaration order.
 ///
-/// Order is declaration order rather than use order because KSL already
-/// requires a type to be declared before the struct that holds it, and Metal
-/// needs the same.
+/// *Every* one, interfaces included. Metal's decorated forms are emitted beside
+/// these under their own names, never instead of them: one struct is often a
+/// vertex output and a fragment input at once, and the fragment body needs the
+/// plain type even though the vertex body writes the decorated one. Order is
+/// declaration order because KSL already requires a type to be declared before
+/// the struct that holds it, and Metal needs the same.
 fn emit_structs(emitter: &mut emit::Emitter<'_>, reflection: &Reflection) {
-    let interfaces = interface_names(reflection);
+    let _ = reflection;
     for declared in &emitter.module.structs.clone() {
-        // An interface struct is emitted per stage instead, with that stage's
-        // attributes on its fields.
-        if interfaces.contains(&declared.name) {
-            continue;
-        }
         let opened = format!("struct {} {{", declared.name);
         emitter.line(0, &opened);
         for field in &declared.fields {
@@ -100,23 +98,6 @@ fn emit_structs(emitter: &mut emit::Emitter<'_>, reflection: &Reflection) {
         emitter.line(0, "};");
         emitter.out.push('\n');
     }
-}
-
-/// Every struct name a stage takes through Metal's interface machinery.
-///
-/// A compute stage's input is not one of them: a kernel takes its builtins as
-/// loose parameters, so that struct stays an ordinary one the body builds.
-fn interface_names(reflection: &Reflection) -> Vec<String> {
-    let mut names = Vec::new();
-    for stage in &reflection.stages {
-        if stage.stage != Stage::Compute {
-            names.extend(stage.input_type.clone());
-        }
-        names.extend(stage.output_type.clone());
-    }
-    names.sort();
-    names.dedup();
-    names
 }
 
 /// Emits one stage: its interface structs, then its entry point.
@@ -186,12 +167,19 @@ fn emit_entry(
             }
         }
         (Some(spelled), _) => {
-            let parameter = stage
-                .entry
-                .params
-                .first()
-                .map_or_else(|| "in".to_owned(), |param| param.name.clone());
-            params.push(format!("{spelled} {parameter} [[stage_in]]"));
+            // The stage-in half keeps its own name; the body's value is
+            // rebuilt from it and the loose builtins below.
+            params.push(format!("{spelled} {STAGE_IN_PARAM} [[stage_in]]"));
+            for field in &reflected.inputs {
+                if let Some(builtin) = field.builtin {
+                    params.push(format!(
+                        "{} {} {}",
+                        type_name(&builtin_type(&field.type_name)),
+                        field.name,
+                        emit::builtin_attribute(builtin, stage.stage, true)
+                    ));
+                }
+            }
         }
         (None, _) => {}
     }
@@ -207,20 +195,21 @@ fn emit_entry(
     );
     emitter.line(0, &signature);
 
-    // A kernel's parameters are the builtins themselves, so the body's
-    // reference to the input struct is rebuilt from them.
-    if stage.stage == Stage::Compute
-        && let (Some(param), Some(source)) = (stage.entry.params.first(), &reflected.input_type)
-    {
-        let fields = reflected
-            .inputs
-            .iter()
-            .filter(|field| field.builtin.is_some())
-            .map(|field| field.name.clone())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let rebuilt = format!("{source} {} = {{ {fields} }};", param.name);
-        emitter.line(1, &rebuilt);
+    // The body works with the struct KSL wrote, which Metal never passes whole:
+    // a kernel gets only loose builtins, and a graphics stage gets a stage-in
+    // struct beside them. Either way the entry rebuilds it field by field.
+    if let (Some(param), Some(source)) = (stage.entry.params.first(), &reflected.input_type) {
+        let declared = format!("{source} {};", param.name);
+        emitter.line(1, &declared);
+        for field in &reflected.inputs {
+            let from = match (field.builtin, stage.stage) {
+                (Some(_), _) => field.name.clone(),
+                (None, Stage::Compute) => continue,
+                (None, _) => format!("{STAGE_IN_PARAM}.{}", field.name),
+            };
+            let line = format!("{}.{} = {from};", param.name, field.name);
+            emitter.line(1, &line);
+        }
     }
     emitter.body(&stage.entry.body, 1);
     emitter.line(0, "}");
@@ -240,6 +229,12 @@ fn emit_interface(
     let opened = format!("struct {spelled} {{");
     emitter.line(0, &opened);
     for field in fields {
+        // A `[[stage_in]]` struct may not carry a builtin — Metal takes those
+        // as entry-point parameters instead — so a graphics input leaves them
+        // out and the entry rebuilds the whole struct from both halves.
+        if field.builtin.is_some() && is_input && stage != Stage::Compute {
+            continue;
+        }
         let attribute = match (field.builtin, is_input, stage) {
             (Some(builtin), _, _) => emit::builtin_attribute(builtin, stage, is_input).to_owned(),
             // A vertex input's locations are vertex-descriptor attributes; a
@@ -276,6 +271,12 @@ fn builtin_type(name: &str) -> kira_shader_model::Type {
     kira_ksl_semantics::builtins::builtin_type(name)
         .unwrap_or_else(|| kira_shader_model::Type::StructRef(name.to_owned()))
 }
+
+/// The name the `[[stage_in]]` parameter is given.
+///
+/// Never the name the shader wrote: that one names the whole input value, which
+/// the entry rebuilds from this and the loose builtins beside it.
+const STAGE_IN_PARAM: &str = "kira_stage_in";
 
 /// The Metal qualifier a stage's entry point carries.
 fn stage_prefix(stage: Stage) -> &'static str {

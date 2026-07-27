@@ -87,6 +87,10 @@ impl ResolvedNativeLibraries {
         // contributes no link inputs and needs no row for this target — a
         // Direct3D import on macOS is a symbol that will never be looked up,
         // not a build failure.
+        // Neither a runtime-loaded library nor an excluded one puts anything on
+        // the link line, but only the second means the symbol will not be
+        // there: a runtime-loaded library's symbols are found at run time, and
+        // Kira's own runtime archive is already linked.
         if resolved.is_runtime_loaded() || resolved.is_excluded_on(target) {
             return Ok(None);
         }
@@ -99,6 +103,17 @@ impl ResolvedNativeLibraries {
                 library: resolved.name().to_owned(),
                 target: target.clone(),
             })
+    }
+
+    /// Whether `library` is one this target does not have at all.
+    ///
+    /// Distinct from contributing no link input: a runtime-loaded library
+    /// contributes none either, and its symbols are still found at run time.
+    /// Only an excluded one has no symbols to find, and only its imports trap.
+    pub fn is_excluded(&self, library: Symbol, target: &TargetTriple) -> bool {
+        self.libraries
+            .get(&library)
+            .is_some_and(|resolved| resolved.is_excluded_on(target))
     }
 
     /// Number of libraries in the catalog.

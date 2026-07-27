@@ -196,6 +196,10 @@ impl Evaluator<'_> {
                 Ok(Value::Void)
             }
             (ksl::NAMESPACE, "compile", values) => ksl::compile(self.shaders, values),
+            // What is being built, answered at compile time. A program that
+            // asked a C library which platform it was on would be asking at run
+            // time a question the compiler already answered.
+            ("Build", "platform", []) => Ok(Value::Str(self.platform.clone())),
             _ => Err(EvalError::unsupported(format!(
                 "`{namespace}.{method}` with {} argument(s)",
                 values.len()

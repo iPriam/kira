@@ -7,6 +7,7 @@
 //! evidence the rule fired for the right reason.
 
 use super::*;
+use crate::host_platform;
 
 /// The exports a library records, as `(kira name, consumer name)` pairs.
 fn exports(text: &str) -> Vec<(String, String)> {
@@ -18,6 +19,7 @@ fn exports(text: &str) -> Vec<(String, String)> {
         Vec::new(),
         BuildKind::Library,
         kira_macros::PrecompiledShaders::default(),
+        host_platform(),
     );
     analyzed(&db, source)
         .exports
@@ -58,6 +60,7 @@ fn an_export_indexes_the_function_it_names() {
         Vec::new(),
         BuildKind::Library,
         kira_macros::PrecompiledShaders::default(),
+        host_platform(),
     );
     let program = analyzed(&db, source);
     assert_eq!(program.exports.len(), 1);
@@ -85,6 +88,7 @@ fn an_export_records_the_signature_a_consumer_is_generated_against() {
         Vec::new(),
         BuildKind::Library,
         kira_macros::PrecompiledShaders::default(),
+        host_platform(),
     );
     let program = analyzed(&db, source);
     assert!(

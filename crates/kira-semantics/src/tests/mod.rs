@@ -28,6 +28,7 @@ mod strings;
 mod widths;
 
 use super::*;
+use crate::host_platform;
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{HirExpr, HirProgram, HirStmt};
 
@@ -77,6 +78,7 @@ fn library_diagnostics(text: &str) -> Vec<Diagnostic> {
         Vec::new(),
         BuildKind::Library,
         kira_macros::PrecompiledShaders::default(),
+        host_platform(),
     );
     analyzed::accumulated::<DiagnosticAccumulator>(&db, source)
         .into_iter()

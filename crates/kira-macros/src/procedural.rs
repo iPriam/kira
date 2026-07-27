@@ -43,6 +43,8 @@ pub(crate) struct Program<'a> {
     pub(crate) templates: &'a HashMap<String, WrapperTemplate>,
     /// The KSL pipeline behind the `Ksl` namespace, when one was supplied.
     pub(crate) shaders: Option<&'a dyn ShaderCompiler>,
+    /// The operating system this build targets, behind `Build.platform`.
+    pub(crate) platform: &'a str,
 }
 
 /// A struct registered as a wrapper template by a `kind { wrapper }` macro.
@@ -132,7 +134,10 @@ pub(crate) fn expand_declaration(
     reporter: &mut Reporter,
 ) {
     let Program {
-        registry, shaders, ..
+        registry,
+        shaders,
+        platform,
+        ..
     } = program;
     let mut generated: Vec<String> = Vec::new();
     let mut replacement: Option<String> = None;
@@ -173,6 +178,7 @@ pub(crate) fn expand_declaration(
                     )],
                     annotation.span,
                     shaders,
+                    platform,
                     reporter,
                 ) {
                     if declared.replace {
@@ -212,6 +218,7 @@ pub(crate) fn expand_declaration(
                     ],
                     annotation.span,
                     shaders,
+                    platform,
                     reporter,
                 ) {
                     generated.push(output);
@@ -290,7 +297,10 @@ fn run_derives(
     reporter: &mut Reporter,
 ) -> Option<String> {
     let Program {
-        registry, shaders, ..
+        registry,
+        shaders,
+        platform,
+        ..
     } = program;
     let mut kept: Vec<&str> = Vec::new();
     for name in &annotation.arguments {
@@ -331,6 +341,7 @@ fn run_derives(
             )],
             annotation.span,
             shaders,
+            platform,
             reporter,
         ) {
             generated.push(output);
@@ -356,6 +367,7 @@ fn summon_from_fields(
         registry,
         templates,
         shaders,
+        platform,
     } = program;
     let mut summoned: Option<String> = None;
     let mut already: Vec<String> = Vec::new();
@@ -384,6 +396,7 @@ fn summon_from_fields(
                     ],
                     annotation.span,
                     shaders,
+                    platform,
                     reporter,
                 );
                 summoned = replace_once(summoned, output, file, declaration, reporter);
@@ -408,6 +421,7 @@ fn summon_from_fields(
                 )],
                 annotation.span,
                 shaders,
+                platform,
                 reporter,
             );
             if declared.replace {
@@ -488,6 +502,7 @@ pub(crate) fn run(
     arguments: Vec<(String, Value)>,
     span: Span,
     shaders: Option<&dyn ShaderCompiler>,
+    platform: &str,
     reporter: &mut Reporter,
 ) -> Option<String> {
     let Some(body) = eval::compile(&declared.body) else {
@@ -499,7 +514,7 @@ pub(crate) fn run(
         );
         return None;
     };
-    match eval::run(&body, arguments, shaders) {
+    match eval::run(&body, arguments, shaders, platform) {
         Ok(outcome) => {
             let failed = !outcome.reported.is_empty();
             for message in outcome.reported {
@@ -520,6 +535,7 @@ pub(crate) fn expand_call(
     declared: &Procedural,
     call: &Invocation,
     shaders: Option<&dyn ShaderCompiler>,
+    platform: &str,
     reporter: &mut Reporter,
 ) -> Option<String> {
     if declared.kind != ProceduralKind::Function {
@@ -547,6 +563,7 @@ pub(crate) fn expand_call(
         vec![(parameter(declared, 0), Value::Syntax(input))],
         call.span,
         shaders,
+        platform,
         reporter,
     )?;
     let trimmed = output.trim().to_owned();

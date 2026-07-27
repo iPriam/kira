@@ -130,12 +130,14 @@ pub(crate) fn run(
     body: &Body,
     arguments: Vec<(String, Value)>,
     shaders: Option<&dyn ShaderCompiler>,
+    platform: &str,
 ) -> Result<Outcome, EvalError> {
     let mut evaluator = Evaluator {
         body,
         scopes: vec![arguments.into_iter().collect()],
         reported: Vec::new(),
         shaders,
+        platform: platform.to_owned(),
     };
     let value = match evaluator.block(&body.block)? {
         Flow::Return(value) => value,
@@ -175,6 +177,8 @@ struct Evaluator<'a> {
     reported: Vec<String>,
     /// The KSL pipeline `Ksl.compile` reaches, when one was supplied.
     shaders: Option<&'a dyn ShaderCompiler>,
+    /// The operating system this build targets, for `Build.platform`.
+    platform: String,
 }
 
 impl Evaluator<'_> {
@@ -418,7 +422,7 @@ mod tests {
 
     fn run_body(text: &str, arguments: Vec<(String, Value)>) -> Result<Outcome, EvalError> {
         let body = compile(text).expect("a parseable expand body");
-        run(&body, arguments, None)
+        run(&body, arguments, None, "unknown")
     }
 
     #[test]
