@@ -20,7 +20,7 @@ use kira_ksl_semantics::model::CheckedModule;
 use kira_shader_model::Reflection;
 
 pub use lower::{entry_name, lower, type_name};
-pub use reflection::{MAGIC, ReflectionError, decode, encode};
+pub use reflection::{MAGIC, ReflectionError, decode, encode, uniform_block_digest};
 
 /// A shader ready for a backend to emit.
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +36,15 @@ impl ShaderIr {
     #[must_use]
     pub fn reflection_text(&self) -> String {
         self.reflection.as_ref().map(encode).unwrap_or_default()
+    }
+
+    /// The uniform blocks in the compact digest a graphics host parses.
+    #[must_use]
+    pub fn uniform_digest(&self) -> String {
+        self.reflection
+            .as_ref()
+            .map(uniform_block_digest)
+            .unwrap_or_default()
     }
 }
 

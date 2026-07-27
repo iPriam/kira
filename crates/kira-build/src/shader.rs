@@ -227,7 +227,7 @@ fn emit(ir: &ShaderIr, target: BackendTarget) -> CompiledShader {
         vertex_entry: entry(Stage::Vertex),
         fragment_entry: entry(Stage::Fragment),
         compute_entry: entry(Stage::Compute),
-        uniform_reflection: ir.reflection_text(),
+        uniform_reflection: ir.uniform_digest(),
         ..CompiledShader::default()
     };
     match target {
