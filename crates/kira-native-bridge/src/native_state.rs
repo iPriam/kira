@@ -68,15 +68,15 @@ fn finish(node: KNativeStateValue) -> Result<NativeStateValue, NativeStateStatus
                 return Err(NativeStateStatus::MALFORMED_VALUE);
             };
             Ok(match tag {
-                NativeStateValueTag::STRUCT => NativeStateValue::Struct(values.into()),
-                NativeStateValueTag::ARRAY => NativeStateValue::Array(values.into()),
+                NativeStateValueTag::STRUCT => NativeStateValue::Struct(values),
+                NativeStateValueTag::ARRAY => NativeStateValue::Array(values),
                 NativeStateValueTag::ENUM => {
                     if values.len() > 1 {
                         return Err(NativeStateStatus::MALFORMED_VALUE);
                     }
                     NativeStateValue::Enum {
                         tag: enum_tag,
-                        payload: values.pop().map(std::sync::Arc::new),
+                        payload: values.pop().map(Box::new),
                     }
                 }
                 _ => return Err(NativeStateStatus::MALFORMED_VALUE),
