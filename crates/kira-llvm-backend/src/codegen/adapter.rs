@@ -59,6 +59,30 @@ impl Codegen<'_> {
         Ok(())
     }
 
+    /// Emits an adapter that reports its library is not on this platform.
+    ///
+    /// One block, one return: the C symbol is never declared, so nothing about
+    /// this import reaches the link line.
+    fn emit_unavailable_adapter(&mut self, index: usize) {
+        let adapter = self.foreign_adapters[index];
+        let types = self.types;
+        // SAFETY: `adapter.value` is a freshly declared function of this live
+        // module and the block below is its only one.
+        unsafe {
+            let entry =
+                LLVMAppendBasicBlockInContext(self.context, adapter.value, c"entry".as_ptr());
+            LLVMPositionBuilderAtEnd(self.builder, entry);
+            LLVMBuildRet(
+                self.builder,
+                LLVMConstInt(
+                    types.i32,
+                    u64::from(ForeignAdapterStatus::UNAVAILABLE_LIBRARY.0),
+                    0,
+                ),
+            );
+        }
+    }
+
     /// Emits the body of every declared foreign adapter.
     pub(super) fn emit_foreign_adapters(&mut self) -> Result<(), LlvmError> {
         for index in 0..self.program.foreign_imports.len() {
@@ -69,6 +93,13 @@ impl Codegen<'_> {
 
     /// Emits the body of adapter `index`.
     fn emit_foreign_adapter(&mut self, index: usize) -> Result<(), LlvmError> {
+        // An import whose library is absent on this target never names its C
+        // symbol: doing so would leave an undefined reference the link cannot
+        // satisfy, for code that only ever runs on another platform.
+        if self.unavailable.contains(&index) {
+            self.emit_unavailable_adapter(index);
+            return Ok(());
+        }
         let import = self.program.foreign_imports[index].import.clone();
         let signature = import.signature();
         let specs: Vec<ForeignTypeSpec> = signature.parameters().to_vec();

@@ -77,8 +77,10 @@ pub struct RawSectionedManifest {
 pub struct RawLibrarySection {
     /// The library name.
     pub name: String,
-    /// `"static"` or `"dynamic"`; absent means static.
+    /// `"static"`, `"dynamic"`, or `"runtime"`; absent means static.
     pub link_mode: Option<String>,
+    /// `"required"` or `"optional"`; absent means required.
+    pub availability: Option<String>,
 }
 
 /// The `[headers]` section.

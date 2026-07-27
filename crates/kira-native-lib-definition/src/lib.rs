@@ -51,7 +51,7 @@ pub use resolved::{
     ResolvedTargetRow,
 };
 pub use spec::{
-    AutobindMode, AutobindProfile, AutobindSpec, LinkMode, NativeArtifact, NativeHeaders,
-    NativeLibrarySpec, NativeTargetSpec,
+    AutobindMode, AutobindProfile, AutobindSpec, Availability, LinkMode, NativeArtifact,
+    NativeHeaders, NativeLibrarySpec, NativeTargetSpec,
 };
 pub use triple::{TargetTriple, TripleError};

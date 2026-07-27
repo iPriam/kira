@@ -26,12 +26,6 @@ use kira_project::NativeLibraryResolveError;
 
 use crate::options::Device;
 
-/// The library name that means "Kira's own runtime".
-///
-/// Not a package's to declare: the runtime archive is linked by the compiler
-/// for every native build, so an import naming it resolves to nothing extra.
-pub const RUNTIME_LIBRARY: &str = "kira_runtime";
-
 /// Why a program's foreign imports could not be resolved to archives.
 #[derive(Debug, thiserror::Error)]
 pub enum ForeignResolveError {
@@ -139,14 +133,8 @@ pub fn resolve(
     let mut catalog = resolution.catalog;
 
     let mut inputs = NativeLinkInputs::default();
-    for entry in &program.foreign_imports {
+    for (index, entry) in program.foreign_imports.iter().enumerate() {
         let library = entry.import.library();
-        // Kira's own runtime is already on every link line — it is what the
-        // compiler emits calls into — so an import naming it contributes no
-        // link input and needs no declaration in a package that uses it.
-        if library == RUNTIME_LIBRARY {
-            continue;
-        }
         let symbol = catalog.intern_library(library).map_err(|_| {
             ForeignResolveError::NameSpaceExhausted {
                 library: library.to_owned(),
@@ -165,10 +153,11 @@ pub fn resolve(
                     ForeignResolveError::NoArtifactForTarget { library, target }
                 }
             })?;
-        // A runtime library contributes nothing to the link line: the runtime
-        // opens it on first call.
-        if let Some(row) = row {
-            inputs.push_row(row);
+        // A library the runtime opens, or one this platform does not have,
+        // contributes nothing to the link line.
+        match row {
+            Some(row) => inputs.push_row(row),
+            None => inputs.mark_unavailable(index),
         }
     }
 

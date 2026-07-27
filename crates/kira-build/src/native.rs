@@ -166,6 +166,7 @@ pub fn build_native_library(
             runtime_archive: options.runtime_archive.clone(),
             exports: surface.clone(),
             foreign_link: kira_llvm_backend::NativeLinkInputs::EMPTY,
+            unavailable_imports: Vec::new(),
         },
     )?;
 

@@ -199,6 +199,13 @@ pub struct NativeBuildOptions {
     /// and linker flags declared beside them. Empty for a program with no
     /// foreign imports.
     pub foreign_link: NativeLinkInputs,
+    /// The imports whose library is absent on this target, by index.
+    ///
+    /// Their adapters return
+    /// [`ForeignAdapterStatus::UNAVAILABLE_LIBRARY`](kira_runtime_abi::ForeignAdapterStatus::UNAVAILABLE_LIBRARY)
+    /// without naming the C symbol, so a Direct3D binding compiled on macOS
+    /// contributes no undefined reference to the link.
+    pub unavailable_imports: Vec<usize>,
 }
 
 /// The artifacts a native build produced.
@@ -251,6 +258,7 @@ pub fn build_native(
         program,
         &options.module_name,
         kira_runtime_abi::ForeignPointerWidth::HOST,
+        &options.unavailable_imports,
     )?;
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
@@ -355,7 +363,7 @@ pub fn build_wasm_object(
         kira_backend_api::WasmDevice::Wasm32 => kira_runtime_abi::ForeignPointerWidth::Bits32,
         kira_backend_api::WasmDevice::Wasm64 => kira_runtime_abi::ForeignPointerWidth::Bits64,
     };
-    let module = codegen::Module::build(program, module_name, width)?;
+    let module = codegen::Module::build(program, module_name, width, &[])?;
     module.emit_wasm_object(object_path, device)
 }
 

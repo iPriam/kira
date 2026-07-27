@@ -30,8 +30,8 @@
 //! field it *does* know but cannot make sense of is an error, never a guess.
 
 use kira_native_lib_definition::{
-    AutobindMode, AutobindProfile, AutobindSpec, LinkMode, NativeArtifact, NativeHeaders,
-    NativeLibrarySpec, NativeLinkAttributes, NativeTargetSpec, TargetTriple,
+    AutobindMode, AutobindProfile, AutobindSpec, Availability, LinkMode, NativeArtifact,
+    NativeHeaders, NativeLibrarySpec, NativeLinkAttributes, NativeTargetSpec, TargetTriple,
 };
 
 use crate::declaration_loader::{
@@ -57,6 +57,7 @@ pub(crate) fn native_libraries_value(
 fn library_value(value: &str) -> Result<NativeLibrarySpec, DeclarationError> {
     let mut name = None;
     let mut link_mode = LinkMode::Static;
+    let mut availability = Availability::Required;
     let mut headers = None;
     let mut sources = Vec::new();
     let mut autobind = None;
@@ -69,6 +70,10 @@ fn library_value(value: &str) -> Result<NativeLibrarySpec, DeclarationError> {
                     return Err(malformed(KEY));
                 }
                 name = Some(non_empty_string(KEY, value)?);
+            }
+            "availability" => {
+                availability =
+                    Availability::parse(qualified_case(value)).ok_or_else(|| malformed(KEY))?;
             }
             "linkMode" => {
                 link_mode = LinkMode::parse(qualified_case(value)).ok_or_else(|| malformed(KEY))?;
@@ -87,7 +92,8 @@ fn library_value(value: &str) -> Result<NativeLibrarySpec, DeclarationError> {
     }
 
     let name = name.ok_or_else(|| malformed(KEY))?;
-    let mut spec = NativeLibrarySpec::new(name, link_mode, targets)?;
+    let mut spec =
+        NativeLibrarySpec::new(name, link_mode, targets)?.with_availability(availability);
     if let Some(headers) = headers {
         spec = spec.with_headers(headers);
     }

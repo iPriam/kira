@@ -490,8 +490,45 @@ pub extern "C" fn kira_rt_trap_div_zero() -> ! {
 /// [`kira_runtime_abi::ForeignAdapterStatus`] word the adapter returned.
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_trap_foreign(status: u32) -> ! {
-    eprintln!("kira: runtime trap: foreign call failed (adapter status {status})");
+    eprintln!(
+        "kira: runtime trap: foreign call failed — {}",
+        explain_foreign_status(status)
+    );
     std::process::exit(1);
+}
+
+/// What a foreign-adapter status word means, in a sentence.
+///
+/// A bare number tells whoever hit it nothing. An unknown one is reported as
+/// itself rather than guessed at, because a newer adapter library may return a
+/// status this runtime has never heard of.
+fn explain_foreign_status(status: u32) -> String {
+    use kira_runtime_abi::ForeignAdapterStatus as Status;
+    let known = match Status(status) {
+        Status::SUCCESS => "the call succeeded, which is not a trap",
+        Status::BAD_ARGUMENT_COUNT => {
+            "the adapter was given a different argument count than its signature declares"
+        }
+        Status::BAD_ARGUMENT_TAG => "an argument arrived carrying the wrong bridge tag",
+        Status::INTERIOR_NUL => {
+            "a `CString` argument contained an interior NUL byte, so it cannot cross as a C string"
+        }
+        Status::MALFORMED_RESULT => "the adapter could not encode a valid result",
+        Status::BAD_RESULT_SLOT => {
+            "the caller presented no writable buffer for an aggregate result"
+        }
+        Status::UNAVAILABLE_LIBRARY => {
+            "this import's native library is not available on this platform, and its declaration \
+             said it need not be — so the call was never linked. Reaching it means code meant for \
+             another platform ran here"
+        }
+        _ => {
+            return format!(
+                "the adapter returned status {status}, which this runtime does not know"
+            );
+        }
+    };
+    known.to_owned()
 }
 
 /// Reports a Kira array that does not fit the inline C array it was crossing as,

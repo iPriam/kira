@@ -432,6 +432,13 @@ impl ForeignAdapterStatus {
     pub const MALFORMED_RESULT: Self = Self(4);
     /// The caller did not present a writable aggregate buffer in the out slot.
     pub const BAD_RESULT_SLOT: Self = Self(5);
+    /// The import's library is not available on the platform this was built
+    /// for, and the declaration said it need not be.
+    ///
+    /// The adapter for such an import never names its C symbol, so nothing is
+    /// linked and the build succeeds; reaching this status means code that was
+    /// only ever meant to run on another platform was actually called.
+    pub const UNAVAILABLE_LIBRARY: Self = Self(6);
 }
 
 /// The version of the generated foreign-adapter ABI.

@@ -87,7 +87,7 @@ impl ResolvedNativeLibraries {
         // contributes no link inputs and needs no row for this target — a
         // Direct3D import on macOS is a symbol that will never be looked up,
         // not a build failure.
-        if resolved.is_runtime_loaded() {
+        if resolved.is_runtime_loaded() || resolved.is_excluded_on(target) {
             return Ok(None);
         }
         resolved
