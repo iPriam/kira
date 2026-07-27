@@ -128,6 +128,10 @@ pub(crate) struct Runtime {
     /// `kira_rt_trap_foreign_unavailable`: a call into a native library this
     /// platform does not have, named rather than numbered.
     pub(super) trap_foreign_unavailable: Callable,
+    /// `llvm.stacksave` / `llvm.stackrestore`: the pair that gives back stack an
+    /// `alloca` took, so a call-site reservation lasts only as long as the call.
+    pub(super) stack_save: Callable,
+    pub(super) stack_restore: Callable,
     /// The version marker every emitted program references; see
     /// [`kira_runtime_abi::RUNTIME_ABI_MARKER`].
     pub(super) abi_marker: Callable,
@@ -306,6 +310,8 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             box_new: declare(c"kira_rt_box_new", types.ptr, &mut [types.i64]),
             box_free: declare(c"kira_rt_box_free", types.void, &mut [types.ptr, types.i64]),
             trap_div_zero: declare(c"kira_rt_trap_div_zero", types.void, &mut []),
+            stack_save: declare(c"llvm.stacksave.p0", types.ptr, &mut []),
+            stack_restore: declare(c"llvm.stackrestore.p0", types.void, &mut [types.ptr]),
             trap_foreign_unavailable: declare(
                 c"kira_rt_trap_foreign_unavailable",
                 types.void,

@@ -229,6 +229,10 @@ impl FunctionLowering<'_, '_> {
         let types = self.codegen.types;
         let result_type = self.codegen.program.functions[index as usize].return_type;
 
+        // Given back as soon as the call returns — see the foreign path for
+        // why neither leaving it reserved nor hoisting it to the entry block
+        // works.
+        let saved = self.call(self.codegen.runtime.stack_save, &mut [], c"stack.save");
         // SAFETY: every type and value belongs to this live module and the
         // builder is on a live block; the argument array is sized to hold
         // exactly the arguments written into it.
@@ -261,7 +265,9 @@ impl FunctionLowering<'_, '_> {
                 .call_runtime(self.codegen.runtime.call_runtime, &mut call_args, c"");
             out
         };
-        self.codegen
+        // Read the payload before giving the stack back: `out` is on it.
+        let value = self
+            .codegen
             .read_bridge_payload(out, result_type)
             .or_else(|error| {
                 // A `Void` callee returns nothing to read; anything else is a real
@@ -273,6 +279,8 @@ impl FunctionLowering<'_, '_> {
                 } else {
                     Err(error)
                 }
-            })
+            })?;
+        self.call(self.codegen.runtime.stack_restore, &mut [saved], c"");
+        Ok(value)
     }
 }
