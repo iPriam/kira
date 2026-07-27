@@ -199,8 +199,20 @@ fn declaring_packages(
             continue;
         }
         seen.push(package_root.clone());
-        let Ok(Some(declared)) = kira_project::manifest_for(&package_root) else {
-            continue;
+        // A dependency whose manifest cannot be read is a real fault: its
+        // libraries would silently go undeclared and the failure would surface
+        // much later as an undeclared-library error naming an import that is
+        // perfectly correct.
+        let declared = match kira_project::manifest_for(&package_root) {
+            Ok(Some(declared)) => declared,
+            // No manifest at all is ordinary — not every source directory in a
+            // graph is a package with declarations of its own.
+            Ok(None) => continue,
+            Err(error) => {
+                return Err(ForeignResolveError::Manifest {
+                    message: format!("`{}`: {error}", package_root.display()),
+                });
+            }
         };
         packages.push(kira_project::NativeLibraryPackage {
             manifest_paths: native_lib_manifests(&package_root)?,
