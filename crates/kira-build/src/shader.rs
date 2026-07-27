@@ -64,7 +64,11 @@ pub(crate) fn precompile(
             } else {
                 lower(ir.module.clone(), target)
             };
-            entries.push((path.clone(), target.label().to_owned(), emit(&ir, target)));
+            entries.push((
+                path.clone(),
+                target.label().to_owned(),
+                emit(&ir, target, &path, &mut diagnostics),
+            ));
         }
     }
     (PrecompiledShaders::new(entries), diagnostics, sources)
@@ -155,6 +159,24 @@ fn unreadable(path: &str, reason: &str) -> Diagnostic {
     diagnostic
 }
 
+/// The note a target that cannot express a shader reports.
+///
+/// A note rather than an error: the shader still compiles for every other
+/// target, so the build succeeds — but it succeeds having produced one fewer
+/// backend than it was asked for, and that has to be said.
+fn unsupported_target(path: &str, target: &str, reason: &str) -> Diagnostic {
+    let message =
+        format!("`{path}` produced no `{target}` output and the artifact's is empty: {reason}");
+    let mut diagnostic = Diagnostic::single(
+        Severity::Note,
+        message.clone(),
+        Label::primary(FileSpan::new(SourceId::new(0), Span::new(0, 0)), message),
+    );
+    diagnostic.code = Some("KSLS016");
+    diagnostic.phase = Some("ksl");
+    diagnostic
+}
+
 /// Every import a module writes, as an alias and its path segments.
 fn import_paths(module: &Module) -> Vec<(String, Vec<String>)> {
     module
@@ -206,7 +228,17 @@ fn resolve_import(directory: &Path, segments: &[String]) -> Option<PathBuf> {
 }
 
 /// Emits every source and name one target contributes.
-fn emit(ir: &ShaderIr, target: BackendTarget) -> CompiledShader {
+///
+/// A target that cannot express the shader says so through `diagnostics` rather
+/// than contributing an empty source: an artifact whose GLSL fields are blank
+/// looks exactly like one whose GLSL compiled, and the difference only shows up
+/// as a black window on the platform that uses it.
+fn emit(
+    ir: &ShaderIr,
+    target: BackendTarget,
+    path: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> CompiledShader {
     let entry = |stage: Stage| {
         ir.reflection
             .as_ref()
@@ -243,9 +275,28 @@ fn emit(ir: &ShaderIr, target: BackendTarget) -> CompiledShader {
         // link. A shader it refuses still compiles for the other targets, so
         // the refusal leaves empty sources rather than failing the build.
         BackendTarget::Glsl330 => {
-            compiled.vertex_source = kira_glsl_backend::emit(ir, Stage::Vertex).unwrap_or_default();
-            compiled.fragment_source =
-                kira_glsl_backend::emit(ir, Stage::Fragment).unwrap_or_default();
+            for (stage, slot) in [(Stage::Vertex, 0usize), (Stage::Fragment, 1usize)] {
+                match kira_glsl_backend::emit(ir, stage) {
+                    Ok(source) => {
+                        if slot == 0 {
+                            compiled.vertex_source = source;
+                        } else {
+                            compiled.fragment_source = source;
+                        }
+                    }
+                    // Reported once, not once per stage: a shader GLSL cannot
+                    // express fails the same way for both.
+                    Err(refusal) => {
+                        if slot == 0 {
+                            diagnostics.push(unsupported_target(
+                                path,
+                                "glsl_330",
+                                &refusal.to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
         }
         BackendTarget::Hlsl | BackendTarget::Spirv => {}
     }
@@ -378,6 +429,56 @@ shader Tri {
         assert_eq!(reported.labels[0].span.source, SourceId::new(4));
         assert_eq!(sources.len(), 1);
         assert!(table.is_empty(), "a rejected shader must not be usable");
+    }
+
+    #[test]
+    fn a_target_that_cannot_express_the_shader_says_so() {
+        // GLSL 330 has no compute stage. The shader still compiles for Metal
+        // and WebGPU, so the build succeeds — but it succeeds having produced
+        // one fewer backend, and an artifact with silently empty GLSL fields
+        // looks exactly like one whose GLSL compiled.
+        let directory = Scratch::new("unsupported-target");
+        std::fs::write(
+            directory.path().join("Step.ksl"),
+            r#"
+type QIn {
+    @builtin(thread_id)
+    let gid: UInt3
+}
+shader Step {
+    group Work {
+        storage read_write out: [UInt]
+    }
+    compute {
+        input QIn
+        threads(64, 1, 1)
+        function entry(q: QIn) {
+            out[q.gid.x] = 1
+            return
+        }
+    }
+}
+"#,
+        )
+        .expect("the shader");
+        let program = "@Main function main() {\n    let art = ksl!(\"Step.ksl\")\n    return\n}\n";
+        let (table, diagnostics, _) =
+            precompile(directory.path(), &[(SourceId::new(0), program)], 1);
+        let note = diagnostics
+            .iter()
+            .find(|d| d.code == Some("KSLS016"))
+            .expect("the unsupported-target note");
+        assert!(note.message.contains("glsl_330"), "{}", note.message);
+        assert!(note.message.contains("Step.ksl"), "{}", note.message);
+
+        // Metal still has it: one target refusing costs only that target.
+        use kira_macros::ShaderCompiler;
+        let msl = table.compile("Step.ksl", "msl").expect("msl");
+        assert!(
+            msl.combined_source.contains("kernel"),
+            "{}",
+            msl.combined_source
+        );
     }
 
     #[test]
