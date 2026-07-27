@@ -68,10 +68,19 @@ unsafe fn initialize_targets() {
 impl TargetMachine {
     /// Builds a target machine for the compiling host.
     ///
-    /// `optimize` chooses the code-generation level. Optimizing dominates the
-    /// cost of emitting a large module — the Project Matter editor takes two
-    /// minutes optimized and seconds unoptimized — so a development build asks
-    /// for none and a shipped one asks for the default.
+    /// `optimize` chooses the code-generation level: the default one, or the
+    /// aggressive one when a build asks to be optimized.
+    ///
+    /// # There is no unoptimized level to choose
+    ///
+    /// Turning code generation off entirely emits far faster, and was the
+    /// default here until it produced a compiler that could not run its own
+    /// corpus. Without optimization LLVM gives every branch's locals a stack
+    /// slot of its own rather than colouring them, so Project Matter's widget
+    /// dispatch reserved a third of a megabyte on entry and thirty-four nested
+    /// calls overflowed an 8 MB stack. The next level down from the default is
+    /// not a middle ground either — measured on the editor it emits *slower*
+    /// than the default and buys nothing.
     pub(super) fn host(optimize: bool) -> Result<Self, LlvmError> {
         // SAFETY: the initializers are idempotent and safe to call repeatedly;
         // every out-parameter below is a live local, and each LLVM-owned string
@@ -96,9 +105,9 @@ impl TargetMachine {
                 cpu,
                 features,
                 if optimize {
-                    LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault
+                    LLVMCodeGenOptLevel::LLVMCodeGenLevelAggressive
                 } else {
-                    LLVMCodeGenOptLevel::LLVMCodeGenLevelNone
+                    LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault
                 },
                 // Host executables link position-independent everywhere Kira
                 // targets; PIC is required on macOS and the default on modern

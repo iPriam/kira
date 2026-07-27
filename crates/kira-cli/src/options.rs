@@ -45,12 +45,12 @@ pub struct CompileOptions {
     pub device_explicit: bool,
     /// Whether to also write the textual LLVM IR beside the other artifacts.
     pub emit_llvm_ir: bool,
-    /// Whether to optimize the generated code.
+    /// Whether to generate code at the aggressive optimization level.
     ///
-    /// Off by default, which is what makes the edit-build-run loop usable: the
-    /// editor's module takes two minutes to emit optimized and seconds to emit
-    /// unoptimized. `--release` asks for the optimized build a shipped program
-    /// wants.
+    /// A development build already optimizes: emitting without it is faster but
+    /// produces stack frames large enough to overflow on a deeply nested
+    /// program, so there is no unoptimized level to fall back to. `--release`
+    /// asks for the level above the default.
     pub release: bool,
 }
 

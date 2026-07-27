@@ -64,6 +64,12 @@ impl FunctionLowering<'_, '_> {
             aggregate_buffers.push(self.write_aggregate_buffer(id, value, ty)?);
         }
 
+        // The stack this call's buffers take is given back the moment it
+        // returns. Reserving without restoring leaks a frame's worth per
+        // iteration when the call sits in a loop; hoisting to the entry block
+        // instead would reserve *every* call site's buffers on entry, which on
+        // a large dispatch function is a quarter-megabyte frame.
+        let saved = self.call(self.codegen.runtime.stack_save, &mut [], c"stack.save");
         // SAFETY: every type and value belongs to this live module and the
         // builder is on a live block; `argv` is sized to hold exactly the
         // arguments written into it, and `out` addresses one bridge value.
@@ -139,13 +145,17 @@ impl FunctionLowering<'_, '_> {
         unsafe { LLVMBuildUnreachable(builder) };
         self.position_at(ok);
 
-        match result_buffer {
-            Some((id, buffer)) => self.read_aggregate_buffer(id, buffer, result_ty),
+        // Read the result *before* giving the stack back: the buffers holding
+        // it are the ones about to be released.
+        let value = match result_buffer {
+            Some((id, buffer)) => self.read_aggregate_buffer(id, buffer, result_ty)?,
             None => {
                 let scalar = crate::codegen::foreign_scalar::scalar_of(result_spec)?;
-                self.codegen.read_foreign_result(out, scalar)
+                self.codegen.read_foreign_result(out, scalar)?
             }
-        }
+        };
+        self.call(self.codegen.runtime.stack_restore, &mut [saved], c"");
+        Ok(value)
     }
 
     /// The layout width the host this build targets uses.
