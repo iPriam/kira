@@ -32,6 +32,17 @@ kira-project.workspace = true
 kira-runtime-abi.workspace = true
 kira-semantics.workspace = true
 kira-semantics-model.workspace = true
+# The KSL pipeline, which this crate drives before analysis: parsing, checking,
+# lowering, and the three emitters a shader artifact carries.
+kira-macros.workspace = true
+kira-ksl-parser.workspace = true
+kira-ksl-semantics.workspace = true
+kira-ksl-syntax-model.workspace = true
+kira-shader-ir.workspace = true
+kira-shader-model.workspace = true
+kira-msl-backend.workspace = true
+kira-wgsl-backend.workspace = true
+kira-glsl-backend.workspace = true
 kira-source.workspace = true
 salsa.workspace = true
 thiserror.workspace = true

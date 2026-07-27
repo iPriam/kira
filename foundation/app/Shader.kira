@@ -1,0 +1,56 @@
+// Foundation's `ksl!` shader macro, written in pure Kira.
+//
+// `ksl!("Shaders/Name.ksl")` compiles a KSL shader at compile time and expands
+// to a `KslArtifact` holding every backend's source inline. It is an ordinary
+// `comptime macro` rather than a compiler builtin, which is the whole point:
+// the artifact type below is Kira source, so an engine can add a backend, drop
+// one, or rename a field without a compiler release.
+//
+// The compiler's half of the contract is only `Ksl.compile(path, target)`,
+// which answers with one backend's output for one shader. Everything about the
+// *shape* the renderer receives — the type's name, its fields, how many
+// backends get inlined — is decided here.
+//
+// Targets: "msl" is Metal, which compiles one module holding every stage, so
+// its whole source lands in `combinedMsl`. "wgsl" is WebGPU and "glsl_330" is
+// OpenGL, and both compile a stage at a time, so each contributes a vertex and
+// a fragment source. A shader GLSL 330 cannot express — one using compute or
+// storage, both of which arrived in 430 — arrives with its GLSL fields empty
+// rather than failing the build, because the other backends still have it.
+
+// A compiled shader, with every backend's source inline.
+struct KslArtifact {
+    let combinedMsl: String
+    let vertexWgsl: String
+    let fragmentWgsl: String
+    let vertexGlsl: String
+    let fragmentGlsl: String
+    let computeWgsl: String
+    let vertexEntry: String
+    let fragmentEntry: String
+    let computeEntry: String
+    let uniformReflection: String
+}
+
+comptime macro ksl {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        let msl = Ksl.compile(input, "msl")
+        let wgsl = Ksl.compile(input, "wgsl")
+        let glsl = Ksl.compile(input, "glsl_330")
+        return quote {
+            KslArtifact(
+                combinedMsl: #{msl.combinedSource},
+                vertexWgsl: #{wgsl.vertexSource},
+                fragmentWgsl: #{wgsl.fragmentSource},
+                vertexGlsl: #{glsl.vertexSource},
+                fragmentGlsl: #{glsl.fragmentSource},
+                computeWgsl: #{wgsl.computeSource},
+                vertexEntry: #{msl.vertexEntry},
+                fragmentEntry: #{msl.fragmentEntry},
+                computeEntry: #{msl.computeEntry},
+                uniformReflection: #{msl.uniformReflection}
+            )
+        }
+    }
+}

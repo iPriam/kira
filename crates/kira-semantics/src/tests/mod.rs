@@ -76,6 +76,7 @@ fn library_diagnostics(text: &str) -> Vec<Diagnostic> {
         "test.kira".to_owned(),
         Vec::new(),
         BuildKind::Library,
+        kira_macros::PrecompiledShaders::default(),
     );
     analyzed::accumulated::<DiagnosticAccumulator>(&db, source)
         .into_iter()

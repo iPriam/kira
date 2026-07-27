@@ -17,6 +17,7 @@ fn exports(text: &str) -> Vec<(String, String)> {
         "test.kira".to_owned(),
         Vec::new(),
         BuildKind::Library,
+        kira_macros::PrecompiledShaders::default(),
     );
     analyzed(&db, source)
         .exports
@@ -56,6 +57,7 @@ fn an_export_indexes_the_function_it_names() {
         "test.kira".to_owned(),
         Vec::new(),
         BuildKind::Library,
+        kira_macros::PrecompiledShaders::default(),
     );
     let program = analyzed(&db, source);
     assert_eq!(program.exports.len(), 1);
@@ -82,6 +84,7 @@ fn an_export_records_the_signature_a_consumer_is_generated_against() {
         "test.kira".to_owned(),
         Vec::new(),
         BuildKind::Library,
+        kira_macros::PrecompiledShaders::default(),
     );
     let program = analyzed(&db, source);
     assert!(

@@ -41,7 +41,6 @@ mod procedural;
 mod quote;
 mod registry;
 mod rename;
-mod shader;
 mod syntax_ops;
 mod tokens;
 mod value;
@@ -57,7 +56,7 @@ use crate::procedural::Program;
 use crate::rename::Gensym;
 use crate::tokens::Lexed;
 
-pub use crate::ksl::{CompiledShader, ShaderCompileError, ShaderCompiler};
+pub use crate::ksl::{CompiledShader, PrecompiledShaders, ShaderCompileError, ShaderCompiler};
 
 /// How many times expansion re-runs over its own output before giving up.
 ///
@@ -76,6 +75,34 @@ pub struct Expansion {
     pub texts: Vec<String>,
     /// Everything expansion reported, in source order.
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Every `.ksl` path a macro call site names, in the order they appear.
+///
+/// The build layer needs these *before* expansion, because compiling a shader
+/// reads files and expansion runs inside pure queries. Matched by the shape of
+/// the call rather than by the macro's name — `name!("…​.ksl")` — so an engine
+/// that renames its shader macro still gets its shaders compiled.
+#[must_use]
+pub fn shader_paths(files: &[(SourceId, &str)]) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for &(source, text) in files {
+        let file = Lexed::new(source, text);
+        for call in invoke::find(&file) {
+            let [argument] = call.arguments.as_slice() else {
+                continue;
+            };
+            let written = file.slice(*argument).trim();
+            if !written.starts_with('"') || !written.ends_with('"') || written.len() < 2 {
+                continue;
+            }
+            let path = kira_lexer::decode_string_literal(written);
+            if path.ends_with(".ksl") && !found.contains(&path) {
+                found.push(path);
+            }
+        }
+    }
+    found
 }
 
 /// Expands every macro in `files`, returning the source the rest of the
@@ -107,12 +134,7 @@ pub fn expand_with(files: &[(SourceId, &str)], shaders: Option<&dyn ShaderCompil
 
     let mut reporter = Reporter::new();
     let (registry, declarations) = registry::collect(&lexed, &mut reporter);
-    // The builtin `ksl!` needs no declaration, so a program with no macros of
-    // its own still has expansion to do when it writes one.
-    let has_builtin = files
-        .iter()
-        .any(|(_, text)| text.contains(&format!("{}!(", shader::NAME)));
-    if registry.is_empty() && !has_builtin {
+    if registry.is_empty() {
         return Expansion {
             texts: identity,
             diagnostics: reporter.into_diagnostics(),
@@ -251,12 +273,6 @@ fn expand_file(
                         buffer.replace(call.span, expansion);
                     }
                 }
-            }
-            continue;
-        }
-        if shader::is_builtin(&call.name) {
-            if let Some(expansion) = shader::expand(file, &call, reporter) {
-                buffer.replace(call.span, expansion);
             }
             continue;
         }
@@ -636,17 +652,20 @@ function load() -> KslArtifact {
 "#;
 
     #[test]
-    fn a_userland_ksl_macro_shadows_the_builtin() {
-        // The guardrail for deleting `shader.rs`: the builtin is consulted only
-        // after the registry, so a declared `ksl` wins. Were that ever to
-        // regress, the engine could not take ownership of its own shader macro.
-        let expansion = expand_one(USERLAND_KSL);
+    fn there_is_no_builtin_ksl_left_to_fall_back_on() {
+        // `ksl!` was a compiler builtin and is not one any more: the engine
+        // declares it. An undeclared call is an unknown macro like any other,
+        // and if a builtin ever returned this would report something else.
+        let expansion = expand_one(
+            "macro other(v: expr) { expand { v } }\n\
+             function f() {\n    let s = ksl!(\"Shaders/Tri.ksl\")\n}\n",
+        );
         assert!(
             expansion
                 .diagnostics
                 .iter()
-                .all(|d| d.code != Some("KMAC024")),
-            "the builtin answered instead of the declared macro: {:?}",
+                .any(|d| d.code == Some("KMAC001")),
+            "{:?}",
             expansion.diagnostics
         );
     }
