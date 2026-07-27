@@ -235,7 +235,7 @@ mod tests {
         let resolved: ResolvedNativeLibrary =
             NativeLibrarySpec::new(name, LinkMode::Static, targets)
                 .expect("a valid declaration")
-                .resolve(Path::new("/pkg/NativeLibs"), |_| true)
+                .resolve(Path::new("/pkg/NativeLibs"), None, |_| true)
                 .expect("resolution");
         // The catalog owns its interner; a fresh, empty one seeds it.
         ResolvedNativeLibraries::from_resolved(Interner::new(), vec![resolved]).expect("a catalog")

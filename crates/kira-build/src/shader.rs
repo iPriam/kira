@@ -219,6 +219,11 @@ fn emit(ir: &ShaderIr, target: BackendTarget) -> CompiledShader {
             .unwrap_or_default()
     };
     let mut compiled = CompiledShader {
+        shader_name: ir
+            .reflection
+            .as_ref()
+            .map(|reflection| reflection.shader_name.clone())
+            .unwrap_or_default(),
         vertex_entry: entry(Stage::Vertex),
         fragment_entry: entry(Stage::Fragment),
         compute_entry: entry(Stage::Compute),

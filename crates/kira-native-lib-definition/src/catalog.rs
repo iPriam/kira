@@ -152,7 +152,7 @@ mod tests {
             .collect();
         NativeLibrarySpec::new(name, LinkMode::Static, targets)
             .expect("a valid declaration")
-            .resolve(Path::new("/pkg/NativeLibs"), |_| true)
+            .resolve(Path::new("/pkg/NativeLibs"), None, |_| true)
             .expect("resolution")
     }
 

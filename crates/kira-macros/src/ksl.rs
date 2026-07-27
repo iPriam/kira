@@ -63,6 +63,8 @@ pub(crate) const RECORD_NAME: &str = "KslCompiled";
 /// target.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct CompiledShader {
+    /// The shader's declared name.
+    pub shader_name: String,
     /// The whole module, for a target that emits one (Metal does).
     pub combined_source: String,
     /// The vertex stage on its own, for a target that splits stages.
@@ -246,6 +248,7 @@ fn literal_path(value: &Value) -> Result<String, EvalError> {
 /// makes inlining a whole shader source into generated Kira work at all.
 fn record(compiled: &CompiledShader) -> Value {
     let members = vec![
+        ("shaderName", &compiled.shader_name),
         ("combinedSource", &compiled.combined_source),
         ("vertexSource", &compiled.vertex_source),
         ("fragmentSource", &compiled.fragment_source),
