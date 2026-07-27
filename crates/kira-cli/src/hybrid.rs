@@ -101,6 +101,7 @@ pub fn build(
         exports: kira_llvm_backend::NativeExportSurface::default(),
         ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
         runtime_archive: native::runtime_archive()?,
+        optimize: false,
         unavailable_imports: foreign_link.unavailable_imports().to_vec(),
         foreign_link: foreign_link.clone(),
     };

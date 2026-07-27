@@ -264,8 +264,8 @@ impl Module {
     }
 
     /// Emits a native object file for the host into `path`.
-    pub(crate) fn emit_object(&self, path: &Path) -> Result<(), LlvmError> {
-        let machine = TargetMachine::host()?;
+    pub(crate) fn emit_object(&self, path: &Path, optimize: bool) -> Result<(), LlvmError> {
+        let machine = TargetMachine::host(optimize)?;
         machine.emit_object(self.module, path)
     }
 
@@ -377,7 +377,7 @@ impl<'a> Codegen<'a> {
         // The module needs the host's data layout in place before any element
         // is sized, and object emission sets the same layout again (harmlessly)
         // when it runs. `target_data` borrows it from the module.
-        TargetMachine::host()?.set_module_layout(owned.module);
+        TargetMachine::host(false)?.set_module_layout(owned.module);
         // SAFETY: the layout was just set, so the module has one; the returned
         // handle borrows it and lives as long as the module does.
         let target_data = unsafe { LLVMGetModuleDataLayout(owned.module) };

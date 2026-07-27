@@ -4,6 +4,7 @@
 
 pub mod diagnostic;
 pub mod label;
+pub mod progress;
 pub mod renderer;
 pub mod sink;
 

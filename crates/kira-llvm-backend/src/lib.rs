@@ -199,6 +199,12 @@ pub struct NativeBuildOptions {
     /// and linker flags declared beside them. Empty for a program with no
     /// foreign imports.
     pub foreign_link: NativeLinkInputs,
+    /// Whether to optimize the emitted code.
+    ///
+    /// Optimizing a large module is the dominant cost of a native build — two
+    /// minutes against seconds for the editor — so a development build leaves
+    /// it off and a shipped one turns it on.
+    pub optimize: bool,
     /// The imports whose library is absent on this target, by index.
     ///
     /// Their adapters return
@@ -254,6 +260,7 @@ pub fn build_native(
     program: &IrProgram,
     options: &NativeBuildOptions,
 ) -> Result<NativeArtifacts, LlvmError> {
+    kira_diagnostics::progress!("generating native code for {}", options.module_name);
     let module = codegen::Module::build(
         program,
         &options.module_name,
@@ -263,12 +270,15 @@ pub fn build_native(
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
-    module.emit_object(&options.object_path)?;
+    kira_diagnostics::progress!("emitting object");
+    module.emit_object(&options.object_path, options.optimize)?;
 
     let executable = match &options.executable_path {
         Some(path) => {
             let llvm = kira_toolchain::discover(None)?;
+            kira_diagnostics::progress!("compiling the foreign shim");
             let shim = build_foreign_shim(program, &options.object_path, &llvm)?;
+            kira_diagnostics::progress!("linking {}", path.display());
             link::link_executable(
                 &llvm,
                 &options.object_path,
@@ -323,7 +333,8 @@ pub fn build_adapter_sidecar(
     options: &AdapterSidecarOptions,
 ) -> Result<PathBuf, LlvmError> {
     let module = codegen::Module::build_adapter_sidecar(program, &options.module_name)?;
-    module.emit_object(&options.object_path)?;
+    kira_diagnostics::progress!("emitting object");
+    module.emit_object(&options.object_path, false)?;
     let llvm = kira_toolchain::discover(None)?;
     // Both the adapters and the callback thunks: a thunk is referenced by
     // nothing inside the sidecar — C is what calls it — so without forcing it by
@@ -392,7 +403,8 @@ pub fn build_native_library(
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
-    module.emit_object(&options.object_path)?;
+    kira_diagnostics::progress!("emitting object");
+    module.emit_object(&options.object_path, options.optimize)?;
 
     if options.archive_path.is_none() && options.shared_library_path.is_none() {
         return Err(LlvmError::Unsupported(
@@ -442,7 +454,8 @@ pub fn build_hybrid_library(
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
-    module.emit_object(&options.object_path)?;
+    kira_diagnostics::progress!("emitting object");
+    module.emit_object(&options.object_path, false)?;
 
     let library = options
         .shared_library_path

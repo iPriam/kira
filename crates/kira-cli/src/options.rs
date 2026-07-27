@@ -45,6 +45,13 @@ pub struct CompileOptions {
     pub device_explicit: bool,
     /// Whether to also write the textual LLVM IR beside the other artifacts.
     pub emit_llvm_ir: bool,
+    /// Whether to optimize the generated code.
+    ///
+    /// Off by default, which is what makes the edit-build-run loop usable: the
+    /// editor's module takes two minutes to emit optimized and seconds to emit
+    /// unoptimized. `--release` asks for the optimized build a shipped program
+    /// wants.
+    pub release: bool,
 }
 
 /// The path a `run`/`build`/`check` uses when the invocation names none: the
@@ -91,6 +98,7 @@ impl CompileOptions {
         let mut device = Device::Host;
         let mut device_explicit = false;
         let mut emit_llvm_ir = false;
+        let mut release = false;
 
         let mut index = 0;
         while index < args.len() {
@@ -112,6 +120,7 @@ impl CompileOptions {
                     index += 1;
                 }
                 "--emit-llvm-ir" => emit_llvm_ir = true,
+                "--release" => release = true,
                 other if other.starts_with('-') => {
                     return Err(OptionsError::UnknownFlag(other.to_owned()));
                 }
@@ -164,6 +173,7 @@ impl CompileOptions {
             device,
             device_explicit,
             emit_llvm_ir,
+            release,
         })
     }
 }

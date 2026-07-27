@@ -53,6 +53,7 @@ pub(crate) fn precompile(
     let mut diagnostics = Vec::new();
     let mut sources: ShaderSources = Vec::new();
     for path in kira_macros::shader_paths(files) {
+        kira_diagnostics::progress!("compiling shader {path}");
         let resolved = root.join(&path);
         let Some(ir) = compile_one(&resolved, base, &mut diagnostics, &mut sources) else {
             continue;
@@ -290,6 +291,9 @@ mod tests {
         std::fs::write(
             shaders.join("Tri.ksl"),
             r#"
+type Camera {
+    let view_projection: Float4x4
+}
 type VOut {
     @builtin(position)
     let clip_position: Float4
@@ -298,11 +302,14 @@ type FOut {
     let color: Float4
 }
 shader Tri {
+    group Frame {
+        uniform camera: Camera
+    }
     vertex {
         output VOut
         function entry() -> VOut {
             let r: VOut
-            r.clip_position = Float4(0.0, 0.0, 0.0, 1.0)
+            r.clip_position = mul(camera.view_projection, Float4(0.0, 0.0, 0.0, 1.0))
             return r
         }
     }
@@ -331,7 +338,14 @@ shader Tri {
         let msl = table.compile("Shaders/Tri.ksl", "msl").expect("msl");
         assert!(msl.combined_source.contains("#include <metal_stdlib>"));
         assert_eq!(msl.vertex_entry, "vertex_main");
-        assert!(msl.uniform_reflection.starts_with("KSLR1\n"));
+        // The artifact carries the compact digest the graphics host parses,
+        // not the whole KSLR1 reflection — the two are different contracts with
+        // different consumers, and handing the host the wrong one leaves every
+        // shader running with its uniforms unbound.
+        assert_eq!(
+            msl.uniform_reflection,
+            "camera:0:64:1:1:view_projection@0#64;"
+        );
 
         let wgsl = table.compile("Shaders/Tri.ksl", "wgsl").expect("wgsl");
         assert!(wgsl.vertex_source.contains("@vertex"));

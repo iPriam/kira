@@ -8,7 +8,8 @@
 //! agree without either backend inventing an order.
 
 use kira_ksl_semantics::model::{
-    CheckedModule, CheckedResource, CheckedShader, CheckedStage, ConstValue,
+    CheckedExprId, CheckedExprKind, CheckedModule, CheckedResource, CheckedShader, CheckedStage,
+    CheckedStmt, CheckedStmtId, ConstValue,
 };
 use kira_shader_model::{
     BackendBinding, BackendTarget, ReflectedField, ReflectedOption, ReflectedResource,
@@ -163,7 +164,6 @@ fn reflect_types(module: &CheckedModule, shader: &CheckedShader) -> Vec<Reflecte
 
 /// Reflects every resource, with one binding per target.
 fn reflect_resources(module: &CheckedModule, shader: &CheckedShader) -> Vec<ReflectedResource> {
-    let visibility: Vec<Stage> = shader.stages.iter().map(|stage| stage.stage).collect();
     let mut counters = Counters::default();
     let mut reflected = Vec::new();
     for (group_index, group) in shader.groups.iter().enumerate() {
@@ -177,7 +177,7 @@ fn reflect_resources(module: &CheckedModule, shader: &CheckedShader) -> Vec<Refl
                 resource_name: resource.name.clone(),
                 resource_kind: resource.kind,
                 type_name: resource_type_name(module, resource),
-                visibility: visibility.clone(),
+                visibility: visible_stages(module, shader, &resource.name),
                 access: resource.access,
                 backend_bindings: TARGETS
                     .iter()
@@ -204,6 +204,79 @@ fn reflect_resources(module: &CheckedModule, shader: &CheckedShader) -> Vec<Refl
         }
     }
     reflected
+}
+
+/// The stages whose bodies actually read `name`.
+///
+/// Measured rather than assumed. A host binds a uniform block to every stage
+/// this lists, and a stage has only so many block slots — so claiming a
+/// resource is visible everywhere spends slots on stages that never touch it.
+fn visible_stages(module: &CheckedModule, shader: &CheckedShader, name: &str) -> Vec<Stage> {
+    shader
+        .stages
+        .iter()
+        .filter(|stage| {
+            std::iter::once(&stage.entry)
+                .chain(&stage.helpers)
+                .any(|function| reads_resource(module, &function.body, name))
+        })
+        .map(|stage| stage.stage)
+        .collect()
+}
+
+/// Whether any statement in `body` reads the resource `name`.
+fn reads_resource(module: &CheckedModule, body: &[CheckedStmtId], name: &str) -> bool {
+    body.iter().any(|&id| match module.stmt(id) {
+        CheckedStmt::Let { init, .. } => init.is_some_and(|value| expr_reads(module, value, name)),
+        CheckedStmt::Assign { target, value } => {
+            expr_reads(module, *target, name) || expr_reads(module, *value, name)
+        }
+        CheckedStmt::If {
+            cond,
+            then,
+            otherwise,
+        } => {
+            expr_reads(module, *cond, name)
+                || reads_resource(module, then, name)
+                || otherwise
+                    .as_ref()
+                    .is_some_and(|body| reads_resource(module, body, name))
+        }
+        CheckedStmt::While { cond, body } => {
+            expr_reads(module, *cond, name) || reads_resource(module, body, name)
+        }
+        CheckedStmt::Return(value) => value.is_some_and(|value| expr_reads(module, value, name)),
+        CheckedStmt::Expr(value) => expr_reads(module, *value, name),
+    })
+}
+
+/// Whether `id` or anything under it reads the resource `name`.
+fn expr_reads(module: &CheckedModule, id: CheckedExprId, name: &str) -> bool {
+    let node = module.expr(id);
+    match &node.kind {
+        CheckedExprKind::Resource(read) => read == name,
+        CheckedExprKind::Field { base, .. }
+        | CheckedExprKind::Swizzle { base, .. }
+        | CheckedExprKind::ArrayLength { base } => expr_reads(module, *base, name),
+        CheckedExprKind::Index { base, index } => {
+            expr_reads(module, *base, name) || expr_reads(module, *index, name)
+        }
+        CheckedExprKind::Construct { args }
+        | CheckedExprKind::Call { args, .. }
+        | CheckedExprKind::Builtin { args, .. } => {
+            args.iter().any(|&arg| expr_reads(module, arg, name))
+        }
+        CheckedExprKind::Cast { value } | CheckedExprKind::Unary { operand: value, .. } => {
+            expr_reads(module, *value, name)
+        }
+        CheckedExprKind::Binary { lhs, rhs, .. } => {
+            expr_reads(module, *lhs, name) || expr_reads(module, *rhs, name)
+        }
+        CheckedExprKind::Const(_)
+        | CheckedExprKind::Local(_)
+        | CheckedExprKind::Option(_)
+        | CheckedExprKind::Invalid => false,
+    }
 }
 
 /// The per-target binding counters, which run over the whole shader.

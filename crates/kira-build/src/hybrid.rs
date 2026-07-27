@@ -381,6 +381,7 @@ pub fn build_hybrid_library(
             // Foreign link inputs reach the hybrid native half through the
             // hybrid build path, not this base options struct.
             foreign_link: kira_llvm_backend::NativeLinkInputs::EMPTY,
+            optimize: false,
             unavailable_imports: Vec::new(),
         },
     )?;

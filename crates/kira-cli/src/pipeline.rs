@@ -61,6 +61,8 @@ pub const EXIT_USAGE: i32 = 2;
 /// With no path, checks the package you are standing in — the same default
 /// `run` and `build` take.
 pub fn check(args: &[String]) -> i32 {
+    let surface = crate::progress::Surface::install("Checking");
+    let _guard = crate::progress::Finish(surface);
     let path = args
         .first()
         .map(String::as_str)
@@ -85,6 +87,8 @@ pub fn check(args: &[String]) -> i32 {
 /// A wasm device does not run on this machine: it builds a module and serves it
 /// to a browser, which is what running a Kira program on the Web means.
 pub fn run(args: &[String]) -> i32 {
+    let surface = crate::progress::Surface::install("Running");
+    let _guard = crate::progress::Finish(surface);
     let mut options = match parse_options("run", args) {
         Ok(options) => options,
         Err(code) => return code,
@@ -264,6 +268,8 @@ fn export_engine_is_built(
 /// <file|dir>`: compile to artifacts under `.kira-build/`, without executing
 /// anything.
 pub fn build(args: &[String]) -> i32 {
+    let surface = crate::progress::Surface::install("Building");
+    let _guard = crate::progress::Finish(surface);
     let mut options = match parse_options("build", args) {
         Ok(options) => options,
         Err(code) => return code,

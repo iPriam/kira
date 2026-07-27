@@ -182,6 +182,7 @@ pub(super) fn build_native(
         ir,
         std::path::Path::new(&options.path),
         options.emit_llvm_ir,
+        options.release,
         foreign_link,
     ) {
         Ok(artifacts) => Some(artifacts),
