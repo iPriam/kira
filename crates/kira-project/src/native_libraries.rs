@@ -9,7 +9,7 @@
 //! a file — using `Path::exists` as the existence predicate. The result is one
 //! [`NativeLinkResolution`] the build path threads to the backend.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use kira_core::Interner;
 use kira_manifest::{NativeLibParseError, parse_native_lib_manifest};
@@ -79,7 +79,74 @@ pub fn resolve_native_libraries(
     manifest_paths: &[String],
     target: &TargetTriple,
 ) -> Result<NativeLinkResolution, NativeLibraryResolveError> {
-    let mut resolved = Vec::with_capacity(inline.len() + manifest_paths.len());
+    resolve_native_library_packages(
+        &[NativeLibraryPackage {
+            root: package_root.to_path_buf(),
+            inline: inline.to_vec(),
+            manifest_paths: manifest_paths.to_vec(),
+        }],
+        target,
+    )
+}
+
+/// One package's native-library declarations, anchored at its own root.
+#[derive(Debug, Clone)]
+pub struct NativeLibraryPackage {
+    /// The package directory its relative paths are written against.
+    pub root: PathBuf,
+    /// What its `package.kira` declares inline.
+    pub inline: Vec<NativeLibrarySpec>,
+    /// Its `NativeLibs/*.toml` files, relative to `root`.
+    pub manifest_paths: Vec<String>,
+}
+
+/// Resolves the declarations of a package **and everything it depends on**.
+///
+/// A library is declared by the package that owns it, not by every package that
+/// uses it: `kira-graphics` declares `sokol`, `vulkan`, and `kira_metal`, and an
+/// app importing their symbols declares none of them. So the whole dependency
+/// closure contributes, each group's relative paths anchored at its own root.
+pub fn resolve_native_library_packages(
+    packages: &[NativeLibraryPackage],
+    target: &TargetTriple,
+) -> Result<NativeLinkResolution, NativeLibraryResolveError> {
+    let mut resolved: Vec<ResolvedNativeLibrary> = Vec::new();
+    for package in packages {
+        // Within one package a library declared twice is still an error, so
+        // each group resolves on its own before being merged.
+        let mut group = Vec::new();
+        resolve_one(package, target, &mut group)?;
+        ResolvedNativeLibraries::from_resolved(Interner::new(), group.clone())?;
+        for library in group {
+            // Across packages the nearest declaration wins. An app and the
+            // engine it depends on both declaring `sokol` is the normal case
+            // here, not a conflict — the app's own is the one that governs,
+            // and the groups arrive nearest-first.
+            if resolved
+                .iter()
+                .any(|already| already.name() == library.name())
+            {
+                continue;
+            }
+            resolved.push(library);
+        }
+    }
+    let catalog = ResolvedNativeLibraries::from_resolved(Interner::new(), resolved)?;
+    Ok(NativeLinkResolution {
+        catalog,
+        target: target.clone(),
+    })
+}
+
+/// Resolves one package's two declaration sources into `resolved`.
+fn resolve_one(
+    package: &NativeLibraryPackage,
+    target: &TargetTriple,
+    resolved: &mut Vec<ResolvedNativeLibrary>,
+) -> Result<(), NativeLibraryResolveError> {
+    let package_root = package.root.as_path();
+    let inline = &package.inline;
+    let manifest_paths = &package.manifest_paths;
     for spec in inline {
         resolved.push(locate(spec, package_root, target)?);
     }
@@ -100,11 +167,7 @@ pub fn resolve_native_libraries(
         let base_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
         resolved.push(locate(&spec, base_dir, target)?);
     }
-    let catalog = ResolvedNativeLibraries::from_resolved(Interner::new(), resolved)?;
-    Ok(NativeLinkResolution {
-        catalog,
-        target: target.clone(),
-    })
+    Ok(())
 }
 
 /// Locates one declaration's files against `base_dir`, reading the disk.
@@ -125,7 +188,7 @@ mod tests {
 
     /// A scratch directory that removes itself so a failing test leaves no
     /// litter and no test depends on another's leftovers.
-    struct TempDir(std::path::PathBuf);
+    struct TempDir(PathBuf);
 
     impl TempDir {
         fn new(tag: &str) -> Self {
