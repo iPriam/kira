@@ -55,6 +55,34 @@ use crate::runtime::{KStr, kira_rt_str_clone, kira_rt_str_free};
 /// A Kira enum at the native ABI: an opaque owned handle.
 pub type KEnum = *mut KiraEnum;
 
+/// Whether `value` carries its whole meaning in the handle.
+///
+/// A variant with no payload is nothing but a tag, and a tag fits in the handle
+/// — so it is stored there, as `(tag << 1) | 1`, and no box is allocated for
+/// it. A real box comes from the allocator word-aligned, so the low bit is free
+/// to say which is which.
+///
+/// This is not a micro-optimization. A layout descriptor is mostly payload-less
+/// variants (an axis, an alignment, a sizing mode), each of which used to cost
+/// a `malloc` on construction and another on every read that cloned it —
+/// measured as the largest remaining cost in a Project Matter frame once state
+/// stopped being copied.
+#[must_use]
+pub fn is_inline(value: KEnum) -> bool {
+    value as usize & 1 == 1
+}
+
+/// The handle for a payload-less variant with this tag.
+#[must_use]
+pub fn inline_handle(tag: i64) -> KEnum {
+    ((tag as usize) << 1 | 1) as KEnum
+}
+
+/// The tag an inline handle carries.
+fn inline_tag(value: KEnum) -> i64 {
+    (value as usize >> 1) as i64
+}
+
 /// Payload word is inert bits (a scalar, or no payload at all); owns nothing.
 pub const PAYLOAD_INERT: i64 = EnumPayloadKind::INERT.as_i64();
 /// Payload word is an owned [`KStr`] to clone and free with the box.
@@ -271,6 +299,9 @@ pub unsafe extern "C" fn kira_rt_enum_tag(value: KEnum) -> i64 {
     if value.is_null() {
         return 0;
     }
+    if is_inline(value) {
+        return inline_tag(value);
+    }
     // SAFETY: a non-null handle is a live `KiraEnum` the caller has not freed.
     unsafe { (*value).tag }
 }
@@ -291,7 +322,8 @@ pub unsafe extern "C" fn kira_rt_enum_tag(value: KEnum) -> i64 {
 /// untouched.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_enum_payload(value: KEnum) -> u64 {
-    if value.is_null() {
+    // An inline handle is a tag and nothing else, so it has no payload to read.
+    if value.is_null() || is_inline(value) {
         return 0;
     }
     // SAFETY: a non-null handle is a live `KiraEnum` that outlives this read.
@@ -320,7 +352,7 @@ pub unsafe extern "C" fn kira_rt_enum_payload(value: KEnum) -> u64 {
 /// must point to writable storage for the concrete payload type.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_enum_payload_aggregate(value: KEnum, out: *mut u8) {
-    if value.is_null() {
+    if value.is_null() || is_inline(value) {
         return;
     }
     // SAFETY: caller guarantees a live enum handle.
@@ -345,6 +377,10 @@ pub unsafe extern "C" fn kira_rt_enum_payload_aggregate(value: KEnum, out: *mut 
 pub unsafe extern "C" fn kira_rt_enum_clone(value: KEnum) -> KEnum {
     if value.is_null() {
         return std::ptr::null_mut();
+    }
+    // An inline handle owns nothing, so a copy of it is itself.
+    if is_inline(value) {
+        return value;
     }
     // SAFETY: a non-null handle is a live `KiraEnum` that outlives this read.
     let source = unsafe { &*value };
@@ -376,7 +412,8 @@ pub unsafe extern "C" fn kira_rt_enum_clone(value: KEnum) -> KEnum {
 /// `value` must be null or a live handle from this runtime, freed at most once.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_enum_free(value: KEnum) {
-    if value.is_null() {
+    // An inline handle was never allocated, so there is nothing to reclaim.
+    if value.is_null() || is_inline(value) {
         return;
     }
     // SAFETY: the handle came from `Box::into_raw`, and the caller's free-once
@@ -591,5 +628,48 @@ mod tests {
             assert!(kira_rt_enum_clone(empty).is_null());
             kira_rt_enum_free(empty);
         }
+    }
+
+    /// A payload-less variant is the handle, so constructing one allocates
+    /// nothing and reading it back costs a shift.
+    #[test]
+    fn a_payload_less_variant_lives_in_its_handle() {
+        for tag in [0_i64, 1, 7, 1024] {
+            let value = inline_handle(tag);
+            assert!(is_inline(value));
+            // SAFETY: an inline handle is not a pointer and is never read as one.
+            assert_eq!(unsafe { kira_rt_enum_tag(value) }, tag);
+            // SAFETY: same handle; an inline one has no payload.
+            assert_eq!(unsafe { kira_rt_enum_payload(value) }, 0);
+        }
+    }
+
+    /// Copying one is identity and releasing one is nothing, which is what
+    /// makes it free to read in a loop.
+    #[test]
+    fn an_inline_variant_owns_nothing() {
+        let value = inline_handle(3);
+        // SAFETY: an inline handle owns no allocation.
+        let copy = unsafe { kira_rt_enum_clone(value) };
+        assert_eq!(copy, value);
+        // SAFETY: releasing an inline handle reclaims nothing, twice over.
+        unsafe {
+            kira_rt_enum_free(value);
+            kira_rt_enum_free(copy);
+        }
+        // SAFETY: still readable, because nothing was ever freed.
+        assert_eq!(unsafe { kira_rt_enum_tag(value) }, 3);
+    }
+
+    /// A boxed enum comes from the allocator word-aligned, so it never looks
+    /// inline — the bit that tells them apart is only ever set deliberately.
+    #[test]
+    fn a_boxed_enum_is_never_mistaken_for_an_inline_one() {
+        let boxed = kira_rt_enum_new(9, PAYLOAD_INERT, 42);
+        assert!(!is_inline(boxed));
+        // SAFETY: the handle is live.
+        assert_eq!(unsafe { kira_rt_enum_tag(boxed) }, 9);
+        // SAFETY: the handle is live and freed exactly once.
+        unsafe { kira_rt_enum_free(boxed) };
     }
 }
