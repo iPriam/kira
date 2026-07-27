@@ -134,7 +134,11 @@ impl FunctionLowering<'_, '_> {
                 let value = self.lower_expr(expr)?;
                 return self.replace_native_state_local(place.local, type_id, root_ty, value);
             }
-            let (root, _) = self.recover_native_state_alloca(place.local, type_id, root_ty)?;
+            // For a boxed state the walk starts at the state's own storage, so
+            // the store lands in it and nothing is written back — that round
+            // trip is what made writing one field cost the whole value.
+            let (root, write_back) =
+                self.recover_native_state_alloca(place.local, type_id, root_ty)?;
             let mut pointer = root;
             let mut ty = root_ty;
             for step in &place.path {
@@ -142,17 +146,10 @@ impl FunctionLowering<'_, '_> {
             }
             let value = self.lower_expr(expr)?;
             self.store_through(pointer, ty, value)?;
-            let llvm_type = self.codegen.llvm_type(root_ty)?;
-            // SAFETY: `root` is a live alloca of `llvm_type`.
-            let updated = unsafe {
-                LLVMBuildLoad2(
-                    self.codegen.builder,
-                    llvm_type,
-                    root,
-                    c"native.updated".as_ptr(),
-                )
-            };
-            return self.replace_native_state_local(place.local, type_id, root_ty, updated);
+            if write_back {
+                return self.write_back_native_state(place.local, type_id, root_ty, root);
+            }
+            return Ok(());
         }
         if place.path.is_empty() {
             let value = self.lower_expr(expr)?;

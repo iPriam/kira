@@ -335,7 +335,10 @@ impl FunctionLowering<'_, '_> {
             .flatten()
         {
             let root_ty = self.local_type(place.local)?;
-            let (root, _) = self.recover_native_state_alloca(place.local, type_id, root_ty)?;
+            // For a boxed state the array being appended to lives in the
+            // state's own storage, so the push reaches it directly.
+            let (root, write_back) =
+                self.recover_native_state_alloca(place.local, type_id, root_ty)?;
             let mut slot = root;
             let mut ty = root_ty;
             for step in &place.path {
@@ -360,17 +363,9 @@ impl FunctionLowering<'_, '_> {
             );
             // SAFETY: `element_slot` is one fresh element slot.
             unsafe { LLVMBuildStore(self.codegen.builder, lowered, element_slot) };
-            let llvm_type = self.codegen.llvm_type(root_ty)?;
-            // SAFETY: `root` is a live alloca of the recovered value.
-            let updated = unsafe {
-                LLVMBuildLoad2(
-                    self.codegen.builder,
-                    llvm_type,
-                    root,
-                    c"native.updated".as_ptr(),
-                )
-            };
-            self.replace_native_state_local(place.local, type_id, root_ty, updated)?;
+            if write_back {
+                self.write_back_native_state(place.local, type_id, root_ty, root)?;
+            }
             return Ok(self.codegen.const_bool(false));
         }
         // Every step is a walk: the place names the array itself, and the walk

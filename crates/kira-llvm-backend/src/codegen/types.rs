@@ -194,6 +194,10 @@ pub(crate) struct Runtime {
     pub(super) native_state_recover: Callable,
     pub(super) native_state_replace: Callable,
     pub(super) native_state_free: Callable,
+    /// Allocates a box holding one state value in this backend's own layout.
+    pub(super) native_state_box_new: Callable,
+    /// The address of the value inside a box, type-checked.
+    pub(super) native_state_box_payload: Callable,
     pub(super) trap_native_state: Callable,
     /// The `kira_rt_fs_*` helpers, indexed by [`FileSystemOp::as_byte`].
     ///
@@ -447,6 +451,16 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 &mut [types.i64, types.i64, types.ptr],
             ),
             native_state_free: declare(c"kira_rt_native_state_free", types.i32, &mut [types.i64]),
+            native_state_box_new: declare(
+                c"kira_rt_native_state_box_new",
+                types.i32,
+                &mut [types.i64, types.i64, types.i64, types.ptr, types.ptr],
+            ),
+            native_state_box_payload: declare(
+                c"kira_rt_native_state_box_payload",
+                types.i32,
+                &mut [types.i64, types.i64, types.ptr],
+            ),
             trap_native_state: declare(c"kira_rt_trap_native_state", types.void, &mut [types.i32]),
             // Appended after the callback-state helpers. Each row's shape comes
             // from the operation itself, so the twelve declarations are one
