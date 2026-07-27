@@ -66,6 +66,15 @@ impl FunctionLowering<'_, '_> {
             ConvertKind::BitsToFloat => unsafe {
                 LLVMBuildBitCast(builder, value, types.f64, c"conv.b2f".as_ptr())
             },
+            // SAFETY: as above. The truncation takes the low 32 bits, which are
+            // the pattern; the widening is a numeric conversion applied *after*
+            // the reinterpretation, because the same bits denote a different
+            // number at the two widths.
+            ConvertKind::Bits32ToFloat => unsafe {
+                let narrow = LLVMBuildTrunc(builder, value, types.i32, c"conv.b32".as_ptr());
+                let single = LLVMBuildBitCast(builder, narrow, types.f32, c"conv.b2f32".as_ptr());
+                LLVMBuildFPExt(builder, single, types.f64, c"conv.f32f64".as_ptr())
+            },
             // SAFETY: `value` is the `f64` the typed conversion fixes and the
             // builder is on a live block; every call below builds a pure value,
             // and the selected operand is never the poison `fptosi` for an input

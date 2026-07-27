@@ -100,7 +100,8 @@ impl Analyzer<'_> {
         }))
     }
 
-    /// Recognizes `floatToBits(x)` / `bitsToFloat(x)`, the two IEEE-754
+    /// Recognizes `floatToBits(x)`, `bitsToFloat(x)`, and `bitsToFloat32(x)`,
+    /// the IEEE-754
     /// **reinterpretations**.
     ///
     /// These are not conversions and are deliberately not spelled like one:
@@ -127,6 +128,14 @@ impl Analyzer<'_> {
             "bitsToFloat" => (
                 ConvertKind::BitsToFloat,
                 Type::Int(IntSpelling::U64),
+                Type::FLOAT,
+            ),
+            // Binary data is full of 32-bit floats — a mesh, a texture, a
+            // packed vertex — and the same bits mean a different number at the
+            // two widths, so reading one needs its own reinterpretation.
+            "bitsToFloat32" => (
+                ConvertKind::Bits32ToFloat,
+                Type::Int(IntSpelling::U32),
                 Type::FLOAT,
             ),
             _ => return None,

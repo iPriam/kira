@@ -372,3 +372,61 @@ function main() {
         "",
     );
 }
+
+/// Reading an element must not copy the array — on either engine.
+///
+/// Both used to: the VM's `LoadLocal` copied the whole array before
+/// `ArrayGet` read one element, and the native backend cloned the base for the
+/// same reason. That made a loop over `n` elements cost `O(n²)`, so 200,000
+/// reads took seven seconds native and three minutes on the VM, and loading an
+/// 18 MB mesh never finished at all.
+///
+/// The size is what makes this a regression test rather than a unit test: a
+/// quadratic read is *correct*, just unusable, so only a program big enough to
+/// notice can tell the two apart.
+#[test]
+fn reading_elements_does_not_copy_the_array() {
+    assert_parity(
+        r"
+@Main function main() {
+    var xs: [Int] = []
+    var i = 0
+    while i < 20000 {
+        xs.append(i)
+        i = i + 1
+    }
+    var sum = 0
+    var j = 0
+    while j < 20000 {
+        sum = sum + xs[j]
+        j = j + 1
+    }
+    // The sum pins that borrowing the base still reads every element
+    // correctly, rather than merely quickly.
+    print(String(sum))
+    return
+}
+",
+    );
+}
+
+/// Writing through an element still leaves other copies alone.
+///
+/// The borrow above hands out a *copy* of the element, so a value read out of
+/// an array can never alias the array's own storage. Nothing about reading
+/// faster is allowed to change that.
+#[test]
+fn an_element_read_out_is_independent_of_the_array() {
+    assert_parity(
+        r"
+@Main function main() {
+    var xs: [[Int]] = [[1, 2], [3, 4]]
+    var first = xs[0]
+    first.append(99)
+    print(String(first.count))
+    print(String(xs[0].count))
+    return
+}
+",
+    );
+}

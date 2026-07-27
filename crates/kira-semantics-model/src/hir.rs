@@ -691,6 +691,8 @@ pub enum ConvertKind {
     /// The exact inverse of [`Self::FloatToBits`], so a round trip through the
     /// two is the identity for every value including NaN.
     BitsToFloat,
+    /// A 32-bit IEEE-754 pattern read as Kira's 64-bit `Float`.
+    Bits32ToFloat,
 }
 
 impl HirExpr {

@@ -375,6 +375,23 @@ impl Vm<'_> {
                 self.heap.drop_value(base);
                 self.stack.push(copy);
             }
+            Instruction::ArrayGetLocal(slot) => {
+                let index = self.pop_int()?;
+                // The local is *borrowed*: its handle is read without copying
+                // the array, and nothing is dropped here because this
+                // instruction does not own it. Only the element is copied out,
+                // which is what keeps a handed-out element unshared.
+                let Value::Array(id) = frame.locals[slot as usize] else {
+                    return Err(VmError::NotAnArray);
+                };
+                let index = check_index(index, self.heap.array_len(id))?;
+                let element = self
+                    .heap
+                    .element(id, index)
+                    .ok_or(VmError::IndexOutOfBounds)?;
+                let copy = self.heap.copy_value(element);
+                self.stack.push(copy);
+            }
             Instruction::ArrayLen => {
                 let base = self.pop()?;
                 let Value::Array(id) = base else {
@@ -543,6 +560,15 @@ impl Vm<'_> {
             Instruction::ConvertBitsToFloat => {
                 let value = self.pop_int()?;
                 self.stack.push(Value::Float(f64::from_bits(value as u64)));
+            }
+            Instruction::ConvertBits32ToFloat => {
+                let value = self.pop_int()?;
+                // Only the low 32 bits are the pattern; widening happens after
+                // the reinterpretation, because the same bits denote a
+                // different number at the two widths.
+                let bits = u32::try_from(value as u64 & u64::from(u32::MAX)).unwrap_or(0);
+                self.stack
+                    .push(Value::Float(f64::from(f32::from_bits(bits))));
             }
             Instruction::ConvertFloatToInt => {
                 // Truncate toward zero, saturating out-of-range to

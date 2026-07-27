@@ -58,6 +58,15 @@ pub(crate) fn precompile(
         let Some(ir) = compile_one(&resolved, base, &mut diagnostics, &mut sources) else {
             continue;
         };
+        // The shader's own source id, so a note about it renders against the
+        // shader rather than against whatever file happens to be first.
+        let display = resolved.display().to_string();
+        let source = sources
+            .iter()
+            .position(|(known, _)| *known == display)
+            .map_or(SourceId::new(base), |at| {
+                SourceId::new(base + u32::try_from(at).unwrap_or(0))
+            });
         for target in TARGETS {
             let ir = if ir.reflection.as_ref().is_some_and(|r| r.backend == target) {
                 ir.clone()
@@ -67,7 +76,7 @@ pub(crate) fn precompile(
             entries.push((
                 path.clone(),
                 target.label().to_owned(),
-                emit(&ir, target, &path, &mut diagnostics),
+                emit(&ir, target, &path, source, &mut diagnostics),
             ));
         }
     }
@@ -164,13 +173,16 @@ fn unreadable(path: &str, reason: &str) -> Diagnostic {
 /// A note rather than an error: the shader still compiles for every other
 /// target, so the build succeeds — but it succeeds having produced one fewer
 /// backend than it was asked for, and that has to be said.
-fn unsupported_target(path: &str, target: &str, reason: &str) -> Diagnostic {
+fn unsupported_target(path: &str, source: SourceId, target: &str, reason: &str) -> Diagnostic {
     let message =
         format!("`{path}` produced no `{target}` output and the artifact's is empty: {reason}");
     let mut diagnostic = Diagnostic::single(
         Severity::Note,
         message.clone(),
-        Label::primary(FileSpan::new(SourceId::new(0), Span::new(0, 0)), message),
+        // Against the shader itself: a note about a shader that renders on the
+        // first line of some Kira file sends whoever reads it to the wrong
+        // place entirely.
+        Label::primary(FileSpan::new(source, Span::new(0, 0)), message),
     );
     diagnostic.code = Some("KSLS016");
     diagnostic.phase = Some("ksl");
@@ -237,6 +249,7 @@ fn emit(
     ir: &ShaderIr,
     target: BackendTarget,
     path: &str,
+    source: SourceId,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> CompiledShader {
     let entry = |stage: Stage| {
@@ -290,6 +303,7 @@ fn emit(
                         if slot == 0 {
                             diagnostics.push(unsupported_target(
                                 path,
+                                source,
                                 "glsl_330",
                                 &refusal.to_string(),
                             ));

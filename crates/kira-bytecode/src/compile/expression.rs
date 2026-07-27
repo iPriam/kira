@@ -74,9 +74,20 @@ impl FnCompiler<'_> {
             }
             IrExpr::Index { base, index, .. } => {
                 let (base, index) = (*base, *index);
-                self.compile_expr(base)?;
-                self.compile_expr(index)?;
-                self.code.push(Instruction::ArrayGet);
+                // A base that is just a local is borrowed rather than copied:
+                // `LoadLocal` copies the whole array, so reading one element
+                // through it costs the whole array and a loop over `n` elements
+                // costs `O(n²)`. Only the element is copied out either way,
+                // which is what keeps the handed-out value unshared.
+                if let IrExpr::Local(slot) = *self.program.expr(base) {
+                    let slot = self.local_slot(slot)?;
+                    self.compile_expr(index)?;
+                    self.code.push(Instruction::ArrayGetLocal(slot));
+                } else {
+                    self.compile_expr(base)?;
+                    self.compile_expr(index)?;
+                    self.code.push(Instruction::ArrayGet);
+                }
             }
             IrExpr::ArrayLen { array } => {
                 let array = *array;
@@ -162,6 +173,9 @@ impl FnCompiler<'_> {
                     ConvertKind::FloatToInt => self.code.push(Instruction::ConvertFloatToInt),
                     ConvertKind::FloatToBits => self.code.push(Instruction::ConvertFloatToBits),
                     ConvertKind::BitsToFloat => self.code.push(Instruction::ConvertBitsToFloat),
+                    ConvertKind::Bits32ToFloat => {
+                        self.code.push(Instruction::ConvertBits32ToFloat);
+                    }
                 }
             }
             IrExpr::ArrayAppend { place, value } => {
