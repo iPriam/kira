@@ -151,6 +151,11 @@ fn a_fragment_output_takes_a_colour_attachment() {
 #[test]
 fn resources_bind_at_the_slots_lowering_assigned() {
     let msl = emit(&build(TEXTURED));
+    // The host binds a bind-group slot into Metal's buffer table, and vertex
+    // buffer 0 already holds the attribute stream — so a vertex uniform sits one
+    // above its slot while the same uniform in the fragment stage sits on it.
+    // Naming one index for both stages reads an unbound buffer in one of them,
+    // which draws a black frame and reports nothing.
     assert!(
         msl.contains("constant Camera& camera [[buffer(1)]]"),
         "{msl}"
@@ -159,7 +164,10 @@ fn resources_bind_at_the_slots_lowering_assigned() {
         msl.contains("texture2d<float> albedo [[texture(0)]]"),
         "{msl}"
     );
-    assert!(msl.contains("sampler linear [[sampler(0)]]"), "{msl}");
+    // A sampler takes its bind-group slot unchanged — `linear` is the second
+    // resource in `Material`, so slot 1 — because Metal's sampler table has no
+    // attribute stream in front of it the way the vertex buffer table does.
+    assert!(msl.contains("sampler linear [[sampler(1)]]"), "{msl}");
 }
 
 #[test]
@@ -238,7 +246,7 @@ shader Inst {
 fn a_read_write_array_binds_as_a_device_pointer() {
     let msl = emit(&build(COMPUTE));
     assert!(
-        msl.contains("device Particle* particles [[buffer(1)]]"),
+        msl.contains("device Particle* particles [[buffer(0)]]"),
         "{msl}"
     );
 }
@@ -249,7 +257,7 @@ fn an_array_length_is_read_from_the_buffer_the_host_binds() {
     // dialects, so the count arrives as its own buffer after every other.
     let msl = emit(&build(COMPUTE));
     assert!(
-        msl.contains("constant uint& particles_count [[buffer(2)]]"),
+        msl.contains("constant uint& particles_count [[buffer(18)]]"),
         "{msl}"
     );
     assert!(msl.contains("particles_count"), "{msl}");
@@ -274,4 +282,65 @@ fn a_float_literal_keeps_its_point_so_division_does_not_truncate() {
 fn a_file_with_no_shader_emits_nothing() {
     let ir = build("function f(x: Float) -> Float {\n    return x\n}\n");
     assert_eq!(emit(&ir), "");
+}
+
+#[test]
+fn a_uniform_read_by_both_stages_takes_a_different_index_in_each() {
+    // The host binds a bind-group slot into Metal's buffer table, and vertex
+    // buffer 0 already holds the attribute stream — so a vertex uniform sits one
+    // above its slot while the same uniform in the fragment stage sits on it.
+    // Naming one index for both stages reads an unbound buffer in one of them,
+    // which draws a black frame and reports nothing.
+    let msl = emit(&build(
+        r#"
+type Tint {
+    let color: Float4
+}
+type VIn {
+    let position: Float2
+}
+type VOut {
+    @builtin(position)
+    let clip_position: Float4
+}
+type FOut {
+    let color: Float4
+}
+shader Both {
+    group Frame {
+        uniform tint: Tint
+    }
+    vertex {
+        input VIn
+        output VOut
+        function entry(v: VIn) -> VOut {
+            let r: VOut
+            r.clip_position = Float4(v.position, tint.color.x, 1.0)
+            return r
+        }
+    }
+    fragment {
+        input VOut
+        output FOut
+        function entry(f: VOut) -> FOut {
+            let r: FOut
+            r.color = tint.color
+            return r
+        }
+    }
+}
+"#,
+    ));
+    let vertex = msl
+        .split("vertex vertex_")
+        .nth(1)
+        .and_then(|rest| rest.split(") {").next())
+        .expect("the vertex entry");
+    let fragment = msl
+        .split("fragment fragment_")
+        .nth(1)
+        .and_then(|rest| rest.split(") {").next())
+        .expect("the fragment entry");
+    assert!(vertex.contains("tint [[buffer(1)]]"), "{msl}");
+    assert!(fragment.contains("tint [[buffer(0)]]"), "{msl}");
 }
