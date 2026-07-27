@@ -497,6 +497,53 @@ pub extern "C" fn kira_rt_trap_foreign(status: u32) -> ! {
     std::process::exit(1);
 }
 
+/// Reports a call into a library this platform does not have, and exits.
+///
+/// Named rather than numbered: knowing a call failed is useless next to knowing
+/// which binding it was, and the adapter is the only place that knows.
+///
+/// # Safety
+/// `library` and `symbol` must each be a pointer to a NUL-terminated C string
+/// that stays readable for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_trap_foreign_unavailable(
+    library: *const c_char,
+    symbol: *const c_char,
+) -> ! {
+    // SAFETY: the caller guarantees both pointers address readable
+    // NUL-terminated strings for the duration of this call.
+    let name = |pointer: *const c_char| unsafe {
+        if pointer.is_null() {
+            "<unnamed>".to_owned()
+        } else {
+            CStr::from_ptr(pointer).to_string_lossy().into_owned()
+        }
+    };
+    eprintln!(
+        "kira: runtime trap: `{}` from native library `{}` was called, but that library is not \
+         available on this platform and its declaration said it need not be",
+        name(symbol),
+        name(library)
+    );
+    print_trap_backtrace();
+    std::process::exit(1);
+}
+
+/// The environment variable that asks a trap to print where it came from.
+pub const TRAP_BACKTRACE_VAR: &str = "KIRA_TRAP_BACKTRACE";
+
+/// Prints a backtrace when [`TRAP_BACKTRACE_VAR`] asks for one.
+///
+/// Off by default: a trap's message names what went wrong, and a wall of
+/// frames after it would bury that. On demand it is the fastest way to find
+/// which call reached a trap in a program with many.
+fn print_trap_backtrace() {
+    if std::env::var_os(TRAP_BACKTRACE_VAR).is_none() {
+        return;
+    }
+    eprintln!("{}", std::backtrace::Backtrace::force_capture());
+}
+
 /// What a foreign-adapter status word means, in a sentence.
 ///
 /// A bare number tells whoever hit it nothing. An unknown one is reported as

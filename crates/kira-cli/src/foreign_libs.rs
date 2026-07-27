@@ -154,10 +154,12 @@ pub fn resolve(
                 }
             })?;
         // A library the runtime opens, or one this platform does not have,
-        // contributes nothing to the link line.
+        // contributes nothing to the link line — but only the second means the
+        // symbol is missing, so only the second makes its adapter trap.
         match row {
             Some(row) => inputs.push_row(row),
-            None => inputs.mark_unavailable(index),
+            None if catalog.is_excluded(symbol, &target) => inputs.mark_unavailable(index),
+            None => {}
         }
     }
 

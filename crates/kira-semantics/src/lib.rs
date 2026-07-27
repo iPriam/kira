@@ -95,6 +95,27 @@ pub struct ModuleSource {
     pub text: String,
 }
 
+/// The operating system this compiler is running on, as `Build.platform`
+/// spells it.
+///
+/// The default for a caller that names no target: building for the machine you
+/// are on is what every plain `kirac build` does.
+#[must_use]
+pub fn host_platform() -> String {
+    if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "ios") {
+        "ios"
+    } else {
+        kira_macros::UNKNOWN_PLATFORM
+    }
+    .to_owned()
+}
+
 /// The one salsa input: the entry file plus the modules it imports.
 #[salsa::input]
 pub struct SourceProgram {
@@ -128,6 +149,13 @@ pub struct SourceProgram {
     /// for every caller that has no shaders.
     #[returns(clone)]
     pub shaders: kira_macros::PrecompiledShaders,
+    /// The operating system this build targets, behind `Build.platform`.
+    ///
+    /// An input for the same reason the others are: a program built for macOS
+    /// and one built for Windows can expand to different code, so changing it
+    /// has to invalidate analysis.
+    #[returns(clone)]
+    pub platform: String,
 }
 
 impl SourceProgram {
@@ -140,6 +168,7 @@ impl SourceProgram {
             Vec::new(),
             BuildKind::Application,
             kira_macros::PrecompiledShaders::default(),
+            host_platform(),
         )
     }
 
@@ -162,6 +191,7 @@ impl SourceProgram {
             modules,
             BuildKind::Application,
             kira_macros::PrecompiledShaders::default(),
+            host_platform(),
         )
     }
 }
@@ -229,10 +259,11 @@ pub fn expanded(db: &dyn salsa::Database, source: SourceProgram) -> ExpandedProg
     files.push((FILE_SOURCE_ID, entry_text.as_str()));
 
     let shaders = source.shaders(db);
+    let platform = source.platform(db);
     let expansion = if shaders.is_empty() {
-        kira_macros::expand(&files)
+        kira_macros::expand_with(&files, None, &platform)
     } else {
-        kira_macros::expand_with(&files, Some(&shaders))
+        kira_macros::expand_with(&files, Some(&shaders), &platform)
     };
     for diagnostic in expansion.diagnostics {
         DiagnosticAccumulator(diagnostic).accumulate(db);

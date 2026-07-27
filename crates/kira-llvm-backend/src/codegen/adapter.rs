@@ -25,6 +25,7 @@
 //! them), the VM sidecar (a marker-only module exports them), and the hybrid
 //! native half (its host resolves them by name).
 
+use super::ffi::c_string;
 use kira_runtime_abi::{ForeignAdapterStatus, ForeignType, ForeignTypeSpec};
 use llvm_sys::LLVMIntPredicate;
 use llvm_sys::core::*;
@@ -41,7 +42,7 @@ impl Codegen<'_> {
     /// call site can reference the adapter before its body exists.
     pub(super) fn declare_foreign_adapters(&mut self) -> Result<(), LlvmError> {
         for index in 0..self.program.foreign_imports.len() {
-            let name = super::ffi::c_string(&adapter_name(index));
+            let name = c_string(&adapter_name(index));
             // (args: ptr, count: i32, out: ptr) -> i32
             let mut params = [self.types.ptr, self.types.i32, self.types.ptr];
             // SAFETY: every type belongs to this module's context and `params`
@@ -64,14 +65,33 @@ impl Codegen<'_> {
     /// One block, one return: the C symbol is never declared, so nothing about
     /// this import reaches the link line.
     fn emit_unavailable_adapter(&mut self, index: usize) {
+        let entry = self.program.foreign_imports[index].import.clone();
+        let library = c_string(entry.library());
+        let symbol = c_string(entry.symbol());
         let adapter = self.foreign_adapters[index];
         let types = self.types;
+        let trap = self.runtime.trap_foreign_unavailable;
         // SAFETY: `adapter.value` is a freshly declared function of this live
-        // module and the block below is its only one.
+        // module and the block below is its only one; both globals are created
+        // in the same module and outlive the call that names them.
         unsafe {
-            let entry =
+            let block =
                 LLVMAppendBasicBlockInContext(self.context, adapter.value, c"entry".as_ptr());
-            LLVMPositionBuilderAtEnd(self.builder, entry);
+            LLVMPositionBuilderAtEnd(self.builder, block);
+            let library = LLVMBuildGlobalString(
+                self.builder,
+                library.as_ptr(),
+                c"unavailable.library".as_ptr(),
+            );
+            let symbol = LLVMBuildGlobalString(
+                self.builder,
+                symbol.as_ptr(),
+                c"unavailable.symbol".as_ptr(),
+            );
+            let mut args = [library, symbol];
+            self.call_runtime(trap, &mut args, c"");
+            // The helper never returns, but a block still needs a terminator,
+            // and the status keeps the adapter's declared result type honest.
             LLVMBuildRet(
                 self.builder,
                 LLVMConstInt(

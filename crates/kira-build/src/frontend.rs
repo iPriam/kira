@@ -187,7 +187,15 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
 
     let db = salsa::DatabaseImpl::new();
     let module_paths: Vec<String> = modules.iter().map(|module| module.path.clone()).collect();
-    let source = SourceProgram::new(&db, text, display.clone(), modules, build_kind, shaders);
+    let source = SourceProgram::new(
+        &db,
+        text,
+        display.clone(),
+        modules,
+        build_kind,
+        shaders,
+        kira_semantics::host_platform(),
+    );
 
     // The SourceMap mirrors the salsa input file for file and in the same order,
     // so diagnostic spans render against the file they were written in: the

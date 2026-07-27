@@ -116,8 +116,15 @@ pub fn shader_paths(files: &[(SourceId, &str)]) -> Vec<String> {
 /// expansion one.
 #[must_use]
 pub fn expand(files: &[(SourceId, &str)]) -> Expansion {
-    expand_with(files, None)
+    expand_with(files, None, UNKNOWN_PLATFORM)
 }
+
+/// The platform a build that did not name one reports.
+///
+/// A macro asking `Build.platform` still gets an answer rather than a failure;
+/// it is simply one no branch matches, which is the honest result when nothing
+/// said what was being built.
+pub const UNKNOWN_PLATFORM: &str = "unknown";
 
 /// Expands every macro in `files` with `shaders` behind the `Ksl` namespace.
 ///
@@ -125,7 +132,11 @@ pub fn expand(files: &[(SourceId, &str)]) -> Expansion {
 /// is above it: the caller that owns the pipeline is the one that can supply
 /// it. See [`ShaderCompiler`].
 #[must_use]
-pub fn expand_with(files: &[(SourceId, &str)], shaders: Option<&dyn ShaderCompiler>) -> Expansion {
+pub fn expand_with(
+    files: &[(SourceId, &str)],
+    shaders: Option<&dyn ShaderCompiler>,
+    platform: &str,
+) -> Expansion {
     let identity: Vec<String> = files.iter().map(|(_, text)| (*text).to_owned()).collect();
     let lexed: Vec<Lexed<'_>> = files
         .iter()
@@ -169,6 +180,7 @@ pub fn expand_with(files: &[(SourceId, &str)], shaders: Option<&dyn ShaderCompil
                 registry: &registry,
                 templates: &templates,
                 shaders,
+                platform,
             };
             expand_file(
                 &file,
@@ -233,7 +245,10 @@ fn expand_file(
     reporter: &mut Reporter,
 ) {
     let Program {
-        registry, shaders, ..
+        registry,
+        shaders,
+        platform,
+        ..
     } = program;
     for declaration in procedural::top_level(file) {
         if blanked.iter().any(|span| {
@@ -262,7 +277,7 @@ fn expand_file(
         }
         if let Some(declared) = registry.procedural(&call.name) {
             if let Some(expansion) =
-                procedural::expand_call(file, declared, &call, shaders, reporter)
+                procedural::expand_call(file, declared, &call, shaders, platform, reporter)
             {
                 match call.position {
                     invoke::Position::Declaration => {
@@ -686,7 +701,7 @@ function load() -> KslArtifact {
     #[test]
     fn a_userland_ksl_macro_inlines_what_the_pipeline_compiled() {
         let shaders = OneShader;
-        let expansion = expand_with(&[(SourceId::new(0), USERLAND_KSL)], Some(&shaders));
+        let expansion = expand_with(&[(SourceId::new(0), USERLAND_KSL)], Some(&shaders), "macos");
         assert!(
             expansion.diagnostics.is_empty(),
             "{:?}",

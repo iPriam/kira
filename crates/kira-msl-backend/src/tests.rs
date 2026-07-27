@@ -183,7 +183,55 @@ fn a_kernel_takes_its_builtins_as_loose_parameters_and_rebuilds_the_struct() {
         msl.contains("kernel void compute_main(uint3 gid [[thread_position_in_grid]]"),
         "{msl}"
     );
-    assert!(msl.contains("QIn q = { gid };"), "{msl}");
+    assert!(msl.contains("QIn q;"), "{msl}");
+    assert!(msl.contains("q.gid = gid;"), "{msl}");
+}
+
+#[test]
+fn a_builtin_in_a_vertex_input_leaves_the_stage_in_struct() {
+    // Metal rejects a `[[stage_in]]` struct carrying a builtin — a pipeline
+    // built from one reports its vertex function as nil rather than failing to
+    // compile, which is how this was found.
+    let ir = build(
+        r#"
+type VIn {
+    let position: Float2
+    @builtin(instance_index)
+    let iid: UInt
+}
+type VOut {
+    @builtin(position)
+    let clip_position: Float4
+}
+shader Inst {
+    vertex {
+        input VIn
+        output VOut
+        function entry(v: VIn) -> VOut {
+            let r: VOut
+            r.clip_position = Float4(v.position, Float(v.iid), 1.0)
+            return r
+        }
+    }
+}
+"#,
+    );
+    let msl = emit(&ir);
+    let stage_in = msl
+        .split("struct vertex_VIn_in {")
+        .nth(1)
+        .and_then(|rest| rest.split("};").next())
+        .expect("the stage-in struct");
+    assert!(!stage_in.contains("iid"), "the builtin stayed in: {msl}");
+    assert!(stage_in.contains("position"), "{msl}");
+    assert!(msl.contains("uint iid [[instance_id]]"), "{msl}");
+    // The body still works with the struct KSL wrote, rebuilt from both halves.
+    assert!(msl.contains("VIn v;"), "{msl}");
+    assert!(
+        msl.contains("v.position = kira_stage_in.position;"),
+        "{msl}"
+    );
+    assert!(msl.contains("v.iid = iid;"), "{msl}");
 }
 
 #[test]
