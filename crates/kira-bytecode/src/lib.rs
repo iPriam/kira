@@ -43,6 +43,7 @@ mod tests {
                 return_type: kira_semantics_model::Type::Void,
                 execution: kira_runtime_abi::Execution::Inherited,
                 by_reference_params: Vec::new(),
+                by_pointer_params: Vec::new(),
                 body,
             }],
             types: Default::default(),
@@ -76,6 +77,7 @@ mod tests {
             return_type: kira_semantics_model::Type::Void,
             execution: Execution::Native,
             by_reference_params: Vec::new(),
+            by_pointer_params: Vec::new(),
             body: Vec::new(),
         });
 
@@ -162,6 +164,7 @@ mod tests {
                 return_type: Type::Void,
                 execution: kira_runtime_abi::Execution::Inherited,
                 by_reference_params: Vec::new(),
+                by_pointer_params: Vec::new(),
                 body: vec![IrStmt::Return { value: None }],
             }],
             types: Default::default(),

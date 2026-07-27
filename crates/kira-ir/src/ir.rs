@@ -275,6 +275,23 @@ pub struct IrFunction {
     /// sits. The VM ignores the list — its writeback is driven entirely by the
     /// call instruction. Empty for every ordinary function.
     pub by_reference_params: Vec<u32>,
+    /// The parameter slots a read-only borrow can be *lent* through, ascending.
+    ///
+    /// `borrow` says the caller keeps the value, so there is nothing for the
+    /// callee to own and nothing to copy — it can read the caller's storage
+    /// where it sits. A backend that passes these by value instead copies the
+    /// whole argument at every call: a view tree recursing over its children
+    /// copies each child's entire subtree, and a layout tree passed down beside
+    /// it copies every node and descriptor at every level.
+    ///
+    /// Only slots whose type costs something to copy are listed; an `Int` is
+    /// cheaper in a register than behind a pointer.
+    ///
+    /// Distinct from [`Self::by_reference_params`], which exists so a *write*
+    /// reaches the caller and drives a write-back. Nothing is written back
+    /// through one of these, and the VM ignores the list entirely — it is a
+    /// calling convention, not a semantic.
+    pub by_pointer_params: Vec<u32>,
     /// The function body.
     pub body: Vec<IrStmt>,
 }
@@ -296,6 +313,17 @@ impl IrFunction {
     /// storage rather than by value.
     pub fn param_by_reference(&self, index: u32) -> bool {
         self.by_reference_params.contains(&index)
+    }
+
+    /// Whether parameter slot `index` is lent as a pointer to the caller's
+    /// storage, read through and never written or freed.
+    pub fn param_by_pointer(&self, index: u32) -> bool {
+        self.by_pointer_params.contains(&index)
+    }
+
+    /// Whether parameter slot `index` arrives as a pointer, either way.
+    pub fn param_is_pointer(&self, index: u32) -> bool {
+        self.param_by_reference(index) || self.param_by_pointer(index)
     }
 }
 
