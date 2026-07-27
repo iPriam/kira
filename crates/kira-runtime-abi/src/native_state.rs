@@ -41,6 +41,17 @@ impl NativeStateToken {
     pub const fn as_word(self) -> u64 {
         self.0
     }
+
+    /// Whether this token names a boxed state rather than a stored value.
+    ///
+    /// A native engine holds state the way Rust does — one allocation, the
+    /// value in it, fields addressed directly — and uses the box's address as
+    /// the token. A box is at least two-byte aligned, so the low bit is free to
+    /// mark one, and [`NativeStateStore`] hands out only even tokens. Nothing
+    /// has to look a token up to know which kind it is.
+    pub const fn is_boxed(self) -> bool {
+        self.0 & 1 == 1
+    }
 }
 
 /// The open C tag of a backend-neutral callback-state value node.
@@ -173,10 +184,18 @@ impl NativeStateStore {
     /// Creates an empty store.
     pub fn new() -> Self {
         Self {
-            next: 1,
+            next: Self::STRIDE,
             entries: HashMap::new(),
         }
     }
+
+    /// The gap between two tokens this store hands out.
+    ///
+    /// Two, so every token it owns is even. A native engine keeps its state in
+    /// a box and uses the box's own address as the token, with the low bit set
+    /// to say so ([`NativeStateToken::is_boxed`]) — one bit tells the two
+    /// apart, in a token space they share, without a lookup.
+    const STRIDE: u64 = 2;
 
     /// Boxes an owned value and returns its stable non-zero token.
     pub fn create(
@@ -190,7 +209,7 @@ impl NativeStateStore {
         }
         self.next = self
             .next
-            .checked_add(1)
+            .checked_add(Self::STRIDE)
             .ok_or(NativeStateError::TokenExhausted)?;
         let token = NativeStateToken(word);
         self.entries.insert(token, Entry { ty, value });

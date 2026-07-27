@@ -507,6 +507,14 @@ pub unsafe extern "C" fn kira_rt_native_state_replace(
 /// Releases one state token exactly once.
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_native_state_free(token: u64) -> u32 {
+    // One release path for both kinds of state, told apart by the token itself:
+    // a native engine's state is a box it owns, and the value-tree store never
+    // hands out an odd token. See `crate::state_box`.
+    if crate::state_box::is_box_token(token) {
+        // SAFETY: the token is a box token this runtime handed out, and a
+        // caller releases it once — the same contract this function already had.
+        return unsafe { crate::state_box::kira_rt_native_state_box_free(token) };
+    }
     let mut store = match store().lock() {
         Ok(store) => store,
         Err(poisoned) => poisoned.into_inner(),

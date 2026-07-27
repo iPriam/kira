@@ -23,6 +23,7 @@ pub mod live;
 pub mod native_state;
 pub mod raw_memory;
 pub mod runtime;
+pub mod state_box;
 
 pub use array::{KArray, KiraArray};
 pub use boxes::{kira_rt_box_free, kira_rt_box_new};

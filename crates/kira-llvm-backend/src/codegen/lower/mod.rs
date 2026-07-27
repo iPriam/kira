@@ -277,13 +277,17 @@ impl FunctionLowering<'_, '_> {
 
     /// Produces an independent copy of `value`, mirroring the VM's
     /// `Heap::copy_value`. See [`Codegen::copy_value`].
-    fn copy_value(&mut self, value: LLVMValueRef, ty: Type) -> Result<LLVMValueRef, LlvmError> {
+    pub(super) fn copy_value(
+        &mut self,
+        value: LLVMValueRef,
+        ty: Type,
+    ) -> Result<LLVMValueRef, LlvmError> {
         self.codegen.copy_value(value, ty)
     }
 
     /// Releases whatever heap storage `value` owns, mirroring the VM's
     /// `Heap::drop_value`. See [`Codegen::drop_value`].
-    fn drop_value(&mut self, value: LLVMValueRef, ty: Type) -> Result<(), LlvmError> {
+    pub(super) fn drop_value(&mut self, value: LLVMValueRef, ty: Type) -> Result<(), LlvmError> {
         self.codegen.drop_value(value, ty)
     }
 

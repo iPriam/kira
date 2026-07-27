@@ -134,10 +134,9 @@ impl FunctionLowering<'_, '_> {
     /// written-through value has no seam representation — so `target` is
     /// resolved in this module.
     ///
-    /// A place rooted at a recovered native-state local is the one root that is
-    /// not addressable in place: it stores an opaque token, so the value is
-    /// recovered into an `alloca`, the callee writes through *that*, and the
-    /// updated value is put back into the box after the call.
+    /// A place rooted at a recovered native-state local is addressable like any
+    /// other: the token names a box holding the value, so the walk starts at
+    /// that box's payload and the callee writes straight into the state.
     fn lower_writeback_call(
         &mut self,
         index: u32,
@@ -154,7 +153,8 @@ impl FunctionLowering<'_, '_> {
                 "a writeback call to a function not in this half",
             ))?;
         let mut pointers: Vec<(u32, LLVMValueRef)> = Vec::with_capacity(writebacks.len());
-        // Native-state roots to put back once the callee has written to them.
+        // Native-state roots that were copied out and owe a write-back. Empty
+        // whenever state is boxed, because then the callee wrote into it.
         let mut recovered: Vec<(u32, NativeStateTypeId, Type, LLVMValueRef)> = Vec::new();
         for writeback in writebacks {
             let place = &writeback.place;
@@ -166,13 +166,19 @@ impl FunctionLowering<'_, '_> {
                 .flatten()
             {
                 let root_ty = self.local_type(place.local)?;
-                let (root, _) = self.recover_native_state_alloca(place.local, type_id, root_ty)?;
+                // For a boxed state the callee writes through this pointer into
+                // the state's own storage, so the write is already where it
+                // belongs when the call returns.
+                let (root, write_back) =
+                    self.recover_native_state_alloca(place.local, type_id, root_ty)?;
                 let mut pointer = root;
                 let mut pointee = root_ty;
                 for step in &place.path {
                     (pointer, pointee) = self.walk_place_step(pointer, pointee, step)?;
                 }
-                recovered.push((place.local, type_id, root_ty, root));
+                if write_back {
+                    recovered.push((place.local, type_id, root_ty, root));
+                }
                 pointer
             } else {
                 self.walk_place(place.local, &place.path)?.0
@@ -198,17 +204,7 @@ impl FunctionLowering<'_, '_> {
         let name = if returns_value { c"call" } else { c"" };
         let result = self.call(target, &mut values, name);
         for (local, type_id, root_ty, root) in recovered {
-            let llvm_type = self.codegen.llvm_type(root_ty)?;
-            // SAFETY: `root` is a live alloca of the recovered value.
-            let updated = unsafe {
-                LLVMBuildLoad2(
-                    self.codegen.builder,
-                    llvm_type,
-                    root,
-                    c"native.updated".as_ptr(),
-                )
-            };
-            self.replace_native_state_local(local, type_id, root_ty, updated)?;
+            self.write_back_native_state(local, type_id, root_ty, root)?;
         }
         Ok(result)
     }
