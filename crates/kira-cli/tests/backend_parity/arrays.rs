@@ -537,3 +537,65 @@ function main() {
     );
     assert_eq!(output, "first\n2\n10\nfirst\n2\n");
 }
+
+/// An array reached through a field is indexed where it lives.
+///
+/// Reading a field yields a copy of it, so an array behind one used to be
+/// duplicated in full to read a single entry. The values below pin that the
+/// borrow reads the same thing the copy did — including that a write through
+/// the field is visible to the next read, and that the struct still owns its
+/// array afterwards.
+#[test]
+fn indexing_an_array_reached_through_a_field_agrees() {
+    let output = assert_parity(
+        r#"
+struct Tree {
+    var nodes: [Int]
+    var label: String
+}
+
+@Main
+function main() {
+    var tree = Tree { nodes: [3, 4, 5] label: "t" }
+    print(tree.nodes[0])
+    print(tree.nodes[2])
+    print(tree.nodes.count)
+    tree.nodes[1] = 40
+    print(tree.nodes[1])
+    tree.nodes.append(6)
+    print(tree.nodes.count)
+    print(tree.nodes[3])
+    print(tree.label)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "3\n5\n3\n40\n4\n6\nt\n");
+}
+
+/// The same, one level deeper: an array inside a struct inside an array.
+#[test]
+fn indexing_through_a_nested_place_agrees() {
+    let output = assert_parity(
+        r#"
+struct Row {
+    var cells: [Int]
+}
+
+@Main
+function main() {
+    var rows: [Row] = [
+        Row { cells: [1, 2] },
+        Row { cells: [3, 4] }
+    ]
+    print(rows[0].cells[1])
+    print(rows[1].cells[0])
+    rows[1].cells[1] = 40
+    print(rows[1].cells[1])
+    print(rows[0].cells[0])
+    return
+}
+"#,
+    );
+    assert_eq!(output, "2\n3\n40\n1\n");
+}

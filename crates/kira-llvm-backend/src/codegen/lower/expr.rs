@@ -177,35 +177,98 @@ impl FunctionLowering<'_, '_> {
         Ok(copy)
     }
 
-    /// The handle a local holds, read without copying it.
+    /// The handle a place holds, read without copying what holds it.
     ///
-    /// `None` when the expression is not a plain local, or is one the backend
-    /// reads through another path — a native-state local recovers a value
-    /// rather than holding a handle, so it is left to the general route.
+    /// `None` when the expression is not a place this can address, and the
+    /// general route — evaluate, use, drop — handles it.
     fn borrowed_local_handle(&mut self, base: IrExprId) -> Result<Option<LLVMValueRef>, LlvmError> {
-        let IrExpr::Local(slot) = *self.codegen.program.expr(base) else {
+        let Some((pointer, ty)) = self.borrowed_place_pointer(base)? else {
             return Ok(None);
         };
-        if self
-            .function
-            .native_state_locals
-            .get(slot as usize)
-            .copied()
-            .flatten()
-            .is_some()
-        {
-            return Ok(None);
-        }
-        let ty = self.local_type(slot)?;
         let llvm_type = self.codegen.llvm_type(ty)?;
-        let pointer = self.local_pointer(slot)?;
-        let name = c_string(&format!("local.{slot}.borrow"));
-        // SAFETY: `pointer` is this slot's alloca of `llvm_type`; the handle is
+        // SAFETY: `pointer` addresses a live value of `llvm_type`; the handle is
         // read, not copied, and is not freed here because this expression does
         // not own it.
         Ok(Some(unsafe {
-            LLVMBuildLoad2(self.codegen.builder, llvm_type, pointer, name.as_ptr())
+            LLVMBuildLoad2(
+                self.codegen.builder,
+                llvm_type,
+                pointer,
+                c"place.borrow".as_ptr(),
+            )
         }))
+    }
+
+    /// The address a place expression names, and the type stored there.
+    ///
+    /// A place is anything reached by naming a local and walking into it —
+    /// `xs`, `tree.nodes`, `rows[i].cells`. Every step of that walk is address
+    /// arithmetic, so the whole path can be addressed rather than evaluated,
+    /// and a handle at the end of it read without cloning what holds it.
+    ///
+    /// This is what keeps `tree.nodes[i]` from cloning `nodes`. Reading a field
+    /// yields a *copy* of it, so an array reached through one used to be
+    /// duplicated in full — every element, and every handle inside every
+    /// element — to read one entry of it and drop the duplicate again. A layout
+    /// pass does that thousands of times a frame.
+    ///
+    /// `None` for anything that is not such a place: the caller then evaluates
+    /// the expression, uses it, and drops it as before.
+    fn borrowed_place_pointer(
+        &mut self,
+        expr: IrExprId,
+    ) -> Result<Option<(LLVMValueRef, Type)>, LlvmError> {
+        match *self.codegen.program.expr(expr) {
+            IrExpr::Local(slot) => {
+                let ty = self.local_type(slot)?;
+                // A native-state local holds a token, and the value it names
+                // lives in the box behind it — which is addressable, so a place
+                // rooted here is addressed through the box's payload.
+                if let Some(type_id) = self
+                    .function
+                    .native_state_locals
+                    .get(slot as usize)
+                    .copied()
+                    .flatten()
+                {
+                    if !self.state_is_boxed() {
+                        return Ok(None);
+                    }
+                    let payload = self.recover_native_state_alloca(slot, type_id, ty)?.0;
+                    return Ok(Some((payload, ty)));
+                }
+                Ok(Some((self.local_pointer(slot)?, ty)))
+            }
+            IrExpr::Field { base, index, ty } => {
+                let Some((pointer, base_ty)) = self.borrowed_place_pointer(base)? else {
+                    return Ok(None);
+                };
+                if !matches!(base_ty, Type::Struct(_)) {
+                    return Ok(None);
+                }
+                let struct_type = self.codegen.llvm_type(base_ty)?;
+                let name = c_string(&format!("place.field.{index}.ptr"));
+                // SAFETY: `pointer` addresses a value of `struct_type`, and
+                // `index` came from that struct's own definition.
+                let field = unsafe {
+                    LLVMBuildStructGEP2(
+                        self.codegen.builder,
+                        struct_type,
+                        pointer,
+                        index,
+                        name.as_ptr(),
+                    )
+                };
+                Ok(Some((field, ty)))
+            }
+            IrExpr::Index { base, index, ty } => {
+                let Some(handle) = self.borrowed_local_handle(base)? else {
+                    return Ok(None);
+                };
+                Ok(Some((self.element_slot(handle, index, ty)?, ty)))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Turns an array handle into the address of element `index`, bounds-checked
