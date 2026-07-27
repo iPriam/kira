@@ -61,19 +61,13 @@ impl Codegen<'_> {
                 }
                 Ok(copy)
             }
-            Type::Array(_) => {
-                // The loop lives in the runtime, which is ordinary Rust there;
-                // what the backend supplies is the element size and a leaf that
-                // clones one element. See `kira-native-bridge`'s `array` module.
-                let element = self.element_of(ty)?;
-                let esize = self.abi_size(element)?;
-                let clone = self.element_clone(element)?;
-                Ok(self.call(
-                    self.runtime.array_clone,
-                    &mut [value, esize, clone],
-                    c"array.copy",
-                ))
-            }
+            // A copy takes a share of the array's item block and walks nothing:
+            // the elements are copied only if one of the two arrays is written,
+            // by the runtime's mutable entry points, which is where the element
+            // clone leaf goes instead. See `kira-native-bridge`'s `array`
+            // module. Reading an array is most of what a frame does, and doing
+            // it eagerly here was 78% of one.
+            Type::Array(_) => Ok(self.call(self.runtime.array_clone, &mut [value], c"array.copy")),
             // An enum box clones through one generic helper: the box carries a
             // flag saying whether its payload is an owned string, so the backend
             // needs no per-variant leaf.
