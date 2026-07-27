@@ -155,6 +155,7 @@ impl Module {
     pub(crate) fn build_adapter_sidecar(
         program: &IrProgram,
         module_name: &str,
+        unavailable: &[usize],
     ) -> Result<Self, LlvmError> {
         let engines = vec![Execution::Runtime; program.functions.len()];
         Self::lower(
@@ -164,12 +165,16 @@ impl Module {
             engines,
             &NativeExportSurface::default(),
             ForeignPointerWidth::HOST,
-            &[],
+            unavailable,
         )
     }
 
     /// Lowers the native half of a hybrid program into a shared library.
-    pub(crate) fn build_hybrid(program: &IrProgram, module_name: &str) -> Result<Self, LlvmError> {
+    pub(crate) fn build_hybrid(
+        program: &IrProgram,
+        module_name: &str,
+        unavailable: &[usize],
+    ) -> Result<Self, LlvmError> {
         let engines = program
             .functions
             .iter()
@@ -182,7 +187,7 @@ impl Module {
             engines,
             &NativeExportSurface::default(),
             ForeignPointerWidth::HOST,
-            &[],
+            unavailable,
         )
     }
 

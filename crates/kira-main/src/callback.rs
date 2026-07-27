@@ -27,9 +27,10 @@ use std::path::Path;
 
 use kira_dynamic_ffi::{ForeignAdapterError, ForeignAdapterLibrary, RuntimeInvoker};
 use kira_runtime_abi::{
-    BridgeData, BridgeValue, ForeignAggregates, ForeignArg, ForeignCallError, ForeignResult,
-    HostCapabilities, NativeArg, NativeResult, NativeStateError, NativeStateStore,
-    NativeStateToken, NativeStateTypeId, NativeStateValue,
+    BridgeData, BridgeValue, FileRequest, FileResponse, FileSystemError, ForeignAggregates,
+    ForeignArg, ForeignCallError, ForeignResult, HostCapabilities, NativeArg, NativeResult,
+    NativeStateError, NativeStateStore, NativeStateToken, NativeStateTypeId, NativeStateValue,
+    file_system,
 };
 use kira_vm_runtime::{Program, RunOutcome, VmError};
 
@@ -138,6 +139,17 @@ struct SessionHost<'a> {
 impl HostCapabilities for SessionHost<'_> {
     fn write_line(&mut self, text: &str) {
         println!("{text}");
+    }
+
+    /// Reaches the process's own filesystem, exactly as [`crate::StdoutHost`]
+    /// does.
+    ///
+    /// This host serves a VM run that also has a foreign half, which is the
+    /// only thing that distinguishes it — and nothing about having one narrows
+    /// what the program may read. Leaving it to the default refused every file
+    /// operation in exactly the programs most likely to open one.
+    fn file_system(&mut self, request: FileRequest<'_>) -> Result<FileResponse, FileSystemError> {
+        Ok(file_system::perform(request))
     }
 
     fn call_foreign(

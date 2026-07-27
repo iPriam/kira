@@ -319,6 +319,14 @@ pub struct AdapterSidecarOptions {
     /// archives in link order plus the frameworks, system libraries, and
     /// linker flags declared beside them.
     pub foreign_link: NativeLinkInputs,
+    /// Imports whose library this target does not have.
+    ///
+    /// Their adapters answer a status instead of calling a symbol nothing
+    /// defines. Without this the sidecar references every import's C symbol and
+    /// the *link* fails — naming Vulkan and Direct3D entry points on a machine
+    /// that was never going to have them — even though the program's own
+    /// declarations already said those libraries are optional.
+    pub unavailable_imports: Vec<usize>,
 }
 
 /// Compiles the program's foreign adapters into one loadable sidecar library.
@@ -332,7 +340,11 @@ pub fn build_adapter_sidecar(
     program: &IrProgram,
     options: &AdapterSidecarOptions,
 ) -> Result<PathBuf, LlvmError> {
-    let module = codegen::Module::build_adapter_sidecar(program, &options.module_name)?;
+    let module = codegen::Module::build_adapter_sidecar(
+        program,
+        &options.module_name,
+        &options.unavailable_imports,
+    )?;
     kira_diagnostics::progress!("emitting object");
     module.emit_object(&options.object_path, false)?;
     let llvm = kira_toolchain::discover(None)?;
@@ -450,7 +462,8 @@ pub fn build_hybrid_library(
     program: &IrProgram,
     options: &NativeBuildOptions,
 ) -> Result<HybridArtifacts, LlvmError> {
-    let module = codegen::Module::build_hybrid(program, &options.module_name)?;
+    let module =
+        codegen::Module::build_hybrid(program, &options.module_name, &options.unavailable_imports)?;
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
