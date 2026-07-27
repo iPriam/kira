@@ -473,15 +473,11 @@ impl FunctionLowering<'_, '_> {
     ) -> Result<LLVMValueRef, LlvmError> {
         let tag_value = self.codegen.const_int(i64::from(tag));
         let Some(payload) = payload else {
-            return Ok(self.call(
-                self.codegen.runtime.enum_new,
-                &mut [
-                    tag_value,
-                    self.codegen.const_int(0),
-                    self.codegen.const_int(0),
-                ],
-                c"enum",
-            ));
+            // A variant with no payload is nothing but a tag, and the handle
+            // holds it: `(tag << 1) | 1`, a constant, with no allocation and no
+            // call. The runtime recognizes the low bit and treats clone as
+            // identity and free as nothing. See `kira_native_bridge::enums`.
+            return Ok(self.codegen.inline_enum(tag));
         };
         let payload_ty = self.codegen.enum_payload_type(enum_id, tag)?;
         let value = self.lower_expr(payload)?;

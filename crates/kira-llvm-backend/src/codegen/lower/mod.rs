@@ -136,6 +136,20 @@ impl<'a> Codegen<'a> {
         unsafe { LLVMConstInt(self.types.i64, value as u64, 1) }
     }
 
+    /// The handle for a payload-less enum variant.
+    ///
+    /// The whole value is its tag, so the handle carries it — `(tag << 1) | 1`,
+    /// a constant with no allocation behind it. The runtime reads the low bit
+    /// and treats such a handle as owning nothing; see
+    /// `kira_native_bridge::enums::is_inline` for the other side of the
+    /// contract.
+    pub(super) fn inline_enum(&self, tag: u32) -> LLVMValueRef {
+        let word = (u64::from(tag) << 1) | 1;
+        // SAFETY: both types belong to this module's live context, and a
+        // constant needs no builder position.
+        unsafe { LLVMConstIntToPtr(LLVMConstInt(self.types.i64, word, 0), self.types.ptr) }
+    }
+
     /// A `usize` constant at the **target**'s pointer width.
     ///
     /// The runtime helpers that take a length take a `usize`, and on wasm32
