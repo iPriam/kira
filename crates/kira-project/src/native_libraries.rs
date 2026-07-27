@@ -81,7 +81,7 @@ pub fn resolve_native_libraries(
 ) -> Result<NativeLinkResolution, NativeLibraryResolveError> {
     let mut resolved = Vec::with_capacity(inline.len() + manifest_paths.len());
     for spec in inline {
-        resolved.push(locate(spec, package_root)?);
+        resolved.push(locate(spec, package_root, target)?);
     }
     for relative in manifest_paths {
         let manifest_path = package_root.join(relative);
@@ -98,7 +98,7 @@ pub fn resolve_native_libraries(
             }
         })?;
         let base_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-        resolved.push(locate(&spec, base_dir)?);
+        resolved.push(locate(&spec, base_dir, target)?);
     }
     let catalog = ResolvedNativeLibraries::from_resolved(Interner::new(), resolved)?;
     Ok(NativeLinkResolution {
@@ -108,11 +108,15 @@ pub fn resolve_native_libraries(
 }
 
 /// Locates one declaration's files against `base_dir`, reading the disk.
+///
+/// Only `target`'s archive has to be there: a library declaring every platform
+/// it supports is normal, and a checkout has archives for the one it builds.
 fn locate(
     spec: &NativeLibrarySpec,
     base_dir: &Path,
+    target: &TargetTriple,
 ) -> Result<ResolvedNativeLibrary, NativeLibraryError> {
-    spec.resolve(base_dir, |candidate| candidate.exists())
+    spec.resolve(base_dir, Some(target), |candidate| candidate.exists())
 }
 
 #[cfg(test)]
@@ -285,20 +289,39 @@ Package Demo {
     }
 
     #[test]
-    fn a_missing_archive_is_a_typed_error() {
-        let dir = TempDir::new("missing");
+    fn the_targets_own_missing_archive_is_a_typed_error() {
+        let dir = TempDir::new("missing-host");
         let root = dir.path();
         write(&root.join("NativeLibs/ffimath.toml"), FFIMATH_TOML);
-        // Only the host archive exists; the wasm one is absent.
-        write(&root.join("NativeLibs/lib/libffimath-macos.a"), "");
+        // The wasm archive exists; the host one — the target being built — does
+        // not, which is the case that must still fail.
+        write(&root.join("NativeLibs/lib/libffimath-wasm.a"), "");
 
         let error =
             resolve_native_libraries(root, &[], &["NativeLibs/ffimath.toml".to_owned()], &host())
-                .expect_err("a missing archive is rejected");
+                .expect_err("a missing archive for the target is rejected");
         assert!(matches!(
             error,
             NativeLibraryResolveError::Model(NativeLibraryError::MissingArchive { .. })
         ));
+    }
+
+    #[test]
+    fn another_targets_missing_archive_does_not_block_this_build() {
+        // A cross-platform library declares every platform it supports, and a
+        // checkout has archives for the one it builds. `kira-graphics` declares
+        // ten targets and ships three; requiring all of them made it unusable
+        // on every machine.
+        let dir = TempDir::new("missing-other");
+        let root = dir.path();
+        write(&root.join("NativeLibs/ffimath.toml"), FFIMATH_TOML);
+        write(&root.join("NativeLibs/lib/libffimath-macos.a"), "");
+
+        let resolution =
+            resolve_native_libraries(root, &[], &["NativeLibs/ffimath.toml".to_owned()], &host())
+                .expect("the host archive is all this build needs");
+        assert_eq!(resolution.target, host());
+        assert_eq!(resolution.catalog.len(), 1);
     }
 
     #[test]
