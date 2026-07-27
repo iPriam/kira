@@ -38,6 +38,8 @@
 //! directly means the adapter's existing result path handles a shim call and a
 //! direct C call identically.
 
+use std::collections::BTreeSet;
+
 use kira_runtime_abi::{
     ForeignAggregateId, ForeignAggregates, ForeignArrayElement, ForeignImport, ForeignMember,
     ForeignSignature, ForeignType, ForeignTypeSpec,
@@ -147,13 +149,36 @@ fn declared_parameters(signature: &ForeignSignature) -> String {
 }
 
 /// Emits one import's shim: the real symbol's declaration and the wrapper.
-fn write_shim(out: &mut String, index: usize, import: &ForeignImport) {
+///
+/// `declared` records the symbols already given an `extern` declaration, so a
+/// symbol imported at more than one signature is declared once. `objc_msgSend`
+/// is the case that forces this — Objective-C dispatches every message through
+/// that one symbol, and Apple's own documentation says to cast it to the
+/// prototype of the message being sent. Two `extern` declarations of it with
+/// different parameter lists is a C error, so the declaration is emitted once
+/// and each call goes through a cast to its own signature.
+fn write_shim(
+    out: &mut String,
+    index: usize,
+    import: &ForeignImport,
+    declared: &mut BTreeSet<String>,
+) {
     let signature = import.signature();
     let symbol = import.symbol();
     let result = spec_c_type(signature.result());
 
+    if declared.insert(symbol.to_owned()) {
+        out.push_str(&format!(
+            "extern {result} {symbol}({});\n",
+            declared_parameters(signature)
+        ));
+    }
+    // The cast is what makes a second signature for the same symbol legal, and
+    // it is a no-op when the symbol has only one.
+    let separator_for_cast = if result.ends_with('*') { "" } else { " " };
     out.push_str(&format!(
-        "extern {result} {symbol}({});\n",
+        "typedef {result}{separator_for_cast}(*{})({});\n",
+        callee_type(index),
         declared_parameters(signature)
     ));
 
@@ -196,7 +221,10 @@ fn write_shim(out: &mut String, index: usize, import: &ForeignImport) {
         .collect::<Vec<_>>()
         .join(", ");
 
-    let call = format!("{symbol}({arguments})");
+    let call = format!(
+        "(({})(void (*)(void)){symbol})({arguments})",
+        callee_type(index)
+    );
     let (returns, body) = match (&out_type, signature.result()) {
         (Some(_), _) => ("void".to_owned(), format!("    *kira_out = {call};\n")),
         (None, ForeignTypeSpec::Scalar(ForeignType::Void)) => {
@@ -209,6 +237,11 @@ fn write_shim(out: &mut String, index: usize, import: &ForeignImport) {
         "{returns}{separator}{}({parameters}) {{\n{body}}}\n",
         shim_name(index)
     ));
+}
+
+/// The typedef name one import's callee type is written as.
+fn callee_type(index: usize) -> String {
+    format!("kira_ffi_callee_{index}")
 }
 
 /// Generates the whole shim translation unit for a program's foreign imports.
@@ -233,8 +266,9 @@ pub fn generate(imports: &[ForeignImport], table: &ForeignAggregates) -> Option<
     out.push_str("#include <stdint.h>\n\n");
     write_aggregates(&mut out, table);
     out.push('\n');
+    let mut declared = BTreeSet::new();
     for (index, import) in needed {
-        write_shim(&mut out, index, import);
+        write_shim(&mut out, index, import, &mut declared);
     }
     Some(out)
 }
@@ -294,7 +328,10 @@ mod tests {
             text.contains("double kira_ffi_shim_0(const struct kira_ffi_agg_0 *p0) {"),
             "{text}"
         );
-        assert!(text.contains("return rect_sum(*p0);"), "{text}");
+        assert!(
+            text.contains("return ((kira_ffi_callee_0)(void (*)(void))rect_sum)(*p0);"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -316,7 +353,52 @@ mod tests {
             text.contains("void kira_ffi_shim_0(struct kira_ffi_agg_0 *kira_out, double p0) {"),
             "{text}"
         );
-        assert!(text.contains("*kira_out = make_point(p0);"), "{text}");
+        assert!(
+            text.contains("*kira_out = ((kira_ffi_callee_0)(void (*)(void))make_point)(p0);"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn one_symbol_imported_at_two_signatures_is_declared_once() {
+        // `objc_msgSend` is why this matters: Objective-C sends every message
+        // through that one symbol, and two `extern` declarations of it with
+        // different parameter lists do not compile. Each call casts instead.
+        let (table, id) = point_table();
+        let imports = [
+            import(
+                "objc_msgSend",
+                ForeignSignature::new(
+                    vec![ForeignTypeSpec::Scalar(ForeignType::I64)],
+                    ForeignTypeSpec::Aggregate(id),
+                ),
+            ),
+            import(
+                "objc_msgSend",
+                ForeignSignature::new(
+                    vec![
+                        ForeignTypeSpec::Scalar(ForeignType::I64),
+                        ForeignTypeSpec::Scalar(ForeignType::F64),
+                    ],
+                    ForeignTypeSpec::Aggregate(id),
+                ),
+            ),
+        ];
+        let text = generate(&imports, &table).expect("a shim");
+        assert_eq!(
+            text.matches("extern struct kira_ffi_agg_0 objc_msgSend(")
+                .count(),
+            1,
+            "declared more than once: {text}"
+        );
+        assert!(
+            text.contains("((kira_ffi_callee_0)(void (*)(void))objc_msgSend)(p0)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("((kira_ffi_callee_1)(void (*)(void))objc_msgSend)(p0, p1)"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -334,7 +416,10 @@ mod tests {
             text.contains("void kira_ffi_shim_0(const struct kira_ffi_agg_0 *p0) {"),
             "{text}"
         );
-        assert!(text.contains("    consume(*p0);"), "{text}");
+        assert!(
+            text.contains("((kira_ffi_callee_0)(void (*)(void))consume)(*p0);"),
+            "{text}"
+        );
         assert!(!text.contains("kira_out"), "{text}");
     }
 

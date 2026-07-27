@@ -28,6 +28,20 @@ pub enum LinkMode {
     Static,
     /// Resolved against a shared library.
     Dynamic,
+    /// Found by the runtime on first call, with no link-time dependency.
+    ///
+    /// For a library that may simply not be present — a Vulkan or Direct3D
+    /// driver on a machine that has neither — this is the only honest mode.
+    /// Linking against it would make a program that cannot start on a machine
+    /// missing the driver, and *checking* for it at build time would tie the
+    /// binary to the machine that built it. So nothing is linked: the runtime
+    /// opens the library and looks each symbol up the first time it is called.
+    ///
+    /// The declaration is all a program writes. Loading is the compiler's and
+    /// the runtime's job, never the caller's — a program that opened libraries
+    /// and read symbol pointers by hand would be doing what the toolchain
+    /// exists to do.
+    Runtime,
 }
 
 impl LinkMode {
@@ -39,6 +53,7 @@ impl LinkMode {
         match value {
             "Static" | "static" => Some(Self::Static),
             "Dynamic" | "dynamic" => Some(Self::Dynamic),
+            "Runtime" | "runtime" => Some(Self::Runtime),
             _ => None,
         }
     }
@@ -48,6 +63,7 @@ impl LinkMode {
         match self {
             Self::Static => "static",
             Self::Dynamic => "dynamic",
+            Self::Runtime => "runtime",
         }
     }
 }
@@ -377,7 +393,10 @@ impl NativeLibrarySpec {
     ) -> Result<ResolvedNativeLibrary, NativeLibraryError> {
         let mut rows = Vec::with_capacity(self.targets.len());
         for row in &self.targets {
-            let required = wanted.is_none_or(|wanted| *wanted == row.triple);
+            // A runtime library is never linked, so no row of it has an
+            // archive to be missing.
+            let required = self.link_mode != LinkMode::Runtime
+                && wanted.is_none_or(|wanted| *wanted == row.triple);
             let artifact = match row.artifact.path() {
                 Some(relative) => {
                     let located = base_dir.join(relative);
@@ -406,7 +425,11 @@ impl NativeLibrarySpec {
                 attributes,
             ));
         }
-        Ok(ResolvedNativeLibrary::new(self.name.clone(), rows))
+        Ok(ResolvedNativeLibrary::new(
+            self.name.clone(),
+            self.link_mode,
+            rows,
+        ))
     }
 }
 
