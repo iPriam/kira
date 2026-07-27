@@ -61,6 +61,7 @@ pub fn lower(program: &HirProgram) -> IrProgram {
     let mut lowerer = Lowerer {
         hir: program,
         ir: &mut ir,
+        aliases: std::collections::HashMap::new(),
     };
     let functions: Vec<IrFunction> = program
         .functions
@@ -74,6 +75,9 @@ pub fn lower(program: &HirProgram) -> IrProgram {
 struct Lowerer<'a> {
     hir: &'a HirProgram,
     ir: &'a mut IrProgram,
+    /// The locals of the function being lowered that are a borrow under a
+    /// second name, mapped to the local they name. See [`crate::borrow_alias`].
+    aliases: std::collections::HashMap<u32, u32>,
 }
 
 /// The parameter slots a function takes by reference, ascending.
@@ -105,6 +109,7 @@ fn by_reference_params(function: &kira_semantics_model::hir::HirFunction) -> Vec
 
 impl Lowerer<'_> {
     fn lower_function(&mut self, function: &kira_semantics_model::hir::HirFunction) -> IrFunction {
+        self.aliases = crate::borrow_alias::borrow_aliases(self.hir, function);
         let body = self.lower_stmts(&function.body);
         IrFunction {
             name: function.name.clone(),
@@ -123,15 +128,26 @@ impl Lowerer<'_> {
     }
 
     fn lower_stmts(&mut self, stmts: &[HirStmtId]) -> Vec<IrStmt> {
-        stmts.iter().map(|&id| self.lower_stmt(id)).collect()
+        stmts.iter().filter_map(|&id| self.lower_stmt(id)).collect()
     }
 
-    fn lower_stmt(&mut self, id: HirStmtId) -> IrStmt {
-        match self.hir.stmt(id).clone() {
-            HirStmt::Let { local, init } => IrStmt::Let {
-                local: local.0,
-                init: self.lower_expr(init),
-            },
+    /// Lowers one statement, or nothing when it has already been accounted for.
+    ///
+    /// A `Let` that only gives a borrow a second name lowers to nothing at all:
+    /// the uses of that name lower to the borrow itself, so there is no binding
+    /// left to initialize. Its initializer is a bare local read, so dropping it
+    /// drops no work anyone can observe.
+    fn lower_stmt(&mut self, id: HirStmtId) -> Option<IrStmt> {
+        Some(match self.hir.stmt(id).clone() {
+            HirStmt::Let { local, init } => {
+                if self.aliases.contains_key(&local.0) {
+                    return None;
+                }
+                IrStmt::Let {
+                    local: local.0,
+                    init: self.lower_expr(init),
+                }
+            }
             HirStmt::Assign { place, value } => IrStmt::Assign {
                 place: self.lower_place(&place),
                 value: self.lower_expr(value),
@@ -157,7 +173,12 @@ impl Lowerer<'_> {
             },
             HirStmt::Break => IrStmt::Break,
             HirStmt::Continue => IrStmt::Continue,
-        }
+        })
+    }
+
+    /// The slot a local reads and writes, following any borrow alias.
+    fn slot(&self, local: u32) -> u32 {
+        self.aliases.get(&local).copied().unwrap_or(local)
     }
 
     fn lower_expr(&mut self, id: HirExprId) -> IrExprId {
@@ -168,7 +189,7 @@ impl Lowerer<'_> {
             HirExpr::Str(value) => IrExpr::Str(value),
             HirExpr::RawPtrNull => IrExpr::RawPtrNull,
             HirExpr::ForeignCallbackPtr { callback } => IrExpr::ForeignCallbackPtr { callback },
-            HirExpr::Local { local, .. } => IrExpr::Local(local.0),
+            HirExpr::Local { local, .. } => IrExpr::Local(self.slot(local.0)),
             HirExpr::Unary { op, operand, .. } => IrExpr::Unary {
                 op,
                 operand: self.lower_expr(operand),
@@ -337,7 +358,7 @@ impl Lowerer<'_> {
             })
             .collect();
         IrPlace {
-            local: place.local.0,
+            local: self.slot(place.local.0),
             path,
         }
     }

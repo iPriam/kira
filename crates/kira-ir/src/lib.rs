@@ -13,6 +13,7 @@
 //! analysis to lowering lives in the embedder (the CLI), keeping the whole VM
 //! subtree salsa-free and wasm-portable.
 
+mod borrow_alias;
 pub mod ir;
 pub mod lower;
 
