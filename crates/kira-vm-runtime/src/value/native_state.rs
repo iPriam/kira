@@ -45,10 +45,25 @@ impl Heap {
                 }
                 NativeStateValue::Array(values)
             }
+            // Moving the payload out is the one thing an enum is never asked to
+            // do elsewhere, and a shared object cannot answer it: the values
+            // still holding it would be left reading what this took. They get
+            // the object; this gets a copy of the payload.
             Value::Enum(id) => {
-                let (tag, payload) = match self.take_object(id.0) {
-                    Some(Object::Enum { tag, payload }) => (tag, payload),
-                    _ => return None,
+                let (tag, payload) = match self.enum_shares(id.0) {
+                    Some(1) | None => match self.take_object(id.0) {
+                        Some(Object::Enum { tag, payload, .. }) => (tag, payload),
+                        _ => return None,
+                    },
+                    Some(_) => {
+                        let (tag, payload) = match self.slots.get(id.0 as usize) {
+                            Some(Some(Object::Enum { tag, payload, .. })) => (*tag, *payload),
+                            _ => return None,
+                        };
+                        let payload = payload.map(|value| self.copy_value(value));
+                        self.free_enum(super::EnumId(id.0));
+                        (tag, payload)
+                    }
                 };
                 NativeStateValue::Enum {
                     tag,

@@ -611,7 +611,7 @@ pub extern "C" fn kira_rt_trap_foreign_array(count: u64, len: u64) -> ! {
 /// The name must always spell [`kira_runtime_abi::RUNTIME_ABI_MARKER`]; the test
 /// below is what keeps the two from drifting.
 #[unsafe(no_mangle)]
-pub extern "C" fn kira_rt_abi_version_4() {}
+pub extern "C" fn kira_rt_abi_version_5() {}
 
 #[cfg(test)]
 mod tests {
@@ -626,12 +626,12 @@ mod tests {
     fn the_abi_marker_matches_the_shared_contract() {
         assert_eq!(
             kira_runtime_abi::RUNTIME_ABI_MARKER,
-            "kira_rt_abi_version_4"
+            "kira_rt_abi_version_5"
         );
-        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 4);
+        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 5);
         // Referenced so the marker cannot be dead-code-eliminated out of an
         // rlib build, and so a rename breaks this test rather than the link.
-        kira_rt_abi_version_4();
+        kira_rt_abi_version_5();
     }
 
     /// Builds a handle from a literal, as the backend's lowering would.

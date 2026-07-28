@@ -35,11 +35,30 @@
 //!
 //! # Ownership
 //!
-//! Affine, mirroring the VM's heap: reading an enum clones it
+//! Affine, mirroring the VM's heap: reading an enum copies it
 //! ([`kira_rt_enum_clone`]), and a local leaving scope or being overwritten
 //! frees it ([`kira_rt_enum_free`]). A well-formed program frees every
 //! allocation exactly once — the guarantee the VM proves with its heap
 //! accounting.
+//!
+//! # A copy is a share
+//!
+//! **A box is never written through.** Every read here — [`kira_rt_enum_tag`],
+//! [`kira_rt_enum_payload`], [`kira_rt_enum_payload_aggregate`] — leaves the box
+//! exactly as it found it and hands back a value the caller owns, because a
+//! variant is replaced whole rather than edited. So a copy needs no new box at
+//! all: [`kira_rt_enum_clone`] adds a share and gives back the same handle, and
+//! [`kira_rt_enum_free`] releases the payload with the last of them.
+//!
+//! That is the whole of it — no make-unique, and nothing for the backend to
+//! route, unlike [`crate::array`], where a block *is* written through. What it
+//! removes is a `malloc`, a deep copy of the payload, and a matching `free` on
+//! every read of every enum: a layout descriptor's sizing modes and alignments
+//! are payload-less and were already free, but its insets, colours and text
+//! runs are not, and they were the largest cost left in a Project Matter frame.
+//!
+//! The count is a plain `usize`, not an atomic: the runtime is single-threaded,
+//! as its string and array storage already assume.
 //!
 //! Every symbol is `extern "C"` with a `kira_rt_` prefix and a fixed signature.
 //! These names are a wire contract with the backend's lowering and are
@@ -106,6 +125,12 @@ pub struct KiraEnum {
     payload_kind: i64,
     /// The variant's single payload, type-erased into one word.
     payload: u64,
+    /// How many values hold this box.
+    ///
+    /// One when it is made, one more per copy, one fewer per free, and the box
+    /// and its payload go at zero. Last, so the three fields above keep the
+    /// offsets they had.
+    shares: usize,
 }
 
 /// Heap storage behind an aggregate payload word.
@@ -175,34 +200,6 @@ unsafe fn move_aggregate(
     }))
 }
 
-/// Produces an independent erased aggregate copy.
-///
-/// # Safety
-/// `value` must be null or a live aggregate payload from [`move_aggregate`].
-unsafe fn clone_aggregate(value: *mut AggregatePayload) -> *mut AggregatePayload {
-    if value.is_null() {
-        return std::ptr::null_mut();
-    }
-    // SAFETY: caller guarantees a live payload that outlives this read.
-    let source = unsafe { &*value };
-    let data = alloc_aggregate_bytes(source.size);
-    if source.size > 0 {
-        // SAFETY: both allocations cover `size` bytes and do not overlap.
-        unsafe { std::ptr::copy_nonoverlapping(source.data, data, source.size) };
-        if let Some(clone) = source.clone {
-            // SAFETY: the callback was emitted for this payload's concrete type;
-            // destination already contains a flat copy as its contract requires.
-            unsafe { clone(source.data, data) };
-        }
-    }
-    Box::into_raw(Box::new(AggregatePayload {
-        data,
-        size: source.size,
-        clone: source.clone,
-        free: source.free,
-    }))
-}
-
 /// Writes an independent aggregate copy into caller-owned storage.
 ///
 /// # Safety
@@ -260,6 +257,7 @@ pub extern "C" fn kira_rt_enum_new(tag: i64, payload_kind: i64, payload: u64) ->
         tag,
         payload_kind,
         payload,
+        shares: 1,
     }))
 }
 
@@ -365,59 +363,51 @@ pub unsafe extern "C" fn kira_rt_enum_payload_aggregate(value: KEnum, out: *mut 
     unsafe { read_aggregate(source.payload as *mut AggregatePayload, out) };
 }
 
-/// Produces an independent copy of an enum (clone-on-read for locals).
+/// Produces a copy of an enum (copy-on-read for locals): the same box, held
+/// once more.
 ///
-/// A `String` or nested-enum payload is cloned so the copy shares no storage
-/// with the source; a scalar payload is copied by bits. A null handle clones to
-/// null. The clone is deep, matching the VM's `Heap::copy_value`.
+/// Independent is a promise about what a reader can observe, and a box has
+/// nothing a reader can change — every read hands back an owned value and
+/// leaves the box alone — so two values sharing one box behave exactly as two
+/// deep copies. A null handle copies to null and an inline handle to itself,
+/// neither of which is a box at all.
 ///
 /// # Safety
-/// `value` must be null or a live handle; it is left untouched.
+/// `value` must be null or a live handle; it is left untouched but for its
+/// share count.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_enum_clone(value: KEnum) -> KEnum {
-    if value.is_null() {
-        return std::ptr::null_mut();
-    }
-    // An inline handle owns nothing, so a copy of it is itself.
-    if is_inline(value) {
+    if value.is_null() || is_inline(value) {
         return value;
     }
-    // SAFETY: a non-null handle is a live `KiraEnum` that outlives this read.
-    let source = unsafe { &*value };
-    let payload = match source.payload_kind {
-        // SAFETY: the kind promises `payload` is a live `KStr`; cloning it
-        // reads it and leaves it in place.
-        PAYLOAD_STR => (unsafe { kira_rt_str_clone(source.payload as KStr) }) as u64,
-        // SAFETY: the kind promises `payload` is a live `KEnum`; cloning it
-        // reads it and leaves it in place.
-        PAYLOAD_ENUM => (unsafe { kira_rt_enum_clone(source.payload as KEnum) }) as u64,
-        PAYLOAD_AGGREGATE => {
-            // SAFETY: the kind promises a live erased aggregate; cloning it
-            // leaves the source untouched and returns independent storage.
-            (unsafe { clone_aggregate(source.payload as *mut AggregatePayload) }) as u64
-        }
-        _ => source.payload,
-    };
-    Box::into_raw(Box::new(KiraEnum {
-        tag: source.tag,
-        payload_kind: source.payload_kind,
-        payload,
-    }))
+    // SAFETY: a non-null, non-inline handle is a live `KiraEnum`. The count
+    // cannot wrap: it rises by one per live value holding this box.
+    unsafe { (*value).shares += 1 };
+    value
 }
 
-/// Frees an enum, releasing an owned `String` or nested-enum payload. A null
-/// handle is a no-op.
+/// Releases one hold on an enum, freeing the box and an owned `String`,
+/// nested-enum or aggregate payload once no value holds it. A null handle is a
+/// no-op.
 ///
 /// # Safety
-/// `value` must be null or a live handle from this runtime, freed at most once.
+/// `value` must be null or a live handle from this runtime, released once per
+/// copy of it that was made.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_enum_free(value: KEnum) {
     // An inline handle was never allocated, so there is nothing to reclaim.
     if value.is_null() || is_inline(value) {
         return;
     }
-    // SAFETY: the handle came from `Box::into_raw`, and the caller's free-once
-    // contract makes this the only reclaim of it.
+    // SAFETY: a non-null, non-inline handle is a live `KiraEnum`.
+    let shares = unsafe { &mut (*value).shares };
+    if *shares > 1 {
+        // Another value still reads this box, so its payload stays.
+        *shares -= 1;
+        return;
+    }
+    // SAFETY: the handle came from `Box::into_raw`, this was the last hold on
+    // it, and the caller's release-once contract makes this the only reclaim.
     let boxed = unsafe { Box::from_raw(value) };
     match boxed.payload_kind {
         // SAFETY: the kind promises `payload` is a live `KStr`, freed here
@@ -447,34 +437,41 @@ mod tests {
 
     #[test]
     fn a_scalar_enum_round_trips_its_tag_and_frees_cleanly() {
-        // SAFETY: the handle is live and freed exactly once.
+        // SAFETY: the handle is live and released once per copy of it.
         unsafe {
             let value = kira_rt_enum_new(2, PAYLOAD_INERT, 42);
             assert_eq!(kira_rt_enum_tag(value), 2);
             let copy = kira_rt_enum_clone(value);
             assert_eq!(kira_rt_enum_tag(copy), 2);
-            assert_ne!(value, copy, "a clone is an independent allocation");
+            assert_eq!(value, copy, "a copy is the same box, held twice");
+            assert_eq!((*value).shares, 2);
             kira_rt_enum_free(value);
             kira_rt_enum_free(copy);
         }
     }
 
+    /// A copy holds the box rather than duplicating its payload, and the payload
+    /// outlives every hold but the last.
+    ///
+    /// Under Miri or ASan, releasing the payload with the first hold would
+    /// surface as a use-after-free on the read below; never releasing it would
+    /// surface as a leak.
     #[test]
-    fn a_string_payload_is_cloned_and_freed_independently() {
-        // A clone must own its own string, so freeing the source leaves the
-        // clone valid — the affine guarantee the VM proves with heap counters.
-        // Under Miri or ASan a shared handle would surface here as a double
-        // free; a leak would surface as a reported leak.
-        // SAFETY: every handle below is live and freed exactly once.
+    fn a_string_payload_is_shared_and_freed_with_the_last_hold() {
+        // SAFETY: every handle below is live and released once per hold.
         unsafe {
             let value = kira_rt_enum_new(0, PAYLOAD_STR, str_handle("payload") as u64);
             let copy = kira_rt_enum_clone(value);
-            assert_ne!(
-                (*value).payload,
-                (*copy).payload,
-                "the clone owns its own string"
-            );
+            assert_eq!(value, copy, "a copy is the same box");
+
             kira_rt_enum_free(value);
+            let read = kira_rt_enum_payload(copy) as KStr;
+            assert_eq!(
+                crate::runtime::kira_rt_str_len(read),
+                7,
+                "the payload survived the first hold"
+            );
+            kira_rt_str_free(read);
             kira_rt_enum_free(copy);
         }
     }
@@ -528,9 +525,9 @@ mod tests {
     }
 
     #[test]
-    fn a_struct_payload_clones_reads_and_frees_independently() {
+    fn a_struct_payload_is_read_out_independently_and_freed_with_its_box() {
         // SAFETY: every erased pointer uses `AggregateFixture`'s layout and every
-        // owned handle is freed exactly once.
+        // owned handle is released exactly as many times as it is held.
         unsafe {
             let source = AggregateFixture {
                 count: 7,
@@ -544,19 +541,17 @@ mod tests {
                 Some(free_fixture),
             );
             let copy = kira_rt_enum_clone(value);
+            assert_eq!(value, copy, "a copy is the same box");
 
+            // A read *is* a copy, and the clone leaf is what makes it one: the
+            // read owns a label of its own, so it outlives the box below.
             let mut read = std::mem::MaybeUninit::<AggregateFixture>::uninit();
             kira_rt_enum_payload_aggregate(value, read.as_mut_ptr().cast::<u8>());
             let read = read.assume_init();
             assert_eq!(read.count, 7);
-
-            let source_payload = &*((*value).payload as *mut AggregatePayload);
-            let copied_payload = &*((*copy).payload as *mut AggregatePayload);
-            let source_value = &*source_payload.data.cast::<AggregateFixture>();
-            let copied_value = &*copied_payload.data.cast::<AggregateFixture>();
-            assert_ne!(source_value.label, copied_value.label);
-            assert_ne!(source_value.label, read.label);
-            assert_ne!(copied_value.label, read.label);
+            let boxed_payload = &*((*value).payload as *mut AggregatePayload);
+            let boxed_value = &*boxed_payload.data.cast::<AggregateFixture>();
+            assert_ne!(boxed_value.label, read.label);
 
             kira_rt_enum_free(value);
             kira_rt_enum_free(copy);
@@ -565,43 +560,68 @@ mod tests {
         }
     }
 
-    /// The box is `#[repr(C)]`, so its layout is pinned here beside it.
+    /// The box is `#[repr(C)]`, so its layout is pinned here beside it. The
+    /// share count is last, leaving the three fields before it where they were.
     #[test]
     fn the_enum_box_layout_is_pinned() {
-        assert_eq!(size_of::<KiraEnum>(), 24);
+        assert_eq!(size_of::<KiraEnum>(), 32);
         assert_eq!(align_of::<KiraEnum>(), 8);
         assert_eq!(size_of::<KEnum>(), size_of::<usize>());
+        let box_ = KiraEnum {
+            tag: 0,
+            payload_kind: 0,
+            payload: 0,
+            shares: 1,
+        };
+        let base = std::ptr::from_ref(&box_).cast::<u8>();
+        // SAFETY: every field belongs to `box_`, which outlives the reads.
+        unsafe {
+            assert_eq!(
+                std::ptr::from_ref(&box_.tag).cast::<u8>().offset_from(base),
+                0
+            );
+            assert_eq!(
+                std::ptr::from_ref(&box_.payload_kind)
+                    .cast::<u8>()
+                    .offset_from(base),
+                8
+            );
+            assert_eq!(
+                std::ptr::from_ref(&box_.payload)
+                    .cast::<u8>()
+                    .offset_from(base),
+                16
+            );
+        }
     }
 
     /// A nested enum payload — what a `Result`-shaped `Error` variant carries —
-    /// is cloned deeply and freed exactly once with its owner.
+    /// is held, not duplicated, and released exactly once with the last hold.
     ///
-    /// Under Miri or ASan a shared inner handle would surface here as a double
-    /// free, and a missed recursive free as a leak.
+    /// Under Miri or ASan an over-release of the inner box would surface here
+    /// as a use-after-free, and a missed one as a leak.
     #[test]
-    fn a_nested_enum_payload_is_cloned_deeply_and_freed_with_its_owner() {
-        // SAFETY: every handle below is live and freed exactly once.
+    fn a_nested_enum_payload_is_held_and_released_with_its_owner() {
+        // SAFETY: every handle below is live and released once per hold.
         unsafe {
             // `Error(.MissingNode("boom"))`: an enum whose payload is an enum
-            // whose payload is a string — two levels of recursion.
+            // whose payload is a string — two levels of nesting.
             let inner = kira_rt_enum_new(1, PAYLOAD_STR, str_handle("boom") as u64);
             let outer = kira_rt_enum_new(0, PAYLOAD_ENUM, inner as u64);
 
             let copy = kira_rt_enum_clone(outer);
-            assert_ne!(
-                (*outer).payload,
-                (*copy).payload,
-                "the clone owns its own nested enum"
-            );
+            assert_eq!(outer, copy, "a copy is the same box");
             assert_eq!(kira_rt_enum_tag((*copy).payload as KEnum), 1);
 
-            // A payload read is owned: freeing the outer must leave it valid.
+            // A payload read is a hold of its own, so releasing the outer twice
+            // over must leave it valid.
             let read = kira_rt_enum_payload(outer) as KEnum;
-            assert_ne!(read as u64, (*outer).payload, "the read owns its own enum");
+            assert_eq!(read as u64, (*outer).payload, "the read holds the same box");
+            assert_eq!((*inner).shares, 2);
             kira_rt_enum_free(outer);
+            kira_rt_enum_free(copy);
             assert_eq!(kira_rt_enum_tag(read), 1, "the read survives its source");
             kira_rt_enum_free(read);
-            kira_rt_enum_free(copy);
         }
     }
 

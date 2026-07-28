@@ -281,25 +281,33 @@ fn an_array_has_no_invented_rendering_or_seam_shape() {
 }
 
 #[test]
-fn copying_an_enum_is_deep_and_both_drops_balance() {
-    // An enum with a string payload: the copy must own its own string, so
-    // dropping the original leaves the copy valid, and dropping both leaks
-    // nothing — the affine guarantee that keeps `current == 0` provable.
+fn copying_an_enum_holds_it_and_both_drops_balance() {
+    // An enum with a string payload. A copy is a second hold on the one
+    // object — nothing reads an enum in a way that could tell the difference —
+    // so dropping the original leaves the copy valid and the payload goes with
+    // the last hold, which is what keeps `current == 0` provable.
     let mut heap = Heap::new();
     let text = heap.alloc("payload".to_owned());
     let original = heap.alloc_enum(3, Some(Value::Str(text)));
-    assert_eq!(heap.stats().current, 2, "the enum box and its string");
+    assert_eq!(heap.stats().current, 2, "the enum object and its string");
 
     let Value::Enum(copy) = heap.copy_value(Value::Enum(original)) else {
         panic!("an enum copies to an enum");
     };
-    assert_ne!(original, copy, "a copy is its own object");
+    assert_eq!(original, copy, "a copy is the same object, held twice");
     assert_eq!(heap.enum_tag(copy), Some(3), "the tag is carried");
-    assert_eq!(heap.stats().current, 4, "two boxes and two strings");
+    assert_eq!(heap.stats().current, 2, "the copy allocated nothing");
 
     heap.drop_value(Value::Enum(original));
     assert_eq!(heap.stats().current, 2, "the copy and its string survive");
+    // A payload read is owned, so it outlives the object it came from — which
+    // is what a `match` arm's binding relies on.
+    let Some(Value::Str(bound)) = heap.enum_payload(copy) else {
+        panic!("the variant carries a payload");
+    };
     heap.drop_value(Value::Enum(copy));
+    assert_eq!(heap.get(bound), "payload", "the binding outlived its enum");
+    heap.drop_value(Value::Str(bound));
     assert_eq!(
         heap.stats().current,
         0,

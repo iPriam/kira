@@ -92,12 +92,20 @@ enum Object {
     /// owned, which is what lets a place walk move handles; an array earns the
     /// exception by being the expensive one to copy and the common one to read.
     Array(Rc<Vec<Value>>),
-    /// An enum value: a discriminant tag and its optional single payload.
+    /// An enum value: a discriminant tag and its optional single payload,
+    /// shared by every value that copied it.
+    ///
+    /// Shared for the same reason an array's elements are, and more simply: an
+    /// enum object is never written through — a variant is replaced whole, and
+    /// every read of one hands back an owned copy — so a copy needs no object
+    /// of its own and there is nothing to make unique.
     Enum {
         /// The variant's declaration index.
         tag: u32,
         /// The payload value, absent for a payload-less variant.
         payload: Option<Value>,
+        /// How many values hold this object; the payload goes with the last.
+        shares: u32,
     },
 }
 
@@ -294,7 +302,11 @@ impl Heap {
     /// produced it (the operand stack) hands over ownership, exactly as a
     /// struct's fields are handed over.
     pub fn alloc_enum(&mut self, tag: u32, payload: Option<Value>) -> EnumId {
-        EnumId(self.alloc_object(Object::Enum { tag, payload }))
+        EnumId(self.alloc_object(Object::Enum {
+            tag,
+            payload,
+            shares: 1,
+        }))
     }
 
     /// The discriminant tag of the enum behind a handle, or `None` when the
@@ -320,12 +332,28 @@ impl Heap {
         Some(self.copy_value(payload))
     }
 
-    /// Frees the enum behind a handle, dropping its payload.
+    /// How many values hold the enum in slot `index`, or `None` when the slot
+    /// does not hold one.
+    fn enum_shares(&self, index: u32) -> Option<u32> {
+        match self.slots.get(index as usize) {
+            Some(Some(Object::Enum { shares, .. })) => Some(*shares),
+            _ => None,
+        }
+    }
+
+    /// Releases one hold on an enum, dropping its payload with the last.
     ///
     /// Bounded by the program's nesting depth: a payload is a value analysis
     /// resolved against types that already resolve, so a cycle is
     /// unrepresentable — the same reason [`Heap::free_struct`] terminates.
     pub fn free_enum(&mut self, id: EnumId) {
+        // Another value still reads this object, so nothing it owns goes here.
+        if let Some(Some(Object::Enum { shares, .. })) = self.slots.get_mut(id.0 as usize)
+            && *shares > 1
+        {
+            *shares -= 1;
+            return;
+        }
         let taken = match self.slots.get_mut(id.0 as usize) {
             Some(slot @ Some(Object::Enum { .. })) => slot.take(),
             _ => None,
@@ -497,16 +525,15 @@ impl Heap {
                 };
                 Value::Array(ArrayId(self.alloc_object(Object::Array(shared))))
             }
+            // A hold on the same object, not a new one. An enum is never
+            // written through — a variant is replaced whole, and reading a
+            // payload copies it out — so there is nothing a second holder could
+            // observe, and no make-unique to do.
             Value::Enum(id) => {
-                // Deep, like a struct or an array: the copy owns a fresh box
-                // and a fresh copy of the payload, so no two live enums share a
-                // handle and neither drop frees the other's.
-                let (tag, payload) = match self.slots.get(id.0 as usize) {
-                    Some(Some(Object::Enum { tag, payload })) => (*tag, *payload),
-                    _ => (0, None),
-                };
-                let payload = payload.map(|value| self.copy_value(value));
-                Value::Enum(self.alloc_enum(tag, payload))
+                if let Some(Some(Object::Enum { shares, .. })) = self.slots.get_mut(id.0 as usize) {
+                    *shares += 1;
+                }
+                Value::Enum(id)
             }
             scalar => scalar,
         }
