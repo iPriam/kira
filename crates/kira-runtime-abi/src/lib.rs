@@ -65,6 +65,16 @@ pub use ownership::Ownership;
 /// marker, so the link fails by name instead of the program failing at runtime.
 pub const RUNTIME_ABI_VERSION: u32 = 5;
 
+/// Where an enum box keeps its share count, as a field index.
+///
+/// Copying and releasing an enum is a share count away from free, and generated
+/// code does both often enough that the *call* into the runtime was the cost —
+/// so the backend reaches into the box itself. That makes the box's shape a
+/// contract between two separately compiled halves like any other: this index
+/// is what the backend GEPs with, and `kira_native_bridge::enums`' layout test
+/// is what holds the box to it.
+pub const ENUM_BOX_SHARES_FIELD: u32 = 3;
+
 /// The marker symbol the runtime archive defines and generated code references.
 ///
 /// Its name carries [`RUNTIME_ABI_VERSION`]; a test in `kira-native-bridge`
