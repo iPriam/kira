@@ -81,26 +81,20 @@ mod block;
 
 use std::alloc::Layout;
 
-use crate::pool::Pool;
+use crate::pool::SharedPool;
 use block::{alloc_items, drop_share, free_items, share_count, take_share};
 
-thread_local! {
-    /// The free list array headers are handed out from.
-    ///
-    /// A header is allocated per array *copy*, which after the sharing above is
-    /// the only allocation a copy makes at all — and the most frequent one a
-    /// program makes. See [`crate::pool`].
-    ///
-    /// A [`Pool`] holds nothing that needs dropping, so this key registers no
-    /// destructor and `with` cannot fail — including on a thread that is
-    /// already winding down, which is where a Kira value released late would
-    /// otherwise find the pool gone.
-    static HEADERS: Pool = const { Pool::new(Layout::new::<KiraArray>()) };
-}
+/// The free list array headers are handed out from.
+///
+/// A header is allocated per array *copy*, which after the sharing above is the
+/// only allocation a copy makes at all — and the most frequent one a program
+/// makes. See [`crate::pool`], which also states what a `static` free list
+/// assumes and why the share count above assumes it already.
+static HEADERS: SharedPool = SharedPool::new(Layout::new::<KiraArray>());
 
 /// Takes a header from the free list and fills it in.
 fn new_header(len: usize, cap: usize, items: *mut u8) -> KArray {
-    let header = HEADERS.with(Pool::alloc).cast::<KiraArray>();
+    let header = HEADERS.alloc().cast::<KiraArray>();
     // SAFETY: the pool hands back a block of exactly this layout, and every
     // field is written before anything reads one.
     unsafe {
@@ -117,7 +111,7 @@ fn new_header(len: usize, cap: usize, items: *mut u8) -> KArray {
 unsafe fn free_header(header: KArray) {
     // SAFETY: the caller vouches the header is live and finished with; a header
     // owns nothing itself, so there is nothing to drop before it goes.
-    HEADERS.with(|pool| unsafe { pool.free(header.cast::<u8>()) });
+    unsafe { HEADERS.free(header.cast::<u8>()) };
 }
 
 /// A Kira array at the native ABI: an opaque owned handle.

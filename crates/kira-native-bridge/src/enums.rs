@@ -69,17 +69,15 @@ use std::alloc::{self, Layout};
 use kira_runtime_abi::EnumPayloadKind;
 
 use crate::array::{ElemClone, ElemFree};
-use crate::pool::Pool;
+use crate::pool::SharedPool;
 use crate::runtime::{KStr, kira_rt_str_clone, kira_rt_str_free};
 
-thread_local! {
-    /// The free list enum boxes are handed out from.
-    ///
-    /// One box per enum value a program *constructs* — a copy takes no box at
-    /// all now — and a UI frame that rebuilds its view tree constructs
-    /// thousands. See [`crate::pool`], which also says why `with` cannot fail.
-    static BOXES: Pool = const { Pool::new(Layout::new::<KiraEnum>()) };
-}
+/// The free list enum boxes are handed out from.
+///
+/// One box per enum value a program *constructs* — a copy takes no box at all
+/// now — and a UI frame that rebuilds its view tree constructs thousands. See
+/// [`crate::pool`] for what a `static` free list assumes.
+static BOXES: SharedPool = SharedPool::new(Layout::new::<KiraEnum>());
 
 /// A Kira enum at the native ABI: an opaque owned handle.
 pub type KEnum = *mut KiraEnum;
@@ -263,7 +261,7 @@ unsafe fn free_aggregate(value: *mut AggregatePayload) {
 /// direction for a word this code cannot interpret.
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_enum_new(tag: i64, payload_kind: i64, payload: u64) -> KEnum {
-    let boxed = BOXES.with(Pool::alloc).cast::<KiraEnum>();
+    let boxed = BOXES.alloc().cast::<KiraEnum>();
     // SAFETY: the pool hands back a block of exactly this layout, and every
     // field is written before anything reads one.
     unsafe {
@@ -427,7 +425,7 @@ pub unsafe extern "C" fn kira_rt_enum_free(value: KEnum) {
     let (payload_kind, payload) = unsafe { ((*value).payload_kind, (*value).payload) };
     // SAFETY: the box is finished with and nothing reads it again; it owns
     // nothing itself — its payload is released below.
-    BOXES.with(|pool| unsafe { pool.free(value.cast::<u8>()) });
+    unsafe { BOXES.free(value.cast::<u8>()) };
     match payload_kind {
         // SAFETY: the kind promises `payload` is a live `KStr`, freed here
         // exactly once as the box is reclaimed.

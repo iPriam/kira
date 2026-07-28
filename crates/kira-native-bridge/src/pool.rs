@@ -19,13 +19,19 @@
 //! which bounds what a pool retains to its capacity and leaves a long-running
 //! program's footprint where its live data puts it.
 //!
-//! # One list per thread
+//! # One list, no synchronization
 //!
-//! Each thread keeps its own, so no lock and no atomic is involved. A block
-//! allocated on one thread and released on another simply joins the releasing
-//! thread's list; every block comes from the global allocator and is only ever
-//! returned to it under the same layout, so which list it waits on is a matter
-//! of locality rather than correctness.
+//! A pool lives in a `static` and is read and written with plain loads and
+//! stores. That rests on the premise the rest of this runtime already rests
+//! on — a Kira value is touched by one thread at a time — which the share
+//! counts in [`crate::array`] and [`crate::enums`] assume just as directly, and
+//! for the same reason: a program that broke it would corrupt those counts
+//! before it corrupted a free list. [`SharedPool`] is where that is stated.
+//!
+//! A `thread_local!` was the first attempt and was **worse than the allocator
+//! it replaced**: on macOS every access goes through `_tlv_get_addr`, a call,
+//! and at one per allocation and one per release that came to 17% of a frame —
+//! more than the `malloc` traffic the pool exists to remove.
 
 use std::alloc::{self, Layout};
 use std::cell::Cell;
@@ -103,6 +109,44 @@ impl Pool {
         unsafe { *block.cast::<*mut u8>() = self.head.get() };
         self.head.set(block);
         self.len.set(self.len.get() + 1);
+    }
+}
+
+/// A [`Pool`] that may live in a `static`.
+///
+/// # Safety of the `Sync` claim
+///
+/// A [`Pool`] is `Cell`-based and not `Sync` on its own. This wrapper asserts
+/// what the whole runtime asserts: **a Kira value is touched by one thread at a
+/// time.** Two threads allocating Kira values at once already race on an
+/// array's and an enum's share counts, which are plain `usize` fields for the
+/// same reason — so a free list adds no assumption that was not there, and a
+/// program that broke the premise would have corrupted a share count first.
+pub(crate) struct SharedPool(Pool);
+
+// SAFETY: the invariant above — one thread at a time — is the runtime's, not
+// this type's alone, and is stated on the type it guards.
+unsafe impl Sync for SharedPool {}
+
+impl SharedPool {
+    /// A pool of blocks with `layout`, on the terms in this type's docs.
+    pub(crate) const fn new(layout: Layout) -> Self {
+        Self(Pool::new(layout))
+    }
+
+    /// A block of this pool's layout. See [`Pool::alloc`].
+    pub(crate) fn alloc(&self) -> *mut u8 {
+        self.0.alloc()
+    }
+
+    /// Takes a block back for reuse. See [`Pool::free`].
+    ///
+    /// # Safety
+    /// As [`Pool::free`]: `block` must be a live block of this pool's layout,
+    /// not used again.
+    pub(crate) unsafe fn free(&self, block: *mut u8) {
+        // SAFETY: the caller's promises are exactly `Pool::free`'s.
+        unsafe { self.0.free(block) };
     }
 }
 
