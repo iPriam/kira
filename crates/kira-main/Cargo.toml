@@ -6,7 +6,20 @@ license.workspace = true
 repository.workspace = true
 
 [lib]
-crate-type = ["staticlib", "cdylib", "rlib"]
+# `rlib` only, because the only consumer this crate names is Rust.
+#
+# It carried `staticlib` and `cdylib` too, for a C facade that does not exist
+# yet — and paid for them: `kira-export-consumer` depends on this crate
+# normally *and*, through `kira-build`, as a build dependency, so cargo builds
+# it twice in one graph. It disambiguates the two rlibs with a metadata hash,
+# but a `staticlib`/`cdylib` artifact is named for external tooling to find, so
+# both units wrote `libkira_main.a`/`.dylib`/`.rlib` to the same paths and
+# raced. `cargo build --release --workspace` failed two runs out of three on a
+# stale-artifact error, which is a compiler nobody can measure against.
+#
+# Adding them back is this line when a non-Rust consumer appears — the same
+# terms the C entry points are held to in `lib.rs`.
+crate-type = ["rlib"]
 
 [dependencies]
 kira-bytecode.workspace = true
