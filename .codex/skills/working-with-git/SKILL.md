@@ -1,6 +1,6 @@
 ---
 name: working-with-git
-description: "The git contract here: every command that can discard, set aside, or rewrite work is refused — reversible ones included (`stash`, `reset --soft`, `commit --amend`) — because the working tree is assumed to hold uncommitted work at all times; plus the non-destructive route to each goal, what this checkout actually is, and commit rules. Load before running or suggesting any git command other than `git diff` and `git status` — including `git log`, `git add`, `git commit`, and any git command buried inside a compound shell command."
+description: "The git contract here: every command that can discard, set aside, or rewrite work is refused — reversible ones included (`stash`, `reset --soft`, `commit --amend`), and read commands whose output is redirected onto a tracked path (`git show <rev>:<path> > <path>`) with them — because the working tree is assumed to hold uncommitted work at all times; plus the non-destructive route to each goal, what this checkout actually is, and commit rules. Load before running or suggesting any git command other than `git diff` and `git status` — including `git log`, `git add`, `git commit`, and any git command buried inside a compound shell command."
 ---
 
 # Working with git
@@ -24,10 +24,21 @@ Refuse every git command that can discard, set aside, or rewrite work:
 - **Rewrites:** `commit --amend`, `rebase`, `filter-branch`, `push --force`,
   `push --force-with-lease`
 - **Collects:** `gc --prune`, `reflog expire`
+- **Overwrites:** any command that puts history's copy of a file back into the
+  tree — `git show <rev>:<path> > <path>`, `git cat-file -p <blob> > <path>`,
+  `git archive` unpacked over the checkout
 
 Read that list as examples of the category, never as its boundary. When a
 command is not named, decide by what it can do to work that exists in one place
 only — and refuse it on that, not on its absence from a list.
+
+**Read the whole line, never the subcommand.** `show`, `cat-file` and
+`archive` are reads, and stay reads right up until their output is redirected
+onto a path in the working tree — where they overwrite it exactly as
+`checkout -- <path>` would, while looking nothing like it. Refuse any git
+command whose output lands on a tracked path, and decide that from the
+redirect rather than from the verb in front of it. A safe subcommand is not a
+safe command.
 
 Extend the refusal to **suggesting** any of them. Treat a banned command in a
 code block as one paste from being a run command.
@@ -66,6 +77,16 @@ session. "I built this list, so it's mine to revert" is the same shortcut as
 checking them. Check every targeted path's status individually before any
 discard, every time, batch or not.
 
+It has fired a third time, on a command no list named. To compare two builds of
+its own change, an agent ran `git show HEAD:<path> > <path>` over four files,
+having copied them to a scratch directory moments earlier. The skill was loaded
+that session too. Nothing was lost — but only because those copies happened to
+be taken *after* its edits, so they carried whatever was in the files before it
+arrived; an ordering it never checked and could not have relied on. **A backup
+you made yourself buys no exception.** It is the same claim about a
+not-yet-taken second step as `stash pop`, made this time about a step already
+taken, whose coverage of what preceded you is exactly what you did not verify.
+
 ## Reach the goal another way
 
 Recognize the goal behind the banned command and take the route that keeps the
@@ -79,6 +100,7 @@ work:
 | Undo a commit already made | `reset --hard HEAD~1` | `git revert <sha>` — keeps history and the work |
 | Fix the commit just made | `commit --amend` | a second commit; squash later only on a branch nobody else has |
 | Abandon working-tree edits | `checkout -- <file>` / `restore` | leave them; commit them on a scratch branch; or ask. WIP in a worktree is never yours to discard |
+| Measure your change against the code without it | `git show <rev>:<path> > <path>` to put the old version back | build the current tree, copy the *artifact* aside (`cp target/release/x "$TMP/x.before"`), then edit forward to the other version and build again. Compare two artifacts, never two states of the tree |
 | Take one commit from elsewhere | reset + reapply | `git cherry-pick <sha>` |
 
 When none of these reach the goal, say so and stop. Never read "no safe route
