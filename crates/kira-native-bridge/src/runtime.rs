@@ -40,17 +40,31 @@ use std::slice;
 /// every slot to `Void`.
 pub type KStr = *mut KiraString;
 
-/// The heap object behind a [`KStr`]: an owned, immutable UTF-8 buffer.
+/// The heap object behind a [`KStr`]: an immutable UTF-8 buffer and a count of
+/// the values holding it.
 ///
-/// Kira strings have value semantics, so this is never shared or mutated: every
-/// operation that would observe a change produces a fresh allocation instead.
+/// Kira strings have value semantics and this object is never *mutated* — every
+/// operation that would observe a change produces a fresh allocation instead —
+/// which is exactly what lets it be **shared**. A copy adds a share and hands
+/// back the same handle; there is no make-unique to do, because no writer
+/// exists. See [`kira_rt_str_clone`].
+///
+/// `#[repr(C)]` because the backend reads `shares` directly rather than calling
+/// for it: copying a string was a quarter of a Project Matter frame, and the
+/// copy was an allocation plus a `memcpy` per read. `the_string_layout_is_pinned`
+/// holds the layout, and [`kira_runtime_abi::STRING_SHARES_FIELD`] is the index
+/// the backend GEPs with.
+#[repr(C)]
 pub struct KiraString {
+    /// The bytes, owned by this object and never written after construction.
     bytes: Box<[u8]>,
+    /// How many values hold this object; the bytes go with the last.
+    shares: usize,
 }
 
-/// Boxes `bytes` into a fresh handle.
+/// Boxes `bytes` into a fresh handle held by one value.
 fn into_handle(bytes: Box<[u8]>) -> KStr {
-    Box::into_raw(Box::new(KiraString { bytes }))
+    Box::into_raw(Box::new(KiraString { bytes, shares: 1 }))
 }
 
 /// Borrows a handle's bytes; a null handle is the empty string.
@@ -74,8 +88,16 @@ unsafe fn drop_handle(handle: KStr) {
     if handle.is_null() {
         return;
     }
-    // SAFETY: the handle came from `Box::into_raw` in `into_handle`, and the
-    // caller's free-once contract makes this the only reclaim of it.
+    // SAFETY: a non-null handle is a live `KiraString`.
+    let shares = unsafe { &mut (*handle).shares };
+    if *shares > 1 {
+        // Another value still reads these bytes.
+        *shares -= 1;
+        return;
+    }
+    // SAFETY: the handle came from `Box::into_raw` in `into_handle`, this was
+    // the last hold on it, and the caller's release-once contract makes this
+    // the only reclaim of it.
     drop(unsafe { Box::from_raw(handle) });
 }
 
@@ -182,18 +204,32 @@ pub unsafe extern "C" fn kira_rt_str_new(data: *const u8, len: usize) -> KStr {
     into_handle(bytes.to_vec().into_boxed_slice())
 }
 
-/// Produces an independent copy of a string (clone-on-read for locals).
+/// Produces a copy of a string: the same bytes, held once more.
+///
+/// A `KiraString` is never written after it is built, so two values holding one
+/// are indistinguishable from two copies — there is no writer for a
+/// copy-on-write scheme to protect against, and nothing to make unique. What it
+/// removes is an allocation and a `memcpy` of the bytes on every read of every
+/// string, which was a quarter of a Project Matter frame.
+///
+/// The empty string is the null handle and is not an object, so a copy of one
+/// is itself.
+///
+/// The backend emits this inline and does not call it; it stays exported
+/// because the name is part of the runtime's wire contract.
 ///
 /// # Safety
-/// `value` must be null or a live handle; it is left untouched.
+/// `value` must be null or a live handle; it is left untouched but for its
+/// share count.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_str_clone(value: KStr) -> KStr {
-    // SAFETY: caller passes a live (or null) handle that outlives this read.
-    let bytes = unsafe { bytes_of(value) };
-    if bytes.is_empty() {
-        return std::ptr::null_mut();
+    if value.is_null() {
+        return value;
     }
-    into_handle(bytes.to_vec().into_boxed_slice())
+    // SAFETY: a non-null handle is a live `KiraString`. The count cannot wrap:
+    // it rises by one per live value holding it.
+    unsafe { (*value).shares += 1 };
+    value
 }
 
 /// Concatenates two strings into a fresh one, freeing both inputs.
@@ -611,7 +647,7 @@ pub extern "C" fn kira_rt_trap_foreign_array(count: u64, len: u64) -> ! {
 /// The name must always spell [`kira_runtime_abi::RUNTIME_ABI_MARKER`]; the test
 /// below is what keeps the two from drifting.
 #[unsafe(no_mangle)]
-pub extern "C" fn kira_rt_abi_version_6() {}
+pub extern "C" fn kira_rt_abi_version_7() {}
 
 #[cfg(test)]
 mod tests {
@@ -626,12 +662,44 @@ mod tests {
     fn the_abi_marker_matches_the_shared_contract() {
         assert_eq!(
             kira_runtime_abi::RUNTIME_ABI_MARKER,
-            "kira_rt_abi_version_6"
+            "kira_rt_abi_version_7"
         );
-        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 6);
+        assert_eq!(kira_runtime_abi::RUNTIME_ABI_VERSION, 7);
         // Referenced so the marker cannot be dead-code-eliminated out of an
         // rlib build, and so a rename breaks this test rather than the link.
-        kira_rt_abi_version_6();
+        kira_rt_abi_version_7();
+    }
+
+    /// The backend reads `shares` out of this object, so its shape is a
+    /// contract with code compiled separately from this crate. The `Box<[u8]>`
+    /// in front of it is a fat pointer — two words — which is what puts the
+    /// count at field index two.
+    #[test]
+    fn the_string_layout_is_pinned() {
+        assert_eq!(size_of::<Box<[u8]>>(), 2 * size_of::<usize>());
+        assert_eq!(size_of::<KiraString>(), 3 * size_of::<usize>());
+        assert_eq!(align_of::<KiraString>(), align_of::<usize>());
+        let owned = KiraString {
+            bytes: Box::new([]),
+            shares: 1,
+        };
+        let base = std::ptr::from_ref(&owned).cast::<u8>();
+        // SAFETY: both fields belong to `owned`, which outlives the reads.
+        unsafe {
+            assert_eq!(
+                std::ptr::from_ref(&owned.bytes)
+                    .cast::<u8>()
+                    .offset_from(base),
+                0
+            );
+            assert_eq!(
+                std::ptr::from_ref(&owned.shares)
+                    .cast::<u8>()
+                    .offset_from(base),
+                isize::try_from(kira_runtime_abi::STRING_SHARES_FIELD).expect("a small index")
+                    * size_of::<usize>() as isize
+            );
+        }
     }
 
     /// Builds a handle from a literal, as the backend's lowering would.
@@ -650,9 +718,27 @@ mod tests {
 
             let copy = kira_rt_str_clone(joined);
             assert_eq!(bytes_of(copy), bytes_of(joined));
-            assert_ne!(copy, joined, "a clone is an independent allocation");
+            // A copy is the same object, held twice: the bytes are never
+            // written, so nothing can tell the two apart.
+            assert_eq!(copy, joined, "a copy allocates nothing");
+            assert_eq!((*joined).shares, 2);
 
-            assert_eq!(kira_rt_str_eq(joined, copy), 1); // frees both
+            assert_eq!(kira_rt_str_eq(joined, copy), 1); // releases both
+        }
+    }
+
+    /// The bytes go with the last value holding them, never with the first —
+    /// which under Miri or ASan is the difference between a live read and a
+    /// use-after-free.
+    #[test]
+    fn a_shared_string_outlives_every_hold_but_the_last() {
+        // SAFETY: the handle is live and released once per hold.
+        unsafe {
+            let text = new("payload");
+            let copy = kira_rt_str_clone(text);
+            kira_rt_str_free(text);
+            assert_eq!(bytes_of(copy), b"payload", "the bytes survived one hold");
+            kira_rt_str_free(copy);
         }
     }
 
