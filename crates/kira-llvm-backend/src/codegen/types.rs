@@ -62,6 +62,13 @@ pub(crate) struct Types {
     /// whose layout test in that crate pins what this must agree with, and
     /// whose version is the one `RUNTIME_ABI_MARKER` names.
     pub(super) enum_box: LLVMTypeRef,
+    /// `KiraArray`: `{ usize len, usize cap, ptr items, usize shares }`.
+    ///
+    /// Read for the same reason [`Types::enum_box`] is: copying an array is a
+    /// share count away from free, and generated code does it often enough that
+    /// the call was the cost. Mirrors `kira_native_bridge::array::KiraArray`,
+    /// whose layout test pins what this must agree with.
+    pub(super) array_header: LLVMTypeRef,
 }
 
 impl Types {
@@ -86,6 +93,7 @@ impl Types {
                 ptr: LLVMPointerTypeInContext(context, 0),
                 bridge_value: bridge_value_type(context),
                 enum_box: enum_box_type(context, usize_ty),
+                array_header: array_header_type(context, usize_ty),
             }
         }
     }
@@ -112,7 +120,9 @@ pub(crate) struct Runtime {
     /// The address of an element to write, in a block the handle owns alone.
     pub(super) array_slot_mut: Callable,
     pub(super) array_push_slot: Callable,
-    pub(super) array_clone: Callable,
+    /// Releases the *last* hold on an array: the only release that frees its
+    /// elements, and the only one generated code still calls. A copy and every
+    /// earlier release are emitted inline; see `super::values`.
     pub(super) array_free: Callable,
     pub(super) enum_new: Callable,
     /// Boxes a moved struct payload with type-specific clone/free leaves.
@@ -236,6 +246,24 @@ fn enum_box_type(context: LLVMContextRef, usize_ty: LLVMTypeRef) -> LLVMTypeRef 
     }
 }
 
+/// The LLVM form of `kira_native_bridge::array::KiraArray`.
+///
+/// `{ usize, usize, ptr, usize }` — the share count last, where that crate's
+/// layout test puts it, so the three fields before it keep their offsets.
+fn array_header_type(context: LLVMContextRef, usize_ty: LLVMTypeRef) -> LLVMTypeRef {
+    // SAFETY: every type is created in this live context; `fields` outlives the
+    // struct-type call.
+    unsafe {
+        let mut fields = [
+            usize_ty,
+            usize_ty,
+            LLVMPointerTypeInContext(context, 0),
+            usize_ty,
+        ];
+        LLVMStructTypeInContext(context, fields.as_mut_ptr(), fields.len() as u32, 0)
+    }
+}
+
 /// The LLVM form of `kira_runtime_abi::BridgeValue`.
 ///
 /// `{ i8, [7 x i8], i64 }` — the same 16 bytes, with the reserved gap spelled
@@ -310,9 +338,6 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 types.ptr,
                 &mut [types.ptr, types.i64, types.ptr],
             ),
-            // Copying an array takes a share of its block, which needs neither
-            // the element size nor a leaf: nothing is walked until a write.
-            array_clone: declare(c"kira_rt_array_clone", types.ptr, &mut [types.ptr]),
             array_free: declare(
                 c"kira_rt_array_free",
                 types.void,

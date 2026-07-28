@@ -9,7 +9,7 @@
 //!
 //! - [`kira_foreign_adapter_abi_version_2`], the versioned marker an adapter
 //!   library exports and a loader checks by name — the foreign-seam mirror of
-//!   [`crate::runtime::kira_rt_abi_version_5`]. A stale sidecar does not define
+//!   [`crate::runtime::kira_rt_abi_version_6`]. A stale sidecar does not define
 //!   this version's marker, so loading it fails by name instead of running the
 //!   wrong ABI.
 //! - [`kira_rt_cstring_new`]/[`kira_rt_cstring_free`], which turn a Kira

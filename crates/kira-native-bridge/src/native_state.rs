@@ -165,8 +165,12 @@ pub unsafe extern "C" fn kira_rt_native_value_array_from(
     clone: Option<ElemClone>,
     encode: NativeStateEncodeElement,
 ) -> KNativeStateValue {
-    // SAFETY: the caller vouches the array and the callback match.
-    unsafe { make_array_unique(array, esize, clone) };
+    // The elements move out of the array below, which is a write: the values
+    // still holding this header would otherwise be left reading what was
+    // taken. The handle is this function's own, so its own slot is the holder.
+    let mut array = array;
+    // SAFETY: `array` is a live local slot and the callback matches.
+    unsafe { make_array_unique(&raw mut array, esize, clone) };
     // SAFETY: the caller vouches the array is live.
     let len = unsafe { kira_rt_array_len(array) };
     let count = usize::try_from(len).unwrap_or(0);
