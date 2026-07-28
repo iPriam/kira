@@ -609,6 +609,15 @@ mod tests {
                     .offset_from(base),
                 16
             );
+            // The backend GEPs this field rather than calling a helper for it,
+            // so where it sits is a contract with separately compiled code.
+            assert_eq!(
+                std::ptr::from_ref(&box_.shares)
+                    .cast::<u8>()
+                    .offset_from(base),
+                isize::try_from(kira_runtime_abi::ENUM_BOX_SHARES_FIELD).expect("a small index")
+                    * 8
+            );
         }
     }
 

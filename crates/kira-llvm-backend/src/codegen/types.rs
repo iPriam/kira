@@ -53,6 +53,15 @@ pub(crate) struct Types {
     /// Mirrors `kira_runtime_abi::BridgeValue` exactly; that crate's layout test
     /// is what pins the shape this must agree with.
     pub(super) bridge_value: LLVMTypeRef,
+    /// `KiraEnum`: `{ i64 tag, i64 payload_kind, i64 payload, usize shares }`.
+    ///
+    /// The one runtime box this module reaches into rather than calling a helper
+    /// for. Copying and releasing an enum is a share count away from free —
+    /// see [`super::values`] — and at four hundred thousand of each per frame,
+    /// the *call* was the cost. Mirrors `kira_native_bridge::enums::KiraEnum`,
+    /// whose layout test in that crate pins what this must agree with, and
+    /// whose version is the one `RUNTIME_ABI_MARKER` names.
+    pub(super) enum_box: LLVMTypeRef,
 }
 
 impl Types {
@@ -76,6 +85,7 @@ impl Types {
                 f64: LLVMDoubleTypeInContext(context),
                 ptr: LLVMPointerTypeInContext(context, 0),
                 bridge_value: bridge_value_type(context),
+                enum_box: enum_box_type(context, usize_ty),
             }
         }
     }
@@ -112,7 +122,9 @@ pub(crate) struct Runtime {
     pub(super) enum_payload: Callable,
     /// Reads an aggregate payload into caller-owned storage.
     pub(super) enum_payload_aggregate: Callable,
-    pub(super) enum_clone: Callable,
+    /// Releases the *last* hold on an enum box: the only release that touches
+    /// the payload, and the only one generated code still calls. A copy and
+    /// every earlier release are emitted inline; see `super::values`.
     pub(super) enum_free: Callable,
     /// Allocates the storage one exported class instance lives in when it
     /// crosses to a consumer as a handle.
@@ -207,6 +219,21 @@ pub(crate) struct Runtime {
     /// rather than searched: adding an operation adds a row to
     /// [`FileSystemOp::ALL`] and nothing here has to be remembered.
     pub(super) file_system: [Callable; FileSystemOp::ALL.len()],
+}
+
+/// The LLVM form of `kira_native_bridge::enums::KiraEnum`.
+///
+/// `{ i64, i64, i64, usize }` — the share count last, where that crate's layout
+/// test puts it, so the three fields before it keep the offsets they had when
+/// the box carried no count at all.
+fn enum_box_type(context: LLVMContextRef, usize_ty: LLVMTypeRef) -> LLVMTypeRef {
+    // SAFETY: every type is created in this live context; `fields` outlives the
+    // struct-type call.
+    unsafe {
+        let i64_ty = LLVMInt64TypeInContext(context);
+        let mut fields = [i64_ty, i64_ty, i64_ty, usize_ty];
+        LLVMStructTypeInContext(context, fields.as_mut_ptr(), fields.len() as u32, 0)
+    }
 }
 
 /// The LLVM form of `kira_runtime_abi::BridgeValue`.
@@ -315,7 +342,6 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 types.void,
                 &mut [types.ptr, types.ptr],
             ),
-            enum_clone: declare(c"kira_rt_enum_clone", types.ptr, &mut [types.ptr]),
             enum_free: declare(c"kira_rt_enum_free", types.void, &mut [types.ptr]),
             // The box helpers hold an exported class instance for as long as a
             // consumer holds its handle. Appended after the enum helpers, which
