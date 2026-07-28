@@ -68,10 +68,7 @@ impl Codegen<'_> {
             // module. Reading an array is most of what a frame does, and doing
             // it eagerly here was 78% of one.
             Type::Array(_) => Ok(self.call(self.runtime.array_clone, &mut [value], c"array.copy")),
-            // An enum box clones through one generic helper: the box carries a
-            // flag saying whether its payload is an owned string, so the backend
-            // needs no per-variant leaf.
-            Type::Enum(_) => Ok(self.call(self.runtime.enum_clone, &mut [value], c"enum.copy")),
+            Type::Enum(_) => self.copy_enum(value),
             // `owns_heap` is only true for the cases above.
             _ => Err(crate::LlvmError::Unsupported("a copy of an unowned value")),
         }
@@ -110,12 +107,163 @@ impl Codegen<'_> {
                 self.call(self.runtime.array_free, &mut [value, esize, free], c"");
                 Ok(())
             }
-            Type::Enum(_) => {
-                self.call(self.runtime.enum_free, &mut [value], c"");
-                Ok(())
-            }
+            Type::Enum(_) => self.drop_enum(value),
             _ => Err(crate::LlvmError::Unsupported("a drop of an unowned value")),
         }
+    }
+
+    /// Copies an enum: a share of the same box, emitted inline.
+    ///
+    /// The runtime helper is four instructions and generated code called it
+    /// four hundred thousand times a frame, so the *call* was the cost. There
+    /// is no slow path to fall back to — a copy is a count away from free —
+    /// which is why this one is emitted whole rather than as a fast path in
+    /// front of a call, and why the box's layout is a type this module knows
+    /// (`Types::enum_box`).
+    ///
+    /// Null and inline handles are neither boxes nor allocations, and a copy of
+    /// one is itself; see `kira_native_bridge::enums::is_inline`.
+    fn copy_enum(&mut self, value: LLVMValueRef) -> Result<LLVMValueRef, crate::LlvmError> {
+        let function = self.current_function();
+        let (bump, done) = (
+            self.append_block(function, c"enum.copy.bump"),
+            self.append_block(function, c"enum.copy.end"),
+        );
+        let boxed = self.enum_is_boxed(value);
+        // SAFETY: `boxed` is an `i1` and both blocks belong to this function.
+        unsafe { LLVMBuildCondBr(self.builder, boxed, bump, done) };
+
+        // SAFETY: `bump` is an empty block of the function being built.
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, bump) };
+        let shares = self.enum_shares_pointer(value);
+        // SAFETY: a boxed handle addresses a live `KiraEnum`, whose share count
+        // this raises by one. It cannot wrap: it rises by one per live value.
+        unsafe {
+            let count = LLVMBuildLoad2(
+                self.builder,
+                self.types.usize_ty,
+                shares,
+                c"enum.shares".as_ptr(),
+            );
+            let one = LLVMConstInt(self.types.usize_ty, 1, 0);
+            let raised = LLVMBuildAdd(self.builder, count, one, c"enum.shares.up".as_ptr());
+            LLVMBuildStore(self.builder, raised, shares);
+            LLVMBuildBr(self.builder, done);
+            LLVMPositionBuilderAtEnd(self.builder, done);
+        }
+        Ok(value)
+    }
+
+    /// Releases an enum: one share, emitted inline, with the last release —
+    /// the only one that touches the payload — left to the runtime.
+    fn drop_enum(&mut self, value: LLVMValueRef) -> Result<(), crate::LlvmError> {
+        let function = self.current_function();
+        let (held, last, lower, done) = (
+            self.append_block(function, c"enum.drop.held"),
+            self.append_block(function, c"enum.drop.last"),
+            self.append_block(function, c"enum.drop.lower"),
+            self.append_block(function, c"enum.drop.end"),
+        );
+        let boxed = self.enum_is_boxed(value);
+        // SAFETY: `boxed` is an `i1` and every block belongs to this function.
+        unsafe { LLVMBuildCondBr(self.builder, boxed, held, done) };
+
+        // SAFETY: `held` is an empty block of the function being built.
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, held) };
+        let shares = self.enum_shares_pointer(value);
+        // SAFETY: a boxed handle addresses a live `KiraEnum`.
+        unsafe {
+            let count = LLVMBuildLoad2(
+                self.builder,
+                self.types.usize_ty,
+                shares,
+                c"enum.shares".as_ptr(),
+            );
+            let one = LLVMConstInt(self.types.usize_ty, 1, 0);
+            let alone = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntULE,
+                count,
+                one,
+                c"enum.alone".as_ptr(),
+            );
+            LLVMBuildCondBr(self.builder, alone, last, lower);
+
+            // Somebody else still holds the box, so only this claim on it goes.
+            LLVMPositionBuilderAtEnd(self.builder, lower);
+            let lowered = LLVMBuildSub(self.builder, count, one, c"enum.shares.down".as_ptr());
+            LLVMBuildStore(self.builder, lowered, shares);
+            LLVMBuildBr(self.builder, done);
+
+            // The last release is where the payload goes, which is the
+            // runtime's job — it knows what the payload kind owns.
+            LLVMPositionBuilderAtEnd(self.builder, last);
+        }
+        self.call(self.runtime.enum_free, &mut [value], c"");
+        // SAFETY: `done` is a block of the function being built.
+        unsafe {
+            LLVMBuildBr(self.builder, done);
+            LLVMPositionBuilderAtEnd(self.builder, done);
+        }
+        Ok(())
+    }
+
+    /// Whether a handle names a real box: not null, and not a tag living in the
+    /// handle itself.
+    fn enum_is_boxed(&self, value: LLVMValueRef) -> LLVMValueRef {
+        // SAFETY: `value` is an enum handle (a `ptr`) and the builder is on a
+        // live block; the low bit is the inline marker
+        // `kira_native_bridge::enums::is_inline` reads.
+        unsafe {
+            let bits =
+                LLVMBuildPtrToInt(self.builder, value, self.types.i64, c"enum.bits".as_ptr());
+            let zero = LLVMConstInt(self.types.i64, 0, 0);
+            let one = LLVMConstInt(self.types.i64, 1, 0);
+            let marker = LLVMBuildAnd(self.builder, bits, one, c"enum.inline.bit".as_ptr());
+            let is_boxed_bit = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                marker,
+                zero,
+                c"enum.not.inline".as_ptr(),
+            );
+            let is_live = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntNE,
+                bits,
+                zero,
+                c"enum.not.null".as_ptr(),
+            );
+            LLVMBuildAnd(self.builder, is_boxed_bit, is_live, c"enum.boxed".as_ptr())
+        }
+    }
+
+    /// The address of a boxed enum's share count.
+    fn enum_shares_pointer(&self, value: LLVMValueRef) -> LLVMValueRef {
+        // SAFETY: the caller has established `value` addresses a live
+        // `KiraEnum`, whose fourth field is the share count.
+        unsafe {
+            LLVMBuildStructGEP2(
+                self.builder,
+                self.types.enum_box,
+                value,
+                kira_runtime_abi::ENUM_BOX_SHARES_FIELD,
+                c"enum.shares.ptr".as_ptr(),
+            )
+        }
+    }
+
+    /// The function currently being built.
+    fn current_function(&self) -> LLVMValueRef {
+        // SAFETY: a value is only ever copied or dropped inside a function
+        // body or a leaf, so the builder is positioned inside one.
+        unsafe { LLVMGetBasicBlockParent(LLVMGetInsertBlock(self.builder)) }
+    }
+
+    /// Appends a fresh block to `function`.
+    fn append_block(&self, function: LLVMValueRef, name: &std::ffi::CStr) -> LLVMBasicBlockRef {
+        // SAFETY: `function` is a live function in this module's context.
+        unsafe { LLVMAppendBasicBlockInContext(self.context, function, name.as_ptr()) }
     }
 
     /// The payload type of one enum variant, or an error when it has none.
