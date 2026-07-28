@@ -225,24 +225,15 @@ impl FunctionLowering<'_, '_> {
             }
             IrPlaceStep::Index(index) => {
                 let element = self.codegen.element_of(ty)?;
-                // `pointer` holds the array handle; load it, then ask the
-                // runtime for the element's bounds-checked address.
-                // SAFETY: `pointer` points at a slot holding an array handle
-                // (a `ptr`), and the builder is on a live block.
-                let handle = unsafe {
-                    LLVMBuildLoad2(
-                        self.codegen.builder,
-                        self.codegen.types.ptr,
-                        pointer,
-                        c"array".as_ptr(),
-                    )
-                };
                 // A place walk exists to write at the end of it, and every
                 // array it passes through is written *through* — so each one
-                // takes its item block back from whatever it was sharing it
-                // with. Doing this per step rather than only at the end is what
-                // makes `rows[i].cells[j] = v` land in this `rows` alone.
-                let slot = self.element_slot_mut(handle, *index, element)?;
+                // takes its elements back from whatever it was sharing them
+                // with. `pointer` is the slot holding the handle, which is what
+                // the runtime needs: a split replaces the handle, and the slot
+                // has to end up holding the fresh one. Doing this per step
+                // rather than only at the end is what makes `rows[i].cells[j] =
+                // v` land in this `rows` alone.
+                let slot = self.element_slot_mut(pointer, *index, element)?;
                 Ok((slot, element))
             }
         }
