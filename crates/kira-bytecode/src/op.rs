@@ -253,6 +253,13 @@ pub enum Instruction {
     /// reading one is otherwise a hand-written decode of sign, exponent, and
     /// mantissa.
     ConvertBits32ToFloat,
+    /// Pop a `Float`, narrow it to a 32-bit IEEE-754 float, push those bits as
+    /// a `U32`.
+    ///
+    /// The inverse of [`Instruction::ConvertBits32ToFloat`], and not the same
+    /// as [`Instruction::ConvertFloatToBits`] followed by a truncation: the
+    /// value rounds to nearest even at 32 bits before its pattern is taken.
+    ConvertFloatToBits32,
     /// Pop an `Int` index, push a copy of that element of the array in `slot`.
     ///
     /// The same answer as [`Instruction::LoadLocal`] followed by
@@ -658,6 +665,10 @@ mod opcode {
     // Reading one element of an array a local holds, without copying the
     // array. Appended after `CONVERT_BITS32_TO_FLOAT`; carries the `u32` slot.
     pub const ARRAY_GET_LOCAL: u8 = 0x5b;
+    // A `Float` narrowed to its 32-bit pattern — the other direction of
+    // `CONVERT_BITS32_TO_FLOAT`. Appended after `ARRAY_GET_LOCAL`; adding an
+    // opcode is not an ABI change.
+    pub const CONVERT_FLOAT_TO_BITS32: u8 = 0x5c;
 }
 
 #[cfg(test)]

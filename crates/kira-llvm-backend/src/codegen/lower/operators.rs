@@ -75,6 +75,14 @@ impl FunctionLowering<'_, '_> {
                 let single = LLVMBuildBitCast(builder, narrow, types.f32, c"conv.b2f32".as_ptr());
                 LLVMBuildFPExt(builder, single, types.f64, c"conv.f32f64".as_ptr())
             },
+            // SAFETY: as above, in the other direction. `fptrunc` rounds to
+            // nearest even — the same rounding the VM's `as f32` does — and the
+            // pattern is zero-extended, so the `U32` never comes back negative.
+            ConvertKind::FloatToBits32 => unsafe {
+                let single = LLVMBuildFPTrunc(builder, value, types.f32, c"conv.f64f32".as_ptr());
+                let bits = LLVMBuildBitCast(builder, single, types.i32, c"conv.f2b32".as_ptr());
+                LLVMBuildZExt(builder, bits, types.i64, c"conv.b32ext".as_ptr())
+            },
             // SAFETY: `value` is the `f64` the typed conversion fixes and the
             // builder is on a live block; every call below builds a pure value,
             // and the selected operand is never the poison `fptosi` for an input

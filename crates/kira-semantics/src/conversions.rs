@@ -138,6 +138,14 @@ impl Analyzer<'_> {
                 Type::Int(IntSpelling::U32),
                 Type::FLOAT,
             ),
+            // Writing that same binary data back out — a cooked mesh, a vertex
+            // buffer — needs the other direction, and it is not a round trip
+            // through `floatToBits`: the value narrows to 32 bits first.
+            "floatToBits32" => (
+                ConvertKind::FloatToBits32,
+                Type::FLOAT,
+                Type::Int(IntSpelling::U32),
+            ),
             _ => return None,
         };
         if ctx.resolve(name).is_some() {
