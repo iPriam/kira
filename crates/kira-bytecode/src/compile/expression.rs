@@ -176,6 +176,9 @@ impl FnCompiler<'_> {
                     ConvertKind::Bits32ToFloat => {
                         self.code.push(Instruction::ConvertBits32ToFloat);
                     }
+                    ConvertKind::FloatToBits32 => {
+                        self.code.push(Instruction::ConvertFloatToBits32);
+                    }
                 }
             }
             IrExpr::ArrayAppend { place, value } => {
