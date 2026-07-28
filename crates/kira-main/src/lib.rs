@@ -52,8 +52,10 @@
 //! non-Rust consumer actually exists. Shipping one now would freeze a shape
 //! before anything had pulled on it.
 //!
-//! The crate still builds as `staticlib`/`cdylib`/`rlib`, so that growth needs
-//! no packaging change — only new `extern "C"` entry points beside what is here.
+//! The packaging follows the same rule as the surface: `rlib` only, because
+//! Rust is the only consumer named. Carrying `staticlib` and `cdylib` for the
+//! facade that does not exist yet was not free — see the note in `Cargo.toml`
+//! for what it cost — and adding them back is one line when it does.
 //!
 //! # Where the guards are
 //!
