@@ -415,8 +415,8 @@ fn two_native_libraries_really_do_collide_on_the_runtime() {
     // The search is confined to the archive's symbol index, because a plain
     // scan of the whole file cannot tell a definition from a reference to one.
     // Both are present here — `nm` on a freshly built archive shows
-    // `T _kira_rt_abi_version_4` in the runtime member and
-    // `U _kira_rt_abi_version_4` in the member that calls it — so a scan of the
+    // `T _kira_rt_abi_version_5` in the runtime member and
+    // `U _kira_rt_abi_version_5` in the member that calls it — so a scan of the
     // bytes would stay green on exactly the regression this test exists to
     // catch: `link.rs` no longer baking the runtime archive in leaves the
     // undefined reference, and its name, behind. The index lists defined
