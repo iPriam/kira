@@ -21,6 +21,7 @@ pub mod foreign;
 pub mod hybrid;
 pub mod live;
 pub mod native_state;
+mod pool;
 pub mod raw_memory;
 pub mod runtime;
 pub mod state_box;
