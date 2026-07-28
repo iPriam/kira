@@ -73,6 +73,18 @@ pub enum BinstallError {
     Install(#[from] InstallError),
 }
 
+/// The packages `binstall` builds before it stages a toolchain.
+///
+/// `kira-native-bridge` is named even though `kira-cli` depends on it, because
+/// that dependency builds its **rlib** and a toolchain installs its
+/// **staticlib** — cargo builds a crate-type nobody asked for only when the
+/// crate itself is a target. Leaving it out installs a fresh compiler beside
+/// whatever archive an earlier build happened to leave in `target/debug`, and
+/// the two then disagree about the runtime ABI: the compiler emits a reference
+/// to its version's marker, the stale archive defines an older one, and every
+/// program the developer builds afterwards fails to link by name.
+const BUILD_PACKAGES: [&str; 3] = ["kira-cli", "kira-lsp", "kira-native-bridge"];
+
 /// Builds the enclosing checkout and installs it as the selected dev toolchain.
 ///
 /// `start` is where the checkout search begins — the working directory, for the
@@ -92,9 +104,11 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
         return Err(BinstallError::LlvmMissing);
     }
     let mut build = Command::new("cargo");
-    build
-        .args(["build", "-p", "kira-cli", "-p", "kira-lsp"])
-        .current_dir(&checkout);
+    build.arg("build");
+    for package in BUILD_PACKAGES {
+        build.args(["-p", package]);
+    }
+    build.current_dir(&checkout);
     let built = build.status().map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => BinstallError::CargoUnavailable,
         _ => BinstallError::BuildFailed {
@@ -105,10 +119,8 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
         return Err(BinstallError::BuildFailed { checkout });
     }
 
-    // The Web runtime archive, cross-built for emscripten. The host archive
-    // needs no separate build — cargo wrote it beside `kirac` because kira-cli
-    // depends on the bridge crate — but nothing builds the wasm one unless
-    // asked.
+    // The same archive again, cross-built for emscripten, since a Web build
+    // links against a bridge compiled for wasm32 rather than the host's.
     let cross = Command::new("cargo")
         .args([
             "build",
@@ -270,4 +282,24 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), InstallError> {
 /// `create_dir_all` with the crate's error shape.
 fn create_dir(path: &Path) -> Result<(), InstallError> {
     std::fs::create_dir_all(path).map_err(|error| InstallError::io("create", path, error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The compiler and the archive it links have to be built by one command,
+    /// or a developer gets a toolchain whose two halves disagree about the
+    /// runtime ABI. This has happened: `binstall` built only `kira-cli` and
+    /// `kira-lsp`, staged the archive an older build had left behind, and
+    /// every `kira run --backend llvm` afterwards failed on the marker.
+    #[test]
+    fn the_runtime_archives_crate_is_built_rather_than_assumed() {
+        assert!(
+            BUILD_PACKAGES.contains(&"kira-native-bridge"),
+            "the staticlib is staged from `target/debug`, so it has to be built there"
+        );
+        assert!(BUILD_PACKAGES.contains(&"kira-cli"));
+        assert!(BUILD_PACKAGES.contains(&"kira-lsp"));
+    }
 }
