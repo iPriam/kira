@@ -6,46 +6,52 @@
 //! A Kira array crosses the boundary as a [`KArray`]: an *opaque owned handle*,
 //! one pointer, never an aggregate — the same discipline [`crate::runtime`]'s
 //! `KStr` follows, and for the same reason. The header behind it is
-//! `#[repr(C)]` because the backend and this crate are compiled separately and
-//! have to agree on it.
+//! `#[repr(C)]` because the backend reads two of its fields directly, so the
+//! two are compiled separately against one layout.
 //!
 //! ```text
 //!   len     how many elements are live
 //!   cap     how many the item block has room for
 //!   items   the element storage
+//!   shares  how many values hold this header
 //! ```
-//!
-//! The header is what a value points at, and its address never changes.
-//! `xs.append(v)` has to be visible through every path that reaches `xs` — a
-//! local, a struct field, an element of an outer array — and all of them hold
-//! this address. Growth moves the *items*, never the header.
 //!
 //! # Copy on write
 //!
 //! Value semantics say a copy is independent; they do not say when the copying
-//! happens. Every handle owns a header of its own, and the *item block* behind
-//! it is shared until somebody writes: [`kira_rt_array_clone`] takes a share of
-//! the block, and the mutating entry points ([`kira_rt_array_slot_mut`],
-//! [`kira_rt_array_push_slot`]) make the block this handle's own first.
+//! happens. [`kira_rt_array_clone`] hands back the same header with one more
+//! share, so **a copy allocates nothing at all**, and the first write through a
+//! shared header is what builds that writer a header and a block of its own.
 //!
 //! ```text
-//!   handle A ──▶ { len cap items } ─┐
-//!                                   ├─▶ [ shares | e0 e1 e2 … ]
-//!   handle B ──▶ { len cap items } ─┘
+//!   xs ─┐
+//!       ├─▶ { len cap items shares:2 } ──▶ [ e0 e1 e2 … ]
+//!   ys ─┘
 //! ```
 //!
 //! Reading an array used to cost the whole array — every element, and every
 //! string, array and enum inside every element, cloned and then dropped again.
 //! A UI frame is mostly such reads, and they were 78% of one.
 //!
-//! Sharing the block rather than the header is what keeps the paragraph above
-//! true: a write makes the block unique by moving `items`, which is a field of
-//! the writer's *own* header, so no other holder of a handle has to be found
-//! and updated. It also gives each handle its own `len`, so an append after a
-//! share lengthens one array and not the other.
+//! # A write is given the slot, not the handle
 //!
-//! The count is a plain `usize` in front of the elements, not an atomic: the
-//! runtime is single-threaded, as its string and enum heaps already assume.
+//! Making a header unique replaces it, so a write has to reach whatever *holds*
+//! the handle rather than the handle itself: [`kira_rt_array_slot_mut`] and
+//! [`kira_rt_array_push_slot`] take `*mut KArray` — the local, the field, or the
+//! outer array's element the handle lives in — and store the fresh header back
+//! into it.
+//!
+//! That costs the caller nothing, because every write already starts from a
+//! place: the backend's place walk loads the handle *out of* that slot, and now
+//! passes the slot instead. It is also what keeps `xs.append(v)` visible through
+//! a `borrow mut` parameter, which is a pointer to the caller's slot — the
+//! callee's append replaces the header the caller can see.
+//!
+//! A block belongs to exactly one header, since the write that splits a header
+//! copies the block with it, so nothing but the header is ever counted.
+//!
+//! The count is a plain `usize`, not an atomic: the runtime is single-threaded,
+//! as its string and enum storage already assume.
 //!
 //! # Why the element type is a size and a callback, not a type
 //!
@@ -59,7 +65,7 @@
 //! - **how to clone and free one**, which arrives as a function pointer the
 //!   backend emits — a two-instruction leaf for a `String`, a walk for a
 //!   struct. A null callback means the element owns nothing, and then the flat
-//!   `memcpy` a clone starts with is already the whole job.
+//!   `memcpy` a copy starts with is already the whole job.
 //!
 //! That split is what keeps the *loop* in Rust, where it is ordinary code, and
 //! leaves LLVM emitting only leaves.
@@ -68,10 +74,9 @@
 //!
 //! Affine, mirroring the VM's heap: reading an array copies it
 //! ([`kira_rt_array_clone`]), and a local leaving scope or being overwritten
-//! frees it ([`kira_rt_array_free`]). A well-formed program frees every
-//! allocation exactly once — the same guarantee the VM proves with its heap
-//! accounting. A shared block is freed by whichever handle gives up the last
-//! share, so the elements it owns are still released exactly once.
+//! frees it ([`kira_rt_array_free`]). A well-formed program releases every hold
+//! exactly once — the same guarantee the VM proves with its heap accounting —
+//! and the elements go with the last of them.
 //!
 //! Every symbol is `extern "C"` with a `kira_rt_` prefix and a fixed signature.
 //! These names are a wire contract with the backend's lowering and are
@@ -82,37 +87,15 @@ mod block;
 use std::alloc::Layout;
 
 use crate::pool::SharedPool;
-use block::{alloc_items, drop_share, free_items, share_count, take_share};
+use block::{alloc_items, free_items};
 
 /// The free list array headers are handed out from.
 ///
-/// A header is allocated per array *copy*, which after the sharing above is the
-/// only allocation a copy makes at all — and the most frequent one a program
-/// makes. See [`crate::pool`], which also states what a `static` free list
-/// assumes and why the share count above assumes it already.
+/// One header per array a program *builds*, and one more each time a write
+/// splits a shared one — a copy takes none at all. See [`crate::pool`], which
+/// also states what a `static` free list assumes and why the share count below
+/// assumes it already.
 static HEADERS: SharedPool = SharedPool::new(Layout::new::<KiraArray>());
-
-/// Takes a header from the free list and fills it in.
-fn new_header(len: usize, cap: usize, items: *mut u8) -> KArray {
-    let header = HEADERS.alloc().cast::<KiraArray>();
-    // SAFETY: the pool hands back a block of exactly this layout, and every
-    // field is written before anything reads one.
-    unsafe {
-        header.write(KiraArray { len, cap, items });
-    }
-    header
-}
-
-/// Returns a header to the free list.
-///
-/// # Safety
-/// `header` must be a live header from [`new_header`], not returned already,
-/// and whatever it owned must have been released.
-unsafe fn free_header(header: KArray) {
-    // SAFETY: the caller vouches the header is live and finished with; a header
-    // owns nothing itself, so there is nothing to drop before it goes.
-    unsafe { HEADERS.free(header.cast::<u8>()) };
-}
 
 /// A Kira array at the native ABI: an opaque owned handle.
 pub type KArray = *mut KiraArray;
@@ -128,9 +111,11 @@ pub type ElemFree = unsafe extern "C" fn(at: *mut u8);
 
 /// The heap object behind a [`KArray`].
 ///
-/// `#[repr(C)]` because the backend GEPs into it: the two are compiled
-/// separately, so the layout is a contract rather than an implementation
-/// detail.
+/// `#[repr(C)]` because the backend reads `shares` directly — copying and
+/// releasing an array are a count away from free, and the *call* was the cost —
+/// so this layout is a contract with separately compiled code rather than an
+/// implementation detail. `the_header_layout_is_pinned` is what holds it, and
+/// [`kira_runtime_abi::ARRAY_HEADER_SHARES_FIELD`] is the index the backend uses.
 #[repr(C)]
 pub struct KiraArray {
     /// How many elements are live.
@@ -139,40 +124,73 @@ pub struct KiraArray {
     pub cap: usize,
     /// The element storage; null when `cap` is zero.
     pub items: *mut u8,
+    /// How many values hold this header.
+    ///
+    /// One when it is built, one more per copy, one fewer per release, and the
+    /// header, its block and everything the elements own go at zero.
+    shares: usize,
 }
 
-/// Makes a handle's item block its own, so a write through it is seen by
-/// nothing else.
+/// Takes a header from the free list and fills it in.
+fn new_header(len: usize, cap: usize, items: *mut u8) -> KArray {
+    let header = HEADERS.alloc().cast::<KiraArray>();
+    // SAFETY: the pool hands back a block of exactly this layout, and every
+    // field is written before anything reads one.
+    unsafe {
+        header.write(KiraArray {
+            len,
+            cap,
+            items,
+            shares: 1,
+        });
+    }
+    header
+}
+
+/// Gives the handle in `holder` a header and a block of its own.
 ///
-/// One share is the common case and costs a load and a compare. Otherwise the
-/// block is duplicated — flat first, then `element` over each live element,
+/// A sole holder is the common case and costs a load and a compare. Otherwise
+/// the elements are duplicated — flat first, then `element` over each live one,
 /// which is exactly the deep copy [`kira_rt_array_clone`] used to do eagerly —
-/// and the original block loses this handle's share.
+/// into a fresh header, which is stored back into `holder`. The header left
+/// behind loses this holder's share.
+///
+/// A slot that holds no array at all gets an empty one, so an append into a
+/// field nobody has built yet lands somewhere rather than through a null.
 ///
 /// # Safety
-/// `header` must be a live array header; `esize` must be the element size it
-/// was built with; and `element`, when given, must clone exactly one element of
-/// that size.
-unsafe fn make_unique(header: &mut KiraArray, esize: usize, element: Option<ElemClone>) {
-    let shared = header.items;
-    // SAFETY: `shared` belongs to a live header.
-    if unsafe { share_count(shared) } == 1 {
+/// `holder` must address a live slot holding a null or live handle; `esize`
+/// must be the element size that array was built with; and `element`, when
+/// given, must clone exactly one element of that size.
+unsafe fn make_unique(holder: *mut KArray, esize: usize, element: Option<ElemClone>) {
+    // SAFETY: the caller guarantees `holder` addresses a live slot.
+    let shared = unsafe { *holder };
+    if shared.is_null() {
+        // SAFETY: as above; the slot takes ownership of the fresh header.
+        unsafe { *holder = new_header(0, 0, std::ptr::null_mut()) };
         return;
     }
-    let fresh = alloc_items(header.cap, esize);
-    // SAFETY: a block with more than one share is non-null and holds at least
-    // `len * esize` bytes, and `fresh` is a new allocation of the same capacity
-    // that cannot overlap it.
+    // SAFETY: a non-null handle is a live header.
+    let source = unsafe { &mut *shared };
+    if source.shares == 1 {
+        return;
+    }
+    let items = alloc_items(source.cap, esize);
+    // SAFETY: both blocks hold at least `len * esize` bytes and cannot overlap —
+    // `items` is a new allocation — and the callback is the caller's promise to
+    // handle one element of `esize`.
     unsafe {
-        std::ptr::copy_nonoverlapping(shared, fresh, header.len * esize);
+        std::ptr::copy_nonoverlapping(source.items, items, source.len * esize);
         if let Some(clone) = element {
-            for at in 0..header.len {
-                clone(shared.add(at * esize), fresh.add(at * esize));
+            for at in 0..source.len {
+                clone(source.items.add(at * esize), items.add(at * esize));
             }
         }
-        drop_share(shared);
     }
-    header.items = fresh;
+    source.shares -= 1;
+    // SAFETY: the caller guarantees `holder` addresses a live slot, which now
+    // holds the only handle to the fresh header.
+    unsafe { *holder = new_header(source.len, source.cap, items) };
 }
 
 /// Allocates an array of `count` elements, with `len == cap == count`.
@@ -187,7 +205,7 @@ pub extern "C" fn kira_rt_array_new(count: usize, esize: usize) -> KArray {
 /// The number of elements in an array.
 ///
 /// # Safety
-/// `array` must be a live handle from this runtime.
+/// `array` must be null or a live handle from this runtime.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_array_len(array: KArray) -> i64 {
     if array.is_null() {
@@ -202,23 +220,23 @@ pub unsafe extern "C" fn kira_rt_array_len(array: KArray) -> i64 {
     i64::try_from(len).unwrap_or(i64::MAX)
 }
 
-/// Makes an array's item block its own, so its elements can be moved out of it.
+/// Gives a handle a header of its own, so its elements can be moved out of it.
 ///
 /// The runtime's own way in to what [`kira_rt_array_slot_mut`] does before it
-/// hands out a writable element. Taking an element *away* from a shared block
-/// is a write like any other: without this, the handle left holding the block
-/// would read storage that had been moved out from under it.
+/// hands out a writable element. Taking elements *away* is a write like any
+/// other: without this, the values still holding the header would read storage
+/// that had been moved out from under them.
 ///
 /// # Safety
-/// `array` must be a live handle from this runtime; `esize` must be the element
-/// size it was built with; and `element`, when given, must clone exactly one
-/// element of that size.
-pub(crate) unsafe fn make_array_unique(array: KArray, esize: usize, element: Option<ElemClone>) {
-    if array.is_null() {
-        return;
-    }
+/// As [`make_unique`]: `holder` must address a live slot, `esize` must match the
+/// array, and `element` must clone one element of that size.
+pub(crate) unsafe fn make_array_unique(
+    holder: *mut KArray,
+    esize: usize,
+    element: Option<ElemClone>,
+) {
     // SAFETY: the caller's promises are exactly `make_unique`'s.
-    unsafe { make_unique(&mut *array, esize, element) };
+    unsafe { make_unique(holder, esize, element) };
 }
 
 /// The address of element `index` **to read**, bounds-checked.
@@ -228,7 +246,7 @@ pub(crate) unsafe fn make_array_unique(array: KArray, esize: usize, element: Opt
 /// past the end are **different traps**, because they are different mistakes —
 /// the VM draws the same line.
 ///
-/// The block may be shared, so nothing may be written through this address; a
+/// The header may be shared, so nothing may be written through this address; a
 /// write goes through [`kira_rt_array_slot_mut`], which is what makes the
 /// sharing invisible.
 ///
@@ -253,20 +271,21 @@ pub unsafe extern "C" fn kira_rt_array_slot(array: KArray, index: i64, esize: us
     unsafe { header.items.add(at * esize) }
 }
 
-/// The address of element `index` **to write**, bounds-checked, in a block this
-/// handle owns alone.
+/// The address of element `index` **to write**, bounds-checked, in an array the
+/// slot holds alone.
 ///
-/// The bounds check comes first, so a trapping index never allocates: the
-/// program is ending either way, and a copy made on the way out would be one
-/// the trap message has to be read past.
+/// Takes the slot rather than the handle because making a header unique
+/// replaces it; see this module's header. The bounds check comes first, so a
+/// trapping index never copies: the program is ending either way, and a copy
+/// made on the way out would be one the trap message has to be read past.
 ///
 /// # Safety
-/// `array` must be a live handle from this runtime; `esize` must be the element
-/// size it was built with; and `element`, when given, must clone exactly one
-/// element of that size.
+/// `holder` must address a live slot holding a live handle from this runtime;
+/// `esize` must be the element size it was built with; and `element`, when
+/// given, must clone exactly one element of that size.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_array_slot_mut(
-    array: KArray,
+    holder: *mut KArray,
     index: i64,
     esize: usize,
     element: Option<ElemClone>,
@@ -274,53 +293,55 @@ pub unsafe extern "C" fn kira_rt_array_slot_mut(
     if index < 0 {
         kira_rt_trap_index_negative();
     }
+    // SAFETY: the caller guarantees `holder` addresses a live slot.
+    let array = unsafe { *holder };
     if array.is_null() {
         kira_rt_trap_index_out_of_bounds();
     }
-    // SAFETY: the caller guarantees a live handle.
-    let header = unsafe { &mut *array };
     let at = index as usize;
-    if at >= header.len {
+    // SAFETY: a non-null handle is a live header.
+    if at >= unsafe { (*array).len } {
         kira_rt_trap_index_out_of_bounds();
     }
-    // SAFETY: the caller's promises are exactly this function's.
+    // SAFETY: the caller's promises are exactly `make_unique`'s, and the slot
+    // holds the array this element belongs to once it returns.
     unsafe {
-        make_unique(header, esize, element);
+        make_unique(holder, esize, element);
         // `at < len <= cap`, so the offset lands inside the item block.
-        header.items.add(at * esize)
+        (**holder).items.add(at * esize)
     }
 }
 
-/// Makes room for one more element in a block this handle owns alone, and
+/// Makes room for one more element in an array the slot holds alone, and
 /// returns where the element goes.
 ///
 /// Capacity doubles (from one, when there is none), so a run of appends copies
 /// O(n) elements in total rather than O(n²).
 ///
 /// # Safety
-/// `array` must be a live handle from this runtime; `esize` must be the element
-/// size it was built with; and `element`, when given, must clone exactly one
-/// element of that size.
+/// `holder` must address a live slot holding a null or live handle; `esize`
+/// must be the element size it was built with; and `element`, when given, must
+/// clone exactly one element of that size.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_array_push_slot(
-    array: KArray,
+    holder: *mut KArray,
     esize: usize,
     element: Option<ElemClone>,
 ) -> *mut u8 {
-    // SAFETY: the caller guarantees a live handle and a matching callback.
-    let header = unsafe { &mut *array };
-    // Appending is a write, so the block becomes this handle's before anything
-    // lands in it — growth included, which would otherwise abandon the shared
-    // block while another handle still counted on this one holding a share.
-    // SAFETY: as above.
-    unsafe { make_unique(header, esize, element) };
+    // Appending is a write, so the array becomes this slot's own before
+    // anything lands in it — growth included, which would otherwise abandon a
+    // block the values still holding the header count on.
+    // SAFETY: the caller's promises are exactly `make_unique`'s.
+    unsafe { make_unique(holder, esize, element) };
+    // SAFETY: `make_unique` leaves the slot holding a live header.
+    let header = unsafe { &mut **holder };
     if header.len == header.cap {
         let grown = if header.cap == 0 { 1 } else { header.cap * 2 };
         let fresh = alloc_items(grown, esize);
         if !header.items.is_null() {
             // SAFETY: both blocks hold at least `len * esize` bytes and cannot
             // overlap — `fresh` is a new allocation — and the old block is this
-            // handle's alone, so nothing else is reading it.
+            // header's alone, so nothing else is reading it.
             unsafe {
                 std::ptr::copy_nonoverlapping(header.items, fresh, header.len * esize);
                 free_items(header.items, header.cap, esize);
@@ -335,41 +356,40 @@ pub unsafe extern "C" fn kira_rt_array_push_slot(
     unsafe { header.items.add(at * esize) }
 }
 
-/// Produces an independent copy of an array: a fresh header taking a share of
-/// the same item block.
+/// Produces a copy of an array: the same header, held once more.
 ///
 /// Independent is a promise about what a reader can observe, not about where
-/// the bytes live. Nothing can be written through the copy without
-/// [`kira_rt_array_slot_mut`] or [`kira_rt_array_push_slot`] first making the
-/// block that handle's own, so the two arrays are indistinguishable from two
-/// deep copies — at the cost of one 24-byte header rather than the whole array
-/// and everything its elements own.
+/// the bytes live. Nothing can be written through either array without
+/// [`kira_rt_array_slot_mut`] or [`kira_rt_array_push_slot`] first giving that
+/// one a header of its own, so the two are indistinguishable from two deep
+/// copies — and a copy allocates nothing.
+///
+/// The backend emits this inline and does not call it; it stays exported
+/// because the name is part of the runtime's wire contract.
 ///
 /// # Safety
 /// `array` must be null or a live handle from this runtime.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_array_clone(array: KArray) -> KArray {
     if array.is_null() {
-        return kira_rt_array_new(0, 0);
+        return array;
     }
-    // SAFETY: the caller guarantees a live handle.
-    let source = unsafe { &*array };
-    // SAFETY: a live header's item pointer is null or names a live block, and
-    // this new handle joins its count.
-    unsafe { take_share(source.items) };
-    new_header(source.len, source.cap, source.items)
+    // SAFETY: a non-null handle is a live header. The count cannot wrap: it
+    // rises by one per live value holding it.
+    unsafe { (*array).shares += 1 };
+    array
 }
 
-/// Frees an array: always its header, and the item block and whatever its
-/// elements own once no handle is left holding it.
+/// Releases one hold on an array, freeing the header, its block and whatever
+/// its elements own once no value holds it.
 ///
 /// `element` is null when the elements own nothing, and then only the block and
 /// the header go.
 ///
 /// # Safety
-/// `array` must be null or a live handle from this runtime, not already freed;
-/// `esize` must be the element size it was built with; and `element`, when
-/// given, must free exactly one element of that size.
+/// `array` must be null or a live handle from this runtime, released once per
+/// copy of it that was made; `esize` must be the element size it was built
+/// with; and `element`, when given, must free exactly one element of that size.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_rt_array_free(
     array: KArray,
@@ -379,21 +399,18 @@ pub unsafe extern "C" fn kira_rt_array_free(
     if array.is_null() {
         return;
     }
-    // SAFETY: the caller guarantees a live handle it is giving up. The header
-    // goes back to the pool either way; what it points at may not.
-    let (items, len, cap) = unsafe { ((*array).items, (*array).len, (*array).cap) };
-    // SAFETY: the caller gave up this handle and nothing reads it again.
-    unsafe { free_header(array) };
-    if items.is_null() {
+    // SAFETY: a non-null handle is a live header.
+    let header = unsafe { &mut *array };
+    if header.shares > 1 {
+        // Another value still reads these elements, so nothing they own is
+        // released here — only this hold on them.
+        header.shares -= 1;
         return;
     }
-    // SAFETY: a non-null item pointer names a live block.
-    let count = unsafe { share_count(items) };
-    if count > 1 {
-        // Another handle still reads these elements, so nothing they own is
-        // released here — only this handle's claim on them.
-        // SAFETY: as above, and the block is shared.
-        unsafe { drop_share(items) };
+    let (items, len, cap) = (header.items, header.len, header.cap);
+    // SAFETY: this was the last hold, so nothing reads the header again.
+    unsafe { HEADERS.free(array.cast::<u8>()) };
+    if items.is_null() {
         return;
     }
     if let Some(free) = element {
@@ -402,7 +419,7 @@ pub unsafe extern "C" fn kira_rt_array_free(
             unsafe { free(items.add(at * esize)) };
         }
     }
-    // SAFETY: the last share was this one, so the block is unheld.
+    // SAFETY: the block belonged to this header alone.
     unsafe { free_items(items, cap, esize) };
 }
 
@@ -460,75 +477,77 @@ mod tests {
 
     #[test]
     fn appending_grows_and_keeps_what_was_there() {
-        let array = kira_rt_array_new(0, ESIZE);
-        // SAFETY: a handle this test just built, with a matching element size.
+        let mut slot = kira_rt_array_new(0, ESIZE);
+        // SAFETY: a slot holding a handle this test just built.
         unsafe {
             for value in 0..10i64 {
-                let slot = kira_rt_array_push_slot(array, ESIZE, None);
-                *slot.cast::<i64>() = value;
+                let at = kira_rt_array_push_slot(&raw mut slot, ESIZE, None);
+                *at.cast::<i64>() = value;
             }
-            assert_eq!(kira_rt_array_len(array), 10);
+            assert_eq!(kira_rt_array_len(slot), 10);
             for value in 0..10i64 {
-                assert_eq!(read(array, value as usize), value, "growth kept element");
+                assert_eq!(read(slot, value as usize), value, "growth kept element");
             }
             // Doubling from one: 1, 2, 4, 8, 16 — never exactly the length.
-            assert_eq!((*array).cap, 16);
-            kira_rt_array_free(array, ESIZE, None);
+            assert_eq!((*slot).cap, 16);
+            kira_rt_array_free(slot, ESIZE, None);
         }
     }
 
+    /// Growth moves the *items*, and the header a sole holder appends through
+    /// stays where it was — which is what a `borrow mut` parameter, a pointer
+    /// to the caller's slot, depends on.
     #[test]
     fn the_header_address_survives_growth() {
-        let array = kira_rt_array_new(0, ESIZE);
-        // SAFETY: a handle this test just built.
+        let mut slot = kira_rt_array_new(0, ESIZE);
+        // SAFETY: a slot holding a handle this test just built.
         unsafe {
-            let before = array;
+            let before = slot;
             for value in 0..64i64 {
-                *kira_rt_array_push_slot(array, ESIZE, None).cast::<i64>() = value;
+                *kira_rt_array_push_slot(&raw mut slot, ESIZE, None).cast::<i64>() = value;
             }
-            // The whole design: a holder of the handle still sees the growth.
-            assert_eq!(before, array);
-            assert_eq!(read(array, 63), 63);
-            kira_rt_array_free(array, ESIZE, None);
+            assert_eq!(before, slot, "nobody else held it, so nothing split");
+            assert_eq!(read(slot, 63), 63);
+            kira_rt_array_free(slot, ESIZE, None);
         }
     }
 
     #[test]
-    fn a_copy_shares_the_block_until_one_of_them_is_written() {
+    fn a_copy_shares_the_header_until_one_of_them_is_written() {
         let array = kira_rt_array_new(2, ESIZE);
         // SAFETY: a handle this test just built.
         unsafe {
             *(*array).items.cast::<i64>() = 1;
             *(*array).items.add(ESIZE).cast::<i64>() = 2;
 
-            let copy = kira_rt_array_clone(array);
-            assert_eq!((*array).items, (*copy).items, "reading copies nothing");
-            assert_eq!(share_count((*array).items), 2);
+            let mut copy = kira_rt_array_clone(array);
+            assert_eq!(array, copy, "reading allocates nothing at all");
+            assert_eq!((*array).shares, 2);
 
-            // The write is what buys the copy its own block, and the original
-            // is what it was before — which is the whole of value semantics.
-            *kira_rt_array_slot_mut(copy, 0, ESIZE, None).cast::<i64>() = 99;
-            assert_ne!((*array).items, (*copy).items, "the block is its own now");
-            assert_eq!(share_count((*array).items), 1, "the share came back");
+            // The write is what buys the copy an array of its own, and the
+            // original is what it was — which is the whole of value semantics.
+            *kira_rt_array_slot_mut(&raw mut copy, 0, ESIZE, None).cast::<i64>() = 99;
+            assert_ne!(array, copy, "the slot holds its own header now");
+            assert_eq!((*array).shares, 1, "the share came back");
             assert_eq!(read(array, 0), 1, "the original is untouched");
             assert_eq!(read(copy, 0), 99);
-            assert_eq!(read(copy, 1), 2, "the rest of the block came along");
+            assert_eq!(read(copy, 1), 2, "the rest of the elements came along");
 
             kira_rt_array_free(array, ESIZE, None);
             kira_rt_array_free(copy, ESIZE, None);
         }
     }
 
-    /// A read through the *original* is the mirror case: the copy is the one
-    /// left holding the block, so the write has to reach the copy's own.
+    /// The mirror case: the copy is the one left holding the header, so the
+    /// write through the original has to reach the original's own.
     #[test]
     fn writing_the_original_leaves_a_copy_alone() {
-        let array = kira_rt_array_new(1, ESIZE);
+        let mut array = kira_rt_array_new(1, ESIZE);
         // SAFETY: a handle this test just built.
         unsafe {
             *(*array).items.cast::<i64>() = 7;
             let copy = kira_rt_array_clone(array);
-            *kira_rt_array_slot_mut(array, 0, ESIZE, None).cast::<i64>() = 8;
+            *kira_rt_array_slot_mut(&raw mut array, 0, ESIZE, None).cast::<i64>() = 8;
             assert_eq!(read(array, 0), 8);
             assert_eq!(read(copy, 0), 7);
             kira_rt_array_free(array, ESIZE, None);
@@ -537,23 +556,37 @@ mod tests {
     }
 
     /// Appending is a write like any other, and it is the one that would
-    /// otherwise abandon a block another handle still counts on.
+    /// otherwise lengthen an array somebody else is reading.
     #[test]
     fn appending_to_a_copy_leaves_the_original_at_its_length() {
         let array = kira_rt_array_new(2, ESIZE);
         // SAFETY: a handle this test just built.
         unsafe {
-            let copy = kira_rt_array_clone(array);
-            *kira_rt_array_push_slot(copy, ESIZE, None).cast::<i64>() = 5;
+            let mut copy = kira_rt_array_clone(array);
+            *kira_rt_array_push_slot(&raw mut copy, ESIZE, None).cast::<i64>() = 5;
             assert_eq!(kira_rt_array_len(copy), 3);
             assert_eq!(
                 kira_rt_array_len(array),
                 2,
                 "the original is its own length"
             );
-            assert_eq!(share_count((*array).items), 1);
+            assert_eq!((*array).shares, 1);
             kira_rt_array_free(array, ESIZE, None);
             kira_rt_array_free(copy, ESIZE, None);
+        }
+    }
+
+    /// A slot that never held an array is a slot an append can still reach: a
+    /// zeroed struct's array field is the null handle until something writes.
+    #[test]
+    fn appending_into_an_empty_slot_builds_the_array() {
+        let mut slot: KArray = std::ptr::null_mut();
+        // SAFETY: a null handle is explicitly allowed here.
+        unsafe {
+            *kira_rt_array_push_slot(&raw mut slot, ESIZE, None).cast::<i64>() = 4;
+            assert_eq!(kira_rt_array_len(slot), 1);
+            assert_eq!(read(slot, 0), 4);
+            kira_rt_array_free(slot, ESIZE, None);
         }
     }
 
@@ -573,7 +606,7 @@ mod tests {
     /// in for the leaf the backend emits for a `String` element: without it the
     /// two arrays would end up holding one handle between them.
     #[test]
-    fn making_a_block_unique_runs_the_element_callback_over_every_element() {
+    fn splitting_a_header_runs_the_element_callback_over_every_element() {
         unsafe extern "C" fn bump(src: *const u8, dst: *mut u8) {
             // SAFETY: the runtime hands both pointers at element slots.
             unsafe { *dst.cast::<i64>() = *src.cast::<i64>() + 100 };
@@ -584,10 +617,10 @@ mod tests {
             for at in 0..3usize {
                 *(*array).items.add(at * ESIZE).cast::<i64>() = at as i64;
             }
-            let copy = kira_rt_array_clone(array);
-            // Writing element 2 copies the block, so elements 0 and 1 are
+            let mut copy = kira_rt_array_clone(array);
+            // Writing element 2 splits the array, so elements 0 and 1 are
             // cloned by the callback rather than left aliasing the original.
-            *kira_rt_array_slot_mut(copy, 2, ESIZE, Some(bump)).cast::<i64>() = 42;
+            *kira_rt_array_slot_mut(&raw mut copy, 2, ESIZE, Some(bump)).cast::<i64>() = 42;
             assert_eq!(read(copy, 0), 100);
             assert_eq!(read(copy, 1), 101);
             assert_eq!(read(copy, 2), 42);
@@ -608,23 +641,23 @@ mod tests {
         unsafe extern "C" fn count(_at: *mut u8) {
             FREED.fetch_add(1, Ordering::Relaxed);
         }
-        let array = kira_rt_array_new(0, ESIZE);
-        // SAFETY: a handle this test just built.
+        let mut slot = kira_rt_array_new(0, ESIZE);
+        // SAFETY: a slot holding a handle this test just built.
         unsafe {
             for value in 0..5i64 {
-                *kira_rt_array_push_slot(array, ESIZE, None).cast::<i64>() = value;
+                *kira_rt_array_push_slot(&raw mut slot, ESIZE, None).cast::<i64>() = value;
             }
             // Capacity is 8 by now, but only 5 elements are live.
-            assert_eq!((*array).cap, 8);
-            kira_rt_array_free(array, ESIZE, Some(count));
+            assert_eq!((*slot).cap, 8);
+            kira_rt_array_free(slot, ESIZE, Some(count));
         }
         assert_eq!(FREED.load(Ordering::Relaxed), 5);
     }
 
-    /// What the elements own is released once, by whichever handle is last —
-    /// never once per handle, which is the double free sharing invites.
+    /// What the elements own is released once, by whichever value is last —
+    /// never once per holder, which is the double free sharing invites.
     #[test]
-    fn a_shared_block_frees_its_elements_once_and_only_at_the_end() {
+    fn a_shared_array_frees_its_elements_once_and_only_at_the_end() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static FREED: AtomicUsize = AtomicUsize::new(0);
         unsafe extern "C" fn count(_at: *mut u8) {
@@ -651,25 +684,27 @@ mod tests {
         unsafe {
             kira_rt_array_free(std::ptr::null_mut(), ESIZE, None);
             assert_eq!(kira_rt_array_len(std::ptr::null_mut()), 0);
-            let copy = kira_rt_array_clone(std::ptr::null_mut());
-            assert_eq!(kira_rt_array_len(copy), 0, "a copy of nothing is empty");
-            kira_rt_array_free(copy, ESIZE, None);
+            assert!(
+                kira_rt_array_clone(std::ptr::null_mut()).is_null(),
+                "a copy of nothing is nothing"
+            );
         }
     }
 
-    /// The backend GEPs into this header, so its shape is a contract with code
-    /// compiled separately from this crate — and the share count deliberately
-    /// is *not* in it, so that a copy gets a header of its own.
+    /// The backend reads `shares` out of this header, so its shape is a
+    /// contract with code compiled separately from this crate.
     #[test]
-    fn the_header_layout_is_three_words() {
-        assert_eq!(size_of::<KiraArray>(), 3 * size_of::<usize>());
+    fn the_header_layout_is_pinned() {
+        assert_eq!(size_of::<KiraArray>(), 4 * size_of::<usize>());
         assert_eq!(align_of::<KiraArray>(), align_of::<usize>());
         let header = KiraArray {
             len: 0,
             cap: 0,
             items: std::ptr::null_mut(),
+            shares: 1,
         };
         let base = std::ptr::from_ref(&header).cast::<u8>();
+        let word = size_of::<usize>() as isize;
         // SAFETY: every field belongs to `header`, which outlives the reads.
         unsafe {
             assert_eq!(
@@ -682,13 +717,21 @@ mod tests {
                 std::ptr::from_ref(&header.cap)
                     .cast::<u8>()
                     .offset_from(base),
-                size_of::<usize>() as isize
+                word
             );
             assert_eq!(
                 std::ptr::from_ref(&header.items)
                     .cast::<u8>()
                     .offset_from(base),
-                2 * size_of::<usize>() as isize
+                2 * word
+            );
+            assert_eq!(
+                std::ptr::from_ref(&header.shares)
+                    .cast::<u8>()
+                    .offset_from(base),
+                isize::try_from(kira_runtime_abi::ARRAY_HEADER_SHARES_FIELD)
+                    .expect("a small index")
+                    * word
             );
         }
     }

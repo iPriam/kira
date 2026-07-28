@@ -296,18 +296,22 @@ impl FunctionLowering<'_, '_> {
         ))
     }
 
-    /// Turns an array handle into the address of element `index` **to write**,
-    /// bounds-checked by the runtime.
+    /// Turns the **slot holding** an array into the address of element `index`
+    /// to write, bounds-checked by the runtime.
     ///
-    /// Copying an array only takes a share of its item block, so a write is
-    /// where the copying actually happens: the runtime gives this handle a
-    /// block of its own first, cloning each element with the leaf handed over
-    /// here. Every write into an array goes through this — a store, an append,
-    /// and a step of a place walk that passes through one — and that is the
-    /// whole of what keeps the sharing invisible.
+    /// Copying an array only takes a share of it, so a write is where the
+    /// copying actually happens: the runtime gives this slot an array of its
+    /// own first, cloning each element with the leaf handed over here, and
+    /// stores the fresh handle back. That is why this takes the slot rather
+    /// than the handle — a split *replaces* the handle, and whatever holds it
+    /// has to see that.
+    ///
+    /// Every write into an array goes through this — a store, an append, and a
+    /// step of a place walk that passes through one — and each of them already
+    /// starts from a place, so the slot costs nothing to supply.
     pub(super) fn element_slot_mut(
         &mut self,
-        array: LLVMValueRef,
+        holder: LLVMValueRef,
         index: IrExprId,
         element: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
@@ -316,7 +320,7 @@ impl FunctionLowering<'_, '_> {
         let clone = self.codegen.element_clone(element)?;
         Ok(self.call(
             self.codegen.runtime.array_slot_mut,
-            &mut [array, index_value, esize, clone],
+            &mut [holder, index_value, esize, clone],
             c"slot.mut",
         ))
     }
@@ -441,21 +445,15 @@ impl FunctionLowering<'_, '_> {
                 (slot, ty) = self.walk_place_step(slot, ty, step)?;
             }
             let element = self.codegen.element_of(ty)?;
-            // SAFETY: `slot` holds an array handle.
-            let handle = unsafe {
-                LLVMBuildLoad2(
-                    self.codegen.builder,
-                    self.codegen.types.ptr,
-                    slot,
-                    c"array".as_ptr(),
-                )
-            };
             let lowered = self.lower_expr(value)?;
             let esize = self.codegen.abi_size(element)?;
             let clone = self.codegen.element_clone(element)?;
+            // The slot, not the handle it holds: an append is a write, and a
+            // write may split a shared array and leave the slot holding the
+            // fresh one.
             let element_slot = self.call(
                 self.codegen.runtime.array_push_slot,
-                &mut [handle, esize, clone],
+                &mut [slot, esize, clone],
                 c"push",
             );
             // SAFETY: `element_slot` is one fresh element slot.
@@ -469,24 +467,16 @@ impl FunctionLowering<'_, '_> {
         // lands on the slot that *holds* its handle.
         let (slot, ty) = self.walk_place(place.local, &place.path)?;
         let element = self.codegen.element_of(ty)?;
-        // SAFETY: `slot` holds an array handle (a `ptr`); the builder is live.
-        let handle = unsafe {
-            LLVMBuildLoad2(
-                self.codegen.builder,
-                self.codegen.types.ptr,
-                slot,
-                c"array".as_ptr(),
-            )
-        };
         let lowered = self.lower_expr(value)?;
         let esize = self.codegen.abi_size(element)?;
-        // Appending is a write, so the runtime gives this handle an item block
-        // of its own — with the leaf cloning each element it carries over —
-        // before the new element lands in it.
+        // Appending is a write, so the runtime gives this slot an array of its
+        // own — with the leaf cloning each element it carries over — before the
+        // new element lands in it. The slot goes over rather than the handle,
+        // because a split replaces the handle.
         let clone = self.codegen.element_clone(element)?;
         let element_slot = self.call(
             self.codegen.runtime.array_push_slot,
-            &mut [handle, esize, clone],
+            &mut [slot, esize, clone],
             c"push",
         );
         // SAFETY: `element_slot` is a fresh, uninitialized element slot of
