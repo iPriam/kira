@@ -79,7 +79,46 @@
 
 mod block;
 
+use std::alloc::Layout;
+
+use crate::pool::Pool;
 use block::{alloc_items, drop_share, free_items, share_count, take_share};
+
+thread_local! {
+    /// The free list array headers are handed out from.
+    ///
+    /// A header is allocated per array *copy*, which after the sharing above is
+    /// the only allocation a copy makes at all — and the most frequent one a
+    /// program makes. See [`crate::pool`].
+    ///
+    /// A [`Pool`] holds nothing that needs dropping, so this key registers no
+    /// destructor and `with` cannot fail — including on a thread that is
+    /// already winding down, which is where a Kira value released late would
+    /// otherwise find the pool gone.
+    static HEADERS: Pool = const { Pool::new(Layout::new::<KiraArray>()) };
+}
+
+/// Takes a header from the free list and fills it in.
+fn new_header(len: usize, cap: usize, items: *mut u8) -> KArray {
+    let header = HEADERS.with(Pool::alloc).cast::<KiraArray>();
+    // SAFETY: the pool hands back a block of exactly this layout, and every
+    // field is written before anything reads one.
+    unsafe {
+        header.write(KiraArray { len, cap, items });
+    }
+    header
+}
+
+/// Returns a header to the free list.
+///
+/// # Safety
+/// `header` must be a live header from [`new_header`], not returned already,
+/// and whatever it owned must have been released.
+unsafe fn free_header(header: KArray) {
+    // SAFETY: the caller vouches the header is live and finished with; a header
+    // owns nothing itself, so there is nothing to drop before it goes.
+    HEADERS.with(|pool| unsafe { pool.free(header.cast::<u8>()) });
+}
 
 /// A Kira array at the native ABI: an opaque owned handle.
 pub type KArray = *mut KiraArray;
@@ -148,11 +187,7 @@ unsafe fn make_unique(header: &mut KiraArray, esize: usize, element: Option<Elem
 /// block at all, and the first append is what buys one.
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_array_new(count: usize, esize: usize) -> KArray {
-    Box::into_raw(Box::new(KiraArray {
-        len: count,
-        cap: count,
-        items: alloc_items(count, esize),
-    }))
+    new_header(count, count, alloc_items(count, esize))
 }
 
 /// The number of elements in an array.
@@ -328,11 +363,7 @@ pub unsafe extern "C" fn kira_rt_array_clone(array: KArray) -> KArray {
     // SAFETY: a live header's item pointer is null or names a live block, and
     // this new handle joins its count.
     unsafe { take_share(source.items) };
-    Box::into_raw(Box::new(KiraArray {
-        len: source.len,
-        cap: source.cap,
-        items: source.items,
-    }))
+    new_header(source.len, source.cap, source.items)
 }
 
 /// Frees an array: always its header, and the item block and whatever its
@@ -354,28 +385,31 @@ pub unsafe extern "C" fn kira_rt_array_free(
     if array.is_null() {
         return;
     }
-    // SAFETY: the caller guarantees a live handle it is giving up.
-    let header = unsafe { Box::from_raw(array) };
-    if header.items.is_null() {
+    // SAFETY: the caller guarantees a live handle it is giving up. The header
+    // goes back to the pool either way; what it points at may not.
+    let (items, len, cap) = unsafe { ((*array).items, (*array).len, (*array).cap) };
+    // SAFETY: the caller gave up this handle and nothing reads it again.
+    unsafe { free_header(array) };
+    if items.is_null() {
         return;
     }
     // SAFETY: a non-null item pointer names a live block.
-    let count = unsafe { share_count(header.items) };
+    let count = unsafe { share_count(items) };
     if count > 1 {
         // Another handle still reads these elements, so nothing they own is
         // released here — only this handle's claim on them.
         // SAFETY: as above, and the block is shared.
-        unsafe { drop_share(header.items) };
+        unsafe { drop_share(items) };
         return;
     }
     if let Some(free) = element {
-        for at in 0..header.len {
+        for at in 0..len {
             // SAFETY: the offset lands inside a block of `len` elements.
-            unsafe { free(header.items.add(at * esize)) };
+            unsafe { free(items.add(at * esize)) };
         }
     }
     // SAFETY: the last share was this one, so the block is unheld.
-    unsafe { free_items(header.items, header.cap, esize) };
+    unsafe { free_items(items, cap, esize) };
 }
 
 /// Reports an out-of-range array index and exits with a failure code, mirroring

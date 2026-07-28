@@ -69,7 +69,17 @@ use std::alloc::{self, Layout};
 use kira_runtime_abi::EnumPayloadKind;
 
 use crate::array::{ElemClone, ElemFree};
+use crate::pool::Pool;
 use crate::runtime::{KStr, kira_rt_str_clone, kira_rt_str_free};
+
+thread_local! {
+    /// The free list enum boxes are handed out from.
+    ///
+    /// One box per enum value a program *constructs* — a copy takes no box at
+    /// all now — and a UI frame that rebuilds its view tree constructs
+    /// thousands. See [`crate::pool`], which also says why `with` cannot fail.
+    static BOXES: Pool = const { Pool::new(Layout::new::<KiraEnum>()) };
+}
 
 /// A Kira enum at the native ABI: an opaque owned handle.
 pub type KEnum = *mut KiraEnum;
@@ -253,12 +263,18 @@ unsafe fn free_aggregate(value: *mut AggregatePayload) {
 /// direction for a word this code cannot interpret.
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_enum_new(tag: i64, payload_kind: i64, payload: u64) -> KEnum {
-    Box::into_raw(Box::new(KiraEnum {
-        tag,
-        payload_kind,
-        payload,
-        shares: 1,
-    }))
+    let boxed = BOXES.with(Pool::alloc).cast::<KiraEnum>();
+    // SAFETY: the pool hands back a block of exactly this layout, and every
+    // field is written before anything reads one.
+    unsafe {
+        boxed.write(KiraEnum {
+            tag,
+            payload_kind,
+            payload,
+            shares: 1,
+        });
+    }
+    boxed
 }
 
 /// Boxes a struct payload by moving its bytes into erased runtime storage.
@@ -406,21 +422,24 @@ pub unsafe extern "C" fn kira_rt_enum_free(value: KEnum) {
         *shares -= 1;
         return;
     }
-    // SAFETY: the handle came from `Box::into_raw`, this was the last hold on
-    // it, and the caller's release-once contract makes this the only reclaim.
-    let boxed = unsafe { Box::from_raw(value) };
-    match boxed.payload_kind {
+    // SAFETY: this was the last hold on the box, and the caller's release-once
+    // contract makes this the only reclaim of it.
+    let (payload_kind, payload) = unsafe { ((*value).payload_kind, (*value).payload) };
+    // SAFETY: the box is finished with and nothing reads it again; it owns
+    // nothing itself — its payload is released below.
+    BOXES.with(|pool| unsafe { pool.free(value.cast::<u8>()) });
+    match payload_kind {
         // SAFETY: the kind promises `payload` is a live `KStr`, freed here
         // exactly once as the box is reclaimed.
-        PAYLOAD_STR => unsafe { kira_rt_str_free(boxed.payload as KStr) },
+        PAYLOAD_STR => unsafe { kira_rt_str_free(payload as KStr) },
         // SAFETY: the kind promises `payload` is a live `KEnum`, freed here
         // exactly once as the box is reclaimed. Recursion is bounded by the
         // program's nesting depth, which is finite because a payload type
         // resolves against types that already resolve.
-        PAYLOAD_ENUM => unsafe { kira_rt_enum_free(boxed.payload as KEnum) },
+        PAYLOAD_ENUM => unsafe { kira_rt_enum_free(payload as KEnum) },
         // SAFETY: the kind promises a live aggregate payload, owned exactly once
         // by this enum box.
-        PAYLOAD_AGGREGATE => unsafe { free_aggregate(boxed.payload as *mut AggregatePayload) },
+        PAYLOAD_AGGREGATE => unsafe { free_aggregate(payload as *mut AggregatePayload) },
         _ => {}
     }
 }
