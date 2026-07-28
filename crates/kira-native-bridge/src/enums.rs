@@ -502,12 +502,15 @@ mod tests {
         unsafe {
             let value = kira_rt_enum_new(1, PAYLOAD_STR, str_handle("bound") as u64);
             let read = kira_rt_enum_payload(value) as KStr;
-            assert_ne!(
-                read as u64,
-                (*value).payload,
-                "the read owns its own string"
-            );
+            // The read is the caller's to release, which is what matters — a
+            // string is shared rather than duplicated, so it *is* the box's
+            // handle, held once more. Releasing the box must leave it readable.
             kira_rt_enum_free(value);
+            assert_eq!(
+                crate::runtime::kira_rt_str_len(read),
+                5,
+                "the binding outlived the enum it came from"
+            );
             kira_rt_str_free(read);
 
             let scalar = kira_rt_enum_new(0, PAYLOAD_INERT, 77);
@@ -561,15 +564,11 @@ mod tests {
             assert_eq!(value, copy, "a copy is the same box");
 
             // A read *is* a copy, and the clone leaf is what makes it one: the
-            // read owns a label of its own, so it outlives the box below.
+            // read takes a hold of the label, so it outlives the box below.
             let mut read = std::mem::MaybeUninit::<AggregateFixture>::uninit();
             kira_rt_enum_payload_aggregate(value, read.as_mut_ptr().cast::<u8>());
             let read = read.assume_init();
             assert_eq!(read.count, 7);
-            let boxed_payload = &*((*value).payload as *mut AggregatePayload);
-            let boxed_value = &*boxed_payload.data.cast::<AggregateFixture>();
-            assert_ne!(boxed_value.label, read.label);
-
             kira_rt_enum_free(value);
             kira_rt_enum_free(copy);
             assert_eq!(crate::runtime::kira_rt_str_len(read.label), 5);

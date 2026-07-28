@@ -63,7 +63,15 @@ pub use ownership::Ownership;
 /// So the version is baked into a symbol name ([`RUNTIME_ABI_MARKER`]) that the
 /// backend emits a reference to. A stale archive does not define this version's
 /// marker, so the link fails by name instead of the program failing at runtime.
-pub const RUNTIME_ABI_VERSION: u32 = 6;
+pub const RUNTIME_ABI_VERSION: u32 = 7;
+
+/// Where a string object keeps its share count, as a field index.
+///
+/// After the `Box<[u8]>` it owns, which is two words wide. A string is never
+/// written after it is built, so copying one is a count away from free — and
+/// generated code copies strings often enough that the *call* was the cost.
+/// The layout test beside `KiraString` is what holds the object to this.
+pub const STRING_SHARES_FIELD: u32 = 2;
 
 /// Where an array header keeps its share count, as a field index.
 ///
@@ -87,7 +95,7 @@ pub const ENUM_BOX_SHARES_FIELD: u32 = 3;
 ///
 /// Its name carries [`RUNTIME_ABI_VERSION`]; a test in `kira-native-bridge`
 /// fails if the archive's marker and this name ever drift apart.
-pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_6";
+pub const RUNTIME_ABI_MARKER: &str = "kira_rt_abi_version_7";
 
 /// The symbols a hybrid host resolves out of a loaded native half by name.
 ///

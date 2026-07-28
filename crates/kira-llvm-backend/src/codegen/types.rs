@@ -69,6 +69,14 @@ pub(crate) struct Types {
     /// the call was the cost. Mirrors `kira_native_bridge::array::KiraArray`,
     /// whose layout test pins what this must agree with.
     pub(super) array_header: LLVMTypeRef,
+    /// `KiraString`: `{ ptr, usize len, usize shares }`.
+    ///
+    /// The `Box<[u8]>` a string owns is a fat pointer, so the count sits after
+    /// two words. Read for the same reason the other two are: a string is never
+    /// written after it is built, so copying one is a count away from free.
+    /// Mirrors `kira_native_bridge::runtime::KiraString`, whose layout test
+    /// pins what this must agree with.
+    pub(super) string_box: LLVMTypeRef,
 }
 
 impl Types {
@@ -94,6 +102,7 @@ impl Types {
                 bridge_value: bridge_value_type(context),
                 enum_box: enum_box_type(context, usize_ty),
                 array_header: array_header_type(context, usize_ty),
+                string_box: string_box_type(context, usize_ty),
             }
         }
     }
@@ -110,7 +119,6 @@ pub(crate) struct Runtime {
     pub(super) print_bool: Callable,
     pub(super) print_str: Callable,
     pub(super) str_new: Callable,
-    pub(super) str_clone: Callable,
     pub(super) str_concat: Callable,
     pub(super) str_eq: Callable,
     pub(super) str_free: Callable,
@@ -264,6 +272,19 @@ fn array_header_type(context: LLVMContextRef, usize_ty: LLVMTypeRef) -> LLVMType
     }
 }
 
+/// The LLVM form of `kira_native_bridge::runtime::KiraString`.
+///
+/// `{ ptr, usize, usize }` — the two words of the owned `Box<[u8]>`, then the
+/// share count where that crate's layout test puts it.
+fn string_box_type(context: LLVMContextRef, usize_ty: LLVMTypeRef) -> LLVMTypeRef {
+    // SAFETY: every type is created in this live context; `fields` outlives the
+    // struct-type call.
+    unsafe {
+        let mut fields = [LLVMPointerTypeInContext(context, 0), usize_ty, usize_ty];
+        LLVMStructTypeInContext(context, fields.as_mut_ptr(), fields.len() as u32, 0)
+    }
+}
+
 /// The LLVM form of `kira_runtime_abi::BridgeValue`.
 ///
 /// `{ i8, [7 x i8], i64 }` — the same 16 bytes, with the reserved gap spelled
@@ -305,7 +326,6 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 types.ptr,
                 &mut [types.ptr, types.usize_ty],
             ),
-            str_clone: declare(c"kira_rt_str_clone", types.ptr, &mut [types.ptr]),
             str_concat: declare(
                 c"kira_rt_str_concat",
                 types.ptr,

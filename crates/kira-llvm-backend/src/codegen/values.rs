@@ -47,7 +47,7 @@ impl Codegen<'_> {
             return Ok(value);
         }
         match ty {
-            Type::String => Ok(self.call(self.runtime.str_clone, &mut [value], c"str.copy")),
+            Type::String => self.copy_shared(value, self.types.string_box, "str"),
             Type::Struct(id) => {
                 let field_types = self.field_types(id)?;
                 let mut copy = value;
@@ -86,8 +86,8 @@ impl Codegen<'_> {
         }
         match ty {
             Type::String => {
-                self.call(self.runtime.str_free, &mut [value], c"");
-                Ok(())
+                let last = self.runtime.str_free;
+                self.drop_shared(value, self.types.string_box, &mut [], last, "str")
             }
             Type::Struct(id) => {
                 let field_types = self.field_types(id)?;
@@ -292,18 +292,25 @@ impl Codegen<'_> {
         }
     }
 
-    /// The address of a shared object's share count, the last field of both.
+    /// The address of a shared object's share count, the last field of each.
     fn shares_pointer(&self, value: LLVMValueRef, object: LLVMTypeRef, name: &str) -> LLVMValueRef {
+        // Each object says where its own count sits: a string's follows the two
+        // words of the `Box<[u8]>` it owns, an array header's and an enum box's
+        // follow three fields. The layout test beside each type is what holds
+        // it there.
+        let shares_field = if object == self.types.string_box {
+            kira_runtime_abi::STRING_SHARES_FIELD
+        } else {
+            kira_runtime_abi::ENUM_BOX_SHARES_FIELD
+        };
         // SAFETY: the caller has established `value` addresses a live object of
-        // this layout, whose fourth field is the share count — the index both
-        // `ARRAY_HEADER_SHARES_FIELD` and `ENUM_BOX_SHARES_FIELD` name, and
-        // which the layout tests beside each type hold them to.
+        // this layout, whose share count is at the index chosen above.
         unsafe {
             LLVMBuildStructGEP2(
                 self.builder,
                 object,
                 value,
-                kira_runtime_abi::ENUM_BOX_SHARES_FIELD,
+                shares_field,
                 c_string(&format!("{name}.shares.ptr")).as_ptr(),
             )
         }
