@@ -151,6 +151,7 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::ConvertFloatToBits => out.push(o::CONVERT_FLOAT_TO_BITS),
         Instruction::ConvertBitsToFloat => out.push(o::CONVERT_BITS_TO_FLOAT),
         Instruction::ConvertBits32ToFloat => out.push(o::CONVERT_BITS32_TO_FLOAT),
+        Instruction::ConvertFloatToBits32 => out.push(o::CONVERT_FLOAT_TO_BITS32),
         Instruction::ArrayGetLocal(slot) => {
             out.push(o::ARRAY_GET_LOCAL);
             out.extend_from_slice(&slot.to_le_bytes());
@@ -457,6 +458,7 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::CONVERT_FLOAT_TO_BITS => Instruction::ConvertFloatToBits,
         o::CONVERT_BITS_TO_FLOAT => Instruction::ConvertBitsToFloat,
         o::CONVERT_BITS32_TO_FLOAT => Instruction::ConvertBits32ToFloat,
+        o::CONVERT_FLOAT_TO_BITS32 => Instruction::ConvertFloatToBits32,
 
         o::CSTRING_NEW => Instruction::CStringNew,
         o::ENUM_TAG => Instruction::EnumTag,

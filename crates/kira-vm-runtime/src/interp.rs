@@ -570,6 +570,15 @@ impl Vm<'_> {
                 self.stack
                     .push(Value::Float(f64::from(f32::from_bits(bits))));
             }
+            Instruction::ConvertFloatToBits32 => {
+                let value = self.pop_float()?;
+                // Narrow first, then take the pattern: the rounding is part of
+                // the answer, not an accident of the cast. `as f32` is round to
+                // nearest even, the IEEE-754 default the native backend's
+                // `fptrunc` also uses.
+                self.stack
+                    .push(Value::Int(i64::from((value as f32).to_bits())));
+            }
             Instruction::ConvertFloatToInt => {
                 // Truncate toward zero, saturating out-of-range to
                 // `i64::MIN`/`i64::MAX` and mapping NaN to zero. Rust's saturating

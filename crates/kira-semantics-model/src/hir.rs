@@ -693,6 +693,13 @@ pub enum ConvertKind {
     BitsToFloat,
     /// A 32-bit IEEE-754 pattern read as Kira's 64-bit `Float`.
     Bits32ToFloat,
+    /// A `Float` narrowed to its 32-bit IEEE-754 pattern, as a `U32`.
+    ///
+    /// The inverse of [`Self::Bits32ToFloat`]. Writing a 32-bit float costs a
+    /// rounding step the 64-bit [`Self::FloatToBits`] does not have — the
+    /// value narrows to `f32` first (round to nearest even, the one IEEE-754
+    /// default), and only then are the bits taken.
+    FloatToBits32,
 }
 
 impl HirExpr {
