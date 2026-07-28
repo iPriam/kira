@@ -28,64 +28,25 @@ Refuse every git command that can discard, set aside, or rewrite work:
   tree — `git show <rev>:<path> > <path>`, `git cat-file -p <blob> > <path>`,
   `git archive` unpacked over the checkout
 
-Read that list as examples of the category, never as its boundary. When a
-command is not named, decide by what it can do to work that exists in one place
-only — and refuse it on that, not on its absence from a list.
+`.codex/hooks/refuse-destructive-git.sh` denies these before they run, on every
+Bash call. Expect it to catch the named shapes and nothing else: it allows what
+it does not recognize, because a hook that guessed would block ordinary work.
+Read the list as examples of the category, never as its boundary, and judge an
+unnamed command by what it can do to work that exists in one place only.
 
-**Read the whole line, never the subcommand.** `show`, `cat-file` and
-`archive` are reads, and stay reads right up until their output is redirected
-onto a path in the working tree — where they overwrite it exactly as
-`checkout -- <path>` would, while looking nothing like it. Refuse any git
-command whose output lands on a tracked path, and decide that from the
-redirect rather than from the verb in front of it. A safe subcommand is not a
-safe command.
+**Read the whole line, never the subcommand.** `show`, `cat-file` and `archive`
+are reads right up until their output is redirected onto a path in the working
+tree, where they overwrite it exactly as `checkout -- <path>` would. A safe
+subcommand is not a safe command.
 
-Extend the refusal to **suggesting** any of them. Treat a banned command in a
-code block as one paste from being a run command.
+Refuse a banned command **even when it is reversible** — `stash` has `pop`,
+`reset --soft` keeps the diff, `amend` leaves the old commit in the reflog —
+and even when you took a backup yourself a moment earlier. Recovery is a claim
+about a step that has not happened yet, or about one whose coverage of what
+preceded you is exactly what you did not check.
 
-## Reject reversibility as a defence
-
-Refuse a destructive command **even when it is reversible**. `stash` has
-`pop`, `reset --soft` keeps the diff, `amend` leaves the old commit in the
-reflog — none of that earns any of them a run here. Recovery is a claim about
-a second step that has not happened yet, made by the same reasoning that ran
-the first one.
-
-That reasoning has a record here. An agent mid-session dropped
-`git stash -q 2>/dev/null` into the middle of a compound command — to watch a
-test fail without its own fix — with about 6,500 lines of uncommitted work in
-the tree. It reverted every tracked file. It was recoverable, and that is the
-least interesting thing about it: plain `stash` happens to leave untracked
-files alone, `stash pop` happened to bring the rest back, and the agent had
-read this skill's ban at the start of that very session and typed the command
-anyway.
-
-So the lesson is not "stash turned out to be survivable". It is that the reflex
-fires *below* the level where rules get consulted, and a rule that needs a
-judgement call at the moment of typing is a rule that loses to the reflex. Keep
-this one needing none: **no destructive git, ever — whatever the tree looks
-like, whatever the undo is.**
-
-The same reflex has fired on `checkout -- <file>`, batched. An agent needed to
-undo a mechanical mistake it had made across ~30 files in one pass, built the
-file list itself, and ran `git checkout -- <that list>` without checking each
-path first. Two of those files carried pre-existing uncommitted work from
-before the session started, never staged, so git had nothing to recover them
-from — gone. The rule that would have stopped it was already loaded that
-session. "I built this list, so it's mine to revert" is the same shortcut as
-"the tree looked clean": a claim about the paths that substitutes for actually
-checking them. Check every targeted path's status individually before any
-discard, every time, batch or not.
-
-It has fired a third time, on a command no list named. To compare two builds of
-its own change, an agent ran `git show HEAD:<path> > <path>` over four files,
-having copied them to a scratch directory moments earlier. The skill was loaded
-that session too. Nothing was lost — but only because those copies happened to
-be taken *after* its edits, so they carried whatever was in the files before it
-arrived; an ordering it never checked and could not have relied on. **A backup
-you made yourself buys no exception.** It is the same claim about a
-not-yet-taken second step as `stash pop`, made this time about a step already
-taken, whose coverage of what preceded you is exactly what you did not verify.
+Extend the refusal to **suggesting** any of them. The hook reads commands, not
+prose: a banned command in a code block is one paste from being a run command.
 
 ## Reach the goal another way
 
@@ -95,12 +56,12 @@ work:
 | Goal | Not this | This |
 |---|---|---|
 | See a test fail without your fix | `stash`, `reset`, `restore` | copy the one file aside (`cp x.rs "$TMP/x.rs.bak"`), edit it, run it, copy it back. One file, no git, no blast radius |
+| Measure your change against the code without it | `git show <rev>:<path> > <path>` to put the old version back | build the current tree, copy the *artifact* aside (`cp target/release/x "$TMP/x.before"`), then edit forward to the other version and build again. Compare two artifacts, never two states of the tree |
 | Get a clean tree to test | `stash` | commit on a scratch branch, or build a separate worktree |
 | Local `main` drifted from remote | `reset --hard origin/main` | `git switch -c backup-<date>` first, then `git merge --ff-only origin/main` — when it refuses, the drift is real content, so read it before deciding |
 | Undo a commit already made | `reset --hard HEAD~1` | `git revert <sha>` — keeps history and the work |
 | Fix the commit just made | `commit --amend` | a second commit; squash later only on a branch nobody else has |
 | Abandon working-tree edits | `checkout -- <file>` / `restore` | leave them; commit them on a scratch branch; or ask. WIP in a worktree is never yours to discard |
-| Measure your change against the code without it | `git show <rev>:<path> > <path>` to put the old version back | build the current tree, copy the *artifact* aside (`cp target/release/x "$TMP/x.before"`), then edit forward to the other version and build again. Compare two artifacts, never two states of the tree |
 | Take one commit from elsewhere | reset + reapply | `git cherry-pick <sha>` |
 
 When none of these reach the goal, say so and stop. Never read "no safe route
