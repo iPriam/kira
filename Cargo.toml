@@ -5,7 +5,8 @@ resolver = "3"
 [workspace.package]
 version = "1.7.4"
 edition = "2024"
-license = "Apache-2.0"
+license = "Apache-2.0 WITH LicenseRef-Kira-Runtime-Library-Exception"
+license-file = "LICENSE"
 repository = "https://github.com/kira-lang-com/kira"
 
 [workspace.dependencies]
@@ -40,6 +41,7 @@ kira-spirv-backend = { path = "crates/kira-spirv-backend" }
 kira-bytecode = { path = "crates/kira-bytecode" }
 kira-vm-runtime = { path = "crates/kira-vm-runtime" }
 kira-native-bridge = { path = "crates/kira-native-bridge" }
+kira-compiler-bridge = { path = "crates/kira-compiler-bridge" }
 kira-hybrid-runtime = { path = "crates/kira-hybrid-runtime" }
 kira-debug = { path = "crates/kira-debug" }
 kira-llvm-backend = { path = "crates/kira-llvm-backend" }
@@ -48,6 +50,7 @@ kira-project = { path = "crates/kira-project" }
 kira-package-manager = { path = "crates/kira-package-manager" }
 kira-build-definition = { path = "crates/kira-build-definition" }
 kira-program-graph = { path = "crates/kira-program-graph" }
+kira-check = { path = "crates/kira-check" }
 kira-build = { path = "crates/kira-build" }
 kira-instruments = { path = "crates/kira-instruments" }
 kira-linter = { path = "crates/kira-linter" }
@@ -58,7 +61,7 @@ kira-desktop-runner = { path = "crates/kira-desktop-runner" }
 kira-cli = { path = "crates/kira-cli" }
 kira-main = { path = "crates/kira-main" }
 kira-hybrid-main = { path = "crates/kira-hybrid-main" }
-kira-bootstrapper = { path = "crates/kira-bootstrapper" }
+kira-launcher = { path = "crates/kira-launcher" }
 kira-knvm = { path = "crates/kira-knvm" }
 kira-devflow = { path = "crates/kira-devflow" }
 kira-lsp = { path = "crates/kira-lsp" }

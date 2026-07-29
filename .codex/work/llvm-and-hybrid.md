@@ -5,9 +5,9 @@ Orientation for the two non-VM backends. The VM path (`kira-bytecode` →
 
 ## Status
 
-- **LLVM/native: landed.** `kirac build|run --backend llvm` produces a real
+- **LLVM/native: landed.** `kira build|run --backend llvm` produces a real
   native executable.
-- **Hybrid: landed.** `kirac build|run --backend hybrid` splits a program on its
+- **Hybrid: landed.** `kira build|run --backend hybrid` splits a program on its
   `@Runtime`/`@Native` annotations, emits both halves plus a manifest, and runs
   the bundle in `kira-hybrid-runtime` (the host). Both call directions work,
   including strings, traps, nesting, and a `@Native` entrypoint.
@@ -28,7 +28,7 @@ environment setup. `llvm-sys` is compiled with `no-llvm-linking` +
 `disable-alltargets-init` and consults nothing.
 
 `cargo build -p kira-cli` refreshes that crate's rlib but **not**
-`kira-native-bridge`'s staticlib, so the archive next to `kirac` can be older
+`kira-native-bridge`'s staticlib, so the archive next to `kira` can be older
 than the compiler that links it. `cargo build --workspace` covers both.
 
 ## Contracts
@@ -96,7 +96,7 @@ the code that emits or reads it.
   pulls in exactly the defining member — deliberately narrower than
   `-force_load`/`--whole-archive`, which would drag the whole Rust standard
   library into every hybrid program.
-- **The host must not link `kira-native-bridge`.** `kirac` already carries its
+- **The host must not link `kira-native-bridge`.** `kira` already carries its
   own copy of every `kira_rt_*` symbol, so allocating a handle in one copy and
   freeing it in the other is a cross-allocator free. `kira-hybrid-runtime`
   therefore depends on the runtime crate *not at all* and resolves every symbol
@@ -119,7 +119,7 @@ the code that emits or reads it.
 
 ## How a hybrid program runs
 
-1. `kirac build|run --backend hybrid` lowers one IR three ways:
+1. `kira build|run --backend hybrid` lowers one IR three ways:
    `compile_hybrid` emits the bytecode half (`<stem>.kbc`),
    `build_hybrid_library` emits the native half (`lib<stem>.dylib`) with one
    `kira_native_fn_<id>` trampoline per `@Native` function, and `kira-cli`'s

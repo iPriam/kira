@@ -185,6 +185,7 @@ fn arithmetic(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
         (B::Sub, Type::Float(_)) => H::SubFloat,
         (B::Mul, Type::Float(_)) => H::MulFloat,
         (B::Div, Type::Float(_)) => H::DivFloat,
+        (B::Rem, Type::Float(_)) => H::RemFloat,
         _ => return None,
     };
     Some((hir, ty))
@@ -245,6 +246,12 @@ fn equality(op: BinaryOp, lt: Type, rt: Type) -> Option<(HirBinaryOp, Type)> {
         Type::Bool => H::NeBool,
         Type::String if is_eq => H::EqStr,
         Type::String => H::NeStr,
+        // Erasure already carries each value's kind at runtime so it can be
+        // freed; reading that same kind back to compare costs no new
+        // representation. This is why `Any == Any` holds where `Point ==
+        // Point` does not — the concrete type has no runtime tag to consult.
+        Type::Any if is_eq => H::EqAny,
+        Type::Any => H::NeAny,
         _ => return None,
     };
     Some((hir, Type::Bool))

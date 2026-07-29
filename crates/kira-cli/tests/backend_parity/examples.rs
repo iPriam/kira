@@ -124,7 +124,7 @@ fn check_example_directory(directory: &std::path::Path) -> usize {
 /// Asserts every backend builds the library package in `directory`.
 ///
 /// The worked example a reader is pointed at, held to the same bar as the
-/// generated fixtures: if the documented `kirac build` stops working on an
+/// generated fixtures: if the documented `kira build` stops working on an
 /// engine, this fails rather than the README quietly becoming false.
 fn check_library_example(directory: &std::path::Path) {
     let sources: Vec<PathBuf> = std::fs::read_dir(directory)
@@ -144,10 +144,10 @@ fn check_library_example(directory: &std::path::Path) {
     let source = &sources[0];
 
     for backend in BACKENDS {
-        let run = Command::new(env!("CARGO_BIN_EXE_kirac"))
+        let run = Command::new(env!("CARGO_BIN_EXE_kira"))
             .args(["build", "--backend", backend, source.to_str().unwrap()])
             .output()
-            .expect("run kirac");
+            .expect("run kira");
         assert!(
             run.status.success(),
             "the {backend} backend failed to build the library example `{}`:\nstderr: {}",

@@ -109,6 +109,9 @@ pub type ElemClone = unsafe extern "C" fn(src: *const u8, dst: *mut u8);
 /// Frees whatever the element at `at` owns. Does not free the slot itself.
 pub type ElemFree = unsafe extern "C" fn(at: *mut u8);
 
+/// Compares two elements of one concrete type; non-zero means equal.
+pub use crate::enums::ElemEq;
+
 /// The heap object behind a [`KArray`].
 ///
 /// `#[repr(C)]` because the backend reads `shares` directly — copying and
@@ -378,6 +381,59 @@ pub unsafe extern "C" fn kira_rt_array_clone(array: KArray) -> KArray {
     // rises by one per live value holding it.
     unsafe { (*array).shares += 1 };
     array
+}
+
+/// Whether two arrays hold equal elements, compared with the element's leaf.
+///
+/// The loop is here for the same reason the clone and free loops are: walking
+/// the item block needs no basic blocks, and what this cannot know is how to
+/// compare one element. Two arrays of different lengths are unequal without any
+/// element being read.
+///
+/// Neither array is consumed: a comparison reads and takes nothing.
+///
+/// # Safety
+/// Both handles must be null or live, `esize` must be the element stride both
+/// were built with, and `element` must compare values of that element type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_array_eq(
+    a: KArray,
+    b: KArray,
+    esize: usize,
+    element: Option<ElemEq>,
+) -> u8 {
+    // A null handle is an empty array, which is the answer a zeroed slot holds.
+    // SAFETY: each length is read only after its handle is proven non-null,
+    // and the caller guarantees a non-null handle is live.
+    let (a_len, b_len) = unsafe {
+        (
+            if a.is_null() { 0 } else { (*a).len },
+            if b.is_null() { 0 } else { (*b).len },
+        )
+    };
+    if a_len != b_len {
+        return 0;
+    }
+    if a_len == 0 {
+        return 1;
+    }
+    let Some(element) = element else {
+        // No leaf means nothing can read these bytes as the type that wrote
+        // them; saying "not equal" is the conservative direction.
+        return 0;
+    };
+    // SAFETY: both are non-null with equal, non-zero lengths, so both item
+    // blocks hold `a_len` elements of `esize` bytes.
+    unsafe {
+        let (one, other) = ((*a).items, (*b).items);
+        for index in 0..a_len {
+            let offset = index * esize;
+            if element(one.add(offset), other.add(offset)) == 0 {
+                return 0;
+            }
+        }
+    }
+    1
 }
 
 /// Releases one hold on an array, freeing the header, its block and whatever

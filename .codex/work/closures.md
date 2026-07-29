@@ -99,26 +99,44 @@ name means before it. `CkxTrailingCallbackCaptures` in the oracle's corpus reads
 scan gets that wrong in both directions, which is why capture resolution is
 scope-accurate rather than a free-variable pre-pass.
 
+**A nested literal claims its tag before its body is analyzed.** A literal
+written inside another is lifted while the outer body is being analyzed, so a
+row appended after the body would let both read the same `impls.len()` and take
+the same tag — and the dispatcher would send every call to whichever was
+registered second. The lifted function's id is reserved before the body, so the
+row can be complete at the point the tag is handed out. Two closures of one
+function type, one nested in the other, is the shape that catches it.
+
+## A `var` capture is shared storage
+
+A `var` a closure mentions moves into a **capture cell** at its declaration:
+a share-counted box, on every backend. See [cells.md](cells.md) for the
+representation, the seven invariants it keeps, and where each is enforced.
+
+Three facts belong here rather than there, because they are about the closure
+desugar:
+
+The decision is made from a **syntactic pre-pass** over the function body, in
+`closures::captures`, not from capture resolution. Boxing has to happen at the
+declaration, and the capture that needs it is discovered later — by which time
+every read of the binding has already been lowered. The pre-pass answers by
+name, so it over-approximates: one extra box costs an allocation, and one
+missing box is a closure and a frame writing different storage.
+
+A cell-typed capture is **trivially copyable**, and it is the only non-scalar
+that is. Copying one takes another hold on a box and owns nothing new, which is
+what lets a captured `var` travel with no `move` at the site that captures it.
+
+A capture local of cell type is the **only mutable capture**. Every other
+capture is a copy, so writing to one would change something nothing can see.
+
+`docs/ownership.md` in the oracle records that closure escape analysis and
+capture-by-move are absent there. Here a closure that escapes its frame is
+sound rather than unchecked: the box is heap storage the escaping closure holds
+a share of, which is what `a_closure_outlives_the_frame_that_declared_its_var`
+proves on all three backends.
+
 ## What is refused, and why
-
-**A `var` capture is refused (`KSEM117`).** The oracle *borrows* a mutable
-capture: a write inside the closure is visible outside, and the corpus depends
-on it (`CkxCallbackValueParity` mutates through a callee and through a struct
-field and expects both to land). Nothing in this runtime has reference
-semantics — `Heap::copy_value` deep-copies a struct, an array, and an enum
-alike, on the VM, and LLVM and wasm mirror that — so a capture-by-copy would run
-and quietly give a different answer.
-
-Refusing is the honest reproduction of a limit this port has and the oracle does
-not. Closing it needs a genuinely shared cell: a value kind whose copy is a
-handle copy and whose drop is a no-op for a non-owner, on all four backends.
-That is a backend-wide change, not a closure change, which is why it is not
-bundled here.
-
-`docs/ownership.md` in the oracle records that **closure escape analysis and
-capture-by-move are absent there too**, so a closure outliving the frame it
-captured from is unspecified in both. That limit is reproduced by not checking
-it, exactly as the oracle does not.
 
 **A non-trivially-copyable capture is refused by the same code.** The oracle's
 `isTriviallyCopyable` admits void, the integers, the floats, and booleans —
@@ -144,7 +162,7 @@ Codes are this repo's own, assigned fresh.
 | KPAR038 | a function type with no `->` |
 | KPAR039 | a closure parameter that is not a name |
 | KPAR040 | a trailing closure after something that cannot take one |
-| KSEM117 | a capture that is a `var`, or is not trivially copyable |
+| KSEM117 | a capture that is not trivially copyable, or a `var` with no shared form |
 | KSEM134 | a closure where no function type is expected |
 | KSEM135 | a closure whose parameter count does not match its type |
 | KSEM136 | member access on a function value (`f.tag`) |
@@ -174,8 +192,8 @@ expression or opens the body of an enclosing `if`/`while`/`for`/`switch`.
 
 - `crates/kira-cli/tests/backend_parity/closures.rs` — 13 cases on vm, llvm, and
   hybrid.
-- `crates/kira-wasm-runtime/tests/execution/closures.rs` — 9 cases on the VM and
-  both wasm word sizes.
+- `crates/kira-cli/tests/backend_parity/captured_vars.rs` — 11 more for shared
+  mutable captures, each looping its interaction 100–200 times.
 - `crates/kira-semantics/src/tests/closures.rs` — the diagnostics.
 - `crates/kira-parser/src/tests/closures.rs` — the grammar and its recovery.
 - `crates/kira-lsp/tests/protocol.rs` — closures reach the editor through the

@@ -130,6 +130,23 @@ impl BridgeValueTag {
     /// caller presents the buffer and the adapter writes it; ownership never
     /// moves.
     pub const AGGREGATE: BridgeValueTag = BridgeValueTag(10);
+
+    /// A value of the top type, `Any`.
+    ///
+    /// **Describes, never travels** — the same standing as
+    /// [`BridgeValueTag::STRUCT`], [`BridgeValueTag::ARRAY`], and
+    /// [`BridgeValueTag::ENUM`], and for a sharper reason than any of them. A
+    /// tag exists so a reader that does not know the signature can still tell
+    /// what the payload is; an erased value's whole content is that its type is
+    /// no longer stated, so this tag names a value the far side is by
+    /// construction unable to read.
+    ///
+    /// It exists because a hybrid manifest carries a row for *every* function in
+    /// the program, most of which never cross. Without a spelling here, a
+    /// `@Runtime` function that merely mentions `Any` could not be described at
+    /// all. An actual crossing is refused where one is emitted — see
+    /// `kira-llvm-backend`'s `AnyAtSeam`.
+    pub const ANY: BridgeValueTag = BridgeValueTag(11);
 }
 
 /// One Kira value crossing the runtime/native boundary.

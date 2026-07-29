@@ -64,11 +64,11 @@ fn install_latest_lays_out_the_toolchain_and_selects_it() {
         "the toolchain must land under <root>/<channel>/<version>"
     );
 
-    let binary = installed.root.join("bin").join("kirac");
-    assert!(binary.is_file(), "bin/kirac must be installed");
+    let binary = installed.root.join("bin").join("kira");
+    assert!(binary.is_file(), "bin/kira must be installed");
     assert!(
         is_executable(&binary),
-        "bin/kirac must keep its executable bit through archive and extract"
+        "bin/kira must keep its executable bit through archive and extract"
     );
     assert!(
         installed
@@ -94,7 +94,7 @@ fn install_latest_lays_out_the_toolchain_and_selects_it() {
         .expect("install must select what it installed");
     assert_eq!(current.channel, Channel::Release);
     assert_eq!(current.version, "1.10.0");
-    assert_eq!(current.primary, "kirac");
+    assert_eq!(current.primary, "kira");
 
     assert!(
         !staging_has_leftovers(home.path()),
@@ -194,6 +194,7 @@ fn an_archive_without_a_primary_binary_is_refused_and_leaves_nothing_behind() {
         &FixtureToolchain {
             with_primary_binary: false,
             with_language_server: true,
+            with_compiler_bridge: true,
             with_foundation: true,
         },
     );
@@ -205,7 +206,7 @@ fn an_archive_without_a_primary_binary_is_refused_and_leaves_nothing_behind() {
         &VersionSpec::Exact("1.7.3".to_string()),
         Channel::Release,
     )
-    .expect_err("a toolchain with no kirac is not installable");
+    .expect_err("a toolchain with no kira is not installable");
     assert!(
         matches!(error, InstallError::MissingPrimaryBinary { .. }),
         "expected a typed validation refusal, got: {error}"
@@ -237,6 +238,7 @@ fn an_archive_without_a_language_server_is_refused() {
         &FixtureToolchain {
             with_primary_binary: true,
             with_language_server: false,
+            with_compiler_bridge: true,
             with_foundation: true,
         },
     );
@@ -257,6 +259,37 @@ fn an_archive_without_a_language_server_is_refused() {
 }
 
 #[test]
+fn an_archive_without_the_compiler_bridge_is_refused() {
+    let releases = TempTree::create("feed");
+    let home = TempTree::create("home");
+    publish(
+        releases.path(),
+        Channel::Release,
+        "1.7.3",
+        &FixtureToolchain {
+            with_primary_binary: true,
+            with_language_server: true,
+            with_compiler_bridge: false,
+            with_foundation: true,
+        },
+    );
+
+    let source = DirectoryReleaseSource::new(releases.path()).expect("supported host");
+    let error = install(
+        home.path(),
+        &source,
+        &VersionSpec::Exact("1.7.3".to_string()),
+        Channel::Release,
+    )
+    .expect_err("a toolchain with no compiler bridge is not installable");
+    assert!(
+        matches!(error, InstallError::MissingRuntimeArchive { .. }),
+        "expected a typed runtime-archive refusal, got: {error}"
+    );
+    assert!(!home.path().join("release").join("1.7.3").exists());
+}
+
+#[test]
 fn an_archive_without_foundation_is_refused() {
     let releases = TempTree::create("feed");
     let home = TempTree::create("home");
@@ -267,6 +300,7 @@ fn an_archive_without_foundation_is_refused() {
         &FixtureToolchain {
             with_primary_binary: true,
             with_language_server: true,
+            with_compiler_bridge: true,
             with_foundation: false,
         },
     );

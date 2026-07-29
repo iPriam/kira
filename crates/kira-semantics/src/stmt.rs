@@ -89,6 +89,10 @@ impl Analyzer<'_> {
         self.analyze_stmt_inner(ctx, stmt_id, &mut produced);
         out.extend(ctx.take_pending_stmts());
         out.append(&mut produced);
+        // A write through a capture cell lands in a temporary and is stored
+        // back afterwards — see [`crate::cells`]. The store-back is queued
+        // while the statement is analyzed and runs here, after it.
+        out.extend(ctx.take_deferred_stmts());
     }
 
     /// Lowers one statement to HIR, appending what it becomes onto `out`.
@@ -134,7 +138,7 @@ impl Analyzer<'_> {
                 }
                 let local_ty = match declared {
                     Some(annotation) => {
-                        if !value_ty.assignable_to(annotation) {
+                        if !self.admits(value_ty, annotation) {
                             self.emit(
                                 name_span,
                                 "KSEM020",
@@ -154,7 +158,26 @@ impl Analyzer<'_> {
                     _ => None,
                 };
                 let name = self.interner.resolve(name).to_owned();
-                let local = ctx.declare_param(&name, local_ty, mutable, ownership);
+                // `let x: Any = 1` stores an erased value, so the crossing
+                // happens here rather than being left for a backend to notice.
+                let value = self.coerce_into(value, local_ty);
+                // A `var` a closure in this function could name moves into a
+                // shared box, so the closure and this frame write the same
+                // storage. The decision is made here — at the declaration —
+                // because every read of the binding below this point has to
+                // agree with it, and the capture that needs it is analyzed
+                // later. A recovered callback-state view is never boxed: it is
+                // a window into storage a host owns, not storage of ours.
+                let boxes = !ownership.is_borrow()
+                    && native_state.is_none()
+                    && ctx.must_box(&name, mutable)
+                    && crate::cells::cell_can_hold(local_ty);
+                let (value, slot_ty) = if boxes {
+                    self.box_binding(value, local_ty)
+                } else {
+                    (value, local_ty)
+                };
+                let local = ctx.declare_param(&name, slot_ty, mutable, ownership);
                 if let Some(type_id) = native_state {
                     ctx.mark_native_state(local, type_id);
                 }
@@ -178,7 +201,7 @@ impl Analyzer<'_> {
                 };
                 let value_expr = self.analyze_expr_expecting(ctx, value, Some(place_ty));
                 let value_ty = self.program.expr(value_expr).type_of();
-                if !value_ty.assignable_to(place_ty) {
+                if !self.admits(value_ty, place_ty) {
                     self.emit(
                         target_span,
                         "KSEM022",
@@ -196,10 +219,22 @@ impl Analyzer<'_> {
                 if place.path.is_empty() {
                     ctx.mark_live(place.local);
                 }
-                let hir = self.program.stmts.alloc(HirStmt::Assign {
-                    place,
-                    value: value_expr,
-                });
+                let value_expr = self.coerce_into(value_expr, place_ty);
+                // Replacing a boxed `var` writes *into the box*, in one step
+                // that releases what was there. Nothing else in the HIR does
+                // that, which is why it is its own statement rather than an
+                // assignment to a slot.
+                let hir = if place.path.is_empty() && self.cell_inner(ctx, place.local).is_some() {
+                    self.program.stmts.alloc(HirStmt::CellSet {
+                        local: place.local,
+                        value: value_expr,
+                    })
+                } else {
+                    self.program.stmts.alloc(HirStmt::Assign {
+                        place,
+                        value: value_expr,
+                    })
+                };
                 out.push(hir);
             }
             Stmt::Return { value, span } => {
@@ -209,6 +244,9 @@ impl Analyzer<'_> {
                 let hir_value =
                     value.map(|expr| self.analyze_expr_expecting(ctx, expr, Some(expected)));
                 self.check_return(ctx, hir_value, span);
+                // After the check, so a value that failed it is reported against
+                // the type it actually had rather than against `Any`.
+                let hir_value = hir_value.map(|expr| self.coerce_into(expr, expected));
                 let hir = self
                     .program
                     .stmts
@@ -520,7 +558,7 @@ impl Analyzer<'_> {
                 let actual = self.program.expr(expr).type_of();
                 if expected == Type::Void {
                     self.emit(span, "KSEM031", "a `Void` function cannot return a value");
-                } else if !actual.assignable_to(expected) {
+                } else if !self.admits(actual, expected) {
                     self.emit(
                         span,
                         "KSEM032",

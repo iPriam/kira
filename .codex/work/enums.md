@@ -42,8 +42,12 @@ payload }` and `EnumTag { value }`.
 
 ## Scope boundary (what is refused, and why)
 
-- **Aggregate payloads** (`struct`/`array`) are refused at the declaration
-  (`KSEM118`). The box carries one word, and an aggregate has no form in it yet.
+- **Aggregate payloads** (`struct`/`array`) are admitted. They do not travel in
+  the one-word slot: the box owns a copy plus the generated clone/free leaves
+  that reclaim it, which is what lets an element type owning itself (`[String]`,
+  `[[Int]]`) be freed by the leaf rather than by the box's kind tag. `KSEM118`
+  now refuses only a type with no payload form at all — `Void`, `CString`,
+  `RawPtr`, `Task`, `NativeState`.
 - **A nested enum payload is now admitted** (`One(EmxInner)`). It is a handle,
   so it fits the one word — and `attempt`/`try`/`handle` forced the issue,
   because a `Result`-shaped value carries its failure enum inside `Error`. The

@@ -8,7 +8,8 @@ use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{ConstructDecl, ConstructKind, Function, Item};
 
 use super::{
-    ConstructFamilyInfo, ConstructFamilyMethod, ConstructInfo, ConstructVariant, ContentSlot,
+    ConstructFamilyField, ConstructFamilyInfo, ConstructFamilyMethod, ConstructInfo,
+    ConstructVariant, ContentSlot,
 };
 use crate::analyze::{Analyzer, Callable, FieldDefault};
 
@@ -44,12 +45,52 @@ impl<'a> Analyzer<'a> {
             };
             self.enum_defaults.push(Vec::new());
 
-            let required = declaration
+            let required: Vec<String> = declaration
                 .fields
                 .iter()
                 .filter(|field| field.required)
                 .map(|field| self.interner.resolve(field.name).to_owned())
                 .collect();
+            // A `@Required let` is a *value* obligation, so it is readable
+            // through the family value the way a computed member is. It gets its
+            // own map rather than joining `methods` because it has no AST
+            // function behind it: what discharges it is the backed
+            // declaration's choice of a stored field or a computed member, and
+            // the dispatcher reads whichever that declaration chose. Only
+            // required fields are here, because only those are guaranteed to
+            // exist on every variant (`KSEM201` is what guarantees it).
+            let field_members = required
+                .iter()
+                .map(|name| {
+                    (
+                        name.clone(),
+                        ConstructFamilyField {
+                            result: Type::Error,
+                            dispatcher: None,
+                        },
+                    )
+                })
+                .collect();
+            // What the family says each of its members is, kept as written so a
+            // `name { … }` shorthand can ask before types are resolved. A field
+            // and a method are both members a shorthand can implement, so both
+            // go in; a method with no written result contributes nothing, which
+            // is what makes the shorthand fall back to the family type.
+            let mut member_types = std::collections::BTreeMap::new();
+            for field in &declaration.fields {
+                member_types.insert(
+                    self.interner.resolve(field.name).to_owned(),
+                    (field.ty, source),
+                );
+            }
+            for method in &declaration.methods {
+                if let Some(result) = method.function.return_type {
+                    member_types.insert(
+                        self.interner.resolve(method.function.name).to_owned(),
+                        (result, source),
+                    );
+                }
+            }
             let mut methods = std::collections::BTreeMap::new();
             for method in &declaration.methods {
                 let method_name = self.interner.resolve(method.function.name).to_owned();
@@ -67,6 +108,8 @@ impl<'a> Analyzer<'a> {
                         function: &method.function,
                         source,
                         computed: method.computed,
+                        required: method.required,
+                        result_declared: method.function.return_type.is_some(),
                         params: Vec::new(),
                         ownership: Vec::new(),
                         result: Type::Error,
@@ -83,7 +126,9 @@ impl<'a> Analyzer<'a> {
                     enum_id,
                     required,
                     methods,
+                    field_members,
                     variants: Vec::new(),
+                    member_types,
                 },
             );
         }
@@ -125,6 +170,7 @@ impl<'a> Analyzer<'a> {
         }
         self.finish_family_variants();
         self.resolve_family_method_signatures();
+        self.resolve_family_field_members();
 
         // Family templates have no runtime struct, but structural clauses still
         // receive their precise refusal.
@@ -159,7 +205,6 @@ impl<'a> Analyzer<'a> {
             });
             defaults.push(None);
         }
-        let param_count = fields.len();
         let mut slots = Vec::new();
         for field in &declaration.fields {
             let field_name = self.interner.resolve(field.name).to_owned();
@@ -189,6 +234,22 @@ impl<'a> Analyzer<'a> {
         let mut own_methods = HashSet::new();
         for method in &declaration.methods {
             let member = self.interner.resolve(method.function.name).to_owned();
+            // `@Required` states an obligation, which only a family can do: a
+            // backed declaration is where an obligation is discharged, and a
+            // bodyless member there would be an implementation that does
+            // nothing.
+            if method.required {
+                self.emit(
+                    method.function.name_span,
+                    "KSEM249",
+                    format!(
+                        "`{name}` is a declaration backed by `{family_name}`, so `{member}` \
+                         implements a requirement rather than declaring one; write it as an \
+                         ordinary `function` member with a body"
+                    ),
+                );
+                continue;
+            }
             self.note_duplicate_member(&mut seen, &member, method.function.name_span);
             own_methods.insert(member.clone());
             if method.computed {
@@ -253,7 +314,6 @@ impl<'a> Analyzer<'a> {
         self.constructs.insert(
             id,
             ConstructInfo {
-                param_count,
                 computed,
                 slots,
                 family,
@@ -310,6 +370,35 @@ impl<'a> Analyzer<'a> {
             .collect();
         for (id, variants) in rows {
             self.program.types.enums_mut().set_variants(id, variants);
+        }
+    }
+
+    /// Resolves the written type of every `@Required let` family member.
+    ///
+    /// Runs with the method signatures, after the family enums exist, because a
+    /// requirement may name its own family — `@Required let body: Widget` on
+    /// `construct Widget` is the ordinary case, not the exotic one.
+    fn resolve_family_field_members(&mut self) {
+        let rows: Vec<_> = self
+            .construct_families
+            .iter()
+            .flat_map(|(family, info)| {
+                info.field_members.keys().filter_map(move |name| {
+                    let (type_ref, source) = *info.member_types.get(name)?;
+                    Some((family.clone(), name.clone(), type_ref, source))
+                })
+            })
+            .collect();
+        for (family, name, type_ref, source) in rows {
+            self.source = source;
+            let result = self.resolve_type_ref(type_ref);
+            if let Some(member) = self
+                .construct_families
+                .get_mut(&family)
+                .and_then(|info| info.field_members.get_mut(&name))
+            {
+                member.result = result;
+            }
         }
     }
 
@@ -452,6 +541,11 @@ impl<'a> Analyzer<'a> {
         }
         let mut own = HashSet::new();
         for method in &declaration.methods {
+            // Refused in `define_construct`, and bodyless: registering it would
+            // mint an implementation that does nothing.
+            if method.required {
+                continue;
+            }
             own.insert(self.interner.resolve(method.function.name));
             callables.push(Callable {
                 receiver: Some(id),
@@ -464,6 +558,14 @@ impl<'a> Analyzer<'a> {
         if let Some(info) = self.construct_families.get(family_name) {
             for (method_name, method) in &info.methods {
                 if own.contains(method_name.as_str()) {
+                    continue;
+                }
+                // A `@Required function` has no body, so there is nothing to
+                // inherit. Registering its empty block as this declaration's
+                // implementation would make an unimplemented requirement look
+                // satisfied; leaving it out is what lets the conformance check
+                // see the gap.
+                if method.required {
                     continue;
                 }
                 callables.push(Callable {
@@ -493,8 +595,9 @@ impl<'a> Analyzer<'a> {
                 "KSEM203",
                 format!(
                     "{} is not executable yet in a construct; the executable slice supports \
-                     `@Required let`, stored and computed `let` members, `body {{ … }}`, \
-                     `function`/`@Consuming function` members, and `some X` / `[some X]` child slots",
+                     `@Required let`, `@Required function`, stored and computed `let` members, \
+                     `body {{ … }}`, `function`/`@Consuming function` members, and \
+                     `some X` / `[some X]` child slots",
                     deferred.label
                 ),
             );

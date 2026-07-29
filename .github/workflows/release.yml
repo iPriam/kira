@@ -2,7 +2,7 @@ name: Release
 
 # Pushing a `v*` tag publishes a GitHub release with, per platform:
 #
-#   kira-<version>-<host-key>.tar.gz   the toolchain: bin/kirac +
+#   kira-<version>-<host-key>.tar.gz   the toolchain: bin/kira +
 #                                      bin/kira-language-server + foundation/
 #   knvm-<version>-<host-key>.tar.gz   the tools: bin/knvm + bin/kira +
 #                                      bin/kira-language-server (launcher alias)
@@ -54,7 +54,7 @@ jobs:
       - name: Resolve the version from the tag
         run: echo "KIRA_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      # The LLVM backend is a hard dependency of kirac; the managed bundle is
+      # The LLVM backend is a hard dependency of kira; the managed bundle is
       # published by the llvm-bundles workflow, once per pin.
       - name: Provision the managed LLVM
         run: |
@@ -74,7 +74,8 @@ jobs:
       - name: Build the release binaries
         run: |
           rustup target add wasm32-unknown-emscripten
-          cargo build --release -p kira-cli -p kira-lsp -p kira-knvm -p kira-bootstrapper
+          cargo build --release -p kira-cli -p kira-lsp -p kira-knvm -p kira-launcher \
+            -p kira-native-bridge -p kira-compiler-bridge
           cargo build --release -p kira-native-bridge --target wasm32-unknown-emscripten
 
       - name: Package the toolchain and tools archives
@@ -84,13 +85,15 @@ jobs:
 
           stage="stage/kira-$KIRA_VERSION"
           mkdir -p "$stage/bin"
-          cp "target/release/kirac$exe" "$stage/bin/"
+          cp "target/release/kira$exe" "$stage/bin/"
           # The language server ships with its compiler so the two cannot
           # drift; knvm's validate refuses an archive without it.
           cp "target/release/kira-language-server$exe" "$stage/bin/"
           # The runtime archives ride beside the compiler, where its archive
-          # resolution looks; the Web one is target-suffixed.
+          # resolution looks; compiler-using programs select the compiler
+          # bridge, and the Web one is target-suffixed.
           cp target/release/libkira_native_bridge.a "$stage/bin/"
+          cp target/release/libkira_compiler_bridge.a "$stage/bin/"
           cp target/wasm32-unknown-emscripten/release/libkira_native_bridge.a \
              "$stage/bin/libkira_native_bridge-wasm32-emscripten.a"
           cp -R foundation "$stage/foundation"
@@ -100,10 +103,14 @@ jobs:
           tools="stage/knvm-$KIRA_VERSION"
           mkdir -p "$tools/bin"
           cp "target/release/knvm$exe" "$tools/bin/"
-          cp "target/release/kira$exe" "$tools/bin/"
+          # The launcher, installed under the name a user types. It is built as
+          # `kira-launcher` because the compiler CLI is the workspace's `kira`,
+          # and one cargo workspace cannot build two binaries of one name; what
+          # goes on PATH is this, and it execs the selected toolchain's `kira`.
+          cp "target/release/kira-launcher$exe" "$tools/bin/kira$exe"
           # The launcher under its language-server name: PATH resolves this
           # copy, and it dispatches to the selected toolchain's real server.
-          cp "target/release/kira$exe" "$tools/bin/kira-language-server$exe"
+          cp "target/release/kira-launcher$exe" "$tools/bin/kira-language-server$exe"
           tar -czf "dist/knvm-$KIRA_VERSION-${{ matrix.host_key }}.tar.gz" -C stage "knvm-$KIRA_VERSION"
 
       - name: Install from the packed archive and run the result

@@ -1,7 +1,7 @@
 //! Analysis: one document's text in, this compiler's diagnostics out.
 //!
 //! The point of this module is that it contains no analysis. The language
-//! server runs the *same* salsa frontend `kirac check` runs, so an editor
+//! server runs the *same* salsa frontend `kira check` runs, so an editor
 //! squiggle and a command-line error are the same computation and cannot drift
 //! into two opinions about one program.
 //!
@@ -10,15 +10,76 @@
 //! The CLI collects diagnostics under its `lowered` query, which calls
 //! `analyzed` and then lowers to IR. Lowering contributes no diagnostics of its
 //! own — `kira-ir` does not even depend on salsa — so everything a user would
-//! see from `kirac check` is already accumulated under `analyzed`. Reaching for
+//! see from `kira check` is already accumulated under `analyzed`. Reaching for
 //! IR here would make the server depend on a backend crate to learn nothing.
 
 use kira_diagnostics::Diagnostic;
 use kira_semantics::{
-    DefinitionAccumulator, DefinitionLink, DiagnosticAccumulator, FILE_SOURCE_ID, SourceProgram,
-    module_source_id,
+    DefinitionAccumulator, DefinitionLink, DiagnosticAccumulator, FILE_SOURCE_ID, ModuleSource,
+    SourceProgram, module_source_id,
 };
 use kira_source::{SourceFile, SourceId};
+use salsa::Setter;
+
+/// The query database every analysis in this server runs against.
+///
+/// One database and one input for the life of the server, rather than a fresh
+/// pair per keystroke. Setting the input starts a new salsa revision, so the
+/// document being edited is re-expanded, re-parsed, and re-analyzed — nothing
+/// stale can survive an edit — while the per-file answers for every module the
+/// edit did not touch are found rather than recomputed.
+pub struct AnalysisSession {
+    /// The database the frontend's memos live in.
+    database: salsa::DatabaseImpl,
+    /// The one program input, re-pointed at each document analyzed.
+    program: Option<SourceProgram>,
+}
+
+impl AnalysisSession {
+    /// Opens a session with nothing analyzed yet.
+    pub fn new() -> Self {
+        Self {
+            database: salsa::DatabaseImpl::new(),
+            program: None,
+        }
+    }
+
+    /// Points the one program input at this document and its modules.
+    ///
+    /// Every field is set, so what the frontend sees is this document and
+    /// nothing left over from the last one.
+    fn point_at(&mut self, path: &str, text: &str, modules: Vec<ModuleSource>) -> SourceProgram {
+        let Some(program) = self.program else {
+            let program = SourceProgram::application(
+                &self.database,
+                text.to_owned(),
+                path.to_owned(),
+                modules,
+            );
+            self.program = Some(program);
+            return program;
+        };
+        program.set_text(&mut self.database).to(text.to_owned());
+        program.set_path(&mut self.database).to(path.to_owned());
+        program.set_modules(&mut self.database).to(modules);
+        program
+            .set_build_kind(&mut self.database)
+            .to(kira_semantics::BuildKind::Application);
+        program
+            .set_shaders(&mut self.database)
+            .to(kira_semantics::PrecompiledShaders::default());
+        program
+            .set_platform(&mut self.database)
+            .to(kira_semantics::host_platform());
+        program
+    }
+}
+
+impl Default for AnalysisSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// One analyzed document: its diagnostics, and the file they point into.
 pub struct Analysis {
@@ -66,12 +127,14 @@ pub const DOCUMENT_SOURCE: SourceId = FILE_SOURCE_ID;
 /// exists. A server that could not find a bundle simply reports the import
 /// unresolved, which is what an editor should say about a broken install.
 ///
-/// A fresh database per call: salsa's incrementality is wasted here, because a
-/// new `SourceProgram` input on each keystroke invalidates everything
-/// downstream of it anyway. Reusing one database across edits is the
-/// optimization this wants, and it is worth doing when a program is big enough
-/// to notice.
-pub fn analyze(path: &str, text: &str) -> Analysis {
+/// Analyzed through a session, so the frontend's per-file answers survive a
+/// keystroke. Setting the input starts a new revision and every whole-program
+/// answer is recomputed, but a module the edit did not touch — every file of
+/// Foundation, every file of every dependency — keeps the same interned key and
+/// is not expanded again. That is the difference between an editor that pays
+/// for the whole program on each character and one that pays for the file being
+/// typed in.
+pub fn analyze(session: &mut AnalysisSession, path: &str, text: &str) -> Analysis {
     let modules = kira_program_graph::load_modules(std::path::Path::new(path), text);
     // The per-file mirror is built before the module list moves into salsa:
     // it is what maps a definition's `SourceId` back to a path and a line
@@ -88,15 +151,15 @@ pub fn analyze(path: &str, text: &str) -> Analysis {
             module.text.clone(),
         )
     }));
-    let db = salsa::DatabaseImpl::new();
     // Analyzed as an application: the server sees one document and no manifest,
     // and the alternative default would silence the missing-`@Main` error for
     // every program in the editor. A library author sees one spurious `KSEM011`
     // until the server learns manifest discovery, which is the smaller wrong
     // answer of the two.
-    let source = SourceProgram::application(&db, text.to_owned(), path.to_owned(), modules);
-    let _ = kira_semantics::analyzed(&db, source);
-    let diagnostics = kira_semantics::analyzed::accumulated::<DiagnosticAccumulator>(&db, source)
+    let source = session.point_at(path, text, modules);
+    let db = &session.database;
+    let _ = kira_semantics::analyzed(db, source);
+    let diagnostics = kira_semantics::analyzed::accumulated::<DiagnosticAccumulator>(db, source)
         .into_iter()
         .map(|accumulated| accumulated.0.clone())
         // A diagnostic in an imported module is that module's to show. The
@@ -110,7 +173,7 @@ pub fn analyze(path: &str, text: &str) -> Analysis {
                 .any(|label| label.span.source == DOCUMENT_SOURCE)
         })
         .collect();
-    let definitions = kira_semantics::analyzed::accumulated::<DefinitionAccumulator>(&db, source)
+    let definitions = kira_semantics::analyzed::accumulated::<DefinitionAccumulator>(db, source)
         .into_iter()
         .map(|accumulated| accumulated.0)
         .collect();
@@ -128,9 +191,56 @@ mod tests {
     use super::*;
     use kira_diagnostics::Severity;
 
+    /// Analyzes one document through a session of its own.
+    ///
+    /// A fresh session per case, so no test can be reading another's analysis;
+    /// [`a_session_analyzes_each_document_on_its_own_terms`] is where reuse
+    /// across documents is asserted on deliberately.
+    fn analyze(path: &str, text: &str) -> Analysis {
+        super::analyze(&mut AnalysisSession::new(), path, text)
+    }
+
+    /// A retained session must not let one document's declarations reach the
+    /// next. Analyzing a program that declares `f`, then one that calls `f`
+    /// without declaring it, has to report the call as unresolved — a stale
+    /// scope would silently accept it.
+    #[test]
+    fn a_session_analyzes_each_document_on_its_own_terms() {
+        let mut session = AnalysisSession::new();
+        let first = super::analyze(
+            &mut session,
+            "t.kira",
+            "function f() -> Int { return 1 }\n@Main function main() { print(f()) return }",
+        );
+        assert!(first.diagnostics.is_empty(), "{:?}", first.diagnostics);
+
+        let second = super::analyze(
+            &mut session,
+            "t.kira",
+            "@Main function main() { print(f()) return }",
+        );
+        assert!(
+            second
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == Some("KSEM061")),
+            "the previous document's `f` must not still be in scope: {:?}",
+            second.diagnostics
+        );
+
+        // And analyzing the first program again through the same session still
+        // answers cleanly, so nothing was poisoned by the second.
+        let again = super::analyze(
+            &mut session,
+            "t.kira",
+            "function f() -> Int { return 1 }\n@Main function main() { print(f()) return }",
+        );
+        assert!(again.diagnostics.is_empty(), "{:?}", again.diagnostics);
+    }
+
     /// New syntax reaches the editor for free, and this is what proves it: the
     /// server runs the compiler's own `analyzed` query, so a `for` loop it has
-    /// never heard of squiggles exactly when `kirac check` says it should.
+    /// never heard of squiggles exactly when `kira check` says it should.
     #[test]
     fn loop_syntax_analyzes_the_way_the_compiler_does() {
         let clean = analyze(
@@ -281,7 +391,7 @@ mod tests {
     /// `attempt`/`try`/`handle` needs no LSP wiring, and this says so.
     ///
     /// The construct reaches the editor by construction: the server serves
-    /// diagnostics from the same salsa `analyzed` query `kirac check` uses, so
+    /// diagnostics from the same salsa `analyzed` query `kira check` uses, so
     /// new syntax is understood the moment analysis understands it. A clean
     /// `attempt` produces no diagnostics, and each of its own checks squiggles
     /// with a span an editor can render.
@@ -415,7 +525,7 @@ mod tests {
     /// The server analyzes the document as the *entry* file of a program and
     /// reads the modules it imports off disk, so a name that only a sibling
     /// module declares resolves in the editor exactly as it does for
-    /// `kirac check` — and an import that names no file squiggles.
+    /// `kira check` — and an import that names no file squiggles.
     #[test]
     fn imports_analyze_the_way_the_compiler_does() {
         let directory = std::env::temp_dir().join(format!(

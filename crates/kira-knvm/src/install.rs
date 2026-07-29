@@ -28,13 +28,20 @@ use crate::cli::VersionSpec;
 use crate::source::{ReleaseSource, ReleaseSourceError};
 
 /// The binary a toolchain's `current.toml` names as its primary.
-pub const PRIMARY_BINARY: &str = "kirac";
+pub const PRIMARY_BINARY: &str = "kira";
 
 /// The directory name of a package manifest inside the bundled Foundation.
 const FOUNDATION_DIR_NAME: &str = "foundation";
 
 /// The manifest that marks the bundled Foundation as a real Kira package.
 const PACKAGE_MANIFEST_FILE_NAME: &str = "package.kira";
+
+/// Native archives every toolchain must carry beside its compiler.
+const RUNTIME_ARCHIVE_NAMES: [&str; 3] = [
+    "libkira_native_bridge.a",
+    "libkira_compiler_bridge.a",
+    "libkira_native_bridge-wasm32-emscripten.a",
+];
 
 /// The directory installs are staged in before being moved into place.
 const STAGING_DIR_NAME: &str = ".staging";
@@ -85,6 +92,16 @@ pub enum InstallError {
     )]
     MissingLanguageServer {
         /// Where the language server was expected.
+        expected: PathBuf,
+    },
+    /// The unpacked tree ships no runtime archive its compiler may select.
+    #[error(
+        "the unpacked toolchain has no runtime archive at `{}` — native and Web \
+         programs require the archives built with their compiler",
+        .expected.display()
+    )]
+    MissingRuntimeArchive {
+        /// Where the runtime archive was expected.
         expected: PathBuf,
     },
     /// The unpacked tree ships no Foundation beside its binaries.
@@ -353,7 +370,7 @@ fn locate_payload(unpacked: &Path, archive: &Path) -> Result<PathBuf, InstallErr
 /// Refuses an unpacked tree that is not a usable toolchain.
 ///
 /// The things checked are the things that make the tree work: the launcher
-/// dispatches to `bin/kirac` and to `bin/kira-language-server`, and
+/// dispatches to `bin/kira` and to `bin/kira-language-server`, and
 /// `import Foundation` resolves to `foundation/` beside them. The language
 /// server is a hard requirement on purpose — an install without one leaves an
 /// editor silently running whatever stale server it finds elsewhere.
@@ -371,6 +388,13 @@ pub(crate) fn validate(payload: &Path) -> Result<(), InstallError> {
         .join(executable_name(LANGUAGE_SERVER_BINARY));
     if !server.is_file() || !is_executable(&server)? {
         return Err(InstallError::MissingLanguageServer { expected: server });
+    }
+
+    for name in RUNTIME_ARCHIVE_NAMES {
+        let archive = payload.join("bin").join(name);
+        if !archive.is_file() {
+            return Err(InstallError::MissingRuntimeArchive { expected: archive });
+        }
     }
 
     let manifest = payload

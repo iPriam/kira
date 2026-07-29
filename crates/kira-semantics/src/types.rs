@@ -74,7 +74,11 @@ impl Analyzer<'_> {
     pub(crate) fn resolve_type_in(&mut self, id: TypeRefId, context: &NameContext) -> Type {
         match self.tree.type_ref(id).clone() {
             TypeRef::Named { name, span } => self.resolve_named_type(name, span, context),
-            TypeRef::AnyConstruct {
+            // `some Family` is the existential over a construct family. It
+            // resolves to exactly what bare `Family` resolves to — the
+            // synthesized family enum — so the node exists to earn the check
+            // below, not to name a second type.
+            TypeRef::SomeConstruct {
                 family,
                 family_span,
                 ..
@@ -94,13 +98,23 @@ impl Analyzer<'_> {
                             family_span,
                             "KSEM237",
                             format!(
-                                "`Any {name}` requires a construct family; `{name}` is not one"
+                                "`some` requires a construct: `{name}` is not a declared \
+                                 construct family. Write `some ConstructName`, or drop `some` \
+                                 for a non-construct type."
                             ),
                         );
                         Type::Error
                     }
                 }
             }
+            // The `name { … }` member shorthand's result type: whatever the
+            // family declared that member to be.
+            TypeRef::ConstructMember {
+                family,
+                family_span,
+                member,
+                ..
+            } => self.resolve_construct_member_type(family, family_span, member),
             // A generic instantiation resolves to the enum it monomorphizes
             // into — an ordinary declared type by the time anyone else looks.
             TypeRef::Generic {
@@ -151,6 +165,55 @@ impl Analyzer<'_> {
             // `<error>`" on top of it would name a type nobody wrote.
             TypeRef::Error { .. } => Type::Error,
         }
+    }
+
+    /// Resolves the `name { … }` shorthand's result type against its family.
+    ///
+    /// The shorthand implements a member the family named, so the family is what
+    /// says what that member returns: a `@Required function test() -> Any` makes
+    /// `test { … }` return `Any`, and a `@Required let body: Widget` makes
+    /// `body { … }` return `some Widget`. Neither is a special case of the other,
+    /// and neither mentions a member name this compiler knows.
+    ///
+    /// A family that declares no such member — or declares it with no written
+    /// type — falls back to the family type. That is the answer the shorthand
+    /// always gave, and it is still the right one when the family has said
+    /// nothing to override it.
+    fn resolve_construct_member_type(
+        &mut self,
+        family: kira_core::Symbol,
+        family_span: Span,
+        member: kira_core::Symbol,
+    ) -> Type {
+        let written = self.interner.resolve(family).to_owned();
+        let Some(qualified) = self.split_module_qualifier(&written, family_span) else {
+            return Type::Error;
+        };
+        let name = qualified.text;
+        let Some(enum_id) = self.construct_family_type(&name) else {
+            self.emit(
+                family_span,
+                "KSEM237",
+                format!("`{name}` is not a construct family"),
+            );
+            return Type::Error;
+        };
+        let member = self.interner.resolve(member).to_owned();
+        let declared = self
+            .construct_families
+            .get(&name)
+            .and_then(|info| info.member_types.get(&member))
+            .copied();
+        let Some((type_ref, declared_in)) = declared else {
+            return Type::Enum(enum_id);
+        };
+        // Resolved against the *family's* file: `test() -> Result<Any, Failure>`
+        // names types the family's imports bring in, which the file writing the
+        // shorthand need never have imported.
+        let outer = std::mem::replace(&mut self.source, declared_in);
+        let resolved = self.resolve_type_ref(type_ref);
+        self.source = outer;
+        resolved
     }
 
     /// Splits a module qualifier off a written type name, or reports why the

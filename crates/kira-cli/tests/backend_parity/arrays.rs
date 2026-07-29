@@ -3,7 +3,7 @@
 //! traps.
 //!
 //! These are the shapes the wasm suite already proves across the VM and both
-//! address widths; running the same source through the real `kirac` on all
+//! address widths; running the same source through the real `kira` on all
 //! three of its backends is the other half of the parity claim — the native
 //! backend frees an array through the runtime where wasm's bump allocator never
 //! does, so a leak or a double free would show up as a divergence here.

@@ -16,6 +16,7 @@
 mod borrow_alias;
 pub mod ir;
 pub mod lower;
+mod tasks;
 
 pub use ir::{
     ConvertKind, IrBinOp, IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport, IrFunction,
@@ -51,6 +52,7 @@ mod tests {
             locals: Vec::new(),
             body: vec![print_stmt, return_stmt],
             is_main: true,
+            is_async: false,
             execution: kira_runtime_abi::Execution::Inherited,
             mutates_self: false,
             name_span: Span::new(0, 4),

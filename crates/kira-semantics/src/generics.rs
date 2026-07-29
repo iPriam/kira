@@ -9,6 +9,17 @@
 //! mangled name `Result<Int, AppError>`. Two writings of the same instantiation
 //! find the same row, because the mangled name is the memo key.
 //!
+//! # A constructor spells no type arguments
+//!
+//! `Result.Ok(1)` is the template's name in front of a variant, and the
+//! language has no `Result<Int, Bool>.Ok(1)` to write instead — so the
+//! *position* supplies the instantiation, exactly as it does for `.Ok(1)`. The
+//! name in front only has to agree with what the position already asked for,
+//! which is what [`Analyzer::generic_instantiation_expected`] checks against
+//! the template recorded for each minted row. Written where nothing asks for an
+//! instantiation of that template, it is `KSEM254` — a mistake with its own
+//! fix, and never a guess at which instantiation was meant.
+//!
 //! # Why this costs no backend anything
 //!
 //! By the time anything below semantics looks, a generic enum has become a
@@ -36,7 +47,7 @@
 
 use std::collections::HashMap;
 
-use kira_semantics_model::Type;
+use kira_semantics_model::{EnumId, Instantiation, Type};
 use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{EnumDecl, TypeRefId};
 
@@ -131,6 +142,26 @@ impl<'a> Analyzer<'a> {
     /// what is missing rather than "unknown type".
     pub(crate) fn is_generic_enum(&self, name: &str) -> bool {
         self.generic_enums.contains_key(name)
+    }
+
+    /// The instantiation of the template `name` that `expected` already asks
+    /// for, if that is what it asks for.
+    ///
+    /// This is what lets `Result.Ok(1)` mean the same thing `.Ok(1)` does: a
+    /// qualified spelling carries no type arguments, so the *position* is what
+    /// supplies them, and the template name written in front only has to agree
+    /// with what the position already said. It agrees when the expected enum is
+    /// an instantiation of exactly this template — `Result<Int, Bool>` for
+    /// `Result`, and not for `Outcome`.
+    pub(crate) fn generic_instantiation_expected(
+        &self,
+        name: &str,
+        expected: Option<Type>,
+    ) -> Option<EnumId> {
+        let Some(Type::Enum(id)) = expected else {
+            return None;
+        };
+        (self.program.types.enums().template_of(id) == Some(name)).then_some(id)
     }
 
     /// Resolves the type parameter `name` stands for in the substitution
@@ -280,6 +311,21 @@ impl<'a> Analyzer<'a> {
             // the same ids the table mints.
             Some(id) => {
                 self.enum_defaults.push(defaults);
+                // Remembering what minted this row is what lets a later
+                // `Result.Ok(1)` recognize its own instantiation, and what lets
+                // `Result<Int, E>` widen into `Result<Any, E>`; the mangled name
+                // spells the arguments, so neither can be read back off it
+                // without parsing what was printed. It is recorded in the enum
+                // table rather than beside the analyzer because the widening
+                // rule is asked of the program's types long after analysis is
+                // over — see [`kira_semantics_model::TypeTable::admits`].
+                self.program.types.enums_mut().record_instantiation(
+                    id,
+                    Instantiation {
+                        template: text.to_owned(),
+                        arguments: args.to_vec(),
+                    },
+                );
                 Type::Enum(id)
             }
             // Unreachable in practice — the memo above already returned for a

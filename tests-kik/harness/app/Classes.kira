@@ -1,0 +1,322 @@
+// Classes / inheritance, in depth.
+//
+// Exercises: single inheritance, multiple inheritance, multi-level (3-deep)
+// inheritance, inherited fields and inherited methods, parent-qualified member
+// access (`Parent.method()` / `Parent.field`), exact-signature method overrides
+// (including with parameters), inherited field-default overrides
+// (`override let ...`), "super-call" composition via parent-qualification, and
+// calling inherited + overridden methods in loops over arrays of instances.
+// Every result is folded into one deterministic Int checksum.
+//
+// PARITY NOTE: this module intentionally never lets an *inherited* base method
+// call `self.<m>()` where a descendant overrides `<m>`. That self-dispatch is
+// virtual on vm/hybrid but static on llvm (a known backend divergence), so it is
+// avoided here. "Calling up" is expressed only with parent-qualified
+// `Parent.method()` inside overrides, which is consistent on every backend.
+// Inherited methods here only read `self` fields or call parent-qualified
+// methods, both of which agree across backends.
+
+// ---------------------------------------------------------------------------
+// H1: three-level single inheritance, field-default overrides, super-calls.
+// ---------------------------------------------------------------------------
+
+class ClsAccount {
+    var balance: Int = 100
+    let rate: Int = 2
+
+    // reads fields only -> consistent even when called on a subclass instance
+    function gross() -> Int {
+        return self.balance * self.rate
+    }
+
+    function tier() -> Int {
+        return 1
+    }
+}
+
+class ClsSavings extends ClsAccount {
+    override let rate = 5
+
+    override function tier() -> Int {
+        return 2
+    }
+
+    // super-call style: parent-qualified call reads the (single-storage,
+    // possibly overridden) `rate`/`balance` fields. Consistent across backends.
+    function bonus() -> Int {
+        return ClsAccount.gross() + self.balance
+    }
+}
+
+class ClsPremium extends ClsSavings {
+    override let rate = 11
+
+    override function tier() -> Int {
+        return 3
+    }
+}
+
+function clsH1() -> Int {
+    var acc = 0
+
+    let a = ClsAccount()
+    acc = acc + a.gross()           // 100*2 = 200
+    acc = acc + a.tier()            // 1
+
+    let s = ClsSavings()
+    acc = acc + s.gross()           // inherited method, overridden rate: 100*5 = 500
+    acc = acc + s.tier()            // overridden: 2
+    acc = acc + s.bonus()           // ClsAccount.gross()=500 + balance 100 = 600
+
+    let p = ClsPremium()
+    acc = acc + p.gross()           // inherited 2 levels up; rate overridden again: 100*11 = 1100
+    acc = acc + p.tier()            // overridden: 3
+    acc = acc + p.bonus()           // inherited from ClsSavings: 1100 + 100 = 1200
+
+    // Mutate a var field on a leaf instance, then read inherited method.
+    var p2 = ClsPremium()
+    var i = 0
+    while i < 10 {
+        p2.balance = p2.balance + 7
+        i = i + 1
+    }
+    acc = acc + p2.balance          // 100 + 70 = 170
+    acc = acc + p2.gross()          // 170 * 11 = 1870
+
+    return acc
+}
+
+// ---------------------------------------------------------------------------
+// H2: multiple inheritance with same-named members; parent-qualified
+// disambiguation; folded over a loop.
+// ---------------------------------------------------------------------------
+
+class ClsAlpha {
+    let v: Int = 3
+
+    function weight() -> Int {
+        return 7
+    }
+
+    function tag(n: Int) -> Int {
+        return n + 100
+    }
+}
+
+class ClsBeta {
+    let v: Int = 4
+
+    function weight() -> Int {
+        return 9
+    }
+
+    function tag(n: Int) -> Int {
+        return n + 200
+    }
+}
+
+class ClsCombo extends ClsAlpha, ClsBeta {
+    // Disambiguate identically-named inherited members by parent qualification.
+    function blendFields() -> Int {
+        return ClsAlpha.v + ClsBeta.v
+    }
+
+    function blendWeights() -> Int {
+        return ClsAlpha.weight() + ClsBeta.weight()
+    }
+
+    function blendTags(n: Int) -> Int {
+        return ClsAlpha.tag(n) + ClsBeta.tag(n)
+    }
+}
+
+function clsH2() -> Int {
+    var acc = 0
+    let c = ClsCombo()
+
+    acc = acc + c.blendFields()     // 3 + 4 = 7
+    acc = acc + c.blendWeights()    // 7 + 9 = 16
+
+    var n = 0
+    var sum = 0
+    while n < 5 {
+        sum = sum + c.blendTags(n)  // (n+100)+(n+200) = 2n+300
+        n = n + 1
+    }
+    acc = acc + sum                 // 300+302+304+306+308 = 1520
+
+    // Direct parent-method values via the combined child, in a loop.
+    var k = 0
+    while k < 4 {
+        acc = acc + c.blendFields() * k   // 7*0 + 7*1 + 7*2 + 7*3 = 42
+        k = k + 1
+    }
+
+    return acc
+}
+
+// ---------------------------------------------------------------------------
+// H3: array of leaf instances; inherited field reads + overridden method
+// dispatch folded in a loop. Also exercises exact-signature overrides with a
+// parameter and a "super-call" override.
+// ---------------------------------------------------------------------------
+
+class ClsShape {
+    let sides: Int = 0
+
+    // never overridden -> safe to read/call from anywhere
+    function baseCost() -> Int {
+        return 1
+    }
+
+    // exact-signature method; overridden below with the same signature
+    function scaledArea(k: Int) -> Int {
+        return 0
+    }
+}
+
+class ClsSquare extends ClsShape {
+    override let sides = 4
+    var side: Int = 1
+
+    override function scaledArea(k: Int) -> Int {
+        return self.side * self.side * k
+    }
+}
+
+class ClsCube extends ClsSquare {
+    // super-call override: parent-qualified call into ClsSquare's version.
+    override function scaledArea(k: Int) -> Int {
+        return ClsSquare.scaledArea(k) * 6
+    }
+}
+
+function clsH3() -> Int {
+    var acc = 0
+
+    // Build an array of squares; mutate each via a local before append.
+    var squares: [ClsSquare] = []
+    var i = 0
+    while i < 6 {
+        var sq = ClsSquare()
+        sq.side = i + 1
+        squares.append(move sq)
+        i = i + 1
+    }
+
+    // Loop: overridden method (scaledArea) + inherited field (sides) +
+    // inherited never-overridden method (baseCost).
+    var j = 0
+    while j < squares.count {
+        acc = acc + squares[j].scaledArea(2)   // side^2 * 2
+        acc = acc + squares[j].sides            // 4 each
+        acc = acc + squares[j].baseCost()       // 1 each
+        j = j + 1
+    }
+    // scaledArea: (1+4+9+16+25+36)*2 = 91*2 = 182 ; sides 4*6 = 24 ; baseCost 6
+    // subtotal so far for the loop = 212
+
+    // Cube uses the super-call override on a single instance, in a loop.
+    var c = ClsCube()
+    c.side = 3
+    var m = 0
+    while m < 4 {
+        acc = acc + c.scaledArea(m)   // (3*3*m)*6 = 54*m -> 0+54+108+162 = 324
+        acc = acc + c.sides           // inherited override default: 4 each -> 16
+        m = m + 1
+    }
+
+    return acc
+}
+
+// ---------------------------------------------------------------------------
+// H4: exact-signature parameterized override resolved through a polymorphic
+// helper, plus inherited-field-default override chains, folded over inputs.
+// ---------------------------------------------------------------------------
+
+class ClsToll {
+    let base: Int = 10
+
+    // overridden with identical signature in subclasses
+    function charge(km: Int) -> Int {
+        return self.base + km
+    }
+}
+
+class ClsBridge extends ClsToll {
+    override let base = 20
+
+    override function charge(km: Int) -> Int {
+        return self.base + km * 2
+    }
+}
+
+class ClsTunnel extends ClsBridge {
+    override let base = 30
+
+    // super-call: ClsBridge.charge then surcharge
+    override function charge(km: Int) -> Int {
+        return ClsBridge.charge(km) + 5
+    }
+}
+
+// Helpers take a concrete leaf type so dispatch is unambiguous and consistent.
+function clsChargeBridge(b: ClsBridge, km: Int) -> Int {
+    return b.charge(km)
+}
+
+function clsH4() -> Int {
+    var acc = 0
+
+    let t = ClsToll()
+    let b = ClsBridge()
+    let tn = ClsTunnel()
+
+    var km = 0
+    while km < 5 {
+        acc = acc + t.charge(km)    // 10 + km          -> 10,11,12,13,14 = 60
+        acc = acc + b.charge(km)    // 20 + 2km         -> 20,22,24,26,28 = 120
+        acc = acc + tn.charge(km)   // (30 + 2km) + 5   -> 35,37,39,41,43 = 195
+        km = km + 1
+    }
+    // 60 + 120 + 195 = 375
+
+    // Pass an owned leaf instance to a helper (requires move).
+    let b2 = ClsBridge()
+    acc = acc + clsChargeBridge(move b2, 7)   // 20 + 14 = 34
+
+    // Field-default override chain read directly.
+    acc = acc + t.base + b.base + tn.base     // 10 + 20 + 30 = 60
+
+    return acc
+}
+
+// ---------------------------------------------------------------------------
+// Entry: fold all hierarchies into one checksum with distinct weights so a
+// regression in any single hierarchy changes the printed value.
+// ---------------------------------------------------------------------------
+
+function clsSection() -> Int {
+    let h1 = clsH1()
+    let h2 = clsH2()
+    let h3 = clsH3()
+    let h4 = clsH4()
+
+    var checksum = 0
+    checksum = checksum + h1 * 1
+    checksum = checksum + h2 * 7
+    checksum = checksum + h3 * 31
+    checksum = checksum + h4 * 131
+    // Mix in a rolling fold so position matters too.
+    var fold = 17
+    let parts = [h1, h2, h3, h4]
+    var i = 0
+    while i < parts.count {
+        fold = fold * 33 + parts[i]
+        i = i + 1
+    }
+    checksum = checksum + fold
+
+    return checksum
+}
+

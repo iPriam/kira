@@ -23,7 +23,7 @@ use kira_llvm_backend::{LlvmError, NativeLinkInputs};
 use crate::native::Artifacts;
 use crate::serve::{ServeError, Server, open_browser};
 
-/// The emscripten-target runtime archive's file name beside `kirac`.
+/// The emscripten-target runtime archive's file name beside `kira`.
 ///
 /// The name carries the target so it can sit beside the host archive without
 /// either being mistaken for the other: linking a host runtime into a wasm
@@ -281,8 +281,8 @@ pub fn run(
 
 /// Locates the emscripten-target runtime archive.
 ///
-/// Installed toolchains ship it beside `kirac` (knvm's installers put it
-/// there); a `kirac` running out of a cargo target tree finds the archive
+/// Installed toolchains ship it beside `kira` (knvm's installers put it
+/// there); a `kira` running out of a cargo target tree finds the archive
 /// where `cargo build -p kira-native-bridge --target wasm32-unknown-emscripten`
 /// left it, two directories over.
 fn wasm_runtime_archive() -> Option<PathBuf> {
@@ -294,7 +294,7 @@ fn wasm_runtime_archive() -> Option<PathBuf> {
         return Some(installed);
     }
 
-    // target/<profile>/kirac -> target/wasm32-unknown-emscripten/<profile>/
+    // target/<profile>/kira -> target/wasm32-unknown-emscripten/<profile>/
     let profile = directory.file_name()?.to_owned();
     let dev = directory
         .parent()?

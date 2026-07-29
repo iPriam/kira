@@ -1,5 +1,21 @@
 //! Top-level items: functions, structs, enums, their members, and the written
 //! type references they name.
+//!
+//! # Why this file stays whole past the size ladder
+//!
+//! It is 27 node definitions and four methods: a grammar written down, not
+//! logic that grew. [`Item`] enumerates every variant, and each variant's node
+//! sits below it, so the file reads top-down in the order the grammar does.
+//! Splitting it would put an [`Item`] variant in one file and its payload in
+//! another, and the split would have to fall somewhere — items versus members,
+//! or aggregates versus functions — that the grammar does not actually divide:
+//! a [`ClassDecl`] holds [`FieldDecl`]s, [`OverrideFieldDecl`]s, and
+//! [`ClassMethod`]s, each of which holds a [`Function`]. Every consumer matches
+//! on [`Item`] and walks straight through, so nobody would import one half.
+//!
+//! The ladder's concern is a file where behavior accumulates until no one can
+//! hold it in mind. Nothing here has behavior to accumulate; the file grows only
+//! when the language gains syntax, and then it grows by a node.
 
 use super::{Block, ExprId, TypeRefId};
 use crate::ownership::OwnershipMode;
@@ -38,7 +54,7 @@ pub enum Item {
 /// New Kira design proven against the oracle's *meaning*: the oracle documents
 /// `extend` as validate-only (modifier bodies are checked, never lowered).
 /// Here each modifier lowers to one real function whose receiver is the family
-/// value (`Any Family`) — so a fluent chain (`text.padding(8).background(fill)`)
+/// value (`some Family`) — so a fluent chain (`text.padding(8).background(fill)`)
 /// runs on every backend. A modifier returns the family type and wraps the
 /// receiver via `self`.
 #[derive(Debug, Clone, PartialEq)]
@@ -98,6 +114,15 @@ pub struct ConstructMethod {
     /// read as a property rather than called. The bridge member (`node`) is the
     /// canonical one.
     pub computed: bool,
+    /// Whether this came from a `@Required function name(…) -> T` member: a
+    /// **bodyless** signature the family declares and every backed declaration
+    /// must implement itself.
+    ///
+    /// [`function`](Self::function) then carries an empty body, which is not a
+    /// body to inherit — it is the absence of one. A backed declaration that
+    /// leaves the member unimplemented has no implementation at all, and that is
+    /// what the conformance check reports.
+    pub required: bool,
     /// The method itself: a zero-argument function for a computed member, or the
     /// written signature for a `function` member.
     pub function: Function,
@@ -359,15 +384,23 @@ pub struct ParentRef {
 
 /// An `override let name = value` member: a new default for an inherited field.
 ///
-/// It carries no type, because it declares no field — the inherited field's
-/// slot and type are what it rebinds. That is why this is its own node rather
-/// than a [`FieldDecl`] with a flag.
+/// It declares no field — the inherited field's slot and type are what it
+/// rebinds — which is why this is its own node rather than a [`FieldDecl`] with
+/// a flag. Its type is therefore optional and, when written, a restatement
+/// rather than a declaration; see [`Self::ty`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct OverrideFieldDecl {
     /// The inherited member's name.
     pub name: Symbol,
     /// Span of the name token.
     pub name_span: Span,
+    /// The restated field type, when the declaration wrote one.
+    ///
+    /// An override may name the inherited type for readability, and doing so
+    /// changes nothing: the slot keeps the type it was declared with. It is
+    /// checked rather than ignored, because a type that *disagrees* with the
+    /// inherited one is a mistake about which field is being rebound.
+    pub ty: Option<TypeRefId>,
     /// The replacement default. Required: an override with no value would say
     /// nothing.
     pub default: ExprId,
@@ -522,6 +555,12 @@ pub struct Function {
     pub name_span: Span,
     /// Whether the declaration carried the `@Main` annotation.
     pub is_main: bool,
+    /// Whether the declaration was written `async function`.
+    ///
+    /// `async` is contextual, not a keyword: it is an ordinary identifier
+    /// everywhere else, and only the token immediately before `function` at a
+    /// declaration's start reads as this marker.
+    pub is_async: bool,
     /// The `@FFI.Extern` marker, when the declaration carried one.
     ///
     /// A function carrying this is bodyless (its [`body`](Function::body) is an
@@ -595,17 +634,45 @@ pub enum TypeRef {
         /// Where the type name appears.
         span: Span,
     },
-    /// A construct-qualified heterogeneous type: `Any Widget`.
+    /// An existential over a construct family: `some Widget`.
+    ///
+    /// Names "a value of some concrete declaration backing this family" — the
+    /// heterogeneous family value, which is what a child slot holds and what a
+    /// function returns when the concrete declaration is its own business.
     ///
     /// The family stays separate from ordinary nominal types in syntax so
-    /// semantics can reject `Any` applied to a struct, class, alias, or builtin
-    /// instead of silently treating the qualifier as decoration.
-    AnyConstruct {
+    /// semantics can reject `some` applied to a struct, class, alias, or
+    /// builtin instead of silently treating the qualifier as decoration. Bare
+    /// `Widget` resolves to the same [`Type`](kira_semantics_model::Type), so
+    /// this variant buys the *check*, not a distinct resolved type.
+    SomeConstruct {
         /// The construct family's name, including any module qualifier.
         family: Symbol,
         /// Span of the family name alone, for definition links and diagnostics.
         family_span: Span,
-        /// Span covering `Any` through the family name.
+        /// Span covering `some` through the family name.
+        span: Span,
+    },
+    /// The result type a construct family declares for one of its members.
+    ///
+    /// Written by nobody: this is what the `name { … }` member shorthand
+    /// desugars its result type to. The shorthand says "here is the body of the
+    /// member the family calls `name`", and what that member *returns* is the
+    /// family's to state — but the parser has no families, so it defers the
+    /// question instead of guessing.
+    ///
+    /// Resolving it asks the named family what it declared for that member.
+    /// A family that declared none falls back to the family type itself, which
+    /// is what keeps a `body { … }` on a family that never mentions `body`
+    /// meaning what it always did.
+    ConstructMember {
+        /// The construct family whose member this is, including any qualifier.
+        family: Symbol,
+        /// Span of the family name, for the diagnostic when it is not a family.
+        family_span: Span,
+        /// The member name the shorthand wrote.
+        member: Symbol,
+        /// Span covering the shorthand's member name.
         span: Span,
     },
     /// A generic instantiation: `Result<Int, AppError>`.
@@ -670,7 +737,8 @@ impl TypeRef {
     pub fn span(&self) -> Span {
         match self {
             TypeRef::Named { span, .. }
-            | TypeRef::AnyConstruct { span, .. }
+            | TypeRef::SomeConstruct { span, .. }
+            | TypeRef::ConstructMember { span, .. }
             | TypeRef::Generic { span, .. }
             | TypeRef::Array { span, .. }
             | TypeRef::Function { span, .. }

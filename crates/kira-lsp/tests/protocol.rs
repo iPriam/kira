@@ -288,7 +288,7 @@ fn an_unsupported_request_is_refused_without_killing_the_server() {
 }
 
 /// New syntax reaches the editor by construction: the server serves the same
-/// salsa `analyzed` query `kirac check` does, so a `type` alias needs no LSP
+/// salsa `analyzed` query `kira check` does, so a `type` alias needs no LSP
 /// change to be understood. This is the test that says so — an aliased program
 /// is clean, and a cyclic alias squiggles with the code semantics gave it.
 #[test]
@@ -324,7 +324,7 @@ fn type_aliases_reach_the_editor_through_the_shared_frontend() {
 }
 
 /// Closures reach the editor by construction, for the same reason type aliases
-/// do: the server serves the same salsa `analyzed` query `kirac check` does, so
+/// do: the server serves the same salsa `analyzed` query `kira check` does, so
 /// a closure needs no LSP change to be understood. A closure program is clean,
 /// and a refused capture squiggles with the code semantics gave it.
 #[test]
@@ -343,19 +343,36 @@ fn closures_reach_the_editor_through_the_shared_frontend() {
         "a closure program is clean, got {clean}",
     );
 
+    // A shared mutable capture is a program the editor sees as clean: the `var`
+    // moved into a capture cell at its declaration and the closure holds a
+    // share of it, so there is nothing to report.
     let captured_var = server.open(
         "file:///tmp/kira-lsp-test/capture.kira",
-        "function run(f: () -> Int) -> Int {\n    return f()\n}\n\
+        "function run(f: () -> Void) {\n    f()\n    return\n}\n\
          @Main\nfunction main() {\n    var total = 0\n    \
-         print(run { in return total })\n    return\n}\n",
+         run { in total = total + 1 }\n    print(total)\n    return\n}\n",
+    );
+    assert_eq!(
+        captured_var.as_array().map(Vec::len),
+        Some(0),
+        "a closure writing a captured `var` is clean, got {captured_var}",
+    );
+
+    // The capture that still has no shared form: a `borrow mut` parameter names
+    // the caller's storage rather than storage of its own.
+    let borrowed = server.open(
+        "file:///tmp/kira-lsp-test/borrowed.kira",
+        "function run(f: () -> Void) {\n    f()\n    return\n}\n\
+         function step(n: borrow mut Int) {\n    run { in n = n + 1 }\n    return\n}\n\
+         @Main\nfunction main() {\n    var v = 0\n    step(v)\n    print(v)\n    return\n}\n",
     );
     assert!(
-        captured_var
+        borrowed
             .as_array()
             .expect("an array of diagnostics")
             .iter()
             .any(|diagnostic| diagnostic["code"] == "KSEM117"),
-        "the refused capture is reported to the editor: {captured_var}",
+        "the refused capture is reported to the editor: {borrowed}",
     );
 
     server.shutdown();

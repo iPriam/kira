@@ -149,6 +149,13 @@ impl Scan<'_> {
                 let body = body.clone();
                 self.stmts(&body);
             }
+            // A cell slot is never a borrow alias: it holds a box this frame
+            // owns a share of, so no other slot can stand in for it. Writing
+            // through one disqualifies it exactly as a whole-binding assignment
+            // would.
+            HirStmt::CellSet { local, .. } => {
+                self.disqualified.insert(local.0);
+            }
             HirStmt::Return { .. } | HirStmt::Expr { .. } | HirStmt::Break | HirStmt::Continue => {}
         }
     }

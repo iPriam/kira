@@ -42,7 +42,7 @@ impl Drop for Scratch {
     }
 }
 
-/// Runs `kirac live` on `path` with `backend` and returns (stdout, stderr, ok).
+/// Runs `kira live` on `path` with `backend` and returns (stdout, stderr, ok).
 fn live(path: &Path, backend: &str) -> (String, String, bool) {
     live_with(path, backend, &[])
 }
@@ -72,7 +72,7 @@ impl Drop for Session {
     }
 }
 
-/// Runs a watched `kirac live` session, edits the program once the session is
+/// Runs a watched `kira live` session, edits the program once the session is
 /// actually watching, and reads until `done` says enough has arrived — then
 /// stops the session and returns what it printed.
 ///
@@ -96,7 +96,7 @@ fn live_until(
     edit: impl FnOnce(),
     done: impl Fn(&str) -> bool,
 ) -> (String, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_kirac"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kira"))
         .arg("live")
         .arg("--backend")
         .arg(backend)
@@ -105,7 +105,7 @@ fn live_until(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("kirac spawns");
+        .expect("kira spawns");
 
     let stdout_pipe = child.stdout.take().expect("stdout is piped");
     let stderr_pipe = child.stderr.take().expect("stderr is piped");
@@ -145,9 +145,9 @@ fn live_until(
     (stdout, stderr)
 }
 
-/// Runs `kirac live` with extra arguments.
+/// Runs `kira live` with extra arguments.
 fn live_with(path: &Path, backend: &str, extra: &[&str]) -> (String, String, bool) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_kirac"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kira"))
         .arg("live")
         .arg("--backend")
         .arg(backend)
@@ -156,7 +156,7 @@ fn live_with(path: &Path, backend: &str, extra: &[&str]) -> (String, String, boo
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("kirac spawns");
+        .expect("kira spawns");
 
     let mut stdout = String::new();
     child
@@ -172,7 +172,7 @@ fn live_with(path: &Path, backend: &str, extra: &[&str]) -> (String, String, boo
         .expect("stderr is piped")
         .read_to_string(&mut stderr)
         .expect("read stderr");
-    let status = child.wait().expect("kirac exits");
+    let status = child.wait().expect("kira exits");
     (stdout, stderr, status.success())
 }
 

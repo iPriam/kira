@@ -503,6 +503,17 @@ impl<'a> Analyzer<'a> {
                 None
             }
             Type::RawPtr => Some(ForeignType::RawPtr),
+            // A task handle names a row in the running program's own task table,
+            // so it means nothing outside it and never crosses the C seam.
+            Type::Task(_) => {
+                self.emit(
+                    span,
+                    "KSEM182",
+                    "a task handle cannot cross the C seam: it names a row in this \
+                     program's task table and means nothing outside it",
+                );
+                None
+            }
             // A `CString` crosses in both directions, and in neither does Kira
             // hold C storage. Inbound the seam builds a transient C copy of the
             // caller's `String` for the one call; outbound it copies the bytes
@@ -516,6 +527,34 @@ impl<'a> Analyzer<'a> {
             Type::Struct(id) if self.ffi_struct_kind(id).is_some_and(is_deferred_ffi) => {
                 let kind = self.ffi_struct_kind(id).expect("checked by the guard");
                 self.emit_ffi_not_executable(kind, id, span);
+                None
+            }
+            // `Any` is refused on its own terms rather than as an aggregate: it
+            // is one word at the seam, so the size is not what stops it. What
+            // stops it is that C would have to read the value back out, and
+            // nothing can — the type is opaque in that direction on both sides.
+            Type::Any => {
+                self.emit(
+                    span,
+                    "KSEM182",
+                    "`Any` cannot cross the C seam: an erased value has no type for C \
+                     to read it back as. Write the concrete type the value has.",
+                );
+                None
+            }
+            // A capture cell is refused for a reason of its own, not the
+            // single-word one: it *is* one word, and that is exactly the
+            // problem. It is shared mutable storage whose share count this
+            // runtime owns, and C has no way to release a hold on one. It is
+            // not surface, so this arm guards the desugar rather than anything
+            // an author can write.
+            Type::Cell(_) => {
+                self.emit(
+                    span,
+                    "KSEM182",
+                    "a captured `var` cannot cross the C seam: its storage is shared and \
+                     counted by this runtime, and C has no way to release a hold on it",
+                );
                 None
             }
             Type::Struct(_) | Type::Array(_) | Type::Enum(_) | Type::NativeState(_) => {

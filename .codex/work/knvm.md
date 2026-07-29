@@ -1,15 +1,15 @@
 # knvm - decision record
 
 Built 2026-07-19 as `crates/kira-knvm` (lib plus bin `knvm`), together with the
-`kira` launcher's dispatch in `kira-bootstrapper`. What they do and how they
+`kira` launcher's dispatch in `kira-launcher`. What they do and how they
 behave is [docs/knvm.md](../../docs/knvm.md); this note holds the decisions
 behind them and what is left.
 
 `install` is real: fetch, stage, unpack, validate, `rename` into
 `~/.kira/toolchains/<channel>/<version>/`, write `current.toml`. `list`, `use`,
 and `uninstall` operate on what is on disk. The launcher reads the selection
-and hands the process over to the selected `kirac`, so an install is now
-reachable as `kira` rather than by naming `bin/kirac` by hand.
+and hands the process over to the selected `kira`, so an install is now
+reachable as `kira` rather than by naming `bin/kira` by hand.
 
 ## Two corrections to the original sketch
 
@@ -19,13 +19,13 @@ authority, and install validates against it.
 
 `current.toml` is **not inert**, as the earlier survey of the repo claimed.
 Discovery rule 3 already reads it to find Foundation for a consumer that is not
-`kirac` itself, so writing it is what makes an installed toolchain usable, not
+`kira` itself, so writing it is what makes an installed toolchain usable, not
 merely selectable.
 
 ## Decisions settled
 
 **A crate in this workspace, not a script.** `kira-knvm` is a standalone leaf
-at the binary layer like `kira-bootstrapper`, depending only on `kira-toolchain`
+at the binary layer like `kira-launcher`, depending only on `kira-toolchain`
 plus workspace externals already present. The `curl | sh` bootstrap that
 installs knvm itself is release infrastructure needing published binaries and a
 hosted URL, neither of which exists; deferred rather than sketched.
@@ -68,7 +68,7 @@ and signal disposition are the toolchain binary's by construction.
 **Removing the selected toolchain clears the selection.** `uninstall` deletes
 `current.toml` and warns rather than repointing at a surviving version, which
 would silently change which compiler a user runs. For the same reason `use`
-refuses a version whose tree has lost its `bin/kirac`: a selection the launcher
+refuses a version whose tree has lost its `bin/kira`: a selection the launcher
 cannot dispatch is a failure worth reporting at selection time.
 
 ## Known-unverified, not assumed-good

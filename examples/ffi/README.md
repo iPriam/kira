@@ -18,9 +18,9 @@ managed toolchain, into `NativeLibs/lib/`:
 clang -c NativeLibs/ffimath.c -o NativeLibs/lib/ffimath.o
 llvm-ar crs NativeLibs/lib/libffimath.a NativeLibs/lib/ffimath.o
 
-kirac run --backend vm main.kira      # 42 / 4 / 0
-kirac run --backend llvm main.kira
-kirac run --backend hybrid main.kira
+kira run --backend vm main.kira      # 42 / 4 / 0
+kira run --backend llvm main.kira
+kira run --backend hybrid main.kira
 ```
 
 For wasm, build the archive with emscripten and target the Web device:
@@ -29,7 +29,7 @@ For wasm, build the archive with emscripten and target the Web device:
 emcc -c NativeLibs/ffimath.c -o NativeLibs/lib/ffimath-wasm.o
 emar crs NativeLibs/lib/libffimath-wasm.a NativeLibs/lib/ffimath-wasm.o
 
-kirac build --device wasm32 main.kira
+kira build --device wasm32 main.kira
 ```
 
 ## Supported surface

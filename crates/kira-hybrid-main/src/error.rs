@@ -56,7 +56,7 @@ pub enum HybridMainError {
     /// than a user error: a `.kbc` from one build beside a `.khm` from another.
     #[error(
         "the two halves of `{library}` do not agree: {reason}\n\
-         note: rebuild with `kirac build --backend hybrid`"
+         note: rebuild with `kira build --backend hybrid`"
     )]
     Mismatch {
         /// The library whose halves disagree.

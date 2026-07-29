@@ -295,7 +295,7 @@ fn print_listing(paint: kira_knvm::Paint, installed: &[kira_knvm::InstalledToolc
         let note = if toolchain.is_complete {
             String::new()
         } else {
-            paint.yellow("  (broken: no bin/kirac)")
+            paint.yellow("  (broken: no bin/kira)")
         };
         println!("{line}{note}");
     }

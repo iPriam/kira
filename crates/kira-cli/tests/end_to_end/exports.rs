@@ -1,13 +1,13 @@
 //! The `@Export` surface.
 //!
-//! The VM engine serves it: `kirac build` in a library package writes the
+//! The VM engine serves it: `kira build` in a library package writes the
 //! artifact *and* the Rust crate that embeds and calls it, which is the product
 //! a consumer depends on. The other two engines are refused by name, each saying
 //! what it still owes. All of this runs through the real binary, on a machine
 //! with no LLVM — the crate it generates is compiled and called for real by
 //! `kira-export-consumer`.
 
-use crate::{kirac, write_package};
+use crate::{kira, write_package};
 
 /// A library that exports the shapes v1 supports: a handle-eligible class, a
 /// constructor-shaped export, and scalars both ways.
@@ -28,7 +28,7 @@ const EXPORTING_LIBRARY: &str = "@Export\n\
 #[test]
 fn an_exporting_library_checks_clean() {
     let path = write_package(".Library", EXPORTING_LIBRARY);
-    let output = kirac(&["check", path.to_str().unwrap()]);
+    let output = kira(&["check", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
@@ -43,11 +43,11 @@ fn an_export_in_an_app_package_is_refused_by_name() {
         "@Main function main() { print(1) return }\n\
          @Export\nfunction add(a: Int) -> Int { return a }",
     );
-    let output = kirac(&["check", path.to_str().unwrap()]);
+    let output = kira(&["check", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("KSEM159"), "{stderr}");
+    assert!(stderr.contains("KSEM256"), "{stderr}");
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn the_vm_engine_builds_an_export_into_an_artifact_and_a_rust_crate() {
     // whose output nobody can find is a build nobody can use.
     let path = write_package(".Library", EXPORTING_LIBRARY);
     let directory = path.parent().expect("package directory").to_path_buf();
-    let output = kirac(&["build", "--backend", "vm", path.to_str().unwrap()]);
+    let output = kira(&["build", "--backend", "vm", path.to_str().unwrap()]);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
@@ -104,12 +104,12 @@ fn the_hybrid_engine_no_longer_refuses_an_export_on_export_grounds() {
     // library artifact, which is about the artifact rather than an engine.
     //
     // Same two legitimate outcomes as the native engine's test above, and for
-    // the same reason: the hybrid engine's native half needs LLVM, so a `kirac`
+    // the same reason: the hybrid engine's native half needs LLVM, so a `kira`
     // built without the feature — which is the CI configuration — refuses for
     // the missing backend rather than for exports. What would be a regression is
     // the export refusal coming back, and that is what this pins.
     let path = write_package(".Library", EXPORTING_LIBRARY);
-    let output = kirac(&["build", "--backend", "hybrid", path.to_str().unwrap()]);
+    let output = kira(&["build", "--backend", "hybrid", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -128,9 +128,9 @@ fn the_hybrid_engine_no_longer_refuses_an_export_on_export_grounds() {
 fn the_native_engine_no_longer_refuses_an_export_on_export_grounds() {
     // The native engine builds this surface now, so whatever it says, it must
     // not be "library export is not built yet" — and with the LLVM backend a
-    // hard part of every kirac, the build itself must succeed.
+    // hard part of every kira, the build itself must succeed.
     let path = write_package(".Library", EXPORTING_LIBRARY);
-    let output = kirac(&["build", "--backend", "llvm", path.to_str().unwrap()]);
+    let output = kira(&["build", "--backend", "llvm", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -154,7 +154,7 @@ fn switching_engines_in_one_package_leaves_nothing_of_the_other_behind() {
     // in the exact two-build flow the toolchain documents.
     //
     // The native build runs for real — the LLVM backend is part of every
-    // kirac — and its failure would fail this test rather than being papered
+    // kira — and its failure would fail this test rather than being papered
     // over with a planted file.
     let path = write_package(".Library", EXPORTING_LIBRARY);
     let directory = path.parent().expect("package directory").to_path_buf();
@@ -165,10 +165,10 @@ fn switching_engines_in_one_package_leaves_nothing_of_the_other_behind() {
     let script = generated.join("build.rs");
     let bytecode = generated.join("uifoundation.kbc");
 
-    let vm = kirac(&["build", "--backend", "vm", path.to_str().unwrap()]);
+    let vm = kira(&["build", "--backend", "vm", path.to_str().unwrap()]);
     let first = (vm.status.success(), bytecode.is_file(), script.is_file());
 
-    let native = kirac(&["build", "--backend", "llvm", path.to_str().unwrap()]);
+    let native = kira(&["build", "--backend", "llvm", path.to_str().unwrap()]);
     assert!(
         native.status.success(),
         "the native build must succeed: {}",
@@ -196,7 +196,7 @@ fn switching_engines_in_one_package_leaves_nothing_of_the_other_behind() {
         "the generated build script's link search path is relative: {search}"
     );
 
-    let vm_again = kirac(&["build", "--backend", "vm", path.to_str().unwrap()]);
+    let vm_again = kira(&["build", "--backend", "vm", path.to_str().unwrap()]);
     let back = (
         vm_again.status.success(),
         bytecode.is_file(),
@@ -223,7 +223,7 @@ fn switching_engines_in_one_package_leaves_nothing_of_the_other_behind() {
 #[test]
 fn the_web_refuses_to_build_an_export_too() {
     let path = write_package(".Library", EXPORTING_LIBRARY);
-    let output = kirac(&[
+    let output = kira(&[
         "build",
         "--backend",
         "llvm",

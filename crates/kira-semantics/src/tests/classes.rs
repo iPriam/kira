@@ -145,6 +145,34 @@ fn an_override_that_overrides_nothing_is_reported() {
     );
 }
 
+/// An override may restate the inherited type, and doing so changes nothing.
+#[test]
+fn an_override_may_restate_the_inherited_type() {
+    assert!(
+        codes(
+            "class Account { var balance: Int = 100\n let rate: Int = 2\n \
+               function gross() -> Int { return self.balance * self.rate } }\n\
+             class Savings extends Account { override let rate: Int = 5 }\n\
+             @Main function main() { print(Savings().gross()) return }"
+        )
+        .is_empty()
+    );
+}
+
+/// A restatement that disagrees is refused: the override is chosen by name, so
+/// a wrong type there says the author meant a different field.
+#[test]
+fn an_override_that_restates_a_different_type_is_reported() {
+    assert_eq!(
+        codes(&format!(
+            "class Base {{ let rate: Int = 1 }}\n\
+             class Child extends Base {{ override let rate: String = \"5\" }}\n\
+             {MAIN}"
+        )),
+        vec!["KSEM059"]
+    );
+}
+
 #[test]
 fn a_bare_name_two_parents_declare_is_ambiguous() {
     assert_eq!(

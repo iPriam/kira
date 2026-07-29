@@ -192,10 +192,15 @@ impl Analyzer<'_> {
     /// rather than only naming it.
     ///
     /// What decides whether a forward declaration has a definition to yield to.
+    /// Compares the resolved text rather than the symbols: a file interns its
+    /// own names, so the `SDL_Window` written in a binding and the one written
+    /// in the file asking are two symbols for one C type.
     fn has_foreign_definition(&self, name: kira_core::Symbol) -> bool {
+        let name = self.interner.resolve(name);
         self.tree.items().iter().any(|item| match item {
             Item::Struct(other) => {
-                other.name == name && crate::ffi_types::is_foreign_definition(other)
+                self.interner.resolve(other.name) == name
+                    && crate::ffi_types::is_foreign_definition(other)
             }
             _ => false,
         })

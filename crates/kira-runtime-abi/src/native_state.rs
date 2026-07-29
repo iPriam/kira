@@ -108,7 +108,13 @@ impl From<NativeStateError> for NativeStateStatus {
             NativeStateError::UnknownToken(_) => Self::UNKNOWN_TOKEN,
             NativeStateError::WrongType { .. } => Self::WRONG_TYPE,
             NativeStateError::TokenExhausted => Self::TOKEN_EXHAUSTED,
-            NativeStateError::MalformedValue => Self::MALFORMED_VALUE,
+            // A path that addresses nothing and a malformed node are the same
+            // status on the wire: both say the stored value did not have the
+            // shape the caller read it as, which is the whole of what a C caller
+            // can act on. No new status code, so no wire change.
+            NativeStateError::MalformedValue | NativeStateError::PathMismatch => {
+                Self::MALFORMED_VALUE
+            }
         }
     }
 }
@@ -165,6 +171,66 @@ pub enum NativeStateError {
     /// A backend-neutral value node was malformed.
     #[error("native callback-state value is malformed")]
     MalformedValue,
+    /// A path addressed something the stored value does not have there.
+    ///
+    /// The compiler resolves every field and index against a checked type, so
+    /// this surfaces state whose stored shape disagrees with the program
+    /// reading it — never a program that merely type-checked.
+    #[error("native callback-state path does not address a value of that shape")]
+    PathMismatch,
+}
+
+/// One step down into a stored callback-state value.
+///
+/// Field indices and array indices are distinct steps rather than one integer:
+/// a struct and an array are both indexed sequences in storage, and conflating
+/// them would let a path read a struct's third field as an array element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeStatePathStep {
+    /// The field at this declaration-order index.
+    Field(u32),
+    /// The element at this index.
+    Index(u64),
+}
+
+/// Follows `path` into a stored value, borrowing what it addresses.
+pub fn native_state_walk<'a>(
+    root: &'a NativeStateValue,
+    path: &[NativeStatePathStep],
+) -> Result<&'a NativeStateValue, NativeStateError> {
+    let mut cursor = root;
+    for step in path {
+        cursor = match (step, cursor) {
+            (NativeStatePathStep::Field(index), NativeStateValue::Struct(fields)) => fields
+                .get(*index as usize)
+                .ok_or(NativeStateError::PathMismatch)?,
+            (NativeStatePathStep::Index(index), NativeStateValue::Array(elements)) => elements
+                .get(usize::try_from(*index).map_err(|_| NativeStateError::PathMismatch)?)
+                .ok_or(NativeStateError::PathMismatch)?,
+            _ => return Err(NativeStateError::PathMismatch),
+        };
+    }
+    Ok(cursor)
+}
+
+/// Follows `path` into a stored value, borrowing what it addresses mutably.
+pub fn native_state_walk_mut<'a>(
+    root: &'a mut NativeStateValue,
+    path: &[NativeStatePathStep],
+) -> Result<&'a mut NativeStateValue, NativeStateError> {
+    let mut cursor = root;
+    for step in path {
+        cursor = match (step, cursor) {
+            (NativeStatePathStep::Field(index), NativeStateValue::Struct(fields)) => fields
+                .get_mut(*index as usize)
+                .ok_or(NativeStateError::PathMismatch)?,
+            (NativeStatePathStep::Index(index), NativeStateValue::Array(elements)) => elements
+                .get_mut(usize::try_from(*index).map_err(|_| NativeStateError::PathMismatch)?)
+                .ok_or(NativeStateError::PathMismatch)?,
+            _ => return Err(NativeStateError::PathMismatch),
+        };
+    }
+    Ok(cursor)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -238,6 +304,42 @@ impl NativeStateStore {
         Self::check_type(entry.ty, requested)?;
         entry.value = value;
         Ok(())
+    }
+
+    /// Confirms a token names live state of `requested`, copying nothing.
+    pub fn check(
+        &self,
+        token: NativeStateToken,
+        requested: NativeStateTypeId,
+    ) -> Result<(), NativeStateError> {
+        Self::check_type(self.entry(token)?.ty, requested)
+    }
+
+    /// Borrows what `path` addresses inside a live state.
+    ///
+    /// The whole point of addressing by path: reading one field of a state that
+    /// also holds a glyph cache touches the field, not the cache.
+    pub fn read_at(
+        &self,
+        token: NativeStateToken,
+        requested: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+    ) -> Result<&NativeStateValue, NativeStateError> {
+        let entry = self.entry(token)?;
+        Self::check_type(entry.ty, requested)?;
+        native_state_walk(&entry.value, path)
+    }
+
+    /// Borrows what `path` addresses inside a live state, mutably.
+    pub fn write_at(
+        &mut self,
+        token: NativeStateToken,
+        requested: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+    ) -> Result<&mut NativeStateValue, NativeStateError> {
+        let entry = self.entry_mut(token)?;
+        Self::check_type(entry.ty, requested)?;
+        native_state_walk_mut(&mut entry.value, path)
     }
 
     /// Releases one state exactly once.
@@ -366,6 +468,48 @@ impl<H: HostCapabilities> HostCapabilities for NativeStateHost<H> {
         value: NativeStateValue,
     ) -> Result<(), NativeStateError> {
         self.store.replace(token, ty, value)
+    }
+
+    fn native_state_check(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+    ) -> Result<(), NativeStateError> {
+        self.store.check(token, ty)
+    }
+
+    fn native_state_read(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+    ) -> Result<NativeStateValue, NativeStateError> {
+        self.store.read_at(token, ty, path).cloned()
+    }
+
+    fn native_state_write(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+        value: NativeStateValue,
+    ) -> Result<(), NativeStateError> {
+        *self.store.write_at(token, ty, path)? = value;
+        Ok(())
+    }
+
+    fn native_state_append(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+        value: NativeStateValue,
+    ) -> Result<(), NativeStateError> {
+        match self.store.write_at(token, ty, path)? {
+            NativeStateValue::Array(elements) => elements.push(value),
+            _ => return Err(NativeStateError::PathMismatch),
+        }
+        Ok(())
     }
 
     fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {

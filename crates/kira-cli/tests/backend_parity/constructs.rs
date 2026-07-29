@@ -87,12 +87,20 @@ function main() {
 /// list `[some X]` slot are filled from a construction's trailing content
 /// block, stored as ordinary fields, and read back through the bridge — so a
 /// widget tree with children *runs*, not merely validates.
+///
+/// The slot element is a construct family, because that is what `some` requires
+/// of every position: the oracle refuses `some` over a plain struct here with
+/// the same message it gives for a parameter.
 #[test]
 fn a_construction_with_children_yields_its_node() {
     let output = assert_parity(
         r#"
-struct Leaf {
-    var value: Int = 0
+construct Item {
+    @Required let value: Int
+}
+
+Item Leaf {
+    let value: Int = 0
 }
 
 construct Panel {
@@ -101,13 +109,13 @@ construct Panel {
 
 // A single-child slot: exactly one child, read back through the bridge.
 Panel Wrap() {
-    let inner: some Leaf
+    let inner: some Item
     let total: Int { inner.value }
 }
 
 // A list slot: an ordered array of children, summed through the bridge.
 Panel Group() {
-    let items: [some Leaf]
+    let items: [some Item]
     let total: Int {
         var sum = 0
         for i in 0..items.count {
@@ -119,12 +127,12 @@ Panel Group() {
 
 @Main
 function main() {
-    let w = Wrap() { Leaf { value = 7 } }
+    let w = Wrap() { Leaf(value: 7) }
     print(w.total)
-    let g = Group() { Leaf { value = 1 } Leaf { value = 2 } Leaf { value = 3 } }
+    let g = Group() { Leaf(value: 1) Leaf(value: 2) Leaf(value: 3) }
     print(g.total)
     // A no-paren construction with children fills the same list slot.
-    print(Group { Leaf { value = 10 } Leaf { value = 20 } }.total)
+    print(Group { Leaf(value: 10) Leaf(value: 20) }.total)
     return
 }
 "#,
@@ -518,4 +526,41 @@ Widget Chain(kind: Int) {
 "#,
     );
     assert_eq!(output, "10\n20\n30\n");
+}
+
+/// A `@Required function` requirement — Construct 2.0's bodyless obligation —
+/// executes: each declaration's own implementation runs when called directly,
+/// and the family value dispatches to the right one on every backend.
+#[test]
+fn a_required_function_runs_and_dispatches_on_every_backend() {
+    let output = assert_parity(
+        r#"
+construct Shape {
+    @Required function area() -> Int
+    @Required function label() -> String
+}
+
+Shape Square(side: Int) {
+    function area() -> Int { return side * side }
+    function label() -> String { return "square" }
+}
+
+Shape Strip(length: Int) {
+    function area() -> Int { return length }
+    function label() -> String { return "strip" }
+}
+
+@Main function main() {
+    print(Square(side: 5).area())
+    print(Strip(length: 3).label())
+    let shapes: [Any Shape] = [Square(side: 4), Strip(length: 9)]
+    for shape in shapes {
+        print(shape.label())
+        print(shape.area())
+    }
+    return
+}
+"#,
+    );
+    assert_eq!(output, "25\nstrip\nsquare\n16\nstrip\n9\n");
 }

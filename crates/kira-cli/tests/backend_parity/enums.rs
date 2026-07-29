@@ -315,3 +315,123 @@ function main() {
     );
     assert_eq!(output, "backdrop/soft\nlayer/hard\nnone\n");
 }
+
+/// An enum carrying an *array* payload: the aggregate slot a struct payload
+/// already used, now holding a value whose elements own themselves.
+///
+/// The elements are deliberately not all inert. A `[String]` and a `[[Int]]`
+/// payload are reclaimed by the generated element leaf rather than by the box's
+/// payload-kind tag, so a backend that freed only the array's own allocation —
+/// or that freed the elements twice — diverges from the others under the churn
+/// loop rather than on the first value.
+///
+/// Differentially checked against the oracle's installed 1.7.3 `kira`, which
+/// prints the same numbers.
+#[test]
+fn an_enum_carrying_an_array_payload_agrees() {
+    let output = assert_parity(
+        r#"
+struct Pt { var x: Int = 0 }
+
+enum Bag {
+    Ints([Int])
+    Strs([String])
+    Pts([Pt])
+    Rows([[Int]])
+    None
+}
+
+function sizeOf(b: borrow Bag) -> Int {
+    match b {
+        Ints(xs) -> {
+            var s = 0
+            for x in xs { s = s + x }
+            return s
+        }
+        Strs(ss) -> { return ss.count * 10 }
+        Pts(ps) -> { return ps.count * 100 }
+        Rows(rs) -> {
+            var s = 0
+            for r in rs {
+                for x in r { s = s + x * 1000 }
+            }
+            return s
+        }
+        None -> { return 0 }
+    }
+    return 0
+}
+
+@Main
+function main() {
+    var total = 0
+    var i = 0
+    while i < 50 {
+        let bags: [Bag] = [
+            .Ints([1, 2, 3]),
+            .Strs(["a", "b"]),
+            .Pts([Pt { x: 1 }]),
+            .Rows([[1, 2], [3]]),
+            .None,
+        ]
+        for b in bags {
+            // Read twice: a borrow must not consume the payload, so a
+            // backend that moved it out would trap or halve the total.
+            total = total + sizeOf(b) + sizeOf(b)
+        }
+        i = i + 1
+    }
+    print(total)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "612600\n");
+}
+
+/// An array payload built by a function and moved into the variant, which is
+/// the `Result<[Int], E>` shape the oracle's stress harness returns.
+#[test]
+fn an_array_payload_moved_into_a_variant_agrees() {
+    let output = assert_parity(
+        r#"
+enum RangeResult {
+    Ok([Int])
+    Fail(Int)
+}
+
+function makeRange(n: Int) -> RangeResult {
+    if n <= 0 {
+        return .Fail(0 - 1)
+    }
+    var xs: [Int] = []
+    var i = 0
+    while i < n {
+        xs.append(i * 3)
+        i = i + 1
+    }
+    return .Ok(move xs)
+}
+
+function total(r: borrow RangeResult) -> Int {
+    match r {
+        Ok(xs) -> {
+            var s = 0
+            for x in xs { s = s + x }
+            return s + xs.count
+        }
+        Fail(c) -> { return c }
+    }
+    return 0
+}
+
+@Main
+function main() {
+    print(total(makeRange(5)))
+    print(total(makeRange(0)))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "35\n-1\n");
+}

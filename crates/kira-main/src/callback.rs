@@ -29,8 +29,8 @@ use kira_dynamic_ffi::{ForeignAdapterError, ForeignAdapterLibrary, RuntimeInvoke
 use kira_runtime_abi::{
     BridgeData, BridgeValue, FileRequest, FileResponse, FileSystemError, ForeignAggregates,
     ForeignArg, ForeignCallError, ForeignResult, HostCapabilities, NativeArg, NativeResult,
-    NativeStateError, NativeStateStore, NativeStateToken, NativeStateTypeId, NativeStateValue,
-    file_system,
+    NativeStateError, NativeStatePathStep, NativeStateStore, NativeStateToken, NativeStateTypeId,
+    NativeStateValue, file_system,
 };
 use kira_vm_runtime::{Program, RunOutcome, VmError};
 
@@ -187,6 +187,56 @@ impl HostCapabilities for SessionHost<'_> {
         value: NativeStateValue,
     ) -> Result<(), NativeStateError> {
         self.session.state.borrow_mut().replace(token, ty, value)
+    }
+
+    // The path-addressed operations, forwarded to the same store. Without these
+    // the trait's defaults answer by recovering — a deep copy of the whole state
+    // per field read and two per write — which is the difference between a UI
+    // frame costing its own work and costing its glyph cache on every access.
+    fn native_state_check(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+    ) -> Result<(), NativeStateError> {
+        self.session.state.borrow().check(token, ty)
+    }
+
+    fn native_state_read(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+    ) -> Result<NativeStateValue, NativeStateError> {
+        self.session
+            .state
+            .borrow()
+            .read_at(token, ty, path)
+            .cloned()
+    }
+
+    fn native_state_write(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+        value: NativeStateValue,
+    ) -> Result<(), NativeStateError> {
+        *self.session.state.borrow_mut().write_at(token, ty, path)? = value;
+        Ok(())
+    }
+
+    fn native_state_append(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+        value: NativeStateValue,
+    ) -> Result<(), NativeStateError> {
+        match self.session.state.borrow_mut().write_at(token, ty, path)? {
+            NativeStateValue::Array(elements) => elements.push(value),
+            _ => return Err(NativeStateError::PathMismatch),
+        }
+        Ok(())
     }
 
     fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {

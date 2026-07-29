@@ -32,11 +32,15 @@ impl Heap {
             // the same thing rather than printing something made up. A `RawPtr`
             // is the `None` case too: an opaque foreign word has no pinned
             // rendering, and `print(RawPtr)` is refused in the frontend.
+            // An erased value joins them: `print` of an `Any` is refused in the
+            // frontend, and what it would render is not pinned anywhere.
             Value::Struct(_)
             | Value::Array(_)
             | Value::Enum(_)
             | Value::RawPtr(_)
+            | Value::Erased(_)
             | Value::NativeState(_)
+            | Value::Cell(_)
             | Value::NativeView { .. } => {
                 self.drop_value(value);
                 return None;
@@ -119,7 +123,9 @@ impl Heap {
             Value::Struct(_)
             | Value::Array(_)
             | Value::Enum(_)
+            | Value::Erased(_)
             | Value::NativeState(_)
+            | Value::Cell(_)
             | Value::NativeView { .. } => return None,
         })
     }

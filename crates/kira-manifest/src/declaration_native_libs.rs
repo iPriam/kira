@@ -8,10 +8,10 @@
 //! let nativeLibraries = [
 //!     NativeLibrary {
 //!         name: "sokol",
-//!         linkMode: LinkMode.Static,
+//!         linkMode: .Static,
 //!         headers: Headers { entrypoint: "...", includeDirs: [...], defines: [...] },
 //!         sources: ["NativeLibs/Sokol/sokol_impl.c"],
-//!         autobind: Autobind { module: "sokol", headers: [...], mode: AutobindMode.AllPublic },
+//!         autobind: Autobind { module: "sokol", headers: [...], mode: .AllPublic },
 //!         nativeTargets: [
 //!             NativeTarget { triple: "aarch64-macos-none", staticLib: "...", frameworks: [...] }
 //!         ],
@@ -202,7 +202,7 @@ Package KiraGraphics {
             linkMode: LinkMode.Static,
             headers: Headers { entrypoint: "NativeLibs/Sokol/sokol_bindings.h", includeDirs: ["NativeLibs/Sokol"], defines: ["SOKOL_NO_ENTRY"] },
             sources: ["NativeLibs/Sokol/sokol_impl.c"],
-            autobind: Autobind { module: "sokol", headers: ["NativeLibs/Sokol/sokol_app.h"], mode: AutobindMode.AllPublic },
+            autobind: Autobind { module: "sokol", headers: ["NativeLibs/Sokol/sokol_app.h"], mode: .AllPublic },
             nativeTargets: [
                 NativeTarget { triple: "aarch64-macos-none", staticLib: "generated/native/aarch64-macos/libsokol.a", defines: ["SOKOL_GLCORE"], frameworks: ["Foundation", "AppKit"] },
                 NativeTarget { triple: "wasm32-emscripten-unknown", staticLib: "generated/native/wasm32-emscripten/libsokol.a", compilerFlags: ["--use-port=emdawnwebgpu"], linkerFlags: ["--use-port=emdawnwebgpu"] }

@@ -32,7 +32,7 @@ fn return_shape(text: &str) -> String {
 fn render(
     tree: &SyntaxTree,
     id: kira_syntax_model::ast::ExprId,
-    interner: &kira_core::Interner,
+    interner: &kira_core::Names,
 ) -> String {
     match tree.expr(id) {
         Expr::Int { value, .. } => value.to_string(),

@@ -1,6 +1,6 @@
 //! The `knvm` verbs and their parsing.
 //!
-//! Hand-rolled like `kirac`'s — knvm is the first thing a user installs, so it
+//! Hand-rolled like `kira`'s — knvm is the first thing a user installs, so it
 //! takes no argument-parsing dependency. Selection is a structured enum all the
 //! way down: nothing downstream matches on a verb or a channel string.
 

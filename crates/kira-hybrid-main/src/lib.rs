@@ -41,7 +41,7 @@
 //!
 //! # Using it
 //!
-//! Nothing writes this by hand — `kirac build --backend hybrid` generates a
+//! Nothing writes this by hand — `kira build --backend hybrid` generates a
 //! wrapper crate that does — but this is what the generated code does:
 //!
 //! ```no_run

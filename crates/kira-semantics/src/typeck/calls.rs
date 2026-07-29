@@ -12,7 +12,7 @@
 use kira_semantics_model::OwnershipMode;
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{Callee, HirExpr, HirExprId, HirPlace, HirWriteback, LocalId};
-use kira_syntax_model::ast::{CallArg, Expr, ExprId, FieldInit};
+use kira_syntax_model::ast::{CallArg, ExprId, FieldInit};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::place::PlacePurpose;
@@ -100,6 +100,10 @@ impl Analyzer<'_> {
     /// A method call is an ordinary call whose first argument is the receiver.
     /// Resolving it to that here is what keeps methods out of the IR and out of
     /// every backend: nothing downstream of analysis knows they exist.
+    ///
+    /// `expected` is carried only for the one shape that is not a call at all:
+    /// `Result.Ok(1)` parses as a method call, and the instantiation it
+    /// constructs comes from the position rather than from anything written.
     pub(super) fn analyze_method_call(
         &mut self,
         ctx: &mut FnCtx,
@@ -107,6 +111,7 @@ impl Analyzer<'_> {
         method: kira_core::Symbol,
         method_span: kira_source::Span,
         args: &[CallArg],
+        expected: Option<Type>,
     ) -> HirExprId {
         // `Support.hello()` is a *module-qualified free call*, not a method
         // call, and it is recognized here because the parser cannot tell the
@@ -123,16 +128,32 @@ impl Analyzer<'_> {
         // is its payload. It parses as a method call because the parser cannot
         // tell an enum name from a value; the analyzer, holding the enum table
         // and the import table, can.
-        if let Some(enum_id) = self.qualified_enum_at(ctx, receiver) {
-            let values = Some(Self::argument_values(args));
-            return self.analyze_dot_member(
-                ctx,
-                method,
-                method_span,
-                &values,
-                method_span,
-                Some(Type::Enum(enum_id)),
-            );
+        match self.qualified_enum_at(ctx, receiver, expected) {
+            crate::enums::QualifiedEnum::Enum(enum_id) => {
+                let values = Some(Self::argument_values(args));
+                return self.analyze_dot_member(
+                    ctx,
+                    method,
+                    method_span,
+                    &values,
+                    method_span,
+                    Some(Type::Enum(enum_id)),
+                );
+            }
+            // `Result.Ok(1)` where the position asks for no instantiation of
+            // `Result`. The receiver is a template, not a value.
+            crate::enums::QualifiedEnum::Unanchored(template) => {
+                let values = Some(Self::argument_values(args));
+                return self.report_unanchored_generic_construction(
+                    ctx,
+                    &template,
+                    method,
+                    &values,
+                    method_span,
+                    expected,
+                );
+            }
+            crate::enums::QualifiedEnum::NotAnEnum => {}
         }
 
         // Analyzing the receiver is how its type is known, and its type is what
@@ -179,6 +200,13 @@ impl Analyzer<'_> {
             );
         }
 
+        // A task handle's three operations are matched before anything tries to
+        // resolve a method on it: it is not a struct, so a field-based lookup
+        // would report a missing type rather than the opaque-handle rule.
+        if matches!(receiver_ty, Type::Task(_)) {
+            let name = self.interner.resolve(method).to_owned();
+            return self.analyze_task_method(ctx, receiver_hir, &name, args, method_span);
+        }
         if receiver_ty == Type::String {
             // A string builtin binds its arguments by shape, not by a parameter
             // name, so a label on one is a mistake.
@@ -348,7 +376,7 @@ impl Analyzer<'_> {
                     .exprs
                     .alloc(HirExpr::CStringNew { text: value })
             } else {
-                if !value_ty.assignable_to(field_ty) {
+                if !self.admits(value_ty, field_ty) {
                     self.emit(
                         init.span,
                         "KSEM094",
@@ -359,7 +387,7 @@ impl Analyzer<'_> {
                         ),
                     );
                 }
-                value
+                self.coerce_into(value, field_ty)
             };
             slots[index as usize] = Some(value);
         }
@@ -413,60 +441,6 @@ impl Analyzer<'_> {
             struct_id: id,
             fields,
         })
-    }
-
-    /// Resolves `Root.name(args)` when `Root` is a module this file imported.
-    ///
-    /// Returns `None` when the shape is not a module-qualified call at all, so
-    /// the caller carries on as a method call. It returns `Some(Error)` — not
-    /// `None` — when `Root` is a module the *program* has but this file did
-    /// not import: that is a real mistake with a real diagnostic, and falling
-    /// through to "type `Error` has no methods" would bury it.
-    fn analyze_qualified_call(
-        &mut self,
-        ctx: &mut FnCtx,
-        receiver: ExprId,
-        method: kira_core::Symbol,
-        method_span: kira_source::Span,
-        args: &[CallArg],
-    ) -> Option<HirExprId> {
-        let Expr::Name { symbol, span } = *self.tree.expr(receiver) else {
-            return None;
-        };
-        let root = self.interner.resolve(symbol).to_owned();
-        // A local of the same name wins: a binding the reader can see beats a
-        // module they have to look up, and it is what keeps a module name from
-        // becoming unusable as a variable.
-        if ctx.resolve(&root).is_some() {
-            return None;
-        }
-        // `ClsAccount.gross()` inside a subclass method: the parent's body run
-        // against `self`. Checked before the module table, because a parent
-        // type name is nearer than a module name.
-        if self.visible_struct(&root).is_some() {
-            // Once the root is known to be a type name, this path owns the
-            // call: falling through would analyze the type name as a value and
-            // report it undefined on top of whatever was already said.
-            let Some(qualifier) = self.resolve_parent_qualifier(ctx, &root, span) else {
-                for arg in args {
-                    self.analyze_expr(ctx, arg.value);
-                }
-                return Some(self.program.exprs.alloc(HirExpr::Error));
-            };
-            let name = self.interner.resolve(method).to_owned();
-            return Some(self.analyze_parent_call(ctx, qualifier, &name, args, method_span));
-        }
-        if self.module_for_root(&root).is_some() {
-            let name = self.interner.resolve(method).to_owned();
-            return Some(self.analyze_user_call_from_syntax(ctx, &name, &[], args, method_span));
-        }
-        if self.report_unimported_root(&root, span) {
-            for arg in args {
-                self.analyze_expr(ctx, arg.value);
-            }
-            return Some(self.program.exprs.alloc(HirExpr::Error));
-        }
-        None
     }
 
     /// Type-checks a call whose arguments are still syntax.
@@ -636,6 +610,7 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         };
         self.link_function(id, span);
+        let mut args = args.to_vec();
         if args.len() != params.len() {
             self.emit(
                 span,
@@ -647,9 +622,9 @@ impl Analyzer<'_> {
                 ),
             );
         } else {
-            for (index, (&arg, &expected)) in args.iter().zip(params.iter()).enumerate() {
-                let actual = self.program.expr(arg).type_of();
-                if !actual.assignable_to(expected) {
+            for (index, (arg, &expected)) in args.iter_mut().zip(params.iter()).enumerate() {
+                let actual = self.program.expr(*arg).type_of();
+                if !self.admits(actual, expected) {
                     self.emit(
                         span,
                         "KSEM063",
@@ -661,11 +636,15 @@ impl Analyzer<'_> {
                         ),
                     );
                 }
+                // An `Any` parameter takes an erased value, and the erasure
+                // belongs to the call site: the callee's body only ever sees the
+                // boxed form.
+                *arg = self.coerce_into(*arg, expected);
             }
         }
         self.program.exprs.alloc(HirExpr::Call {
             callee: Callee::User(id),
-            args: args.to_vec(),
+            args,
             ty: ret,
             writebacks: Vec::new(),
         })

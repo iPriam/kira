@@ -5,7 +5,7 @@
 //! # What this crate is for
 //!
 //! Kira gained an export surface so a library authored in Kira can be *consumed*
-//! by a Rust program: the author marks functions `@Export`, `kirac build` emits
+//! by a Rust program: the author marks functions `@Export`, `kira build` emits
 //! an artifact plus a generated wrapper crate, and the consumer writes
 //! `ui.make_button("ok")`. This crate is what that generated wrapper is built
 //! on. It is the whole of the safe machinery — decode a library, check it is the

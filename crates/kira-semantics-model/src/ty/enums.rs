@@ -61,6 +61,24 @@ pub struct VariantDef {
     pub payload: Option<Type>,
 }
 
+/// What a monomorphized enum row was instantiated from.
+///
+/// A generic enum declares no type of its own: `Result<Int, E>` and
+/// `Result<Any, E>` are two ordinary rows of the table with nothing in their
+/// shapes to say they came from one template. This is that missing link, and it
+/// is what lets one instantiation widen into another — see
+/// [`super::TypeTable::admits`].
+///
+/// The template is named rather than pointed at because a template is not a
+/// row: it lives only in the analyzer, and the name is what a use site writes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Instantiation {
+    /// The generic enum's name, as declared — `Result`, not `Result<Int, E>`.
+    pub template: String,
+    /// The type arguments substituted in, in declaration order.
+    pub arguments: Vec<Type>,
+}
+
 /// Every enum a program declares, indexed by [`EnumId`].
 ///
 /// The table is the one owner of enum shapes: the HIR, the IR, and every
@@ -71,6 +89,9 @@ pub struct EnumTable {
     defs: Vec<EnumDef>,
     // Kept in step with `defs` by `declare`, which is the only way to add one.
     index: std::collections::HashMap<String, EnumId>,
+    // Only the rows a generic template minted appear here, so a hand-written
+    // enum is distinguishable from an instantiation by absence.
+    instantiations: std::collections::HashMap<EnumId, Instantiation>,
 }
 
 impl EnumTable {
@@ -119,6 +140,31 @@ impl EnumTable {
             }
             None => false,
         }
+    }
+
+    /// Records that `id` was minted by instantiating a generic template.
+    ///
+    /// Returns `false` for an id this table never minted, which keeps the note
+    /// and the rows from drifting apart the way a blind insert would.
+    pub fn record_instantiation(&mut self, id: EnumId, instantiation: Instantiation) -> bool {
+        if self.get(id).is_none() {
+            return false;
+        }
+        self.instantiations.insert(id, instantiation);
+        true
+    }
+
+    /// What `id` was instantiated from, or `None` for a hand-written enum.
+    pub fn instantiation(&self, id: EnumId) -> Option<&Instantiation> {
+        self.instantiations.get(&id)
+    }
+
+    /// The generic enum `id` is an instantiation of, or `None` when it is not
+    /// one.
+    pub fn template_of(&self, id: EnumId) -> Option<&str> {
+        self.instantiations
+            .get(&id)
+            .map(|from| from.template.as_str())
     }
 
     /// Every declared enum, in declaration order.
@@ -202,6 +248,46 @@ mod tests {
         assert_eq!(again, None);
         assert_eq!(table.lookup("Color"), Some(id));
         assert_eq!(table.len(), 1);
+    }
+
+    #[test]
+    fn only_an_instantiated_row_names_a_template() {
+        let (mut table, color) = table_with_color();
+        assert_eq!(table.template_of(color), None);
+        assert!(table.record_instantiation(
+            color,
+            Instantiation {
+                template: "Result".to_owned(),
+                arguments: vec![Type::INT],
+            }
+        ));
+        assert_eq!(table.template_of(color), Some("Result"));
+        assert_eq!(
+            table
+                .instantiation(color)
+                .map(|from| from.arguments.clone()),
+            Some(vec![Type::INT])
+        );
+    }
+
+    #[test]
+    fn a_note_for_a_row_this_table_never_minted_is_refused() {
+        let mut table = EnumTable::new();
+        let mut elsewhere = EnumTable::new();
+        let other = elsewhere
+            .declare(EnumDef {
+                name: "Elsewhere".to_owned(),
+                variants: Vec::new(),
+            })
+            .expect("a fresh table accepts the first declaration");
+        assert!(!table.record_instantiation(
+            other,
+            Instantiation {
+                template: "Result".to_owned(),
+                arguments: Vec::new(),
+            }
+        ));
+        assert_eq!(table.instantiation(other), None);
     }
 
     #[test]

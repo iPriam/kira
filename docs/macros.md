@@ -517,6 +517,17 @@ A program that declares no macros and writes no `ksl!` is returned
 byte-identical after one lexing pass per file, so nothing downstream can tell
 the pass ran.
 
+The pass is split per file, and `expanded` is an orchestrator over the pieces:
+`kira_macros::scan` finds what one file declares, the macro-declaring files
+become the program-wide environment, and `kira_macros::expand_one` runs one
+file's fixpoint against it. Each piece is a salsa query keyed on an interned
+file, so a dependency that has not changed — Foundation, in every program that
+imports it — is expanded once per session rather than once per compilation. The
+only cross-file dependency is a `kind { wrapper }` macro, which reads other
+declarations; when a program declares one, the files carrying its templates join
+the key, and when it declares none nothing scans another file's declarations at
+all.
+
 Expansion is total: a malformed macro is reported and left unexpanded, so the
 file still reaches the parser and everything else wrong with it is still
 reported.

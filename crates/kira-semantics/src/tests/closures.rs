@@ -66,28 +66,47 @@ fn a_closure_whose_parameter_count_is_wrong_is_refused() {
 }
 
 #[test]
-fn capturing_a_var_is_refused() {
-    // The oracle *borrows* a mutable capture, which needs shared storage.
-    // Nothing in this runtime shares storage, so copying it would run and give
-    // the wrong answer — it is refused instead of silently diverging.
+fn capturing_a_var_is_accepted() {
+    // A mutable capture is shared, not copied: the binding moved into a
+    // capture cell at its declaration, and the closure holds a share of it.
     assert_eq!(
         codes(
             "function run(f: () -> Int) -> Int { return f() }\n\
              @Main function main() { var total = 0 print(run { in return total }) return }"
         ),
-        vec!["KSEM117"]
+        Vec::<&str>::new()
     );
 }
 
 #[test]
-fn assigning_to_a_captured_binding_is_refused() {
+fn assigning_to_a_captured_binding_is_accepted() {
+    // Both halves have to work for the feature to mean anything: the name has
+    // to *resolve* on the left of an assignment inside a closure (it used to
+    // report `KSEM023`, undefined) and the write has to be legal (it used to
+    // report `KSEM021`, immutable).
+    assert_eq!(
+        codes(
+            "function run(f: () -> Void) { f() return }\n\
+             @Main function main() { var total = 0 run { in total = total + 1 } print(total) return }"
+        ),
+        Vec::<&str>::new()
+    );
+}
+
+#[test]
+fn capturing_a_borrow_mut_parameter_is_refused() {
+    // The mutable binding a cell cannot hold: a `borrow mut` parameter names
+    // the caller's storage rather than storage of its own, so there is nothing
+    // to move into a box. Refusing beats capturing a copy, which would run and
+    // write somewhere the caller never sees.
     let reported = codes(
         "function run(f: () -> Void) { f() return }\n\
-         @Main function main() { var total = 0 run { in total = total + 1 } print(total) return }",
+         function step(n: borrow mut Int) { run { in n = n + 1 } return }\n\
+         @Main function main() { var v = 0 step(v) print(v) return }",
     );
     assert!(
         reported.contains(&"KSEM117"),
-        "a closure that writes an enclosing `var` is refused, got {reported:?}"
+        "a `borrow mut` parameter has no shared form, got {reported:?}"
     );
 }
 

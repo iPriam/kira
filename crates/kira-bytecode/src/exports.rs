@@ -217,11 +217,22 @@ fn export_type(
         // of the export surface this milestone pins, so both are refused here
         // rather than given an export wire spelling that would have to be
         // supported forever.
+        // `Any` joins them for a different reason — the analyzer's `KSEM186`
+        // already refused it, because a consumer's wrapper cannot name an
+        // erased type — but the outcome here is the same: no wire spelling is
+        // invented for a type that never legally reaches this point.
+        // A capture cell joins them because it is shared mutable storage this
+        // runtime counts holds on; the analyzer already refused it (`KSEM186`),
+        // and inventing a wire spelling for one would be inventing a way for a
+        // consumer to hold a share nobody releases.
         Type::Array(_)
         | Type::Enum(_)
         | Type::RawPtr
         | Type::CString
+        | Type::Any
         | Type::NativeState(_)
+        | Type::Task(_)
+        | Type::Cell(_)
         | Type::Error => {
             return Err(CompileError::UncrossableExport {
                 export: export.to_owned(),

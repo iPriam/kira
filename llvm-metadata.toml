@@ -1,5 +1,5 @@
 # The pinned LLVM toolchain: the contract between this repo, CI, and the
-# downloader (`kirac fetch-llvm`).
+# downloader (`kira fetch-llvm`).
 #
 # This file is the single source of truth for which LLVM Kira expects, which
 # release owns the published bundles, and the exact archive name per supported

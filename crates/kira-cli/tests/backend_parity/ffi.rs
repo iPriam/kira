@@ -87,7 +87,7 @@ fn build_fixture_archive(dir: &Path) -> PathBuf {
 fn write_ffi_package(program: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("kirac_ffi_{}_{unique}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("kira_ffi_{}_{unique}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
 
     build_fixture_archive(&dir);
@@ -128,8 +128,7 @@ staticLib = "lib/libffifixture.a"
 fn write_inline_ffi_package(program: &str, extra_fields: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir =
-        std::env::temp_dir().join(format!("kirac_ffi_inline_{}_{unique}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("kira_ffi_inline_{}_{unique}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
 
     build_fixture_archive(&dir);
@@ -168,10 +167,10 @@ fn write_inline_ffi_package(program: &str, extra_fields: &str) -> PathBuf {
 
 /// Runs the FFI program on one backend.
 fn run_on(entry: &Path, backend: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_kirac"))
+    Command::new(env!("CARGO_BIN_EXE_kira"))
         .args(["run", "--backend", backend, entry.to_str().unwrap()])
         .output()
-        .expect("run kirac")
+        .expect("run kira")
 }
 
 #[test]

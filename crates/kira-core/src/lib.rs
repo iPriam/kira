@@ -12,5 +12,5 @@ pub mod types;
 pub use errors::CommonError;
 pub use identifiers::sanitize_kira_identifier;
 pub use ids::{BridgeId, LibraryId, ModuleId, SymbolId};
-pub use symbol::{Interner, Symbol};
+pub use symbol::{Interner, Names, Symbol};
 pub use types::Version;

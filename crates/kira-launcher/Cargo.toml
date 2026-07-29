@@ -1,12 +1,12 @@
 [package]
-name = "kira-bootstrapper"
+name = "kira-launcher"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "kira"
+name = "kira-launcher"
 path = "src/main.rs"
 
 [dependencies]

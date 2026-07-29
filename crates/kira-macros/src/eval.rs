@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use kira_core::Interner;
+use kira_core::Names;
 use kira_source::SourceId;
 use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::{Block, Expr, ExprId, ForIterable, Item, Stmt, StmtId};
@@ -61,7 +61,7 @@ impl EvalError {
 /// A parsed `expand` body, ready to run.
 pub(crate) struct Body {
     tree: SyntaxTree,
-    interner: Interner,
+    interner: Names,
     block: Block,
     templates: Vec<Template>,
 }

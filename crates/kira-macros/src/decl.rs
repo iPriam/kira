@@ -51,7 +51,7 @@ impl DeclarationKind {
 }
 
 /// One `@Name` or `@Derive(A, B)` written above a declaration or a field.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Annotation {
     /// The annotation's name, without the `@`.
     pub(crate) name: String,
@@ -62,7 +62,7 @@ pub(crate) struct Annotation {
 }
 
 /// One field or enum variant of a declaration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Field {
     /// The field's name, or the variant's.
     pub(crate) name: String,
@@ -79,12 +79,19 @@ pub(crate) struct Field {
 }
 
 /// One declaration, as a macro sees it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Declaration {
     /// Which form it wears.
     pub(crate) kind: DeclarationKind,
     /// Its name.
     pub(crate) name: String,
+    /// The construct family backing it, for a [`DeclarationKind::Form`].
+    ///
+    /// Empty for every other kind. This is what lets a macro ask which family a
+    /// declaration is written in without the compiler knowing any family by
+    /// name — `Test`, `Printable`, or one a program declares itself are all the
+    /// same question asked of this string.
+    pub(crate) family: String,
     /// Its fields, or an enum's variants, in declaration order.
     pub(crate) fields: Vec<Field>,
     /// The declaration's exact source text, annotations **excluded**.
@@ -108,8 +115,13 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
         TokenKind::Enum => (DeclarationKind::Enum, head + 1),
         TokenKind::Construct => (DeclarationKind::Construct, head + 1),
         TokenKind::Function => (DeclarationKind::Function, head + 1),
+        // A construct-backed declaration: `Family Name(params) { … }`, and the
+        // parameterless `Family Name { … }` a family with no construction
+        // inputs is written with. Both are two identifiers where every other
+        // declaration form opens with a keyword.
         TokenKind::Identifier
-            if file.is_ident(head + 1) && file.kind(head + 2) == TokenKind::LParen =>
+            if file.is_ident(head + 1)
+                && matches!(file.kind(head + 2), TokenKind::LParen | TokenKind::LBrace) =>
         {
             (DeclarationKind::Form, head + 1)
         }
@@ -117,6 +129,12 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
     };
     let name = if file.is_ident(name_index) {
         file.text_at(name_index).to_owned()
+    } else {
+        String::new()
+    };
+    // The family sits where every other form has its keyword.
+    let family = if kind == DeclarationKind::Form {
+        file.text_at(head).to_owned()
     } else {
         String::new()
     };
@@ -143,6 +161,7 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
         Declaration {
             kind,
             name,
+            family,
             fields,
             syntax: file.slice(span).to_owned(),
             span,

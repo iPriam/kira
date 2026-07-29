@@ -141,18 +141,60 @@ pub struct KiraEnum {
     shares: usize,
 }
 
+impl KiraEnum {
+    /// What this box's payload word is, as a [`PAYLOAD_INERT`]-family constant.
+    ///
+    /// For [`crate::cells`], which shares this box: a cell has to read the kind
+    /// back to release the payload it is replacing, and an enum never does
+    /// because an enum is never written through.
+    pub(crate) fn payload_kind_raw(&self) -> i64 {
+        self.payload_kind
+    }
+
+    /// This box's payload word, uninterpreted and unowned by the reader.
+    pub(crate) fn payload_raw(&self) -> u64 {
+        self.payload
+    }
+
+    /// Overwrites the payload word and its kind together.
+    ///
+    /// The two are one fact — a word is meaningless without the kind that says
+    /// what it is — so they are written by one method rather than two fields, and
+    /// releasing what was there is the caller's job. [`crate::cells`] is the only
+    /// caller, and the reason a box is written through at all.
+    pub(crate) fn set_payload_raw(&mut self, payload_kind: i64, payload: u64) {
+        self.payload_kind = payload_kind;
+        self.payload = payload;
+    }
+}
+
 /// Heap storage behind an aggregate payload word.
 ///
 /// The bytes use the same fixed alignment as native array elements: every Kira
 /// field is at most eight-byte aligned, and LLVM's ABI size includes the padding
 /// needed to keep nested fields aligned. Clone/free leaves are generated for the
 /// concrete payload type, so this runtime never needs compiler type metadata.
-struct AggregatePayload {
+pub(crate) struct AggregatePayload {
     data: *mut u8,
     size: usize,
     clone: Option<ElemClone>,
     free: Option<ElemFree>,
+    /// Compares two payloads of this concrete type, for `Any` equality.
+    ///
+    /// The third leaf of the same family as `clone` and `free`, and needed for
+    /// the same reason: the bytes are untyped here, so only code generated for
+    /// the concrete type can read them. Null when the value was boxed by a
+    /// caller that predates erasure comparison — an ordinary enum payload,
+    /// which no comparison reaches — and a null leaf answers "not equal"
+    /// rather than reading bytes it has no layout for.
+    eq: Option<ElemEq>,
 }
+
+/// Compares two elements of one concrete type.
+///
+/// Returns non-zero when they are equal. Both pointers stay owned by their
+/// boxes: a comparison reads and takes nothing.
+pub type ElemEq = unsafe extern "C" fn(a: *const u8, b: *const u8) -> u8;
 
 const AGGREGATE_ALIGN: usize = 8;
 
@@ -188,11 +230,12 @@ fn alloc_aggregate_bytes(size: usize) -> *mut u8 {
 /// # Safety
 /// `source` must point to `size` readable bytes with the concrete payload type's
 /// layout. `clone` and `free`, when present, must operate on that same type.
-unsafe fn move_aggregate(
+pub(crate) unsafe fn move_aggregate(
     source: *const u8,
     size: usize,
     clone: Option<ElemClone>,
     free: Option<ElemFree>,
+    eq: Option<ElemEq>,
 ) -> *mut AggregatePayload {
     let data = alloc_aggregate_bytes(size);
     if size > 0 {
@@ -205,6 +248,7 @@ unsafe fn move_aggregate(
         size,
         clone,
         free,
+        eq,
     }))
 }
 
@@ -213,7 +257,7 @@ unsafe fn move_aggregate(
 /// # Safety
 /// `value` must be a live aggregate payload and `out` must point to `size`
 /// writable bytes with the payload's concrete alignment.
-unsafe fn read_aggregate(value: *mut AggregatePayload, out: *mut u8) {
+pub(crate) unsafe fn read_aggregate(value: *mut AggregatePayload, out: *mut u8) {
     if value.is_null() {
         return;
     }
@@ -234,7 +278,7 @@ unsafe fn read_aggregate(value: *mut AggregatePayload, out: *mut u8) {
 ///
 /// # Safety
 /// `value` must be null or a live payload, freed at most once.
-unsafe fn free_aggregate(value: *mut AggregatePayload) {
+pub(crate) unsafe fn free_aggregate(value: *mut AggregatePayload) {
     if value.is_null() {
         return;
     }
@@ -295,8 +339,146 @@ pub unsafe extern "C" fn kira_rt_enum_new_aggregate(
     free: Option<ElemFree>,
 ) -> KEnum {
     // SAFETY: caller provides the concrete payload's bytes and matching leaves.
-    let payload = unsafe { move_aggregate(source, size, clone, free) };
+    let payload = unsafe { move_aggregate(source, size, clone, free, None) };
     kira_rt_enum_new(tag, PAYLOAD_AGGREGATE, payload as u64)
+}
+
+/// Boxes an aggregate payload that can also be compared.
+///
+/// Appended beside [`kira_rt_enum_new_aggregate`] rather than changing its
+/// signature, so existing callers and runtime archives keep their ABI. Erasure
+/// uses this one; an ordinary enum payload uses the older one and gets a null
+/// `eq`, which no comparison reaches.
+///
+/// # Safety
+/// As [`kira_rt_enum_new_aggregate`], and `eq` must have been generated for the
+/// same concrete type as `clone` and `free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_enum_new_aggregate_eq(
+    tag: i64,
+    source: *const u8,
+    size: usize,
+    clone: Option<ElemClone>,
+    free: Option<ElemFree>,
+    eq: Option<ElemEq>,
+) -> KEnum {
+    // SAFETY: caller provides the concrete payload's bytes and matching leaves.
+    let payload = unsafe { move_aggregate(source, size, clone, free, eq) };
+    kira_rt_enum_new(tag, PAYLOAD_AGGREGATE, payload as u64)
+}
+
+/// Whether two erased values are structurally equal.
+///
+/// What `EqAny` lowers to. The tag of an erasure box is its
+/// `kira_semantics_model::ErasedTypeId` word rather than a variant
+/// discriminant, so two boxes whose tags differ hold different Kira types and
+/// are unequal without their payloads being read at all. That test is what
+/// makes reading them afterwards sound: an aggregate is untyped bytes here, and
+/// reading a `Rect`'s through a `Point`'s leaf would be undefined behavior
+/// rather than a wrong answer.
+///
+/// Both handles stay owned by the caller: comparing takes nothing.
+///
+/// # Safety
+/// `a` and `b` must be null or live handles from this runtime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_any_eq(a: KEnum, b: KEnum) -> u8 {
+    // SAFETY: the caller's live-handle contract is this function's own.
+    u8::from(unsafe { boxes_equal(a, b) })
+}
+
+/// The family word an `ErasedTypeId` carries in its high 32 bits.
+///
+/// Mirrors `kira_semantics_model::ty::erased`'s `kind` module, which is the
+/// wire side of this contract. Only the two that need different treatment from
+/// a plain word comparison are named: a float compares as a float so `NaN`
+/// matches nothing, and every other scalar family is its bits.
+const ERASED_FAMILY_FLOAT: i64 = 1;
+
+/// Compares two enum-shaped boxes structurally.
+///
+/// Used for erasure boxes and for the nested enums they carry, which are the
+/// same shape: a tag, and one payload whose kind says what it is.
+///
+/// # Safety
+/// Both must be null or live handles from this runtime.
+unsafe fn boxes_equal(a: KEnum, b: KEnum) -> bool {
+    if a.is_null() || b.is_null() {
+        return a.is_null() && b.is_null();
+    }
+    // SAFETY: both are live handles, and reading a tag never consumes one.
+    let (a_tag, b_tag) = unsafe { (kira_rt_enum_tag(a), kira_rt_enum_tag(b)) };
+    if a_tag != b_tag {
+        return false;
+    }
+    // A payload-less variant is its tag and nothing else.
+    if is_inline(a) || is_inline(b) {
+        return is_inline(a) && is_inline(b);
+    }
+    // SAFETY: neither is inline, so both address a live `KiraEnum`.
+    let (one, other) = unsafe { (&*a, &*b) };
+    if one.payload_kind != other.payload_kind {
+        return false;
+    }
+    match one.payload_kind {
+        PAYLOAD_INERT => {
+            if a_tag >> 32 == ERASED_FAMILY_FLOAT {
+                // IEEE, deliberately: making erasure the one place `NaN`
+                // compares equal to itself would be a worse surprise than the
+                // rule every other float comparison already follows.
+                return f64::from_bits(one.payload) == f64::from_bits(other.payload);
+            }
+            one.payload == other.payload
+        }
+        // SAFETY: the kind says both words are live `KStr` handles.
+        PAYLOAD_STR => unsafe { str_payloads_equal(one.payload, other.payload) },
+        // SAFETY: the kind says both words are live nested `KEnum` handles.
+        PAYLOAD_ENUM => unsafe { boxes_equal(one.payload as KEnum, other.payload as KEnum) },
+        PAYLOAD_AGGREGATE => {
+            let (one, other) = (
+                one.payload as *mut AggregatePayload,
+                other.payload as *mut AggregatePayload,
+            );
+            if one.is_null() || other.is_null() {
+                return one.is_null() && other.is_null();
+            }
+            // SAFETY: the kind says both words are live aggregate payloads.
+            let (one, other) = unsafe { (&*one, &*other) };
+            // Equal tags already proved both hold the same Kira type, so the
+            // sizes agree and either leaf reads either payload correctly. A
+            // null leaf is a payload boxed by a caller that never compares.
+            let Some(eq) = one.eq else {
+                return false;
+            };
+            // SAFETY: both point at live payloads of the type `eq` was
+            // generated for, and the comparison reads without taking.
+            unsafe { eq(one.data, other.data) != 0 }
+        }
+        // An unrecognized kind is a word this code cannot interpret; saying
+        // "not equal" is the conservative direction, matching how the same
+        // unknown is treated as inert rather than guessed at when freeing.
+        _ => false,
+    }
+}
+
+/// Compares two `KStr` payload words, leaving both boxes as they were found.
+///
+/// `kira_rt_str_eq` consumes what it compares, so each side is cloned first and
+/// the clones are what it releases. The payloads themselves stay owned by the
+/// boxes holding them, which is what lets a comparison take nothing.
+///
+/// # Safety
+/// Both words must be live `KStr` handles or null.
+unsafe fn str_payloads_equal(one: u64, other: u64) -> bool {
+    // SAFETY: caller's live-handle contract, and each clone is handed to
+    // `kira_rt_str_eq`, which releases exactly the two it is given.
+    unsafe {
+        let (a, b) = (
+            kira_rt_str_clone(one as KStr),
+            kira_rt_str_clone(other as KStr),
+        );
+        crate::runtime::kira_rt_str_eq(a, b) != 0
+    }
 }
 
 /// Reads an enum's discriminant tag; leaves the enum untouched.

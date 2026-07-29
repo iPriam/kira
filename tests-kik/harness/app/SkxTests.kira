@@ -1,0 +1,446 @@
+import Foundation
+
+// SkxTests.kira
+// Migrated from tests/pass/run/{struct_state_parity, borrow_mut_struct_writeback,
+// instance_method_parity, while_index_struct_methods,
+// retained_tree_aggregate_defaults_parity, printable_dispatch_parity,
+// construct_declaration_functions, construct_array_field_owned_value,
+// construct_any_binding_move_parity}.
+// All top-level names use skx / Skx prefix. Structs are reduced to scalars
+// (sums of fields/counts) since the runner only compares Int/Bool/String.
+
+// ---------------------------------------------------------------------------
+// struct_state_parity
+// ---------------------------------------------------------------------------
+
+struct SkxPair1 {
+    var left: I64
+    var right: I64
+}
+
+struct SkxState1 {
+    var first: SkxPair1
+    var second: SkxPair1
+    var total: I64
+}
+
+// ---------------------------------------------------------------------------
+// borrow_mut_struct_writeback
+// ---------------------------------------------------------------------------
+
+struct SkxPair2 { var w: Int = 0; var h: Int = 0 }
+struct SkxNode2 { var v: Int = 0; var sz: SkxPair2 = SkxPair2 {} }
+struct SkxTree2 { var nodes: [SkxNode2] = [] }
+
+function skxMutScalar2(s: borrow mut SkxPair2) {
+    s.w = 111
+    return
+}
+
+function skxMutElemScalar2(t: borrow mut SkxTree2) {
+    t.nodes[0].v = 222
+    return
+}
+
+function skxMutElemStruct2(t: borrow mut SkxTree2) {
+    t.nodes[0].sz = SkxPair2 { w: 333, h: 444 }
+    return
+}
+
+function skxMutViaReborrow2(t: borrow mut SkxTree2) {
+    var r = t
+    r.nodes[0].sz = SkxPair2 { w: 555, h: 666 }
+    return
+}
+
+// ---------------------------------------------------------------------------
+// instance_method_parity
+// ---------------------------------------------------------------------------
+
+class SkxCounter3 {
+    let value: I64
+
+    function emit(): I64 {
+        return self.value
+    }
+}
+
+// ---------------------------------------------------------------------------
+// while_index_struct_methods
+// ---------------------------------------------------------------------------
+
+struct SkxCounter4 {
+    let step: Int = 1;
+
+    function next(value: Int) -> Int {
+        return value + step;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// retained_tree_aggregate_defaults_parity
+// ---------------------------------------------------------------------------
+
+struct SkxStateSlot5 {
+    var nodeId: Int = 0
+    var value: Int = 0
+    var active: Bool = false
+}
+
+struct SkxRetainedNode5 {
+    var id: Int = 0
+    var parentId: Int = 0
+    var key: Int = 0
+    var label: String = ""
+    var childIds: [Int] = []
+    var stateSlots: [SkxStateSlot5] = []
+    var mounted: Bool = true
+}
+
+struct SkxRetainedTree5 {
+    var nextId: Int = 1
+    var rootId: Int = 0
+    var nodes: [SkxRetainedNode5] = []
+    var removedIds: [Int] = []
+}
+
+class SkxClassBucket5 {
+    let title: String = ""
+    let values: [Int] = []
+}
+
+function skxFindNodeIndex5(nodes: borrow [SkxRetainedNode5], id: Int) -> Int {
+    var index = 0
+    while index < nodes.count {
+        if nodes[index].id == id {
+            return index
+        }
+        index = index + 1
+    }
+    return -1
+}
+
+function skxAppendRetainedNode5(tree: SkxRetainedTree5, parentId: Int, key: Int, label: String) -> SkxRetainedTree5 {
+    var next = tree
+    let nodeId = next.nextId
+    next.nextId = next.nextId + 1
+
+    var node = SkxRetainedNode5 {
+        id: nodeId
+        parentId: parentId
+        key: key
+        label: label
+        childIds: []
+        stateSlots: []
+        mounted: true
+    }
+    node.stateSlots.append(SkxStateSlot5 {
+        nodeId: nodeId
+        value: label.count + key
+        active: true
+    })
+
+    next.nodes.append(move node)
+    if parentId == 0 {
+        next.rootId = nodeId
+    } else {
+        let parentIndex = skxFindNodeIndex5(next.nodes, parentId)
+        if parentIndex >= 0 {
+            next.nodes[parentIndex].childIds.append(nodeId)
+        }
+    }
+    return next
+}
+
+function skxRemoveRetainedNode5(tree: SkxRetainedTree5, nodeId: Int) -> SkxRetainedTree5 {
+    var next = tree
+    var kept: [SkxRetainedNode5] = []
+    var index = 0
+    while index < next.nodes.count {
+        let node = next.nodes[index]
+        if node.id == nodeId {
+            next.removedIds.append(nodeId)
+        } else {
+            var updated = node
+            var children: [Int] = []
+            var childIndex = 0
+            while childIndex < updated.childIds.count {
+                if updated.childIds[childIndex] != nodeId {
+                    children.append(updated.childIds[childIndex])
+                }
+                childIndex = childIndex + 1
+            }
+            updated.childIds = children
+            kept.append(move updated)
+        }
+        index = index + 1
+    }
+    next.nodes = kept
+    return next
+}
+
+function skxBuildRetainedTree5() -> SkxRetainedTree5 {
+    var tree = SkxRetainedTree5 {}
+    tree = skxAppendRetainedNode5(move tree, 0, 100, "root")
+    let rootId = tree.rootId
+    tree = skxAppendRetainedNode5(move tree, rootId, 200, "first")
+    tree = skxAppendRetainedNode5(move tree, rootId, 300, "second")
+
+    var copied = tree.nodes[1]
+    copied.childIds.append(999)
+    copied.stateSlots.append(SkxStateSlot5 {
+        nodeId: copied.id
+        value: copied.label.count + 400
+        active: true
+    })
+    tree.nodes[1] = copied
+
+    return skxRemoveRetainedNode5(move tree, 3)
+}
+
+// ---------------------------------------------------------------------------
+// printable_dispatch_parity
+// ---------------------------------------------------------------------------
+
+struct SkxPerson6 {
+    let name: String
+
+    function onPrint() -> String {
+        return name
+    }
+}
+
+// ---------------------------------------------------------------------------
+// construct_declaration_functions
+// ---------------------------------------------------------------------------
+
+construct SkxDrawable7 {
+    requires {
+        function draw() -> Int
+    }
+}
+
+SkxDrawable7 SkxSprite7 {
+    let base: Int = 7
+
+    function draw() -> Int {
+        return base + SkxSprite7.offset()
+    }
+
+    function offset() -> Int {
+        return 3
+    }
+}
+
+// ---------------------------------------------------------------------------
+// construct_array_field_owned_value
+// ---------------------------------------------------------------------------
+
+struct SkxItem8 {
+    let v: Int
+}
+
+struct SkxBag8 {
+    var items: [SkxItem8]
+}
+
+function skxFreshItems8() -> [SkxItem8] {
+    return [SkxItem8 { v: 10 }, SkxItem8 { v: 20 }]
+}
+
+function skxTotal8(bag: borrow SkxBag8) -> Int {
+    var sum = 0
+    var index = 0
+    while index < bag.items.count {
+        sum = sum + bag.items[index].v
+        index = index + 1
+    }
+    return sum
+}
+
+// ---------------------------------------------------------------------------
+// construct_any_binding_move_parity
+// ---------------------------------------------------------------------------
+
+construct SkxNode9 {
+    @Required let label: String
+}
+
+SkxNode9 SkxLeaf9 {
+    let text: String = ""
+
+    let label: String {
+        text
+    }
+}
+
+function skxSize9(node: some SkxNode9) -> Int {
+    return node.label.count
+}
+
+function skxGood9(node: some SkxNode9) -> Int {
+    let alias = node
+    return skxSize9(move alias)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+Test SkxStructStateParity {
+    test {
+        var seed: SkxPair1 = SkxPair1(4, 8)
+        var state: SkxState1 = SkxState1(seed, SkxPair1(1, 2), 0)
+
+        seed.left = seed.left + 3
+        state.first.right = state.first.right + seed.left
+        state.second = seed
+        state.total = state.first.left + state.first.right
+
+        var out = seed.left + state.first.left + state.first.right + state.second.left + state.second.right + state.total
+        return out
+    }
+
+    expect {
+        let e: Result<I64, TestFailure> = .Ok(60)
+        return e
+    }
+}
+
+Test SkxBorrowMutStructWriteback {
+    test {
+        var p = SkxPair2 { w: 0, h: 0 }
+        skxMutScalar2(p)
+
+        var a = SkxTree2 { nodes: [SkxNode2 { v: 0, sz: SkxPair2 {} }] }
+        skxMutElemScalar2(a)
+
+        var b = SkxTree2 { nodes: [SkxNode2 { v: 0, sz: SkxPair2 {} }] }
+        skxMutElemStruct2(b)
+
+        var c = SkxTree2 { nodes: [SkxNode2 { v: 0, sz: SkxPair2 {} }] }
+        skxMutViaReborrow2(c)
+
+        var out = p.w + a.nodes[0].v + b.nodes[0].sz.w + c.nodes[0].sz.w
+        return out
+    }
+
+    expect {
+        let e: Result<Int, TestFailure> = .Ok(1221)
+        return e
+    }
+}
+
+Test SkxInstanceMethodParity {
+    test {
+        let counter: SkxCounter3 = SkxCounter3(42)
+        return counter.emit()
+    }
+
+    expect {
+        let e: Result<I64, TestFailure> = .Ok(42)
+        return e
+    }
+}
+
+Test SkxWhileIndexStructMethods {
+    test {
+        var values = [1, 2, 3, 4];
+        var index = 0;
+        let counter = SkxCounter4 { step: 3 };
+
+        while index < 4 {
+            if index == 1 {
+                index = index + 1;
+                continue;
+            } else if index == 3 {
+                values[index] = counter.next(values[index]);
+                break;
+            }
+
+            values[index] = counter.next(values[index]);
+            index = index + 1;
+        }
+
+        var out = values[0] + values[1] + values[2] + values[3]
+        return out
+    }
+
+    expect {
+        let e: Result<Int, TestFailure> = .Ok(19)
+        return e
+    }
+}
+
+Test SkxRetainedTreeAggregateDefaultsParity {
+    test {
+        let blank = SkxRetainedNode5 {}
+        let bucket = SkxClassBucket5()
+        var tree = skxBuildRetainedTree5()
+        let copiedNode = tree.nodes[1]
+        var mutatedCopy = copiedNode
+        mutatedCopy.childIds.append(77)
+        mutatedCopy.stateSlots.append(SkxStateSlot5 {
+            nodeId: 77
+            value: 88
+            active: true
+        })
+
+        var out = blank.label.count + blank.childIds.count + blank.stateSlots.count + bucket.title.count + bucket.values.count + tree.nextId + tree.rootId + tree.nodes.count + tree.removedIds.count + copiedNode.childIds.count + mutatedCopy.childIds.count + mutatedCopy.stateSlots.count
+        return out
+    }
+
+    expect {
+        let e: Result<Int, TestFailure> = .Ok(14)
+        return e
+    }
+}
+
+Test SkxPrintableDispatchParity {
+    test {
+        let person = SkxPerson6(name: "Ada")
+        return person.onPrint()
+    }
+
+    expect {
+        let e: Result<String, TestFailure> = .Ok("Ada")
+        return e
+    }
+}
+
+Test SkxConstructDeclarationFunctions {
+    test {
+        return SkxSprite7.draw()
+    }
+
+    expect {
+        let e: Result<Int, TestFailure> = .Ok(10)
+        return e
+    }
+}
+
+Test SkxConstructArrayFieldOwnedValue {
+    test {
+        let local = [SkxItem8 { v: 1 }, SkxItem8 { v: 2 }, SkxItem8 { v: 3 }]
+        let moved = SkxBag8 { items: move local }
+        let built = SkxBag8 { items: skxFreshItems8() }
+        var out = moved.items.count + skxTotal8(moved) + built.items.count + skxTotal8(built)
+        return out
+    }
+
+    expect {
+        let e: Result<Int, TestFailure> = .Ok(41)
+        return e
+    }
+}
+
+Test SkxConstructAnyBindingMoveParity {
+    test {
+        return skxGood9(SkxLeaf9(text: "leaf"))
+    }
+
+    expect {
+        let e: Result<Int, TestFailure> = .Ok(4)
+        return e
+    }
+}

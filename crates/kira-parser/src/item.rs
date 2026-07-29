@@ -65,39 +65,47 @@ impl Parser<'_> {
             TokenKind::At => self.parse_annotated_item(),
             TokenKind::Function => {
                 if let Some(function) = self.parse_function(false, Execution::Inherited, false) {
-                    self.tree.push_item(self.source, Item::Function(function));
+                    self.items.push(Item::Function(function));
+                }
+            }
+            // `async function` — `async` is contextual, so it is an ordinary
+            // identifier until the very next token is `function`.
+            TokenKind::Identifier if self.at_async_function() => {
+                self.bump(); // `async`
+                if let Some(mut function) = self.parse_function(false, Execution::Inherited, false)
+                {
+                    function.is_async = true;
+                    self.items.push(Item::Function(function));
                 }
             }
             TokenKind::Struct => {
                 if let Some(declaration) = self.parse_struct() {
-                    self.tree.push_item(self.source, Item::Struct(declaration));
+                    self.items.push(Item::Struct(declaration));
                 }
             }
             TokenKind::Enum => {
                 if let Some(declaration) = self.parse_enum() {
-                    self.tree.push_item(self.source, Item::Enum(declaration));
+                    self.items.push(Item::Enum(declaration));
                 }
             }
             TokenKind::Type => {
                 if let Some(declaration) = self.parse_type_alias() {
-                    self.tree
-                        .push_item(self.source, Item::TypeAlias(declaration));
+                    self.items.push(Item::TypeAlias(declaration));
                 }
             }
             TokenKind::Import => {
                 if let Some(declaration) = self.parse_import() {
-                    self.tree.push_item(self.source, Item::Import(declaration));
+                    self.items.push(Item::Import(declaration));
                 }
             }
             TokenKind::Class => {
                 if let Some(declaration) = self.parse_class() {
-                    self.tree.push_item(self.source, Item::Class(declaration));
+                    self.items.push(Item::Class(declaration));
                 }
             }
             TokenKind::Construct => {
                 if let Some(declaration) = self.parse_construct_family() {
-                    self.tree
-                        .push_item(self.source, Item::Construct(declaration));
+                    self.items.push(Item::Construct(declaration));
                 }
             }
             // `extend Family { ... }` leads with the contextual keyword
@@ -106,7 +114,7 @@ impl Parser<'_> {
             // matched first.
             TokenKind::Identifier if self.at_extend_block() => {
                 if let Some(declaration) = self.parse_extend() {
-                    self.tree.push_item(self.source, Item::Extend(declaration));
+                    self.items.push(Item::Extend(declaration));
                 }
             }
             // `Family Name(params) { ... }` — a construct-backed declaration —
@@ -114,8 +122,7 @@ impl Parser<'_> {
             // starts with an identifier is still parse-don't-crash.
             TokenKind::Identifier if self.at_construct_backed() => {
                 if let Some(declaration) = self.parse_construct_backed() {
-                    self.tree
-                        .push_item(self.source, Item::Construct(declaration));
+                    self.items.push(Item::Construct(declaration));
                 }
             }
             TokenKind::Identifier => self.parse_unsupported_item(),
@@ -132,12 +139,28 @@ impl Parser<'_> {
         }
     }
 
+    /// Whether the cursor sits on the contextual `async` of `async function`.
+    ///
+    /// One token of lookahead and nothing else: `async` keeps its identifier
+    /// meaning everywhere `function` does not immediately follow it, so a local
+    /// named `async` and a call to `async(…)` still parse as they always did.
+    fn at_async_function(&self) -> bool {
+        self.text_of(self.current().span) == "async" && self.peek(1).kind == TokenKind::Function
+    }
+
     fn parse_annotated_item(&mut self) {
         let start = self.current().span;
         let annotations = self.parse_annotations();
-        if self.at(TokenKind::Function) {
+        if self.at(TokenKind::Identifier) && self.at_async_function() {
+            self.bump(); // `async`
+            if let Some(mut function) = self.parse_function_annotated(&annotations) {
+                function.is_async = true;
+                function.span = Span::from_bounds(start.start, self.previous_end());
+                self.items.push(Item::Function(function));
+            }
+        } else if self.at(TokenKind::Function) {
             if let Some(function) = self.parse_function_annotated(&annotations) {
-                self.tree.push_item(self.source, Item::Function(function));
+                self.items.push(Item::Function(function));
             }
         } else if self.at(TokenKind::Class) {
             // `@Export class` is the handle-eligibility marker, so a class is
@@ -153,7 +176,7 @@ impl Parser<'_> {
             if let Some(mut declaration) = self.parse_class() {
                 declaration.export = annotations.export;
                 declaration.span = Span::from_bounds(start.start, self.previous_end());
-                self.tree.push_item(self.source, Item::Class(declaration));
+                self.items.push(Item::Class(declaration));
             }
         } else if self.at(TokenKind::Struct) {
             // `@Main`, `@Runtime`, and `@Native` select how a *function* runs,
@@ -196,7 +219,7 @@ impl Parser<'_> {
                 declaration.ffi = annotations.ffi_type;
                 declaration.derives_copy = annotations.derives_copy;
                 declaration.span = Span::from_bounds(start.start, self.previous_end());
-                self.tree.push_item(self.source, Item::Struct(declaration));
+                self.items.push(Item::Struct(declaration));
             }
         } else if self.at(TokenKind::Enum) {
             // An enum reaches an annotation for exactly one reason —
@@ -205,7 +228,7 @@ impl Parser<'_> {
             if let Some(mut declaration) = self.parse_enum() {
                 declaration.derives_copy = annotations.derives_copy;
                 declaration.span = Span::from_bounds(start.start, self.previous_end());
-                self.tree.push_item(self.source, Item::Enum(declaration));
+                self.items.push(Item::Enum(declaration));
             }
         } else {
             // Annotated non-function construct: parse-don't-crash.
@@ -364,6 +387,9 @@ impl Parser<'_> {
             name,
             name_span,
             is_main,
+            // Set by the caller that consumed a contextual `async` before the
+            // `function` keyword; a bare `function` carries none.
+            is_async: false,
             // Set by `parse_function_annotated` when annotations preceded the
             // declaration; a bare `function` carries none.
             export: None,
@@ -529,10 +555,8 @@ impl Parser<'_> {
             }
         }
         let span = Span::from_bounds(start.start, self.previous_end());
-        self.tree.push_item(
-            self.source,
-            Item::Unsupported(UnsupportedItem { keyword, span }),
-        );
+        self.items
+            .push(Item::Unsupported(UnsupportedItem { keyword, span }));
         let file_span = FileSpan::new(self.source, span);
         let mut diagnostic = Diagnostic::single(
             Severity::Error,
@@ -570,9 +594,13 @@ fn unsupported_keyword(kind: TokenKind, text: &str) -> &'static str {
         TokenKind::Enum => "enum",
         TokenKind::Class => "class",
         TokenKind::Import => "import",
+        // `Package` is a real declaration form this parser has not built.
+        // Every other identifier-led form is either a construct-backed
+        // declaration, matched before this, or an ordinary name — including
+        // `Test`, which is a construct family Foundation declares in Kira and
+        // this parser knows nothing about.
         TokenKind::Identifier => match text {
             "Package" => "Package",
-            "Test" => "Test",
             "construct" => "construct",
             _ => "declaration",
         },

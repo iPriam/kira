@@ -1,7 +1,7 @@
 // A Kira library, and the Rust program that calls it.
 //
 // `kind = .Library` in `package.kira` is what makes this a library: it needs no
-// `@Main`, `kirac run` refuses it by name, and `kirac build` produces an
+// `@Main`, `kira run` refuses it by name, and `kira build` produces an
 // artifact plus the Rust crate a consumer depends on. `README.md` beside this
 // file is the consumer half.
 

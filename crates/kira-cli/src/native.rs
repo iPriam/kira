@@ -138,7 +138,7 @@ pub fn build(
         archive_path: None,
         exports: kira_llvm_backend::NativeExportSurface::default(),
         ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
-        runtime_archive: runtime_archive()?,
+        runtime_archive: runtime_archive(program)?,
         optimize,
         unavailable_imports: foreign_link.unavailable_imports().to_vec(),
         foreign_link: foreign_link.clone(),
@@ -163,7 +163,7 @@ pub fn build_adapter_sidecar(
         module_name: format!("{}_ffi", artifacts.stem),
         object_path: artifacts.foreign_object(),
         library_path: artifacts.foreign_sidecar(),
-        runtime_archive: runtime_archive()?,
+        runtime_archive: runtime_archive(program)?,
         unavailable_imports: foreign_link.unavailable_imports().to_vec(),
         foreign_link: foreign_link.clone(),
     };
@@ -186,12 +186,20 @@ pub fn execute(executable: &Path) -> Result<i32, NativeError> {
     Ok(status.code().unwrap_or(1))
 }
 
-/// Locates `libkira_native_bridge.a`, the native runtime archive.
+/// Locates the native runtime archive `program` needs.
 ///
-/// It sits beside this executable: cargo writes the staticlib into the same
-/// profile directory as `kirac`, and `kirac` depends on the crate, so a built
-/// `kirac` always has a matching archive next to it.
-pub fn runtime_archive() -> Result<PathBuf, NativeError> {
+/// Two archives, and the program picks. The base one carries the runtime every
+/// native program needs; `libkira_compiler_bridge.a` carries that *and* the
+/// check-only frontend, because native code has no host to ask for a compiler
+/// and can only reach one that was linked in. Linking the larger one always
+/// would put a compiler inside every program Kira ever produces, and linking
+/// both is not possible — two Rust static libraries in one link line duplicate
+/// the standard library — so the answer is whichever one this program needs.
+///
+/// Either sits beside this executable: cargo writes both staticlibs into the
+/// same profile directory as `kira`, and `kira` depends on both crates, so a
+/// built `kira` always has matching archives next to it.
+pub fn runtime_archive(program: &IrProgram) -> Result<PathBuf, NativeError> {
     let executable =
         std::env::current_exe().map_err(|source| NativeError::RuntimeArchive { source })?;
     let directory = executable
@@ -199,7 +207,18 @@ pub fn runtime_archive() -> Result<PathBuf, NativeError> {
         .ok_or_else(|| NativeError::RuntimeArchive {
             source: std::io::Error::other("this executable has no parent directory"),
         })?;
-    Ok(directory.join("libkira_native_bridge.a"))
+    Ok(directory.join(archive_file_name(program.uses_compiler())))
+}
+
+/// Which archive file a program needs, by name.
+///
+/// Split from the path so a test can assert the choice without a built `kira`
+/// beside it.
+fn archive_file_name(uses_compiler: bool) -> &'static str {
+    match uses_compiler {
+        true => "libkira_compiler_bridge.a",
+        false => "libkira_native_bridge.a",
+    }
 }
 
 /// Why a native build or run failed.
@@ -236,6 +255,15 @@ pub enum NativeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A program that never checks a package links the small archive; one that
+    /// does links the archive that carries a compiler. Both, never neither and
+    /// never both — two Rust static libraries in one link line do not link.
+    #[test]
+    fn the_archive_a_program_links_follows_from_whether_it_checks_packages() {
+        assert_eq!(archive_file_name(false), "libkira_native_bridge.a");
+        assert_eq!(archive_file_name(true), "libkira_compiler_bridge.a");
+    }
 
     #[test]
     fn artifacts_live_beside_their_source_and_share_its_stem() {

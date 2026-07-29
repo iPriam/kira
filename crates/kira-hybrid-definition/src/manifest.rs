@@ -104,6 +104,19 @@ pub struct HybridManifest {
     /// Empty for a program whose externs pass only scalars, which is also what
     /// a manifest written before this section existed decodes as.
     pub foreign_aggregates: ForeignAggregates,
+    /// How many functions the bytecode half carries beyond
+    /// [`HybridManifest::functions`].
+    ///
+    /// The VM half synthesizes helpers of its own — the widen rebuilds — which
+    /// are appended after the program's functions and belong to no crossing:
+    /// nothing native calls one, because a crossing names a function by its
+    /// manifest id and these have none. They still have to be *counted*, or the
+    /// bundle check could not tell a legitimate helper from a stale bytecode
+    /// half carrying a function the manifest never described.
+    ///
+    /// Zero for a program that widens nothing, and for a manifest written
+    /// before this field existed — which is what keeps those bytes unchanged.
+    pub internal_functions: u32,
 }
 
 /// One `@FFI.Extern` import: its C library and symbol, its exact-width
@@ -273,11 +286,17 @@ impl HybridManifest {
             // function with nothing to bind.
             write_string(&mut out, function.exported_name.as_deref().unwrap_or(""));
         }
-        // The foreign-import section is appended last, and only when there is
-        // something in it: a program with no `@FFI.Extern` imports writes nothing
-        // here, so its bytes are identical to a manifest that predates this
-        // section. That is what lets an old manifest decode as an empty table.
-        if !self.foreign.is_empty() {
+        // The trailing sections are positional, not tagged, so a later one can
+        // only be written if every earlier one is — otherwise the decoder reads
+        // this section's count as the foreign count. A program that widens
+        // nothing writes no tail at all and keeps its bytes unchanged.
+        let tail = self.internal_functions != 0;
+        // The foreign-import section, written when there is something in it (or
+        // when the tail below forces it): a program with no `@FFI.Extern`
+        // imports writes nothing here, so its bytes are identical to a manifest
+        // that predates this section. That is what lets an old manifest decode
+        // as an empty table.
+        if !self.foreign.is_empty() || tail {
             write_u32(&mut out, self.foreign.len() as u32);
             for import in &self.foreign {
                 write_string(&mut out, &import.library);
@@ -294,7 +313,7 @@ impl HybridManifest {
         // The aggregate table follows the imports that index it, and is omitted
         // when empty for the same reason the imports are: a scalar-only program
         // writes bytes identical to a manifest predating aggregates.
-        if !self.foreign_aggregates.is_empty() {
+        if !self.foreign_aggregates.is_empty() || tail {
             write_u32(&mut out, self.foreign_aggregates.len() as u32);
             for aggregate in self.foreign_aggregates.iter() {
                 write_u32(&mut out, aggregate.members().len() as u32);
@@ -319,6 +338,9 @@ impl HybridManifest {
                     }
                 }
             }
+        }
+        if tail {
+            write_u32(&mut out, self.internal_functions);
         }
         out
     }
@@ -370,6 +392,9 @@ impl HybridManifest {
 
         let foreign = read_foreign(&mut reader)?;
         let foreign_aggregates = read_foreign_aggregates(&mut reader, &foreign)?;
+        // Absent means zero: a manifest written before this field existed ends
+        // here, and so does one for a program that widens nothing.
+        let internal_functions = reader.u32().unwrap_or_default();
 
         // A library carries no entrypoint, so there is no index to bound.
         let entry = match entry {
@@ -390,6 +415,7 @@ impl HybridManifest {
             functions,
             foreign,
             foreign_aggregates,
+            internal_functions,
         })
     }
 }
@@ -635,6 +661,7 @@ mod tests {
             ],
             foreign: Vec::new(),
             foreign_aggregates: Default::default(),
+            internal_functions: 0,
         }
     }
 
@@ -753,6 +780,47 @@ mod tests {
         assert_eq!(
             decoded.entry_function().expect("an entrypoint").name,
             "main"
+        );
+    }
+
+    /// The internal-function count survives a round trip with no foreign
+    /// section to sit behind.
+    ///
+    /// The trailing sections are positional rather than tagged, so writing this
+    /// count while the two before it are absent would have the decoder read it
+    /// as the foreign-import count. The encoder writes those empty sections
+    /// explicitly when there is a tail; this is what holds it.
+    #[test]
+    fn an_internal_function_count_round_trips_without_a_foreign_section() {
+        let mut original = manifest();
+        original.internal_functions = 3;
+        assert!(original.foreign.is_empty());
+        assert!(original.foreign_aggregates.is_empty());
+        let decoded = HybridManifest::from_bytes(&original.to_bytes()).expect("decodes");
+        assert_eq!(decoded, original);
+        assert_eq!(decoded.internal_functions, 3);
+        assert!(decoded.foreign.is_empty());
+    }
+
+    /// A program that widens nothing writes the bytes it always did.
+    ///
+    /// What keeps the field append-only: the tail is omitted when the count is
+    /// zero, so a manifest predating it decodes identically and one written now
+    /// is byte-for-byte what the old encoder produced.
+    #[test]
+    fn a_zero_internal_count_writes_no_tail() {
+        let mut original = manifest();
+        assert_eq!(original.internal_functions, 0);
+        let without = original.to_bytes();
+        original.internal_functions = 1;
+        let with = original.to_bytes();
+        assert!(with.len() > without.len());
+        assert_eq!(&with[..without.len()], &without[..]);
+        assert_eq!(
+            HybridManifest::from_bytes(&without)
+                .expect("decodes")
+                .internal_functions,
+            0
         );
     }
 

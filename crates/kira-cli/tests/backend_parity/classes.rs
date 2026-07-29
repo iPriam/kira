@@ -389,3 +389,69 @@ function main() {
     );
     assert_eq!(output, "13\n");
 }
+
+/// An `override let` that restates the inherited type, including an enum and an
+/// array of one — the shape the oracle's stress harness writes.
+///
+/// Restating the type is inert by design, so what this proves is that it stays
+/// inert on every backend: the slot keeps its inherited type and layout, and the
+/// override still replaces only the default. A backend that treated the
+/// restatement as a *new* field would add storage and read the parent's value
+/// back instead of the child's.
+///
+/// Differentially checked against the oracle's installed 1.7.3 `kira`.
+#[test]
+fn an_override_restating_the_inherited_type_agrees() {
+    let output = assert_parity(
+        r#"
+struct ColorVal {
+    let r: Int = 1
+}
+
+struct GlowPayload {
+    let color: ColorVal = ColorVal {}
+    let radius: Int = 4
+}
+
+enum Paint {
+    Flat
+    Glow(GlowPayload)
+}
+
+class Surface {
+    let paint: Paint = .Flat
+    let effects: [Paint] = []
+    let depth: Int = 0
+}
+
+class Card extends Surface {
+    override let paint: Paint = .Glow(GlowPayload { color: ColorVal { r: 5 }, radius: 2 })
+    override let effects: [Paint] = [.Glow(GlowPayload { color: ColorVal { r: 3 }, radius: 1 })]
+    // The same override without a restated type still works beside them.
+    override let depth = 9
+}
+
+function paintScore(p: borrow Paint) -> Int {
+    match p {
+        Flat -> { return 1 }
+        Glow(g) -> { return g.color.r * 10 + g.radius }
+    }
+    return 0
+}
+
+@Main
+function main() {
+    let base = Surface {}
+    print(paintScore(base.paint) + base.effects.count + base.depth)
+    let card = Card {}
+    var total = paintScore(card.paint) + card.depth
+    for e in card.effects {
+        total = total + paintScore(e)
+    }
+    print(total)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "1\n92\n");
+}

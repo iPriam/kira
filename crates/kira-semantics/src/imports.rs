@@ -36,7 +36,7 @@
 
 use std::collections::HashMap;
 
-use kira_core::Interner;
+use kira_core::Names;
 use kira_source::{SourceId, Span};
 use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::Item;
@@ -305,7 +305,7 @@ fn package_identity(identity: &str) -> Option<(&str, &str)> {
 
 /// Reads every `import` item out of the tree, paired with the file that wrote
 /// it.
-pub(crate) fn collect_imports(tree: &SyntaxTree, interner: &Interner) -> Vec<ImportEntry> {
+pub(crate) fn collect_imports(tree: &SyntaxTree, interner: &Names) -> Vec<ImportEntry> {
     let mut entries = Vec::new();
     for (source, item) in tree.items_with_source() {
         let Item::Import(declaration) = item else {

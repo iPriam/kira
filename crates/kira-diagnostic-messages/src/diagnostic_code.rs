@@ -34,6 +34,14 @@ pub enum DiagnosticCode {
     Kpk024LockfileDrift,
     /// KPK025 — a `*_types.kira` source sits outside a `bind-types/` directory.
     Kpk025MisplacedBindTypesFile,
+    /// KPK026 — a drifted lockfile was rewritten from the manifests.
+    Kpk026LockfileSynced,
+    /// KPK027 — a drifted lockfile could not be rewritten.
+    Kpk027LockfileSyncFailed,
+    /// KPK030 — a package manifest handed to the compiler could not be read.
+    Kpk030UnreadableManifest,
+    /// KPK031 — the root a check request named is in no package it listed.
+    Kpk031UnknownRootPackage,
 }
 
 impl DiagnosticCode {
@@ -53,6 +61,10 @@ impl DiagnosticCode {
             DiagnosticCode::Kpk023ConflictingPackageIdentity => "KPK023",
             DiagnosticCode::Kpk024LockfileDrift => "KPK024",
             DiagnosticCode::Kpk025MisplacedBindTypesFile => "KPK025",
+            DiagnosticCode::Kpk026LockfileSynced => "KPK026",
+            DiagnosticCode::Kpk027LockfileSyncFailed => "KPK027",
+            DiagnosticCode::Kpk030UnreadableManifest => "KPK030",
+            DiagnosticCode::Kpk031UnknownRootPackage => "KPK031",
         }
     }
 
@@ -78,6 +90,10 @@ mod tests {
             (DiagnosticCode::Kpk023ConflictingPackageIdentity, "KPK023"),
             (DiagnosticCode::Kpk024LockfileDrift, "KPK024"),
             (DiagnosticCode::Kpk025MisplacedBindTypesFile, "KPK025"),
+            (DiagnosticCode::Kpk026LockfileSynced, "KPK026"),
+            (DiagnosticCode::Kpk027LockfileSyncFailed, "KPK027"),
+            (DiagnosticCode::Kpk030UnreadableManifest, "KPK030"),
+            (DiagnosticCode::Kpk031UnknownRootPackage, "KPK031"),
         ];
 
         for (code, expected) in cases {

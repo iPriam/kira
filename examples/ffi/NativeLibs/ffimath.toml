@@ -1,7 +1,7 @@
 name = "ffimath"
 
 # One row per target this library ships an archive for. Selection is exact:
-# `kirac build --device wasm32` picks the wasm row, a host run picks the row
+# `kira build --device wasm32` picks the wasm row, a host run picks the row
 # whose triple matches this machine. Paths resolve relative to this file.
 #
 # The archives are not checked in — build them from ffimath.c with the commands

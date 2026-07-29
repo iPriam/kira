@@ -21,6 +21,7 @@ pub use kira_runtime_abi::Execution;
 /// so the analyzer and everything above it name them from one place.
 pub use kira_syntax_model::ownership::{OwnershipMode, OwnershipOp};
 pub use ty::{
-    ArrayId, ArrayTable, EnumDef, EnumId, EnumTable, FieldDef, FloatSpelling, IntSpelling,
-    NativeStateId, NativeStateTable, StructDef, StructId, StructTable, Type, TypeTable, VariantDef,
+    ArrayId, ArrayTable, CellId, CellTable, EnumDef, EnumId, EnumTable, ErasedTypeId, FieldDef,
+    FloatSpelling, Instantiation, IntSpelling, NativeStateId, NativeStateTable, StructDef,
+    StructId, StructTable, TaskResult, Type, TypeTable, VariantDef,
 };

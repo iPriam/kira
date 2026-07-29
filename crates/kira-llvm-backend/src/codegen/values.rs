@@ -69,8 +69,120 @@ impl Codegen<'_> {
             // eagerly here was 78% of one.
             Type::Array(_) => self.copy_shared(value, self.types.array_header, "array"),
             Type::Enum(_) => self.copy_shared(value, self.types.enum_box, "enum"),
+            // An erased value copies exactly as an enum does, because its box
+            // *is* an enum box: one more share of the same object. Nothing may
+            // write through an `Any`, so two holders can observe nothing a deep
+            // copy would have hidden — the same argument the enum arm rests on.
+            Type::Any => self.copy_shared(value, self.types.enum_box, "any"),
+            // A cell copies as an enum does, because its box *is* an enum box —
+            // and here the sharing is the point rather than an optimization
+            // nobody can observe. A closure and the frame that declared the
+            // `var` have to see each other's writes, so a copy must not be
+            // independent. This is the one arm of this function that does not
+            // preserve value semantics, because the type it copies does not
+            // have them.
+            Type::Cell(_) => self.copy_shared(value, self.types.enum_box, "cell"),
             // `owns_heap` is only true for the cases above.
             _ => Err(crate::LlvmError::Unsupported("a copy of an unowned value")),
+        }
+    }
+
+    /// Whether two values of `ty` are structurally equal, as an `i1`.
+    ///
+    /// Mirrors the VM's `Heap::values_equal`, and is reached the same way: only
+    /// from an erasure, where both sides are already known to be the same Kira
+    /// type. That is what lets this walk a struct field-by-field without
+    /// checking anything about the operands first — the erasure box's tag
+    /// settled it.
+    ///
+    /// Neither operand is consumed. A comparison reads and takes nothing, so a
+    /// caller still owns both afterwards.
+    pub(in crate::codegen) fn equal_values(
+        &mut self,
+        left: LLVMValueRef,
+        right: LLVMValueRef,
+        ty: Type,
+    ) -> Result<LLVMValueRef, crate::LlvmError> {
+        let builder = self.builder;
+        match ty {
+            // A float compares as IEEE says, so `NaN` equals nothing: the same
+            // rule `EqFloat` follows, and the VM's arm alongside it.
+            Type::Float(_) => {
+                // SAFETY: both operands are `double` and the builder is live.
+                Ok(unsafe {
+                    LLVMBuildFCmp(
+                        builder,
+                        llvm_sys::LLVMRealPredicate::LLVMRealOEQ,
+                        left,
+                        right,
+                        c"eq.float".as_ptr(),
+                    )
+                })
+            }
+            Type::Int(_) | Type::Bool | Type::RawPtr => {
+                // SAFETY: both operands share one integer type and the builder
+                // is live.
+                Ok(unsafe {
+                    LLVMBuildICmp(
+                        builder,
+                        llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                        left,
+                        right,
+                        c"eq.scalar".as_ptr(),
+                    )
+                })
+            }
+            // The helper consumes what it compares, so each side is cloned for
+            // it: the values themselves belong to whoever called this.
+            Type::String => {
+                let (a, b) = (self.copy_value(left, ty)?, self.copy_value(right, ty)?);
+                let equal = self.call(self.runtime.str_eq, &mut [a, b], c"eq.str");
+                Ok(self.truthy(equal))
+            }
+            Type::Struct(id) => {
+                let field_types = self.field_types(id)?;
+                // An empty struct is a value with nothing to disagree about.
+                let mut all = self.const_bool(true);
+                for (index, field_ty) in field_types.into_iter().enumerate() {
+                    let index = index as u32;
+                    let (a, b) = (
+                        self.extract_field(left, index),
+                        self.extract_field(right, index),
+                    );
+                    let equal = self.equal_values(a, b, field_ty)?;
+                    // SAFETY: both are `i1` and the builder is live. `and`
+                    // rather than a branch chain: a field comparison has no
+                    // side effect to skip, so there is nothing to short-circuit
+                    // for beyond the work itself.
+                    all = unsafe { LLVMBuildAnd(builder, all, equal, c"eq.field".as_ptr()) };
+                }
+                Ok(all)
+            }
+            // Both reach the runtime, which walks the elements or the tag and
+            // payload. An array needs its element's leaf to compare items it
+            // cannot type; an enum box carries everything its comparison needs.
+            Type::Array(_) => {
+                let element = self.element_of(ty)?;
+                let esize = self.abi_size(element)?;
+                let eq = self.element_eq(element)?;
+                let equal = self.call(
+                    self.runtime.array_eq,
+                    &mut [left, right, esize, eq],
+                    c"eq.array",
+                );
+                Ok(self.truthy(equal))
+            }
+            Type::Enum(_) | Type::Any => {
+                let equal = self.call(self.runtime.any_eq, &mut [left, right], c"eq.enum");
+                Ok(self.truthy(equal))
+            }
+            // Nothing else can be inside an erased value: `Void`, `Error`,
+            // `CString`, a cell, a task, and callback state are all refused by
+            // `Type::assignable_to` before `Any` takes them, and none is a
+            // struct field type that could carry one in sideways.
+            _ => Err(crate::LlvmError::Unsupported(
+                "an equality of a type that never erases",
+            )),
         }
     }
 
@@ -116,6 +228,24 @@ impl Codegen<'_> {
             Type::Enum(_) => {
                 let last = self.runtime.enum_free;
                 self.drop_shared(value, self.types.enum_box, &mut [], last, "enum")
+            }
+            // The box carries the payload kind that says what it owns, so
+            // `kira_rt_enum_free` reclaims an erased `String` or struct without
+            // this side having to remember which one was erased. That is the
+            // whole reason the tag is written at the box rather than tracked in
+            // the type: the free is driven by the value, as it is on the VM.
+            Type::Any => {
+                let last = self.runtime.enum_free;
+                self.drop_shared(value, self.types.enum_box, &mut [], last, "any")
+            }
+            // The last release reclaims whatever the payload kind says the box
+            // owns, exactly as an enum's does. A cell holding a closure that
+            // captures the same cell is a cycle share counts cannot collect; it
+            // leaks, and that is recorded in `kira-native-bridge`'s `cells`
+            // module rather than defended against here.
+            Type::Cell(_) => {
+                let last = self.runtime.cell_free;
+                self.drop_shared(value, self.types.enum_box, &mut [], last, "cell")
             }
             _ => Err(crate::LlvmError::Unsupported("a drop of an unowned value")),
         }
@@ -380,6 +510,22 @@ impl Codegen<'_> {
         let name = c_string(&format!("with.{index}"));
         // SAFETY: as `extract_field`, and `field` has field `index`'s type.
         unsafe { LLVMBuildInsertValue(self.builder, value, field, index, name.as_ptr()) }
+    }
+
+    /// Narrows a runtime helper's `i8` answer to the `i1` Kira booleans are.
+    pub(super) fn truthy(&self, value: LLVMValueRef) -> LLVMValueRef {
+        // SAFETY: the helper returns an `i8` of 0 or 1, and the builder is on
+        // a live block.
+        unsafe {
+            let zero = LLVMConstInt(self.types.i8, 0, 0);
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntNE,
+                value,
+                zero,
+                c"truthy".as_ptr(),
+            )
+        }
     }
 
     /// Emits a call to a runtime helper from within the current block.

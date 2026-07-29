@@ -171,7 +171,7 @@ pub fn build_native_library(
         },
     )?;
 
-    // Absolute, always. `kirac` is run from wherever the author happens to be,
+    // Absolute, always. `kira` is run from wherever the author happens to be,
     // so `build_directory` can perfectly well be relative — and the path baked
     // into the generated `build.rs` is read by cargo from the *generated
     // crate's* directory, which is somewhere else entirely. Resolved after the

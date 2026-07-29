@@ -60,6 +60,15 @@ impl Analyzer<'_> {
             (then_hir, otherwise_hir)
         };
 
+        // An integer *literal* against a `Float` branch is read as the float it
+        // spells: `flag ? 1 : 2.5` is `Float`. This is a property of the
+        // literal, not a widening rule — a named `Int` on one side and a
+        // `Float` on the other still disagree, exactly as `let f: Float = 1`
+        // still does. A literal has no width of its own until a position gives
+        // it one, and here the other branch is that position.
+        let (then_hir, otherwise_hir) =
+            self.float_literal_branches(then, then_hir, otherwise, otherwise_hir);
+
         let then_ty = self.program.expr(then_hir).type_of();
         let otherwise_ty = self.program.expr(otherwise_hir).type_of();
         if then_ty == Type::Error || otherwise_ty == Type::Error {
@@ -96,5 +105,48 @@ impl Analyzer<'_> {
             otherwise: otherwise_hir,
             ty,
         })
+    }
+
+    /// Re-reads an integer-literal branch as a `Float` when the other branch is
+    /// one, returning both branches as they should be lowered.
+    ///
+    /// Only a literal converts, and only against a `Float` peer: nothing here
+    /// touches a named binding, a call result, or an arithmetic expression, so
+    /// the language keeps its "no implicit `Int` -> `Float`" rule everywhere a
+    /// value already has a width.
+    fn float_literal_branches(
+        &mut self,
+        then: ExprId,
+        then_hir: HirExprId,
+        otherwise: ExprId,
+        otherwise_hir: HirExprId,
+    ) -> (HirExprId, HirExprId) {
+        let then_ty = self.program.expr(then_hir).type_of();
+        let otherwise_ty = self.program.expr(otherwise_hir).type_of();
+        if matches!(then_ty, Type::Int(_))
+            && matches!(otherwise_ty, Type::Float(_))
+            && let Some(converted) = self.integer_literal_as_float(then)
+        {
+            return (converted, otherwise_hir);
+        }
+        if matches!(then_ty, Type::Float(_))
+            && matches!(otherwise_ty, Type::Int(_))
+            && let Some(converted) = self.integer_literal_as_float(otherwise)
+        {
+            return (then_hir, converted);
+        }
+        (then_hir, otherwise_hir)
+    }
+
+    /// The `Float` an integer literal spells, or `None` when the syntax is not
+    /// one.
+    fn integer_literal_as_float(&mut self, id: ExprId) -> Option<HirExprId> {
+        match self.tree.expr(id) {
+            Expr::Int { value, .. } => {
+                let value = *value as f64;
+                Some(self.program.exprs.alloc(HirExpr::Float(value)))
+            }
+            _ => None,
+        }
     }
 }

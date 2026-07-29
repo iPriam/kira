@@ -1,0 +1,248 @@
+import Foundation
+
+// Corpus migration: closures. Source cases under tests/pass/run/{callback_*,
+// trailing_callback_*, closure_export_distinct_dispatch}. This file imports Foundation
+// explicitly (imports are file-scoped). Prefix: ckx / Ckx.
+
+// ── callback_builder_style_parity ─────────────────────────────────────────────
+
+class CkxCallbackApp {
+    function onEvent(handler: (Int) -> Void) {
+        handler(42)
+        return
+    }
+}
+
+Test CkxCallbackBuilderStyleParity {
+    test {
+        var out: Int = 0
+        let app = CkxCallbackApp()
+        app.onEvent { value in
+            out = value
+        }
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+// ── callback_mutable_value_capture ────────────────────────────────────────────
+
+Test CkxCallbackMutableValueCapture {
+    test {
+        var offset: Int = 1
+        let printer: (Int) -> Void = { value in
+            offset = offset + value
+        }
+        printer(1)
+        return offset
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+// ── callback_return_value_parity ──────────────────────────────────────────────
+// Original returns a Void-printing closure from a function; reduced to a
+// closure that returns the value it would have printed.
+
+function ckxMakePrinter(): (Int) -> Int {
+    return { value in
+        return value
+    }
+}
+
+Test CkxCallbackReturnValueParity {
+    test {
+        let printer = ckxMakePrinter()
+        return printer(5)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+}
+
+// ── callback_value_capture ────────────────────────────────────────────────────
+
+Test CkxCallbackValueCapture {
+    test {
+        let offset: Int = 1
+        let printer: (Int) -> Int = { value in
+            return value + offset
+        }
+        return printer(1)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+// ── callback_value_parity ─────────────────────────────────────────────────────
+
+class CkxHandlerBox {
+    let onDone: () -> Void
+    let onValue: (Int) -> Void
+}
+
+function ckxInvokeLater(callback: borrow () -> Void) {
+    callback()
+    return
+}
+
+function ckxTrigger(box: borrow CkxHandlerBox) {
+    box.onDone()
+    box.onValue(42)
+    return
+}
+
+Test CkxCallbackValueParity {
+    test {
+        var out: Int = 0
+        let callback: () -> Void = { in
+            out = out + 1
+        }
+        let printer: (Int) -> Void = { value in
+            out = out + value
+        }
+
+        callback()
+        printer(7)
+        ckxInvokeLater(callback)
+
+        let box: CkxHandlerBox = CkxHandlerBox(move callback, move printer)
+        ckxTrigger(box)
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(52); return e }
+}
+
+// ── trailing_callback_captures ────────────────────────────────────────────────
+
+class CkxFrame {
+    let value: Int
+
+    function draw() -> Int {
+        return self.value
+    }
+
+    function clear(color: Int) -> Int {
+        return color + self.value
+    }
+}
+
+class CkxGraphics {
+    function run(handler: (CkxFrame) -> Void) {
+        handler(CkxFrame(1))
+        return
+    }
+}
+
+class CkxApp {
+    function tick(handler: () -> Void) {
+        handler()
+        return
+    }
+}
+
+function ckxRegister(handler: (Int) -> Void) {
+    handler(2)
+    return
+}
+
+function ckxRegister0(handler: () -> Void) {
+    handler()
+    return
+}
+
+Test CkxTrailingCallbackCaptures {
+    test {
+        var out: Int = 0
+        let graphics = CkxGraphics()
+        let color = 7
+        graphics.run { frame in
+            out = out + frame.clear(color)
+        }
+
+        let app = CkxApp()
+        let message = 40
+        app.tick { in
+            out = out + message
+        }
+
+        let frame = 123
+        graphics.run { frame in
+            out = out + frame.draw()
+        }
+
+        let shadowed = 20
+        ckxRegister0 { in
+            out = out + shadowed
+            let shadowed = 21
+            out = out + shadowed
+        }
+
+        let base = 30
+        ckxRegister { value in
+            let outer_value = value
+            ckxRegister0 { in
+                out = out + (base + outer_value)
+            }
+        }
+        return out
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(122); return e }
+}
+
+// ── trailing_callback_mutable_capture ─────────────────────────────────────────
+
+function ckxRegisterMut(handler: (Int) -> Void) {
+    handler(1)
+    return
+}
+
+Test CkxTrailingCallbackMutableCapture {
+    test {
+        var offset: Int = 1
+        ckxRegisterMut { value in
+            offset = offset + value
+        }
+        return offset
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+// ── closure_export_distinct_dispatch ──────────────────────────────────────────
+// Regression (FF1): distinct VM closures that capture scalars, exported across
+// the hybrid @Native bridge, must each run their OWN body. A consumed closure's
+// pointer was freed and reused by the next closure; the export cache was keyed
+// by that pointer and returned the first closure's stale native block. The
+// export is now always fresh.
+
+@Native
+function ckxInvoke(cb: (Int) -> Int, x: Int) -> Int {
+    return cb(x)
+}
+
+@Native
+function ckxInvokeTwo(f1: (Int) -> Int, f2: (Int) -> Int, a: Int, b: Int) -> Int {
+    return f1(a) + f2(b)
+}
+
+Test CkxClosureExportDistinctDispatchSequential {
+    test {
+        let a = 10
+        let cbA: (Int) -> Int = { v in return v + a }
+        let r1 = ckxInvoke(move cbA, 1)
+        let b = 100
+        let cbB: (Int) -> Int = { v in return v + b }
+        let r2 = ckxInvoke(move cbB, 1)
+        // FF1 bug would give 11 + 11 = 22 (stale-pointer reuse); correct is 112.
+        return r1 + r2
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(112); return e }
+}
+
+Test CkxClosureExportDistinctDispatchTwo {
+    test {
+        let p = 10
+        let cbA: (Int) -> Int = { x in return x + p }
+        let q = 100
+        let cbB: (Int) -> Int = { x in return x + q }
+        // FF1 bug would give (1+10) + (2+10) = 23; correct is 113.
+        return ckxInvokeTwo(move cbA, move cbB, 1, 2)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(113); return e }
+}

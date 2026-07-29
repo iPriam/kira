@@ -1,0 +1,65 @@
+// Ownership stress: `move` into consuming functions, owned aggregates created
+// and dropped in tight loops, structs holding owned array fields churned
+// repeatedly. Designed to expose leaks, double-frees, and use-after-free under
+// the affine ownership model.
+
+struct OwnBucket {
+    var items: [Int]
+    var tag: Int
+}
+
+function ownConsumeString(s: String) -> Int {
+    return s.count
+}
+
+function ownConsumeBucket(b: OwnBucket) -> Int {
+    var total = b.tag
+    var i = 0
+    while i < b.items.count {
+        total = total + b.items[i]
+        i = i + 1
+    }
+    return total
+}
+
+function ownMakeBucket(n: Int) -> OwnBucket {
+    var xs: [Int] = []
+    var i = 0
+    while i < n {
+        xs.append(i + n)
+        i = i + 1
+    }
+    return OwnBucket { items: move xs, tag: n }
+}
+
+function ownershipSection() -> Int {
+    var acc = 0
+
+    // Move a string into a consuming function repeatedly.
+    var i = 0
+    while i < 100 {
+        let s = "owned-string-value"
+        acc = acc + ownConsumeString(move s)
+        i = i + 1
+    }
+
+    // Build an owned struct-with-array and move it into a consumer; churn hard.
+    var j = 0
+    while j < 300 {
+        let b = ownMakeBucket(20)
+        acc = acc + ownConsumeBucket(move b)
+        j = j + 1
+    }
+
+    // Owned array fields read back and replaced.
+    var keep = ownMakeBucket(10)
+    var k = 0
+    while k < 50 {
+        keep = ownMakeBucket(10)
+        acc = acc + keep.items[0]
+        k = k + 1
+    }
+    acc = acc + keep.tag
+
+    return acc
+}

@@ -36,6 +36,21 @@ fn package_warning(code: DiagnosticCode, title: &str, message: String, help: &st
     })
 }
 
+fn package_note(code: DiagnosticCode, title: &str, message: String, help: &str) -> Diagnostic {
+    build(MessageArgs {
+        code,
+        severity: Severity::Note,
+        domain: DiagnosticDomain::Package,
+        phase: Some(CompilerPhase::ProjectDiscovery),
+        title: title.to_owned(),
+        message,
+        span: None,
+        label: None,
+        notes: Vec::new(),
+        help: Some(help.to_owned()),
+    })
+}
+
 /// Builds KPK001: no `package.kira` manifest was found under `path`.
 pub fn missing_project_manifest(path: &str) -> Diagnostic {
     package_error(
@@ -146,11 +161,64 @@ pub fn misplaced_bind_types_file(path: &str) -> Diagnostic {
     )
 }
 
+/// Builds KPK026: a drifted `kira.lock` at `path` was rewritten to match the
+/// manifests.
+///
+/// A note rather than a warning: nothing is left for the reader to do, and a
+/// warning that appears on every build until someone runs a command teaches
+/// people to ignore warnings.
+pub fn lockfile_synced(path: &str) -> Diagnostic {
+    package_note(
+        DiagnosticCode::Kpk026LockfileSynced,
+        "lockfile synced",
+        format!("`{path}` did not match the package manifests and was regenerated from them."),
+        "Commit the regenerated lockfile if your project tracks it.",
+    )
+}
+
+/// Builds KPK027: a drifted `kira.lock` at `path` could not be rewritten.
+pub fn lockfile_sync_failed(path: &str, reason: &str) -> Diagnostic {
+    package_warning(
+        DiagnosticCode::Kpk027LockfileSyncFailed,
+        "lockfile could not be synced",
+        format!(
+            "`{path}` does not match the package manifests and could not be rewritten: {reason}."
+        ),
+        "Resolution continues from the manifests; fix the write failure to stop the warning.",
+    )
+}
+
+/// Builds KPK030: a manifest handed to the compiler in memory could not be read.
+///
+/// The in-memory counterpart of a `package.kira` that will not load: there is
+/// no path to name, so the package is named by the position it was listed at.
+pub fn unreadable_manifest(position: usize, reason: &str) -> Diagnostic {
+    package_error(
+        DiagnosticCode::Kpk030UnreadableManifest,
+        "package manifest could not be read",
+        format!("The manifest of package {position} in the request could not be read: {reason}."),
+        "Give the package a `Package <name> { ... }` declaration the manifest reader accepts.",
+    )
+}
+
+/// Builds KPK031: the root a check request named is in no package it listed.
+pub fn unknown_root_package(root: &str) -> Diagnostic {
+    package_error(
+        DiagnosticCode::Kpk031UnknownRootPackage,
+        "root package not in the request",
+        format!(
+            "The request names `{root}` as its root, but no package it lists declares that name."
+        ),
+        "Name the root exactly as its manifest's `Package` declaration spells it.",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         conflicting_package_identity, cyclic_package_dependency, duplicate_dependency_declaration,
-        lockfile_drift, misplaced_bind_types_file, missing_dependency_package,
+        lockfile_drift, lockfile_sync_failed, lockfile_synced, misplaced_bind_types_file,
+        missing_dependency_package, unknown_root_package, unreadable_manifest,
     };
     use crate::{CompilerPhase, DiagnosticDomain};
     use kira_diagnostics::{Diagnostic, Severity};
@@ -204,10 +272,40 @@ mod tests {
         assert_package_diagnostic(&diagnostic, "KPK024", Severity::Warning);
     }
 
+    /// Syncing is something that was handled, not something to act on, so it
+    /// must not be spelled as a warning.
+    #[test]
+    fn lockfile_synced_is_a_package_note() {
+        let diagnostic = lockfile_synced("/project/kira.lock");
+
+        assert_package_diagnostic(&diagnostic, "KPK026", Severity::Note);
+    }
+
+    #[test]
+    fn lockfile_sync_failure_is_a_package_warning() {
+        let diagnostic = lockfile_sync_failed("/project/kira.lock", "permission denied");
+
+        assert_package_diagnostic(&diagnostic, "KPK027", Severity::Warning);
+    }
+
     #[test]
     fn misplaced_bind_types_file_is_package_error() {
         let diagnostic = misplaced_bind_types_file("app/types/vulkan_types.kira");
 
         assert_package_diagnostic(&diagnostic, "KPK025", Severity::Error);
+    }
+
+    #[test]
+    fn an_unreadable_in_memory_manifest_is_a_package_error() {
+        let diagnostic = unreadable_manifest(1, "not a package declaration");
+
+        assert_package_diagnostic(&diagnostic, "KPK030", Severity::Error);
+    }
+
+    #[test]
+    fn an_unknown_root_package_is_a_package_error() {
+        let diagnostic = unknown_root_package("App");
+
+        assert_package_diagnostic(&diagnostic, "KPK031", Severity::Error);
     }
 }

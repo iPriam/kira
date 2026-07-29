@@ -59,7 +59,7 @@ pub enum DeclarationError {
     /// A `nativeLibraries` entry was well-formed but did not validate.
     ///
     /// Boxed because it is by far the largest thing that can go wrong here (a
-    /// library name, a triple, and a path), and every `kirac` verb reads a
+    /// library name, a triple, and a path), and every `kira` verb reads a
     /// manifest — an unboxed variant would widen the `Result` of every function
     /// that returns this, and of `kira-project`'s discovery errors above it.
     #[error("the `nativeLibraries` declaration is invalid: {0}")]
@@ -630,7 +630,7 @@ mod tests {
         // Regression: `brace_group_end` used the byte offset of `{` as a count
         // of characters to skip, so a multi-byte character before the brace
         // started iteration past it and the first `}` underflowed the depth.
-        // Every `kirac` verb reads a manifest, so this decoder must refuse
+        // Every `kira` verb reads a manifest, so this decoder must refuse
         // malformed input rather than abort the process.
         let text = "Package p {\n let note = é {}\n let kind = .Library\n}";
         assert_eq!(load(text).unwrap().kind, PackageKind::Library);

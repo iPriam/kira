@@ -221,7 +221,7 @@ fn relaunch(
 
 /// The inputs a change to which rebuilds this program.
 ///
-/// One file today, because that is what `kirac live` is given: there are no
+/// One file today, because that is what `kira live` is given: there are no
 /// packages, no manifests, and no `app/` directory to walk yet. The watcher takes
 /// roots rather than a file precisely so that this grows into the real set
 /// without the watching itself changing.

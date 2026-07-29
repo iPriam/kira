@@ -11,8 +11,8 @@
 //! unknown opcode is rejected rather than guessed at.
 
 use super::{
-    FieldPath, FileSystemOp, Instruction, PathStep, PlacePath, WritebackTarget, opcode as o,
-    step_tag,
+    CompilerOp, FieldPath, FileSystemOp, Instruction, PathStep, PlacePath, TaskPrim,
+    WritebackTarget, opcode as o, step_tag,
 };
 
 /// An error decoding a byte stream back into instructions.
@@ -156,6 +156,18 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.push(o::ARRAY_GET_LOCAL);
             out.extend_from_slice(&slot.to_le_bytes());
         }
+        Instruction::CellGet(slot) => {
+            out.push(o::CELL_GET);
+            out.extend_from_slice(&slot.to_le_bytes());
+        }
+        Instruction::CellSet(slot) => {
+            out.push(o::CELL_SET);
+            out.extend_from_slice(&slot.to_le_bytes());
+        }
+        Instruction::TaskOp(prim) => {
+            out.push(o::TASK_OP);
+            out.push(prim.as_byte());
+        }
         Instruction::CStringNew => out.push(o::CSTRING_NEW),
         Instruction::CLayoutAddress(aggregate) => {
             out.push(o::CLAYOUT_ADDRESS);
@@ -165,6 +177,11 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.push(o::FILE_SYSTEM);
             out.push(op.as_byte());
         }
+        Instruction::Compiler(op) => {
+            out.push(o::COMPILER);
+            out.push(op.as_byte());
+        }
+        Instruction::NewCell => out.push(o::NEW_CELL),
         Instruction::EnumTag => out.push(o::ENUM_TAG),
         Instruction::EnumPayload => out.push(o::ENUM_PAYLOAD),
         Instruction::ConvertIntToFloat => out.push(o::CONVERT_INT_TO_FLOAT),
@@ -192,6 +209,7 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::SubFloat => out.push(o::SUB_FLOAT),
         Instruction::MulFloat => out.push(o::MUL_FLOAT),
         Instruction::DivFloat => out.push(o::DIV_FLOAT),
+        Instruction::RemFloat => out.push(o::REM_FLOAT),
         Instruction::ConcatStr => out.push(o::CONCAT_STR),
         Instruction::EqInt => out.push(o::EQ_INT),
         Instruction::NeInt => out.push(o::NE_INT),
@@ -218,6 +236,12 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::GeFloat => out.push(o::GE_FLOAT),
         Instruction::EqBool => out.push(o::EQ_BOOL),
         Instruction::NeBool => out.push(o::NE_BOOL),
+        Instruction::Erase(type_id) => {
+            out.push(o::ERASE);
+            out.extend_from_slice(&type_id.to_le_bytes());
+        }
+        Instruction::EqAny => out.push(o::EQ_ANY),
+        Instruction::NeAny => out.push(o::NE_ANY),
         Instruction::EqStr => out.push(o::EQ_STR),
         Instruction::NeStr => out.push(o::NE_STR),
         Instruction::Print => out.push(o::PRINT),
@@ -289,9 +313,12 @@ impl Cursor<'_> {
             o::CONST_FLOAT => Instruction::ConstFloat(f64::from_le_bytes(self.take()?)),
             o::CONST_BOOL => Instruction::ConstBool(self.take::<1>()?[0] != 0),
             o::CONST_STR => Instruction::ConstStr(u32::from_le_bytes(self.take()?)),
+            o::ERASE => Instruction::Erase(u64::from_le_bytes(self.take()?)),
             o::CONST_VOID => Instruction::ConstVoid,
             o::LOAD_LOCAL => Instruction::LoadLocal(u16::from_le_bytes(self.take()?)),
             o::ARRAY_GET_LOCAL => Instruction::ArrayGetLocal(u16::from_le_bytes(self.take()?)),
+            o::CELL_GET => Instruction::CellGet(u16::from_le_bytes(self.take()?)),
+            o::CELL_SET => Instruction::CellSet(u16::from_le_bytes(self.take()?)),
             o::STORE_LOCAL => Instruction::StoreLocal(u16::from_le_bytes(self.take()?)),
             o::JUMP => Instruction::Jump(u32::from_le_bytes(self.take()?)),
             o::JUMP_IF_FALSE => Instruction::JumpIfFalse(u32::from_le_bytes(self.take()?)),
@@ -359,6 +386,24 @@ impl Cursor<'_> {
                 })?;
                 Instruction::FileSystem(op)
             }
+            o::COMPILER => {
+                let tag_offset = self.offset;
+                let [tag] = self.take::<1>()?;
+                let op = CompilerOp::from_byte(tag).ok_or(DecodeError::UnknownOpcode {
+                    opcode: tag,
+                    offset: tag_offset,
+                })?;
+                Instruction::Compiler(op)
+            }
+            o::TASK_OP => {
+                let tag_offset = self.offset;
+                let [tag] = self.take::<1>()?;
+                let prim = TaskPrim::from_byte(tag).ok_or(DecodeError::UnknownOpcode {
+                    opcode: tag,
+                    offset: tag_offset,
+                })?;
+                Instruction::TaskOp(prim)
+            }
             other => nullary_from_opcode(other).ok_or(DecodeError::UnknownOpcode {
                 opcode: other,
                 offset: opcode_offset,
@@ -420,6 +465,8 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::SUB_FLOAT => Instruction::SubFloat,
         o::MUL_FLOAT => Instruction::MulFloat,
         o::DIV_FLOAT => Instruction::DivFloat,
+        o::REM_FLOAT => Instruction::RemFloat,
+        o::NEW_CELL => Instruction::NewCell,
         o::CONCAT_STR => Instruction::ConcatStr,
         o::EQ_INT => Instruction::EqInt,
         o::NE_INT => Instruction::NeInt,
@@ -446,6 +493,8 @@ fn nullary_from_opcode(op: u8) -> Option<Instruction> {
         o::GE_FLOAT => Instruction::GeFloat,
         o::EQ_BOOL => Instruction::EqBool,
         o::NE_BOOL => Instruction::NeBool,
+        o::EQ_ANY => Instruction::EqAny,
+        o::NE_ANY => Instruction::NeAny,
         o::EQ_STR => Instruction::EqStr,
         o::NE_STR => Instruction::NeStr,
         o::ARRAY_GET => Instruction::ArrayGet,

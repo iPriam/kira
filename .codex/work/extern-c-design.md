@@ -19,7 +19,7 @@ ABI that already exists in `kira-hybrid-runtime`.** A Rust crate opts in with a
 per exported function, a C-ABI adapter with the exact signature
 `kira-hybrid-runtime/src/library.rs:34` already defines —
 `unsafe extern "C" fn(args: *const BridgeValue, count: u32, out: *mut BridgeValue)`
-— plus an embedded, versioned KFI1 metadata table. `kirac` drives `cargo build`,
+— plus an embedded, versioned KFI1 metadata table. `kira` drives `cargo build`,
 reads KFI1, and machine-emits a `.kira` bindings file of oracle-syntax
 `@FFI.Extern` / `@FFI.Pointer` / `@FFI.Callback` declarations (the oracle's own
 autobinder pattern). The user imports the library and calls it like Kira code.
@@ -95,7 +95,7 @@ pub fn window_create(title: &str, width: i32, height: i32) -> Handle<UifWindow> 
 pub fn window_on_click(window: Handle<UifWindow>, on_click: Callback<(i32, i32), ()>) { .. }
 ```
 
-Behind the import, `kirac` emits `.kira-build/bindings/uifoundation.kira` —
+Behind the import, `kira` emits `.kira-build/bindings/uifoundation.kira` —
 machine-written, regenerated when the KFI1 hash changes, never committed:
 
 ```kira
@@ -148,7 +148,7 @@ calls a new `HostCapabilities::call_foreign` default trait method (default:
 `Err(ForeignCallError::NoForeignHost)`, mirroring `call_native`'s default), so
 `kira-vm-runtime` stays wasm32-clean with nothing changed — the baseline
 `cargo check -p kira-vm-runtime --target wasm32-unknown-unknown` was verified
-green. The `kirac` host (`StdHost`, which today implements only `write_line`)
+green. The `kira` host (`StdHost`, which today implements only `write_line`)
 grows the implementation: dlopen the crate's cdylib, resolve adapter symbols by
 the names KFI1 records (generalizing the `NativeLibrary` loader), verify the
 ABI marker symbol at load, call the trampoline, marshal per the existing
@@ -240,8 +240,9 @@ defunctionalization pattern the closure design chose, deliberately not a
 function pointer table). Callbacks may be invoked **only on the program's
 thread** in v1 — the existing session rule (`session.rs`: fatal on a foreign
 thread) is the contract, stated in `kira-export`'s docs. Callback state cannot
-live in captures (captures are scalar-only by KSEM117 and a named function has
-none); state lives on the Rust side behind handles, which is how a widget-tree
+live in captures (a named function has none, and a captured `var` lives in a
+capture cell, which is refused at the C seam); state lives on the Rust side
+behind handles, which is how a widget-tree
 library is shaped anyway. The oracle's `nativeState` family is not in v1.
 
 ## 5. How a Rust crate is built and linked
@@ -251,7 +252,7 @@ library is shaped anyway. The oracle's `nativeState` family is not in v1.
    `kira-native-lib-definition` crate (layer 3, "Design pending" by intent):
    library name (must be a valid Kira identifier), `kind = "rust-crate"`, crate
    path, and later optional per-target prebuilt artifacts.
-2. **Build.** `kirac` runs `cargo build --release -p <crate>` in the crate's
+2. **Build.** `kira` runs `cargo build --release -p <crate>` in the crate's
    directory. The crate depends on `kira-export` (new workspace crate, shipped
    for crate authors, depends on `kira-runtime-abi` so `BridgeValue`'s layout
    is defined exactly once) and declares `crate-type = ["cdylib", "staticlib"]`
@@ -272,7 +273,7 @@ library is shaped anyway. The oracle's `nativeState` family is not in v1.
    per export the Rust name, the Kira name (deterministic snake_case →
    camelCase; a collision after mapping is a bind-time refusal), the adapter
    symbol, param/result types, handle target names (namespaced per library),
-   and callback shapes. `kirac` obtains it by dlopening the host-target cdylib
+   and callback shapes. `kira` obtains it by dlopening the host-target cdylib
    and calling `kira_x_<lib>_manifest` — no weaker trust than already running
    the crate's `build.rs` via cargo.
 5. **Bindings.** Emitted to `.kira-build/bindings/<lib>.kira`, deterministic
@@ -425,8 +426,9 @@ recorded so nobody re-derives them, and none blocks v1.
   emission is its only producer, and refusing beats guessing (the
   `print(struct)` precedent).
 - **Closure callbacks** — refused (KSEM095): no function pointer exists on any
-  backend by the closure design's own charter, and captures are scalar-only
-  (KSEM117). Named functions plus Rust-side state cover the UI case.
+  backend by the closure design's own charter, and a capture is either a scalar
+  copy or a capture cell, which is refused at the C seam. Named functions plus
+  Rust-side state cover the UI case.
 - **Off-thread callbacks** — the existing v0 single-thread session rule holds;
   a crate invoking a callback from another thread hits the existing fatal.
 - **`owned`/`opaque` handle ownership, `move`/`borrow mut` extern params,
@@ -442,9 +444,9 @@ recorded so nobody re-derives them, and none blocks v1.
   Assign the next free block at implementation — the titles above are the
   spec, the numbers are bookkeeping.
 - **Build profile for `kira run`.** `--release` adapters by default, or follow
-  a kirac profile flag? Affects iteration speed on UI Foundation itself.
+  a kira profile flag? Affects iteration speed on UI Foundation itself.
 - **KFI staleness vs cargo fingerprinting.** Binding regeneration keys off the
-  KFI1 hash; whether kirac should also short-circuit the cargo invocation when
+  KFI1 hash; whether kira should also short-circuit the cargo invocation when
   nothing changed, or always let cargo decide, is an ergonomics call.
 - **Callback re-entrancy depth.** The interpreter re-enters safely, but a
   callback that calls back into the same library that is mid-call is a

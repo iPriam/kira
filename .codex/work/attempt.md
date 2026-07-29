@@ -90,10 +90,12 @@ nothing and silently leak every nested payload rather than corrupting memory —
 still exactly the silent backend/archive disagreement the marker exists to turn
 into a link error.
 
-A struct or array payload is still refused. A struct payload does not even reach
-the payload check: enums are declared before structs, so the name does not
-resolve, and it is reported as `KSEM050` instead. Recorded rather than
-corrected — the program is rejected either way.
+A struct or array payload is admitted too, and neither needed a second
+mechanism: both take `EnumPayloadKind::AGGREGATE`, the erased aggregate box the
+widening path had already built for `Any`, carrying a size plus a generated
+clone and free leaf. That is what an array payload needs and a one-word slot
+cannot give it — the element callbacks travel with the box. `Result<[Int], E>`,
+the shape a fallible builder returns, is writable because of it.
 
 ## Diagnostics
 

@@ -1,7 +1,7 @@
 //! The Kira language server binary (`kira-language-server`).
 //!
 //! Speaks LSP over stdio via `lsp-server`, backed by the same salsa frontend
-//! the compiler uses — so an editor squiggle and a `kirac check` error are the
+//! the compiler uses — so an editor squiggle and a `kira check` error are the
 //! same computation, not two implementations that agree until they do not.
 //!
 //! # What it does today
@@ -99,6 +99,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// I/O threads is what lets the process exit.
 fn serve(connection: Connection) -> Result<(), Box<dyn std::error::Error>> {
     let mut documents = Documents::new();
+    // One session for the life of the server: see `analysis::AnalysisSession`.
+    let mut session = analysis::AnalysisSession::new();
 
     for message in &connection.receiver {
         match message {
@@ -113,9 +115,10 @@ fn serve(connection: Connection) -> Result<(), Box<dyn std::error::Error>> {
                     GotoDefinition::METHOD | GotoDeclaration::METHOD => {
                         let id = request.id.clone();
                         let response = match extract_request::<GotoDefinitionParams>(request) {
-                            Ok(params) => {
-                                lsp_server::Response::new_ok(id, definition(&documents, &params))
-                            }
+                            Ok(params) => lsp_server::Response::new_ok(
+                                id,
+                                definition(&mut session, &documents, &params),
+                            ),
                             Err(error) => lsp_server::Response::new_err(
                                 id,
                                 lsp_server::ErrorCode::InvalidParams as i32,
@@ -138,7 +141,7 @@ fn serve(connection: Connection) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Message::Notification(notification) => {
-                notify(&connection, &mut documents, notification)?;
+                notify(&connection, &mut session, &mut documents, notification)?;
             }
             // Responses to requests this server never sends.
             Message::Response(_) => {}
@@ -150,6 +153,7 @@ fn serve(connection: Connection) -> Result<(), Box<dyn std::error::Error>> {
 /// Handles one notification, republishing diagnostics when the text changed.
 fn notify(
     connection: &Connection,
+    session: &mut analysis::AnalysisSession,
     documents: &mut Documents,
     notification: Notification,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -161,7 +165,7 @@ fn notify(
                 params.text_document.text,
                 params.text_document.version,
             );
-            publish(connection, documents, &params.text_document.uri)?;
+            publish(connection, session, documents, &params.text_document.uri)?;
         }
         DidChangeTextDocument::METHOD => {
             let params: DidChangeTextDocumentParams = extract(notification)?;
@@ -172,7 +176,7 @@ fn notify(
                     change.text,
                     params.text_document.version,
                 );
-                publish(connection, documents, &params.text_document.uri)?;
+                publish(connection, session, documents, &params.text_document.uri)?;
             }
         }
         DidCloseTextDocument::METHOD => {
@@ -199,6 +203,7 @@ fn analysis_path(uri: &Uri) -> String {
 /// Analyzes a document and publishes what the frontend said about it.
 fn publish(
     connection: &Connection,
+    session: &mut analysis::AnalysisSession,
     documents: &Documents,
     uri: &Uri,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -208,7 +213,7 @@ fn publish(
         return Ok(());
     };
 
-    let analysis = analysis::analyze(&analysis_path(uri), text);
+    let analysis = analysis::analyze(session, &analysis_path(uri), text);
     let diagnostics = analysis
         .diagnostics
         .iter()
@@ -252,14 +257,18 @@ fn send_diagnostics(
 /// whichever file it lives. `None` — a `null` reply — is the protocol's way
 /// of saying "nothing to jump to", and it is the honest answer for a
 /// position on whitespace, a keyword, or a name that never resolved.
-fn definition(documents: &Documents, params: &GotoDefinitionParams) -> GotoDefinitionResponse {
+fn definition(
+    session: &mut analysis::AnalysisSession,
+    documents: &Documents,
+    params: &GotoDefinitionParams,
+) -> GotoDefinitionResponse {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
     let Some(text) = documents.text(uri) else {
         return GotoDefinitionResponse::Array(Vec::new());
     };
 
-    let analysis = analysis::analyze(&analysis_path(uri), text);
+    let analysis = analysis::analyze(session, &analysis_path(uri), text);
     let offset = convert::offset(&analysis.file, position);
     let Some(link) = reference_at(&analysis, offset) else {
         return GotoDefinitionResponse::Array(Vec::new());
@@ -369,7 +378,11 @@ mod tests {
 
         // The cursor sits on the `value` inside `print(...)`, column 44.
         let read = text.rfind("value").expect("the read is there") as u32;
-        let response = definition(&documents, &request_at(&uri, Position::new(0, read)));
+        let response = definition(
+            &mut analysis::AnalysisSession::new(),
+            &documents,
+            &request_at(&uri, Position::new(0, read)),
+        );
         let GotoDefinitionResponse::Scalar(location) = response else {
             panic!("a resolvable name answers with one location, got {response:?}");
         };
@@ -403,7 +416,11 @@ mod tests {
 
         let line1 = text.lines().nth(1).expect("two lines");
         let call = line1.find("supportValue").expect("the call is there") as u32;
-        let response = definition(&documents, &request_at(&uri, Position::new(1, call)));
+        let response = definition(
+            &mut analysis::AnalysisSession::new(),
+            &documents,
+            &request_at(&uri, Position::new(1, call)),
+        );
         let GotoDefinitionResponse::Scalar(location) = response else {
             panic!("a cross-module name answers with one location, got {response:?}");
         };
@@ -427,7 +444,11 @@ mod tests {
         let mut documents = Documents::new();
         documents.set(&uri, text.to_owned(), 1);
 
-        let response = definition(&documents, &request_at(&uri, Position::new(0, 22)));
+        let response = definition(
+            &mut analysis::AnalysisSession::new(),
+            &documents,
+            &request_at(&uri, Position::new(0, 22)),
+        );
         assert!(
             matches!(response, GotoDefinitionResponse::Array(ref locations) if locations.is_empty()),
             "got {response:?}"

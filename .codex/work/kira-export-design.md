@@ -8,7 +8,7 @@ The opposite direction — consuming a Rust crate from Kira — is
 ## 1. The decision
 
 **Build one author surface and one consumer product, backed by two engines: a
-new `@Export` marker on a `kind = "library"` package, compiled by `kirac build`
+new `@Export` marker on a `kind = "library"` package, compiled by `kira build`
 into (a) a `.kbc` with an appended KBC1 exports section for the VM engine and
 (b) a self-contained native library with stable C-ABI trampolines for the LLVM
 engine — both fronted by a machine-generated Rust wrapper crate with the same
@@ -78,7 +78,7 @@ generator, and ahead of anything backend-specific.
 
 What step 0 owes, at minimum: `PackageKind` must reach analysis so the `@Main`
 requirement becomes conditional on building an *application*; a library with no
-`@Main` must analyze clean; a library must still refuse to `kirac run`, by name
+`@Main` must analyze clean; a library must still refuse to `kira run`, by name
 and with a reason; and the three backends must each produce a library artifact
 rather than an executable — for LLVM that means suppressing the C `main` that
 `codegen/entry.rs` emits unconditionally today.
@@ -229,10 +229,10 @@ does.
 The developer flow end to end:
 
 ```
-$ cd uifoundation/ && kirac build                 # VM engine (default)
+$ cd uifoundation/ && kira build                 # VM engine (default)
    -> .kira-build/lib/uifoundation.kbc
    -> .kira-build/rust/uifoundation/              # generated wrapper crate
-$ kirac build --backend llvm                      # native engine, same API
+$ kira build --backend llvm                      # native engine, same API
    -> .kira-build/lib/libuifoundation.a  (+ .dylib)
    -> .kira-build/rust/uifoundation/              # regenerated, native internals
 ```
@@ -311,7 +311,7 @@ build, regenerated when the hash changes, and never committed.
 
 ## 4. The four-backend matrix
 
-**VM (`kirac build`, default) — works.** Product: `uifoundation.kbc` (KBC1 +
+**VM (`kira build`, default) — works.** Product: `uifoundation.kbc` (KBC1 +
 appended exports section) inside the generated crate, depending on
 `kira-main` → `kira-vm-runtime`. The consumer *embeds the VM* — and this is
 the portable core's charter, not a workaround: the embedder supplies
@@ -329,7 +329,7 @@ write-only. Generic rather than boxed, matching `kira-main`. The parameter is
 spelled `H`, so an exported class of that name is refused by name
 (`WrapperError::Reserved`).
 
-**LLVM/native (`kirac build --backend llvm`) — works.** Product:
+**LLVM/native (`kira build --backend llvm`) — works.** Product:
 `libuifoundation.a` and `libuifoundation.dylib`/`.so`, self-contained (the
 `kira-native-bridge` runtime archive baked in, exactly as
 `link_shared_library` builds the hybrid native half today,
@@ -436,7 +436,7 @@ The yes-path is recorded: the module builder supports arbitrary named exports
 carrying the reason and the yes-path in its doc comment, raised from
 `kira_wasm_runtime::compile` before any module is assembled. It refuses a
 library whether or not it declares exports, because the missing contract is the
-artifact's rather than the export surface's; `kirac` names the export half of it
+artifact's rather than the export surface's; `kira` names the export half of it
 separately so a user who asked for `--device wasm32` learns which functions were
 in question. Checked at three levels: the backend
 (`kira-wasm-runtime/tests/execution/libraries.rs`, both wasm32 and wasm64, with
@@ -471,7 +471,7 @@ from reaching the boundary.
 
 ## 6. What the toolchain produces and how
 
-`kirac build` in a `kind = "library"` package is the verb — no new verb; the
+`kira build` in a `kind = "library"` package is the verb — no new verb; the
 manifest field selects the mode. The pipeline: frontend (with the § 2 export
 checks) → per backend:
 
@@ -609,7 +609,7 @@ native engine is step 6, not "later".
    host, exports-section verification, marker constants + pinning test; move
    the crate above `kira-vm-runtime` and fix its layer line and the
    where-to-change skill. *Medium; one crate.*
-5. **VM-engine product** — `kira-build` wrapper-crate generator + `kirac`
+5. **VM-engine product** — `kira-build` wrapper-crate generator + `kira`
    library build; a workspace fixture library and a consumer test crate prove
    `uifoundation::button`-shaped calls end to end **on CI, no LLVM**, plus the
    wasm32 check of the generated crate. *Medium-large; layers 7-top.*

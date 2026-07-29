@@ -1,0 +1,889 @@
+import Foundation
+
+// Migrated from tests/pass/run/ownership_* and consuming_* corpus cases.
+// See tests-kik/corpus/ownership-b/SKIPPED.md for cases that depend on
+// @Widget body/children builder syntax and could not be reduced.
+
+// ---- ownership_construct_any_tree_churn_parity ----
+
+construct OwyTreeNode {
+    @Required let label: String
+}
+
+OwyTreeNode OwyLeafNode {
+    let text: String = ""
+    let weight: Int = 0
+
+    let label: String {
+        text
+    }
+}
+
+OwyTreeNode OwyPairNode {
+    @Required let first: OwyTreeNode
+    @Required let second: OwyTreeNode
+
+    let label: String {
+        "pair"
+    }
+}
+
+function owyBuildRow(index: Int) -> some OwyTreeNode {
+    if index - (index / 2) * 2 == 0 {
+        return OwyLeafNode(text: "leaf", weight: index)
+    }
+    return OwyPairNode(first: OwyLeafNode(text: "a"), second: OwyLeafNode(text: "b"))
+}
+
+Test OwyConstructAnyTreeChurnParity {
+    test {
+        var total = 0
+        var rebuild = 0
+        while rebuild < 10 {
+            var nodes: [some OwyTreeNode] = []
+            var i = 0
+            while i < 12 {
+                nodes.append(owyBuildRow(i))
+                i = i + 1
+            }
+            for node in nodes {
+                let label = node.label
+                if label == "leaf" {
+                    total = total + 1
+                }
+                if label == "pair" {
+                    total = total + 2
+                }
+            }
+            rebuild = rebuild + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(180); return e }
+}
+
+// ---- ownership_enum_argument_into_field_parity ----
+
+enum OwyMode1 {
+    Hug
+    Fixed(Int)
+}
+
+struct OwyView1 {
+    let width: OwyMode1
+    let height: OwyMode1
+    let n: Int
+}
+
+function owyMakeView1(width: OwyMode1, height: OwyMode1, n: Int) -> OwyView1 {
+    return OwyView1 { width: width, height: height, n: n }
+}
+
+function owySpan1(m: borrow OwyMode1) -> Int {
+    match m {
+        Hug -> { return 1 }
+        Fixed(v) -> { return v }
+    }
+}
+
+Test OwyEnumArgumentIntoFieldParity {
+    test {
+        var frame = 0
+        var total = 0
+        while frame < 4 {
+            let view = owyMakeView1(.Fixed(frame + 2), .Hug, frame)
+            total = total + owySpan1(view.width) + owySpan1(view.height) + view.n
+            frame = frame + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+}
+
+// ---- ownership_enum_string_payload_free_parity ----
+
+enum OwyMessage3 {
+    Note(String)
+    Count(Int)
+    Empty
+}
+
+struct OwyEnvelope3 {
+    var label: String
+    var message: OwyMessage3
+}
+
+function owyDescribe3(message: borrow OwyMessage3) -> String {
+    match message {
+        Note(text) -> { return "note:" + text }
+        Count(value) -> {
+            if value > 0 {
+                return "count-positive"
+            }
+            return "count-other"
+        }
+        Empty -> { return "empty" }
+    }
+    return "unreachable"
+}
+
+function owyPickMessage3(envelope: borrow OwyEnvelope3) -> OwyMessage3 {
+    return envelope.message
+}
+
+Test OwyEnumStringPayloadFreeParity {
+    test {
+        var hits = 0
+        var i = 0
+        var envelope = OwyEnvelope3 { label: "env-" + "x", message: .Empty }
+        while i < 20 {
+            envelope.message = .Note("payload-" + "text")
+            envelope.message = .Count(i)
+            envelope.message = .Note("second-" + "note")
+            let copy = envelope
+            let picked = owyPickMessage3(copy)
+            if owyDescribe3(picked) == "note:second-note" {
+                hits = hits + 1
+            }
+            i = i + 1
+        }
+        return hits
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+}
+
+// ---- ownership_enum_struct_field_parity ----
+
+enum OwyKind4 {
+    None
+    Tagged(Int)
+}
+
+struct OwyBox4 {
+    let kind: OwyKind4
+    let n: Int
+}
+
+function owyMake4(x: Int) -> OwyBox4 {
+    return OwyBox4 { kind: .Tagged(x), n: x }
+}
+
+function owyClassify4(b: borrow OwyBox4) -> Int {
+    match b.kind {
+        None -> { return 0 }
+        Tagged(v) -> { return v }
+    }
+}
+
+function owyRebrand4(b: borrow OwyBox4) -> OwyBox4 {
+    return OwyBox4 { kind: b.kind, n: b.n + 100 }
+}
+
+Test OwyEnumStructFieldParity {
+    test {
+        var frame = 0
+        var total = 0
+        while frame < 3 {
+            let box = owyMake4(frame + 1)
+            let copy = owyRebrand4(box)
+            total = total + owyClassify4(box) + owyClassify4(copy)
+            frame = frame + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+}
+
+// ---- ownership_explicit_move_ok ----
+
+struct OwyMesh5 {
+    let id: Int
+}
+
+function owyConsume5(mesh: OwyMesh5) -> Int {
+    return mesh.id
+}
+
+Test OwyExplicitMoveOk {
+    test {
+        var mesh = OwyMesh5 { id: 7 }
+        return owyConsume5(move mesh)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+}
+
+// ---- ownership_free_state_moveout_return_parity ----
+
+struct OwyAcc6 {
+    var ids: [Int] = []
+    var total: Int = 0
+}
+
+struct OwyScratch6 {
+    var acc: OwyAcc6 = OwyAcc6 {}
+}
+
+struct OwyTree6 {
+    var nodes: [Int] = []
+    var generation: Int = 0
+}
+
+function owyBorrowedSegments6(t: borrow OwyTree6) -> [Int] {
+    return t.nodes
+}
+
+function owyRebuild6(tree: OwyTree6) -> OwyTree6 {
+    var next = move tree
+    let previous = next.nodes
+    next.nodes = []
+    var i = 0
+    while i < previous.count {
+        next.nodes.append(previous[i] + 1)
+        i = i + 1
+    }
+    next.generation = next.generation + 1
+    return next
+}
+
+Test OwyFreeStateMoveoutReturnParity {
+    test {
+        var okFlag = 1
+        let state = nativeState(OwyScratch6 {})
+        let handle = nativeUserData(state)
+        var frame = 0
+        while frame < 10 {
+            var scratch = nativeRecover<OwyScratch6>(handle)
+            var fresh = OwyAcc6 {}
+            fresh.total = frame
+            fresh.ids.append(frame)
+            scratch.acc = move fresh
+            let acc = scratch.acc
+            if acc.total != frame {
+                okFlag = 0
+            }
+            frame = frame + 1
+        }
+
+        var tree = OwyTree6 {}
+        tree.nodes.append(1)
+        tree.nodes.append(2)
+        var r = 0
+        while r < 10 {
+            tree = owyRebuild6(move tree)
+            r = r + 1
+        }
+
+        var sum = 0
+        var k = 0
+        while k < 10 {
+            let segs = owyBorrowedSegments6(tree)
+            sum = sum + segs.count
+            k = k + 1
+        }
+
+        let combined = tree.nodes[0] * 100000 + tree.nodes[1] * 1000 + tree.generation * 100 + sum * 10 + tree.nodes.count
+        return okFlag * combined
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1113202); return e }
+}
+
+// ---- ownership_let_field_alias_if_partial_move ----
+
+struct OwyBag7 {
+    var items: [Int]
+}
+
+function owyLeak7(flag: Bool, bag: OwyBag7) -> Int {
+    if flag {
+        let alias = bag.items
+        return alias.count
+    }
+    return 0
+}
+
+Test OwyLetFieldAliasIfPartialMove {
+    test {
+        let bag = OwyBag7 { items: [1, 2, 3] }
+        return owyLeak7(true, move bag)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+}
+
+// ---- ownership_let_field_alias_partial_move ----
+
+struct OwyBag8 {
+    var items: [Int]
+}
+
+function owyLeak8(bag: OwyBag8) -> Int {
+    let alias = bag.items
+    return alias.count
+}
+
+Test OwyLetFieldAliasPartialMove {
+    test {
+        let bag = OwyBag8 { items: [1, 2, 3] }
+        return owyLeak8(move bag)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+}
+
+// ---- ownership_let_field_alias_switch_partial_move ----
+
+struct OwyBag9 {
+    var items: [Int]
+}
+
+function owyLeak9(value: Int, bag: OwyBag9) -> Int {
+    switch value {
+        case 0 {
+            let alias = bag.items
+            return alias.count
+        }
+        default {
+            return 0
+        }
+    }
+}
+
+Test OwyLetFieldAliasSwitchPartialMove {
+    test {
+        let bag = OwyBag9 { items: [1, 2, 3] }
+        return owyLeak9(0, move bag)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+}
+
+// ---- ownership_let_field_alias_while_partial_move ----
+
+struct OwyBag10 {
+    var items: [Int]
+}
+
+function owyLeak10(flag: Bool, bag: OwyBag10) -> Int {
+    while flag {
+        let alias = bag.items
+        return alias.count
+    }
+    return 0
+}
+
+Test OwyLetFieldAliasWhilePartialMove {
+    test {
+        let bag = OwyBag10 { items: [1, 2, 3] }
+        return owyLeak10(true, move bag)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+}
+
+// ---- ownership_multi_closure_copy_capture ----
+
+function owyCallTwice11(first: () -> Int, second: () -> Int) -> Int {
+    let a = first()
+    let b = second()
+    return a * 100 + b
+}
+
+Test OwyMultiClosureCopyCapture {
+    test {
+        let seed = 4
+        let adder: () -> Int = { in
+            return seed + 1
+        }
+        let multiplier: () -> Int = { in
+            return seed * 10
+        }
+        let direct = seed + 0
+        let combined = owyCallTwice11(move adder, move multiplier)
+        return combined * 10 + direct
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(5404); return e }
+}
+
+// ---- ownership_partial_move_scope_exit_parity ----
+
+construct OwyPmNode12 {
+    @Required let tag: Int
+}
+
+OwyPmNode12 OwyPmLeaf12(value: Int) {
+    let tag: Int {
+        value
+    }
+}
+
+enum OwyStatus12 {
+    Ready: String = "ready"
+    Blocked: String = "blocked"
+}
+
+function owyBuildNode12(tag: Int) -> some OwyPmNode12 {
+    return OwyPmLeaf12(value: tag)
+}
+
+struct OwyHolder12 {
+    var ids: [Int] = []
+    var status: OwyStatus12 = .Ready("ok")
+    var node: some OwyPmNode12
+    var kept: [Int] = []
+}
+
+function owyStatusText12(s: borrow OwyStatus12) -> String {
+    match s {
+        Ready(text) -> { return text }
+        Blocked(text) -> { return text }
+    }
+    return ""
+}
+
+function owyConsume12(holder: OwyHolder12) -> Int {
+    let ids = holder.ids
+    let status = holder.status
+    let node = holder.node
+    var total = ids.count
+    total = total + owyStatusText12(status).count
+    total = total + node.tag
+    return total
+}
+
+Test OwyPartialMoveScopeExitParity {
+    test {
+        var round = 0
+        var total = 0
+        while round < 10 {
+            var holder = OwyHolder12 { node: owyBuildNode12(round) }
+            holder.ids.append(round)
+            holder.ids.append(round + 1)
+            holder.status = .Blocked("waiting")
+            holder.kept.append(round)
+            total = total + owyConsume12(move holder)
+            round = round + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(135); return e }
+}
+
+// ---- ownership_recursive_closure_tree_parity ----
+
+struct OwyClosureNode13 {
+    let id: Int
+    let onPress: (Int) -> Int
+    let children: [OwyClosureNode13]
+}
+
+function owyMakeAdder13(base: Int): (Int) -> Int {
+    return { n in
+        return base + n
+    }
+}
+
+function owyMakeLeaf13(id: Int) -> OwyClosureNode13 {
+    return OwyClosureNode13 {
+        id: id
+        onPress: owyMakeAdder13(id)
+        children: []
+    }
+}
+
+function owyMakeBranch13(id: Int) -> OwyClosureNode13 {
+    var children: [OwyClosureNode13] = []
+    children.append(owyMakeLeaf13(id + 10))
+    children.append(owyMakeLeaf13(id + 20))
+    return OwyClosureNode13 {
+        id: id
+        onPress: owyMakeAdder13(id)
+        children: move children
+    }
+}
+
+function owyMakeTree13(seed: Int) -> OwyClosureNode13 {
+    var children: [OwyClosureNode13] = []
+    children.append(owyMakeBranch13(seed + 100))
+    children.append(owyMakeBranch13(seed + 200))
+    return OwyClosureNode13 {
+        id: seed
+        onPress: owyMakeAdder13(seed)
+        children: move children
+    }
+}
+
+function owyVisit13(node: borrow OwyClosureNode13) -> Int {
+    var total = node.onPress(1)
+    var i = 0
+    while i < node.children.count {
+        total = total + owyVisit13(node.children[i])
+        i = i + 1
+    }
+    return total
+}
+
+Test OwyRecursiveClosureTreeParity {
+    test {
+        var total = 0
+        var rebuild = 0
+        while rebuild < 20 {
+            let tree = owyMakeTree13(rebuild)
+            total = total + owyVisit13(tree)
+            rebuild = rebuild + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(20670); return e }
+}
+
+// ---- ownership_string_deep_value_parity ----
+
+struct OwyLabel14 {
+    var text: String = ""
+    var hits: Int = 0
+}
+
+struct OwyPanel14 {
+    var title: String = ""
+    var label: OwyLabel14 = OwyLabel14 {}
+}
+
+enum OwyMessage14 {
+    Note(String)
+    Empty
+}
+
+function owyDescribe14(name: String) -> String {
+    return "name:" + name
+}
+
+function owyPickBranch14(flag: Bool) -> String {
+    var s = "init"
+    if flag {
+        s = "left-" + "branch"
+    } else {
+        s = "right-" + "branch"
+    }
+    return s
+}
+
+function owyLabelText14(l: borrow OwyLabel14) -> String {
+    return l.text
+}
+
+function owyUnwrap14(m: OwyMessage14) -> String {
+    match m {
+        Note(text) -> { return text }
+        Empty -> { return "empty" }
+    }
+    return "unreachable"
+}
+
+Test OwyStringDeepValueParity {
+    test {
+        var okCount = 0
+        var panel = OwyPanel14 {}
+        var i = 0
+        while i < 10 {
+            panel.title = "frame-" + "title"
+            panel.label.text = owyDescribe14("inner")
+            panel.label.hits = panel.label.hits + 1
+            i = i + 1
+        }
+        if panel.title == "frame-title" {
+            okCount = okCount + 1
+        }
+        if panel.label.text == "name:inner" {
+            okCount = okCount + 1
+        }
+        if owyLabelText14(panel.label) == "name:inner" {
+            okCount = okCount + 1
+        }
+
+        let snapshot = panel.title
+        panel.title = "replaced"
+        if snapshot == "frame-title" {
+            okCount = okCount + 1
+        }
+        if panel.title == "replaced" {
+            okCount = okCount + 1
+        }
+
+        var names: [String] = []
+        var j = 0
+        while j < 10 {
+            names.append("n" + "x")
+            j = j + 1
+        }
+        names[0] = "first-" + "slot"
+        if names[0] == "first-slot" {
+            okCount = okCount + 1
+        }
+        names[0] = "overwritten"
+        if names[0] == "overwritten" {
+            okCount = okCount + 1
+        }
+        if names[1] == "nx" {
+            okCount = okCount + 1
+        }
+        if names.count == 10 {
+            okCount = okCount + 1
+        }
+
+        let m: OwyMessage14 = .Note("payload-" + "text")
+        if owyUnwrap14(move m) == "payload-text" {
+            okCount = okCount + 1
+        }
+
+        if owyPickBranch14(true) == "left-branch" {
+            okCount = okCount + 1
+        }
+        if owyPickBranch14(false) == "right-branch" {
+            okCount = okCount + 1
+        }
+
+        var acc = ""
+        var k = 0
+        while k < 5 {
+            acc = acc + names[0] + "-" + panel.title
+            k = k + 1
+        }
+        if acc != "" {
+            okCount = okCount + 1
+        }
+
+        return okCount
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(13); return e }
+}
+
+// ---- ownership_struct_param_move_into_array_parity ----
+
+struct OwyItem15 {
+    let v: Int
+}
+
+function owyAppendItem15(items: borrow mut [OwyItem15], item: OwyItem15) {
+    var out = items
+    out.append(move item)
+    return
+}
+
+function owyBuild15(n: Int) -> [OwyItem15] {
+    var items: [OwyItem15] = []
+    var i = 0
+    while i < n {
+        owyAppendItem15(items, OwyItem15 { v: i * 2 })
+        i = i + 1
+    }
+    return items
+}
+
+Test OwyStructParamMoveIntoArrayParity {
+    test {
+        var frame = 0
+        var total = 0
+        while frame < 3 {
+            let items = owyBuild15(3)
+            var i = 0
+            while i < items.count {
+                total = total + items[i].v
+                i = i + 1
+            }
+            frame = frame + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(18); return e }
+}
+
+// ---- ownership_temporary_move_ok ----
+
+struct OwyMesh16 {
+    let id: Int
+}
+
+function owyMakeMesh16() -> OwyMesh16 {
+    return OwyMesh16 { id: 11 }
+}
+
+function owyConsume16(mesh: OwyMesh16) -> Int {
+    return mesh.id
+}
+
+Test OwyTemporaryMoveOk {
+    test {
+        return owyConsume16(owyMakeMesh16())
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(11); return e }
+}
+
+// ---- ownership_trivial_value_no_move ----
+
+function owyAdd17(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+Test OwyTrivialValueNoMove {
+    test {
+        let x = 1
+        let y = owyAdd17(x, x)
+        return y
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+// ---- partial_move_disjoint_fields ----
+
+struct OwyPair18 {
+    let a: [Int]
+    let b: [Int]
+}
+
+function owySink18(values: [Int]) -> Int {
+    var sum = 0
+    var index = 0
+    while index < values.count {
+        sum = sum + values[index]
+        index = index + 1
+    }
+    return sum
+}
+
+function owyConsume18(pair: OwyPair18) -> Int {
+    let left = owySink18(move pair.a)
+    let right = owySink18(move pair.b)
+    return left + right
+}
+
+Test OwyPartialMoveDisjointFields {
+    test {
+        let pair = OwyPair18 {
+            a: [1, 2, 3]
+            b: [10, 20]
+        }
+        return owyConsume18(move pair)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+}
+
+// ---- mid_ir_disjoint_struct_field_borrows ----
+
+struct OwyCell19 { var value: Int }
+struct OwyPairCell19 { var left: OwyCell19; var right: OwyCell19 }
+
+function owyUpdateBoth19(a: borrow mut OwyCell19, b: borrow mut OwyCell19) {
+    a.value = a.value + 10
+    b.value = b.value + 20
+    return
+}
+
+Test OwyMidIrDisjointStructFieldBorrows {
+    test {
+        var pair = OwyPairCell19 { left: OwyCell19 { value: 1 }, right: OwyCell19 { value: 2 } }
+        owyUpdateBoth19(pair.left, pair.right)
+        return pair.left.value * 100 + pair.right.value
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1122); return e }
+}
+
+// ---- consuming_nested_field_receiver_parity ----
+
+construct OwyWidget23 {
+    @Required let body: OwyWidget23
+
+    @Consuming
+    function render() -> [String] {
+        return body.render()
+    }
+}
+
+OwyWidget23 OwyLeaf23(text: String) {
+    function render() -> [String] {
+        return [text]
+    }
+}
+
+struct OwyInner23 {
+    var child: some OwyWidget23
+}
+
+struct OwyOuter23 {
+    var inner: OwyInner23
+}
+
+function owyBuild23(tag: Int) -> some OwyWidget23 {
+    return OwyLeaf23(text: "n")
+}
+
+function owyConsume23(outer: OwyOuter23) -> Int {
+    let lines = outer.inner.child.render()
+    return lines.count
+}
+
+Test OwyConsumingNestedFieldReceiverParity {
+    test {
+        var round = 0
+        var total = 0
+        while round < 10 {
+            let outer = OwyOuter23 { inner: OwyInner23 { child: owyBuild23(round) } }
+            total = total + owyConsume23(move outer)
+            round = round + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+}
+
+// ---- consuming_nested_indexed_receiver_parity ----
+
+construct OwyWidget24 {
+    @Required let body: OwyWidget24
+
+    @Consuming
+    function render() -> [String] {
+        return body.render()
+    }
+}
+
+OwyWidget24 OwyLeaf24(text: String) {
+    function render() -> [String] {
+        return [text]
+    }
+}
+
+function owyBuild24(tag: Int) -> some OwyWidget24 {
+    return OwyLeaf24(text: "n")
+}
+
+struct OwyInner24 {
+    var children: [some OwyWidget24]
+}
+
+struct OwyOuter24 {
+    var inner: OwyInner24
+}
+
+function owyRenderNested24(outer: OwyOuter24) -> Int {
+    var total = 0
+    var i = 0
+    while i < outer.inner.children.count {
+        let lines = outer.inner.children[i].render()
+        total = total + lines.count
+        i = i + 1
+    }
+    return total
+}
+
+Test OwyConsumingNestedIndexedReceiverParity {
+    test {
+        var round = 0
+        var total = 0
+        while round < 10 {
+            var kids: [some OwyWidget24] = []
+            kids.append(owyBuild24(round))
+            kids.append(owyBuild24(round + 1))
+            let outer = OwyOuter24 { inner: OwyInner24 { children: move kids } }
+            total = total + owyRenderNested24(move outer)
+            round = round + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(20); return e }
+}

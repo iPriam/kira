@@ -1,6 +1,6 @@
 //! Read-only verification of an optional `kira.lock`.
 
-use crate::graph::ResolvedPackage;
+use crate::graph::{LockfileStatus, ResolvedPackage};
 use kira_diagnostic_messages::package_messages::lockfile_drift;
 use kira_diagnostics::Diagnostic;
 use serde::Deserialize;
@@ -48,20 +48,26 @@ impl LockedDependency {
 }
 
 /// Checks an existing lockfile against the manifest-resolved package graph.
+///
+/// Reports what it found rather than repairing it: the caller decides whether
+/// a stale lockfile is worth writing to disk, and resolution runs in places
+/// (an editor, a language server) where writing would be a surprise.
 pub(crate) fn check(
     root_dir: &Path,
     packages: &[ResolvedPackage],
     diagnostics: &mut Vec<Diagnostic>,
-) {
+) -> LockfileStatus {
     let lock_path = root_dir.join("kira.lock");
     let text = match fs::read_to_string(&lock_path) {
         Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return LockfileStatus::Absent;
+        }
         Err(error) => {
             diagnostics.push(lockfile_drift(&format!(
                 "the file could not be read ({error})"
             )));
-            return;
+            return LockfileStatus::Drifted;
         }
     };
     let snapshot = match toml::from_str::<LockSnapshot>(&text) {
@@ -70,12 +76,16 @@ pub(crate) fn check(
             diagnostics.push(lockfile_drift(&format!(
                 "the file could not be parsed ({error})"
             )));
-            return;
+            return LockfileStatus::Drifted;
         }
     };
 
-    if let Some(description) = drift_description(&snapshot, packages) {
-        diagnostics.push(lockfile_drift(&description));
+    match drift_description(&snapshot, packages) {
+        Some(description) => {
+            diagnostics.push(lockfile_drift(&description));
+            LockfileStatus::Drifted
+        }
+        None => LockfileStatus::Current,
     }
 }
 
@@ -91,14 +101,14 @@ fn drift_description(snapshot: &LockSnapshot, packages: &[ResolvedPackage]) -> O
         ));
     }
 
-    let resolved_root_edges = names(&root.dependencies);
+    let resolved_root_edges = names(root);
     let locked_root_edges = match locked_root_edges(snapshot, locked_root) {
         Ok(edges) => edges,
         Err(description) => return Some(description),
     };
     if locked_root_edges != resolved_root_edges {
         return Some(format!(
-            "the root dependency set is {}, expected {}",
+            "the lockfile's root dependency set is {}, but the manifests resolve to {}",
             display_names(&locked_root_edges),
             display_names(&resolved_root_edges)
         ));
@@ -108,7 +118,7 @@ fn drift_description(snapshot: &LockSnapshot, packages: &[ResolvedPackage]) -> O
         packages
             .iter()
             .skip(1)
-            .map(|package| (package.name.as_str(), names(&package.dependencies))),
+            .map(|package| (package.name.as_str(), names(package))),
     );
     let locked = package_edges(
         snapshot
@@ -121,7 +131,7 @@ fn drift_description(snapshot: &LockSnapshot, packages: &[ResolvedPackage]) -> O
     let locked_names = locked.keys().cloned().collect::<BTreeSet<_>>();
     if locked_names != resolved_names {
         return Some(format!(
-            "the package set is {}, expected {}",
+            "the lockfile's package set is {}, but the manifests resolve to {}",
             display_names(&locked_names),
             display_names(&resolved_names)
         ));
@@ -133,7 +143,7 @@ fn drift_description(snapshot: &LockSnapshot, packages: &[ResolvedPackage]) -> O
         };
         if locked_edges != &resolved_edges {
             return Some(format!(
-                "package `{name}` depends on {}, expected {}",
+                "the lockfile has `{name}` depending on {}, but its manifest declares {}",
                 display_names(locked_edges),
                 display_names(&resolved_edges)
             ));
@@ -169,8 +179,11 @@ fn package_edges<'a>(
         .collect()
 }
 
-fn names(dependencies: &[String]) -> BTreeSet<String> {
-    dependencies.iter().cloned().collect()
+fn names(package: &ResolvedPackage) -> BTreeSet<String> {
+    package
+        .dependency_names()
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>()
 }
 
 fn locked_names(dependencies: &[LockedDependency]) -> BTreeSet<String> {
@@ -326,12 +339,20 @@ dependencies = ["Core", "MathX"]
     fn resolved_package(name: &str, dependencies: &[&str]) -> ResolvedPackage {
         ResolvedPackage {
             name: name.to_owned(),
+            version: "0.1.0".to_owned(),
+            kind: "library".to_owned(),
+            kira_version: "0.1.0".to_owned(),
             module_root: name.to_owned(),
             root_dir: PathBuf::new(),
             source_dir: PathBuf::new(),
             dependencies: dependencies
                 .iter()
-                .map(|dependency| (*dependency).to_owned())
+                .map(|dependency| crate::graph::ResolvedDependency {
+                    name: (*dependency).to_owned(),
+                    source: kira_manifest::DependencySource::Path(kira_manifest::PathSource {
+                        path: format!("../{dependency}"),
+                    }),
+                })
                 .collect(),
         }
     }

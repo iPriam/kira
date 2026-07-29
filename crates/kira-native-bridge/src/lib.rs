@@ -15,6 +15,7 @@
 
 pub mod array;
 pub mod boxes;
+pub mod cells;
 pub mod enums;
 pub mod file_system;
 pub mod foreign;
@@ -25,9 +26,15 @@ mod pool;
 pub mod raw_memory;
 pub mod runtime;
 pub mod state_box;
+pub mod tasks;
+pub mod values;
 
 pub use array::{KArray, KiraArray};
 pub use boxes::{kira_rt_box_free, kira_rt_box_new};
+pub use cells::{
+    KCell, kira_rt_cell_free, kira_rt_cell_get, kira_rt_cell_get_aggregate, kira_rt_cell_new,
+    kira_rt_cell_new_aggregate, kira_rt_cell_set, kira_rt_cell_set_aggregate,
+};
 pub use enums::{KEnum, KiraEnum, PAYLOAD_ENUM, PAYLOAD_INERT, PAYLOAD_STR};
 pub use foreign::{kira_foreign_adapter_abi_version_2, kira_rt_cstring_free, kira_rt_cstring_new};
 pub use hybrid::{RuntimeInvoker, kira_hybrid_call_runtime, kira_hybrid_install_runtime_invoker};

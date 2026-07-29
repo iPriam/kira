@@ -9,10 +9,11 @@
 // introduces a result, a function returning a function writes its result after
 // a colon: `function make(): (Int) -> Int`.
 //
-// A closure *captures* the bindings it reads from around it. A capture is a
-// copy taken when the closure is built, so it must be an immutable `let` of a
-// scalar type. Capturing a `var` is refused: the copy would go stale, and there
-// is no shared mutable storage to borrow instead.
+// A closure *captures* the bindings it reads from around it, and how depends on
+// how the binding was declared. A `let` of a scalar type is captured by value —
+// a copy taken when the closure is built. A `var` is captured by *sharing its
+// storage*: a write inside the closure is visible outside it, and outside
+// writes are visible inside.
 
 // A function type in a parameter. `borrow` says the call does not consume it.
 function apply(f: borrow (Int) -> Int, x: Int) -> Int {
@@ -39,6 +40,16 @@ function each(handler: (Int) -> Void) {
 // parameter list as a bare leading `in`.
 function run(handler: () -> Int) -> Int {
     return handler()
+}
+
+// A counter whose state outlives the frame that declared it: the returned
+// closure shares the `var`, so the storage lives as long as the closure does.
+function makeCounter(): () -> Int {
+    var seen = 0
+    return { in
+        seen = seen + 1
+        return seen
+    }
 }
 
 // A closure is an ordinary value, so it can be stored in a field and called
@@ -92,6 +103,19 @@ function main() {
             return base + seen
         }
     }, 2))
+
+    // A shared `var` capture: the closure and this scope write one storage, so
+    // the total the loop accumulates is readable here afterwards.
+    var total = 0
+    each { v in
+        total = total + v
+    }
+    print(total)
+
+    // The same sharing is what lets state outlive the frame it was declared in.
+    let tick = makeCounter()
+    print(tick())
+    print(tick())
 
     // A closure in a field. `move` transfers it, because a closure value owns
     // its captures the way any other aggregate owns its fields.

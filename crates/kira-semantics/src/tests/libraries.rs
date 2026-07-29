@@ -30,7 +30,7 @@ fn an_application_without_main_is_still_ksem011() {
 fn a_library_declaring_main_is_refused_by_name() {
     let text = "@Main function main() { print(1) return }";
     assert!(
-        library_codes(text).contains(&"KSEM158"),
+        library_codes(text).contains(&"KSEM255"),
         "{:?}",
         library_codes(text)
     );
@@ -55,7 +55,7 @@ fn a_library_records_no_entrypoint() {
         "test.kira".to_owned(),
         Vec::new(),
         BuildKind::Library,
-        kira_macros::PrecompiledShaders::default(),
+        PrecompiledShaders::default(),
         host_platform(),
     );
     let program = analyzed(&db, source);

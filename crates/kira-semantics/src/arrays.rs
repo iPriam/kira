@@ -60,7 +60,7 @@ impl Analyzer<'_> {
         // span, so a literal with two bad elements reports twice.
         for (&value, &written) in values.iter().zip(elements.iter()) {
             let value_ty = self.program.expr(value).type_of();
-            if !value_ty.assignable_to(element_ty) {
+            if !self.admits(value_ty, element_ty) {
                 let element_span = self.tree.expr(written).span();
                 self.emit(
                     element_span,
@@ -75,6 +75,12 @@ impl Analyzer<'_> {
             }
         }
 
+        // An `[Any]` erases each element as it goes in, at the same point a
+        // `let x: Any` does.
+        let values = values
+            .into_iter()
+            .map(|value| self.coerce_into(value, element_ty))
+            .collect();
         let ty = self.program.types.array_of(element_ty);
         self.program.exprs.alloc(HirExpr::ArrayNew {
             ty,
@@ -297,7 +303,7 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         };
         let value_ty = self.program.expr(value).type_of();
-        if !value_ty.assignable_to(element) {
+        if !self.admits(value_ty, element) {
             let span = self.tree.expr(args[0]).span();
             self.emit(
                 span,
@@ -309,6 +315,7 @@ impl Analyzer<'_> {
                 ),
             );
         }
+        let value = self.coerce_into(value, element);
         self.program
             .exprs
             .alloc(HirExpr::ArrayAppend { place, value })

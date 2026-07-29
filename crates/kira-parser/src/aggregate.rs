@@ -433,17 +433,11 @@ impl Parser<'_> {
                 let name_span = self.current().span;
                 let name = self.intern_span(name_span);
                 self.bump();
-                // No type: an override rebinds an inherited slot, and the slot
-                // already has one. Saying it again could only disagree.
-                if self.at(TokenKind::Colon) {
-                    self.error(
-                        self.current().span,
-                        "KPAR036",
-                        "an `override` field takes no type: it rebinds the inherited field",
-                    );
-                    self.bump();
-                    self.parse_type_ref();
-                }
+                // A type is optional here: an override rebinds an inherited
+                // slot, which already has one. Restating it is legal and
+                // changes nothing; whether it *agrees* is a question about
+                // resolved types, so semantics answers it.
+                let ty = self.eat(TokenKind::Colon).then(|| self.parse_type_ref());
                 if !self.expect(TokenKind::Equals) {
                     return;
                 }
@@ -452,6 +446,7 @@ impl Parser<'_> {
                 overrides.push(OverrideFieldDecl {
                     name,
                     name_span,
+                    ty,
                     default,
                     span,
                 });

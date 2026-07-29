@@ -140,10 +140,36 @@ pub fn load_modules_with_packages(
     // The module root is the entry file's directory. A module path is a
     // sequence of identifiers, so it can name nothing above the root.
     let root = entry_path.parent().unwrap_or_else(|| Path::new("."));
+    walk(Some(root), imports_of(entry_text), bundles, packages)
+}
+
+/// Reads every module `imports` names, and their closure, from bundles alone.
+///
+/// The loader for a program that has no directory: a package set held in
+/// memory still writes `import Foundation`, and Foundation is on disk. There is
+/// no project root to consult, so no file beside whatever directory the process
+/// happens to be in can be reached — which is what makes an in-memory check
+/// hermetic rather than dependent on the caller's working directory.
+#[must_use]
+pub fn load_bundled_modules(imports: &[String], bundles: &[BundledRoot]) -> Vec<ModuleSource> {
+    walk(None, imports.to_vec(), bundles, &[])
+}
+
+/// The transitive module walk, from a seed of import names.
+///
+/// `root` is the project directory whose files an import prefers, and `None`
+/// says there is no such directory — the two loaders above differ in that and
+/// nothing else, so they cannot disagree about resolution order.
+fn walk(
+    root: Option<&Path>,
+    seed: Vec<String>,
+    bundles: &[BundledRoot],
+    packages: &[PackageRoot],
+) -> Vec<ModuleSource> {
     let mut loaded: Vec<ModuleSource> = Vec::new();
     let mut seen: HashSet<ModuleKey> = HashSet::new();
     let mut stack: Vec<Step> = Vec::new();
-    push_resolves(&mut stack, imports_of(entry_text), None);
+    push_resolves(&mut stack, seed, None);
 
     while let Some(step) = stack.pop() {
         match step {
@@ -205,7 +231,12 @@ fn push_modules(stack: &mut Vec<Step>, modules: Vec<ReadModule>) {
 /// disagree with it on the first file that wrote the word inside a string.
 /// Diagnostics are discarded — this pass answers a filesystem question, and the
 /// frontend parses the same text again and reports everything it finds.
-fn imports_of(text: &str) -> Vec<String> {
+///
+/// Public because a caller holding sources this crate never read — a package
+/// set built in memory — still has to ask which modules they name, and asking
+/// it a second way is how two answers to one question appear.
+#[must_use]
+pub fn imports_of(text: &str) -> Vec<String> {
     let parsed = kira_parser::parse(SourceId::new(0), text);
     parsed
         .tree
@@ -229,8 +260,10 @@ fn imports_of(text: &str) -> Vec<String> {
 }
 
 /// Reads every source file selected by `module` in resolution-tier order.
+///
+/// `root` is the project's own directory, or `None` when the program has none.
 fn read_module(
-    root: &Path,
+    root: Option<&Path>,
     module: &str,
     package: Option<&PackageRoot>,
     bundles: &[BundledRoot],
@@ -246,9 +279,11 @@ fn read_module(
         }
     }
 
-    let own = module_path(root, module);
-    if let Some(source) = read_named_module(module, own) {
-        return vec![source];
+    if let Some(root) = root {
+        let own = module_path(root, module);
+        if let Some(source) = read_named_module(module, own) {
+            return vec![source];
+        }
     }
 
     for package in packages {

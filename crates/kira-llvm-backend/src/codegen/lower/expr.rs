@@ -5,7 +5,6 @@
 //! that are control flow rather than instructions.
 
 use kira_ir::{IrExpr, IrExprId, IrPlace};
-use kira_runtime_abi::EnumPayloadKind;
 use kira_semantics_model::Type;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
@@ -36,6 +35,8 @@ impl FunctionLowering<'_, '_> {
                 self.codegen.callback_thunk_address(callback as usize)
             }
             IrExpr::Local(slot) => self.load_local(slot),
+            IrExpr::CellNew { value, ty } => self.lower_cell_new(value, ty),
+            IrExpr::CellGet { slot, ty } => self.lower_cell_get(slot, ty),
             IrExpr::Unary { op, operand } => {
                 let value = self.lower_expr(operand)?;
                 Ok(self.lower_unary(op, value))
@@ -60,11 +61,14 @@ impl FunctionLowering<'_, '_> {
                 tag,
                 payload,
             } => self.lower_enum_new(enum_id, tag, payload),
+            IrExpr::IntoAny { value, from } => self.lower_into_any(value, from),
+            IrExpr::Widen { value, from, to } => self.lower_widen(value, from, to),
             IrExpr::EnumTag { value } => self.lower_enum_tag(value),
             IrExpr::EnumPayload { value, ty } => self.lower_enum_payload(value, ty),
             IrExpr::Field { base, index, ty } => self.lower_field(base, index, ty),
             IrExpr::ArrayNew { ty, elements } => self.lower_array_new(ty, &elements),
             IrExpr::Index { base, index, ty } => self.lower_index(base, index, ty),
+            IrExpr::TaskOp { prim, operands } => self.lower_task_op(prim, operands),
             IrExpr::ArrayLen { array } => self.lower_array_len(array),
             IrExpr::StringLen { text } => self.lower_string_len(text),
             IrExpr::StringCharAt { text, index } => self.lower_string_char_at(text, index),
@@ -81,6 +85,7 @@ impl FunctionLowering<'_, '_> {
                 Ok(self.call(self.codegen.runtime.cstring_retain, &mut [value], c"cstr"))
             }
             IrExpr::FileSystem { op, args, ty } => self.lower_file_system(op, &args, ty),
+            IrExpr::Compiler { op, args, ty } => self.lower_compiler(op, &args, ty),
             IrExpr::ArrayAppend { place, value } => self.lower_array_append(&place, value),
             IrExpr::NativeState { value, type_id, .. } => {
                 self.lower_native_state_new(value, type_id)
@@ -326,6 +331,27 @@ impl FunctionLowering<'_, '_> {
     }
 
     /// An array's element count (`xs.count`), the VM's `ArrayLen`.
+    /// One deferred-task primitive: the native mirror of the VM's `TaskOp`.
+    ///
+    /// The operands are lowered left to right, which is the order the VM pushes
+    /// them, so a program whose arguments have side effects orders those side
+    /// effects identically on both engines.
+    fn lower_task_op(
+        &mut self,
+        prim: kira_runtime_abi::TaskPrim,
+        operands: [IrExprId; 3],
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let tag = self.codegen.const_int(i64::from(prim.as_byte()));
+        let first = self.lower_expr(operands[0])?;
+        let second = self.lower_expr(operands[1])?;
+        let third = self.lower_expr(operands[2])?;
+        Ok(self.call(
+            self.codegen.runtime.task_op,
+            &mut [tag, first, second, third],
+            c"task",
+        ))
+    }
+
     fn lower_array_len(&mut self, array: IrExprId) -> Result<LLVMValueRef, LlvmError> {
         let array_ty = self.type_of(array);
         let array_value = self.lower_expr(array)?;
@@ -616,257 +642,5 @@ impl FunctionLowering<'_, '_> {
         // The element still owns its field, so the reader gets a copy of that
         // one field — never of the element around it.
         Ok(Some(self.copy_value(field, ty)?))
-    }
-
-    /// Builds an enum value: a boxed tag plus its optional payload, encoded into
-    /// the one type-erased word the runtime box carries.
-    ///
-    /// A scalar payload's bits go in directly; a `String` payload is an owned
-    /// handle, so `owns_str` is set and the box takes ownership of it — exactly
-    /// what makes the box's clone/free reclaim it. A payload-less variant passes
-    /// a zero word and `owns_str` unset.
-    fn lower_enum_new(
-        &mut self,
-        enum_id: kira_semantics_model::EnumId,
-        tag: u32,
-        payload: Option<IrExprId>,
-    ) -> Result<LLVMValueRef, LlvmError> {
-        let tag_value = self.codegen.const_int(i64::from(tag));
-        let Some(payload) = payload else {
-            // A variant with no payload is nothing but a tag, and the handle
-            // holds it: `(tag << 1) | 1`, a constant, with no allocation and no
-            // call. The runtime recognizes the low bit and treats clone as
-            // identity and free as nothing. See `kira_native_bridge::enums`.
-            return Ok(self.codegen.inline_enum(tag));
-        };
-        let payload_ty = self.codegen.enum_payload_type(enum_id, tag)?;
-        let value = self.lower_expr(payload)?;
-        if matches!(payload_ty, Type::Struct(_)) {
-            return self.lower_enum_aggregate_new(tag_value, payload_ty, value);
-        }
-        let (kind, payload_word) = self.encode_enum_payload(payload_ty, value)?;
-        Ok(self.call(
-            self.codegen.runtime.enum_new,
-            &mut [tag_value, kind, payload_word],
-            c"enum",
-        ))
-    }
-
-    /// Moves a struct payload into the runtime's erased aggregate box.
-    fn lower_enum_aggregate_new(
-        &mut self,
-        tag: LLVMValueRef,
-        ty: Type,
-        value: LLVMValueRef,
-    ) -> Result<LLVMValueRef, LlvmError> {
-        let llvm_type = self.codegen.llvm_type(ty)?;
-        // SAFETY: `llvm_type` belongs to this context, `value` has that type, and
-        // the builder is positioned on a live block.
-        let slot = unsafe {
-            let slot = LLVMBuildAlloca(
-                self.codegen.builder,
-                llvm_type,
-                c"enum.aggregate.source".as_ptr(),
-            );
-            LLVMBuildStore(self.codegen.builder, value, slot);
-            slot
-        };
-        let size = self.codegen.abi_size(ty)?;
-        let clone = self.codegen.element_clone(ty)?;
-        let free = self.codegen.element_free(ty)?;
-        Ok(self.call(
-            self.codegen.runtime.enum_new_aggregate,
-            &mut [tag, slot, size, clone, free],
-            c"enum.aggregate",
-        ))
-    }
-
-    /// Encodes a payload value into `(payload_kind, payload_word)` for the enum
-    /// box.
-    fn encode_enum_payload(
-        &mut self,
-        ty: Type,
-        value: LLVMValueRef,
-    ) -> Result<(LLVMValueRef, LLVMValueRef), LlvmError> {
-        let builder = self.codegen.builder;
-        let types = self.codegen.types;
-        // SAFETY: `value` has `ty`'s LLVM type and the builder is on a live
-        // block; each conversion below targets `i64`, the box's payload word.
-        let word = unsafe {
-            match ty {
-                Type::Int(_) => value,
-                Type::Float(_) => {
-                    LLVMBuildBitCast(builder, value, types.i64, c"enum.float.bits".as_ptr())
-                }
-                Type::Bool => LLVMBuildZExt(builder, value, types.i64, c"enum.bool.bits".as_ptr()),
-                // A nested enum is a handle exactly as a `String` is, so it
-                // encodes the same way; only the kind the box records differs,
-                // which is what makes its clone/free recurse.
-                Type::String | Type::Enum(_) => {
-                    LLVMBuildPtrToInt(builder, value, types.i64, c"enum.handle.bits".as_ptr())
-                }
-                _ => {
-                    return Err(LlvmError::Unsupported(
-                        "an enum payload of an unsupported type",
-                    ));
-                }
-            }
-        };
-        let kind = self.codegen.const_int(payload_kind(ty));
-        Ok((kind, word))
-    }
-
-    /// Reads an enum value's discriminant tag as an `Int`.
-    ///
-    /// The VM's `EnumTag`, in the same order: the value is evaluated (a local
-    /// read clones the enum), the tag is read out, and then the clone is freed —
-    /// exactly as `.count` reads and frees an array.
-    fn lower_enum_tag(&mut self, value: IrExprId) -> Result<LLVMValueRef, LlvmError> {
-        let value_ty = self.type_of(value);
-        let enum_value = self.lower_expr(value)?;
-        let tag = self.call(
-            self.codegen.runtime.enum_tag,
-            &mut [enum_value],
-            c"enum.tag",
-        );
-        self.drop_value(enum_value, value_ty)?;
-        Ok(tag)
-    }
-
-    /// Reads an enum value's payload as an owned value of type `ty`.
-    ///
-    /// The same order as the VM's `EnumPayload`: the enum is evaluated (a local
-    /// read clones it), the payload is read *owned* — `kira_rt_enum_payload`
-    /// clones a `String` — and only then is the enum released. Reading before
-    /// releasing is what keeps a `String` payload alive across the free.
-    fn lower_enum_payload(&mut self, value: IrExprId, ty: Type) -> Result<LLVMValueRef, LlvmError> {
-        let value_ty = self.type_of(value);
-        let enum_value = self.lower_expr(value)?;
-        let decoded = if matches!(ty, Type::Struct(_)) {
-            let llvm_type = self.codegen.llvm_type(ty)?;
-            // SAFETY: `llvm_type` belongs to this context and the runtime writes
-            // one owned value of exactly that type into `out`.
-            let out = unsafe {
-                LLVMBuildAlloca(
-                    self.codegen.builder,
-                    llvm_type,
-                    c"enum.aggregate.payload".as_ptr(),
-                )
-            };
-            self.call(
-                self.codegen.runtime.enum_payload_aggregate,
-                &mut [enum_value, out],
-                c"",
-            );
-            // SAFETY: the helper initialized `out` with a value of `llvm_type`.
-            unsafe {
-                LLVMBuildLoad2(
-                    self.codegen.builder,
-                    llvm_type,
-                    out,
-                    c"enum.aggregate.value".as_ptr(),
-                )
-            }
-        } else {
-            let word = self.call(
-                self.codegen.runtime.enum_payload,
-                &mut [enum_value],
-                c"enum.payload",
-            );
-            self.decode_enum_payload(ty, word)?
-        };
-        self.drop_value(enum_value, value_ty)?;
-        Ok(decoded)
-    }
-
-    /// Decodes a payload word back into a value of type `ty`.
-    ///
-    /// The exact inverse of [`Self::encode_enum_payload`], which is what makes a
-    /// round trip through the box lossless on every payload type the
-    /// declaration admits.
-    fn decode_enum_payload(
-        &mut self,
-        ty: Type,
-        word: LLVMValueRef,
-    ) -> Result<LLVMValueRef, LlvmError> {
-        let builder = self.codegen.builder;
-        let types = self.codegen.types;
-        // SAFETY: `word` is the `i64` the box stores for a payload of `ty`, put
-        // there by `encode_enum_payload`, and the builder is on a live block.
-        unsafe {
-            Ok(match ty {
-                Type::Int(_) => word,
-                Type::Float(_) => {
-                    LLVMBuildBitCast(builder, word, types.f64, c"enum.payload.float".as_ptr())
-                }
-                Type::Bool => {
-                    LLVMBuildTrunc(builder, word, types.i1, c"enum.payload.bool".as_ptr())
-                }
-                Type::String | Type::Enum(_) => {
-                    LLVMBuildIntToPtr(builder, word, types.ptr, c"enum.payload.handle".as_ptr())
-                }
-                _ => {
-                    return Err(LlvmError::Unsupported(
-                        "an enum payload of an unsupported type",
-                    ));
-                }
-            })
-        }
-    }
-}
-
-/// The payload kind the enum box records for a payload of type `ty`.
-///
-/// Mirrors `kira_native_bridge::enums`' `PAYLOAD_*` constants, which decide what
-/// the box's clone and free reclaim. The two are kept in step by
-/// `the_payload_kinds_match_the_runtime`, below — the backend and the runtime
-/// archive are compiled separately, so nothing but a test makes them agree.
-fn payload_kind(ty: Type) -> i64 {
-    match ty {
-        Type::String => EnumPayloadKind::STR,
-        Type::Enum(_) => EnumPayloadKind::ENUM,
-        Type::Struct(_) => EnumPayloadKind::AGGREGATE,
-        _ => EnumPayloadKind::INERT,
-    }
-    .as_i64()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::payload_kind;
-    use kira_runtime_abi::EnumPayloadKind;
-    use kira_semantics_model::{EnumDef, EnumTable, StructDef, Type, TypeTable};
-
-    /// The kinds this lowering emits are the ones the runtime interprets.
-    ///
-    /// A drift here is the silent failure the ABI marker exists to catch: the
-    /// symbols still resolve, and the box simply forgets to free its payload.
-    #[test]
-    fn the_payload_kinds_match_the_runtime() {
-        assert_eq!(payload_kind(Type::INT), EnumPayloadKind::INERT.as_i64());
-        assert_eq!(payload_kind(Type::Bool), EnumPayloadKind::INERT.as_i64());
-        assert_eq!(payload_kind(Type::String), EnumPayloadKind::STR.as_i64());
-        // An id is minted only by the table, so the test declares one.
-        let mut enums = EnumTable::new();
-        let id = enums
-            .declare(EnumDef {
-                name: "E".to_owned(),
-                variants: Vec::new(),
-            })
-            .expect("a fresh table accepts the first declaration");
-        assert_eq!(payload_kind(Type::Enum(id)), EnumPayloadKind::ENUM.as_i64());
-
-        let mut types = TypeTable::new();
-        let id = types
-            .structs_mut()
-            .declare(StructDef {
-                name: "Payload".to_owned(),
-                fields: Vec::new(),
-            })
-            .expect("a fresh table accepts the first struct");
-        assert_eq!(
-            payload_kind(Type::Struct(id)),
-            EnumPayloadKind::AGGREGATE.as_i64()
-        );
     }
 }

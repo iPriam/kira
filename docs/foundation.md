@@ -62,14 +62,74 @@ agree byte for byte, and it is why the portable VM core still builds for
 `wasm32-unknown-unknown` — a host that grants no filesystem simply refuses, and
 the web has no files to grant.
 
+## The compiler
+
+`Kira/Compiler.kira` lets a Kira program compile Kira. The unit is a **package
+set**, not a source string: `checkPackages` takes a `KiraCheckRequest` — a list
+of `KiraPackage`, each a `package.kira` text plus its named source files, with
+one of them named as the root — and answers with a `KiraCheckResult` holding
+typed `KiraCheckDiagnostic` values.
+
+```kira
+import Foundation
+
+@Main
+function main() {
+    var package = KiraPackage()
+    package.manifest = "Package App {\n    let kind = .App\n}\n"
+    var file = KiraSourceFile()
+    file.path = "app/main.kira"
+    file.text = "@Main function main() { print(missing) return }"
+    package.files.append(file)
+
+    let result = checkPackage("App", package)
+    print(result.ok())                                 // false
+    print(result.has(.KSEM060, "app/main.kira"))       // true
+    return
+}
+```
+
+A package set rather than a string, because the bugs worth catching are
+multi-file. An `import` is written per file and binds that file only, so
+`import Foundation` in `app/A.kira` is invisible in `app/B.kira`. A package is
+one flat namespace, so two of its files declaring one name collide. A library
+plus the app on top of it is two packages with an edge between them. None of
+that can be said with one string of source.
+
+Each diagnostic carries the code as a `KiraError` value, its severity, and the
+**file** it points into — so a test asserts `.KSEM061` in `app/FileC.kira`
+rather than matching text that gets reworded. `codeText` carries the code
+exactly as the compiler wrote it, for a code this Foundation's enum does not
+list; `kiraErrorFromCode` in `Kira/DiagnosticCodes.kira` is the mapping, and it
+answers `.Unrecognized` for one it does not know.
+
+Nothing reaches a disk. The files checked are the ones written in the request
+and no others, so two checks cannot see each other's work and nothing is left
+behind — the one exception being a bundled package an `import` names, which is
+Foundation itself. Checking runs the frontend and nothing after it: no IR, no
+code generation, no linker, so a suite of these needs no toolchain installed.
+
+Underneath, this is a host capability like the filesystem. The VM describes the
+request and hands it to its host; native code calls
+`kira_rt_compiler_check_packages`. Both reach one `kira-check` session, which is
+what makes the three backends agree. A host with no compiler — an embedded VM, a
+browser tab, a test — refuses **by name** rather than answering "no
+diagnostics", which would read as "it compiled". `kira` is the host that grants
+it, because `kira` is what links the frontend.
+
+A native build links the compiler only when the program reaches it: `kira`
+links `libkira_compiler_bridge.a` for a program that calls `kcCheckPackages` and
+the small `libkira_native_bridge.a` for every other, so no Kira program carries
+a compiler it never calls.
+
 ## Where the compiler looks
 
-An installed toolchain is `<root>/bin/kirac` and `<root>/foundation/`, so
+An installed toolchain is `<root>/bin/kira` and `<root>/foundation/`, so
 discovery anchors on the running executable and resolves its directory's
 sibling. That is the primary rule, and it consults neither `$HOME`, nor
 `current.toml`, nor the working directory: move a toolchain and its standard
 library moves with it, still matching the compiler it was installed with. A
-version-skewed pairing of one toolchain's `kirac` with another's Foundation is
+version-skewed pairing of one toolchain's `kira` with another's Foundation is
 unreachable.
 
 Three rules surround it, in `kira-toolchain`'s `bundled_discovery`. Setting
@@ -77,11 +137,11 @@ Three rules surround it, in `kira-toolchain`'s `bundled_discovery`. Setting
 is an error naming the path, not a silent fallback, the same contract
 `KIRA_LLVM_HOME` carries. Failing that, the toolchain named by
 `~/.kira/toolchains/current.toml` is tried, which is the route for a consumer
-that is not `kirac` itself: a `build.rs` compiling a Kira library through
+that is not `kira` itself: a `build.rs` compiling a Kira library through
 `kira-build` runs as a Cargo build script sitting nowhere near a toolchain.
 Last, and only after both have failed, the walk looks upward from the executable
 for a directory holding both a workspace `Cargo.toml` and `foundation/package.kira`
-— which is how a `kirac` built into this repository's `target/debug/` finds the
+— which is how a `kira` built into this repository's `target/debug/` finds the
 `foundation/` committed here. A shipped toolchain never reaches that rule, so
 the shipped path never depends on a checkout existing.
 
@@ -141,19 +201,70 @@ Kira on top of `comptime macro`. `docs/macros.md` documents what each generates,
 the field classification they share, and the wire format the serde pair reads
 and writes.
 
-The reference implementation's Foundation also carries four more files. Each
-waits on a language subsystem this compiler has not built, and each is named
-here rather than stubbed — a file that compiles and does nothing is worse than
-an import that fails.
+`Result.kira` ships `enum Result<Value, Failure>`. An importing program writes
+`Result<Int, Trouble>` in any type position and constructs it with either
+spelling — `.Ok(1)` or `Result.Ok(1)` — because a qualified constructor carries
+no type arguments and takes its instantiation from the position it fills. A
+qualified spelling with nothing to anchor it is `KSEM254` rather than a guess.
 
-| File | Waits on |
-|---|---|
-| `Result.kira` | nothing; generic enums landed, and it is the next file to port |
-| `Printable.kira` | `construct` declarations |
-| `Test.kira` | `comptime` and `construct` |
-| `Web.kira` | FFI, and the DOM bindings |
+The reference implementation's Foundation carries one more file, `Web.kira`,
+which waits on FFI and the DOM bindings. It is named here rather than stubbed —
+a file that compiles and does nothing is worse than an import that fails.
 
 Foundation is the consumer of nearly every remaining subsystem, which is why it
-is worth having the mechanism before the content: each of those files becomes a
-matter of adding a `.kira` file to `foundation/app/`, with no change to how an
-import finds it.
+is worth having the mechanism before the content: that file becomes a matter of
+adding a `.kira` file to `foundation/app/`, with no change to how an import
+finds it.
+
+## The test vocabulary
+
+`Test.kira` ships the `Test` construct family a suite is written in, together
+with `TestResult`, `TestReport`, `TestStatus`, `TestFailure`, and `TestRuntime`.
+A case is a declaration backed by `Test` providing the two members the family
+requires:
+
+```kira
+Test SumsToTen {
+    test { return add(4, 6) }
+    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+}
+```
+
+Nothing in the compiler knows the name `Test`. It is one construct family among
+any others a library could declare, and every rule that shapes a case is a rule
+of the construct surface — which is why `Test.kira` is a `.kira` file and not a
+branch in the frontend.
+
+Both requirements write a result type — `test() -> Any` and
+`expect() -> Result<Any, TestFailure>` — because `Any`, Kira's top type, names
+exactly what a case answers with: whatever it measures. A `test { … }` member
+therefore returns `Any` and an `expect { … }` member a `Result<Any,
+TestFailure>`, which is what a runner reads without the family knowing what any
+one case measures.
+
+A case answers with the narrow instantiation it measured — `Result<Int,
+TestFailure>` above — and a `Result<Any, TestFailure>` position accepts it. That
+is the one widening the language has beyond `Any` itself: an instantiation
+reaches another instantiation of the same template when every type argument
+either stays as it was or becomes `Any`. Nothing about it knows the name
+`Result`, so a user's own `enum Crate<Held>` widens by the identical path. The
+boundary is that the arguments widen and a position that merely *contains* one
+does not: `[Result<Int, TestFailure>]` is not `[Result<Any, TestFailure>]`, for
+the same reason `[Int]` is not `[Any]`.
+
+The result type comes from the family, not from the shorthand. A `name { … }`
+member is the body of the member the family calls `name`, so what it returns is
+the family's to state; a family that declares no such member falls back to the
+family type, which is what keeps a `body { … }` on a family that never mentions
+`body` meaning what it always did. No name is special-cased — `test` and `expect`
+take the same path a user's own family and member would.
+
+`Any` is one-directional. A value crosses in and is stored, copied, passed,
+returned, and released, and nothing reads it back: the language has no `is`,
+`as`, or downcast form, so a runner still reaches a case's own result through its
+declaration rather than through an `Any Test` value.
+
+`Printable.kira` ships the `Printable` family, whose one requirement is
+`onPrint() -> String`. It is the whole surface: `print(value)` does not consult
+it, and there is no `@Printable` annotation here, so `onPrint()` is called by
+name like any other member.

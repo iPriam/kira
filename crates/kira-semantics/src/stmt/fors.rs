@@ -10,7 +10,7 @@ use kira_core::Symbol;
 use kira_semantics_model::hir::{HirPlace, HirStmt, HirStmtId};
 use kira_semantics_model::{HirBinaryOp, HirExpr, Type};
 use kira_source::Span;
-use kira_syntax_model::ast::{Block, ExprId};
+use kira_syntax_model::ast::{Block, Expr, ExprId};
 
 use crate::analyze::{Analyzer, FnCtx};
 
@@ -189,6 +189,18 @@ impl Analyzer<'_> {
         out: &mut Vec<HirStmtId>,
         fill_body: impl FnOnce(&mut Self, &mut FnCtx, &mut Vec<HirStmtId>),
     ) {
+        // `for x in []` iterates nothing, so the element type it would need is
+        // a type no code can observe: the body never runs and `x` is never
+        // bound. Recognized from the *syntax*, before the literal is analyzed
+        // and asked what it holds, because that question is the one `KSEM104`
+        // refuses to guess at — and here there is nothing to guess for.
+        if matches!(self.tree.expr(array), Expr::ArrayLit { elements, .. } if elements.is_empty()) {
+            ctx.push_scope();
+            let mut discarded = Vec::new();
+            fill_body(self, ctx, &mut discarded);
+            ctx.pop_scope();
+            return;
+        }
         let array_span = self.tree.expr(array).span();
         let array_expr = self.analyze_expr(ctx, array);
         let array_ty = self.program.expr(array_expr).type_of();

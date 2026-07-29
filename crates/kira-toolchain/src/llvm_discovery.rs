@@ -100,7 +100,7 @@ pub enum LlvmDiscoveryError {
     /// Nothing was found anywhere in the discovery order.
     #[error(
         "no LLVM {version} install found; checked:\n{}\n\
-         set KIRA_LLVM_HOME to an LLVM install root, or run `kirac fetch-llvm` \
+         set KIRA_LLVM_HOME to an LLVM install root, or run `kira fetch-llvm` \
          to install the pinned bundle",
         .checked.iter().map(|path| format!("  {}", path.display())).collect::<Vec<_>>().join("\n")
     )]

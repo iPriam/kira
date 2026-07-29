@@ -1,0 +1,217 @@
+import Foundation
+
+// ArxTests.kira
+// Migrated from tests/pass/run/{array_append_loop_no_stack_growth, array_append_parity,
+// array_call_parity, array_local_parity, array_element_borrow_mut_writeback_parity,
+// array_element_deep_field_store_parity, array_element_mixed_projection_parity,
+// array_element_nested_append_parity, conditional_array_return_parity}.
+// All top-level names use arx / Arx prefix. Arrays are reduced to scalars
+// (weighted sums / counts) since the runner only compares Int/Bool/String.
+
+// ---------------------------------------------------------------------------
+// Struct/helper types
+// ---------------------------------------------------------------------------
+
+struct ArxRow {
+    var v: Int
+}
+
+function arxBump(r: borrow mut ArxRow) {
+    r.v = r.v + 1
+    return
+}
+
+struct ArxInner {
+    var x: Int
+}
+
+struct ArxOuter {
+    var inner: ArxInner
+}
+
+struct ArxA {
+    var c: Int
+}
+
+struct ArxB {
+    var a: ArxA
+}
+
+struct ArxC {
+    var b: ArxB
+}
+
+struct ArxCell {
+    var xs: [Int]
+}
+
+struct ArxGrid {
+    var cells: [ArxCell]
+}
+
+struct ArxRowXs {
+    var xs: [Int]
+}
+
+struct ArxColor {
+    let r: Float = 0.0
+    let g: Float = 0.0
+    let b: Float = 0.0
+    let a: Float = 1.0
+}
+
+struct ArxGlow {
+    let color: ArxColor = ArxColor {}
+    let radius: Float = 0.0
+    let intensity: Float = 0.0
+}
+
+function arxGlowEffects(enabled: Bool) -> [ArxGlow] {
+    if enabled {
+        return [
+            ArxGlow {
+                color: ArxColor { r: 0.30 g: 0.55 b: 1.0 a: 1.0 }
+                radius: 22.0
+                intensity: 0.28
+            }
+        ]
+    }
+    return []
+}
+
+function arxGlowCount(enabled: Bool) -> Int {
+    let effects = arxGlowEffects(enabled)
+    return effects.count
+}
+
+function arxPassThrough(values: [Int]): [Int] {
+    return values
+}
+
+function arxMakeValues(): [Int] {
+    return arxPassThrough([4, 5, 6])
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+// From array_append_loop_no_stack_growth: regression for scratch-alloca
+// hoisting into the entry block (avoids unbounded native stack growth in a
+// 60000-iteration loop that rebuilds an array each pass).
+Test ArxAppendLoopNoStackGrowth {
+    test {
+        var i = 0
+        var acc = 0
+        while i < 60000 {
+            var xs: [Int] = []
+            xs.append(i)
+            acc = acc + xs[0]
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1799970000); return e }
+}
+
+// From array_append_parity: [4, 5] built via append, order preserved.
+Test ArxAppendParity {
+    test {
+        var values: [Int] = []
+        values.append(4)
+        values.append(5)
+        return values[0] * 10 + values[1]
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
+}
+
+// From array_call_parity: array threaded through function calls/returns.
+Test ArxCallParity {
+    test {
+        let values: [Int] = arxMakeValues()
+        return values[0] * 100 + values[1] * 10 + values[2]
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(456); return e }
+}
+
+// From array_local_parity: plain array literal local.
+Test ArxLocalParity {
+    test {
+        let values = [1, 2, 3]
+        return values[0] * 100 + values[1] * 10 + values[2]
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(123); return e }
+}
+
+// From array_element_borrow_mut_writeback_parity: mutation through
+// `arr[i]` passed to a `borrow mut` param must write back into the array.
+Test ArxElementBorrowMutWritebackParity {
+    test {
+        var arr: [ArxRow] = []
+        arr.append(ArxRow { v: 5 })
+        arxBump(arr[0])
+        arxBump(arr[0])
+        return arr[0].v
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+}
+
+// From array_element_deep_field_store_parity: store through a place nested
+// 2+ projections below the array index must write back.
+Test ArxElementDeepFieldStoreParity {
+    test {
+        var arr: [ArxOuter] = []
+        arr.append(ArxOuter { inner: ArxInner { x: 1 } })
+        arr[0].inner.x = 77
+        return arr[0].inner.x
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(77); return e }
+}
+
+// From array_element_mixed_projection_parity: 3-deep field chain rooted at
+// an array index, plus a nested-array-of-array element index write.
+Test ArxElementMixedProjectionParity {
+    test {
+        var deep: [ArxC] = []
+        deep.append(ArxC { b: ArxB { a: ArxA { c: 1 } } })
+        deep[0].b.a.c = 333
+
+        var grid: [ArxGrid] = []
+        grid.append(ArxGrid { cells: [] })
+        grid[0].cells.append(ArxCell { xs: [7, 8, 9] })
+        grid[0].cells[0].xs[2] = 555
+
+        var out = deep[0].b.a.c * 1000000 + grid[0].cells[0].xs[2] * 1000 + grid[0].cells[0].xs[0]
+        return out
+    }
+    // deep=333, xs[2]=555, xs[0]=7 -> 333*1e6 + 555*1e3 + 7 = 333555007
+    expect { let e: Result<Int, TestFailure> = .Ok(333555007); return e }
+}
+
+// From array_element_nested_append_parity: `arr[i].xs.append(v)` must grow
+// the nested array in place (write back), not a discarded transient copy.
+Test ArxElementNestedAppendParity {
+    test {
+        var arr: [ArxRowXs] = []
+        arr.append(ArxRowXs { xs: [] })
+        arr[0].xs.append(42)
+        arr[0].xs.append(43)
+        var out = arr[0].xs.count * 10000 + arr[0].xs[0] * 100 + arr[0].xs[1]
+        return out
+    }
+    // count=2, xs[0]=42, xs[1]=43 -> 2*10000 + 42*100 + 43 = 24243
+    expect { let e: Result<Int, TestFailure> = .Ok(24243); return e }
+}
+
+// From conditional_array_return_parity: an array literal of heap structs
+// returned from one `if` branch, empty array from the other; owned
+// temporaries of a returning block must not be cleaned up by a sibling
+// block's return path.
+Test ArxConditionalArrayReturnParity {
+    test {
+        var out = arxGlowCount(true) * 100 + arxGlowCount(false) * 10 + arxGlowCount(true)
+        return out
+    }
+    // 1*100 + 0*10 + 1 = 101
+    expect { let e: Result<Int, TestFailure> = .Ok(101); return e }
+}

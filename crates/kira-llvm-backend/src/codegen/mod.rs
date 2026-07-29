@@ -20,6 +20,7 @@
 //! drop, and no LLVM reference escapes that lifetime.
 
 mod adapter;
+mod boxing;
 mod bridge;
 mod callback;
 mod elements;
@@ -34,6 +35,7 @@ mod symbols;
 mod target;
 mod types;
 mod values;
+mod widening;
 
 use std::collections::HashMap;
 use std::ffi::CStr;
@@ -358,6 +360,10 @@ pub(crate) struct Codegen<'a> {
     /// `(element type, leaf)`. Memoized so two arrays of the same element share
     /// one leaf. See [`elements`].
     element_leaves: HashMap<(Type, Leaf), LLVMValueRef>,
+    /// The rebuild that carries one generic instantiation into another, one per
+    /// `(from, to)`. `None` records a pair that needs no rebuild at all, so the
+    /// answer is computed once either way. See [`widening`].
+    widen_leaves: HashMap<(Type, Type), Option<Callable>>,
     /// Encode/decode leaves used by generic callback-state array conversion.
     native_state_leaves: HashMap<(Type, StateLeaf), LLVMValueRef>,
     /// Encode/decode helpers for payload-carrying enum callback state.
@@ -404,6 +410,7 @@ impl<'a> Codegen<'a> {
             string_counter: 0,
             target_data,
             element_leaves: HashMap::new(),
+            widen_leaves: HashMap::new(),
             native_state_leaves: HashMap::new(),
             native_state_enum_leaves: HashMap::new(),
             pointer_width,
@@ -584,7 +591,15 @@ impl<'a> Codegen<'a> {
             // are the same shape and for the same reason — the runtime owns
             // their layout (an enum is a boxed tag plus its payload), and this
             // only ever passes the handle around.
-            Type::String | Type::Array(_) | Type::Enum(_) => self.types.ptr,
+            // `Any` joins them: an erased value is a handle to a box shaped like
+            // the enum box — a tag saying what was erased, what the payload
+            // word owns, and the word — so it is one opaque pointer here too.
+            // A capture cell is the same shape again, and literally the same
+            // box as an enum: `kira-native-bridge`'s `cells` module boxes a
+            // held value in a `KiraEnum` with the tag unused.
+            Type::String | Type::Array(_) | Type::Enum(_) | Type::Any | Type::Cell(_) => {
+                self.types.ptr
+            }
             // A `RawPtr` is an opaque target-width word Kira only stores and
             // passes back; it is represented as an `i64` payload and never
             // dereferenced, exactly as the VM keeps it in a `Value::RawPtr`.
@@ -595,7 +610,7 @@ impl<'a> Codegen<'a> {
             // C-layout struct it is real storage: the address of bytes that
             // outlive the call, which Kira stores and passes back and never
             // dereferences.
-            Type::RawPtr | Type::NativeState(_) | Type::CString => self.types.i64,
+            Type::RawPtr | Type::NativeState(_) | Type::CString | Type::Task(_) => self.types.i64,
             Type::Void => self.types.void,
             Type::Struct(id) => *self
                 .struct_types

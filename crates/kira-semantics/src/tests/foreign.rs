@@ -16,7 +16,7 @@ fn program(text: &str) -> HirProgram {
     let db = salsa::DatabaseImpl::new();
     let source =
         SourceProgram::application(&db, text.to_owned(), "test.kira".to_owned(), Vec::new());
-    analyzed(&db, source)
+    analyzed(&db, source).clone()
 }
 
 /// Whether the program contains a call resolved to a foreign callable.

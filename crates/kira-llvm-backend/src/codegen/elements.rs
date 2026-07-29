@@ -45,6 +45,12 @@ pub(super) enum Leaf {
     Clone,
     /// `(at)`: release whatever `*at` owns.
     Free,
+    /// `(a, b) -> i8`: whether `*a` and `*b` are structurally equal.
+    ///
+    /// Unlike the other two, this one has no "owns nothing" shortcut. A flat
+    /// `memcmp` would read padding bytes, which a copy never defines, so even a
+    /// struct of two `Int`s needs a real leaf that compares the fields it has.
+    Eq,
 }
 
 impl Codegen<'_> {
@@ -90,10 +96,18 @@ impl Codegen<'_> {
         self.element_leaf(ty, Leaf::Free)
     }
 
+    /// The equality leaf for a value of `ty`, for comparing it once erased.
+    ///
+    /// Always a real function: see [`Leaf::Eq`] for why there is no null case.
+    pub(in crate::codegen) fn element_eq(&mut self, ty: Type) -> Result<LLVMValueRef, LlvmError> {
+        self.element_leaf(ty, Leaf::Eq)
+    }
+
     fn element_leaf(&mut self, ty: Type, leaf: Leaf) -> Result<LLVMValueRef, LlvmError> {
-        // An element that owns nothing needs no leaf, and saying so with a null
-        // pointer is what lets the runtime skip its loop for `[Int]`.
-        if !self.program.types.owns_heap(ty) {
+        // An element that owns nothing needs no clone or free leaf, and saying
+        // so with a null pointer is what lets the runtime skip its loop for
+        // `[Int]`. Equality has no such case — it compares the value itself.
+        if leaf != Leaf::Eq && !self.program.types.owns_heap(ty) {
             // SAFETY: `types.ptr` is this context's opaque pointer type.
             return Ok(unsafe { LLVMConstNull(self.types.ptr) });
         }
@@ -135,18 +149,22 @@ impl Codegen<'_> {
         let name = c_string(&match leaf {
             Leaf::Clone => format!("kira.elem.clone.{ordinal}"),
             Leaf::Free => format!("kira.elem.free.{ordinal}"),
+            Leaf::Eq => format!("kira.elem.eq.{ordinal}"),
         });
         let mut params = match leaf {
-            Leaf::Clone => vec![self.types.ptr, self.types.ptr],
+            Leaf::Clone | Leaf::Eq => vec![self.types.ptr, self.types.ptr],
             Leaf::Free => vec![self.types.ptr],
+        };
+        let returns = match leaf {
+            Leaf::Eq => self.types.i8,
+            Leaf::Clone | Leaf::Free => self.types.void,
         };
 
         // SAFETY: every type belongs to this module's context; `params`
         // outlives the `LLVMFunctionType` call; and the block is appended to
         // the function just created.
         let (function, entry) = unsafe {
-            let signature =
-                LLVMFunctionType(self.types.void, params.as_mut_ptr(), params.len() as u32, 0);
+            let signature = LLVMFunctionType(returns, params.as_mut_ptr(), params.len() as u32, 0);
             let function = LLVMAddFunction(self.module, name.as_ptr(), signature);
             // Internal: a leaf is this module's own, never part of its ABI.
             LLVMSetLinkage(function, llvm_sys::LLVMLinkage::LLVMInternalLinkage);
@@ -187,6 +205,27 @@ impl Codegen<'_> {
                 let value =
                     unsafe { LLVMBuildLoad2(self.builder, llvm_type, src, c"elem".as_ptr()) };
                 self.drop_value(value, ty)?;
+            }
+            Leaf::Eq => {
+                // SAFETY: `b` is the second parameter of a two-parameter
+                // signature; both point at live values of `llvm_type`.
+                let other = unsafe { LLVMGetParam(function, 1) };
+                // SAFETY: both point at live values of `llvm_type`.
+                let (left, right) = unsafe {
+                    (
+                        LLVMBuildLoad2(self.builder, llvm_type, src, c"elem.a".as_ptr()),
+                        LLVMBuildLoad2(self.builder, llvm_type, other, c"elem.b".as_ptr()),
+                    )
+                };
+                let equal = self.equal_values(left, right, ty)?;
+                // SAFETY: `equal` is an `i1`; the seam speaks `i8`, and the
+                // builder is on an unterminated block of this function.
+                unsafe {
+                    let widened =
+                        LLVMBuildZExt(self.builder, equal, self.types.i8, c"elem.eq".as_ptr());
+                    LLVMBuildRet(self.builder, widened);
+                }
+                return Ok(());
             }
         }
         // SAFETY: the builder is on an unterminated block of this function.

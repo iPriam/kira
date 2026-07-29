@@ -1,7 +1,7 @@
 //! The packages a program may import without naming a path.
 //!
 //! A *bundled* package ships with the toolchain rather than with the project:
-//! Foundation is installed beside `kirac` and versioned with it, so
+//! Foundation is installed beside `kira` and versioned with it, so
 //! `import Foundation` resolves from any directory on the machine with no
 //! dependency entry and no relative path. [`kira_toolchain`] finds the
 //! directory; this module decides which module names it owns and where each

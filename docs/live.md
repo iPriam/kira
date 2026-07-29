@@ -1,6 +1,6 @@
 # Kira Live
 
-`kirac live <file>` builds a program into a `.klbundle`, serves it over a
+`kira live <file>` builds a program into a `.klbundle`, serves it over a
 loopback socket, and starts a runner client that downloads it, loads it, links
 it, and starts it. With `--watch`, every save rebuilds and the change goes into
 the app that is already running.
@@ -10,11 +10,11 @@ that outlives the compiler and can take a new bundle later — which is the whol
 reason reload is possible at all.
 
 ```sh
-kirac live app.kira                             # the VM half
-kirac live --backend hybrid app.kira            # both halves
-kirac live --watch app.kira                     # reload on every save
-kirac live --watch --quit-after 30s app.kira    # bounded, for scripts and CI
-kirac live ios app.kira                         # a runner with no client yet: says so
+kira live app.kira                             # the VM half
+kira live --backend hybrid app.kira            # both halves
+kira live --watch app.kira                     # reload on every save
+kira live --watch --quit-after 30s app.kira    # bounded, for scripts and CI
+kira live ios app.kira                         # a runner with no client yet: says so
 ```
 
 | Flag | Meaning |
@@ -24,7 +24,7 @@ kirac live ios app.kira                         # a runner with no client yet: s
 | `--quit-after <5s\|500ms\|2m>` | shut the session down cleanly after this long |
 
 The first positional is a runner id if it names one and a path otherwise, so
-`kirac live ios` is the iOS runner and `kirac live ./ios` is a directory. The
+`kira live ios` is the iOS runner and `kira live ./ios` is a directory. The
 distinction is made on shape, not on what happens to exist: a path-looking
 argument stays a path even when nothing is there, so the error says the file is
 missing rather than that the runner is unknown.
@@ -188,7 +188,7 @@ the rest) reports precisely that rather than failing as an unknown command: the
 runner is modeled, the command is valid, and the diagnostic names what is
 missing.
 
-The runner is resolved beside `kirac` rather than from `PATH`, so a session never
+The runner is resolved beside `kira` rather than from `PATH`, so a session never
 picks up a runner from a different build than the bundle it is about to serve.
 Cargo builds a dependency's lib target and never its `[[bin]]`, so it is
 `cargo build --workspace` that puts it there — `cargo build -p kira-cli` does not,
@@ -199,7 +199,7 @@ and a session that cannot find its runner says so.
 - **Headless.** Sessions stop at `live.entrypoint.started` and never claim
   `live.frame.presented`. Presenting a frame needs a window and a swapchain, and
   kira-graphics owns those, not this repo.
-- **One file is the watch set.** That is what `kirac live` is given; there are no
+- **One file is the watch set.** That is what `kira live` is given; there are no
   packages, manifests, or `app/` directory to walk yet. `WatchSet` takes roots
   precisely so this grows without the watching changing.
 - **The session socket is unauthenticated.** It is loopback and first-come, so

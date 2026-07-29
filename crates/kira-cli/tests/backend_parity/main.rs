@@ -21,7 +21,7 @@
 //! tests: agreeing with `vm` and `llvm`, which ignored the annotations, is the
 //! statement that a boundary changed where the code ran and nothing else.
 //!
-//! These only run when `kirac` was built with its `llvm` feature; without it
+//! These only run when `kira` was built with its `llvm` feature; without it
 //! there is no native backend to compare against.
 
 use std::path::PathBuf;
@@ -36,7 +36,7 @@ fn write_source(source: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
-    let directory = std::env::temp_dir().join(format!("kirac_parity_{pid}_{unique}"));
+    let directory = std::env::temp_dir().join(format!("kira_parity_{pid}_{unique}"));
     std::fs::create_dir_all(&directory).expect("temp dir");
     let path = directory.join("program.kira");
     std::fs::write(&path, source).expect("write temp source");
@@ -94,10 +94,10 @@ fn assert_module_parity(entry: &str, modules: &[(&str, &str)]) -> String {
 
 /// Runs `source` on one backend.
 fn run_on(source_path: &std::path::Path, backend: &str) -> Output {
-    kirac()
+    kira()
         .args(["run", "--backend", backend, source_path.to_str().unwrap()])
         .output()
-        .expect("run kirac")
+        .expect("run kira")
 }
 
 /// The repo's own `foundation/`, which every run here is pinned to.
@@ -110,9 +110,9 @@ fn foundation_home() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../foundation")
 }
 
-/// A `kirac` command pinned to this checkout's Foundation.
-fn kirac() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_kirac"));
+/// A `kira` command pinned to this checkout's Foundation.
+fn kira() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_kira"));
     command.env("KIRA_FOUNDATION_HOME", foundation_home());
     command
 }
@@ -134,11 +134,11 @@ fn assert_parity_on_disk(source: &str) -> String {
     let runs: Vec<(&str, Output)> = BACKENDS
         .iter()
         .map(|backend| {
-            let run = kirac()
+            let run = kira()
                 .args(["run", "--backend", backend, path.to_str().unwrap()])
                 .current_dir(&directory)
                 .output()
-                .expect("run kirac");
+                .expect("run kira");
             (*backend, run)
         })
         .collect();
@@ -229,20 +229,25 @@ fn assert_trap_parity(source: &str, before_the_trap: &str) {
 }
 
 mod aliases;
+mod any;
 mod arithmetic;
 mod array_sharing;
 mod arrays;
 mod attempts;
 mod bitwise;
 mod calls;
+mod captured_vars;
 mod classes;
 mod closures;
+mod compiler;
+mod construct_requirements;
 mod constructs;
 mod control_flow;
 mod conversions;
 mod derives;
 mod enums;
 mod examples;
+mod existentials;
 mod ffi;
 mod ffi_types;
 mod file_system;
@@ -259,4 +264,6 @@ mod ownership;
 mod seam;
 mod strings;
 mod structs;
+mod tasks;
+mod widening;
 mod widths;

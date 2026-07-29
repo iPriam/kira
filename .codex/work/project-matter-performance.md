@@ -55,7 +55,7 @@ Build the editor, then take the **slope** between two frame counts:
 
 ```
 cd ~/Code/kira-projects/project-matter/apps/editor
-kirac build
+kira build
 /usr/bin/time -p env KIRA_METAL_OFFSCREEN=1 KIRA_METAL_OFFSCREEN_FRAMES=5  ./app/.kira-build/main
 /usr/bin/time -p env KIRA_METAL_OFFSCREEN=1 KIRA_METAL_OFFSCREEN_FRAMES=20 ./app/.kira-build/main
 ```
@@ -67,9 +67,9 @@ takes 4–8 minutes, so each measurement cycle is ~10 minutes. Now that a frame
 is tens of milliseconds, use far more frames — 20 against 220 — or the slope is
 mostly startup noise.
 
-The `kirac` that builds the editor is `target/debug/kirac` in this checkout,
+The `kira` that builds the editor is `target/debug/kira` in this checkout,
 not anything on `PATH`: the runtime archive a program links is the one sitting
-beside the compiler that built it, so a repo `kirac` and its own archive always
+beside the compiler that built it, so a repo `kira` and its own archive always
 match. `~/.kira/toolchains/dev/1.7.4` is a stale install that predates
 `727ae1d` and cannot build the editor at all.
 
@@ -343,7 +343,7 @@ change is invisible — it is what confirmed the array sharing, on native and on
 the VM.
 
 Pin new behaviour against **the oracle**
-(`~/.kira/toolchains/dev/1.7.3/bin/kirac`), not against the three backends
+(`~/.kira/toolchains/dev/1.7.3/bin/kira`), not against the three backends
 agreeing with each other. Every engine copying a borrow identically is exactly
 the bug that produced the layout trap, and `assert_parity` could not see it
 because all three agreed. `assert_parity` returns the output, so assert the

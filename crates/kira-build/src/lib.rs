@@ -12,7 +12,7 @@
 //!   dependencies and loads their modules before semantics; library packages
 //!   additionally compile every source below `app/`, while a bare source file
 //!   keeps the standalone behavior. It is a *library* function rather than CLI
-//!   code because `kirac` is not the only thing that compiles Kira: a consumer
+//!   code because `kira` is not the only thing that compiles Kira: a consumer
 //!   crate's `build.rs` builds the library it embeds, and it must reach the
 //!   identical pipeline rather than a second one that drifts from it.
 //! - [`library`] takes that program and produces what a Rust consumer actually
@@ -40,10 +40,11 @@ pub mod native;
 mod shader;
 pub mod wrapper;
 
-pub use frontend::{Compiled, FrontendError, compile};
+pub use frontend::{Compiled, FrontendError, compile, compile_as};
 pub use hybrid::{
     HybridLibraryArtifacts, HybridLibraryError, HybridLibraryOptions, build_hybrid_library,
-    check_library as check_hybrid_library, manifest as hybrid_manifest,
+    check_library as check_hybrid_library,
+    internal_function_count as hybrid_internal_function_count, manifest as hybrid_manifest,
 };
 // Re-exported rather than restated: a consumer's `build.rs` that reaches the
 // generated wrapper without running the generated `build.rs` still has to name

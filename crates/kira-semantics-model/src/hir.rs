@@ -5,18 +5,22 @@
 //! expression carries its [`Type`]. Nodes live in per-program arenas and refer
 //! to each other by index, so no HIR type carries a lifetime. Local indices
 //! are scoped to their owning function.
+//!
+//! This file holds the *program* model — what a program, a function, a local,
+//! and a statement are. The expression tree is [`exprs`] and the operator
+//! vocabulary it refers to is [`ops`], both split out on the file-size ladder
+//! and re-exported here, so `kira_semantics_model::hir::HirExpr` is still one
+//! path however the file is divided.
 
-use crate::ty::{EnumId, StructId, Type, TypeTable};
+use crate::ty::{StructId, Type, TypeTable};
 use kira_runtime_abi::{
-    Execution, FileSystemOp, ForeignAbi, ForeignAggregateId, ForeignAggregates, ForeignCallback,
+    Execution, ForeignAbi, ForeignAggregateId, ForeignAggregates, ForeignCallback,
     ForeignSignature, NativeStateTypeId,
 };
 use kira_source::Span;
 use kira_syntax_model::ownership::OwnershipMode;
 use la_arena::{Arena, Idx};
 
-/// Handle to a HIR expression.
-pub type HirExprId = Idx<HirExpr>;
 /// Handle to a HIR statement.
 pub type HirStmtId = Idx<HirStmt>;
 
@@ -189,6 +193,13 @@ pub struct HirFunction {
     pub body: Vec<HirStmtId>,
     /// Whether this is the `@Main` entrypoint.
     pub is_main: bool,
+    /// Whether the declaration was written `async function`.
+    ///
+    /// An `async` body is an ordinary body when it is *called*: the marker says
+    /// the function is meant to be spawned, not that calling it does something
+    /// different. It is carried here so a later phase can act on it without
+    /// re-reading syntax.
+    pub is_async: bool,
     /// The engine this function's body runs on, as written in the source.
     pub execution: Execution,
     /// Whether this function is a method that mutates its receiver.
@@ -241,6 +252,25 @@ pub enum HirStmt {
         /// The place being written.
         place: HirPlace,
         /// The new value.
+        value: HirExprId,
+    },
+    /// Replace what a capture cell holds, in one step.
+    ///
+    /// Deliberately **one** primitive rather than a drop followed by a store:
+    /// a split path traps between the two and leaves a freed handle in the box.
+    /// For the same reason nothing is ever handed a raw pointer into the
+    /// payload slot — the only ways in and out are this and
+    /// [`HirExpr::CellGet`].
+    ///
+    /// Writing *through* a cell into an aggregate it holds is not this
+    /// statement: the analyzer reads the aggregate out, writes into the copy —
+    /// which is where an array buys elements of its own — and stores the
+    /// possibly-new handle back with this. Skipping the store-back would mutate
+    /// a copy nobody can see.
+    CellSet {
+        /// The cell-typed local written through.
+        local: LocalId,
+        /// The value moving into the box; whatever was there is released.
         value: HirExprId,
     },
     /// Return from the function, optionally with a value.
@@ -329,557 +359,8 @@ pub struct HirWriteback {
     pub place: HirPlace,
 }
 
-/// An expression, carrying its resolved type.
-#[derive(Debug, Clone, PartialEq)]
-pub enum HirExpr {
-    /// An integer constant.
-    Int(i64),
-    /// A floating-point constant.
-    Float(f64),
-    /// A boolean constant.
-    Bool(bool),
-    /// A string constant.
-    Str(String),
-    /// The address C enters a Kira function at, for callback `callback`.
-    ///
-    /// An index into [`HirProgram::foreign_callbacks`]. The value is a
-    /// `RawPtr`: the backend generates one entry thunk per row and this is its
-    /// address, so nothing about a function value has to exist for C to hold
-    /// one.
-    ForeignCallbackPtr {
-        /// The callback entry this address enters.
-        callback: u32,
-    },
-    /// The null raw pointer.
-    ///
-    /// The one `RawPtr` constant Kira spells. It exists because a C-layout
-    /// struct zero-fills a pointer member to `NULL`, and a zero-fill that could
-    /// not name its own zero would have to refuse the field instead.
-    RawPtrNull,
-    /// A read of a local slot.
-    Local {
-        /// The referenced local.
-        local: LocalId,
-        /// The local's type.
-        ty: Type,
-    },
-    /// A unary operation.
-    Unary {
-        /// The operator.
-        op: HirUnaryOp,
-        /// The operand.
-        operand: HirExprId,
-        /// The result type.
-        ty: Type,
-    },
-    /// A binary operation.
-    Binary {
-        /// The operator (already resolved to a typed variant).
-        op: HirBinaryOp,
-        /// Left operand.
-        lhs: HirExprId,
-        /// Right operand.
-        rhs: HirExprId,
-        /// The result type.
-        ty: Type,
-    },
-    /// A conditional expression, `cond ? then : otherwise`.
-    ///
-    /// Kept as a node rather than desugared: a `? :` can sit anywhere an
-    /// expression can, and rewriting it into an `if` statement over a temporary
-    /// would need statement hoisting out of arbitrary expression position,
-    /// which this lowering deliberately does not do. Every backend already
-    /// branches at expression level for `&&`/`||`, so the node costs a reuse of
-    /// that machinery rather than new machinery.
-    Select {
-        /// The `Bool` condition.
-        cond: HirExprId,
-        /// The value when the condition holds.
-        then: HirExprId,
-        /// The value when it does not.
-        otherwise: HirExprId,
-        /// The type both branches agreed on.
-        ty: Type,
-    },
-    /// A call to a builtin or user function.
-    Call {
-        /// What is being called.
-        callee: Callee,
-        /// The argument expressions.
-        args: Vec<HirExprId>,
-        /// The call's result type.
-        ty: Type,
-        /// Every argument the callee writes back into the caller's storage, in
-        /// parameter order.
-        ///
-        /// Empty for every ordinary call, which then behaves exactly as it did
-        /// before value-semantics writeback existed. A mutating method
-        /// contributes one entry for its receiver (`args[0]`); a `borrow mut`
-        /// parameter contributes one for its own position. Each entry's final
-        /// callee-side value is stored back into its place after the call — the
-        /// side effect that makes a write inside the callee observable to the
-        /// caller, while the call still yields the declared return value.
-        writebacks: Vec<HirWriteback>,
-    },
-    /// Construction of a struct value.
-    ///
-    /// Every field is present and in declaration order: the analyzer fills an
-    /// omitted field with its declared default, so nothing downstream has to
-    /// know defaults exist.
-    StructNew {
-        /// The struct being built.
-        struct_id: StructId,
-        /// One initializer per field, in declaration order.
-        fields: Vec<HirExprId>,
-    },
-    /// A read of one field of a struct value.
-    Field {
-        /// The struct-typed expression being read.
-        base: HirExprId,
-        /// The field's index in declaration order.
-        index: u32,
-        /// The field's type.
-        ty: Type,
-    },
-    /// Construction of an array value from its written elements.
-    ///
-    /// Carries its own type rather than deriving it from the elements: an
-    /// empty literal (`[]`) has no element to ask, and the expected type is
-    /// what decides it.
-    ArrayNew {
-        /// The array's type (an interned [`Type::Array`]).
-        ty: Type,
-        /// The elements, in written order.
-        elements: Vec<HirExprId>,
-    },
-    /// A read of one element of an array (`xs[i]`).
-    Index {
-        /// The array-typed expression being read.
-        base: HirExprId,
-        /// The `Int`-typed index.
-        index: HirExprId,
-        /// The element's type.
-        ty: Type,
-    },
-    /// An array's element count (`xs.count`) — a property, not a call.
-    ArrayLen {
-        /// The array-typed expression being measured.
-        array: HirExprId,
-    },
-    /// A string's length in bytes (`s.count`) — a property, not a call.
-    ///
-    /// Bytes, not characters: `charAt` and `substring` index the same units,
-    /// and a UTF-8 byte index is what the wire formats built on these
-    /// primitives carve at.
-    StringLen {
-        /// The string-typed expression being measured.
-        text: HirExprId,
-    },
-    /// The byte at an index of a string (`s.charAt(i)`).
-    ///
-    /// Traps when the index is outside `0 ..< s.count`, which is what makes an
-    /// out-of-range read a deterministic failure on every backend rather than a
-    /// value nothing agrees on.
-    StringCharAt {
-        /// The string being read.
-        text: HirExprId,
-        /// The byte index.
-        index: HirExprId,
-    },
-    /// A half-open byte slice of a string (`s.substring(start, end)`).
-    ///
-    /// Traps when `start > end` or either bound is outside `0 ..= s.count`.
-    StringSubstring {
-        /// The string being sliced.
-        text: HirExprId,
-        /// The inclusive lower bound, in bytes.
-        start: HirExprId,
-        /// The exclusive upper bound, in bytes.
-        end: HirExprId,
-    },
-    /// The byte index of the first occurrence of a needle (`s.indexOf(n)`), or
-    /// `-1` when there is none.
-    ///
-    /// An empty needle matches at the front, so it answers `0`.
-    StringIndexOf {
-        /// The string being searched.
-        text: HirExprId,
-        /// The string being searched for.
-        needle: HirExprId,
-    },
-    /// A scalar rendered as text (`String(x)`).
-    ///
-    /// The rendering is the one `print` gives, so a value printed and a value
-    /// converted never disagree.
-    StringOf {
-        /// The value being rendered.
-        value: HirExprId,
-    },
-    /// The address of a C-layout struct's image, in storage that outlives the
-    /// call.
-    ///
-    /// What a call passes where a parameter was written as an `@FFI.Pointer` to
-    /// that struct. The image is built once and never released, for the same
-    /// reason a `CString` member is not: nothing here knows whether the callee
-    /// kept the pointer, and a buffer freed when the call returns is a dangling
-    /// pointer for every callee that did.
-    CLayoutAddress {
-        /// The struct value whose image is written.
-        value: HirExprId,
-        /// The aggregate row describing its C layout.
-        aggregate: ForeignAggregateId,
-    },
-    /// A `String` copied into C storage that outlives the call.
-    ///
-    /// Inserted where a `String` fills a `CString` member of a C-layout struct.
-    /// A `CString` *parameter* stays transient — C reads it during the call and
-    /// the seam frees it after — but a member of a struct C keeps is read long
-    /// after the call returns, so its storage is never released. See
-    /// [`kira_runtime_abi::c_storage`] for why that is the safe answer rather
-    /// than the lazy one.
-    CStringNew {
-        /// The string whose bytes are copied.
-        text: HirExprId,
-    },
-    /// The null C string: what a `CString` member zero-fills to.
-    CStringNull,
-    /// One file-system operation, performed by the engine on the host's behalf.
-    ///
-    /// An intrinsic rather than a call because reaching the outside world is an
-    /// effect no Kira function body can express. The result type is carried
-    /// rather than derived: it follows from the operation alone, and storing it
-    /// keeps every consumer from re-deriving the same table.
-    FileSystem {
-        /// Which operation this performs.
-        op: FileSystemOp,
-        /// Its arguments, in source order.
-        args: Vec<HirExprId>,
-        /// What the operation produces.
-        ty: Type,
-    },
-    /// `xs.append(v)`: push one element onto an array, in place.
-    ///
-    /// The receiver is a **place**, not an expression, and that is the whole
-    /// correctness argument for this node: reading an array yields an
-    /// independent value, so appending to a *read* would push onto something
-    /// nobody else can see and silently lose the write. Resolving the receiver
-    /// to a place is what makes `rows[0].xs.append(42)` land in `rows`.
-    ArrayAppend {
-        /// The array being appended to.
-        place: HirPlace,
-        /// The element to push.
-        value: HirExprId,
-    },
-    /// Construction of an enum value: a variant of an enum, with its optional
-    /// single payload.
-    ///
-    /// The `tag` is the variant's declaration index — the discriminant `==`
-    /// compares and the runtime value stores. A payload-less variant carries
-    /// `None`; a payload variant carries the value to box, which analysis has
-    /// already filled from the variant's default when the site wrote none.
-    EnumNew {
-        /// The enum being built.
-        enum_id: EnumId,
-        /// The variant's declaration index.
-        tag: u32,
-        /// The payload value, or `None` for a payload-less variant.
-        payload: Option<HirExprId>,
-    },
-    /// An enum value's discriminant tag, as an `Int`.
-    ///
-    /// Enum equality is tag equality, so the analyzer lowers `e == .V` to an
-    /// `Int` comparison of two tags — this is how it reads one off an enum
-    /// whose variant is only known at run time. A backend extracts the tag and
-    /// releases the enum, exactly as `.count` does for an array.
-    EnumTag {
-        /// The enum-typed expression whose tag is read.
-        value: HirExprId,
-    },
-    /// An enum value's payload, as an owned value of the variant's payload type.
-    ///
-    /// This is what a `match` arm's binding reads. The variant is *not* checked
-    /// at run time: a `match` only projects a payload inside the arm its tag
-    /// test already selected, so the tag is known to be the one whose payload
-    /// `ty` describes. Reading it yields an owned copy — a `String` payload is
-    /// cloned out of the box — so the binding outlives the enum it came from
-    /// and the box still owns its own payload.
-    EnumPayload {
-        /// The enum-typed expression whose payload is read.
-        value: HirExprId,
-        /// The selected variant's declared payload type.
-        ty: Type,
-    },
-    /// Boxes a copy of a Kira-owned value in opaque callback-state storage.
-    NativeState {
-        /// The value copied into the box.
-        value: HirExprId,
-        /// The stable runtime identity of the boxed type.
-        type_id: NativeStateTypeId,
-        /// The opaque handle type returned to Kira.
-        ty: Type,
-    },
-    /// Exports a callback-state handle's stable opaque userdata token.
-    NativeUserData {
-        /// The state handle.
-        state: HirExprId,
-    },
-    /// Recovers typed mutable access through a returned userdata token.
-    NativeRecover {
-        /// The opaque raw userdata token.
-        raw: HirExprId,
-        /// The stable runtime identity recovery validates.
-        type_id: NativeStateTypeId,
-        /// The Kira value type exposed by the mutable view.
-        ty: Type,
-    },
-    /// Releases a callback-state handle or userdata token exactly once.
-    NativeStateFree {
-        /// The state handle or raw token.
-        token: HirExprId,
-    },
-    /// A scalar type-conversion call, `Target(operand)` where `Target` is a numeric
-    /// scalar type.
-    ///
-    /// This is a value conversion, not a function call: `Int(2.9)` is `2`,
-    /// `Float(7)` is `7.0`. The `kind` fixes the machine operation so no
-    /// backend re-derives it from the operand and target types — the same
-    /// split [`HirBinaryOp`] uses to bake signedness into the operator. The
-    /// integer-width spelling is carried in `ty`, not in a runtime narrowing:
-    /// every integer shares one 64-bit representation, so an int-to-int
-    /// conversion re-tags the type and copies the value unchanged.
-    Convert {
-        /// The value being converted.
-        operand: HirExprId,
-        /// Which machine conversion this is.
-        kind: ConvertKind,
-        /// The target type, carrying its width spelling.
-        ty: Type,
-    },
-    /// A placeholder for an expression that failed to analyze.
-    Error,
-}
+mod exprs;
+mod ops;
 
-/// Which machine operation a scalar [`HirExpr::Convert`] performs.
-///
-/// The four kinds are the cross product of the two numeric runtime
-/// representations (`Int` is `i64`, `Float` is `f64`). Two are identity copies
-/// — an integer width is a type-level annotation over one representation, and
-/// float width likewise — and two do real work. The kind is fixed at analysis,
-/// so nothing below re-derives it: the VM and every backend read it directly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConvertKind {
-    /// Integer to integer, any width to any width. An identity copy: widths
-    /// share one 64-bit representation, so nothing is truncated or extended.
-    IntToInt,
-    /// Float to float (`F32`/`F64`/`Float`). An identity copy: every float is
-    /// one 64-bit representation, and float arithmetic runs at that width.
-    FloatToFloat,
-    /// Integer to float, a signed conversion (round to nearest, ties to even).
-    IntToFloat,
-    /// Float to integer: truncate toward zero, saturating out-of-range inputs
-    /// to `i64::MIN`/`i64::MAX` and mapping NaN to zero. Never traps.
-    FloatToInt,
-    /// `floatToBits`: the IEEE-754 bit pattern of a `Float`, as a `U64`.
-    ///
-    /// A reinterpretation, not a conversion — the opposite of [`Self::FloatToInt`]
-    /// in every way that matters. Nothing rounds, nothing saturates, and NaN
-    /// keeps the exact payload it had, which is what makes it usable for
-    /// serializing a float byte for byte.
-    FloatToBits,
-    /// `bitsToFloat`: the `Float` an IEEE-754 bit pattern denotes.
-    ///
-    /// The exact inverse of [`Self::FloatToBits`], so a round trip through the
-    /// two is the identity for every value including NaN.
-    BitsToFloat,
-    /// A 32-bit IEEE-754 pattern read as Kira's 64-bit `Float`.
-    Bits32ToFloat,
-    /// A `Float` narrowed to its 32-bit IEEE-754 pattern, as a `U32`.
-    ///
-    /// The inverse of [`Self::Bits32ToFloat`]. Writing a 32-bit float costs a
-    /// rounding step the 64-bit [`Self::FloatToBits`] does not have — the
-    /// value narrows to `f32` first (round to nearest even, the one IEEE-754
-    /// default), and only then are the bits taken.
-    FloatToBits32,
-}
-
-impl HirExpr {
-    /// The resolved type of this expression.
-    pub fn type_of(&self) -> Type {
-        match self {
-            // A literal carries the *plain* spelling, which is the wildcard in
-            // `Type::assignable_to`. That one fact is what lets `let x: U8 = 5`
-            // check without any implicit-conversion rule: the literal is
-            // assignable to every width rather than being converted to one.
-            HirExpr::Int(_) => Type::INT,
-            HirExpr::Float(_) => Type::FLOAT,
-            HirExpr::Bool(_) => Type::Bool,
-            HirExpr::Str(_) => Type::String,
-            HirExpr::RawPtrNull | HirExpr::ForeignCallbackPtr { .. } => Type::RawPtr,
-            HirExpr::CStringNew { .. } | HirExpr::CStringNull => Type::CString,
-            HirExpr::CLayoutAddress { .. } => Type::RawPtr,
-            HirExpr::Local { ty, .. }
-            | HirExpr::Unary { ty, .. }
-            | HirExpr::Binary { ty, .. }
-            | HirExpr::Select { ty, .. }
-            | HirExpr::Call { ty, .. }
-            | HirExpr::Field { ty, .. }
-            | HirExpr::ArrayNew { ty, .. }
-            | HirExpr::EnumPayload { ty, .. }
-            | HirExpr::NativeState { ty, .. }
-            | HirExpr::NativeRecover { ty, .. }
-            | HirExpr::Convert { ty, .. }
-            | HirExpr::FileSystem { ty, .. }
-            | HirExpr::Index { ty, .. } => *ty,
-            HirExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
-            HirExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),
-            // `.count` and a tag read are both `Int`; `.append` yields nothing.
-            // None has a type that can vary, so none carries one.
-            HirExpr::ArrayLen { .. }
-            | HirExpr::StringLen { .. }
-            | HirExpr::StringCharAt { .. }
-            | HirExpr::StringIndexOf { .. }
-            | HirExpr::EnumTag { .. } => Type::INT,
-            HirExpr::StringSubstring { .. } | HirExpr::StringOf { .. } => Type::String,
-            HirExpr::NativeUserData { .. } => Type::RawPtr,
-            HirExpr::ArrayAppend { .. } | HirExpr::NativeStateFree { .. } => Type::Void,
-            HirExpr::Error => Type::Error,
-        }
-    }
-}
-
-/// The target of a call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Callee {
-    /// A language builtin.
-    Builtin(Builtin),
-    /// A user-defined function.
-    User(FuncId),
-    /// A foreign C function, indexed into [`HirProgram::foreign`].
-    ///
-    /// The call site is ordinary Kira — no `@Native`, no ceremony — and the
-    /// registry row carries the exact-width signature the call was checked
-    /// against.
-    Foreign(ForeignId),
-}
-
-/// The builtins the v0 subset provides.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Builtin {
-    /// `print(value)` — writes one formatted line of output.
-    Print,
-}
-
-/// A type-resolved unary operator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HirUnaryOp {
-    /// Integer negation.
-    NegInt,
-    /// Float negation.
-    NegFloat,
-    /// Boolean negation.
-    Not,
-    /// Bitwise complement (`~`) on the raw 64-bit pattern.
-    BitNot,
-}
-
-/// A type-resolved binary operator: each variant fixes its operand types, so
-/// backends never re-derive types from operands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HirBinaryOp {
-    /// Integer `+`, `-`, `*`, `/`, `%`.
-    AddInt,
-    /// Integer subtraction.
-    SubInt,
-    /// Integer multiplication.
-    MulInt,
-    /// Integer division (truncating), signed.
-    DivInt,
-    /// Integer remainder, signed.
-    RemInt,
-    /// Integer division (truncating), unsigned — the `U8`..`U64` spellings.
-    ///
-    /// Separate from [`HirBinaryOp::DivInt`] because signedness is the one
-    /// thing an integer's written width decides. `+`, `-`, and `*` need no
-    /// unsigned twin: two's-complement wrapping is bit-identical for both
-    /// signednesses, so they would be the same instruction.
-    DivUInt,
-    /// Integer remainder, unsigned — the `U8`..`U64` spellings.
-    RemUInt,
-    /// Float addition.
-    AddFloat,
-    /// Float subtraction.
-    SubFloat,
-    /// Float multiplication.
-    MulFloat,
-    /// Float division.
-    DivFloat,
-    /// String concatenation (`+`).
-    ConcatStr,
-    /// Integer comparisons.
-    EqInt,
-    /// Integer inequality.
-    NeInt,
-    /// Integer less-than.
-    LtInt,
-    /// Integer less-or-equal.
-    LeInt,
-    /// Integer greater-than.
-    GtInt,
-    /// Integer greater-or-equal.
-    GeInt,
-    /// Integer less-than, unsigned — the `U8`..`U64` spellings.
-    ///
-    /// Ordering needs an unsigned twin for the same reason division does, and
-    /// equality does not: `==` compares bit patterns, which is signedness-free.
-    LtUInt,
-    /// Integer less-or-equal, unsigned.
-    LeUInt,
-    /// Integer greater-than, unsigned.
-    GtUInt,
-    /// Integer greater-or-equal, unsigned.
-    GeUInt,
-    /// Float comparisons.
-    EqFloat,
-    /// Float inequality.
-    NeFloat,
-    /// Float less-than.
-    LtFloat,
-    /// Float less-or-equal.
-    LeFloat,
-    /// Float greater-than.
-    GtFloat,
-    /// Float greater-or-equal.
-    GeFloat,
-    /// Boolean equality.
-    EqBool,
-    /// Boolean inequality.
-    NeBool,
-    /// String equality.
-    EqStr,
-    /// String inequality.
-    NeStr,
-    /// Short-circuiting logical AND.
-    And,
-    /// Short-circuiting logical OR.
-    Or,
-    /// Bitwise AND (`&`) on the raw 64-bit pattern.
-    ///
-    /// The three bitwise operators need no unsigned twin for the same reason
-    /// `+` does not: they act on bits, and a bit has no sign.
-    BitAnd,
-    /// Bitwise OR (`|`) on the raw 64-bit pattern.
-    BitOr,
-    /// Bitwise XOR (`^`) on the raw 64-bit pattern.
-    BitXor,
-    /// Left shift (`<<`). The shift amount is taken modulo 64.
-    ///
-    /// Signedness-free: shifting bits left discards the high end either way.
-    Shl,
-    /// Arithmetic right shift (`>>`), sign-propagating — the signed spellings.
-    ///
-    /// Unlike `<<`, `>>` *does* need an unsigned twin: what fills the vacated
-    /// high bits is exactly the question signedness answers.
-    ShrInt,
-    /// Logical right shift (`>>`), zero-filling — the `U8`..`U64` spellings.
-    ShrUInt,
-}
+pub use exprs::{ConvertKind, HirExpr, HirExprId, TaskTarget};
+pub use ops::{Builtin, Callee, HirBinaryOp, HirUnaryOp};

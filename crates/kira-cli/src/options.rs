@@ -151,7 +151,7 @@ impl CompileOptions {
                     && named != BackendMode::LlvmNative
                 {
                     eprintln!(
-                        "kirac: `--device {}` overrides `--backend {}`: the Web \
+                        "kira: `--device {}` overrides `--backend {}`: the Web \
                          device has one code generator",
                         device.label(),
                         named.label(),
@@ -310,7 +310,7 @@ mod tests {
             CompileOptions::parse(&args(&[])).expect("parses").path,
             DEFAULT_PATH
         );
-        // Flags alone still leave the path defaulted, so `kirac build
+        // Flags alone still leave the path defaulted, so `kira build
         // --backend llvm` in a package directory means what it looks like.
         assert_eq!(
             CompileOptions::parse(&args(&["--backend", "llvm"]))

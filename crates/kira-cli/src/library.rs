@@ -1,14 +1,14 @@
-//! `kirac build` inside a `kind = .Library` package, on the VM engine.
+//! `kira build` inside a `kind = .Library` package, on the VM engine.
 //!
 //! The artifact of a VM-engine library is not one file: it is a `.kbc` plus the
 //! Rust crate that embeds and calls it. Both come out of
-//! [`kira_build::build_library`]; this module is the part that only `kirac`
+//! [`kira_build::build_library`]; this module is the part that only `kira`
 //! knows — where the build directory is, what the library is called, and what to
 //! print about it.
 //!
 //! # Why the package name and not the file stem
 //!
-//! Every other artifact `kirac` writes is named after the source file, because
+//! Every other artifact `kira` writes is named after the source file, because
 //! for a program the file *is* the thing being built. A library is not: its
 //! consumer writes `uifoundation = { path = ... }` and `use uifoundation::…`,
 //! and that name has to be the package's, whatever the author called the file
@@ -30,7 +30,7 @@ pub enum LibraryError {
          note: add a `package.kira` declaring `Package <name> {{ let kind = .Library }}`"
     )]
     Unnamed {
-        /// The source file that was handed to `kirac`.
+        /// The source file that was handed to `kira`.
         path: String,
     },
     /// The package names itself but declares no version.
@@ -40,7 +40,7 @@ pub enum LibraryError {
          note: add `let version = \"0.1.0\"` to the package declaration"
     )]
     Unversioned {
-        /// The source file that was handed to `kirac`.
+        /// The source file that was handed to `kira`.
         path: String,
         /// The package that gave a name but no version.
         name: String,

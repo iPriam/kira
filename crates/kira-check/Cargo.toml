@@ -1,0 +1,25 @@
+[package]
+name = "kira-check"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The diagnostic model a check answers with, before it is flattened to the wire.
+kira-diagnostics.workspace = true
+# The cataloged `KPK*` messages a malformed request answers with.
+kira-diagnostic-messages.workspace = true
+# Reads each package's `package.kira` text: name, kind, module root.
+kira-manifest.workspace = true
+# Loads the bundled packages an in-memory file imports (`import Foundation`).
+kira-program-graph.workspace = true
+# The frontend itself: the same salsa queries `kira check` runs.
+kira-semantics.workspace = true
+kira-source.workspace = true
+# The request and diagnostic vocabulary the engine seam carries.
+kira-runtime-abi.workspace = true
+salsa.workspace = true
+
+[lints]
+workspace = true

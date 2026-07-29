@@ -127,9 +127,9 @@ what the task touches — before writing code, never after a review.
 - `cargo clippy --workspace --all-targets -- -D warnings` — lint gate
   (CI-enforced, warnings are errors).
 - `cargo fmt` — format; CI runs `cargo fmt --check`.
-- `cargo run -p kira-cli -- <verb>` — iterate on the `kirac` CLI.
-- Bins: `kirac` (kira-cli), `kira` (kira-bootstrapper), `devflow`
-  (kira-devflow).
+- `cargo run -p kira-cli -- <verb>` — iterate on the `kira` CLI.
+- Bins: `kira` (kira-cli), `kira-launcher` (kira-launcher, installed onto PATH
+  as `kira`), `devflow` (kira-devflow).
 - CI provisions the managed LLVM before building, so its gates prove the same
   configuration a dev machine builds. Consult the `verifying-work` skill for
   the done-bar.

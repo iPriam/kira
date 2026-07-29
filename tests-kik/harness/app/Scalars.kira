@@ -1,0 +1,82 @@
+// Scalar arithmetic, comparisons, boolean logic, control flow, and recursion.
+
+function scalarFactorial(n: Int) -> Int {
+    if n <= 1 {
+        return 1
+    }
+    return n * scalarFactorial(n - 1)
+}
+
+function scalarFib(n: Int) -> Int {
+    if n < 2 {
+        return n
+    }
+    return scalarFib(n - 1) + scalarFib(n - 2)
+}
+
+function scalarGcd(a: Int, b: Int) -> Int {
+    var x = a
+    var y = b
+    while y != 0 {
+        let t = x % y
+        x = y
+        y = t
+    }
+    return x
+}
+
+function scalarClassify(n: Int) -> Int {
+    var r = 0
+    switch n % 3 {
+        case 0 { r = 100 }
+        case 1 { r = 200 }
+        case 2 { r = 300 }
+        default { r = 0 }
+    }
+    return r
+}
+
+function scalarsSection() -> Int {
+    var acc = 0
+
+    // Integer arithmetic across a loop, mixing every operator.
+    var i = 1
+    while i <= 50 {
+        acc = acc + (i * 3) - (i / 2) + (i % 7)
+        i = i + 1
+    }
+
+    // Recursion.
+    acc = acc + scalarFactorial(10)
+    acc = acc + scalarFib(20)
+    acc = acc + scalarGcd(1071, 462)
+
+    // Boolean short-circuit and conditional expressions.
+    var j = 0
+    while j < 40 {
+        let even = j % 2 == 0
+        let big = j > 20
+        let pick = (even && big) || (!even && !big)
+        acc = acc + (pick ? j : (0 - j))
+        acc = acc + scalarClassify(j)
+        j = j + 1
+    }
+
+    // Float arithmetic folded into an integer checksum.
+    var f = 0.0
+    var k = 0
+    while k < 30 {
+        f = f + 1.5 * 2.0 - 0.5
+        k = k + 1
+    }
+    // f == 30 * 2.5 == 75.0
+    if f > 74.9 && f < 75.1 {
+        acc = acc + 7500
+    }
+
+    // Unary minus, nested grouping.
+    let g = 0 - (3 * (4 + 5))
+    acc = acc + g
+
+    return acc
+}

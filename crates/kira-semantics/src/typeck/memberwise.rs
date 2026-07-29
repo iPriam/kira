@@ -106,7 +106,7 @@ impl Analyzer<'_> {
             }
             let (field, expected) = &slots[slot];
             let actual = self.program.expr(value).type_of();
-            if !actual.assignable_to(*expected) {
+            if !self.admits(actual, *expected) {
                 self.emit(
                     span,
                     "KSEM224",
@@ -117,7 +117,8 @@ impl Analyzer<'_> {
                     ),
                 );
             }
-            initializers[slot] = Some(value);
+            let expected = *expected;
+            initializers[slot] = Some(self.coerce_into(value, expected));
         }
 
         let mut missing: Vec<String> = Vec::new();

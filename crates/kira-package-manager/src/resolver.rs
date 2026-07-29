@@ -1,6 +1,6 @@
 //! Canonical-path resolution of transitive package dependencies.
 
-use crate::graph::{ResolvedPackage, ResolvedPackageGraph};
+use crate::graph::{ResolvedDependency, ResolvedPackage, ResolvedPackageGraph};
 use crate::lockfile_check;
 use kira_diagnostic_messages::package_messages::{
     conflicting_package_identity, cyclic_package_dependency, duplicate_dependency_declaration,
@@ -170,24 +170,28 @@ pub fn resolve(root_dir: &Path) -> Result<ResolvedPackageGraph, ResolveError> {
     }
 
     diagnose_cycles(&packages, &adjacency, &mut diagnostics);
-    lockfile_check::check(&canonical_root, &packages, &mut diagnostics);
+    let lockfile = lockfile_check::check(&canonical_root, &packages, &mut diagnostics);
 
     Ok(ResolvedPackageGraph {
         packages,
         diagnostics,
+        lockfile,
     })
 }
 
 fn resolved_package(
     manifest: ProjectManifest,
     root_dir: PathBuf,
-    dependencies: Vec<String>,
+    dependencies: Vec<ResolvedDependency>,
 ) -> ResolvedPackage {
     let module_root = manifest
         .module_root
         .unwrap_or_else(|| manifest.name.clone());
     ResolvedPackage {
         name: manifest.name,
+        version: manifest.version,
+        kind: manifest.kind.label().to_owned(),
+        kira_version: manifest.kira_version,
         module_root,
         source_dir: root_dir.join("app"),
         root_dir,
@@ -200,7 +204,7 @@ fn prepare_dependencies(
     package_dir: &Path,
     dependencies: &[DependencySpec],
     diagnostics: &mut Vec<Diagnostic>,
-) -> (Vec<String>, Vec<PendingDependency>) {
+) -> (Vec<ResolvedDependency>, Vec<PendingDependency>) {
     let mut seen = HashSet::new();
     let mut names = Vec::new();
     let mut pending = Vec::new();
@@ -209,7 +213,10 @@ fn prepare_dependencies(
             diagnostics.push(duplicate_dependency_declaration(&dependency.name));
             continue;
         }
-        names.push(dependency.name.clone());
+        names.push(ResolvedDependency {
+            name: dependency.name.clone(),
+            source: dependency.source.clone(),
+        });
         if let Some(path_source) = dependency.source.as_path() {
             pending.push(PendingDependency {
                 parent,
@@ -431,8 +438,8 @@ mod tests {
             .iter()
             .find(|package| package.name == "D")
             .unwrap();
-        assert_eq!(package_b.dependencies, ["D"]);
-        assert_eq!(package_c.dependencies, ["D"]);
+        assert_eq!(package_b.dependency_names().collect::<Vec<_>>(), ["D"]);
+        assert_eq!(package_c.dependency_names().collect::<Vec<_>>(), ["D"]);
         assert_eq!(package_d.module_root, "D");
         assert_eq!(package_d.source_dir, package_d.root_dir.join("app"));
     }
@@ -450,7 +457,10 @@ mod tests {
         assert_eq!(diagnostic_codes(&graph), ["KPK020"]);
         assert_eq!(graph.packages.len(), 2);
         assert!(graph.packages.iter().any(|package| package.name == "Good"));
-        assert_eq!(graph.packages[0].dependencies, ["Missing", "Good"]);
+        assert_eq!(
+            graph.packages[0].dependency_names().collect::<Vec<_>>(),
+            ["Missing", "Good"]
+        );
     }
 
     #[test]
@@ -544,7 +554,10 @@ mod tests {
         let graph = resolve(&a).unwrap();
 
         assert_eq!(diagnostic_codes(&graph), ["KPK022"]);
-        assert_eq!(graph.packages[0].dependencies, ["B"]);
+        assert_eq!(
+            graph.packages[0].dependency_names().collect::<Vec<_>>(),
+            ["B"]
+        );
         assert_eq!(graph.packages.len(), 2);
     }
 

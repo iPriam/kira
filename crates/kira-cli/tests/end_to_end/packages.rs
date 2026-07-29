@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::{LIBRARY_SOURCE, check_source, kirac, write_package};
+use crate::{LIBRARY_SOURCE, check_source, kira, write_package};
 
 /// A unique package tree that removes all build artifacts with itself.
 struct PackageTree(PathBuf);
@@ -19,7 +19,7 @@ impl PackageTree {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
-            "kirac-e2e-packages-{tag}-{}-{unique}",
+            "kira-e2e-packages-{tag}-{}-{unique}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create package tree");
@@ -49,7 +49,7 @@ impl Drop for PackageTree {
 #[test]
 fn a_library_without_main_checks_clean() {
     let path = write_package(".Library", LIBRARY_SOURCE);
-    let output = kirac(&["check", path.to_str().unwrap()]);
+    let output = kira(&["check", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
@@ -64,7 +64,7 @@ fn the_same_source_in_an_app_package_is_still_ksem011() {
     // The exemption comes from the manifest and nowhere else. Same bytes, same
     // command, different `kind` — and the entrypoint requirement comes back.
     let path = write_package(".App", LIBRARY_SOURCE);
-    let output = kirac(&["check", path.to_str().unwrap()]);
+    let output = kira(&["check", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -74,17 +74,17 @@ fn the_same_source_in_an_app_package_is_still_ksem011() {
 #[test]
 fn a_library_declaring_main_is_refused() {
     let path = write_package(".Library", "@Main function main() { print(1) return }");
-    let output = kirac(&["check", path.to_str().unwrap()]);
+    let output = kira(&["check", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("KSEM158"), "{stderr}");
+    assert!(stderr.contains("KSEM255"), "{stderr}");
 }
 
 #[test]
 fn running_a_library_is_refused_by_name_with_a_reason() {
     let path = write_package(".Library", LIBRARY_SOURCE);
-    let output = kirac(&["run", path.to_str().unwrap()]);
+    let output = kira(&["run", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -99,7 +99,7 @@ fn a_library_builds_on_the_vm_backend() {
     // The VM backend is the one CI has, so this is the artifact proof that runs
     // everywhere. It compiles to a real KBC1 module with no entrypoint.
     let path = write_package(".Library", LIBRARY_SOURCE);
-    let output = kirac(&["build", "--backend", "vm", path.to_str().unwrap()]);
+    let output = kira(&["build", "--backend", "vm", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
@@ -115,7 +115,7 @@ fn a_library_cannot_be_built_for_the_web_and_says_why() {
     // The recorded wasm refusal: a library artifact for a JS host needs a
     // string/allocator contract across the module boundary that is undesigned.
     let path = write_package(".Library", LIBRARY_SOURCE);
-    let output = kirac(&[
+    let output = kira(&[
         "build",
         "--backend",
         "llvm",
@@ -145,7 +145,7 @@ fn a_package_with_no_manifest_is_still_an_application() {
 #[test]
 fn a_malformed_package_manifest_is_reported_not_ignored() {
     let path = write_package(".Plugin", LIBRARY_SOURCE);
-    let output = kirac(&["check", path.to_str().unwrap()]);
+    let output = kira(&["check", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -171,7 +171,7 @@ fn the_real_editor_directory_resolves_dependency_package_sources() {
     }
     let editor_arg = editor.to_str().expect("UTF-8 real editor path");
 
-    let output = kirac(&["check", editor_arg]);
+    let output = kira(&["check", editor_arg]);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(output.status.code().is_some(), "process crashed: {stderr}");
@@ -274,7 +274,7 @@ fn a_multi_package_directory_checks_runs_and_builds_on_every_host_backend() {
     let app = tree.path().join("app");
     let app = app.to_str().expect("UTF-8 temp path");
 
-    let checked = kirac(&["check", app]);
+    let checked = kira(&["check", app]);
     assert!(
         checked.status.success(),
         "{}",
@@ -283,7 +283,7 @@ fn a_multi_package_directory_checks_runs_and_builds_on_every_host_backend() {
 
     let mut expected_stdout = None;
     for backend in ["vm", "llvm", "hybrid"] {
-        let run = kirac(&["run", "--backend", backend, app]);
+        let run = kira(&["run", "--backend", backend, app]);
         assert!(
             run.status.success(),
             "{backend} run failed: {}",
@@ -297,7 +297,7 @@ fn a_multi_package_directory_checks_runs_and_builds_on_every_host_backend() {
             expected_stdout = Some(stdout);
         }
 
-        let build = kirac(&["build", "--backend", backend, app]);
+        let build = kira(&["build", "--backend", backend, app]);
         assert!(
             build.status.success(),
             "{backend} build failed: {}",
@@ -330,7 +330,7 @@ fn manifest_llvm_default_runs_natively_but_an_explicit_vm_still_wins() {
     let app_arg = app.to_str().expect("UTF-8 temp path");
     let artifacts = app.join("app/.kira-build");
 
-    let default_run = kirac(&["run", "--emit-llvm-ir", app_arg]);
+    let default_run = kira(&["run", "--emit-llvm-ir", app_arg]);
     assert!(
         default_run.status.success(),
         "{}",
@@ -343,7 +343,7 @@ fn manifest_llvm_default_runs_natively_but_an_explicit_vm_still_wins() {
     );
 
     std::fs::remove_dir_all(&artifacts).expect("remove default native artifacts");
-    let vm_run = kirac(&["run", "--backend", "vm", "--emit-llvm-ir", app_arg]);
+    let vm_run = kira(&["run", "--backend", "vm", "--emit-llvm-ir", app_arg]);
     assert!(
         vm_run.status.success(),
         "{}",
@@ -375,7 +375,7 @@ fn an_explicit_vm_backend_outranks_a_manifest_wasm32_target() {
     let app_arg = app.to_str().expect("UTF-8 temp path");
     let web_artifact = app.join("app/.kira-build/web/main.js");
 
-    let output = kirac(&["build", "--backend", "vm", app_arg]);
+    let output = kira(&["build", "--backend", "vm", app_arg]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
     assert!(

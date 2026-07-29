@@ -1,12 +1,14 @@
-//! Semantic-analysis tests: the diagnostics `kirac check` reports, driven
+//! Semantic-analysis tests: the diagnostics `kira check` reports, driven
 //! through the same salsa `analyzed` query the CLI and the LSP use.
 
 mod aliases;
+mod any;
 mod arrays;
 mod attempts;
 mod calls;
 mod classes;
 mod closures;
+mod compiler;
 mod constructs;
 mod conversions;
 mod copyable;
@@ -24,7 +26,10 @@ mod memberwise;
 mod mutation;
 mod native_state;
 mod operators;
+mod reuse;
 mod strings;
+mod tasks;
+mod widening;
 mod widths;
 
 use super::*;
@@ -42,7 +47,7 @@ fn analyze_text(text: &str) -> HirProgram {
     let db = salsa::DatabaseImpl::new();
     let source =
         SourceProgram::application(&db, text.to_owned(), "test.kira".to_owned(), Vec::new());
-    analyzed(&db, source)
+    analyzed(&db, source).clone()
 }
 
 /// The diagnostics of a program built from an entry file plus named modules.
@@ -77,7 +82,7 @@ fn library_diagnostics(text: &str) -> Vec<Diagnostic> {
         "test.kira".to_owned(),
         Vec::new(),
         BuildKind::Library,
-        kira_macros::PrecompiledShaders::default(),
+        PrecompiledShaders::default(),
         host_platform(),
     );
     analyzed::accumulated::<DiagnosticAccumulator>(&db, source)

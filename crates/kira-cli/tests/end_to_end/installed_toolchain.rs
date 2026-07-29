@@ -1,7 +1,7 @@
 //! Foundation resolved out of a toolchain `knvm` installed, not out of this
 //! checkout.
 //!
-//! Every other Foundation case runs `kirac` from `target/`, where the checkout
+//! Every other Foundation case runs `kira` from `target/`, where the checkout
 //! rule answers first: the binary walks up, finds the workspace `Cargo.toml`
 //! beside `foundation/`, and never consults `current.toml`. That is the
 //! developer path, and it proves nothing about the shipped one.
@@ -40,7 +40,7 @@ impl TempTree {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
-        let path = std::env::temp_dir().join(format!("kirac_installed_{label}_{pid}_{unique}"));
+        let path = std::env::temp_dir().join(format!("kira_installed_{label}_{pid}_{unique}"));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create temp tree");
         Self { path }
@@ -93,13 +93,13 @@ fn repository_root() -> PathBuf {
 /// Foundation, shaped the way a released toolchain is.
 ///
 /// The compiler is the binary under test, so what this proves is discovery and
-/// layout rather than some fixture stand-in: the same `kirac` that passes the
+/// layout rather than some fixture stand-in: the same `kira` that passes the
 /// checkout-rule tests has to find Foundation with the checkout taken away.
 fn publish_fixture_release(feed: &Path, staging: &Path) {
     let payload = staging.join(format!("kira-{FIXTURE_VERSION}"));
     let bin = payload.join("bin");
     std::fs::create_dir_all(&bin).expect("create bin");
-    std::fs::copy(env!("CARGO_BIN_EXE_kirac"), bin.join("kirac")).expect("stage the compiler");
+    std::fs::copy(env!("CARGO_BIN_EXE_kira"), bin.join("kira")).expect("stage the compiler");
     // Install validation requires a language server beside the compiler. What
     // these tests prove is Foundation discovery, not the server, so a stub
     // satisfies the tree contract without pretending to speak LSP.
@@ -110,6 +110,18 @@ fn publish_fixture_release(feed: &Path, staging: &Path) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755))
             .expect("mark the language-server stub executable");
+    }
+    // These tests exercise Foundation discovery, not native or Web linking.
+    // Install validation still requires the complete archive inventory, so
+    // contract-only files keep this fixture shaped like a selectable toolchain
+    // without coupling a discovery test to cross-compilation.
+    for archive in [
+        "libkira_native_bridge.a",
+        "libkira_compiler_bridge.a",
+        "libkira_native_bridge-wasm32-emscripten.a",
+    ] {
+        std::fs::write(bin.join(archive), "fixture runtime archive")
+            .expect("stage the runtime-archive fixture");
     }
     copy_tree(
         &repository_root().join("foundation"),
@@ -161,7 +173,7 @@ fn a_knvm_installed_compiler_resolves_the_foundation_beside_it() {
     )
     .expect("write the program");
 
-    let compiler = installed.root.join("bin").join("kirac");
+    let compiler = installed.root.join("bin").join("kira");
     let output = Command::new(&compiler)
         .arg("run")
         .arg(&program)
@@ -207,8 +219,8 @@ fn a_compiler_outside_any_toolchain_resolves_through_the_selection() {
     // Deliberately not in the installed tree and not in the checkout: the two
     // executable-relative rules must both miss.
     let elsewhere = TempTree::create("elsewhere");
-    let compiler = elsewhere.path().join("kirac");
-    std::fs::copy(env!("CARGO_BIN_EXE_kirac"), &compiler).expect("stage a loose compiler");
+    let compiler = elsewhere.path().join("kira");
+    std::fs::copy(env!("CARGO_BIN_EXE_kira"), &compiler).expect("stage a loose compiler");
 
     let program = elsewhere.path().join("main.kira");
     std::fs::write(

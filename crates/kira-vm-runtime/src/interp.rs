@@ -8,11 +8,13 @@
 
 use kira_bytecode::module::Module;
 use kira_bytecode::op::Instruction;
-use kira_runtime_abi::HostCapabilities;
+use kira_runtime_abi::{HostCapabilities, NativeStatePathStep, TaskExecutor};
 
-use crate::error::VmError;
+use crate::error::{NativeStateOperation, VmError};
 use crate::value::{Heap, Value};
 
+mod cells;
+mod compiler;
 mod file_system;
 mod frames;
 mod host;
@@ -45,6 +47,19 @@ pub(crate) struct Vm<'h> {
     /// operand stack without borrowing the VM twice — then handed back cleared,
     /// never freed.
     steps: Vec<ResolvedStep>,
+    /// Reusable scratch for a path into callback state.
+    ///
+    /// Same reason as `steps`: a write through a recovered view happens on every
+    /// mutation of native state, and allocating its path each time would put an
+    /// allocation on that path.
+    native_path: Vec<NativeStatePathStep>,
+    /// The deferred tasks this run spawned.
+    ///
+    /// One table per run, because a handle is an index into it: two runs
+    /// sharing a table would let one program's handle name another's task. The
+    /// *policy* is not here — the scheduler is generated Kira the IR
+    /// synthesizes, so this only answers what each primitive means.
+    tasks: TaskExecutor,
 }
 
 impl Vm<'_> {
@@ -230,11 +245,23 @@ impl Vm<'_> {
             }
             Instruction::StoreLocal(slot) => {
                 let value = self.pop()?;
-                if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
-                    let stored = self
-                        .heap
-                        .into_native_state(value)
-                        .ok_or(VmError::NativeStateValueMismatch)?;
+                // Storing into a local that holds a recovered view writes THROUGH it
+                // into the callback state — except when the incoming value is itself
+                // a view. Rebinding the local to another view (`state =
+                // nativeRecover<T>(other)`, or a slot the compiler reuses for a
+                // second view) replaces what the local names; writing the second
+                // view into the first one's state is both meaningless and
+                // unrepresentable, since a view has no boxed form.
+                let rebinding_a_view = matches!(value, Value::NativeView { .. });
+                if let Value::NativeView { token, type_id } = frame.locals[slot as usize]
+                    && !rebinding_a_view
+                {
+                    let stored = self.heap.into_native_state(value).map_err(|kind| {
+                        VmError::NativeStateValueMismatch {
+                            operation: NativeStateOperation::Store,
+                            kind,
+                        }
+                    })?;
                     self.host
                         .native_state_replace(token, type_id, stored)
                         .map_err(VmError::NativeState)?;
@@ -274,13 +301,24 @@ impl Vm<'_> {
                 self.stack.push(Value::Struct(id));
             }
             Instruction::GetField(index) => {
-                let mut base = self.pop()?;
+                let base = self.pop()?;
                 if let Value::NativeView { token, type_id } = base {
+                    // Read the one field, not the whole state. Recovering the
+                    // state here rebuilt every string, array and struct it holds
+                    // as heap objects — so reading a counter out of a UI batch
+                    // rebuilt its glyph cache, and reading three fields rebuilt
+                    // it three times.
                     let stored = self
                         .host
-                        .native_state_recover(token, type_id)
+                        .native_state_read(
+                            token,
+                            type_id,
+                            &[NativeStatePathStep::Field(index.into())],
+                        )
                         .map_err(VmError::NativeState)?;
-                    base = self.heap.from_native_state(stored);
+                    let value = self.heap.from_native_state(stored);
+                    self.stack.push(value);
+                    return Ok(());
                 }
                 let Value::Struct(id) = base else {
                     self.heap.drop_value(base);
@@ -375,6 +413,15 @@ impl Vm<'_> {
                 self.heap.drop_value(base);
                 self.stack.push(copy);
             }
+            Instruction::TaskOp(prim) => {
+                // Popped in reverse: the compiler pushed the three operands
+                // deepest-first, so the last pushed is the third.
+                let third = self.pop_int()?;
+                let second = self.pop_int()?;
+                let first = self.pop_int()?;
+                let answer = self.tasks.perform(prim, first, second, third)?;
+                self.stack.push(Value::Int(answer));
+            }
             Instruction::ArrayGetLocal(slot) => {
                 let index = self.pop_int()?;
                 // The local is *borrowed*: its handle is read without copying
@@ -463,6 +510,17 @@ impl Vm<'_> {
                 let id = self.heap.alloc_enum(u32::from(tag), payload);
                 self.stack.push(Value::Enum(id));
             }
+            Instruction::Erase(type_id) => {
+                // The value is taken over by the box, exactly as an enum
+                // payload is: nothing is copied, and nothing is left behind to
+                // be freed twice.
+                let value = self.pop()?;
+                let id = self.heap.alloc_erased(type_id, value);
+                self.stack.push(Value::Erased(id));
+            }
+            Instruction::NewCell => self.new_cell()?,
+            Instruction::CellGet(slot) => self.cell_get(frame, slot)?,
+            Instruction::CellSet(slot) => self.cell_set(frame, slot)?,
             Instruction::EnumTag => {
                 let base = self.pop()?;
                 let Value::Enum(id) = base else {
@@ -557,6 +615,7 @@ impl Vm<'_> {
                     )));
             }
             Instruction::FileSystem(op) => self.file_system(op)?,
+            Instruction::Compiler(op) => self.compiler(op)?,
             Instruction::ConvertBitsToFloat => {
                 let value = self.pop_int()?;
                 self.stack.push(Value::Float(f64::from_bits(value as u64)));

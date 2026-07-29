@@ -51,9 +51,17 @@ fn only_struct(result: &ParseResult) -> &kira_syntax_model::ast::StructDecl {
 fn type_spelling(result: &ParseResult, id: TypeRefId) -> String {
     match result.tree.type_ref(id) {
         TypeRef::Named { name, .. } => result.interner.resolve(*name).to_owned(),
-        TypeRef::AnyConstruct { family, .. } => {
-            format!("Any {}", result.interner.resolve(*family))
+        TypeRef::SomeConstruct { family, .. } => {
+            format!("some {}", result.interner.resolve(*family))
         }
+        // Spelled by the question it defers rather than by an answer, because
+        // the parser has none: this resolves to whatever the family declared for
+        // that member. See `TypeRef::ConstructMember`.
+        TypeRef::ConstructMember { family, member, .. } => format!(
+            "{}::{}",
+            result.interner.resolve(*family),
+            result.interner.resolve(*member)
+        ),
         TypeRef::Generic { name, args, .. } => {
             let written: Vec<String> = args.iter().map(|&arg| type_spelling(result, arg)).collect();
             format!("{}<{}>", result.interner.resolve(*name), written.join(", "))

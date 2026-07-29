@@ -182,7 +182,7 @@ fn write(path: &Path, contents: &[u8]) -> Result<(), LibraryBuildError> {
 /// The generated crate depends on `kira-main` and the crates under it by path,
 /// because none of them is published yet, and the only path that is true is the
 /// one this compiler was built from. Baked in at compile time rather than
-/// discovered at run time: a discovered root would depend on where `kirac`
+/// discovered at run time: a discovered root would depend on where `kira`
 /// happens to be invoked, and would silently generate a crate pointing at
 /// somebody else's checkout.
 ///
@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn a_vm_build_removes_the_native_engines_build_script() {
-        // The switch flow: `kirac build --backend llvm` then `kirac build`, in
+        // The switch flow: `kira build --backend llvm` then `kira build`, in
         // one package. Both engines write the same directory, and cargo decides
         // whether a crate has a build script by looking for the file — so a
         // surviving `build.rs` would make the VM-engine crate go on linking the

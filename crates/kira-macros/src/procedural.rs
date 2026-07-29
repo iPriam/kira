@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 
+use kira_diagnostics::Diagnostic;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
 
@@ -21,7 +22,7 @@ use crate::invoke::{Invocation, Position};
 use crate::ksl::ShaderCompiler;
 use crate::registry::{Procedural, ProceduralKind, Registry, kind_word};
 use crate::tokens::Lexed;
-use crate::value::Value;
+use crate::value::{DeclarationValue, Value};
 
 /// The derive name the compiler owns rather than a macro.
 ///
@@ -48,7 +49,7 @@ pub(crate) struct Program<'a> {
 }
 
 /// A struct registered as a wrapper template by a `kind { wrapper }` macro.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct WrapperTemplate {
     /// The macro that registered it.
     pub(crate) macro_name: String,
@@ -60,13 +61,13 @@ pub(crate) struct WrapperTemplate {
 ///
 /// A pre-scan, so declaration order between files and packages never matters: a
 /// field may name a wrapper declared in a file parsed after its own.
-pub(crate) fn wrapper_templates(
-    files: &[Lexed<'_>],
+pub(crate) fn wrapper_templates<'a>(
+    files: impl Iterator<Item = &'a [Declaration]>,
     registry: &Registry,
 ) -> HashMap<String, WrapperTemplate> {
     let mut templates = HashMap::new();
-    for file in files {
-        for declaration in top_level(file) {
+    for declarations in files {
+        for declaration in declarations {
             for annotation in &declaration.annotations {
                 let Some(declared) = registry.procedural(&annotation.name) else {
                     continue;
@@ -100,8 +101,11 @@ pub(crate) fn top_level(file: &Lexed<'_>) -> Vec<Declaration> {
             | TokenKind::Enum
             | TokenKind::Construct
             | TokenKind::Function => {}
+            // A construct-backed declaration, in both spellings: `Family
+            // Name(params) {` and the parameterless `Family Name {`.
             TokenKind::Identifier
-                if file.is_ident(index + 1) && file.kind(index + 2) == TokenKind::LParen => {}
+                if file.is_ident(index + 1)
+                    && matches!(file.kind(index + 2), TokenKind::LParen | TokenKind::LBrace) => {}
             TokenKind::LBrace | TokenKind::LParen | TokenKind::LBracket => {
                 match file.match_close(index) {
                     Some(close) => index = close + 1,
@@ -123,6 +127,60 @@ pub(crate) fn top_level(file: &Lexed<'_>) -> Vec<Declaration> {
         }
     }
     found
+}
+
+/// Runs every `collector` macro over the program's declarations.
+///
+/// Returns one appended file per collector that produced output, plus whatever
+/// the collectors reported. A program with no collector does no work here and
+/// appends nothing.
+pub(crate) fn collect<'a>(
+    registry: &Registry,
+    declarations: impl Iterator<Item = &'a Declaration>,
+    shaders: Option<&dyn ShaderCompiler>,
+    platform: &str,
+) -> (Vec<String>, Vec<Diagnostic>) {
+    let collectors = registry.of_kind(ProceduralKind::Collector);
+    if collectors.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let all = Value::Array(
+        declarations
+            .map(|declaration| Value::Declaration(Box::new(DeclarationValue::of(declaration))))
+            .collect(),
+    );
+    let mut appended = Vec::new();
+    let mut reporter = Reporter::default();
+    for declared in collectors {
+        let parameter = parameter(declared, 0);
+        let Some(body) = eval::compile(&declared.body) else {
+            reporter.error(
+                declared.source,
+                declared.span,
+                diagnostics::EXPAND_SIGNATURE,
+                format!("the `expand` body of `{}` does not parse", declared.name),
+            );
+            continue;
+        };
+        match eval::run(&body, vec![(parameter, all.clone())], shaders, platform) {
+            Ok(outcome) => {
+                let failed = !outcome.reported.is_empty();
+                for message in outcome.reported {
+                    reporter.error(
+                        declared.source,
+                        declared.span,
+                        diagnostics::MACRO_REPORTED,
+                        message,
+                    );
+                }
+                if !failed && !outcome.syntax.trim().is_empty() {
+                    appended.push(outcome.syntax);
+                }
+            }
+            Err(error) => reporter.error(declared.source, declared.span, error.code, error.message),
+        }
+    }
+    (appended, reporter.into_diagnostics())
 }
 
 /// Runs every macro one declaration summons, recording the edits it needs.
@@ -164,6 +222,11 @@ pub(crate) fn expand_declaration(
             continue;
         };
         match declared.kind {
+            // A collector is not summoned by an annotation: it runs once for
+            // the whole program, from `collect`. Reaching here means a program
+            // wrote `@Name` with a collector's name, which is not a site it
+            // has.
+            ProceduralKind::Collector => continue,
             ProceduralKind::Attribute => {
                 if !check_applies_to(file, declaration, declared, annotation.span, reporter) {
                     consumed.push(annotation.span);

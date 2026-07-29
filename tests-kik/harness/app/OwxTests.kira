@@ -1,0 +1,564 @@
+import Foundation
+
+// OwxTests.kira
+// Migrated from tests/pass/run/{ownership_array_field_readback_parity,
+// ownership_array_struct_elements_parity, ownership_borrow_mut_struct_field_parity,
+// ownership_borrow_param_parity, ownership_closure_array_elements_parity,
+// ownership_closure_block_churn_parity, ownership_closure_body_recursive_tree_parity,
+// ownership_closure_branch_local_parity, ownership_closure_capture_copy_parity,
+// ownership_closure_field_reassign_parity, ownership_closure_mixed_aggregate_churn_parity,
+// ownership_closure_multi_capture_churn_parity, ownership_closure_nested_capture_parity,
+// ownership_closure_owned_param_parity, ownership_closure_returned_parity,
+// ownership_closure_struct_array_parity, ownership_closure_struct_copy_parity,
+// ownership_closure_struct_field_parity}.
+// All top-level names use owx / Owx prefix. Aggregates are reduced to scalars
+// since the runner only compares Int/Bool/String.
+
+// ---------------------------------------------------------------------------
+// Struct/enum/helper types
+// ---------------------------------------------------------------------------
+
+enum OwxTag {
+    A
+    B(Int)
+}
+
+struct OwxNode {
+    let t: OwxTag
+    let v: Int
+}
+
+struct OwxTree {
+    var nodes: [OwxNode]
+}
+
+function owxSetV(tree: OwxTree, index: Int, x: Int) -> OwxTree {
+    var out = tree
+    let node = out.nodes[index]
+    var nodes = out.nodes
+    nodes[index] = OwxNode { t: node.t, v: x }
+    out.nodes = nodes
+    return out
+}
+
+struct OwxCell {
+    let a: Int
+    let b: Int
+}
+
+function owxBuild(n: Int) -> [OwxCell] {
+    var cells: [OwxCell] = []
+    var i = 0
+    while i < n {
+        cells.append(OwxCell { a: i, b: i + 1 })
+        i = i + 1
+    }
+    return cells
+}
+
+struct OwxBox {
+    var n: Int
+}
+
+struct OwxPair {
+    var a: Int
+    var b: Int
+}
+
+function owxBump(b: borrow mut OwxBox, by: Int) {
+    b.n = b.n + by
+    return
+}
+
+function owxSwapAdd(p: borrow mut OwxPair) {
+    let old = p.a
+    p.a = p.b
+    p.b = old + 1
+    return
+}
+
+struct OwxMesh {
+    let id: Int
+}
+
+function owxInspect(mesh: borrow OwxMesh) -> Int {
+    return mesh.id
+}
+
+// Shared factory reused across every closure-parity test below (identical
+// semantics to each source case's own `makeAdder`).
+function owxMakeAdder(base: Int): (Int) -> Int {
+    return { n in
+        return base + n
+    }
+}
+
+struct OwxTreeNode {
+    let id: Int
+    let onPress: (Int) -> Int
+    let children: [OwxTreeNode]
+}
+
+function owxMakeLeaf(id: Int) -> OwxTreeNode {
+    return OwxTreeNode {
+        id: id
+        onPress: owxMakeAdder(id)
+        children: []
+    }
+}
+
+function owxMakeBranch(id: Int) -> OwxTreeNode {
+    var children: [OwxTreeNode] = []
+    children.append(owxMakeLeaf(id + 10))
+    children.append(owxMakeLeaf(id + 20))
+    return OwxTreeNode {
+        id: id
+        onPress: owxMakeAdder(id)
+        children: move children
+    }
+}
+
+function owxMakeTree(seed: Int) -> OwxTreeNode {
+    var children: [OwxTreeNode] = []
+    children.append(owxMakeBranch(seed + 100))
+    children.append(owxMakeBranch(seed + 200))
+    return OwxTreeNode {
+        id: seed
+        onPress: owxMakeAdder(seed)
+        children: move children
+    }
+}
+
+function owxVisit(node: borrow OwxTreeNode) -> Int {
+    var total = node.onPress(1)
+    var i = 0
+    while i < node.children.count {
+        total = total + owxVisit(node.children[i])
+        i = i + 1
+    }
+    return total
+}
+
+function owxRunBuilder(builder: (Int) -> Int) -> Int {
+    var total = 0
+    var i = 0
+    while i < 200 {
+        total = total + builder(i)
+        i = i + 1
+    }
+    return total
+}
+
+function owxMakeValue(base: Int): () -> Int {
+    return { in
+        return base + 2
+    }
+}
+
+struct OwxSlotReassign {
+    var tag: Int
+    var cb: (Int) -> Int
+}
+
+struct OwxCard {
+    var title: String
+    var score: (Int) -> Int
+}
+
+function owxBuildDeck(count: Int) -> [OwxCard] {
+    var deck: [OwxCard] = []
+    var i = 0
+    while i < count {
+        deck.append(OwxCard { title: "card-" + "n", score: owxMakeAdder(i) })
+        i = i + 1
+    }
+    return move deck
+}
+
+function owxMakeMixer(a: Int, b: Int, c: Bool): (Int) -> Int {
+    let bias = a * 10
+    return { n in
+        if c {
+            return bias + b + n
+        }
+        return bias - b + n
+    }
+}
+
+function owxCallIt(f: (Int) -> Int, v: Int) -> Int {
+    return f(v)
+}
+
+function owxConsume(f: (Int) -> Int, v: Int) -> Int {
+    return f(v)
+}
+
+function owxPassThrough(f: (Int) -> Int): (Int) -> Int {
+    return move f
+}
+
+struct OwxRow {
+    let tag: Int
+    let onPress: (Int) -> Int
+}
+
+function owxBuildRows(count: Int) -> [OwxRow] {
+    var rows: [OwxRow] = []
+    var i = 0
+    while i < count {
+        rows.append(OwxRow { tag: i, onPress: owxMakeAdder(i) })
+        i = i + 1
+    }
+    return move rows
+}
+
+struct OwxSlotCopy {
+    var tag: Int
+    var cb: (Int) -> Int
+}
+
+function owxFirstOf(a: OwxSlotCopy, b: OwxSlotCopy) -> Int {
+    let f = a.cb
+    let g = b.cb
+    return f(1) + g(2) + a.tag + b.tag
+}
+
+struct OwxSlotField {
+    let tag: Int
+    let cb: (Int) -> Int
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+// From ownership_array_field_readback_parity: `var x = obj.arr; x[i] = ...;
+// obj.arr = x` self-store readback must be a no-op, not a leak/clone.
+Test OwxArrayFieldReadbackParity {
+    test {
+        var frame = 0
+        var total = 0
+        while frame < 3 {
+            var tree = OwxTree { nodes: [] }
+            tree.nodes.append(OwxNode { t: .B(1), v: 0 })
+            tree.nodes.append(OwxNode { t: .A, v: 0 })
+            tree = owxSetV(move tree, 0, 5)
+            tree = owxSetV(move tree, 1, 7)
+            total = total + tree.nodes[0].v + tree.nodes[1].v
+            frame = frame + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+}
+
+// From ownership_array_struct_elements_parity: an empty typed-element array
+// literal must carry its element type so struct elements drop correctly.
+Test OwxArrayStructElementsParity {
+    test {
+        var frame = 0
+        var total = 0
+        while frame < 3 {
+            let cells = owxBuild(4)
+            var i = 0
+            while i < cells.count {
+                total = total + cells[i].a + cells[i].b
+                i = i + 1
+            }
+            frame = frame + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(48); return e }
+}
+
+// From ownership_borrow_mut_struct_field_parity: `borrow mut` struct params
+// mutate the caller's struct in place.
+Test OwxBorrowMutStructFieldParity {
+    test {
+        var box = OwxBox { n: 5 }
+        owxBump(box, 10)
+        owxBump(box, 3)
+
+        var pair = OwxPair { a: 2, b: 7 }
+        owxSwapAdd(pair)
+
+        return box.n * 100 + pair.a * 10 + pair.b
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1873); return e }
+}
+
+// From ownership_borrow_param_parity: a plain `borrow` param can be read
+// repeatedly without consuming the source.
+Test OwxBorrowParamParity {
+    test {
+        let mesh = OwxMesh { id: 1 }
+        let a = owxInspect(mesh)
+        let b = owxInspect(mesh)
+        return a + b
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+// From ownership_closure_array_elements_parity: closures stored in an array
+// (append, overwrite, read-call) must not double-free.
+Test OwxClosureArrayElementsParity {
+    test {
+        var cbs: [(Int) -> Int] = []
+        var i = 0
+        while i < 1000 {
+            cbs.append(owxMakeAdder(i))
+            i = i + 1
+        }
+        var j = 0
+        while j < 1000 {
+            cbs[j] = owxMakeAdder(j + 1)
+            j = j + 1
+        }
+        var total = 0
+        var k = 0
+        while k < 1000 {
+            let f = cbs[k]
+            total = total + f(1)
+            k = k + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(501500); return e }
+}
+
+// From ownership_closure_block_churn_parity: every closure block is freed
+// at its drop point across a churn loop.
+Test OwxClosureBlockChurnParity {
+    test {
+        var total = 0
+        var i = 0
+        while i < 3000 {
+            let add = owxMakeAdder(i)
+            total = total + add(1)
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(4501500); return e }
+}
+
+// From ownership_closure_body_recursive_tree_parity: recursive closure-rich
+// trees built inside a closure body must still drop every local.
+Test OwxClosureBodyRecursiveTreeParity {
+    test {
+        let builder: (Int) -> Int = { seed in
+            let tree = owxMakeTree(seed)
+            return owxVisit(tree)
+        }
+        return owxRunBuilder(move builder)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(332700); return e }
+}
+
+// From ownership_closure_branch_local_parity: a var closure local reassigned
+// across branches drops the dead value and keeps the live one.
+Test OwxClosureBranchLocalParity {
+    test {
+        var total = 0
+        var i = 0
+        while i < 1000 {
+            var g = owxMakeAdder(1)
+            if i - (i / 2) * 2 == 0 {
+                g = owxMakeAdder(2)
+            } else {
+                g = owxMakeAdder(3)
+            }
+            total = total + g(0)
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2500); return e }
+}
+
+// From ownership_closure_capture_copy_parity: a by-value capture must be
+// readable after the source local that produced it is gone. (Original
+// printed inside the closure body; reduced here to a returned scalar.)
+Test OwxClosureCaptureCopyParity {
+    test {
+        let printer = owxMakeValue(5)
+        return printer()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+}
+
+// From ownership_closure_field_reassign_parity: overwriting a closure field
+// drops the replaced block, and a self-store must not double-free.
+Test OwxClosureFieldReassignParity {
+    test {
+        var slot = OwxSlotReassign { tag: 0, cb: owxMakeAdder(10) }
+        var total = 0
+        var i = 0
+        while i < 2000 {
+            slot.cb = owxMakeAdder(i)
+            let f = slot.cb
+            total = total + f(1)
+            i = i + 1
+        }
+        slot.cb = slot.cb
+        let g = slot.cb
+        total = total + g(1)
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2003000); return e }
+}
+
+// From ownership_closure_mixed_aggregate_churn_parity: strings and closures
+// inside the same struct/array, rebuilt repeatedly, must not interfere.
+Test OwxClosureMixedAggregateChurnParity {
+    test {
+        var total = 0
+        var round = 0
+        while round < 150 {
+            var deck = owxBuildDeck(10)
+            deck[3] = OwxCard { title: "hot" + "-swap", score: owxMakeAdder(100) }
+            var i = 0
+            while i < 10 {
+                let card = deck[i]
+                let f = card.score
+                total = total + f(1)
+                i = i + 1
+            }
+            let sample = deck[3]
+            if sample.title == "hot-swap" {
+                total = total + 1
+            }
+            round = round + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(22950); return e }
+}
+
+// From ownership_closure_multi_capture_churn_parity: closures with several
+// by-value captures must all be readable after the source locals are gone.
+Test OwxClosureMultiCaptureChurnParity {
+    test {
+        var total = 0
+        var i = 0
+        while i < 2000 {
+            let even = i - (i / 2) * 2 == 0
+            let mix = owxMakeMixer(i, 7, even)
+            total = total + mix(1)
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(19992000); return e }
+}
+
+// From ownership_closure_nested_capture_parity: a closure captured inside
+// another closure is deep-cloned and recursively torn down.
+Test OwxClosureNestedCaptureParity {
+    test {
+        var total = 0
+        var i = 0
+        while i < 1500 {
+            let inner = owxMakeAdder(i)
+            let outer: (Int) -> Int = { n in
+                return owxCallIt(inner, n) + 1
+            }
+            total = total + outer(1)
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1127250); return e }
+}
+
+// From ownership_closure_owned_param_parity: an owned/move closure param is
+// dropped by the callee at scope exit.
+Test OwxClosureOwnedParamParity {
+    test {
+        var total = 0
+        var i = 0
+        while i < 2000 {
+            let add = owxMakeAdder(i)
+            total = total + owxConsume(move add, 3)
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2005000); return e }
+}
+
+// From ownership_closure_returned_parity: returning a borrowed closure
+// source must deep-clone it, not hand back the caller-owned block.
+Test OwxClosureReturnedParity {
+    test {
+        var total = 0
+        var i = 0
+        while i < 2000 {
+            let add = owxMakeAdder(i)
+            let same = owxPassThrough(move add)
+            total = total + same(2)
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2003000); return e }
+}
+
+// From ownership_closure_struct_array_parity: structs with closure fields
+// collected into an array, rebuilt every iteration, must fully reclaim.
+Test OwxClosureStructArrayParity {
+    test {
+        var total = 0
+        var rebuild = 0
+        while rebuild < 200 {
+            let rows = owxBuildRows(20)
+            var i = 0
+            while i < 20 {
+                let row = rows[i]
+                let f = row.onPress
+                total = total + f(1)
+                i = i + 1
+            }
+            rebuild = rebuild + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(42000); return e }
+}
+
+// From ownership_closure_struct_copy_parity: struct copies deep-clone
+// closure fields so both copies own independent blocks.
+Test OwxClosureStructCopyParity {
+    test {
+        var total = 0
+        var i = 0
+        while i < 1000 {
+            var original = OwxSlotCopy { tag: i, cb: owxMakeAdder(i) }
+            var copy = original
+            copy.tag = copy.tag + 1
+            copy.cb = owxMakeAdder(i + 1)
+            total = total + owxFirstOf(move original, move copy)
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2003000); return e }
+}
+
+// From ownership_closure_struct_field_parity: a closure stored in a struct
+// field is a deep value owning an independent clone.
+Test OwxClosureStructFieldParity {
+    test {
+        var total = 0
+        var i = 0
+        while i < 2000 {
+            let slot = OwxSlotField { tag: i, cb: owxMakeAdder(i) }
+            let f = slot.cb
+            total = total + f(1) + slot.tag
+            i = i + 1
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(4000000); return e }
+}

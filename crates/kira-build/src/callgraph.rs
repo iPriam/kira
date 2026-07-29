@@ -44,6 +44,7 @@ fn walk_stmt(program: &IrProgram, statement: &IrStmt, found: &mut BTreeSet<u32>)
             }
         }
         IrStmt::Eval { expr } => walk_expr(program, *expr, found),
+        IrStmt::CellSet { value, .. } => walk_expr(program, *value, found),
         IrStmt::If {
             cond,
             then_body,
@@ -117,6 +118,11 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
             walk_expr(program, *base, found);
             walk_expr(program, *index, found);
         }
+        IrExpr::TaskOp { operands, .. } => {
+            for operand in operands {
+                walk_expr(program, *operand, found);
+            }
+        }
         IrExpr::ArrayLen { array } => walk_expr(program, *array, found),
         IrExpr::StringLen { text } => walk_expr(program, *text, found),
         IrExpr::StringOf { value } => walk_expr(program, *value, found),
@@ -140,11 +146,25 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
                 walk_expr(program, arg, found);
             }
         }
+        IrExpr::Compiler { args, .. } => {
+            for &arg in args {
+                walk_expr(program, arg, found);
+            }
+        }
         IrExpr::ArrayAppend { place, value } => {
             walk_place(program, place, found);
             walk_expr(program, *value, found);
         }
         IrExpr::Convert { operand, .. } => walk_expr(program, *operand, found),
+        // Boxing a `var` wraps the value it boxes, so a call inside that value
+        // is reachable exactly as it would be anywhere else.
+        IrExpr::CellNew { value, .. } => walk_expr(program, *value, found),
+        // An erasure wraps the value it erases, and a call inside that value is
+        // reachable exactly as it would be anywhere else.
+        IrExpr::IntoAny { value, .. } => walk_expr(program, *value, found),
+        // A widening wraps its value for the same reason, so a call inside one
+        // is reachable the same way.
+        IrExpr::Widen { value, .. } => walk_expr(program, *value, found),
         IrExpr::NativeState { value, .. } => walk_expr(program, *value, found),
         IrExpr::NativeUserData { state } => walk_expr(program, *state, found),
         IrExpr::NativeRecover { raw, .. } => walk_expr(program, *raw, found),
@@ -156,6 +176,7 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
         | IrExpr::Str(_)
         | IrExpr::RawPtrNull
         | IrExpr::ForeignCallbackPtr { .. }
-        | IrExpr::Local(_) => {}
+        | IrExpr::Local(_)
+        | IrExpr::CellGet { .. } => {}
     }
 }

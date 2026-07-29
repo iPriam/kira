@@ -14,7 +14,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::{kirac, write_source};
+use crate::{kira, write_source};
 
 /// A program whose output exercises the cases browsers get wrong when a
 /// runtime borrows the host's formatting: large floats, wrapping arithmetic,
@@ -39,14 +39,14 @@ fn run_under_node(js: &Path) -> std::process::Output {
 fn a_web_build_links_and_runs_with_the_vms_exact_output() {
     let path = write_source(PROGRAM);
 
-    let vm = kirac(&["run", path.to_str().expect("utf-8 path")]);
+    let vm = kira(&["run", path.to_str().expect("utf-8 path")]);
     assert!(
         vm.status.success(),
         "{}",
         String::from_utf8_lossy(&vm.stderr)
     );
 
-    let web = kirac(&[
+    let web = kira(&[
         "build",
         "--device",
         "wasm32",
@@ -84,7 +84,7 @@ fn a_web_build_links_and_runs_with_the_vms_exact_output() {
 #[test]
 fn a_wasm64_build_is_refused_by_name() {
     let path = write_source(PROGRAM);
-    let output = kirac(&[
+    let output = kira(&[
         "build",
         "--device",
         "wasm64",

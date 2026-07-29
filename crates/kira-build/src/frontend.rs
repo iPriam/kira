@@ -4,7 +4,7 @@
 //! driver rather than the compiler. The reason is a second consumer, not tidiness:
 //! a Rust crate embedding a Kira library builds that library from its own
 //! `build.rs`, and a `build.rs` that reimplemented package resolution, module
-//! loading, source mapping, or build-kind discovery would drift from `kirac` in
+//! loading, source mapping, or build-kind discovery would drift from `kira` in
 //! exactly the ways that make a bug reproduce on one path and not the other.
 //!
 //! When an entry belongs to a package, this pipeline resolves its transitive path
@@ -24,6 +24,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use kira_diagnostic_messages::diagnostic_code::DiagnosticCode;
+use kira_diagnostic_messages::package_messages::{lockfile_sync_failed, lockfile_synced};
 use kira_diagnostics::Diagnostic;
 use kira_ir::IrProgram;
 use kira_semantics::{
@@ -45,7 +47,7 @@ use kira_source::SourceMap;
 #[salsa::tracked(returns(clone))]
 fn lowered(db: &dyn salsa::Database, source: SourceProgram) -> IrProgram {
     let program = kira_semantics::analyzed(db, source);
-    kira_ir::lower(&program)
+    kira_ir::lower(program)
 }
 
 /// A compiled program plus everything needed to report on it.
@@ -117,6 +119,17 @@ pub enum FrontendError {
 /// Returns `Err` only for problems that prevent compiling at all; compile
 /// errors are carried in [`Compiled::diagnostics`], not as an error here.
 pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
+    compile_as(path, None)
+}
+
+/// Compiles `path`, optionally overriding the build kind its manifest implies.
+///
+/// `kira test` is the one caller that overrides: a suite is entered through
+/// the runner a collector generated rather than through `@Main`, so demanding
+/// an application entrypoint would refuse a package whose only purpose is
+/// tests. Everything else takes the manifest's word, which is why the override
+/// is a parameter here rather than a field on the manifest.
+pub fn compile_as(path: &Path, kind: Option<BuildKind>) -> Result<Compiled, FrontendError> {
     let display = path.display().to_string();
     let text = std::fs::read_to_string(path).map_err(|source| FrontendError::Read {
         path: display.clone(),
@@ -133,9 +146,17 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
     let bundled_roots = kira_program_graph::bundled::bundled_roots();
     let mut modules =
         kira_program_graph::load_modules_with_packages(path, &text, &bundled_roots, &package_roots);
-    if let Some(found) = package
-        .as_ref()
-        .filter(|found| found.kind() == kira_manifest::PackageKind::Library)
+    // Every `.kira` file under a package's source root is a member of that
+    // package — app or library. What a package *produces* does not decide which
+    // of its own files belong to it, and an app used to compile its entry file
+    // plus that file's imports and nothing else: a program split across
+    // `app/main.kira` and `app/area/Thing.kira` reported every function in the
+    // sibling as undefined, while the identical library layout compiled.
+    //
+    // Aggregating adds files to the package, not to each other's scope: imports
+    // stay file-scoped, so a sibling's `import Foundation` still does not put
+    // `Foundation` in this file's namespace.
+    if let Some(found) = package.as_ref()
         && let Some(library_sources) = kira_project::library_sources_for_entry(found, path)?
     {
         aggregate_library_modules(
@@ -153,10 +174,10 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
     // path converge with the diagnostics channel.
     diagnostics.extend(bind_types_placement_diagnostics(path, &modules));
 
-    let build_kind = match package.as_ref().map(|found| found.kind()) {
+    let build_kind = kind.unwrap_or(match package.as_ref().map(|found| found.kind()) {
         Some(kira_manifest::PackageKind::Library) => BuildKind::Library,
         Some(kira_manifest::PackageKind::App) | None => BuildKind::Application,
-    };
+    });
 
     // Shaders are compiled before analysis: expansion runs inside salsa
     // queries, which may not read files, so the paths its call sites name are
@@ -208,12 +229,11 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
     kira_diagnostics::progress!("expanding macros");
     let expansion = kira_semantics::expanded(&db, source);
     let mut sources = SourceMap::new();
-    let id =
-        sources
-            .insert(display, expansion.entry)
-            .map_err(|full| FrontendError::SourceMapFull {
-                message: full.to_string(),
-            })?;
+    let id = sources
+        .insert(display, expansion.entry.clone())
+        .map_err(|full| FrontendError::SourceMapFull {
+            message: full.to_string(),
+        })?;
     debug_assert_eq!(id, FILE_SOURCE_ID);
     for (index, path) in module_paths.into_iter().enumerate() {
         let module_text = expansion.modules.get(index).cloned().unwrap_or_default();
@@ -344,18 +364,53 @@ fn resolve_package_roots(
         _ => Path::new("."),
     };
     let graph = kira_package_manager::resolve(root_dir)?;
+    let mut diagnostics = graph.diagnostics;
+    sync_drifted_lockfile(root_dir, &graph.lockfile, &graph.packages, &mut diagnostics);
     let roots = graph
         .packages
         .into_iter()
         .map(|package| kira_program_graph::PackageRoot::new(package.name, package.source_dir))
         .collect();
-    Ok((roots, graph.diagnostics))
+    Ok((roots, diagnostics))
+}
+
+/// Rewrites `kira.lock` when the manifests have moved out from under it.
+///
+/// A lockfile is a record of a resolution, so a build that just performed the
+/// resolution is exactly the moment to write it down — the alternative is a
+/// warning on every command until someone runs `kira sync` by hand, which is
+/// a chore the tool can do itself. Only a lockfile that already exists and
+/// drifted is rewritten: a project without one has not asked for one, and
+/// creating files a command was not pointed at is a surprise.
+///
+/// The drift warning resolution raised is replaced with the note saying it was
+/// handled, so the reader is told what happened rather than what was wrong.
+fn sync_drifted_lockfile(
+    root_dir: &Path,
+    status: &kira_package_manager::LockfileStatus,
+    packages: &[kira_package_manager::ResolvedPackage],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if *status != kira_package_manager::LockfileStatus::Drifted {
+        return;
+    }
+    let path = root_dir.join("kira.lock");
+    let display = path.display().to_string();
+    match kira_package_manager::sync_lockfile(root_dir, packages) {
+        Ok(_) => {
+            diagnostics.retain(|diagnostic| {
+                diagnostic.code != Some(DiagnosticCode::Kpk024LockfileDrift.as_str())
+            });
+            diagnostics.push(lockfile_synced(&display));
+        }
+        Err(error) => diagnostics.push(lockfile_sync_failed(&display, &error.to_string())),
+    }
 }
 
 /// The manifest governing `source`, if a `package.kira` sits above it.
 ///
 /// The manifest is discovered by walking up from the source file, which is what
-/// makes `kirac build lib/thing.kira` inside a library package build a library
+/// makes `kira build lib/thing.kira` inside a library package build a library
 /// without a flag: the package already said so, and a flag that could disagree
 /// with it would be a second source of truth.
 ///
@@ -426,6 +481,60 @@ mod tests {
         // No `@Main`, and no KSEM011: the manifest relaxed it.
         assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
         assert_eq!(compiled.ir.main, None);
+    }
+
+    /// A manifest edited after the lockfile was written leaves the two
+    /// disagreeing. Compiling resolves the graph anyway, so it writes the
+    /// answer down instead of warning about it on every command from here on.
+    #[test]
+    fn compiling_rewrites_a_drifted_lockfile() {
+        let dir = TempDir::new("lockfile-drift");
+        dir.write(
+            "package.kira",
+            "Package Core {\n    let kind = .Library\n    let moduleRoot = \"Core\"\n}\n",
+        );
+        let stale = "version = 1\n\n[root]\nname = \"Core\"\n\n[[package]]\nname = \"Ghost\"\n";
+        dir.write("kira.lock", stale);
+        let path = dir.write("app/Core.kira", "function value() -> Int { return 1 }");
+
+        let compiled = compile(&path).expect("compile");
+
+        let lock = std::fs::read_to_string(dir.0.join("kira.lock")).expect("read lockfile");
+        assert_ne!(stale, lock, "the stale lockfile should have been rewritten");
+        assert!(lock.contains("name = \"Core\""), "{lock}");
+        assert!(!lock.contains("Ghost"), "{lock}");
+        assert!(
+            compiled
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == Some("KPK026")),
+            "{:?}",
+            compiled.diagnostics
+        );
+        assert!(
+            !compiled
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == Some("KPK024")),
+            "the drift warning is replaced by the synced note: {:?}",
+            compiled.diagnostics
+        );
+    }
+
+    /// A project without a lockfile has not asked for one; compiling must not
+    /// create files the command was never pointed at.
+    #[test]
+    fn compiling_does_not_create_a_missing_lockfile() {
+        let dir = TempDir::new("lockfile-absent");
+        dir.write(
+            "package.kira",
+            "Package Core {\n    let kind = .Library\n    let moduleRoot = \"Core\"\n}\n",
+        );
+        let path = dir.write("app/Core.kira", "function value() -> Int { return 1 }");
+
+        compile(&path).expect("compile");
+
+        assert!(!dir.0.join("kira.lock").exists());
     }
 
     #[test]

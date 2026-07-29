@@ -18,61 +18,116 @@ mod stmt;
 #[cfg(test)]
 mod tests;
 
-use kira_core::{Interner, Symbol};
+use kira_core::{Interner, Names, Symbol};
 use kira_diagnostics::{Diagnostic, Label, Severity};
 use kira_source::{FileSpan, SourceId, Span};
-use kira_syntax_model::{SyntaxTree, Token, TokenKind};
+use kira_syntax_model::{FileNodes, FilePart, NodeBase, SyntaxTree, Token, TokenKind};
+use std::sync::Arc;
 
-/// The result of parsing one source file.
+/// The result of parsing a program.
 #[derive(Debug, Clone)]
 pub struct ParseResult {
     /// The parsed syntax tree (always produced, possibly with error nodes).
     pub tree: SyntaxTree,
-    /// The interner holding every identifier symbol referenced by the tree.
-    pub interner: Interner,
+    /// What every identifier symbol referenced by the tree stands for.
+    pub interner: Names,
     /// Diagnostics produced while parsing.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// The result of parsing **one** file, ready to be assembled into a program.
+///
+/// The unit of reuse: a file is parsed against the base its position gives it,
+/// so a compilation that finds this answer already computed assembles it
+/// straight in rather than parsing the file again.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileParse {
+    /// The file's items and nodes, numbered into the program.
+    pub part: FilePart,
+    /// The names this file interned, in the order its symbols name them.
+    ///
+    /// The deduplicating map is dropped once the file is parsed: it answered
+    /// the only question it was for, and keeping it would make holding a
+    /// parsed file cost as much as parsing it again.
+    pub names: Names,
+    /// The base the next file must be parsed against.
+    pub end: NodeBase,
+    /// The first symbol the next file must number from.
+    pub symbol_end: u32,
+    /// Diagnostics produced while lexing and parsing this file.
     pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Lexes and parses `text`, attributing spans to `source`.
 ///
-/// This is the single entry point the frontend calls; it runs the lexer and
+/// This is the single entry point for a one-file program; it runs the lexer and
 /// then the parser, merging their diagnostics in source order.
+#[must_use]
 pub fn parse(source: SourceId, text: &str) -> ParseResult {
-    parse_files(&[(source, text)])
+    assemble(&[parse_file(source, text, NodeBase::default(), 0)])
 }
 
-/// Lexes and parses several files into **one** tree.
+/// Lexes and parses one file, numbering its handles from `base` and its symbols
+/// from `symbol_base`.
+///
+/// A file is parsed **on its own**: nothing about it depends on the contents of
+/// any other file, only on how much of the program's id space precedes it. That
+/// is what makes this answer worth memoizing — a dependency whose bytes and
+/// position have not changed is parsed once per session rather than once per
+/// compilation.
+#[must_use]
+pub fn parse_file(source: SourceId, text: &str, base: NodeBase, symbol_base: u32) -> FileParse {
+    let lexed = kira_lexer::lex(source, text);
+    let mut parser = Parser::new(source, text, lexed.tokens, base, symbol_base);
+    parser.diagnostics = lexed.diagnostics;
+    parser.parse_program()
+}
+
+/// Assembles parsed files into one program, in the order they were parsed.
 ///
 /// Imports are file-scoped, but a program is one thing: the analyzer resolves
-/// names across every file at once, so every file's items land in a single
-/// arena set and a single interner. Which file an item came from is not lost —
-/// [`SyntaxTree::items_with_source`] carries it, and that is what the
-/// file-scoped import gate reads.
+/// names across every file at once, so every file's handles are numbered into
+/// one program-wide space and every file's names into one table. Which file an
+/// item came from is not lost — [`SyntaxTree::items_with_source`] carries it,
+/// and that is what the file-scoped import gate reads.
 ///
-/// Files are parsed in the order given, and that order is the item order in the
-/// tree. Callers pass dependencies before dependents, because a struct field
-/// may only name a struct declared earlier.
-pub fn parse_files(files: &[(SourceId, &str)]) -> ParseResult {
-    let mut tree = SyntaxTree::new();
-    let mut interner = Interner::new();
+/// Callers pass dependencies before dependents, because a struct field may only
+/// name a struct declared earlier.
+#[must_use]
+pub fn assemble<'a>(files: impl IntoIterator<Item = &'a FileParse>) -> ParseResult {
+    let mut interner = Names::new();
     let mut diagnostics = Vec::new();
-    for &(source, text) in files {
-        let lexed = kira_lexer::lex(source, text);
-        let mut parser = Parser::new(source, text, lexed.tokens);
-        parser.diagnostics = lexed.diagnostics;
-        parser.tree = tree;
-        parser.interner = interner;
-        let result = parser.parse_program();
-        tree = result.tree;
-        interner = result.interner;
-        diagnostics.extend(result.diagnostics);
+    let mut parts = Vec::new();
+    for file in files {
+        interner.append(&file.names);
+        diagnostics.extend(file.diagnostics.iter().cloned());
+        parts.push(file.part.clone());
     }
     ParseResult {
-        tree,
+        tree: SyntaxTree::assemble(parts),
         interner,
         diagnostics,
     }
+}
+
+/// Lexes and parses several files into one program.
+///
+/// The whole-program convenience: every file is parsed against the base the one
+/// before it ended at, and the results are assembled. A caller that wants to
+/// reuse an unchanged file's answer calls [`parse_file`] and [`assemble`]
+/// itself.
+#[must_use]
+pub fn parse_files(files: &[(SourceId, &str)]) -> ParseResult {
+    let mut base = NodeBase::default();
+    let mut symbol_base = 0;
+    let mut parsed = Vec::with_capacity(files.len());
+    for &(source, text) in files {
+        let file = parse_file(source, text, base, symbol_base);
+        base = file.end;
+        symbol_base = file.symbol_end;
+        parsed.push(file);
+    }
+    assemble(&parsed)
 }
 
 /// The parser's mutable working state.
@@ -81,7 +136,8 @@ struct Parser<'a> {
     text: &'a str,
     tokens: Vec<Token>,
     pos: usize,
-    tree: SyntaxTree,
+    items: Vec<kira_syntax_model::Item>,
+    tree: FileNodes,
     interner: Interner,
     diagnostics: Vec<Diagnostic>,
     /// Whether a `{` at expression position opens a block rather than a struct
@@ -90,20 +146,27 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(source: SourceId, text: &'a str, tokens: Vec<Token>) -> Self {
+    fn new(
+        source: SourceId,
+        text: &'a str,
+        tokens: Vec<Token>,
+        base: NodeBase,
+        symbol_base: u32,
+    ) -> Self {
         Self {
             source,
             text,
             tokens,
             pos: 0,
-            tree: SyntaxTree::new(),
-            interner: Interner::new(),
+            items: Vec::new(),
+            tree: FileNodes::new(base),
+            interner: Interner::with_base(symbol_base),
             diagnostics: Vec::new(),
             no_struct_literal: false,
         }
     }
 
-    fn parse_program(mut self) -> ParseResult {
+    fn parse_program(mut self) -> FileParse {
         while !self.at_eof() {
             let before = self.pos;
             self.parse_item();
@@ -112,9 +175,15 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
             }
         }
-        ParseResult {
-            tree: self.tree,
-            interner: self.interner,
+        FileParse {
+            end: self.tree.end(),
+            part: FilePart {
+                source: self.source,
+                items: Arc::from(self.items),
+                nodes: Arc::new(self.tree),
+            },
+            symbol_end: self.interner.next_base(),
+            names: self.interner.into_names(),
             diagnostics: self.diagnostics,
         }
     }

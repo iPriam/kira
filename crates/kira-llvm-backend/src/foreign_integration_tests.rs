@@ -97,6 +97,7 @@ fn fixture_program() -> IrProgram {
         locals: Vec::new(),
         body,
         is_main: true,
+        is_async: false,
         execution: kira_runtime_abi::Execution::Inherited,
         mutates_self: false,
         name_span: Span::new(0, 4),

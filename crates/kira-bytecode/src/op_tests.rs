@@ -353,6 +353,30 @@ fn an_unknown_file_system_operation_is_rejected() {
     assert!(matches!(truncated, DecodeError::UnexpectedEnd { .. }));
 }
 
+#[test]
+fn compiler_opcodes_are_appended_and_round_trip() {
+    assert_eq!(opcode::COMPILER, 0x62);
+
+    let code: Vec<Instruction> = CompilerOp::ALL
+        .into_iter()
+        .map(Instruction::Compiler)
+        .collect();
+    let bytes = encode(&code);
+    assert_eq!(decode(&bytes).unwrap(), code);
+}
+
+/// A decoder never guesses, for the compiler operand byte either.
+#[test]
+fn an_unknown_compiler_operation_is_rejected() {
+    let err = decode(&[opcode::COMPILER, 0xfe]).unwrap_err();
+    assert!(matches!(
+        err,
+        DecodeError::UnknownOpcode { opcode: 0xfe, .. }
+    ));
+    let truncated = decode(&[opcode::COMPILER]).unwrap_err();
+    assert!(matches!(truncated, DecodeError::UnexpectedEnd { .. }));
+}
+
 /// The two retained-C-storage opcodes, appended after the file-system one.
 #[test]
 fn c_storage_opcodes_are_appended_and_round_trip() {
@@ -388,4 +412,40 @@ fn truncated_operand_is_reported() {
     // CONST_INT opcode with no following 8-byte payload.
     let err = decode(&[0x01, 0x00]).unwrap_err();
     assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
+}
+
+#[test]
+fn the_capture_cell_opcodes_are_appended_after_the_previous_last_one() {
+    // Append-only, spelled literally: the three cell opcodes start one past
+    // `TASK_OP`/`REM_FLOAT`, so every module written before them still decodes
+    // by the numbers it was encoded with.
+    assert_eq!(opcode::TASK_OP, 0x5d);
+    assert_eq!(opcode::REM_FLOAT, 0x5e);
+    assert_eq!(opcode::NEW_CELL, 0x5f);
+    assert_eq!(opcode::CELL_GET, 0x60);
+    assert_eq!(opcode::CELL_SET, 0x61);
+}
+
+#[test]
+fn round_trips_the_capture_cell_opcodes() {
+    let code = vec![
+        Instruction::NewCell,
+        Instruction::CellGet(0),
+        Instruction::CellSet(0),
+        Instruction::CellGet(u16::MAX),
+        Instruction::CellSet(u16::MAX),
+    ];
+    let bytes = encode(&code);
+    assert_eq!(decode(&bytes).unwrap(), code);
+}
+
+#[test]
+fn a_truncated_cell_slot_is_reported() {
+    for opcode in [opcode::CELL_GET, opcode::CELL_SET] {
+        let err = decode(&[opcode, 1]).unwrap_err();
+        assert!(
+            matches!(err, DecodeError::UnexpectedEnd { .. }),
+            "a half-written slot must be a typed error, not a guess"
+        );
+    }
 }

@@ -28,10 +28,10 @@ fn write_library(source: &str) -> PathBuf {
 
 /// Builds `path` on one backend.
 fn build_on(source_path: &std::path::Path, backend: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_kirac"))
+    Command::new(env!("CARGO_BIN_EXE_kira"))
         .args(["build", "--backend", backend, source_path.to_str().unwrap()])
         .output()
-        .expect("run kirac")
+        .expect("run kira")
 }
 
 /// A library exercising the value types that cross no boundary yet but must
@@ -493,16 +493,16 @@ fn checking_an_exporting_library_stops_at_a_clean_frontend() {
     // live — so an exporting library checks clean without any engine being
     // consulted at all.
     //
-    // Deliberately one run, not one per backend: `kirac check` takes no
+    // Deliberately one run, not one per backend: `kira check` takes no
     // `--backend` (pipeline.rs::check reads only a path), so looping the
     // backends here would run the identical command three times and prove
     // nothing about any of them. What makes this frontend-wide is that the
     // export checks sit above the backend split at all.
     let path = write_library(EXPORTING_LIBRARY);
-    let run = Command::new(env!("CARGO_BIN_EXE_kirac"))
+    let run = Command::new(env!("CARGO_BIN_EXE_kira"))
         .args(["check", path.to_str().unwrap()])
         .output()
-        .expect("run kirac");
+        .expect("run kira");
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
 
     assert!(

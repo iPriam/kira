@@ -18,7 +18,7 @@ fn exports(text: &str) -> Vec<(String, String)> {
         "test.kira".to_owned(),
         Vec::new(),
         BuildKind::Library,
-        kira_macros::PrecompiledShaders::default(),
+        PrecompiledShaders::default(),
         host_platform(),
     );
     analyzed(&db, source)
@@ -59,7 +59,7 @@ fn an_export_indexes_the_function_it_names() {
         "test.kira".to_owned(),
         Vec::new(),
         BuildKind::Library,
-        kira_macros::PrecompiledShaders::default(),
+        PrecompiledShaders::default(),
         host_platform(),
     );
     let program = analyzed(&db, source);
@@ -87,7 +87,7 @@ fn an_export_records_the_signature_a_consumer_is_generated_against() {
         "test.kira".to_owned(),
         Vec::new(),
         BuildKind::Library,
-        kira_macros::PrecompiledShaders::default(),
+        PrecompiledShaders::default(),
         host_platform(),
     );
     let program = analyzed(&db, source);
@@ -131,7 +131,7 @@ fn an_export_in_an_application_is_refused_by_name() {
     // the application build kind, which is what a `.App` package analyzes as.
     let text = "@Main function main() { print(1) return }\n\
                 @Export\nfunction add(a: Int) -> Int { return a }";
-    assert_eq!(codes(text), vec!["KSEM159"], "{:?}", codes(text));
+    assert_eq!(codes(text), vec!["KSEM256"], "{:?}", codes(text));
 }
 
 #[test]
@@ -283,7 +283,7 @@ fn an_export_marker_on_a_class_in_an_application_is_refused() {
     // consumer it does not have.
     let text = "@Main function main() { print(1) return }\n\
                 @Export\nclass Button { var title: String = \"\" }";
-    assert_eq!(codes(text), vec!["KSEM159"], "{:?}", codes(text));
+    assert_eq!(codes(text), vec!["KSEM256"], "{:?}", codes(text));
 }
 
 #[test]

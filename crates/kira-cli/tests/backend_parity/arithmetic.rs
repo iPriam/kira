@@ -131,3 +131,49 @@ function main() {
         "255\n466020866\n17\n9223372036854775807\n-1\ntrue\n"
     );
 }
+
+/// Float remainder is *truncated*: the sign follows the dividend.
+///
+/// The VM computes it with Rust's `%` on `f64` and the native backend with
+/// LLVM's `frem`; both are `fmod`, and the negative case is what proves it —
+/// a floored remainder would answer `3` where this answers `-1`.
+#[test]
+fn float_remainder_truncates_toward_zero() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    print(9.0 % 4.0)
+    print((0.0 - 9.0) % 4.0)
+    print(8.5 % 2.0)
+    print(9.0 % (0.0 - 4.0))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "1\n-1\n0.5\n1\n");
+}
+
+/// An integer literal opposite a `Float` branch of `? :` is the float it
+/// spells.
+///
+/// A property of the *literal*, not a widening rule: a named `Int` on one side
+/// still disagrees with a `Float` on the other, exactly as `let f: Float = 1`
+/// still does.
+#[test]
+fn a_conditional_reads_an_integer_literal_against_a_float_branch_as_a_float() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    let mixed = false ? 1 : 2.5
+    print(mixed)
+    print(mixed == 2.5)
+    print(true ? 7 : 2.5)
+    print(false ? 2.5 : 7)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "2.5\ntrue\n7\n7\n");
+}

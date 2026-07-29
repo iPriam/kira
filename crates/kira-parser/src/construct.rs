@@ -3,10 +3,10 @@
 //! `Family Name(params) { ... }` that conforms to one.
 //!
 //! Both share a member body — stored `let` members, computed block-bodied
-//! members (`let node: Any { expr }`), and `function` members — so they share a
-//! parser. A family adds nothing to the header beyond its name; a backed
-//! declaration adds a function-style parameter list, which becomes its
-//! construction inputs.
+//! members (`let node: Any { expr }`), `function` members, and the bodyless
+//! `@Required function f(…) -> T` requirement — so they share a parser. A family
+//! adds nothing to the header beyond its name; a backed declaration adds a
+//! function-style parameter list, which becomes its construction inputs.
 //!
 //! Members and clauses the executable slice does not cover yet (`@Content`
 //! slots, `@Consuming` methods, `extends`/`requires` inheritance) are parsed
@@ -19,11 +19,13 @@ use kira_runtime_abi::Execution;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
-    Block, ConstructDecl, ConstructField, ConstructKind, ConstructMethod, DeferredConstruct,
-    ExtendDecl, Function, Stmt, TypeRef, TypeRefId,
+    ConstructDecl, ConstructField, ConstructKind, ConstructMethod, DeferredConstruct, ExtendDecl,
+    TypeRef,
 };
 
 use crate::Parser;
+
+mod members;
 
 /// The members parsed out of a construct body, before they are placed in a
 /// [`ConstructDecl`].
@@ -274,9 +276,19 @@ impl Parser<'_> {
                 if let Some(function) = self.parse_function(false, Execution::Inherited, false) {
                     body.methods.push(ConstructMethod {
                         computed: false,
+                        required: false,
                         function,
                     });
                 }
+            }
+            // `requires { function f(…) -> T … }` — the *section* spelling of
+            // `@Required function`. One block instead of one annotation per
+            // member; the members it produces are the same, so a family may mix
+            // the two freely and conformance sees no difference.
+            TokenKind::Identifier
+                if self.at_word("requires") && self.peek(1).kind == TokenKind::LBrace =>
+            {
+                self.parse_construct_requires_section(body);
             }
             // `body { child … }` — the SwiftUI-style shorthand for a computed
             // member whose result type is the declaration's construct family.
@@ -293,12 +305,20 @@ impl Parser<'_> {
                 match backing_family {
                     Some((family, family_span)) => {
                         self.make_block_return_its_tail(&block);
-                        let ty = self.tree.add_type(TypeRef::Named {
-                            name: family,
-                            span: family_span,
+                        // The family decides what this member returns, and the
+                        // parser has no families — so the type ref defers the
+                        // question rather than answering it with the family
+                        // type, which is only ever right for a member the family
+                        // never mentioned. See `TypeRef::ConstructMember`.
+                        let ty = self.tree.add_type(TypeRef::ConstructMember {
+                            family,
+                            family_span,
+                            member: name,
+                            span: name_span,
                         });
                         body.methods.push(ConstructMethod {
                             computed: true,
+                            required: false,
                             function: Self::computed_member_function(
                                 name, name_span, ty, block, span,
                             ),
@@ -353,294 +373,6 @@ impl Parser<'_> {
                     self.bump();
                 }
             }
-        }
-    }
-
-    /// Parses an `@Name`-annotated construct member.
-    fn parse_annotated_construct_member(&mut self, body: &mut ConstructBody) {
-        let at_span = self.current().span;
-        self.bump(); // `@`
-        if !self.at(TokenKind::Identifier) {
-            self.error(
-                self.current().span,
-                "KPAR003",
-                "expected an annotation name after `@`",
-            );
-            return;
-        }
-        let name_span = self.current().span;
-        let name = self.text_of(name_span).to_owned();
-        self.bump();
-        match name.as_str() {
-            // `@Required let name: Any` — a member every backed declaration must
-            // provide. This one executes: it is a stored field.
-            "Required" => {
-                if self.at(TokenKind::Let) {
-                    self.parse_construct_let_required(body);
-                } else {
-                    self.error(
-                        self.current().span,
-                        "KPAR060",
-                        "`@Required` annotates a `let` member",
-                    );
-                }
-            }
-            // `@Content let x: Any` — the compat spelling of a `some Any` child
-            // slot. It parses to a real slot field: analysis fills it from a
-            // construction's trailing children, and executes it when its declared
-            // type is concrete.
-            "Content" => {
-                if self.at(TokenKind::Let) {
-                    self.parse_construct_content_slot(body);
-                } else {
-                    self.error(
-                        self.current().span,
-                        "KPAR063",
-                        "`@Content` annotates a `let` child-slot member",
-                    );
-                }
-            }
-            "Consuming" => {
-                if self.at(TokenKind::Function) {
-                    if let Some(function) = self.parse_function(false, Execution::Inherited, false)
-                    {
-                        body.methods.push(ConstructMethod {
-                            computed: false,
-                            function,
-                        });
-                    }
-                } else {
-                    self.error(
-                        self.current().span,
-                        "KPAR064",
-                        "`@Consuming` annotates a `function` member",
-                    );
-                    self.consume_deferred_member(body, at_span, "malformed `@Consuming` member");
-                }
-            }
-            other => {
-                self.error(
-                    name_span,
-                    "KPAR061",
-                    format!("`@{other}` is not a construct member annotation"),
-                );
-                self.consume_deferred_member(body, at_span, "unknown annotated member");
-            }
-        }
-    }
-
-    /// Consumes a not-yet-executable member (a `let` field or a `function`) so
-    /// the rest of the body still parses, recording it as deferred.
-    fn consume_deferred_member(
-        &mut self,
-        body: &mut ConstructBody,
-        start: Span,
-        label: &'static str,
-    ) {
-        match self.current_kind() {
-            TokenKind::Let | TokenKind::Var => {
-                let mut discard = ConstructBody::default();
-                self.parse_construct_let(&mut discard, self.at(TokenKind::Var));
-            }
-            TokenKind::Function => {
-                self.parse_function(false, Execution::Inherited, false);
-            }
-            _ => {
-                // Nothing recognizable follows; step over one token so the loop
-                // makes progress.
-                self.bump();
-            }
-        }
-        let span = Span::from_bounds(start.start, self.previous_end());
-        body.deferred.push(DeferredConstruct { label, span });
-    }
-
-    /// Parses `@Required let name: Any [= default]`, with `let` at the cursor.
-    fn parse_construct_let_required(&mut self, body: &mut ConstructBody) {
-        let start = self.current().span;
-        self.bump(); // `let`
-        let Some((name, name_span, ty, slot)) = self.parse_construct_member_head() else {
-            return;
-        };
-        if self.at(TokenKind::LBrace) {
-            self.error(
-                self.current().span,
-                "KPAR062",
-                "a `@Required` member has no computed body: it is a value the \
-                 backed declaration supplies",
-            );
-            self.parse_block();
-        }
-        let default = self.eat(TokenKind::Equals).then(|| self.parse_expr());
-        let span = Span::from_bounds(start.start, self.previous_end());
-        body.fields.push(ConstructField {
-            name,
-            name_span,
-            required: true,
-            slot,
-            ty,
-            default,
-            span,
-        });
-    }
-
-    /// Parses `@Content let name: Any`, with `let` at the cursor — a child slot in
-    /// its compat spelling. Equivalent to a `let name: some Any` field.
-    fn parse_construct_content_slot(&mut self, body: &mut ConstructBody) {
-        let start = self.current().span;
-        self.bump(); // `let`
-        let Some((name, name_span, ty, _slot)) = self.parse_construct_member_head() else {
-            return;
-        };
-        let default = self.eat(TokenKind::Equals).then(|| self.parse_expr());
-        let span = Span::from_bounds(start.start, self.previous_end());
-        body.fields.push(ConstructField {
-            name,
-            name_span,
-            required: false,
-            slot: true,
-            ty,
-            default,
-            span,
-        });
-    }
-
-    /// Parses a plain or computed `let` construct member, with `let`/`var` at
-    /// the cursor.
-    fn parse_construct_let(&mut self, body: &mut ConstructBody, _is_var: bool) {
-        let start = self.current().span;
-        self.bump(); // `let` / `var`
-        let Some((name, name_span, ty, slot)) = self.parse_construct_member_head() else {
-            return;
-        };
-        if self.at(TokenKind::LBrace) {
-            // `let node: Any { block }` — a computed member: a zero-argument method
-            // read as a property.
-            let block = self.parse_block();
-            self.make_block_return_its_tail(&block);
-            let span = Span::from_bounds(start.start, self.previous_end());
-            body.methods.push(ConstructMethod {
-                computed: true,
-                function: Self::computed_member_function(name, name_span, ty, block, span),
-            });
-            return;
-        }
-        let default = self.eat(TokenKind::Equals).then(|| self.parse_expr());
-        let span = Span::from_bounds(start.start, self.previous_end());
-        body.fields.push(ConstructField {
-            name,
-            name_span,
-            required: false,
-            slot,
-            ty,
-            default,
-            span,
-        });
-    }
-
-    /// Parses the `name: Type` head shared by every `let` construct member,
-    /// returning whether the type was written as a child slot (`some X` /
-    /// `[some X]`).
-    fn parse_construct_member_head(&mut self) -> Option<(Symbol, Span, TypeRefId, bool)> {
-        if !self.at(TokenKind::Identifier) {
-            self.error(self.current().span, "KPAR010", "expected a member name");
-            return None;
-        }
-        let name_span = self.current().span;
-        let name = self.intern_span(name_span);
-        self.bump();
-        self.expect(TokenKind::Colon);
-        let (ty, slot) = self.parse_construct_field_type();
-        Some((name, name_span, ty, slot))
-    }
-
-    /// Parses a construct field's type, recognizing the child-slot spellings
-    /// `some X` and `[some X]`.
-    ///
-    /// A slot's stored type is its *element* type: `some X` yields `X` and
-    /// `[some X]` yields `[X]`, so a single slot and a list slot are told apart
-    /// downstream by whether the type is an array. A plain type is not a slot.
-    fn parse_construct_field_type(&mut self) -> (TypeRefId, bool) {
-        // `some X`
-        if self.at_word("some") {
-            self.bump(); // `some`
-            return (self.parse_type_ref(), true);
-        }
-        // `[some X]`
-        if self.at(TokenKind::LBracket)
-            && self.peek(1).kind == TokenKind::Identifier
-            && self.text_of(self.peek(1).span) == "some"
-        {
-            let start = self.current().span;
-            self.bump(); // `[`
-            self.bump(); // `some`
-            let element = self.parse_type_ref();
-            self.expect(TokenKind::RBracket);
-            let span = Span::from_bounds(start.start, self.previous_end());
-            return (self.tree.add_type(TypeRef::Array { element, span }), true);
-        }
-        (self.parse_type_ref(), false)
-    }
-
-    /// Rewrites a block's trailing expression statement into a `return`, in
-    /// place.
-    ///
-    /// A computed member is an expression bridge — `let node: Node { body.node }`
-    /// yields its final expression — so its block returns its tail, the way the
-    /// source reads it. Statements live in the tree's arena, so the rewrite
-    /// replaces the arena entry the block's last id names.
-    fn make_block_return_its_tail(&mut self, body: &Block) {
-        let Some(&last) = body.stmts.last() else {
-            return;
-        };
-        match self.tree.stmt(last) {
-            Stmt::Expr { expr, span } => {
-                let (expr, span) = (*expr, *span);
-                self.tree.stmts[last] = Stmt::Return {
-                    value: Some(expr),
-                    span,
-                };
-            }
-            // A member whose value is chosen by a condition ends in the `if`
-            // rather than in an expression, and each arm is then a tail of its
-            // own. Recursing gives every arm the return the single-expression
-            // case gets — including a nested `else if`, which is an `if` in the
-            // else block. An `if` with no `else` is left alone: one arm returning
-            // does not make the member total, and the definite-return check is
-            // what should say so.
-            Stmt::If {
-                then_block,
-                else_block: Some(else_block),
-                ..
-            } => {
-                let (then_block, else_block) = (then_block.clone(), else_block.clone());
-                self.make_block_return_its_tail(&then_block);
-                self.make_block_return_its_tail(&else_block);
-            }
-            _ => {}
-        }
-    }
-
-    /// Builds the zero-argument method a computed member (`let node: Any { … }`)
-    /// desugars to: no parameters, result type `Any`, body the written block.
-    fn computed_member_function(
-        name: Symbol,
-        name_span: Span,
-        ty: TypeRefId,
-        body: Block,
-        span: Span,
-    ) -> Function {
-        Function {
-            name,
-            name_span,
-            is_main: false,
-            foreign: None,
-            export: None,
-            execution: Execution::Inherited,
-            params: Vec::new(),
-            return_type: Some(ty),
-            body,
-            span,
         }
     }
 }

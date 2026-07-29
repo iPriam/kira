@@ -23,7 +23,9 @@ impl Vm<'_> {
             I::AddInt | I::SubInt | I::MulInt | I::DivInt | I::RemInt | I::DivUInt | I::RemUInt => {
                 self.int_arith(instruction)
             }
-            I::AddFloat | I::SubFloat | I::MulFloat | I::DivFloat => self.float_arith(instruction),
+            I::AddFloat | I::SubFloat | I::MulFloat | I::DivFloat | I::RemFloat => {
+                self.float_arith(instruction)
+            }
             I::ConcatStr => self.concat(),
             I::EqInt | I::NeInt | I::LtInt | I::LeInt | I::GtInt | I::GeInt => {
                 self.int_compare(instruction)
@@ -34,6 +36,7 @@ impl Vm<'_> {
             }
             I::EqBool | I::NeBool => self.bool_compare(instruction),
             I::EqStr | I::NeStr => self.str_compare(instruction),
+            I::EqAny | I::NeAny => self.any_compare(instruction),
             I::BitAnd | I::BitOr | I::BitXor | I::Shl | I::ShrInt | I::ShrUInt => {
                 self.bitwise(instruction)
             }
@@ -119,6 +122,9 @@ impl Vm<'_> {
             I::SubFloat => lhs - rhs,
             I::MulFloat => lhs * rhs,
             I::DivFloat => lhs / rhs,
+            // Rust's `%` on `f64` is the truncated remainder `fmod` computes,
+            // which is what LLVM's `frem` lowers to on the other engine.
+            I::RemFloat => lhs % rhs,
             _ => return Err(VmError::BadDispatch),
         };
         self.stack.push(Value::Float(value));
@@ -197,6 +203,29 @@ impl Vm<'_> {
         let value = match instruction {
             Instruction::EqBool => lhs == rhs,
             Instruction::NeBool => lhs != rhs,
+            _ => return Err(VmError::BadDispatch),
+        };
+        self.stack.push(Value::Bool(value));
+        Ok(())
+    }
+
+    /// Structural equality of two erased values.
+    ///
+    /// Erasure is the identity here — the VM's `Value` already carries its own
+    /// tag, so an `Any` operand is just a value — which is why this pops two
+    /// values of no particular kind rather than a pair of one kind. Both are
+    /// dropped afterwards, as every comparison drops what it consumed; the
+    /// comparison itself borrows the heap and takes nothing from it, so the
+    /// drops are the only ownership this arm has to get right.
+    fn any_compare(&mut self, instruction: Instruction) -> Result<(), VmError> {
+        let rhs = self.pop()?;
+        let lhs = self.pop()?;
+        let equal = self.heap.values_equal(lhs, rhs);
+        self.heap.drop_value(lhs);
+        self.heap.drop_value(rhs);
+        let value = match instruction {
+            Instruction::EqAny => equal,
+            Instruction::NeAny => !equal,
             _ => return Err(VmError::BadDispatch),
         };
         self.stack.push(Value::Bool(value));

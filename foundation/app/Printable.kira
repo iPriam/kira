@@ -1,0 +1,20 @@
+// Foundation's `Printable` construct family: a type says how it renders itself.
+//
+// A declaration backed by `Printable` implements `onPrint`, and callers reach
+// that text through it:
+//
+//     Printable Temperature(celsius: Float) {
+//         function onPrint() -> String {
+//             return "…"
+//         }
+//     }
+//
+// The family is the whole surface. Nothing in the compiler treats `Printable`
+// specially — `print(value)` does not consult it, and an `@Printable`
+// annotation does not exist here — so `onPrint()` is called the way any other
+// member is, by name.
+
+// A type that renders itself as text.
+construct Printable {
+    @Required function onPrint() -> String
+}

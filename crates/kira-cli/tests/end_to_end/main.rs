@@ -1,4 +1,4 @@
-//! End-to-end tests driving the built `kirac` binary over real `.kira` files.
+//! End-to-end tests driving the built `kira` binary over real `.kira` files.
 //!
 //! These exercise the whole pipeline — lexer, parser, salsa analysis, IR,
 //! bytecode, VM — plus diagnostic rendering and process exit codes, the way a
@@ -24,6 +24,7 @@ mod modules;
 mod natives;
 mod packages;
 mod programs;
+mod tests_verb;
 mod web;
 
 /// Writes `source` to a uniquely-named temp `.kira` file and returns its path.
@@ -31,31 +32,31 @@ fn write_source(source: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
-    let path = std::env::temp_dir().join(format!("kirac_e2e_{pid}_{unique}.kira"));
+    let path = std::env::temp_dir().join(format!("kira_e2e_{pid}_{unique}.kira"));
     std::fs::write(&path, source).expect("write temp source");
     path
 }
 
-/// Runs the real `kirac` binary with `args`.
-fn kirac(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_kirac"))
+/// Runs the real `kira` binary with `args`.
+fn kira(args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_kira"))
         .args(args)
         .output()
-        .expect("run kirac")
+        .expect("run kira")
 }
 
-/// Runs one source string through `kirac run`.
+/// Runs one source string through `kira run`.
 fn run_source(source: &str) -> std::process::Output {
     let path = write_source(source);
-    let output = kirac(&["run", path.to_str().unwrap()]);
+    let output = kira(&["run", path.to_str().unwrap()]);
     let _ = std::fs::remove_file(&path);
     output
 }
 
-/// Runs one source string through `kirac check`.
+/// Runs one source string through `kira check`.
 fn check_source(source: &str) -> std::process::Output {
     let path = write_source(source);
-    let output = kirac(&["check", path.to_str().unwrap()]);
+    let output = kira(&["check", path.to_str().unwrap()]);
     let _ = std::fs::remove_file(&path);
     output
 }
@@ -66,7 +67,7 @@ fn write_program(entry: &str, modules: &[(&str, &str)]) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
-    let directory = std::env::temp_dir().join(format!("kirac_e2e_program_{pid}_{unique}"));
+    let directory = std::env::temp_dir().join(format!("kira_e2e_program_{pid}_{unique}"));
     std::fs::create_dir_all(&directory).expect("temp dir");
     for (name, text) in modules {
         let module = directory.join(format!("{name}.kira"));
@@ -86,7 +87,7 @@ fn write_package(kind: &str, source: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
-    let directory = std::env::temp_dir().join(format!("kirac_e2e_pkg_{pid}_{unique}"));
+    let directory = std::env::temp_dir().join(format!("kira_e2e_pkg_{pid}_{unique}"));
     std::fs::create_dir_all(&directory).expect("temp dir");
     std::fs::write(
         directory.join("package.kira"),

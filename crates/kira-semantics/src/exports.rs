@@ -149,7 +149,7 @@ impl Analyzer<'_> {
         if self.build_kind != BuildKind::Library {
             self.emit(
                 name_span,
-                "KSEM159",
+                "KSEM256",
                 "`@Export` is only meaningful in a library package: an \
                  application is entered at its `@Main`, not called by a \
                  consumer. Set `let kind = .Library` in `package.kira`.",
@@ -245,7 +245,13 @@ impl Analyzer<'_> {
             // is generated against, so both are refused here. (A written
             // `CString` in an ordinary position is already `Error` by `KSEM176`,
             // so only `RawPtr` reaches this arm in practice.)
-            Type::RawPtr | Type::CString | Type::NativeState(_) => {
+            // A capture cell is refused here too, and for the strongest reason
+            // on this list: it is shared mutable storage whose share count this
+            // runtime owns. Nothing outside can hold one without a count nobody
+            // manages. It is not surface either, so no author can reach this
+            // arm by writing a signature — it exists so the desugar cannot leak
+            // one through an export.
+            Type::RawPtr | Type::CString | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
                 self.emit(
                     span,
                     "KSEM186",
@@ -253,6 +259,23 @@ impl Analyzer<'_> {
                         "`{name}` cannot cross the export boundary: `RawPtr` and \
                          `CString` are `@FFI.Extern` seam types for calling *into* C, \
                          not part of a library's exported surface."
+                    ),
+                );
+                false
+            }
+            // The export boundary carries one tag and one word, and `Any` is one
+            // word — but a consumer's generated wrapper has to *name* the type
+            // it gets back, and `Any` names none. So this is refused for the
+            // same reason the C seam refuses it, not for the aggregate reason
+            // the arms below give.
+            Type::Any => {
+                self.emit(
+                    span,
+                    "KSEM186",
+                    format!(
+                        "`{name}` cannot cross the export boundary: an erased value \
+                         has no type a consumer's wrapper could name. Export the \
+                         concrete type."
                     ),
                 );
                 false
