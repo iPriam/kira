@@ -103,15 +103,27 @@ fn a_payload_of_the_wrong_type_is_reported() {
     );
 }
 
+/// An aggregate payload is admitted: the box carries a struct or an array
+/// through the erased aggregate slot, whose generated clone/free leaves reclaim
+/// whatever the elements own.
 #[test]
-fn an_aggregate_payload_is_refused_at_the_declaration() {
-    // An array payload is refused: the box carries one type-erased word, and an
-    // aggregate has no form there yet. (A struct payload cannot even resolve —
-    // structs are declared after enums, so it is an unknown type, KSEM050 —
-    // which is refusal enough.)
+fn an_aggregate_payload_is_admitted_at_the_declaration() {
+    assert!(
+        codes(
+            "enum E { Wrap([Int]) Deep([[String]]) }\n\
+             @Main function main() { return }"
+        )
+        .is_empty()
+    );
+}
+
+/// A type with no payload form at all is still refused, and `KSEM118` still
+/// names the set that has one.
+#[test]
+fn a_payload_type_with_no_value_form_is_refused_at_the_declaration() {
     assert_eq!(
         codes(
-            "enum E { Wrap([Int]) }\n\
+            "enum E { Wrap(Void) }\n\
              @Main function main() { return }"
         ),
         vec!["KSEM118"]

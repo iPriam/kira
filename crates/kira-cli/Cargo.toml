@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "kirac"
+name = "kira"
 path = "src/main.rs"
 
 [lints]
@@ -22,7 +22,7 @@ kira-ir.workspace = true
 kira-semantics-model.workspace = true
 kira-bytecode.workspace = true
 # The build system: the frontend query and the library/wrapper-crate build both
-# live there, so `kirac` drives them rather than owning a second copy.
+# live there, so `kira` drives them rather than owning a second copy.
 kira-build.workspace = true
 kira-main.workspace = true
 kira-vm-runtime.workspace = true
@@ -34,20 +34,27 @@ kira-hybrid-runtime.workspace = true
 kira-live.workspace = true
 kira-manifest.workspace = true
 kira-package-manager.workspace = true
-# Manifest discovery: `kirac` walks up from the source file to the package that
+# Manifest discovery: `kira` walks up from the source file to the package that
 # governs it, which is what makes `kind = .Library` reach the frontend.
 kira-project.workspace = true
-# Structured target triples and the resolved-library catalog: `kirac` picks the
+# Structured target triples and the resolved-library catalog: `kira` picks the
 # build target and resolves each `@FFI.Extern` import's archive against it.
 kira-native-lib-definition.workspace = true
 # Not called from Rust: depending on the native runtime makes cargo build
-# `libkira_native_bridge.a` into the same profile directory as `kirac`, which is
+# `libkira_native_bridge.a` into the same profile directory as `kira`, which is
 # where the native link step looks for it.
 kira-native-bridge.workspace = true
-# Not called from Rust: `kirac live` starts the desktop runner as a child
+# The compiler capability, from both ends. `kira-check` is what `kira` grants a
+# running program; `kira-compiler-bridge` is not called from Rust at all —
+# depending on it makes cargo build `libkira_compiler_bridge.a` beside `kira`,
+# which is where the native link step looks for it when a program checks a
+# package.
+kira-check.workspace = true
+kira-compiler-bridge.workspace = true
+# Not called from Rust: `kira live` starts the desktop runner as a child
 # process. This dep only orders the build and ties the versions together — cargo
 # builds a dependency's lib target, never its `[[bin]]`, so unlike the staticlib
-# above this does NOT put `kira-desktop-runner` beside `kirac`. Only a workspace
+# above this does NOT put `kira-desktop-runner` beside `kira`. Only a workspace
 # build does that, which is why a live session that cannot find its runner says
 # so and names the build that would fix it.
 kira-desktop-runner.workspace = true

@@ -23,6 +23,10 @@ resolvable statically:
   commented "take a concrete leaf type so dispatch is unambiguous".
 - `override let rate = 5` changes the **default of one shared slot**, not a new
   slot: `s.gross()` is 100*5 because `gross` reads the single `rate` field.
+- The type may be restated (`override let rate: Int = 5`) and doing so is inert
+  — the slot keeps the type its declaration gave it. A restatement that
+  *disagrees* is `KSEM059`: an override is chosen by name, so a wrong type there
+  means the author believed they were rebinding a different field.
 - `ClsAccount.gross()` inside a `ClsSavings` method runs the parent's *body*
   against the *derived* instance — it is spelled "super", not "upcast".
 
@@ -73,6 +77,7 @@ Codes are this repo's own, assigned fresh — they are not the oracle's numberin
 | KSEM062 | wrong constructor argument count |
 | KSEM063 | argument type mismatch — the pre-existing call/constructor check, which is also what refuses a derived instance where an ancestor type is written |
 | KSEM064 | inheritance cycle |
+| KSEM059 | `override let` restates a type the inherited field does not have |
 | KSEM065 | duplicate parent type |
 | KSEM066 | override signature mismatch |
 | KSEM067 | ambiguous inherited method lookup |

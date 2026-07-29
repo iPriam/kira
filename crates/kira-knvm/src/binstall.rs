@@ -2,7 +2,7 @@
 //!
 //! `knvm binstall` is the developer's install route: it compiles the compiler
 //! out of the checkout it is run inside (dev profile), shapes the result into
-//! the same tree a release archive unpacks to — `bin/kirac` with `foundation/`
+//! the same tree a release archive unpacks to — `bin/kira` with `foundation/`
 //! beside it — and lands it on the `dev` channel through the same
 //! staging/validate/rename pipeline a release install uses. Installing selects
 //! it, so `kira` dispatches to the fresh build immediately.
@@ -49,10 +49,10 @@ pub enum BinstallError {
     /// `cargo` is required to build the checkout and is not on PATH.
     #[error("`cargo` was not found on PATH; binstall builds the checkout with it")]
     CargoUnavailable,
-    /// No managed LLVM was found, and kirac cannot be built without one.
+    /// No managed LLVM was found, and kira cannot be built without one.
     #[error(
         "no managed LLVM found under the toolchains root; the LLVM backend is \
-         part of every kirac build. Provision one (see `llvm-metadata.toml` \
+         part of every kira build. Provision one (see `llvm-metadata.toml` \
          for the pinned version) and try again"
     )]
     LlvmMissing,
@@ -75,15 +75,18 @@ pub enum BinstallError {
 
 /// The packages `binstall` builds before it stages a toolchain.
 ///
-/// `kira-native-bridge` is named even though `kira-cli` depends on it, because
-/// that dependency builds its **rlib** and a toolchain installs its
-/// **staticlib** — cargo builds a crate-type nobody asked for only when the
-/// crate itself is a target. Leaving it out installs a fresh compiler beside
-/// whatever archive an earlier build happened to leave in `target/debug`, and
-/// the two then disagree about the runtime ABI: the compiler emits a reference
-/// to its version's marker, the stale archive defines an older one, and every
-/// program the developer builds afterwards fails to link by name.
-const BUILD_PACKAGES: [&str; 3] = ["kira-cli", "kira-lsp", "kira-native-bridge"];
+/// Both runtime crates are named even though `kira-cli` depends on them,
+/// because those dependencies build their **rlibs** and a toolchain installs
+/// their **staticlibs** — cargo builds a crate-type nobody asked for only when
+/// the crate itself is a target. Leaving either out installs a fresh compiler
+/// beside an absent or stale archive: ordinary native programs need the base
+/// bridge, while programs that call the compiler need its superset.
+const BUILD_PACKAGES: [&str; 4] = [
+    "kira-cli",
+    "kira-lsp",
+    "kira-native-bridge",
+    "kira-compiler-bridge",
+];
 
 /// Builds the enclosing checkout and installs it as the selected dev toolchain.
 ///
@@ -96,7 +99,7 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
     })?;
     let version = workspace_version(&checkout)?;
 
-    // The LLVM backend is a hard dependency of kirac, and its build script
+    // The LLVM backend is a hard dependency of kira, and its build script
     // discovers the managed bundle itself; this check only refuses up front,
     // with the provisioning route named, rather than three crates into a
     // build that cannot finish.
@@ -145,11 +148,18 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
     let compiler = debug_dir.join(executable_name(PRIMARY_BINARY));
     let language_server = debug_dir.join(executable_name(LANGUAGE_SERVER_BINARY));
     let host_archive = debug_dir.join("libkira_native_bridge.a");
+    let compiler_archive = debug_dir.join("libkira_compiler_bridge.a");
     let wasm_archive = target_dir(&checkout)
         .join("wasm32-unknown-emscripten")
         .join("debug")
         .join("libkira_native_bridge.a");
-    for artifact in [&compiler, &language_server, &host_archive, &wasm_archive] {
+    for artifact in [
+        &compiler,
+        &language_server,
+        &host_archive,
+        &compiler_archive,
+        &wasm_archive,
+    ] {
         if !artifact.is_file() {
             return Err(BinstallError::MissingBuildArtifact {
                 expected: artifact.clone(),
@@ -179,6 +189,14 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
     let staged_host = bin.join("libkira_native_bridge.a");
     std::fs::copy(&host_archive, &staged_host)
         .map_err(|error| InstallError::io("copy the runtime archive to", &staged_host, error))?;
+    let staged_compiler = bin.join("libkira_compiler_bridge.a");
+    std::fs::copy(&compiler_archive, &staged_compiler).map_err(|error| {
+        InstallError::io(
+            "copy the compiler runtime archive to",
+            &staged_compiler,
+            error,
+        )
+    })?;
     let staged_wasm = bin.join("libkira_native_bridge-wasm32-emscripten.a");
     std::fs::copy(&wasm_archive, &staged_wasm).map_err(|error| {
         InstallError::io("copy the Web runtime archive to", &staged_wasm, error)
@@ -298,6 +316,10 @@ mod tests {
         assert!(
             BUILD_PACKAGES.contains(&"kira-native-bridge"),
             "the staticlib is staged from `target/debug`, so it has to be built there"
+        );
+        assert!(
+            BUILD_PACKAGES.contains(&"kira-compiler-bridge"),
+            "the compiler staticlib is staged from `target/debug`, so it has to be built there"
         );
         assert!(BUILD_PACKAGES.contains(&"kira-cli"));
         assert!(BUILD_PACKAGES.contains(&"kira-lsp"));

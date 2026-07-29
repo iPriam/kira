@@ -9,7 +9,7 @@ use std::ffi::{CStr, CString};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 
-use kira_runtime_abi::{FileSystemOp, ForeignPointerWidth};
+use kira_runtime_abi::{CompilerOp, FileSystemOp, ForeignPointerWidth};
 
 use super::ffi::c_string;
 
@@ -133,6 +133,12 @@ pub(crate) struct Runtime {
     /// earlier release are emitted inline; see `super::values`.
     pub(super) array_free: Callable,
     pub(super) enum_new: Callable,
+    /// Structural equality of two erased values, and of the enums inside them.
+    pub(super) any_eq: Callable,
+    /// Structural equality of two arrays, given the element's equality leaf.
+    pub(super) array_eq: Callable,
+    /// Boxes a moved aggregate payload with clone/free **and** equality leaves.
+    pub(super) enum_new_aggregate_eq: Callable,
     /// Boxes a moved struct payload with type-specific clone/free leaves.
     pub(super) enum_new_aggregate: Callable,
     pub(super) enum_tag: Callable,
@@ -144,6 +150,22 @@ pub(crate) struct Runtime {
     /// the payload, and the only one generated code still calls. A copy and
     /// every earlier release are emitted inline; see `super::values`.
     pub(super) enum_free: Callable,
+    /// Boxes a value into a fresh capture cell.
+    pub(super) cell_new: Callable,
+    /// Boxes a wide value — a struct or an array handle — into a fresh cell.
+    pub(super) cell_new_aggregate: Callable,
+    /// Reads what a cell holds as an owned word.
+    pub(super) cell_get: Callable,
+    /// Reads a wide payload into caller-owned storage.
+    pub(super) cell_get_aggregate: Callable,
+    /// Replaces what a cell holds, releasing the old payload, in one call.
+    pub(super) cell_set: Callable,
+    /// Replaces a cell's payload with a wide value.
+    pub(super) cell_set_aggregate: Callable,
+    /// Releases the *last* hold on a cell: the only release that touches the
+    /// payload, and the only one generated code still calls. A copy and every
+    /// earlier release are emitted inline; see `super::values`.
+    pub(super) cell_free: Callable,
     /// Allocates the storage one exported class instance lives in when it
     /// crosses to a consumer as a handle.
     pub(super) box_new: Callable,
@@ -151,6 +173,13 @@ pub(crate) struct Runtime {
     /// whatever the instance inside it owned.
     pub(super) box_free: Callable,
     pub(super) trap_div_zero: Callable,
+    /// `kira_rt_task_op`: the whole deferred-task surface, in one call.
+    ///
+    /// One symbol rather than a dozen, because the *policy* is generated Kira
+    /// the IR synthesizes: what the runtime owns is the task table, and one
+    /// `(primitive, a, b, c) -> answer` shape covers every question the
+    /// generated scheduler asks it.
+    pub(super) task_op: Callable,
     /// `kira_rt_trap_foreign`: how a generated adapter's non-success status
     /// becomes a native trap at a foreign call site.
     pub(super) trap_foreign: Callable,
@@ -237,6 +266,11 @@ pub(crate) struct Runtime {
     /// rather than searched: adding an operation adds a row to
     /// [`FileSystemOp::ALL`] and nothing here has to be remembered.
     pub(super) file_system: [Callable; FileSystemOp::ALL.len()],
+    /// The `kira_rt_compiler_*` helpers, indexed by [`CompilerOp::as_byte`].
+    ///
+    /// An array for the same reason the file-system row is: the set is written
+    /// down once, in [`CompilerOp::ALL`], and indexed by a total function.
+    pub(super) compiler: [Callable; CompilerOp::ALL.len()],
 }
 
 /// The LLVM form of `kira_native_bridge::enums::KiraEnum`.
@@ -374,6 +408,21 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 // (tag, payload_kind, payload)
                 &mut [types.i64, types.i64, types.i64],
             ),
+            any_eq: declare(c"kira_rt_any_eq", types.i8, &mut [types.ptr, types.ptr]),
+            array_eq: declare(
+                c"kira_rt_array_eq",
+                types.i8,
+                // (a, b, element size, element equality leaf)
+                &mut [types.ptr, types.ptr, types.i64, types.ptr],
+            ),
+            enum_new_aggregate_eq: declare(
+                c"kira_rt_enum_new_aggregate_eq",
+                types.ptr,
+                // (tag, source, size, clone, free, eq)
+                &mut [
+                    types.i64, types.ptr, types.i64, types.ptr, types.ptr, types.ptr,
+                ],
+            ),
             enum_new_aggregate: declare(
                 c"kira_rt_enum_new_aggregate",
                 types.ptr,
@@ -388,12 +437,53 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 &mut [types.ptr, types.ptr],
             ),
             enum_free: declare(c"kira_rt_enum_free", types.void, &mut [types.ptr]),
+            // The capture-cell helpers box the shared, mutable storage a
+            // captured `var` lives in. The box is an enum box with the tag
+            // unused, so `Types::enum_box` serves the inline share bump and
+            // only the *write* needs machinery of its own. Appended after the
+            // enum helpers, which is what makes them not an ABI change.
+            cell_new: declare(
+                c"kira_rt_cell_new",
+                types.ptr,
+                // (payload_kind, payload)
+                &mut [types.i64, types.i64],
+            ),
+            cell_new_aggregate: declare(
+                c"kira_rt_cell_new_aggregate",
+                types.ptr,
+                // (source, size, clone, free)
+                &mut [types.ptr, types.i64, types.ptr, types.ptr],
+            ),
+            cell_get: declare(c"kira_rt_cell_get", types.i64, &mut [types.ptr]),
+            cell_get_aggregate: declare(
+                c"kira_rt_cell_get_aggregate",
+                types.void,
+                &mut [types.ptr, types.ptr],
+            ),
+            cell_set: declare(
+                c"kira_rt_cell_set",
+                types.void,
+                // (cell, payload_kind, payload)
+                &mut [types.ptr, types.i64, types.i64],
+            ),
+            cell_set_aggregate: declare(
+                c"kira_rt_cell_set_aggregate",
+                types.void,
+                // (cell, source, size, clone, free)
+                &mut [types.ptr, types.ptr, types.i64, types.ptr, types.ptr],
+            ),
+            cell_free: declare(c"kira_rt_cell_free", types.void, &mut [types.ptr]),
             // The box helpers hold an exported class instance for as long as a
             // consumer holds its handle. Appended after the enum helpers, which
             // is what makes them not an ABI change.
             box_new: declare(c"kira_rt_box_new", types.ptr, &mut [types.i64]),
             box_free: declare(c"kira_rt_box_free", types.void, &mut [types.ptr, types.i64]),
             trap_div_zero: declare(c"kira_rt_trap_div_zero", types.void, &mut []),
+            task_op: declare(
+                c"kira_rt_task_op",
+                types.i64,
+                &mut [types.i64, types.i64, types.i64, types.i64],
+            ),
             stack_save: declare(c"llvm.stacksave.p0", types.ptr, &mut []),
             stack_restore: declare(c"llvm.stackrestore.p0", types.void, &mut [types.ptr]),
             trap_foreign_unavailable: declare(
@@ -553,6 +643,13 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 let name = c_string(op.runtime_symbol());
                 let (ret, mut params) = file_system_signature(op, types);
                 declare(&name, ret, &mut params)
+            }),
+            // Appended after the file-system helpers. Every compiler operation
+            // takes one `[String]` handle plus the element stride and answers
+            // with another, so the shape is one row rather than a table.
+            compiler: CompilerOp::ALL.map(|op| {
+                let name = c_string(op.runtime_symbol());
+                declare(&name, types.ptr, &mut [types.ptr, types.i64])
             }),
         }
     }

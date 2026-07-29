@@ -25,10 +25,14 @@ pub mod instance;
 pub mod interp;
 pub mod value;
 
-pub use error::VmError;
+pub use error::{NativeStateOperation, VmError};
 pub use instance::{Instance, RootId};
 pub use interp::{Program, RunOutcome, execute};
 pub use value::{Heap, HeapStats, StrId, Value};
+
+#[cfg(test)]
+#[path = "compiler_tests.rs"]
+mod compiler_tests;
 
 #[cfg(test)]
 #[path = "foreign_tests.rs"]

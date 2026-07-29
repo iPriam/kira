@@ -225,7 +225,8 @@ impl<'a> Analyzer<'a> {
             }
             // A closure captures `self` by value, so a mutation inside its body
             // never reaches the enclosing method's receiver — it is not scanned.
-            Expr::Closure { .. }
+            Expr::TaskSpawn { .. }
+            | Expr::Closure { .. }
             | Expr::DotMember { args: None, .. }
             | Expr::Int { .. }
             | Expr::Float { .. }

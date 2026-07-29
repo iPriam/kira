@@ -257,7 +257,21 @@ impl Analyzer<'_> {
                 .element(id)
                 .is_some_and(|element| self.native_state_eligible_inner(element, visiting)),
             Type::Enum(id) => self.native_state_enum_eligible(id, visiting),
-            Type::Void | Type::Error | Type::CString | Type::NativeState(_) => false,
+            // Recovering callback state is *typed*: `nativeRecover<T>` checks a
+            // runtime identity against `T`. `Any` has no identity to check
+            // (`TypeTable::native_state_type_id` gives it none), so boxing one
+            // would produce state nothing could ever recover.
+            // A capture cell is refused with them: boxing one would hand a host
+            // shared mutable storage whose count this runtime owns, and
+            // `native_state_type_id` gives a cell no identity to recover
+            // against either.
+            Type::Void
+            | Type::Error
+            | Type::CString
+            | Type::NativeState(_)
+            | Type::Task(_)
+            | Type::Cell(_)
+            | Type::Any => false,
         };
         visiting.remove(&ty);
         eligible

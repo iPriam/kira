@@ -17,14 +17,16 @@ pub fn dispatch(command: Command, args: &[String]) -> i32 {
         Command::Run => pipeline::run(args),
         Command::Build => pipeline::build(args),
         Command::Check => pipeline::check(args),
+        Command::Test => pipeline::test(args),
         Command::Live => pipeline::live(args),
+        Command::Sync => crate::sync::sync(args),
         Command::Help => {
             let all = args.iter().any(|arg| arg == "all" || arg == "--all");
             print_usage_with(all);
             0
         }
         Command::Version => {
-            println!("kirac {}", env!("CARGO_PKG_VERSION"));
+            println!("kira {}", env!("CARGO_PKG_VERSION"));
             0
         }
         other => unavailable(other),
@@ -32,7 +34,7 @@ pub fn dispatch(command: Command, args: &[String]) -> i32 {
 }
 
 fn unavailable(command: Command) -> i32 {
-    eprintln!("kirac {}: not yet implemented", command.label());
+    eprintln!("kira {}: not yet implemented", command.label());
     EXIT_UNAVAILABLE
 }
 
@@ -47,7 +49,9 @@ fn implemented(command: Command) -> bool {
         Command::Run
             | Command::Build
             | Command::Check
+            | Command::Test
             | Command::Live
+            | Command::Sync
             | Command::Help
             | Command::Version
     )
@@ -62,39 +66,39 @@ pub fn print_usage() {
 ///
 /// The default screen lists only what runs — a front door advertising sixteen
 /// stubs reads as sixteen broken promises. The planned set stays reachable
-/// (`kirac help all`) and stays honest: every hidden verb is labeled
+/// (`kira help all`) and stays honest: every hidden verb is labeled
 /// unimplemented.
 fn print_usage_with(all: bool) {
     let paint = kira_toolchain::Paint::auto_stderr();
-    // The note column is aligned by the visible width of `kirac <verb><args>` —
+    // The note column is aligned by the visible width of `kira <verb><args>` —
     // padding is computed before color is applied, because ANSI escapes
     // inflate `len()`, and from the rows this screen actually shows, so hiding
     // the planned set does not pad the short list to the longest hidden name.
-    let visible = |kind: &Command| "kirac ".len() + kind.label().len() + kind.arguments().len();
+    let visible = |kind: &Command| "kira ".len() + kind.label().len() + kind.arguments().len();
     let width = ALL
         .iter()
         .filter(|kind| all || implemented(**kind))
         .map(visible)
         .max()
         .unwrap_or(0)
-        .max("kirac --version".len());
+        .max("kira --version".len());
 
-    eprintln!("{} — the Kira compiler CLI", paint.bold("kirac"));
+    eprintln!("{} — the Kira compiler CLI", paint.bold("kira"));
     eprintln!();
     for kind in ALL.into_iter().filter(|kind| implemented(*kind)) {
         let pad = " ".repeat(width - visible(&kind));
         eprintln!(
             "  {}{}{pad}   {}",
-            paint.cyan(&format!("kirac {}", kind.label())),
+            paint.cyan(&format!("kira {}", kind.label())),
             kind.arguments(),
             paint.dim(kind.description())
         );
     }
     {
-        let pad = " ".repeat(width - "kirac --version".len());
+        let pad = " ".repeat(width - "kira --version".len());
         eprintln!(
             "  {}{pad}   {}",
-            paint.cyan("kirac --version"),
+            paint.cyan("kira --version"),
             paint.dim("print the version")
         );
     }
@@ -106,7 +110,7 @@ fn print_usage_with(all: bool) {
             let pad = " ".repeat(width - visible(&kind));
             eprintln!(
                 "  {}{}{pad}   {}",
-                paint.dim(&format!("kirac {}", kind.label())),
+                paint.dim(&format!("kira {}", kind.label())),
                 kind.arguments(),
                 paint.dim(&format!("{} (not yet implemented)", kind.description()))
             );
@@ -117,7 +121,7 @@ fn print_usage_with(all: bool) {
         eprintln!(
             "{}",
             paint.dim(&format!(
-                "{count} more commands are planned; `kirac help all` lists them."
+                "{count} more commands are planned; `kira help all` lists them."
             ))
         );
     }

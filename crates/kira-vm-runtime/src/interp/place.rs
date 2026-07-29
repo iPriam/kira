@@ -17,8 +17,9 @@
 use kira_bytecode::op::{PathStep, PlacePath};
 
 use super::{Frame, Vm};
-use crate::error::VmError;
+use crate::error::{NativeStateOperation, VmError};
 use crate::value::Value;
+use kira_runtime_abi::NativeStatePathStep;
 
 /// A place step with its index value already taken off the stack.
 ///
@@ -109,13 +110,11 @@ impl Vm<'_> {
         value: Value,
     ) -> Result<(), VmError> {
         if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
-            return self.mutate_native_view(token, type_id, value, |vm, root, value| {
-                let Some((&last, walk)) = steps.split_last() else {
-                    return Err(VmError::EmptyFieldPath);
-                };
-                let target = vm.walk_value(root, walk)?;
-                vm.write_last(target, last, value)
-            });
+            if steps.is_empty() {
+                self.heap.drop_value(value);
+                return Err(VmError::EmptyFieldPath);
+            }
+            return self.write_through_view(token, type_id, steps, value);
         }
         let Some((&last, walk)) = steps.split_last() else {
             return Err(VmError::EmptyFieldPath);
@@ -138,16 +137,16 @@ impl Vm<'_> {
         value: Value,
     ) -> Result<(), VmError> {
         if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
-            return self.mutate_native_view(token, type_id, value, |vm, root, value| {
-                let Some((&last, walk)) = path.split_last() else {
-                    return Err(VmError::EmptyFieldPath);
-                };
-                let mut target = root;
-                for &index in walk {
-                    target = vm.walk_step(target, ResolvedStep::Field(index))?;
-                }
-                vm.write_last(target, ResolvedStep::Field(last), value)
-            });
+            if path.is_empty() {
+                self.heap.drop_value(value);
+                return Err(VmError::EmptyFieldPath);
+            }
+            self.native_path.clear();
+            self.native_path.extend(
+                path.iter()
+                    .map(|&index| NativeStatePathStep::Field(index.into())),
+            );
+            return self.write_native_path(token, type_id, value, false);
         }
         let Some((&last, walk)) = path.split_last() else {
             return Err(VmError::EmptyFieldPath);
@@ -201,16 +200,7 @@ impl Vm<'_> {
         value: Value,
     ) -> Result<(), VmError> {
         if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
-            return self.mutate_native_view(token, type_id, value, |vm, root, value| {
-                let target = vm.walk_value(root, steps)?;
-                let Value::Array(id) = target else {
-                    return Err(VmError::NotAnArray);
-                };
-                if !vm.heap.push_element(id, value) {
-                    return Err(VmError::NotAnArray);
-                }
-                Ok(())
-            });
+            return self.write_through_view_appending(token, type_id, steps, value);
         }
         let target = self.walk_place(frame, slot, steps)?;
         let Value::Array(id) = target else {
@@ -222,29 +212,77 @@ impl Vm<'_> {
         Ok(())
     }
 
-    fn mutate_native_view(
+    /// Writes `value` at `steps` inside callback state, addressing it by path.
+    ///
+    /// The state is never materialized as VM objects to do this. It used to be:
+    /// a field write recovered the whole state, rebuilt every string, array and
+    /// struct in it as heap objects, wrote one field, and boxed all of it back.
+    /// That is O(state) per write, so a UI batch carrying a glyph cache paid for
+    /// the cache on every `quadCount = quadCount + 1` — which is what made the
+    /// VM unusably slow on a real UI. Addressing by path costs the depth of the
+    /// path instead.
+    fn write_through_view(
+        &mut self,
+        token: kira_runtime_abi::NativeStateToken,
+        type_id: kira_runtime_abi::NativeStateTypeId,
+        steps: &[ResolvedStep],
+        value: Value,
+    ) -> Result<(), VmError> {
+        self.resolve_native_path(steps)?;
+        self.write_native_path(token, type_id, value, false)
+    }
+
+    /// Appends `value` to the array `steps` addresses inside callback state.
+    fn write_through_view_appending(
+        &mut self,
+        token: kira_runtime_abi::NativeStateToken,
+        type_id: kira_runtime_abi::NativeStateTypeId,
+        steps: &[ResolvedStep],
+        value: Value,
+    ) -> Result<(), VmError> {
+        self.resolve_native_path(steps)?;
+        self.write_native_path(token, type_id, value, true)
+    }
+
+    /// Fills the reusable path buffer from resolved place steps.
+    ///
+    /// Reused rather than allocated: this runs on every write through callback
+    /// state, which is every mutation of a UI batch's counters.
+    fn resolve_native_path(&mut self, steps: &[ResolvedStep]) -> Result<(), VmError> {
+        self.native_path.clear();
+        for step in steps {
+            self.native_path.push(match *step {
+                ResolvedStep::Field(index) => NativeStatePathStep::Field(index.into()),
+                ResolvedStep::Index(index) => NativeStatePathStep::Index(
+                    u64::try_from(index).map_err(|_| VmError::NegativeIndex)?,
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// Boxes `value` and hands it to the host at the resolved path.
+    fn write_native_path(
         &mut self,
         token: kira_runtime_abi::NativeStateToken,
         type_id: kira_runtime_abi::NativeStateTypeId,
         value: Value,
-        mutate: impl FnOnce(&mut Self, Value, Value) -> Result<(), VmError>,
+        appending: bool,
     ) -> Result<(), VmError> {
-        let stored = self
-            .host
-            .native_state_recover(token, type_id)
-            .map_err(VmError::NativeState)?;
-        let root = self.heap.from_native_state(stored);
-        if let Err(error) = mutate(self, root, value) {
-            self.heap.drop_value(root);
-            return Err(error);
-        }
-        let stored = self
-            .heap
-            .into_native_state(root)
-            .ok_or(VmError::NativeStateValueMismatch)?;
-        self.host
-            .native_state_replace(token, type_id, stored)
-            .map_err(VmError::NativeState)
+        let stored = self.heap.into_native_state(value).map_err(|kind| {
+            VmError::NativeStateValueMismatch {
+                operation: NativeStateOperation::Store,
+                kind,
+            }
+        })?;
+        let path = std::mem::take(&mut self.native_path);
+        let outcome = if appending {
+            self.host.native_state_append(token, type_id, &path, stored)
+        } else {
+            self.host.native_state_write(token, type_id, &path, stored)
+        };
+        self.native_path = path;
+        outcome.map_err(VmError::NativeState)
     }
 
     /// Fills `buf` with `path`'s steps, popping one index value per `Index`

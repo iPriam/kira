@@ -34,9 +34,9 @@ Supported surface: `Void`, `I8/I16/I32/I64`, `U8/U16/U32/U64`, `Bool`, `F32/F64`
 
 ## Broader migration context
 
-This FFI slice is one milestone in the larger Project Matter migration. Before it, the package resolver milestone landed (committed as `Resolve package directories through the toolchain`), which let `kirac check` on the editor resolve its 9-package graph and reach real semantics — surfacing **1524 honest diagnostics** across 26 files. Those split into genuine missing language features and cases needing `.kira` changes in Project Matter itself; the largest buckets were parser errors around named-argument syntax (`KPAR020`/`KPAR001`), undefined function/name/type cascades (`KSEM061/060/050`), mutable-`self` methods (`KSEM021`), and unimplemented mutable borrow (`KSEM112`). Seamless FFI was chosen as the next slice because the editor is FFI-heavy (graphics/windowing/input host calls); it does not reduce those 1524 directly but unblocks the host-call surface the editor depends on.
+This FFI slice is one milestone in the larger Project Matter migration. Before it, the package resolver milestone landed (committed as `Resolve package directories through the toolchain`), which let `kira check` on the editor resolve its 9-package graph and reach real semantics — surfacing **1524 honest diagnostics** across 26 files. Those split into genuine missing language features and cases needing `.kira` changes in Project Matter itself; the largest buckets were parser errors around named-argument syntax (`KPAR020`/`KPAR001`), undefined function/name/type cascades (`KSEM061/060/050`), mutable-`self` methods (`KSEM021`), and unimplemented mutable borrow (`KSEM112`). Seamless FFI was chosen as the next slice because the editor is FFI-heavy (graphics/windowing/input host calls); it does not reduce those 1524 directly but unblocks the host-call surface the editor depends on.
 
-Next slices to attack after FFI commits (rough priority): the named-argument parser gap (collapses the largest diagnostic bucket), mutable-`self`/mutable-borrow execution, then re-run `kirac check` on the editor to re-measure.
+Next slices to attack after FFI commits (rough priority): the named-argument parser gap (collapses the largest diagnostic bucket), mutable-`self`/mutable-borrow execution, then re-run `kira check` on the editor to re-measure.
 
 **Landed (2026-07-21):** named (labeled) call arguments — `4d60ecb Accept labeled arguments at call sites`. Parser accepts `label: expr` in argument lists; semantics resolves each label against the callee's parameters and binds to positional order before IR, so all backends inherit it; unknown/duplicate/missing labels are typed diagnostics; proven byte-identical on vm/llvm/hybrid. Green (one live_hybrid flake, confirmed passing in isolation at 7.74s vs a 194s parallel-contention timeout).
 
@@ -48,7 +48,7 @@ Remaining top buckets (from the re-measure): `KSEM061` undefined function (249),
 
 - **A1 — flat-package-scope aggregate loading — LANDED** (`4d45eed Load every file of a package into one flat scope`). Bare imports now aggregate every package file; two-phase name registration resolves forward references across sibling files; struct value cycles detected/reported. Green (the two `live_hybrid` failures are the known parallel-load flake — 5 passed isolated). `ComponentStore`/`SpatialBvh`/KiraGraphics public types now resolve.
 
-**Scope correction after A1 — the true surface is much larger than 592.** Because A1 now loads *all* package files (not just root files), the editor's `kirac check` error count went **592 → 14867**. This is not a regression: before A1 the compiler never looked at most of the source. The real remaining work, by origin: kira-graphics 10668, project-matter 1747, kira_ui 1182, ui-foundation 1146, kira-layout 124. Top blocker histogram: `KPAR053` ~7102 — the **deferred FFI annotation family** (`@FFI.Struct`/`@FFI.Callback`/`@FFI.Pointer`/`@FFI.Array`; the FFI slice implemented only `@FFI.Extern`), heavily used in kira-graphics's Metal/Vulkan bindings — then `KSEM182` 2339, `KSEM060` 1694, `KSEM050` 935, `KSEM061` 788, `KSEM021` 633, `KPAR020` 446.
+**Scope correction after A1 — the true surface is much larger than 592.** Because A1 now loads *all* package files (not just root files), the editor's `kira check` error count went **592 → 14867**. This is not a regression: before A1 the compiler never looked at most of the source. The real remaining work, by origin: kira-graphics 10668, project-matter 1747, kira_ui 1182, ui-foundation 1146, kira-layout 124. Top blocker histogram: `KPAR053` ~7102 — the **deferred FFI annotation family** (`@FFI.Struct`/`@FFI.Callback`/`@FFI.Pointer`/`@FFI.Array`; the FFI slice implemented only `@FFI.Extern`), heavily used in kira-graphics's Metal/Vulkan bindings — then `KSEM182` 2339, `KSEM060` 1694, `KSEM050` 935, `KSEM061` 788, `KSEM021` 633, `KPAR020` 446.
 
 Revised slice priority (each substantial): the fuller `@FFI.*` annotation set (largest, unblocks whole binding files — parse first, then C-layout struct / callback semantics), **Construct 2.0**, scalar-conversion calls A3, mutating `self` A4, the Foundation stdlib port A2, `borrow mut` A5. This is now clearly a multi-slice, multi-session effort, not a handful of quick fixes.
 
@@ -519,7 +519,7 @@ HFA, `MetalNSPoint` 2×`F64`).
 
 All of that is now built; see the LANDED note above.
 
-**Path-less CLI invocations — LANDED (2026-07-26, `b032d39`).** `kirac run`,
+**Path-less CLI invocations — LANDED (2026-07-26, `b032d39`).** `kira run`,
 `build`, and `check` required an explicit path; a bare invocation inside an app
 directory was a usage error. It now defaults to `.` and goes through the same
 package discovery, so a directory with no `package.kira` is still refused by
@@ -689,7 +689,7 @@ project manifest through `readFileRange` — is gone, along with its cascade.
 reaches the filesystem through a bundled C library, which is exactly what this
 repo may not ship, so its *behaviour* was the specification and its internals
 were left alone. Probe programs ran under `kira-zig/zig-out/bin/kira` and then
-under `kirac` on each backend, and the two outputs were diffed byte for byte.
+under `kira` on each backend, and the two outputs were diffed byte for byte.
 `.codex/work/foundation-filesystem.md` records every answer that pinned;
 `.codex/tmp/{probes,diff.sh}` is the harness. Two answers would not have been
 guessed: `removePath` is **recursive**, and `readFile`'s `text` stops at the
@@ -759,7 +759,7 @@ agreed on everything. A full page of "the oracle rejects it identically, so this
 is a corpus bug" was produced that way before a kira-rusty-only diagnostic code
 appeared in the "oracle" output and gave it away.
 
-The real compiler is **`~/.kira/toolchains/dev/1.7.3/bin/kirac`** (~19 MB; the
+The real compiler is **`~/.kira/toolchains/dev/1.7.3/bin/kira`** (~19 MB; the
 launcher is ~2 MB, which is the quickest tell — `--version` prints
 `kira-bootstrapper 1.7.3` either way). Re-run properly, the oracle *accepts*
 almost everything that had been "confirmed corpus". The committed filesystem

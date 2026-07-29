@@ -1,4 +1,4 @@
-//! The local development server behind `kirac run --device wasm32`, and opening
+//! The local development server behind `kira run --device wasm32`, and opening
 //! the browser at it.
 //!
 //! A Kira wasm module cannot be run by opening a file: `file://` pages have a
@@ -45,7 +45,7 @@ impl Server {
     /// Binds a server on loopback, letting the OS pick a free port.
     ///
     /// An OS-assigned port is the point: a fixed one collides with whatever is
-    /// already on it, and two `kirac run`s at once must not fight.
+    /// already on it, and two `kira run`s at once must not fight.
     pub fn bind(root: PathBuf) -> Result<Self, ServeError> {
         let listener =
             TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|source| ServeError::Bind {

@@ -38,7 +38,7 @@ fn main() {
         "cargo:rustc-link-search=native={}",
         run(&llvm_config, &["--libdir"]).trim()
     );
-    // The bundle's LLVM archives are linked statically: a `kirac` must run
+    // The bundle's LLVM archives are linked statically: a `kira` must run
     // without the bundle installed beside it. The system libraries LLVM
     // itself needs stay dynamic — they are the host's, not the bundle's.
     for name in link_names(&run(&llvm_config, &["--link-static", "--libs"])) {

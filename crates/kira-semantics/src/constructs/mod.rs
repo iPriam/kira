@@ -20,19 +20,18 @@ use std::collections::{BTreeMap, HashSet};
 use kira_semantics_model::hir::{FuncId, HirExprId};
 use kira_semantics_model::{EnumId, OwnershipMode, StructId, Type};
 use kira_source::SourceId;
-use kira_syntax_model::ast::Function;
+use kira_syntax_model::ast::{Function, TypeRefId};
 
 mod collection;
 mod construction;
 mod dispatch;
 mod extend;
+mod value_members;
 
 /// Everything analysis remembers about one construct-backed declaration beyond
 /// its struct shape.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ConstructInfo {
-    /// The number of leading struct fields that are construction params.
-    pub(crate) param_count: usize,
     /// Computed members read as properties rather than fields.
     pub(crate) computed: HashSet<String>,
     /// Child slots filled from construction trailing content.
@@ -74,6 +73,21 @@ pub(crate) struct ConstructFamilyMethod<'a> {
     pub(crate) source: SourceId,
     /// Whether reads use property syntax rather than a call.
     pub(crate) computed: bool,
+    /// Whether the family declared this as `@Required function f(…)`: a
+    /// signature with **no body**, so there is nothing for a backed declaration
+    /// to inherit and every variant must implement it itself.
+    pub(crate) required: bool,
+    /// Whether the declaration wrote a result type.
+    ///
+    /// A [`required`](Self::required) member that wrote none states an
+    /// obligation whose *result* is unconstrained — there is no body to make it
+    /// `Void` — so conformance compares parameters only, and a call through the
+    /// family value is refused because the family cannot say what it returns.
+    ///
+    /// A family that wants to say "each declaration decides, and I still want to
+    /// name the result" writes `-> Any` instead, which constrains the member and
+    /// types the call.
+    pub(crate) result_declared: bool,
     /// Resolved written parameters, excluding the receiver.
     pub(crate) params: Vec<Type>,
     /// Parameter ownership modes, aligned with [`Self::params`].
@@ -99,17 +113,66 @@ pub(crate) struct ConstructFamilyMethod<'a> {
     pub(crate) defaults: Vec<Option<HirExprId>>,
 }
 
+impl ConstructFamilyMethod<'_> {
+    /// The result type every implementation must present, or `None` when the
+    /// family placed no constraint on it.
+    ///
+    /// Only a bodyless `@Required function` written without `-> T` is
+    /// unconstrained: a member with a body has a real result, and a requirement
+    /// that wrote one means it.
+    pub(crate) fn constrained_result(&self) -> Option<Type> {
+        (!self.required || self.result_declared).then_some(self.result)
+    }
+}
+
+/// One value member a construct family requires: a `@Required let name: T`.
+///
+/// Separate from [`ConstructFamilyMethod`] because a field requirement has no
+/// AST function behind it. The family states an obligation to *present a value*;
+/// a backed declaration discharges it with either a stored field or a computed
+/// member, and a read through the family value dispatches to whichever that
+/// declaration chose.
+#[derive(Debug, Clone)]
+pub(crate) struct ConstructFamilyField {
+    /// The type every backed declaration must present for this member.
+    ///
+    /// [`Type::Error`] until [`Analyzer::resolve_family_field_members`] fills
+    /// it: the written type is resolved after the family enums exist, because a
+    /// requirement may name the family itself.
+    ///
+    /// [`Analyzer::resolve_family_field_members`]: crate::analyze::Analyzer
+    pub(crate) result: Type,
+    /// The synthesized dynamic dispatcher, reserved on first read.
+    pub(crate) dispatcher: Option<FuncId>,
+}
+
 /// One construct family's type, conformance surface, and concrete variants.
 #[derive(Debug, Clone)]
 pub(crate) struct ConstructFamilyInfo<'a> {
-    /// The synthesized `Any Family` enum.
+    /// The synthesized family enum.
     pub(crate) enum_id: EnumId,
     /// Required stored or computed member names.
     pub(crate) required: Vec<String>,
     /// Methods inherited by concrete declarations and dynamically dispatched.
     pub(crate) methods: BTreeMap<String, ConstructFamilyMethod<'a>>,
+    /// `@Required let` value members, dynamically dispatched on read.
+    pub(crate) field_members: BTreeMap<String, ConstructFamilyField>,
     /// Concrete backed declarations in source order.
     pub(crate) variants: Vec<ConstructVariant>,
+    /// The type each declared member was written with, and the file it was
+    /// written in.
+    ///
+    /// Kept as the *written* type rather than a resolved one because this is
+    /// read while types are still being resolved: the `name { … }` member
+    /// shorthand asks the family what its member returns
+    /// (`TypeRef::ConstructMember`), and that question is answered during type
+    /// resolution rather than after it. The [`SourceId`] travels with it so the
+    /// type resolves against the family's imports, not the shorthand's.
+    ///
+    /// Covers both member kinds, because both are things a shorthand can
+    /// implement: a `@Required let body: Widget` field and a
+    /// `@Required function test() -> Any` method.
+    pub(crate) member_types: BTreeMap<String, (TypeRefId, SourceId)>,
 }
 
 impl crate::analyze::Analyzer<'_> {
@@ -124,13 +187,5 @@ impl crate::analyze::Analyzer<'_> {
         self.constructs
             .get(&id)
             .is_some_and(|info| info.computed.contains(name))
-    }
-
-    /// The number of leading construction-parameter fields of `id`.
-    pub(crate) fn construct_param_count(&self, id: StructId) -> usize {
-        self.constructs
-            .get(&id)
-            .map(|info| info.param_count)
-            .unwrap_or_default()
     }
 }

@@ -61,6 +61,8 @@ pub(crate) struct DeclarationValue {
     pub(crate) syntax: String,
     /// The `appliesTo` word for the form it wears.
     pub(crate) kind: &'static str,
+    /// The construct family backing it, or `""` when it is not a form.
+    pub(crate) family: String,
 }
 
 /// A `Field` as the reflection API exposes it.
@@ -86,6 +88,7 @@ impl DeclarationValue {
             fields: declaration.fields.iter().map(FieldValue::of).collect(),
             syntax: declaration.syntax.clone(),
             kind: declaration.kind.word(),
+            family: declaration.family.clone(),
         }
     }
 }
@@ -229,6 +232,7 @@ mod tests {
             fields: Vec::new(),
             syntax: String::new(),
             kind: "struct",
+            family: String::new(),
         }));
         assert_eq!(declaration.splice(), None);
     }

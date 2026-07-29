@@ -100,7 +100,7 @@ pub fn build(
         archive_path: None,
         exports: kira_llvm_backend::NativeExportSurface::default(),
         ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
-        runtime_archive: native::runtime_archive()?,
+        runtime_archive: native::runtime_archive(program)?,
         optimize: false,
         unavailable_imports: foreign_link.unavailable_imports().to_vec(),
         foreign_link: foreign_link.clone(),
@@ -108,7 +108,12 @@ pub fn build(
     let native = kira_llvm_backend::build_hybrid_library(program, &options)?;
 
     // The manifest, last: it names the two payloads above.
-    let manifest = manifest(program, &artifacts, &native.exports)?;
+    let manifest = manifest(
+        program,
+        &artifacts,
+        &native.exports,
+        kira_build::hybrid_internal_function_count(program, &module)?,
+    )?;
     let manifest_path = artifacts.manifest();
     write(&manifest_path, &manifest.to_bytes())?;
 
@@ -139,6 +144,7 @@ fn manifest(
     program: &IrProgram,
     artifacts: &Artifacts,
     exports: &[(u32, String)],
+    internal_functions: u32,
 ) -> Result<HybridManifest, HybridError> {
     Ok(kira_build::hybrid_manifest(
         program,
@@ -146,6 +152,7 @@ fn manifest(
         &file_name(&artifacts.bytecode()),
         &file_name(&artifacts.shared_library()),
         exports,
+        internal_functions,
     )?)
 }
 

@@ -45,7 +45,7 @@ mod syntax_ops;
 mod tokens;
 mod value;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use kira_diagnostics::Diagnostic;
 use kira_source::SourceId;
@@ -73,6 +73,14 @@ pub struct Expansion {
     ///
     /// A file with nothing to expand comes back exactly as it went in.
     pub texts: Vec<String>,
+    /// Files a `collector` macro produced, in declaration order of the macros
+    /// that produced them.
+    ///
+    /// Appended to the program rather than spliced into an existing file: a
+    /// collector answers about the whole program and has no site, so splicing
+    /// would make its output depend on file order. Empty for a program that
+    /// declares no collector, which is every program that does not ask for one.
+    pub appended: Vec<String>,
     /// Everything expansion reported, in source order.
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -137,83 +145,355 @@ pub fn expand_with(
     shaders: Option<&dyn ShaderCompiler>,
     platform: &str,
 ) -> Expansion {
-    let identity: Vec<String> = files.iter().map(|(_, text)| (*text).to_owned()).collect();
-    let lexed: Vec<Lexed<'_>> = files
+    let scans: Vec<FileMacros> = files
         .iter()
-        .map(|&(source, text)| Lexed::new(source, text))
+        .map(|&(source, text)| scan(source, text))
         .collect();
-
-    let mut reporter = Reporter::new();
-    let (registry, declarations) = registry::collect(&lexed, &mut reporter);
-    if registry.is_empty() {
+    let borrowed: Vec<&FileMacros> = scans.iter().collect();
+    // Only a wrapper macro makes one file's expansion depend on another file's
+    // declarations, so the declaration pre-scan runs only when one exists.
+    let wrappers = wrapper_macro_names(&borrowed);
+    let carriers: Vec<FileDeclarations> = if wrappers.is_empty() {
+        Vec::new()
+    } else {
+        files
+            .iter()
+            .map(|&(source, text)| declarations(source, text))
+            .filter(|file| file.carries_template_for(&wrappers))
+            .collect()
+    };
+    let environment = environment(&borrowed, &carriers.iter().collect::<Vec<_>>());
+    let mut collected: Vec<Diagnostic> = scans
+        .iter()
+        .flat_map(|scan| scan.diagnostics.iter().cloned())
+        .collect();
+    if environment.is_empty() {
         return Expansion {
-            texts: identity,
-            diagnostics: reporter.into_diagnostics(),
+            texts: files.iter().map(|(_, text)| (*text).to_owned()).collect(),
+            appended: Vec::new(),
+            diagnostics: collected,
         };
     }
 
-    let templates = procedural::wrapper_templates(&lexed, &registry);
-    let mut texts = identity;
+    let mut texts = Vec::with_capacity(files.len());
+    for (index, &(_, text)) in files.iter().enumerate() {
+        let expansion = expand_one(&scans[index], text, &environment, shaders, platform);
+        texts.push(expansion.text);
+        collected.extend(expansion.diagnostics);
+    }
+
+    // Collectors run last, over the *expanded* texts: a declaration a derive or
+    // an attribute produced is as much a declaration of the program as one
+    // written by hand, and a collector that ran first would not see it.
+    let expanded: Vec<FileDeclarations> = files
+        .iter()
+        .enumerate()
+        .map(|(index, &(source, _))| declarations(source, &texts[index]))
+        .collect();
+    let (appended, reported) = procedural::collect(
+        &environment.registry,
+        expanded.iter().flat_map(|file| file.declarations.iter()),
+        shaders,
+        platform,
+    );
+    collected.extend(reported);
+
+    Expansion {
+        texts,
+        appended,
+        diagnostics: deduplicate(collected),
+    }
+}
+
+/// Runs every `collector` macro over a whole program's expanded texts.
+///
+/// Returns the source a collector produced, to be appended to the program's
+/// entry file, and everything the collectors reported. Empty for a program that
+/// declares no collector.
+///
+/// Separate from [`expand_one`] because a collector is the one macro form whose
+/// answer is not a function of a single file: it is asked about every
+/// declaration the program has. It runs over the *expanded* texts, so a
+/// declaration a derive or an attribute produced is as visible to it as one
+/// written by hand.
+#[must_use]
+pub fn collect_program(
+    environment: &MacroEnvironment,
+    texts: &[(SourceId, &str)],
+    shaders: Option<&dyn ShaderCompiler>,
+    platform: &str,
+) -> (String, Vec<Diagnostic>) {
+    let files: Vec<FileDeclarations> = texts
+        .iter()
+        .map(|&(source, text)| declarations(source, text))
+        .collect();
+    let (appended, diagnostics) = procedural::collect(
+        &environment.registry,
+        files.iter().flat_map(|file| file.declarations.iter()),
+        shaders,
+        platform,
+    );
+    (appended.join("\n"), diagnostics)
+}
+
+/// Every macro **one** file declares, found by reading that file and nothing
+/// else.
+///
+/// This is the unit a frontend memoizes. A dependency whose bytes have not
+/// changed contributes the same scan to every compilation it takes part in, so
+/// finding its macros is paid for once rather than once per compilation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileMacros {
+    /// The file this describes.
+    source: SourceId,
+    /// The macros it declares, in declaration order.
+    registry: registry::FileRegistry,
+    /// Everything scanning it reported.
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl FileMacros {
+    /// The file this scan describes.
+    #[must_use]
+    pub fn source(&self) -> SourceId {
+        self.source
+    }
+
+    /// Whether this file declares any macro at all.
+    #[must_use]
+    pub fn declares_macro(&self) -> bool {
+        !self.registry.is_empty()
+    }
+
+    /// Everything scanning this file reported.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+}
+
+/// Scans one file for the macros it declares.
+///
+/// Total, like the rest of expansion: a malformed declaration is reported and
+/// dropped, and the file is still scanned to its end.
+#[must_use]
+pub fn scan(source: SourceId, text: &str) -> FileMacros {
+    let file = Lexed::new(source, text);
+    let mut reporter = Reporter::new();
+    let registry = registry::collect_file(&file, &mut reporter);
+    FileMacros {
+        source,
+        registry,
+        diagnostics: reporter.into_diagnostics(),
+    }
+}
+
+/// The names of every macro the program registers as a wrapper.
+///
+/// A wrapper macro is the only form that reads *another* declaration, so this
+/// is the whole of the cross-file dependency expansion has, and it is almost
+/// always empty. Answering it before scanning any declaration is what keeps a
+/// program with no wrapper macro from paying for a declaration pre-scan at all.
+///
+/// `scans` must be every file, in file order: later files override earlier ones
+/// by name, exactly as merging into one registry does, so a name redeclared as
+/// something other than a wrapper is not one here either.
+#[must_use]
+pub fn wrapper_macro_names(scans: &[&FileMacros]) -> Vec<String> {
+    let mut forms: HashMap<&str, registry::ProceduralKind> = HashMap::new();
+    for scan in scans {
+        for declared in &scan.registry.procedural {
+            forms.insert(&declared.name, declared.kind);
+        }
+    }
+    let mut names: Vec<String> = forms
+        .into_iter()
+        .filter(|&(_, kind)| kind == registry::ProceduralKind::Wrapper)
+        .map(|(name, _)| name.to_owned())
+        .collect();
+    // Sorted so the answer is a stable value: a caller keying a query on it
+    // must get the same key from the same program however the map iterated.
+    names.sort_unstable();
+    names
+}
+
+/// The top-level declarations of one file, for the wrapper-template pre-scan.
+///
+/// Separate from [`FileMacros`] because it is needed only when some macro wears
+/// `kind { wrapper }`. Scanning declarations costs the whole file, so a program
+/// with no wrapper macro — every program so far — never runs it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileDeclarations {
+    /// The file this describes.
+    source: SourceId,
+    /// Its top-level declarations, annotations included.
+    declarations: Vec<decl::Declaration>,
+}
+
+impl FileDeclarations {
+    /// The file this scan describes.
+    #[must_use]
+    pub fn source(&self) -> SourceId {
+        self.source
+    }
+
+    /// Whether this file declares something one of `wrappers` registers as a
+    /// template.
+    #[must_use]
+    pub fn carries_template_for(&self, wrappers: &[String]) -> bool {
+        self.declarations.iter().any(|declaration| {
+            declaration
+                .annotations
+                .iter()
+                .any(|annotation| wrappers.contains(&annotation.name))
+        })
+    }
+}
+
+/// Scans one file's top-level declarations.
+#[must_use]
+pub fn declarations(source: SourceId, text: &str) -> FileDeclarations {
+    FileDeclarations {
+        source,
+        declarations: procedural::top_level(&Lexed::new(source, text)),
+    }
+}
+
+/// Every macro the program declares, plus the wrapper templates they registered.
+///
+/// Built by merging per-file scans in file order, which is exactly what a
+/// single whole-program walk produced: a later file's macro of the same name
+/// wins, and a wrapper template is looked for in every declaration the caller
+/// hands over.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MacroEnvironment {
+    /// Every macro the program declares, by name.
+    registry: registry::Registry,
+    /// Every struct a `kind { wrapper }` macro registered as a template.
+    templates: HashMap<String, procedural::WrapperTemplate>,
+}
+
+impl MacroEnvironment {
+    /// Whether the program declares no macros at all.
+    ///
+    /// Expansion is skipped entirely when this holds, which is what keeps a
+    /// program that never mentions a macro byte-identical to its own source.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.registry.is_empty()
+    }
+}
+
+/// Merges per-file scans into the program-wide macro environment.
+///
+/// `macros` needs to carry every file that declares a macro, and `templates`
+/// every file carrying a declaration a wrapper macro would register — which is
+/// none unless [`wrapper_macro_names`] found one. A file in neither contributes
+/// nothing, so leaving it out changes no answer.
+#[must_use]
+pub fn environment(macros: &[&FileMacros], templates: &[&FileDeclarations]) -> MacroEnvironment {
+    let mut registry = registry::Registry::default();
+    for file in macros {
+        registry.absorb(&file.registry);
+    }
+    let templates = procedural::wrapper_templates(
+        templates.iter().map(|file| file.declarations.as_slice()),
+        &registry,
+    );
+    MacroEnvironment {
+        registry,
+        templates,
+    }
+}
+
+/// One file's text after expansion, plus what expanding it reported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileExpansion {
+    /// The file's text after every macro in it was expanded.
+    pub text: String,
+    /// Everything expanding it reported, in the order it was reported.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Expands every macro in one file against the program-wide `environment`.
+///
+/// `scan` must be [`scan`]'s answer for this file's `text` — it carries the
+/// byte ranges of the file's own macro declarations, which are blanked before
+/// anything in the file is expanded so a call site inside a macro's template is
+/// never mistaken for a use of it.
+///
+/// Expansion is a fixpoint per file, not per program: a macro may expand into a
+/// call of another macro, so this re-runs over its own output until the file
+/// stops changing. Files do not interact during expansion — the environment is
+/// fixed before any of them runs — so running each to its own fixpoint gives
+/// the same texts a whole-program sweep did, and is what makes one file's
+/// expansion a memoizable answer.
+#[must_use]
+pub fn expand_one(
+    scan: &FileMacros,
+    text: &str,
+    environment: &MacroEnvironment,
+    shaders: Option<&dyn ShaderCompiler>,
+    platform: &str,
+) -> FileExpansion {
+    if environment.is_empty() {
+        return FileExpansion {
+            text: text.to_owned(),
+            diagnostics: Vec::new(),
+        };
+    }
+    let source = scan.source;
+    let mut current = text.to_owned();
     let mut gensym = Gensym::new();
-    let mut collected: Vec<Diagnostic> = reporter.into_diagnostics();
-    let mut exhausted = true;
+    let mut collected: Vec<Diagnostic> = Vec::new();
     for round in 0..DEPTH_LIMIT {
         let mut reporter = Reporter::new();
-        let mut changed = false;
-        for (index, &(source, _)) in files.iter().enumerate() {
-            let blanks: Vec<kira_source::Span> = if round == 0 {
-                declarations
-                    .iter()
-                    .filter(|declaration| declaration.source == source)
-                    .map(|declaration| declaration.span)
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            let text = texts[index].clone();
-            let file = Lexed::new(source, &text);
-            let mut buffer = EditBuffer::new();
-            for span in &blanks {
-                buffer.blank(*span, &text);
-            }
-            let program = Program {
-                registry: &registry,
-                templates: &templates,
-                shaders,
-                platform,
-            };
-            expand_file(
-                &file,
-                program,
-                &blanks,
-                &mut gensym,
-                &mut buffer,
-                &mut reporter,
-            );
-            if buffer.is_empty() {
-                continue;
-            }
-            let applied = buffer.apply(&text);
-            if applied.overlapped {
-                reporter.error(
-                    source,
-                    kira_source::Span::new(0, 0),
-                    diagnostics::CONFLICTING_REWRITE,
-                    "two macro expansions rewrote the same source range",
-                );
-            }
-            if applied.text != text {
-                changed = true;
-            }
-            texts[index] = applied.text;
+        let blanks: &[kira_source::Span] = if round == 0 {
+            &scan.registry.spans
+        } else {
+            &[]
+        };
+        let text = std::mem::take(&mut current);
+        let file = Lexed::new(source, &text);
+        let mut buffer = EditBuffer::new();
+        for span in blanks {
+            buffer.blank(*span, &text);
         }
+        let program = Program {
+            registry: &environment.registry,
+            templates: &environment.templates,
+            shaders,
+            platform,
+        };
+        expand_file(
+            &file,
+            program,
+            blanks,
+            &mut gensym,
+            &mut buffer,
+            &mut reporter,
+        );
+        if buffer.is_empty() {
+            collected.extend(reporter.into_diagnostics());
+            current = text;
+            break;
+        }
+        let applied = buffer.apply(&text);
+        if applied.overlapped {
+            reporter.error(
+                source,
+                kira_source::Span::new(0, 0),
+                diagnostics::CONFLICTING_REWRITE,
+                "two macro expansions rewrote the same source range",
+            );
+        }
+        let changed = applied.text != text;
         collected.extend(reporter.into_diagnostics());
+        current = applied.text;
         if !changed {
-            exhausted = false;
             break;
         }
         if round + 1 == DEPTH_LIMIT {
-            let (source, _) = files.first().copied().unwrap_or((SourceId::new(0), ""));
             collected.push(diagnostics::error(
                 source,
                 kira_source::Span::new(0, 0),
@@ -222,11 +502,9 @@ pub fn expand_with(
             ));
         }
     }
-    let _ = exhausted;
-
-    Expansion {
-        texts,
-        diagnostics: deduplicate(collected),
+    FileExpansion {
+        text: current,
+        diagnostics: collected,
     }
 }
 

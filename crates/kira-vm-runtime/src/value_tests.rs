@@ -337,3 +337,81 @@ fn a_handle_of_the_wrong_kind_reads_empty_rather_than_panicking() {
     // …and the string is untouched by any of it.
     assert_eq!(heap.get(text), "x");
 }
+
+#[test]
+fn a_cell_copy_shares_storage_and_a_write_is_visible_through_both() {
+    // The one place value semantics stop, and the reason the type exists.
+    let mut heap = Heap::new();
+    let cell = heap.alloc_cell(Value::Int(1));
+    let Value::Cell(shared) = heap.copy_value(Value::Cell(cell)) else {
+        panic!("a cell copies to a cell");
+    };
+    assert_eq!(shared, cell, "a copy is the same box, held twice");
+    assert_eq!(heap.stats().current, 1, "and no second box was allocated");
+
+    assert!(heap.cell_set(cell, Value::Int(42)));
+    assert_eq!(heap.cell_get(shared), Some(Value::Int(42)));
+
+    heap.drop_value(Value::Cell(cell));
+    // The box outlives the first release, because the second hold reads it.
+    assert_eq!(heap.cell_get(shared), Some(Value::Int(42)));
+    heap.drop_value(Value::Cell(shared));
+    assert_eq!(heap.stats().current, 0, "the last hold reclaimed the box");
+}
+
+#[test]
+fn a_cell_write_releases_the_payload_it_replaced() {
+    // The accounting `cell_set` owes: the string that was there goes with the
+    // write, and the one that replaced it goes with the box.
+    let mut heap = Heap::new();
+    let first = heap.alloc("first".to_owned());
+    let cell = heap.alloc_cell(Value::Str(first));
+    assert_eq!(heap.stats().current, 2, "the string and its box");
+
+    let second = heap.alloc("second".to_owned());
+    assert!(heap.cell_set(cell, Value::Str(second)));
+    assert_eq!(
+        heap.stats().current,
+        2,
+        "the replaced string was released, not leaked"
+    );
+
+    heap.drop_value(Value::Cell(cell));
+    assert_eq!(heap.stats().current, 0);
+}
+
+#[test]
+fn a_cell_read_is_owned_and_outlives_the_write_that_replaced_it() {
+    // A borrowing read would hand back storage the next write frees.
+    let mut heap = Heap::new();
+    let held = heap.alloc("held".to_owned());
+    let cell = heap.alloc_cell(Value::Str(held));
+
+    let Some(read) = heap.cell_get(cell) else {
+        panic!("a cell reads what it holds");
+    };
+    let Value::Str(read_id) = read else {
+        panic!("the payload is a string");
+    };
+    let replaced = heap.alloc("replaced".to_owned());
+    assert!(heap.cell_set(cell, Value::Str(replaced)));
+    assert_eq!(heap.get(read_id), "held", "the read survived the write");
+
+    heap.drop_value(read);
+    heap.drop_value(Value::Cell(cell));
+    assert_eq!(heap.stats().current, 0);
+}
+
+#[test]
+fn a_cell_operation_on_a_handle_of_the_wrong_kind_refuses_rather_than_panicking() {
+    let mut heap = Heap::new();
+    let text = heap.alloc("x".to_owned());
+    // A cell handle over a string slot: the VM must not panic on it.
+    assert_eq!(heap.cell_get(CellId(text.0)), None);
+    assert!(!heap.cell_set(CellId(text.0), Value::Int(1)));
+    heap.free_cell(CellId(text.0));
+    // …and the string is untouched by any of it.
+    assert_eq!(heap.get(text), "x");
+    heap.drop_value(Value::Str(text));
+    assert_eq!(heap.stats().current, 0);
+}

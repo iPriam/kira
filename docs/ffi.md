@@ -84,7 +84,7 @@ TOML.
 let nativeLibraries = [
     NativeLibrary {
         name: "sokol",
-        linkMode: LinkMode.Static,
+        linkMode: .Static,
         headers: Headers { entrypoint: "NativeLibs/Sokol/sokol.h", defines: ["SOKOL_NO_ENTRY"] },
         sources: ["NativeLibs/Sokol/sokol_impl.c"],
         nativeTargets: [
@@ -119,9 +119,9 @@ the target.
 A selected row contributes more than an archive. Its `frameworks`, `systemLibs`,
 and `linkerFlags` go on the same link line, so a library whose symbols come from
 Apple frameworks needs no archive at all — write the row with neither
-`staticLib` nor `dynamicLib`. Under `LinkMode.Dynamic`, a row that names nothing
+`staticLib` nor `dynamicLib`. Under `.Dynamic`, a row that names nothing
 whatsoever links the library by its own name (`dynamicLib: ""` on a library
-called `vulkan` is `-lvulkan`); the same row under `LinkMode.Static` is refused,
+called `vulkan` is `-lvulkan`); the same row under `.Static` is refused,
 because it says nothing about what to link.
 
 `headers`, `sources`, and `autobind` are read and carried, and not yet acted on:
@@ -152,7 +152,7 @@ change what the C function receives.
 the C ABI cannot be derived from the type alone: x86-64 System V classifies
 eightbytes, AArch64 AAPCS detects homogeneous float aggregates and returns large
 ones indirectly, and wasm32 has its own rules. So for each import naming a
-struct, `kirac` generates a small C file that redeclares the struct, redeclares
+struct, `kira` generates a small C file that redeclares the struct, redeclares
 the real symbol with its true by-value signature, and wraps the call in a shim
 taking every aggregate through a pointer. The target's own C compiler builds it
 — the managed clang for a host build, `emcc` for wasm — and applies the ABI it

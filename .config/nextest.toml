@@ -1,6 +1,6 @@
 # Test-run scheduling. Three facts shape it:
 #
-# * Most of this workspace's slow tests block on subprocesses (kirac builds,
+# * Most of this workspace's slow tests block on subprocesses (kira builds,
 #   cargo builds, watched live sessions), not on CPU — so running more of
 #   them than there are cores keeps the cores busy instead of idle.
 # * Wall time is set by the longest tests when they start late. The overrides
@@ -25,14 +25,26 @@ test-threads = 16
 # no-ops once the target directory is warm, which it is by the time tests run.
 [test-groups]
 shared-cargo-target = { max-threads = 1 }
+# The two harness gates build and run the *same* Kira package, so they share
+# its `.kira-build` directory. Run them at once and one reads an artifact the
+# other is rewriting, which surfaces as a checksum mismatch — a parity failure
+# that is really a build race, and the most misleading shape it could take.
+# One at a time makes the overlap impossible; each still takes about twenty
+# seconds, and they are started early by the priority override below.
+kik-harness = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = "binary_id(kira-knvm::knvm_binstall) | binary_id(kira-knvm::knvm_sinstall)"
 test-group = "shared-cargo-target"
+threads-required = 16
+
+[[profile.default.overrides]]
+filter = "binary_id(kira-cli::kik_harness)"
+test-group = "kik-harness"
 
 # Higher priority starts earlier; the default is 0. The cargo-driven installs
 # are in a group of one, so they are also the first thing that group should
 # start — everything behind them queues.
 [[profile.default.overrides]]
-filter = "binary_id(kira-cli::live_hybrid) | test(=every_example_agrees_on_every_backend) | test(/installed_toolchain/) | binary_id(kira-knvm::knvm_binstall) | binary_id(kira-knvm::knvm_sinstall)"
+filter = "binary_id(kira-cli::kik_harness) | binary_id(kira-cli::live_hybrid) | test(=every_example_agrees_on_every_backend) | test(/installed_toolchain/) | binary_id(kira-knvm::knvm_binstall) | binary_id(kira-knvm::knvm_sinstall)"
 priority = 50

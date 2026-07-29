@@ -257,6 +257,18 @@ pub enum Expr {
         /// Span covering the whole `if … { … }`.
         span: Span,
     },
+    /// A deferred task spawn (`Task { work(1, 2) }`).
+    ///
+    /// The braces hold one expression, not a content block: `Task` is not a
+    /// construct, and its block is the *body* the task defers rather than a
+    /// list of children. Analysis decides which bodies the executable slice
+    /// accepts; the parser records the expression and stops there.
+    TaskSpawn {
+        /// The deferred body.
+        body: ExprId,
+        /// Span covering `Task { … }`.
+        span: Span,
+    },
     /// An expression the parser could not parse; recovery inserts this.
     Error {
         /// Span of the malformed expression.
@@ -339,6 +351,7 @@ impl Expr {
             | Expr::Closure { span, .. }
             | Expr::ContentFor { span, .. }
             | Expr::ContentIf { span, .. }
+            | Expr::TaskSpawn { span, .. }
             | Expr::Error { span } => *span,
         }
     }

@@ -1,6 +1,13 @@
 //! Semantic analysis of the construct declaration family: a family template, a
 //! construct-backed declaration that conforms to one, its construction, and the
 //! read of its computed bridge member — plus every typed refusal.
+//!
+//! Two neighbouring surfaces have their own files: [`requirements`] covers what
+//! a family obliges its declarations to provide, and [`slots`] covers the
+//! children a construction passes.
+
+mod requirements;
+mod slots;
 
 use super::{codes, library_codes};
 
@@ -133,212 +140,6 @@ Family Thing(value: Int) {
 "#,
         ),
         vec!["KSEM202"]
-    );
-}
-
-#[test]
-fn a_content_slot_over_a_family_type_is_an_executable_heterogeneous_field() {
-    assert!(
-        library_codes(
-            r#"
-construct Family {
-    function value() -> Int { return 0 }
-}
-
-Family Leaf(number: Int) {
-    function value() -> Int { return number }
-}
-
-Family Stack() {
-    @Content let children: [Family]
-    function value() -> Int { return children.count }
-}
-"#,
-        )
-        .is_empty()
-    );
-}
-
-/// A child slot over a concrete type is a real field and checks clean.
-#[test]
-fn a_concrete_child_slot_checks_clean() {
-    assert!(
-        library_codes(
-            r#"
-struct Leaf {
-    var value: Int = 0
-}
-
-construct Family {
-    let node: Int { 0 }
-}
-
-Family One() {
-    let child: some Leaf
-    let node: Int { child.value }
-}
-
-Family Many() {
-    let items: [some Leaf]
-    let node: Int { items.count }
-}
-"#,
-        )
-        .is_empty()
-    );
-}
-
-/// A construction fills a single slot and a list slot from its trailing
-/// children, and the whole program checks clean.
-#[test]
-fn a_construction_fills_its_child_slots() {
-    assert!(
-        codes(
-            r#"
-struct Leaf {
-    var value: Int = 0
-}
-
-construct Family {
-    let count: Int { 0 }
-}
-
-Family One() {
-    let child: some Leaf
-    let count: Int { 1 }
-}
-
-Family Many() {
-    let items: [some Leaf]
-    let count: Int { items.count }
-}
-
-@Main
-function main() {
-    let a = One() { Leaf { value = 3 } }
-    print(a.count)
-    let b = Many() { Leaf { value = 1 } Leaf { value = 2 } }
-    print(b.count)
-    return
-}
-"#,
-        )
-        .is_empty()
-    );
-}
-
-/// A child whose type does not satisfy the slot's element type is refused.
-#[test]
-fn a_wrong_typed_child_is_refused() {
-    assert_eq!(
-        codes(
-            r#"
-struct Leaf {
-    var value: Int = 0
-}
-
-construct Family {
-    let count: Int { 0 }
-}
-
-Family One() {
-    let child: some Leaf
-    let count: Int { 1 }
-}
-
-@Main
-function main() {
-    let a = One() { 42 }
-    print(a.count)
-    return
-}
-"#,
-        ),
-        vec!["KSEM232"]
-    );
-}
-
-/// A single slot takes exactly one child: two is a count mismatch.
-#[test]
-fn too_many_children_for_a_single_slot_is_refused() {
-    assert_eq!(
-        codes(
-            r#"
-struct Leaf {
-    var value: Int = 0
-}
-
-construct Family {
-    let count: Int { 0 }
-}
-
-Family One() {
-    let child: some Leaf
-    let count: Int { 1 }
-}
-
-@Main
-function main() {
-    let a = One() { Leaf {} Leaf {} }
-    print(a.count)
-    return
-}
-"#,
-        ),
-        vec!["KSEM231"]
-    );
-}
-
-/// Children on a construction whose declaration has no child slot are refused.
-#[test]
-fn children_on_a_slotless_construct_are_refused() {
-    assert_eq!(
-        codes(
-            r#"
-struct Leaf {
-    var value: Int = 0
-}
-
-construct Family {
-    let count: Int { 0 }
-}
-
-Family Plain(tag: Int) {
-    let count: Int { tag }
-}
-
-@Main
-function main() {
-    let a = Plain(tag: 1) { Leaf {} }
-    print(a.count)
-    return
-}
-"#,
-        ),
-        vec!["KSEM229"]
-    );
-}
-
-/// A trailing content block on something that is not a construct-backed
-/// declaration is refused.
-#[test]
-fn children_on_a_non_construct_are_refused() {
-    assert_eq!(
-        codes(
-            r#"
-function plain(tag: Int) -> Int {
-    return tag
-}
-
-@Main
-function main() {
-    let a = plain(tag: 1) { 1 }
-    print(a)
-    return
-}
-"#,
-        ),
-        vec!["KSEM233"]
     );
 }
 
@@ -527,43 +328,29 @@ extend Widget {
     );
 }
 
-/// A `For`/`if` builder filling a `[some X]` slot type-checks cleanly.
+/// A construct-backed declaration names a thing, not a type, so a member is
+/// callable on the name itself: `Sprite.draw()` builds the declaration with its
+/// declared defaults and calls `draw` on it.
 #[test]
-fn builder_content_items_check_clean() {
+fn a_declaration_qualified_call_checks_clean() {
     assert!(
         codes(
             r#"
-construct Widget {
-    @Required let body: Widget
-    function total() -> Int { return body.total() }
-}
-
-Widget Leaf(number: Int) {
-    function total() -> Int { return number }
-}
-
-Widget Group() {
-    let children: [some Widget]
-    function total() -> Int { return 0 }
-}
-
-function counts() -> [Int] {
-    let xs: [Int] = []
-    return xs
-}
-
-@Main function main() {
-    let on = true
-    let g = Group() {
-        Leaf(number = 1)
-        For(n in counts()) {
-            Leaf(number = n)
-        }
-        if on {
-            Leaf(number = 2)
-        }
+construct Drawable {
+    requires {
+        function draw() -> Int
     }
-    print(g.total())
+}
+
+Drawable Sprite {
+    let base: Int = 7
+    function draw() -> Int { return base + Sprite.offset() }
+    function offset() -> Int { return 3 }
+}
+
+@Main
+function main() {
+    print(Sprite.draw())
     return
 }
 "#,
@@ -572,83 +359,81 @@ function counts() -> [Int] {
     );
 }
 
-/// A builder's produced child is still checked against the slot's element type.
+/// The default construction is real, so an input with no default is reported at
+/// the qualified call exactly as a written `Sprite()` would report it.
 #[test]
-fn a_wrong_typed_builder_child_is_refused() {
+fn a_declaration_qualified_call_needs_every_input_to_have_a_default() {
     assert!(
         codes(
             r#"
-construct Widget {
-    @Required let body: Widget
-    function total() -> Int { return body.total() }
+construct Boxed {
+    @Required let size: Int
 }
 
-Widget Leaf(number: Int) {
-    function total() -> Int { return number }
+Boxed Boxy {
+    let size: Int = 4
+    let scale: Int
+    function area() -> Int { return size * scale }
 }
 
-Widget Group() {
-    let children: [some Widget]
-    function total() -> Int { return 0 }
-}
-
-function counts() -> [Int] {
-    let xs: [Int] = []
-    return xs
-}
-
-@Main function main() {
-    let g = Group() {
-        For(n in counts()) {
-            n
-        }
-    }
-    print(g.total())
+@Main
+function main() {
+    print(Boxy.area())
     return
 }
 "#,
         )
-        .contains(&"KSEM232")
+        .contains(&"KSEM208")
     );
 }
 
-/// A builder cannot fill a single (`some X`) slot, which takes exactly one
-/// child.
+/// A member the declaration does not have is reported on the declaration, not
+/// swallowed into the class parent-qualifier rule.
 #[test]
-fn a_builder_filling_a_single_slot_is_refused() {
+fn a_declaration_qualified_call_to_a_missing_member_is_reported() {
     assert!(
         codes(
             r#"
-construct Widget {
-    @Required let body: Widget
-    function total() -> Int { return body.total() }
-}
-
-Widget Leaf(number: Int) {
-    function total() -> Int { return number }
-}
-
-Widget Wrap() {
-    let child: some Widget
-    function total() -> Int { return child.total() }
-}
-
-function counts() -> [Int] {
-    let xs: [Int] = []
-    return xs
-}
-
-@Main function main() {
-    let w = Wrap() {
-        For(n in counts()) {
-            Leaf(number = n)
-        }
+construct Drawable {
+    requires {
+        function draw() -> Int
     }
-    print(w.total())
+}
+
+Drawable Sprite {
+    function draw() -> Int { return 1 }
+}
+
+@Main
+function main() {
+    print(Sprite.missing())
     return
 }
 "#,
         )
-        .contains(&"KSEM242")
+        .contains(&"KSEM097")
+    );
+}
+
+/// A plain `class` gets none of this: its name is a type, and a type has no
+/// value of its own to run a member against.
+#[test]
+fn a_class_name_is_still_not_callable_without_an_instance() {
+    assert!(
+        codes(
+            r#"
+class Account {
+    let rate: Int = 2
+    function gross() -> Int { return self.rate * 10 }
+}
+
+@Main
+function main() {
+    print(Account.gross())
+    return
+}
+"#,
+        )
+        .contains(&"KSEM069")
     );
 }

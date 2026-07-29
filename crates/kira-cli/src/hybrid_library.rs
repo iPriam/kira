@@ -1,4 +1,4 @@
-//! `kirac build --backend hybrid` inside a `kind = .Library` package.
+//! `kira build --backend hybrid` inside a `kind = .Library` package.
 //!
 //! The third engine's counterpart of [`crate::library`] and
 //! [`crate::native_library`], and deliberately their mirror image: same package
@@ -46,7 +46,7 @@ pub fn build(
         version,
         build_directory: build_directory(source),
         toolchain_root: kira_build::toolchain_root(),
-        runtime_archive: crate::native::runtime_archive()?,
+        runtime_archive: crate::native::runtime_archive(&compiled.ir)?,
         emit_llvm_ir,
     };
     Ok(kira_build::build_hybrid_library(&compiled.ir, &options)?)

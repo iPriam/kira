@@ -53,11 +53,15 @@ fn bridge_tag_of(ty: Type) -> Result<(u8, Option<PayloadForm>), LlvmError> {
         // `RawPtr` crosses this seam for opaque callback userdata. `CString`
         // remains foreign-parameter-only, and a state handle itself stays in the
         // engine that owns the intrinsic; only its raw token crosses.
-        Type::CString | Type::NativeState(_) => {
+        Type::CString | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
             return Err(LlvmError::Unsupported(
-                "a C string or callback-state handle crossing the @Native boundary",
+                "a C string, callback-state handle, task handle, or captured `var` crossing the @Native boundary",
             ));
         }
+        // `Any` is one word, so size is not what stops it: the hybrid seam
+        // carries a tag the *other* side must be able to interpret, and an
+        // erased value has no type for it to interpret the payload as.
+        Type::Any => return Err(LlvmError::AnyAtSeam),
         Type::Error => return Err(LlvmError::Unsupported("a value with no type")),
     })
 }
@@ -102,10 +106,11 @@ impl Codegen<'_> {
                 Type::Struct(_) => return Err(LlvmError::StructAtSeam),
                 Type::Array(_) => return Err(LlvmError::ArrayAtSeam),
                 Type::Enum(_) => return Err(LlvmError::EnumAtSeam),
+                Type::Any => return Err(LlvmError::AnyAtSeam),
                 Type::RawPtr => payload,
-                Type::CString | Type::NativeState(_) => {
+                Type::CString | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
                     return Err(LlvmError::Unsupported(
-                        "a C string or callback-state handle crossing the @Native boundary",
+                        "a C string, callback-state handle, task handle, or captured `var` crossing the @Native boundary",
                     ));
                 }
                 Type::Void | Type::Error => {
@@ -179,6 +184,7 @@ mod tests {
             locals: Vec::new(),
             body: vec![ret],
             is_main: false,
+            is_async: false,
             execution: Execution::Native,
             mutates_self: false,
             name_span: Span::new(0, 6),

@@ -1,0 +1,215 @@
+import Foundation
+
+// SgxTests.kira — migrated corpus cases from tests/pass/run/{string_*,call_*}.
+// PREFIX: sgx / Sgx (all top-level names use this prefix).
+// This file imports Foundation (imports are file-scoped); Test/Result/TestFailure/print already available.
+
+// ---------------------------------------------------------------------------
+// Helpers (copied from source programs, prefixed)
+// ---------------------------------------------------------------------------
+
+function sgxGreet(name: String) -> String {
+    return "hello, " + name
+}
+
+function sgxPick(i: Int) -> String {
+    if i == 0 { return "alpha" }
+    return "beta"
+}
+
+function sgxPickWord(i: Int) -> String {
+    if i == 0 {
+        return "hello"
+    }
+    return "worldwide"
+}
+
+function sgxEchoText(value: String): String {
+    return value
+}
+
+function sgxAddPair(left: Int, right: Int): Int {
+    return left + right
+}
+
+function sgxEchoFlag(value: Bool): Bool {
+    return value
+}
+
+// ---------------------------------------------------------------------------
+// string_array_overwrite_no_leak
+// ---------------------------------------------------------------------------
+
+Test SgxArrayOverwriteNoLeak {
+    test {
+        let head = "item"
+        let sep = "-"
+        var names: [String] = []
+        names.append("seed-a")
+        names.append("seed-b")
+        names.append("seed-c")
+        var round = 0
+        while round < 200 {
+            // Each store is a freshly heap-allocated concatenation; the previous
+            // cloned buffer in the slot must be released, not orphaned.
+            names[0] = head + sep + "alpha"
+            names[1] = head + sep + "beta"
+            names[2] = head + sep + "gamma"
+            round = round + 1
+        }
+        return names[0] + "|" + names[2]
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("item-alpha|item-gamma"); return e }
+}
+
+// ---------------------------------------------------------------------------
+// string_concat_parity
+// ---------------------------------------------------------------------------
+
+Test SgxConcatSimple {
+    test { return "a" + "b" }
+    expect { let e: Result<String, TestFailure> = .Ok("ab"); return e }
+}
+
+Test SgxConcatEmptyLeft {
+    test { return "" + "x" }
+    expect { let e: Result<String, TestFailure> = .Ok("x"); return e }
+}
+
+Test SgxConcatEmptyRight {
+    test { return "y" + "" }
+    expect { let e: Result<String, TestFailure> = .Ok("y"); return e }
+}
+
+Test SgxConcatGreet {
+    test { return sgxGreet("kira") }
+    expect { let e: Result<String, TestFailure> = .Ok("hello, kira"); return e }
+}
+
+Test SgxConcatLoopAccum {
+    test {
+        var s = ""
+        var i = 0
+        while i < 4 {
+            s = s + "ab"
+            i = i + 1
+        }
+        return s
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("abababab"); return e }
+}
+
+Test SgxConcatLoopEquality {
+    test {
+        var s = ""
+        var i = 0
+        while i < 4 {
+            s = s + "ab"
+            i = i + 1
+        }
+        return s == "abababab"
+    }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+Test SgxConcatNested {
+    test { return ("p" + "q") + ("r" + "s") }
+    expect { let e: Result<String, TestFailure> = .Ok("pqrs"); return e }
+}
+
+// ---------------------------------------------------------------------------
+// string_count_parity
+// ---------------------------------------------------------------------------
+
+Test SgxCountTitle {
+    test {
+        let title = "KIRA"
+        return title.count
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(4); return e }
+}
+
+Test SgxCountSubtitle {
+    test {
+        let subtitle = "UI FOUNDATION"
+        return subtitle.count
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(13); return e }
+}
+
+// ---------------------------------------------------------------------------
+// string_equality_parity
+// ---------------------------------------------------------------------------
+
+Test SgxEqAlphaAlpha {
+    test { return "alpha" == "alpha" }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+Test SgxEqAlphaBeta {
+    test { return "alpha" == "beta" }
+    expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
+}
+
+Test SgxNeqAlphaBeta {
+    test { return "alpha" != "beta" }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+Test SgxEqEmptyEmpty {
+    test { return "" == "" }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+Test SgxEqPrefixMismatch {
+    test { return "a" == "ab" }
+    expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
+}
+
+Test SgxEqPickComputed {
+    test { return sgxPick(0) == "alpha" }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+Test SgxEqPickPick {
+    test { return sgxPick(1) == sgxPick(1) }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+// ---------------------------------------------------------------------------
+// call_temp_string_count_parity
+// ---------------------------------------------------------------------------
+
+Test SgxCallTempCountHello {
+    test { return sgxPickWord(0).count }
+    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+}
+
+Test SgxCallTempCountWorldwide {
+    test { return sgxPickWord(1).count }
+    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+}
+
+// ---------------------------------------------------------------------------
+// call_value_parity
+// ---------------------------------------------------------------------------
+
+Test SgxCallEchoText {
+    test { return sgxEchoText("hello parity") }
+    expect { let e: Result<String, TestFailure> = .Ok("hello parity"); return e }
+}
+
+Test SgxCallAddPair {
+    test { return sgxAddPair(20, 22) }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+Test SgxCallEchoFlagTrue {
+    test { return sgxEchoFlag(true) }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+Test SgxCallEchoFlagFalse {
+    test { return sgxEchoFlag(false) }
+    expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
+}

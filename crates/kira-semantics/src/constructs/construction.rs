@@ -18,7 +18,52 @@ use super::ContentSlot;
 use crate::analyze::{Analyzer, FnCtx};
 use crate::stmt::fors::ForCursor;
 
+/// One value a construction call may supply, positionally or by name.
+///
+/// Every stored field of a construct-backed declaration is one of these — the
+/// parenthesized `Name(text: String)` params first, then the declared `let`
+/// members — because Construct 2.0 says a construct expresses caller-provided
+/// values as its fields. A child slot (`some X` / `[some X]`) is the one field
+/// kind that is *not* here: a slot is filled only by bare children in the
+/// trailing block, never by an argument.
+struct ConstructInput {
+    /// The input's index among the struct's fields.
+    field_index: u32,
+    /// The field's name, which is also the argument label that fills it.
+    name: String,
+    /// The type the supplied value must satisfy.
+    ty: Type,
+}
+
 impl Analyzer<'_> {
+    /// Every field of `id` a construction call may fill, in declaration order.
+    ///
+    /// Order is the positional signature, so it must stay declaration order:
+    /// `PLeaf("leaf", 3)` fills the first two inputs. Child slots are skipped
+    /// rather than filtered afterwards, which is what keeps a slot from ever
+    /// being reachable positionally — a slot's field index still exists, so the
+    /// index carried here is the field's, not this vector's.
+    fn construct_input_slots(&self, id: StructId) -> Vec<ConstructInput> {
+        let slots: Vec<u32> = self
+            .constructs
+            .get(&id)
+            .map(|info| info.slots.iter().map(|slot| slot.field_index).collect())
+            .unwrap_or_default();
+        let Some(def) = self.program.types.structs().get(id) else {
+            return Vec::new();
+        };
+        def.fields
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !slots.contains(&(*index as u32)))
+            .map(|(index, field)| ConstructInput {
+                field_index: index as u32,
+                name: field.name.clone(),
+                ty: field.ty,
+            })
+            .collect()
+    }
+
     /// Type-checks `Name(args) { children }`: a construct-backed declaration's
     /// construction.
     ///
@@ -36,7 +81,6 @@ impl Analyzer<'_> {
         span: Span,
     ) -> HirExprId {
         let name = self.program.types.type_name(Type::Struct(id));
-        let param_count = self.construct_param_count(id);
         let field_count = self
             .program
             .types
@@ -44,28 +88,25 @@ impl Analyzer<'_> {
             .get(id)
             .map(|def| def.fields.len())
             .unwrap_or_default();
-        // The param name and type for each of the leading slots.
-        let param_slots: Vec<(String, Type)> = (0..param_count)
-            .filter_map(|slot| {
-                self.program
-                    .types
-                    .structs()
-                    .get(id)
-                    .and_then(|def| def.field(slot as u32))
-                    .map(|field| (field.name.clone(), field.ty))
-            })
-            .collect();
+        let inputs = self.construct_input_slots(id);
+        let input_count = inputs.len();
 
         let mut initializers: Vec<Option<HirExprId>> = vec![None; field_count];
         let mut next_positional = 0usize;
         for arg in args {
-            let value = self.analyze_expr(ctx, arg.value);
-            let slot = match arg.label {
+            // Which input this argument fills is decided *before* it is
+            // analyzed, so the value is analyzed against the type that input
+            // expects. That expectation is what upcasts a concrete `PLeaf` into
+            // the `some PNode` an input declares, and what anchors a
+            // leading-dot member — neither of which an unexpecting analysis of
+            // the argument could produce.
+            let input = match arg.label {
                 Some(label) => {
                     let label = self.interner.resolve(label).to_owned();
-                    match param_slots.iter().position(|(name, _)| *name == label) {
-                        Some(slot) => slot,
+                    match inputs.iter().position(|input| input.name == label) {
+                        Some(input) => input,
                         None => {
+                            self.analyze_expr(ctx, arg.value);
                             self.emit(
                                 arg.label_span.unwrap_or(span),
                                 "KSEM204",
@@ -76,33 +117,39 @@ impl Analyzer<'_> {
                     }
                 }
                 None => {
-                    let slot = next_positional;
+                    let input = next_positional;
                     next_positional += 1;
-                    if slot >= param_count {
+                    if input >= input_count {
+                        self.analyze_expr(ctx, arg.value);
                         self.emit(
                             span,
                             "KSEM205",
                             format!(
-                                "`{name}` takes {param_count} construction input(s), found more"
+                                "`{name}` takes {input_count} construction input(s), found more"
                             ),
                         );
                         continue;
                     }
-                    slot
+                    input
                 }
             };
-            if initializers[slot].is_some() {
-                let (field, _) = &param_slots[slot];
+            let value = self.analyze_expr_expecting(ctx, arg.value, Some(inputs[input].ty));
+            let ConstructInput {
+                field_index,
+                name: field,
+                ty: expected,
+            } = &inputs[input];
+            let index = *field_index as usize;
+            if initializers[index].is_some() {
                 self.emit(
                     span,
                     "KSEM206",
                     format!("construction input `{field}` of `{name}` is set more than once"),
                 );
             }
-            let expected = param_slots[slot].1;
+            let expected = *expected;
             let actual = self.program.expr(value).type_of();
-            if !actual.assignable_to(expected) {
-                let (field, _) = &param_slots[slot];
+            if !self.admits(actual, expected) {
                 self.emit(
                     span,
                     "KSEM207",
@@ -113,7 +160,7 @@ impl Analyzer<'_> {
                     ),
                 );
             }
-            initializers[slot] = Some(value);
+            initializers[index] = Some(self.coerce_into(value, expected));
         }
 
         // The trailing children fill the declaration's child slots. Done before

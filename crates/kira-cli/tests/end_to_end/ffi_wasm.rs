@@ -86,10 +86,10 @@ fn a_wasm_build_links_the_emscripten_archive_and_runs_under_node() {
     )
     .expect("program");
 
-    let build = Command::new(env!("CARGO_BIN_EXE_kirac"))
+    let build = Command::new(env!("CARGO_BIN_EXE_kira"))
         .args(["build", "--device", "wasm32", entry.to_str().unwrap()])
         .output()
-        .expect("run kirac");
+        .expect("run kira");
     assert!(
         build.status.success(),
         "the wasm build failed\nstdout: {}\nstderr: {}",
@@ -141,10 +141,10 @@ fn a_wasm_build_creates_kira_strings_and_crosses_the_cstring_seam() {
     )
     .expect("program");
 
-    let build = Command::new(env!("CARGO_BIN_EXE_kirac"))
+    let build = Command::new(env!("CARGO_BIN_EXE_kira"))
         .args(["build", "--device", "wasm32", entry.to_str().unwrap()])
         .output()
-        .expect("run kirac");
+        .expect("run kira");
     assert!(
         build.status.success(),
         "the wasm string build failed\nstdout: {}\nstderr: {}",
@@ -184,10 +184,10 @@ fn a_host_only_library_is_refused_before_emcc() {
     )
     .expect("program");
 
-    let build = Command::new(env!("CARGO_BIN_EXE_kirac"))
+    let build = Command::new(env!("CARGO_BIN_EXE_kira"))
         .args(["build", "--device", "wasm32", entry.to_str().unwrap()])
         .output()
-        .expect("run kirac");
+        .expect("run kira");
     assert_eq!(
         build.status.code(),
         Some(1),

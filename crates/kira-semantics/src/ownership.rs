@@ -270,8 +270,11 @@ impl Analyzer<'_> {
             );
             return self.program.exprs.alloc(HirExpr::Error);
         }
-        let ty = ctx.local_type(local);
-        let read = self.program.exprs.alloc(HirExpr::Local { local, ty });
+        // A boxed `var` is moved out of by reading what its box holds; the box
+        // itself stays where it is, because the closures sharing it still name
+        // it. Marking the binding moved is what stops the value being read
+        // twice, exactly as it does for an unboxed one.
+        let read = self.read_local(ctx, local);
         ctx.mark_moved(local, span);
         read
     }
@@ -312,9 +315,10 @@ impl Analyzer<'_> {
     /// `borrow` and `copy` say it is not, and are accepted only for a type that
     /// does not move on bind. That is not a restriction looking for a reason: a
     /// type that *does* move on bind aliases its source, so a binding that
-    /// borrowed one would have to share storage with it, and nothing in this
-    /// runtime shares storage — the binding would hold a snapshot while reading
-    /// as a view, and a later write through the source would silently not be
+    /// borrowed one would have to share storage with it, and no binding here
+    /// shares storage — the one shared thing in this runtime is a capture cell,
+    /// which no annotation can name — so the binding would hold a snapshot
+    /// while reading as a view, and a later write through the source would silently not be
     /// seen. For every other type an owned binding already leaves the source
     /// alone, so `borrow` and `copy` coincide with `Owned` and can be honored
     /// exactly.
@@ -340,9 +344,9 @@ impl Analyzer<'_> {
             }
             OwnershipMode::BorrowRead | OwnershipMode::Copy => format!(
                 "a `{}` binding of `{}` would have to share storage with what it binds, \
-                 because a value of that type aliases its source; nothing in this runtime \
-                 shares storage, so the binding would hold a snapshot while reading as a \
-                 view. Drop the prefix to take it by value.",
+                 because a value of that type aliases its source; no binding here shares \
+                 storage, so it would hold a snapshot while reading as a view. Drop the \
+                 prefix to take it by value.",
                 ownership.spelling(),
                 self.type_name(bound_ty)
             ),

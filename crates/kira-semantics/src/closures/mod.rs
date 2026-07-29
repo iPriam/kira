@@ -31,15 +31,19 @@
 //! fields grow as literals are found, which is why a literal's `StructNew` is
 //! *finalized* after all bodies are analyzed rather than built complete.
 //!
-//! # What is refused, and why
+//! # Two kinds of capture
 //!
-//! A capture must be an immutable binding of a trivially-copyable type. The
-//! oracle borrows a mutable local instead of copying it, which needs shared
-//! mutable storage; nothing in this runtime has reference semantics yet — every
-//! value is copied on read, on every backend — so a `var` capture is refused
-//! (`KSEM117`) rather than silently copied, which would run and give the wrong
-//! answer. A `String`, struct, array, or enum capture is refused by the same
-//! code, matching the oracle: `isTriviallyCopyable` admits only the scalars.
+//! An immutable binding is captured **by value**, and must be trivially
+//! copyable: a `String`, struct, array, or enum capture is refused (`KSEM117`),
+//! matching the oracle's `isTriviallyCopyable`, which admits only the scalars.
+//!
+//! A `var` is captured by **sharing its storage**. The binding moved into a
+//! capture cell at its declaration — see [`crate::cells`] and
+//! `.codex/work/cells.md` — and the closure holds a share of the box, so a
+//! write through either side is visible through the other. A mutable binding
+//! with no storage of its own has no shared form and is still refused: a
+//! `borrow mut` parameter names the caller's storage, and a recovered
+//! callback-state view is a window into a host's.
 
 use std::collections::HashMap;
 
@@ -47,6 +51,7 @@ use kira_semantics_model::hir::{FuncId, LocalId};
 use kira_semantics_model::{OwnershipMode, StructId, Type};
 
 mod calls;
+pub(crate) mod captures;
 mod lift;
 
 /// One function type, and everything synthesized for it.
@@ -146,10 +151,20 @@ pub(crate) enum Captured {
 ///
 /// A **function type** is decided by [`Analyzer::capture_is_trivially_copyable`]
 /// instead, because answering it needs the function-type table this cannot see.
+/// A **capture cell** is admitted too, and it is the one entry here that is not
+/// a scalar: copying one takes another hold on a share-counted box and owns
+/// nothing new. That is what a captured `var` travels as, and the sharing is
+/// the point rather than something the copy hides.
 pub(crate) fn is_trivially_copyable(ty: Type) -> bool {
     matches!(
         ty,
-        Type::Int(_) | Type::Float(_) | Type::Bool | Type::Void | Type::Error | Type::RawPtr
+        Type::Int(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Void
+            | Type::Error
+            | Type::RawPtr
+            | Type::Cell(_)
     )
 }
 

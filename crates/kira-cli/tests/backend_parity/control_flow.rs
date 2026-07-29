@@ -341,3 +341,26 @@ function main() {
     );
     assert_eq!(output, "3\n25\n");
 }
+
+/// `for x in []` iterates nothing, so it needs no element type.
+///
+/// The loop variable is never bound — there is no value it could hold — and
+/// the body never runs, which is why the literal's element type is a question
+/// with no answer rather than one to guess at.
+#[test]
+fn a_for_over_an_empty_array_literal_runs_zero_times() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    var out = 0
+    for item in [] {
+        out = out + 1
+    }
+    print(out + 100)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "100\n");
+}

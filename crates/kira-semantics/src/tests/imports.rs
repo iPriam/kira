@@ -25,7 +25,7 @@ fn module_program(text: &str, modules: &[(&str, &str)]) -> HirProgram {
         })
         .collect();
     let source = SourceProgram::application(&db, text.to_owned(), "test.kira".to_owned(), modules);
-    analyzed(&db, source)
+    analyzed(&db, source).clone()
 }
 
 #[test]

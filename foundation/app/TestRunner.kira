@@ -1,0 +1,80 @@
+// Foundation's test runner: the `collector` macro that turns a program's `Test`
+// declarations into something that runs.
+//
+// `Test` is an ordinary construct family declared in `Test.kira`, and the
+// compiler knows nothing about it. What was missing was not a way to *write* a
+// case but a way to *find* every case: every other macro form is attached to
+// the declaration or call it rewrites, so none of them can ask what a program
+// contains. A `collector` runs once for the whole program and is handed every
+// declaration in it, which is exactly that question.
+//
+// Nothing here is privileged. The selection is `d.family == "Test"` — a string
+// compare against the family a declaration was written in — so a library could
+// declare its own family and its own collector and get the same treatment with
+// no change to the compiler.
+//
+// The generated entry is `kiraTestMain`, which `kira test` runs in place of
+// `@Main`. It is an ordinary function: a suite keeps whatever `@Main` it has,
+// and `kira run` on the same package still runs that one.
+
+comptime macro TestRunner {
+    kind { collector }
+    expand(declarations: [Declaration]) -> Syntax {
+        var cases: [Syntax] = []
+        var count: Int = 0
+        for d in declarations {
+            if d.family == "Test" {
+                count = count + 1
+                // Each case reduces to the same four steps: run it, ask what it
+                // should have come to, compare, and report. The comparison is
+                // `==` on two `Any` values, which is structural and nominal —
+                // two values of different types are unequal rather than an
+                // error — so a case may answer with whatever it measures.
+                cases.append(quote {
+                    total = total + 1
+                    // The expectation is read *before* the body runs, which is
+                    // what lets a case whose expectation this runner cannot
+                    // assert be declined rather than attempted. `expect` only
+                    // states what should happen; `test` is what makes it
+                    // happen.
+                    let want: Result<Any, TestFailure> = #{d.name}.expect()
+                    match want {
+                        Ok(expected) -> {
+                            let got: Any = #{d.name}.test()
+                            if got == expected {
+                                passed = passed + 1
+                                print("ok   " + #{d.name.asString()})
+                            } else {
+                                failed = failed + 1
+                                print("FAIL " + #{d.name.asString()})
+                            }
+                        }
+                        // A case that expects a failure — a trap, a refused
+                        // compile, a build that produced nothing. Running the
+                        // body is exactly what this runner cannot survive: a
+                        // trap ends the process, so the case that asserts one
+                        // would take every case after it down with it. Declined
+                        // and counted, never reported as passing.
+                        Error(failure) -> {
+                            declined = declined + 1
+                            print("skip " + #{d.name.asString()} + " (expects a failure this runner cannot assert yet)")
+                        }
+                    }
+                })
+            }
+        }
+        // A program with no cases still gets a runner, so `kira test` on one
+        // reports an empty run rather than failing to find an entry.
+        return quote {
+            function kiraTestMain() {
+                var total: Int = 0
+                var passed: Int = 0
+                var failed: Int = 0
+                var declined: Int = 0
+                #{cases}
+                print(String(passed) + " passed, " + String(failed) + " failed, " + String(declined) + " skipped, " + String(total) + " total")
+                return
+            }
+        }
+    }
+}

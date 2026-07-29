@@ -24,7 +24,7 @@
 //!    silently passed over in favour of a developer's build directory that
 //!    happens to still exist on the same machine.
 //! 2. **The absolute path the build baked in.** The development layout: `cargo
-//!    test` right after `kirac build --backend hybrid` works with no ceremony,
+//!    test` right after `kira build --backend hybrid` works with no ceremony,
 //!    because the generator wrote down where it put the file. Last, because it
 //!    is the one that is wrong the moment the artifact is copied anywhere.
 //!

@@ -108,7 +108,7 @@ pub enum DiscoveryError {
 /// The manifest governing `source`, found by walking up from its directory.
 ///
 /// `Ok(None)` means no `package.kira` sits above the file. That is not an
-/// error: a bare `.kira` file handed to `kirac` is a program in its own right,
+/// error: a bare `.kira` file handed to `kira` is a program in its own right,
 /// and the caller supplies the default. A manifest that *is* present and
 /// unreadable is an error, because silently falling back to the default would
 /// build the wrong kind of thing.
@@ -351,6 +351,17 @@ fn collect_kira_sources(
         })?;
         let path = entry.path();
         if path.is_dir() {
+            // A dot-directory is never package source. `.kira-build/` holds
+            // generated code and stale copies of the package's own files, so
+            // walking into it would make every name in the package a duplicate
+            // of itself.
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with('.'))
+            {
+                continue;
+            }
             collect_kira_sources(&path, sources)?;
         } else if path
             .extension()

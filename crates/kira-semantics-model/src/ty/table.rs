@@ -3,6 +3,7 @@
 use kira_runtime_abi::NativeStateTypeId;
 
 use super::arrays::ArrayTable;
+use super::cells::CellTable;
 use super::enums::EnumTable;
 use super::native_state::NativeStateTable;
 use super::structs::StructTable;
@@ -21,6 +22,7 @@ pub struct TypeTable {
     arrays: ArrayTable,
     enums: EnumTable,
     native_states: NativeStateTable,
+    cells: CellTable,
 }
 
 impl TypeTable {
@@ -67,6 +69,31 @@ impl TypeTable {
         }
     }
 
+    /// The interned capture-cell types.
+    pub fn cells(&self) -> &CellTable {
+        &self.cells
+    }
+
+    /// The cell type holding `inner`, interning it on first mention, or
+    /// [`Type::Error`] when the id space is exhausted.
+    ///
+    /// `Error` rather than a `Result` for the same reason [`TypeTable::array_of`]
+    /// gives one: every caller is analysis, whose job is to keep going.
+    pub fn cell_of(&mut self, inner: Type) -> Type {
+        match self.cells.intern(inner) {
+            Some(id) => Type::Cell(id),
+            None => Type::Error,
+        }
+    }
+
+    /// The type a cell holds, or `None` when `ty` is not a cell.
+    pub fn cell_inner(&self, ty: Type) -> Option<Type> {
+        match ty {
+            Type::Cell(id) => self.cells.inner(id),
+            _ => None,
+        }
+    }
+
     /// The element type of an array type, or `None` when `ty` is not one.
     pub fn element_of(&self, ty: Type) -> Option<Type> {
         match ty {
@@ -102,7 +129,19 @@ impl TypeTable {
             Type::Array(id) => (6, u64::from(id.index())),
             Type::Enum(id) => (7, u64::from(id.index())),
             Type::RawPtr => (8, 0),
-            Type::Void | Type::Error | Type::CString | Type::NativeState(_) => {
+            // `Any` has no identity to give: the whole point of the type is
+            // that the value inside it kept its own and this one has none, so
+            // there is nothing for a recovery to check against.
+            Type::Void
+            | Type::Error
+            | Type::CString
+            | Type::NativeState(_)
+            | Type::Task(_)
+            // A cell never crosses into opaque callback state: it is shared
+            // mutable storage this runtime manages the count of, and handing
+            // one to a host that does not would leave the count wrong.
+            | Type::Cell(_)
+            | Type::Any => {
                 return None;
             }
         };
@@ -121,6 +160,7 @@ impl TypeTable {
             Type::Float(spelling) => spelling.name().to_owned(),
             Type::Bool => "Bool".to_owned(),
             Type::String => "String".to_owned(),
+            Type::Any => "Any".to_owned(),
             Type::Void => "Void".to_owned(),
             Type::RawPtr => "RawPtr".to_owned(),
             Type::CString => "CString".to_owned(),
@@ -128,6 +168,7 @@ impl TypeTable {
                 Some(target) => format!("NativeState<{}>", self.type_name(target)),
                 None => "<unknown native state>".to_owned(),
             },
+            Type::Task(result) => format!("Task<{}>", result.label()),
             Type::Error => "<error>".to_owned(),
             Type::Struct(id) => match self.structs.get(id) {
                 Some(def) => def.name.clone(),
@@ -140,6 +181,13 @@ impl TypeTable {
             Type::Enum(id) => match self.enums.get(id) {
                 Some(def) => def.name.clone(),
                 None => "<unknown enum>".to_owned(),
+            },
+            // Named for a diagnostic that should never reach a reader: a cell
+            // is not surface, so anything printing one is reporting on the
+            // desugar rather than on what was written.
+            Type::Cell(id) => match self.cells.inner(id) {
+                Some(inner) => format!("<captured {}>", self.type_name(inner)),
+                None => "<unknown capture cell>".to_owned(),
             },
         }
     }
@@ -160,7 +208,12 @@ impl TypeTable {
             // An enum, like an array, always *is* a heap object — a boxed tag
             // plus its optional payload — so a copy allocates a fresh box and a
             // drop frees it, whatever the variant carries.
-            Type::String | Type::Array(_) | Type::Enum(_) => true,
+            // `Any` always is, whatever it erased. The box carries the tag that
+            // says what it owns, so a copy and a drop go through it even when
+            // the value inside was a scalar that owned nothing.
+            // A cell always is: it is a share-counted box, and the last holder
+            // releases what is inside it.
+            Type::String | Type::Array(_) | Type::Enum(_) | Type::Any | Type::Cell(_) => true,
             Type::Struct(id) => match self.structs.get(id) {
                 Some(def) => def.fields.iter().any(|field| self.owns_heap(field.ty)),
                 None => false,

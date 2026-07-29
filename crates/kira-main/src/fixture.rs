@@ -1,6 +1,6 @@
 //! A hand-built stand-in for the motivating library, for this crate's tests.
 //!
-//! The real one is authored in Kira and compiled by `kirac`, which lives far
+//! The real one is authored in Kira and compiled by `kira`, which lives far
 //! above this crate — so a test here that wanted a `.kbc` would either depend
 //! upward or ship a committed binary nobody can read a diff of. Building the
 //! module directly keeps the fixture in Rust, in the open, and cheap to bend

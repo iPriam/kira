@@ -22,6 +22,24 @@ use kira_syntax_model::ast::{EnumDecl, Expr, ExprId, Item};
 use crate::analyze::{Analyzer, FnCtx};
 use crate::types::NameContext;
 
+/// What the base of a qualified member spelling (`SizeMode.Hug`, `Result.Ok`)
+/// turned out to name.
+///
+/// Three outcomes rather than an `Option`, because a generic enum written
+/// without an instantiation to construct is neither a resolved enum nor an
+/// ordinary value: the caller owes it a diagnostic instead of falling through
+/// to "undefined name".
+#[derive(Debug, Clone)]
+pub(crate) enum QualifiedEnum {
+    /// The base names this enum, and the member after it is a variant.
+    Enum(EnumId),
+    /// The base names this generic enum, and nothing here says which
+    /// instantiation of it is meant.
+    Unanchored(String),
+    /// The base names no enum; it is an ordinary expression.
+    NotAnEnum,
+}
+
 impl<'a> Analyzer<'a> {
     /// First pass: declares every enum's name with no variants yet.
     ///
@@ -141,9 +159,9 @@ impl<'a> Analyzer<'a> {
     /// Restricts an enum payload to a type the runtime box can carry.
     ///
     /// The box holds one type-erased value slot. A scalar fits directly; a
-    /// `String` or nested enum is an owned handle; a struct uses an erased
-    /// aggregate box with compiler-generated clone/free leaves. Arrays remain
-    /// refused until their element callbacks can travel with the payload.
+    /// `String` or nested enum is an owned handle; a struct or an array uses the
+    /// erased aggregate box, whose compiler-generated clone/free leaves carry
+    /// the element callbacks the payload word cannot.
     ///
     /// A nested enum is admitted because `Result`-shaped values are built from
     /// one: `Error` carries the failure enum, which is what
@@ -152,6 +170,12 @@ impl<'a> Analyzer<'a> {
     /// `EnumPayloadKind::ENUM`, and the WASM lowering's handle payload — and the
     /// recursion terminates because a payload's type resolves against types that
     /// already resolve, so a cycle is unrepresentable.
+    ///
+    /// What is left out is not short of room in the box — it is a type no
+    /// declaration may name a payload of at all: `Void`, a `CString` view the
+    /// payload would not own, a `RawPtr` the box could never reclaim, an
+    /// in-flight `Task`, and a `NativeState` handle whose lifetime is the
+    /// host's.
     fn check_payload_type(&mut self, ty: Type, span: Span) -> Type {
         match ty {
             Type::Int(_)
@@ -160,14 +184,24 @@ impl<'a> Analyzer<'a> {
             | Type::String
             | Type::Struct(_)
             | Type::Enum(_)
+            // A struct and an array both travel as an aggregate: the box owns a
+            // copy plus the two leaves that clone and free it, so an element
+            // type needing its own teardown (a `[String]`, a `[[Int]]`) is
+            // reclaimed by the generated leaf rather than by the box's kind tag.
+            | Type::Array(_)
+            // An erased value is an owned handle to a box shaped exactly like a
+            // nested enum's, so it travels on the arm above's terms and needs
+            // nothing of its own: `EnumPayloadKind::ENUM` on native reclaims it,
+            // and the VM's `Value` was never told the difference.
+            | Type::Any
             | Type::Error => ty,
             _ => {
                 self.emit(
                     span,
                     "KSEM118",
                     format!(
-                        "an enum payload of type `{}` is not supported yet; a payload may be \
-                         `Int`, `Float`, `Bool`, `String`, a struct, or another enum",
+                        "an enum payload may not be of type `{}`; a payload may be \
+                         `Int`, `Float`, `Bool`, `String`, an array, a struct, or another enum",
                         self.type_name(ty)
                     ),
                 );
@@ -196,14 +230,26 @@ impl<'a> Analyzer<'a> {
     /// field read or an undefined name still reports on its own path.
     ///
     /// A local of the same name wins over the enum, mirroring every other
-    /// qualifier here. A generic enum is not resolved: a qualified spelling
-    /// carries no type arguments, and constructing one needs them.
-    pub(crate) fn qualified_enum_at(&self, ctx: &FnCtx, base: ExprId) -> Option<EnumId> {
-        let path = self.name_path_of(base)?;
+    /// qualifier here.
+    ///
+    /// A generic enum resolves too, but only through `expected`: `Result.Ok(1)`
+    /// spells no type arguments, so the position has to supply them. Written
+    /// where nothing asks for an instantiation of that template, it is
+    /// [`QualifiedEnum::Unanchored`] — a mistake with its own fix, not an
+    /// undefined name.
+    pub(crate) fn qualified_enum_at(
+        &self,
+        ctx: &FnCtx,
+        base: ExprId,
+        expected: Option<Type>,
+    ) -> QualifiedEnum {
+        let Some(path) = self.name_path_of(base) else {
+            return QualifiedEnum::NotAnEnum;
+        };
         let candidate = match path.split_once('.') {
             None => {
                 if ctx.resolve(&path).is_some() {
-                    return None;
+                    return QualifiedEnum::NotAnEnum;
                 }
                 path
             }
@@ -211,17 +257,69 @@ impl<'a> Analyzer<'a> {
                 // A module-qualified enum: strip the imported root. A local
                 // named like the root wins, and a further-dotted member is not
                 // a single enum name.
-                if ctx.resolve(root).is_some() || member.contains('.') {
-                    return None;
+                if ctx.resolve(root).is_some()
+                    || member.contains('.')
+                    || self.module_for_root(root).is_none()
+                {
+                    return QualifiedEnum::NotAnEnum;
                 }
-                self.module_for_root(root)?;
                 member.to_owned()
             }
         };
         if self.is_generic_enum(&candidate) {
-            return None;
+            return match self.generic_instantiation_expected(&candidate, expected) {
+                Some(id) => QualifiedEnum::Enum(id),
+                None => QualifiedEnum::Unanchored(candidate),
+            };
         }
-        self.program.types.enums().lookup(&candidate)
+        match self.program.types.enums().lookup(&candidate) {
+            Some(id) => QualifiedEnum::Enum(id),
+            None => QualifiedEnum::NotAnEnum,
+        }
+    }
+
+    /// Reports a generic enum constructed with no instantiation to construct.
+    ///
+    /// The fix is never to add type arguments to the constructor — the language
+    /// has no `Result<Int, Bool>.Ok(1)` — it is to give the position a type, so
+    /// the message says that rather than repeating the name.
+    pub(crate) fn report_unanchored_generic_construction(
+        &mut self,
+        ctx: &mut FnCtx,
+        name: &str,
+        member: kira_core::Symbol,
+        args: &Option<Vec<ExprId>>,
+        span: Span,
+        expected: Option<Type>,
+    ) -> HirExprId {
+        // Still analyze any arguments so their own mistakes are reported.
+        if let Some(args) = args {
+            for &arg in args {
+                self.analyze_expr(ctx, arg);
+            }
+        }
+        // An expectation that already failed to resolve said its piece; naming
+        // a second mistake on top of it would blame the wrong line.
+        if expected != Some(Type::Error) {
+            let variant = self.interner.resolve(member).to_owned();
+            let detail = match expected {
+                Some(ty) => format!(
+                    "but `{}` is expected here, which is not one of its instantiations",
+                    self.type_name(ty)
+                ),
+                None => "but nothing here says which instantiation is meant".to_owned(),
+            };
+            self.emit(
+                span,
+                "KSEM254",
+                format!(
+                    "generic enum `{name}` needs an instantiation to construct, {detail}; \
+                     annotate the target, as in \
+                     `let value: {name}<...> = {name}.{variant}(...)`"
+                ),
+            );
+        }
+        self.program.exprs.alloc(HirExpr::Error)
     }
 
     /// Reconstructs the dotted spelling of a pure name path (`A`, `A.B`), or
@@ -363,7 +461,7 @@ impl<'a> Analyzer<'a> {
                 if let Some(&arg) = written.first() {
                     let value = self.analyze_expr_expecting(ctx, arg, Some(expected));
                     let value_ty = self.program.expr(value).type_of();
-                    if !value_ty.assignable_to(expected) {
+                    if !self.admits(value_ty, expected) {
                         self.emit(
                             self.tree.expr(arg).span(),
                             "KSEM123",
@@ -374,7 +472,7 @@ impl<'a> Analyzer<'a> {
                             ),
                         );
                     }
-                    return Some(value);
+                    return Some(self.coerce_into(value, expected));
                 }
                 // No argument written: fall back to the declared default.
                 match self.variant_default(id, tag) {

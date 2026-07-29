@@ -2,9 +2,9 @@
 //! import resolution, the order the graph is typed in, and where a module's
 //! diagnostic points.
 
-use crate::{kirac, write_program};
+use crate::{kira, write_program};
 
-/// `kirac` resolves an import against the entry file's directory, so a program
+/// `kira` resolves an import against the entry file's directory, so a program
 /// spread over several files runs from the real binary the way a user runs it.
 #[test]
 fn runs_a_program_spread_across_modules() {
@@ -24,7 +24,7 @@ fn runs_a_program_spread_across_modules() {
             ),
         ],
     );
-    let output = kirac(&["run", path.to_str().unwrap()]);
+    let output = kira(&["run", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
     assert!(
         output.status.success(),
@@ -63,7 +63,7 @@ fn runs_a_diamond_import_graph() {
             ),
         ],
     );
-    let output = kirac(&["run", path.to_str().unwrap()]);
+    let output = kira(&["run", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
     assert!(
         output.status.success(),
@@ -81,7 +81,7 @@ fn an_import_of_a_missing_module_is_rejected() {
         "import nowhere\n@Main function main() { print(1) return }",
         &[],
     );
-    let output = kirac(&["check", path.to_str().unwrap()]);
+    let output = kira(&["check", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -97,7 +97,7 @@ fn a_modules_diagnostic_renders_against_the_module_file() {
         "import broken\n@Main function main() { print(1) return }",
         &[("broken", "function bad() -> Int { return nope }")],
     );
-    let output = kirac(&["check", path.to_str().unwrap()]);
+    let output = kira(&["check", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -122,7 +122,7 @@ fn a_siblings_import_does_not_carry_into_a_module() {
             ),
         ],
     );
-    let output = kirac(&["check", path.to_str().unwrap()]);
+    let output = kira(&["check", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);

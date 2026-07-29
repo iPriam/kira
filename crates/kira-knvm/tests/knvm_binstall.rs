@@ -58,9 +58,19 @@ fn binstall_installs_this_checkout_as_the_selected_dev_toolchain() {
 
     assert_eq!(installed.channel, Channel::Dev);
     assert!(
-        installed.root.join("bin").join("kirac").is_file(),
+        installed.root.join("bin").join("kira").is_file(),
         "the dev toolchain must hold the built compiler"
     );
+    for archive in [
+        "libkira_native_bridge.a",
+        "libkira_compiler_bridge.a",
+        "libkira_native_bridge-wasm32-emscripten.a",
+    ] {
+        assert!(
+            installed.root.join("bin").join(archive).is_file(),
+            "the dev toolchain must hold `{archive}`"
+        );
+    }
     assert!(
         installed
             .root
@@ -85,7 +95,7 @@ fn binstall_installs_this_checkout_as_the_selected_dev_toolchain() {
         "import Foundation\n@Main function main() { printLine(\"dev toolchain\") return }",
     )
     .expect("write the program");
-    let output = Command::new(installed.root.join("bin").join("kirac"))
+    let output = Command::new(installed.root.join("bin").join("kira"))
         .arg("run")
         .arg(&program)
         .current_dir(workspace.path())
@@ -122,7 +132,7 @@ fn a_second_binstall_replaces_the_previous_build() {
         "a rebuild must land a fresh tree, not touch up the old one"
     );
     assert!(
-        second.root.join("bin").join("kirac").is_file(),
+        second.root.join("bin").join("kira").is_file(),
         "the replacement must be a whole toolchain"
     );
 }

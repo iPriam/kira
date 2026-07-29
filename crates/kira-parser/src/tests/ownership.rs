@@ -129,7 +129,7 @@ fn move_is_an_operator_only_when_an_operand_follows() {
         operator.diagnostics
     );
     assert!(
-        operator.tree.exprs.iter().any(|(_, expr)| matches!(
+        operator.tree.exprs().any(|(_, expr)| matches!(
             expr,
             Expr::Ownership {
                 op: OwnershipOp::Move,
@@ -144,8 +144,7 @@ fn move_is_an_operator_only_when_an_operand_follows() {
     assert!(
         !name
             .tree
-            .exprs
-            .iter()
+            .exprs()
             .any(|(_, expr)| matches!(expr, Expr::Ownership { .. })),
         "`move + 1` reads a local named `move`, it does not transfer anything"
     );
@@ -156,7 +155,7 @@ fn move_is_an_operator_only_when_an_operand_follows() {
 fn copy_parses_as_an_ownership_expression() {
     let result = parse_text("function f() { g(copy -1) return }");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert!(result.tree.exprs.iter().any(|(_, expr)| matches!(
+    assert!(result.tree.exprs().any(|(_, expr)| matches!(
         expr,
         Expr::Ownership {
             op: OwnershipOp::Copy,

@@ -12,6 +12,29 @@ use kira_syntax_model::ownership::OwnershipMode;
 
 use crate::Parser;
 
+/// What follows a written type, which decides whether the compat `Any Family`
+/// spelling can be told apart from the `Any` top type.
+///
+/// A two-word type is only unambiguous when something other than a name must
+/// come next. Carried as a type rather than a `bool` so the two positions are
+/// named at every call site instead of a bare `true` nobody can read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeEnd {
+    /// A delimiter must follow: `)`, `]`, `,`, `=`, `{`, `->`. A trailing
+    /// identifier can only be part of the type, so `Any Widget` is unambiguous.
+    Enclosed,
+    /// The type may be the statement's last token, so a following identifier
+    /// may be the next statement. Only `some Family` is accepted here.
+    StatementFinal,
+}
+
+impl TypeEnd {
+    /// Whether the compat `Any Family` spelling is unambiguous in this position.
+    fn admits_any_construct(self) -> bool {
+        matches!(self, TypeEnd::Enclosed)
+    }
+}
+
 impl Parser<'_> {
     /// Parses `type Name = Target`.
     ///
@@ -152,13 +175,72 @@ impl Parser<'_> {
         )
     }
 
-    /// Parses a written type: a name, `[` element `]`, or a function type,
-    /// nested to any depth.
+    /// Whether the cursor sits on the `some Family` existential spelling.
+    ///
+    /// `some` is contextual, so it is committed to only when a name follows —
+    /// which is what keeps a type *named* `some`, or a parameter named `some`,
+    /// parsing as it always did. One `[some X]` spelling falls out for free:
+    /// the array branch recurses into this same function.
+    pub(crate) fn at_some_construct(&self) -> bool {
+        self.at_word("some") && self.peek(1).kind == TokenKind::Identifier
+    }
+
+    /// Whether the cursor sits on `Any Family`, the pre-Construct-2.0 spelling
+    /// of [`Parser::at_some_construct`].
+    ///
+    /// Kept because checked-in Kira still writes it (`[Any Widget]`), and it
+    /// parses to the same node. It is *not* accepted where a type may be the
+    /// last token of its statement — see [`TypeEnd`] — because `Any` is also
+    /// the top type, so `var x: Any` followed by a statement that starts with a
+    /// name would otherwise be read as `Any <that name>`. `some` has no such
+    /// ambiguity and is the spelling to write.
+    fn at_any_construct(&self) -> bool {
+        self.at_word("Any") && self.peek(1).kind == TokenKind::Identifier
+    }
+
+    /// Whether the cursor sits on `[some Family]`, the list existential.
+    ///
+    /// Asked only by the construct grammar, which needs to know a field is a
+    /// child slot *before* the type is parsed. [`Parser::parse_type_ref`] needs
+    /// no such lookahead: its array branch recurses.
+    pub(crate) fn at_bracketed_some_construct(&self) -> bool {
+        self.at(TokenKind::LBracket)
+            && self.peek(1).kind == TokenKind::Identifier
+            && self.text_of(self.peek(1).span) == "some"
+            && self.peek(2).kind == TokenKind::Identifier
+    }
+
+    /// Consumes a possibly module-qualified name starting at `start`, returning
+    /// its text and the span covering every segment.
+    ///
+    /// Shared by the nominal and existential branches so `some Support.Widget`
+    /// qualifies exactly the way `Support.Widget` does — one grammar, not two
+    /// that can drift apart.
+    fn parse_qualified_name(&mut self, start: Span) -> (String, Span) {
+        let mut text = self.text_of(start).to_owned();
+        self.bump();
+        while self.at(TokenKind::Dot) && self.peek(1).kind == TokenKind::Identifier {
+            self.bump(); // `.`
+            let segment = self.current().span;
+            text.push('.');
+            text.push_str(self.text_of(segment));
+            self.bump();
+        }
+        (text, Span::from_bounds(start.start, self.previous_end()))
+    }
+
+    /// Parses a written type: a name, `some Family`, `[` element `]`, or a
+    /// function type, nested to any depth.
     ///
     /// A name may be **module-qualified** (`Support.Point`). The qualifier is
     /// kept in the interned name — a dot cannot appear in an identifier, so a
     /// qualified spelling can never collide with a declared one — and semantics
     /// is what strips it against the file's imports.
+    ///
+    /// `some Family` is the Construct 2.0 existential: "a value of some concrete
+    /// declaration backing `Family`". It resolves to the same type bare `Family`
+    /// does, so it is parsed as its own node purely to earn the check that the
+    /// name really is a family.
     ///
     /// A leading `(` always starts a function type: no other written type is
     /// parenthesized, so there is nothing to disambiguate against. That is also
@@ -166,12 +248,28 @@ impl Parser<'_> {
     /// declaration — `function f(): (Int) -> Int` — and both spellings are
     /// accepted for every other result type.
     pub(crate) fn parse_type_ref(&mut self) -> TypeRefId {
+        self.parse_type_ref_ending(TypeEnd::Enclosed)
+    }
+
+    /// Parses a written type that may be the final token of its statement.
+    ///
+    /// Only the local-binding annotation is in this position, and it is the one
+    /// place the compat `Any Family` spelling is refused: there, and only there,
+    /// a bare `Any` can be followed by an identifier that starts the *next
+    /// statement* rather than naming a family.
+    pub(crate) fn parse_type_ref_statement_final(&mut self) -> TypeRefId {
+        self.parse_type_ref_ending(TypeEnd::StatementFinal)
+    }
+
+    fn parse_type_ref_ending(&mut self, end: TypeEnd) -> TypeRefId {
         if self.at(TokenKind::LParen) {
             return self.parse_function_type();
         }
         if self.at(TokenKind::LBracket) {
             let start = self.current().span;
             self.bump(); // `[`
+            // An element type is enclosed by the brackets whatever encloses the
+            // array, so `var xs: [Any Widget]` keeps the compat spelling.
             let element = self.parse_type_ref();
             self.expect(TokenKind::RBracket);
             let span = Span::from_bounds(start.start, self.previous_end());
@@ -179,40 +277,20 @@ impl Parser<'_> {
         }
         if self.at(TokenKind::Identifier) {
             let start = self.current().span;
-            let is_any_construct =
-                self.text_of(start) == "Any" && self.peek(1).kind == TokenKind::Identifier;
-            if is_any_construct {
-                self.bump(); // `Any`
+            if self.at_some_construct() || (end.admits_any_construct() && self.at_any_construct()) {
+                self.bump(); // `some` / `Any`
                 let family_start = self.current().span;
-                let mut text = self.text_of(family_start).to_owned();
-                self.bump();
-                while self.at(TokenKind::Dot) && self.peek(1).kind == TokenKind::Identifier {
-                    self.bump(); // `.`
-                    let segment = self.current().span;
-                    text.push('.');
-                    text.push_str(self.text_of(segment));
-                    self.bump();
-                }
-                let family_span = Span::from_bounds(family_start.start, self.previous_end());
+                let (text, family_span) = self.parse_qualified_name(family_start);
                 let family = self.intern_text(&text, family_span);
                 let span = Span::from_bounds(start.start, self.previous_end());
-                return self.tree.add_type(TypeRef::AnyConstruct {
+                return self.tree.add_type(TypeRef::SomeConstruct {
                     family,
                     family_span,
                     span,
                 });
             }
 
-            let mut text = self.text_of(start).to_owned();
-            self.bump();
-            while self.at(TokenKind::Dot) && self.peek(1).kind == TokenKind::Identifier {
-                self.bump(); // `.`
-                let segment = self.current().span;
-                text.push('.');
-                text.push_str(self.text_of(segment));
-                self.bump();
-            }
-            let span = Span::from_bounds(start.start, self.previous_end());
+            let (text, span) = self.parse_qualified_name(start);
             let name = self.intern_text(&text, span);
             // `Name<...>` is a generic instantiation. A type position has no
             // comparison operator, so a `<` here is never ambiguous.

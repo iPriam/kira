@@ -254,6 +254,173 @@ fn attempt_and_try_resolve_a_generic_result_nominally() {
 }
 
 #[test]
+fn a_qualified_spelling_constructs_the_instantiation_the_position_asks_for() {
+    // `Result.Ok(12)` carries no type arguments, so the annotation is what says
+    // which instantiation it builds — exactly as `.Ok(12)` does. The template
+    // name in front only has to agree with it.
+    assert!(
+        codes(&format!(
+            "{RESULT}\
+             function find() -> Result<Int, AppError> {{ return Result.Ok(1) }}\n\
+             @Main function main() {{\n\
+                 let ok: Result<Int, AppError> = Result.Ok(12)\n\
+                 let bad: Result<Int, AppError> = Result.Error(.Denied)\n\
+                 let from: Result<Int, AppError> = find()\n\
+                 match ok {{ Ok -> {{ print(1) }} Error -> {{ print(0) }} }}\n\
+                 match bad {{ Ok -> {{ print(1) }} Error -> {{ print(0) }} }}\n\
+                 match from {{ Ok -> {{ print(1) }} Error -> {{ print(0) }} }}\n\
+                 return\n\
+             }}"
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_payload_less_variant_takes_a_qualified_spelling_too() {
+    // No arguments means it parses as a field read rather than a call, which is
+    // the other of the two paths a qualified spelling arrives on.
+    assert!(
+        codes(
+            "enum Flag<Value> { On Off Held(Value) }\n\
+             @Main function main() { let f: Flag<Int> = Flag.On print(1) return }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_qualified_payload_is_checked_against_the_argument_not_the_parameter() {
+    // `Ok(Value)` with `Value = Int` may not take a `String` — the same rule the
+    // leading-dot form obeys, reached through the qualified spelling.
+    assert!(
+        !codes(&format!(
+            "{RESULT}\
+         @Main function main() {{\n\
+             let ok: Result<Int, AppError> = Result.Ok(\"twelve\")\n\
+             print(1)\n\
+             return\n\
+         }}"
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_qualified_spelling_with_no_instantiation_to_build_says_so() {
+    // No annotation at all: nothing supplies the type arguments a constructor
+    // cannot spell, so this is a typed refusal rather than "undefined name".
+    assert!(
+        codes(&format!(
+            "{RESULT}\
+             @Main function main() {{ let r = Result.Ok(1) print(1) return }}"
+        ))
+        .contains(&"KSEM254")
+    );
+    // A payload-less variant reaches the same refusal down the field path.
+    assert!(
+        codes(
+            "enum Flag<Value> { On Held(Value) }\n\
+             @Main function main() { let f = Flag.On print(1) return }"
+        )
+        .contains(&"KSEM254")
+    );
+}
+
+#[test]
+fn a_qualified_spelling_against_an_unrelated_expected_type_is_refused() {
+    // The expectation is an enum, but not an instantiation of this template, so
+    // the name in front disagrees with the position and neither one wins.
+    assert!(
+        codes(&format!(
+            "{RESULT}\
+             enum Color {{ Red Green }}\n\
+             @Main function main() {{ let c: Color = Result.Ok(1) print(1) return }}"
+        ))
+        .contains(&"KSEM254")
+    );
+    // A non-enum expectation is the same mistake.
+    assert!(
+        codes(&format!(
+            "{RESULT}\
+             @Main function main() {{ let n: Int = Result.Ok(1) print(1) return }}"
+        ))
+        .contains(&"KSEM254")
+    );
+}
+
+#[test]
+fn one_templates_name_does_not_construct_anothers_instantiation() {
+    // Both are generic and both have an `Ok`, so only the recorded template
+    // separates them: `Other.Ok` may not build a `Result<Int, AppError>`.
+    assert!(
+        codes(&format!(
+            "{RESULT}\
+             enum Other<Value> {{ Ok(Value) }}\n\
+             @Main function main() {{\n\
+                 let r: Result<Int, AppError> = Other.Ok(1)\n\
+                 print(1)\n\
+                 return\n\
+             }}"
+        ))
+        .contains(&"KSEM254")
+    );
+}
+
+#[test]
+fn a_hand_written_enums_name_does_not_construct_an_instantiation() {
+    // `Color` is not a template, so `Color.Ok` is an ordinary qualified
+    // spelling against `Color` — and `Color` has no `Ok`.
+    assert!(
+        codes(&format!(
+            "{RESULT}\
+             enum Color {{ Red Green }}\n\
+             @Main function main() {{\n\
+                 let r: Result<Int, AppError> = Color.Ok(1)\n\
+                 print(1)\n\
+                 return\n\
+             }}"
+        ))
+        .contains(&"KSEM120")
+    );
+}
+
+#[test]
+fn a_variant_no_instantiation_has_is_still_a_missing_variant() {
+    // The template is anchored, so the mistake is the variant name — which is a
+    // sharper thing to say than "this needs an instantiation".
+    assert!(
+        codes(&format!(
+            "{RESULT}\
+             @Main function main() {{\n\
+                 let r: Result<Int, AppError> = Result.Nope(1)\n\
+                 print(1)\n\
+                 return\n\
+             }}"
+        ))
+        .contains(&"KSEM120")
+    );
+}
+
+#[test]
+fn a_local_named_like_a_template_wins_over_it() {
+    // Every other qualifier here yields to a local of the same name, and a
+    // template is no different — `Result.x` reads the struct's field.
+    assert!(
+        codes(&format!(
+            "{RESULT}\
+             struct Holder {{ var x: Int = 0 }}\n\
+             @Main function main() {{\n\
+                 let Result = Holder {{ x = 3 }}\n\
+                 print(Result.x)\n\
+                 return\n\
+             }}"
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
 fn a_generic_struct_class_and_function_are_refused_by_name() {
     assert!(
         codes("struct Box<Value> { let v: Int }\n@Main function main() { print(1) return }")

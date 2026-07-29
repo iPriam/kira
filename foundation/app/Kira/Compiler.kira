@@ -1,0 +1,244 @@
+// Kira's compiler, as a Kira program calls it.
+//
+// A program hands over a *set of packages* — each a manifest text and its named
+// source files, one of them named as the root — and reads back the diagnostics
+// the frontend produced, as values.
+//
+// The unit is a package, not a string of source, because the questions worth
+// asking are not about one file. An `import` is written per file and binds that
+// file only, so `import Foundation` in `app/A.kira` must not be visible in
+// `app/B.kira`. A package is one flat namespace, so two of its files declaring
+// one name collide. And a library with an app on top of it is two packages with
+// an edge between them. None of that can be said with a single source string.
+//
+// Nothing reaches a disk. The files are the ones written here and no others,
+// so two checks running one after another cannot see each other's work, and
+// nothing is left behind to clean up. The one exception is a bundled package an
+// `import` names — Foundation itself — which ships with the toolchain.
+//
+// Checking only: the frontend and nothing after it. Every diagnostic a package
+// can be asserted on is a frontend diagnostic, and a check that reached code
+// generation would need a linker and a toolchain to answer a question about
+// source.
+//
+// The engine performs this the way it performs a file read: through its host.
+// A host with no compiler refuses by name rather than answering "no
+// diagnostics", which would read as "it compiled".
+
+// One source file of a package: what it is called, and what is in it.
+//
+// `path` is two things at once, deliberately. It is what a diagnostic points
+// at, and — with a leading `app/` dropped, exactly as a package's source
+// directory works on disk — it is the module name an `import` inside the
+// package resolves against.
+struct KiraSourceFile {
+    var path: String = ""
+    var text: String = ""
+}
+
+// One package: its `package.kira` text, and its files.
+struct KiraPackage {
+    var manifest: String = ""
+    var files: [KiraSourceFile] = []
+}
+
+// A package set to check, and which of its packages is the root.
+//
+// The root is the one being checked; the others are its dependencies, and
+// their declarations are reachable only through an `import`.
+struct KiraCheckRequest {
+    var packages: [KiraPackage] = []
+    var root: String = ""
+}
+
+// How serious one reported problem is.
+enum KiraSeverity {
+    Error
+    Warning
+    Note
+}
+
+// One problem the compiler reported, as a value.
+//
+// Enough to assert on without matching a message: which diagnostic it is, how
+// serious it is, and which file of the request it points into. `title` and
+// `message` are for a reader — they get reworded, and codes do not.
+//
+// `codeText` is the code exactly as the compiler wrote it, for the case
+// `KiraError` has no name for.
+struct KiraCheckDiagnostic {
+    var code: KiraError = .Unrecognized
+    var codeText: String = ""
+    var severity: KiraSeverity = .Error
+    var file: String = ""
+    var title: String = ""
+    var message: String = ""
+
+    // Whether this is the diagnostic `code` names, in the file `file` names.
+    //
+    // The assertion a fail test writes: a code and a file, never a message.
+    function isAt(code: borrow KiraError, file: borrow String) -> Bool {
+        if self.code != code {
+            return false
+        }
+        return self.file == file
+    }
+}
+
+// What one check answered.
+struct KiraCheckResult {
+    var diagnostics: [KiraCheckDiagnostic] = []
+
+    // How many problems were reported, of every severity.
+    function count() -> Int {
+        return self.diagnostics.count
+    }
+
+    // The diagnostic at `index`, or an empty one when there is none there.
+    //
+    // Out of range is an answer rather than a trap, because a caller reading a
+    // result it did not produce should be able to ask.
+    function at(index: Int) -> KiraCheckDiagnostic {
+        if index < 0 {
+            return KiraCheckDiagnostic()
+        }
+        if index >= self.diagnostics.count {
+            return KiraCheckDiagnostic()
+        }
+        return self.diagnostics[index]
+    }
+
+    // Whether the package set compiles: no diagnostic is an error.
+    //
+    // A warning or a note is not a refusal, so neither makes this false.
+    function ok() -> Bool {
+        var index = 0
+        while index < self.diagnostics.count {
+            if self.diagnostics[index].severity == .Error {
+                return false
+            }
+            index = index + 1
+        }
+        return true
+    }
+
+    // How many errors were reported.
+    function errorCount() -> Int {
+        var errors = 0
+        var index = 0
+        while index < self.diagnostics.count {
+            if self.diagnostics[index].severity == .Error {
+                errors = errors + 1
+            }
+            index = index + 1
+        }
+        return errors
+    }
+
+    // Whether `code` was reported in `file`.
+    function has(code: borrow KiraError, file: borrow String) -> Bool {
+        var index = 0
+        while index < self.diagnostics.count {
+            if self.diagnostics[index].isAt(code, file) {
+                return true
+            }
+            index = index + 1
+        }
+        return false
+    }
+
+    // Whether `code` was reported anywhere in the request.
+    function hasCode(code: borrow KiraError) -> Bool {
+        var index = 0
+        while index < self.diagnostics.count {
+            if self.diagnostics[index].code == code {
+                return true
+            }
+            index = index + 1
+        }
+        return false
+    }
+}
+
+// Checks a package set, answering with every diagnostic it produced.
+//
+// Total: a package that does not compile answers with its problems, and a
+// request that cannot be read answers with the package diagnostic saying so.
+// A caller asking whether something compiles is entitled to an answer either
+// way, so nothing here fails.
+function checkPackages(request: borrow KiraCheckRequest) -> KiraCheckResult {
+    return decodeCheckResult(kcCheckPackages(encodeCheckRequest(request)))
+}
+
+// Checks one package, named as its own root.
+//
+// The common shape, spelled once: most callers have one package and a manifest
+// that names it.
+function checkPackage(root: borrow String, package: borrow KiraPackage) -> KiraCheckResult {
+    var request = KiraCheckRequest()
+    request.root = root
+    request.packages.append(package)
+    return checkPackages(request)
+}
+
+// Writes a request as the flat string array the engine seam carries.
+//
+// The layout is the root package's name, then a record per package and per
+// file: `"package"` with its manifest, and `"file"` with a path and a text
+// belonging to the package before it. The compiler reads exactly this shape.
+function encodeCheckRequest(request: borrow KiraCheckRequest) -> [String] {
+    var fields: [String] = []
+    fields.append(request.root)
+    var packageIndex = 0
+    while packageIndex < request.packages.count {
+        let package = request.packages[packageIndex]
+        fields.append("package")
+        fields.append(package.manifest)
+        var fileIndex = 0
+        while fileIndex < package.files.count {
+            let file = package.files[fileIndex]
+            fields.append("file")
+            fields.append(file.path)
+            fields.append(file.text)
+            fileIndex = fileIndex + 1
+        }
+        packageIndex = packageIndex + 1
+    }
+    return fields
+}
+
+// Reads the flat string array the compiler answered with.
+//
+// Five fields per diagnostic, in order, so this walks rather than parses. A
+// trailing partial record is dropped: the compiler writes whole records, and
+// half a diagnostic is not one.
+function decodeCheckResult(fields: borrow [String]) -> KiraCheckResult {
+    var result = KiraCheckResult()
+    var index = 0
+    while index + 4 < fields.count {
+        var diagnostic = KiraCheckDiagnostic()
+        diagnostic.codeText = fields[index]
+        diagnostic.code = kiraErrorFromCode(fields[index])
+        diagnostic.severity = kiraSeverityFromText(fields[index + 1])
+        diagnostic.file = fields[index + 2]
+        diagnostic.title = fields[index + 3]
+        diagnostic.message = fields[index + 4]
+        result.diagnostics.append(diagnostic)
+        index = index + 5
+    }
+    return result
+}
+
+// The severity a wire spelling names; anything unknown reads as an error.
+//
+// Erring towards `Error` rather than towards `Note` is deliberate: a severity
+// this Foundation does not know must not make a refused package look clean.
+function kiraSeverityFromText(text: borrow String) -> KiraSeverity {
+    if text == "warning" {
+        return .Warning
+    }
+    if text == "note" {
+        return .Note
+    }
+    return .Error
+}

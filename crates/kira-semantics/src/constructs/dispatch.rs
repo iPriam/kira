@@ -1,4 +1,4 @@
-//! Expected-type upcasts and synthesized dispatch for `Any Family` values.
+//! Expected-type upcasts and synthesized dispatch for construct-family values.
 
 use kira_semantics_model::hir::{
     Callee, FuncId, HirBinaryOp, HirExpr, HirExprId, HirFunction, HirStmt, HirStmtId, LocalId,
@@ -17,7 +17,12 @@ struct FamilyMethodShape {
     /// Resolved parameter defaults, aligned with `params`. A `None` slot is
     /// mandatory; a `Some` fills a call that omits it.
     defaults: Vec<Option<HirExprId>>,
-    result: Type,
+    /// The result every implementation presents, or `None` when the family
+    /// stated the obligation without one — see
+    /// [`ConstructFamilyMethod::constrained_result`].
+    ///
+    /// [`ConstructFamilyMethod::constrained_result`]: super::ConstructFamilyMethod::constrained_result
+    result: Option<Type>,
 }
 
 /// The pieces one dispatcher branch forwards to a concrete method.
@@ -83,7 +88,7 @@ impl Analyzer<'_> {
             .is_some_and(|method| method.computed)
     }
 
-    /// Type-checks a method call on an `Any Family` value.
+    /// Type-checks a method call on a family value.
     pub(crate) fn analyze_construct_family_call(
         &mut self,
         ctx: &mut FnCtx,
@@ -113,6 +118,26 @@ impl Analyzer<'_> {
             defaults,
             result,
         } = shape;
+        // A requirement written without `-> T` says nothing about what an
+        // implementation returns, so there is no one type this call could have.
+        // Reaching the member through the concrete declaration still works; only
+        // dispatch through the family value cannot be typed.
+        let Some(result) = result else {
+            self.emit(
+                span,
+                "KSEM241",
+                format!(
+                    "`{}` declares `{method}` without a result type, so a call through the \
+                     family value has no type; give the requirement a result type, or call \
+                     `{method}` on the concrete declaration",
+                    self.type_name(Type::Enum(family_id))
+                ),
+            );
+            for arg in args {
+                self.analyze_expr(ctx, arg.value);
+            }
+            return self.program.exprs.alloc(HirExpr::Error);
+        };
         // A uniform `extend` modifier has one body called directly; a
         // per-variant method is reached through a synthesized tag dispatcher.
         let callee = if self.family_method_is_uniform(family_id, method) {
@@ -166,10 +191,12 @@ impl Analyzer<'_> {
                 ),
             );
         } else {
-            for (index, (&value, &expected)) in values.iter().skip(1).zip(params.iter()).enumerate()
-            {
+            for (index, &expected) in params.iter().enumerate() {
+                let Some(value) = values.get(index + 1).copied() else {
+                    break;
+                };
                 let actual = self.program.expr(value).type_of();
-                if !actual.assignable_to(expected) {
+                if !self.admits(actual, expected) {
                     self.emit(
                         span,
                         "KSEM063",
@@ -181,6 +208,9 @@ impl Analyzer<'_> {
                         ),
                     );
                 }
+                // An `Any` parameter of a family method takes the erased form,
+                // exactly as a direct call to the same member would.
+                values[index + 1] = self.coerce_into(value, expected);
             }
         }
         self.program.exprs.alloc(HirExpr::Call {
@@ -210,7 +240,7 @@ impl Analyzer<'_> {
             params: method.params.clone(),
             ownership: method.ownership.clone(),
             defaults: method.defaults.clone(),
-            result: method.result,
+            result: method.constrained_result(),
         })
     }
 
@@ -253,7 +283,9 @@ impl Analyzer<'_> {
                                 method.function.name_span,
                                 method.source,
                                 method.params.clone(),
-                                method.result,
+                                // An obligation that wrote no result type
+                                // constrains the parameters only.
+                                method.constrained_result(),
                                 *variant,
                             )
                         })
@@ -278,7 +310,7 @@ impl Analyzer<'_> {
                 continue;
             };
             if actual_params.get(1..) != Some(expected_params.as_slice())
-                || actual_result != expected_result
+                || expected_result.is_some_and(|expected| actual_result != expected)
             {
                 self.emit(
                     span,
@@ -320,6 +352,9 @@ impl Analyzer<'_> {
             let function = self.construct_dispatcher_body(&family, &method);
             self.fill_synth(dispatcher, function);
         }
+        // A `@Required let` read through the family value reserves its own
+        // dispatcher; see `super::value_members`.
+        self.build_family_field_dispatchers();
     }
 
     fn construct_dispatcher_body(&mut self, family: &str, method: &str) -> HirFunction {
@@ -398,6 +433,7 @@ impl Analyzer<'_> {
             locals: ctx.locals,
             body,
             is_main: false,
+            is_async: false,
             execution: kira_semantics_model::Execution::Inherited,
             mutates_self: false,
             name_span: Span::new(0, 0),
@@ -456,7 +492,7 @@ impl Analyzer<'_> {
         }
     }
 
-    fn empty_construct_dispatcher(&self) -> HirFunction {
+    pub(super) fn empty_construct_dispatcher(&self) -> HirFunction {
         HirFunction {
             name: "<unreachable construct dispatcher>".to_owned(),
             param_count: 0,
@@ -464,6 +500,7 @@ impl Analyzer<'_> {
             locals: Vec::new(),
             body: Vec::new(),
             is_main: false,
+            is_async: false,
             execution: kira_semantics_model::Execution::Inherited,
             mutates_self: false,
             name_span: Span::new(0, 0),

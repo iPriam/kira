@@ -214,16 +214,19 @@ fn an_enum_payload_may_be_another_enum() {
     );
 }
 
-/// An array payload is still refused: the one-word box has no representation
-/// for an aggregate, and nothing pins one. Only the *enum* case was added.
+/// An array payload resolves, which is what makes `Result<[Int], E>` — the
+/// shape a builder returns and `attempt` routes on — a writable type.
+///
+/// It travels as an aggregate rather than in the one-word slot: the box owns a
+/// copy of the array plus the generated leaves that clone and free it.
 #[test]
-fn an_array_payload_is_still_refused() {
-    assert_eq!(
+fn an_array_payload_resolves() {
+    assert!(
         codes(
             "enum E { Held: [Int] }\n\
              @Main function main() { print(1) return }"
-        ),
-        ["KSEM118"]
+        )
+        .is_empty()
     );
 }
 

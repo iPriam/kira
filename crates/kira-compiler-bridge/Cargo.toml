@@ -1,0 +1,24 @@
+[package]
+name = "kira-compiler-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The check-only frontend this archive carries. Deliberately not `kira-build`:
+# that would drag LLVM into every native program that checks a package.
+kira-check.workspace = true
+# The base runtime, whose `kira_rt_*` symbols this archive also carries — it is
+# a superset of `libkira_native_bridge.a`, never a second archive beside it.
+kira-native-bridge.workspace = true
+kira-runtime-abi.workspace = true
+
+# `staticlib` produces `libkira_compiler_bridge.a`, the runtime archive a native
+# build links when — and only when — the program reaches the compiler; `rlib`
+# lets the CLI depend on the crate so cargo builds that archive beside `kira`.
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[lints]
+workspace = true

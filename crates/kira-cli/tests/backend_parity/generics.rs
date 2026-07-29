@@ -14,7 +14,7 @@
 //!
 //! [`EnumDef`]: kira_semantics_model::EnumDef
 
-use crate::assert_parity;
+use crate::{assert_module_parity, assert_parity};
 
 /// The oracle's `Result` verbatim.
 const RESULT: &str = "
@@ -176,6 +176,166 @@ function main() {{
 "#
     ));
     assert_eq!(output, "3\n-1\n");
+}
+
+#[test]
+fn a_generic_enum_round_trips_a_payload_of_every_supported_kind() {
+    // The payload kinds an enum may carry are `Int`, `Float`, `Bool`, `String`,
+    // a struct, and another enum. Each one is a different representation — an
+    // immediate, a float register, a heap handle, an aggregate — so this is the
+    // case that would catch monomorphization producing a row whose payload one
+    // engine reads back differently from another.
+    let output = assert_parity(&format!(
+        r#"
+enum AppError {{ NotFound }}
+enum Shade {{ Dim Bright }}
+{RESULT}
+struct Pt {{
+    let x: Int
+    let y: Int
+}}
+
+@Main
+function main() {{
+    let number: Result<Int, AppError> = .Ok(42)
+    match number {{ Ok(v) -> {{ print(v) }} Error -> {{ print(0) }} }}
+
+    let real: Result<Float, AppError> = .Ok(1.5)
+    match real {{ Ok(v) -> {{ print(v) }} Error -> {{ print(0.0) }} }}
+
+    let flag: Result<Bool, AppError> = .Ok(true)
+    match flag {{ Ok(v) -> {{ print(v) }} Error -> {{ print(false) }} }}
+
+    let text: Result<String, AppError> = .Ok("payload")
+    match text {{ Ok(v) -> {{ print(v) }} Error -> {{ print("none") }} }}
+
+    let point: Result<Pt, AppError> = .Ok(Pt {{ x = 3, y = 4 }})
+    match point {{ Ok(v) -> {{ print(v.x + v.y) }} Error -> {{ print(0) }} }}
+
+    let inner: Result<Shade, AppError> = .Ok(.Bright)
+    match inner {{
+        Ok(v) -> {{ if v == .Bright {{ print(1) }} else {{ print(0) }} }}
+        Error -> {{ print(0 - 1) }}
+    }}
+
+    let failed: Result<Int, AppError> = .Error(.NotFound)
+    match failed {{ Ok(v) -> {{ print(v) }} Error -> {{ print(0 - 9) }} }}
+    return
+}}
+"#
+    ));
+    assert_eq!(output, "42\n1.5\ntrue\npayload\n7\n1\n-9\n");
+}
+
+#[test]
+fn a_qualified_spelling_builds_the_same_value_a_leading_dot_does() {
+    // `Result.Ok(1)` carries no type arguments, so the position supplies them —
+    // and what it builds has to be the very same value `.Ok(1)` builds, on
+    // every engine. A backend seeing a difference here would mean the qualified
+    // path reached a different row.
+    let output = assert_parity(&format!(
+        r#"
+enum AppError {{ NotFound Denied }}
+{RESULT}
+function viaDot(n: Int) -> Result<Int, AppError> {{
+    if n < 0 {{ return .Error(.Denied) }}
+    return .Ok(n)
+}}
+
+function viaQualified(n: Int) -> Result<Int, AppError> {{
+    if n < 0 {{ return Result.Error(.Denied) }}
+    return Result.Ok(n)
+}}
+
+function unwrap(outcome: Result<Int, AppError>) -> Int {{
+    match outcome {{
+        Ok(v) -> {{ return v }}
+        Error -> {{ return 0 - 1 }}
+    }}
+}}
+
+@Main
+function main() {{
+    print(unwrap(viaDot(7)))
+    print(unwrap(viaQualified(7)))
+    print(unwrap(viaDot(0 - 3)))
+    print(unwrap(viaQualified(0 - 3)))
+
+    let text: Result<String, AppError> = Result.Ok("qualified")
+    match text {{ Ok(s) -> {{ print(s) }} Error -> {{ print("none") }} }}
+    return
+}}
+"#
+    ));
+    assert_eq!(output, "7\n7\n-1\n-1\nqualified\n");
+}
+
+#[test]
+fn a_template_declared_in_another_module_instantiates_and_runs() {
+    // The template lives in one file and every instantiation of it in another,
+    // so the substitution has to resolve the template's body against the file
+    // that *wrote* it while the arguments come from the use site.
+    let output = assert_module_parity(
+        r#"
+import outcome
+
+@Main
+function main() {
+    let ok: Result<Int, Trouble> = .Ok(11)
+    match ok { Ok(v) -> { print(v) } Error -> { print(0) } }
+
+    let qualified: Result<Int, Trouble> = Result.Ok(22)
+    match qualified { Ok(v) -> { print(v) } Error -> { print(0) } }
+
+    let bad: Result<String, Trouble> = outcome.Result.Error(.Late)
+    match bad { Ok(s) -> { print(s) } Error -> { print("late") } }
+    return
+}
+"#,
+        &[(
+            "outcome",
+            r#"
+enum Trouble { Missing Late }
+
+enum Result<Value, Failure> {
+    Ok(Value)
+    Error(Failure)
+}
+"#,
+        )],
+    );
+    assert_eq!(output, "11\n22\nlate\n");
+}
+
+#[test]
+fn foundations_result_instantiates_and_runs_from_an_importing_program() {
+    // The premise the whole feature exists for: `Result` is Foundation's, not
+    // the program's, and an `import Foundation` is all it takes to name it in
+    // type position and construct it. The parity harness pins Foundation to
+    // this checkout, so this is about the `Result` in the tree.
+    let output = assert_parity(
+        r#"
+import Foundation
+
+enum Trouble { Missing }
+
+function parse(n: Int) -> Result<Int, Trouble> {
+    if n < 0 { return Result.Error(.Missing) }
+    return Result.Ok(n * 2)
+}
+
+@Main
+function main() {
+    match parse(4) { Ok(v) -> { print(v) } Error -> { print(0 - 1) } }
+    match parse(0 - 4) { Ok(v) -> { print(v) } Error -> { print(0 - 1) } }
+
+    let text: Result<String, Trouble> = .Ok("foundation")
+    match text { Ok(s) -> { print(s) } Error -> { print("none") } }
+    return
+}
+"#,
+    );
+    assert_eq!(output, "8\n-1\nfoundation\n");
 }
 
 #[test]

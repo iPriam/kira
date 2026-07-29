@@ -13,8 +13,11 @@
 
 use kira_semantics_model::OwnershipMode;
 use kira_semantics_model::hir::{
-    Callee, HirExpr, HirExprId, HirPlace, HirPlaceStep, HirProgram, HirStmt, HirStmtId,
+    Builtin, Callee, HirExpr, HirExprId, HirPlace, HirPlaceStep, HirProgram, HirStmt, HirStmtId,
+    TaskTarget,
 };
+
+use crate::tasks::TaskTargets;
 
 use crate::ir::{
     IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport, IrFunction, IrPlace, IrPlaceStep,
@@ -58,17 +61,29 @@ pub fn lower(program: &HirProgram) -> IrProgram {
         foreign_callbacks: program.foreign_callbacks.clone(),
         exprs: la_arena::Arena::new(),
     };
+    // The task spine's functions are *appended*, so the row each one lands at
+    // is known before a single body is lowered — which is what lets a `.await`
+    // lower to a call to a function that does not exist yet.
+    let task_base = program.functions.len() as u32;
     let mut lowerer = Lowerer {
         hir: program,
         ir: &mut ir,
         aliases: std::collections::HashMap::new(),
+        task_base,
+        task_targets: TaskTargets::default(),
+        uses_tasks: false,
     };
     let functions: Vec<IrFunction> = program
         .functions
         .iter()
         .map(|function| lowerer.lower_function(function))
         .collect();
+    let uses_tasks = lowerer.uses_tasks;
+    let targets = std::mem::take(&mut lowerer.task_targets);
     ir.functions = functions;
+    if uses_tasks {
+        crate::tasks::synthesize(&mut ir, task_base, &targets);
+    }
     ir
 }
 
@@ -78,6 +93,16 @@ struct Lowerer<'a> {
     /// The locals of the function being lowered that are a borrow under a
     /// second name, mapped to the local they name. See [`crate::borrow_alias`].
     aliases: std::collections::HashMap<u32, u32>,
+    /// The row the task spine's first synthesized function will land at.
+    task_base: u32,
+    /// The spawn targets seen so far, each holding the dispatcher arm it took.
+    task_targets: TaskTargets,
+    /// Whether anything in the program reached the task spine.
+    ///
+    /// A program that never spawns, joins, or yields gets no synthesized
+    /// functions at all: the spine is a feature a program opts into by using
+    /// it, not seven dead rows in every module.
+    uses_tasks: bool,
 }
 
 /// The parameter slots a function takes by reference, ascending.
@@ -185,6 +210,10 @@ impl Lowerer<'_> {
                 place: self.lower_place(&place),
                 value: self.lower_expr(value),
             },
+            HirStmt::CellSet { local, value } => IrStmt::CellSet {
+                slot: self.slot(local.0),
+                value: self.lower_expr(value),
+            },
             HirStmt::Return { value } => IrStmt::Return {
                 value: value.map(|expr| self.lower_expr(expr)),
             },
@@ -223,6 +252,14 @@ impl Lowerer<'_> {
             HirExpr::RawPtrNull => IrExpr::RawPtrNull,
             HirExpr::ForeignCallbackPtr { callback } => IrExpr::ForeignCallbackPtr { callback },
             HirExpr::Local { local, .. } => IrExpr::Local(self.slot(local.0)),
+            HirExpr::CellNew { value, ty } => IrExpr::CellNew {
+                value: self.lower_expr(value),
+                ty,
+            },
+            HirExpr::CellGet { local, ty } => IrExpr::CellGet {
+                slot: self.slot(local.0),
+                ty,
+            },
             HirExpr::Unary { op, operand, .. } => IrExpr::Unary {
                 op,
                 operand: self.lower_expr(operand),
@@ -258,7 +295,7 @@ impl Lowerer<'_> {
                     })
                     .collect();
                 IrExpr::Call {
-                    callee: lower_callee(callee),
+                    callee: self.lower_callee(callee),
                     args: ir_args,
                     result: ty,
                     writebacks,
@@ -344,6 +381,11 @@ impl Lowerer<'_> {
                 args: args.into_iter().map(|arg| self.lower_expr(arg)).collect(),
                 ty,
             },
+            HirExpr::Compiler { op, args, ty } => IrExpr::Compiler {
+                op,
+                args: args.into_iter().map(|arg| self.lower_expr(arg)).collect(),
+                ty,
+            },
             HirExpr::ArrayAppend { place, value } => IrExpr::ArrayAppend {
                 place: self.lower_place(&place),
                 value: self.lower_expr(value),
@@ -369,12 +411,138 @@ impl Lowerer<'_> {
                 kind,
                 ty,
             },
+            HirExpr::IntoAny { value, from } => IrExpr::IntoAny {
+                value: self.lower_expr(value),
+                from,
+            },
+            HirExpr::Widen { value, from, to } => IrExpr::Widen {
+                value: self.lower_expr(value),
+                from,
+                to,
+            },
             // An error node can only be reached when analysis already reported
             // diagnostics and the program is never run; lower it to a harmless
             // constant so lowering stays total.
             HirExpr::Error => IrExpr::Int(0),
+            HirExpr::TaskSpawn { target, args, ty } => {
+                return self.lower_task_spawn(target, &args, ty);
+            }
+            HirExpr::TaskJoin { handle, ty } => return self.lower_task_join(handle, ty),
+            HirExpr::TaskDetach { handle } => {
+                return self.lower_task_handle_call(handle, crate::tasks::TaskFns::DETACH);
+            }
+            HirExpr::TaskCancel { handle } => {
+                return self.lower_task_handle_call(handle, crate::tasks::TaskFns::CANCEL);
+            }
         };
         self.ir.exprs.alloc(node)
+    }
+
+    /// The IR callee one HIR callee names.
+    ///
+    /// The two suspend-point builtins are calls to synthesized functions rather
+    /// than to anything a backend implements, which is what keeps `taskYield()`
+    /// and `taskSleep(ms)` from needing an opcode of their own.
+    fn lower_callee(&mut self, callee: Callee) -> IrCallee {
+        match callee {
+            Callee::Builtin(Builtin::Print) => IrCallee::Print,
+            Callee::Builtin(Builtin::TaskYield) => {
+                self.uses_tasks = true;
+                IrCallee::User(self.task_base + crate::tasks::TaskFns::YIELD)
+            }
+            Callee::Builtin(Builtin::TaskSleep) => {
+                self.uses_tasks = true;
+                IrCallee::User(self.task_base + crate::tasks::TaskFns::SLEEP)
+            }
+            Callee::User(id) => IrCallee::User(id.0),
+            Callee::Foreign(id) => IrCallee::Foreign(id.0),
+        }
+    }
+
+    /// Lowers `Task { … }` to a call to the spawn helper.
+    ///
+    /// The helper takes a fixed argument list, so a body with fewer arguments
+    /// pads with zeros: one generated function serves every arity, and the
+    /// dispatcher reads back exactly as many slots as its target declares.
+    fn lower_task_spawn(
+        &mut self,
+        target: TaskTarget,
+        args: &[HirExprId],
+        ty: kira_semantics_model::Type,
+    ) -> IrExprId {
+        use kira_semantics_model::Type;
+        self.uses_tasks = true;
+        let arm = match target {
+            TaskTarget::Value => 0,
+            TaskTarget::Call(id) => {
+                let function = &self.hir.functions[id.0 as usize];
+                let params: Vec<Type> = function
+                    .locals
+                    .iter()
+                    .take(function.param_count as usize)
+                    .map(|local| local.ty)
+                    .collect();
+                let result = function.return_type;
+                self.task_targets.arm_for(id.0, params, result)
+            }
+        };
+        let mut call_args = vec![self.ir.exprs.alloc(IrExpr::Int(arm))];
+        for &arg in args {
+            let value = self.lower_expr(arg);
+            let lowered = match self.hir.expr(arg).type_of() {
+                // A slot is one machine word, so a `Float` argument crosses as
+                // its bit pattern and the dispatcher rebuilds it.
+                Type::Float(_) => self.ir.exprs.alloc(IrExpr::Convert {
+                    operand: value,
+                    kind: kira_semantics_model::hir::ConvertKind::FloatToBits,
+                    ty: Type::INT,
+                }),
+                _ => value,
+            };
+            call_args.push(lowered);
+        }
+        while call_args.len() < 1 + kira_runtime_abi::TASK_SLOTS {
+            call_args.push(self.ir.exprs.alloc(IrExpr::Int(0)));
+        }
+        self.ir.exprs.alloc(IrExpr::Call {
+            callee: IrCallee::User(self.task_base + crate::tasks::TaskFns::SPAWN),
+            args: call_args,
+            result: ty,
+            writebacks: Vec::new(),
+        })
+    }
+
+    /// Lowers `handle.await` to a call to the join helper.
+    fn lower_task_join(&mut self, handle: HirExprId, ty: kira_semantics_model::Type) -> IrExprId {
+        use kira_semantics_model::Type;
+        self.uses_tasks = true;
+        let handle = self.lower_expr(handle);
+        let joined = self.ir.exprs.alloc(IrExpr::Call {
+            callee: IrCallee::User(self.task_base + crate::tasks::TaskFns::AWAIT),
+            args: vec![handle],
+            result: Type::INT,
+            writebacks: Vec::new(),
+        });
+        match ty {
+            Type::Float(_) => self.ir.exprs.alloc(IrExpr::Convert {
+                operand: joined,
+                kind: kira_semantics_model::hir::ConvertKind::BitsToFloat,
+                ty,
+            }),
+            _ => joined,
+        }
+    }
+
+    /// Lowers `handle.detach()` / `handle.requestCancel()` to their helper.
+    fn lower_task_handle_call(&mut self, handle: HirExprId, helper: u32) -> IrExprId {
+        self.uses_tasks = true;
+        let handle = self.lower_expr(handle);
+        self.ir.exprs.alloc(IrExpr::Call {
+            callee: IrCallee::User(self.task_base + helper),
+            args: vec![handle],
+            result: kira_semantics_model::Type::Void,
+            writebacks: Vec::new(),
+        })
     }
 
     /// Lowers a place, lowering the index expressions its path carries.
@@ -394,13 +562,5 @@ impl Lowerer<'_> {
             local: self.slot(place.local.0),
             path,
         }
-    }
-}
-
-fn lower_callee(callee: Callee) -> IrCallee {
-    match callee {
-        Callee::Builtin(kira_semantics_model::hir::Builtin::Print) => IrCallee::Print,
-        Callee::User(id) => IrCallee::User(id.0),
-        Callee::Foreign(id) => IrCallee::Foreign(id.0),
     }
 }

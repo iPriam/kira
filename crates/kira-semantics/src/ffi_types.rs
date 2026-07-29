@@ -213,9 +213,18 @@ impl Analyzer<'_> {
                     self.written_type_name(*result)
                 )
             }
-            TypeRef::AnyConstruct { family, .. } => {
-                format!("Any {}", self.interner.resolve(*family))
+            TypeRef::SomeConstruct { family, .. } => {
+                format!("some {}", self.interner.resolve(*family))
             }
+            // Spelled by its two halves rather than by what it resolves to,
+            // because this compares declarations *before* the tables that would
+            // resolve it exist. Two shorthands for the same member of the same
+            // family describe the same thing; two for different members do not.
+            TypeRef::ConstructMember { family, member, .. } => format!(
+                "{}::{}",
+                self.interner.resolve(*family),
+                self.interner.resolve(*member)
+            ),
             // The parser already reported this; two unresolvable spellings are
             // never treated as the same description.
             TypeRef::Error { span } => format!("<error@{}>", span.start),

@@ -1,0 +1,103 @@
+// Async task spine (deferred execution), exercised through scalar folds so the
+// kik harness catches backend-parity regressions in async lowering.
+//
+// Semantics under test (identical on vm/llvm/hybrid):
+//
+//   * `async function` bodies execute like synchronous functions when called
+//     directly (no reactor-backed suspend points yet).
+//   * `Task { f(args) }` spawns a DEFERRED task: args evaluate at the spawn
+//     site, the call runs at first drive (`.await` joins it, `.detach()`
+//     drives and discards).
+//   * `handle.requestCancel()` before the first drive prevents the call from
+//     ever running; awaiting a cancelled task traps, as does joining twice
+//     (covered by trap-asserting Tests in AsyncSpineTests.kira).
+//
+// Every value below reduces to a deterministic Int checksum; any divergence
+// across vm/llvm/hybrid is a parity bug.
+
+async function asyncSum(a: Int, b: Int) -> Int {
+    return a + b
+}
+
+async function asyncDouble(value: Int) -> Int {
+    return asyncSum(value, value)
+}
+
+async function asyncFactorial(n: Int) -> Int {
+    if n <= 1 {
+        return 1
+    }
+    return n * asyncFactorial(n - 1)
+}
+
+// A pure `async function` called directly behaves like a synchronous call.
+function asyncDirectCall() -> Int {
+    return asyncDouble(21)
+}
+
+// Spawn a deferred task and join it: the call runs at the `.await`.
+function asyncSpawnJoin() -> Int {
+    let handle = Task { asyncFactorial(5) }
+    return handle.await
+}
+
+// Cancelled and detached tasks do not disturb a joined sibling. The cancelled
+// task's call never runs; the detached task's call runs with its result
+// discarded — both invisible to the joined value.
+function asyncCancelDetachSiblings() -> Int {
+    let joined = Task { asyncSum(100, 40) }
+    let cancelled = Task { asyncSum(1, 1) }
+    cancelled.requestCancel()
+    let detached = Task { asyncSum(2, 2) }
+    detached.detach()
+    return joined.await + 2
+}
+
+// A Void-returning async body: its task joins as Int 0 (sequencing-only await).
+async function asyncNoop(n: Int) {
+    let unused = n + 1
+    return
+}
+
+// A two-phase body with a cooperative yield point: the executor runs queued
+// siblings between the phases.
+async function asyncPhased(a: Int, b: Int) -> Int {
+    let first = a * 10
+    taskYield()
+    let second = b * 100
+    return first + second
+}
+
+// A suspendable state-machine body: params and mutable locals survive two
+// suspensions (the async transform externalizes them into the task frame).
+async function asyncStepper(base: Int, step: Int) -> Int {
+    var acc = base
+    taskYield()
+    acc = acc + step
+    taskYield()
+    acc = acc + step
+    return acc
+}
+
+// A coordinator body that spawns a stepper and PARKS on its join (`.await`
+// inside a suspendable body suspends until the target completes rather than
+// driving it nested).
+async function asyncCoordinator(base: Int) -> Int {
+    let worker = Task { asyncStepper(base, 5) }
+    let joined = worker.await
+    return joined + 1
+}
+
+// A sleeping body: parks with a wake deadline and resumes with its frame
+// intact (`ms` is deliberately tiny to keep the suite fast).
+async function asyncNapper(ms: Int, value: Int) -> Int {
+    taskSleep(ms)
+    return value + 2
+}
+
+function asyncSpineSection() -> Int {
+    let direct = asyncDirectCall()             // 42
+    let joined = asyncSpawnJoin()               // 120
+    let siblings = asyncCancelDetachSiblings()  // 142
+    return direct + joined + siblings           // 304
+}

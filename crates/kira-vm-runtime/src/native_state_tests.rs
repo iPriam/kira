@@ -109,3 +109,60 @@ fn wrong_recovery_type_and_double_free_are_typed_traps() {
         Err(VmError::NativeState(NativeStateError::UnknownToken(_)))
     ));
 }
+
+/// A local that already holds a recovered view may be REBOUND to another view.
+///
+/// Storing into such a local ordinarily writes through it into the callback
+/// state, which is what makes `state.field = x` work — but a view has no boxed
+/// form, so treating a rebind as a write-back trapped every program that
+/// recovered twice into one slot. Rendering the UI editor on the VM did exactly
+/// that and never reached its first frame.
+#[test]
+fn rebinding_a_recovered_local_to_another_view_is_not_a_write_back() {
+    let module = module(
+        vec![
+            // Two independent states, boxed and kept in locals 0 and 1.
+            I::ConstInt(7),
+            I::NewStruct(1),
+            I::NativeState(STATE_TYPE.as_word()),
+            I::StoreLocal(0),
+            I::ConstInt(9),
+            I::NewStruct(1),
+            I::NativeState(STATE_TYPE.as_word()),
+            I::StoreLocal(1),
+            // Recover the first into local 2 ...
+            I::LoadLocal(0),
+            I::NativeUserData,
+            I::NativeRecover(STATE_TYPE.as_word()),
+            I::StoreLocal(2),
+            // ... then rebind that same local to a view of the second.
+            I::LoadLocal(1),
+            I::NativeUserData,
+            I::NativeRecover(STATE_TYPE.as_word()),
+            I::StoreLocal(2),
+            // The local now names the second state, and the first is untouched.
+            I::LoadLocal(2),
+            I::GetField(0),
+            I::Print,
+            I::Pop,
+            I::LoadLocal(0),
+            I::NativeUserData,
+            I::NativeRecover(STATE_TYPE.as_word()),
+            I::GetField(0),
+            I::Print,
+            I::Pop,
+            I::LoadLocal(0),
+            I::NativeStateFree,
+            I::Pop,
+            I::LoadLocal(1),
+            I::NativeStateFree,
+            I::Pop,
+            I::ReturnVoid,
+        ],
+        3,
+    );
+    let mut host = NativeStateHost::new(CapturingHost::new());
+    let outcome = execute(&module, &mut host).expect("rebinding a view executes");
+    assert_eq!(host.inner().lines(), ["9", "7"]);
+    assert_eq!(outcome.heap.current, 0);
+}

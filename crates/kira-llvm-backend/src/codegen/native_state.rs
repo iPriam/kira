@@ -506,7 +506,15 @@ impl Codegen<'_> {
                 let encoder = self.native_state_enum_leaf(id, StateLeaf::Encode)?;
                 self.call(encoder, &mut [value], c"native.enum.value")
             }
-            Type::Void | Type::Error | Type::CString | Type::NativeState(_) => {
+            // `Any` is refused by `native_state_eligible` before lowering:
+            // recovery is typed, and an erased value has no type id to check.
+            Type::Void
+            | Type::Error
+            | Type::CString
+            | Type::Any
+            | Type::Task(_)
+            | Type::Cell(_)
+            | Type::NativeState(_) => {
                 return Err(LlvmError::Unsupported(
                     "a non-Kira-owned native callback-state value",
                 ));
@@ -563,7 +571,15 @@ impl Codegen<'_> {
                 let decoder = self.native_state_enum_leaf(id, StateLeaf::Decode)?;
                 self.call(decoder, &mut [node], c"native.enum")
             }
-            Type::Void | Type::Error | Type::CString | Type::NativeState(_) => {
+            // `Any` is refused by `native_state_eligible` before lowering:
+            // recovery is typed, and an erased value has no type id to check.
+            Type::Void
+            | Type::Error
+            | Type::CString
+            | Type::Any
+            | Type::Task(_)
+            | Type::Cell(_)
+            | Type::NativeState(_) => {
                 return Err(LlvmError::Unsupported(
                     "a non-Kira-owned native callback-state value",
                 ));

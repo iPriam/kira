@@ -1,4 +1,4 @@
-//! The bundled Foundation, driven through the real `kirac` binary.
+//! The bundled Foundation, driven through the real `kira` binary.
 //!
 //! Everything else about this feature can be tested against a bundle a test
 //! stood up itself. This module is the one that cannot: the programs here run
@@ -7,7 +7,7 @@
 //! discovery worked — the binary found a Foundation without being told where
 //! one was.
 
-use crate::{kirac, write_program, write_source};
+use crate::{kira, write_program, write_source};
 
 /// The mechanism, as a user meets it: an import with no path, no dependency
 /// entry, and nothing beside the program on disk.
@@ -17,7 +17,7 @@ fn runs_a_program_that_imports_the_bundled_foundation() {
         "import Foundation\n\
          @Main function main() { printLine(\"hello from Foundation\") return }",
     );
-    let output = kirac(&["run", path.to_str().expect("a utf-8 path")]);
+    let output = kira(&["run", path.to_str().expect("a utf-8 path")]);
     let _ = std::fs::remove_file(&path);
     assert!(
         output.status.success(),
@@ -38,7 +38,7 @@ fn calls_the_bundled_foundation_through_its_namespace_root() {
         "import Foundation\n\
          @Main function main() { Foundation.printLine(\"qualified\") return }",
     );
-    let output = kirac(&["run", path.to_str().expect("a utf-8 path")]);
+    let output = kira(&["run", path.to_str().expect("a utf-8 path")]);
     let _ = std::fs::remove_file(&path);
     assert!(
         output.status.success(),
@@ -66,7 +66,7 @@ fn the_bundled_foundation_ships_the_geometry_vocabulary() {
              return\n\
          }",
     );
-    let output = kirac(&["run", path.to_str().expect("a utf-8 path")]);
+    let output = kira(&["run", path.to_str().expect("a utf-8 path")]);
     let _ = std::fs::remove_file(&path);
     assert!(
         output.status.success(),
@@ -82,7 +82,7 @@ fn the_bundled_foundation_ships_the_geometry_vocabulary() {
 #[test]
 fn foundation_is_not_available_without_an_import() {
     let path = write_source("@Main function main() { printLine(\"x\") return }");
-    let output = kirac(&["check", path.to_str().expect("a utf-8 path")]);
+    let output = kira(&["check", path.to_str().expect("a utf-8 path")]);
     let _ = std::fs::remove_file(&path);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -108,7 +108,7 @@ fn a_file_that_did_not_import_foundation_cannot_name_its_root() {
         "import Foundation\nimport support\n@Main function main() { helper() return }",
     )
     .expect("rewrite entry");
-    let output = kirac(&["check", entry.to_str().expect("a utf-8 path")]);
+    let output = kira(&["check", entry.to_str().expect("a utf-8 path")]);
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -127,7 +127,7 @@ fn a_projects_own_foundation_shadows_the_bundled_one() {
             "function printLine(text: borrow String) { print(\"local: \" + text) return }",
         )],
     );
-    let output = kirac(&["run", path.to_str().expect("a utf-8 path")]);
+    let output = kira(&["run", path.to_str().expect("a utf-8 path")]);
     let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
     assert!(
         output.status.success(),
@@ -147,7 +147,7 @@ fn a_name_foundation_also_declares_is_an_ordinary_duplicate() {
          function printLine(text: borrow String) { print(\"mine\") return }\n\
          @Main function main() { printLine(\"x\") return }",
     );
-    let output = kirac(&["check", path.to_str().expect("a utf-8 path")]);
+    let output = kira(&["check", path.to_str().expect("a utf-8 path")]);
     let _ = std::fs::remove_file(&path);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);

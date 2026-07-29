@@ -1,7 +1,7 @@
 //! Marshalling a Kira struct value into C-layout bytes and back, in native code.
 //!
 //! The native mirror of the VM's `value::aggregate` walk, and it has to produce
-//! byte-identical buffers: the same program on `kirac run --backend vm` and
+//! byte-identical buffers: the same program on `kira run --backend vm` and
 //! `--backend llvm` hands the same generated adapter the same bytes, or the two
 //! backends disagree about what a C function was called with.
 //!

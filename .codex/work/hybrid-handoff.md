@@ -47,7 +47,7 @@ fixed in `link_shared_library` — see the Pitfalls section of
 and the host looks up; adding a symbol the host resolves means adding it there,
 not in two places.
 
-**Resolve every symbol out of the loaded library, never `kirac`'s own copy.**
+**Resolve every symbol out of the loaded library, never `kira`'s own copy.**
 `kira-cli` links `kira-native-bridge` as an rlib, so the host process carries its
 own `kira_rt_*` and `kira_hybrid_*` symbols. Allocating a handle in one copy and
 freeing it in the other is a cross-allocator free. `libloading` defaults to

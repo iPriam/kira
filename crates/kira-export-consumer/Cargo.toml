@@ -36,7 +36,7 @@ hybrid-engine = ["dep:kira-hybrid-main"]
 
 [build-dependencies]
 # The compiler itself. A consumer builds the Kira library it embeds, through the
-# same frontend and the same generator `kirac` drives — not a second copy.
+# same frontend and the same generator `kira` drives — not a second copy.
 kira-build.workspace = true
 kira-ir.workspace = true
 thiserror.workspace = true

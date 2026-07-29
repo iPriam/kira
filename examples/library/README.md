@@ -4,7 +4,7 @@
 the crate it generates, call it.
 
 ```sh
-kirac build greetings.kira                  # --backend vm is the default
+kira build greetings.kira                  # --backend vm is the default
 ```
 
 ```text
@@ -39,8 +39,8 @@ dropping one releases the Kira object it names — nothing else does.
 ## The same five lines against a different engine
 
 ```sh
-kirac build --backend llvm greetings.kira     # a static archive the crate links
-kirac build --backend hybrid greetings.kira   # a bytecode half plus a native one
+kira build --backend llvm greetings.kira     # a static archive the crate links
+kira build --backend hybrid greetings.kira   # a bytecode half plus a native one
 ```
 
 The consumer's code does not change. All three engines write the same
@@ -58,7 +58,7 @@ its own stdout.
 ## What this example does not show
 
 Arrays, structs and enums by value, and function values do not cross the export
-boundary — each is refused in analysis by name, with its reason. `kirac run` on
+boundary — each is refused in analysis by name, with its reason. `kira run` on
 this package is refused too: a library has no `@Main`, because it is entered by
 whatever consumes it.
 
