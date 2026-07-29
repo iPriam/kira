@@ -1,0 +1,56 @@
+// Language-wide type aliases, exercised through scalar folds so the kik harness
+// catches canonicalization regressions across the executable backends.
+
+type Byte = U8
+type ByteBuffer = [Byte]
+type ByteMatrix = [ByteBuffer]
+type ByteWord = Byte
+
+struct AliasPacket {
+    var payload: ByteBuffer
+}
+
+function aliasBufferSum(buffer: borrow ByteBuffer) -> Int {
+    var total = 0
+    for value in buffer {
+        total = total + value
+    }
+    return total
+}
+
+function aliasBuildPacket(start: Int, count: Int) -> AliasPacket {
+    var payload: ByteBuffer = []
+    var i = 0
+    while i < count {
+        payload.append(start + i)
+        i = i + 1
+    }
+    return AliasPacket { payload: move payload }
+}
+
+function aliasMatrixScore(matrix: borrow ByteMatrix) -> Int {
+    var score = 0
+    for row in matrix {
+        score = score + aliasBufferSum(row) + row.count * 10
+    }
+    return score
+}
+
+function aliasesSection() -> Int {
+    var first: ByteBuffer = []
+    first.append(1)
+    first.append(2)
+    first.append(3)
+    first.append(4)
+
+    let packet = aliasBuildPacket(5, 4)
+    let firstSum = aliasBufferSum(first)
+    let packetSum = aliasBufferSum(packet.payload)
+
+    var matrix: ByteMatrix = []
+    matrix.append(move first)
+    matrix.append(move packet.payload)
+
+    let word: ByteWord = 9
+    return firstSum + packetSum + aliasMatrixScore(matrix) + word
+}

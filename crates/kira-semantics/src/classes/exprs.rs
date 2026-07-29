@@ -79,7 +79,7 @@ impl Analyzer<'_> {
                 .unwrap_or(Type::Error);
             let value = self.analyze_expr(ctx, arg);
             let actual = self.program.expr(value).type_of();
-            if !actual.assignable_to(expected) {
+            if !self.admits(actual, expected) {
                 self.emit(
                     span,
                     "KSEM063",
@@ -91,7 +91,7 @@ impl Analyzer<'_> {
                     ),
                 );
             }
-            initializers[slot as usize] = Some(value);
+            initializers[slot as usize] = Some(self.coerce_into(value, expected));
         }
         for slot in 0..field_count as u32 {
             if initializers[slot as usize].is_some() {

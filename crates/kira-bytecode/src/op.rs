@@ -17,7 +17,10 @@
 mod codec;
 
 pub use codec::{DecodeError, decode, encode, encode_one};
-pub use kira_runtime_abi::FileSystemOp;
+/// The deferred-task primitives, re-exported so an instruction names them from
+/// the one place the executor defines them.
+pub use kira_runtime_abi::TaskPrim;
+pub use kira_runtime_abi::{CompilerOp, FileSystemOp};
 
 /// One decoded VM instruction.
 #[derive(Debug, Clone, PartialEq)]
@@ -69,6 +72,12 @@ pub enum Instruction {
     MulFloat,
     /// Float division.
     DivFloat,
+    /// Pop two `Float`s and push the truncated remainder of the first by the
+    /// second.
+    ///
+    /// Truncated, not floored: the sign follows the dividend, which is what
+    /// `fmod` does and what the language pins.
+    RemFloat,
     /// String concatenation.
     ConcatStr,
     /// Integer equality.
@@ -125,6 +134,22 @@ pub enum Instruction {
     EqStr,
     /// String inequality.
     NeStr,
+    /// Pop a value; push it erased, carrying the type it had on the way in.
+    ///
+    /// The immediate is the `ErasedTypeId` word of that type. Carrying it is
+    /// the whole of this instruction's purpose: the VM's values are tagged
+    /// already, so erasure would otherwise be free — and was, before `EqAny`
+    /// needed to tell a `Point` from a `Rect` whose fields happen to match.
+    Erase(u64),
+    /// Pop two erased values; push whether they are structurally equal.
+    ///
+    /// Both operands are dropped, as every comparison here drops what it
+    /// consumed. Values of different kinds are unequal rather than a trap:
+    /// `Any` is the one type whose operands are not known to agree statically,
+    /// so a mismatch is an ordinary answer.
+    EqAny,
+    /// Pop two erased values; push whether they are structurally unequal.
+    NeAny,
     /// Unconditional jump to an absolute instruction index.
     Jump(u32),
     /// Pop a boolean; jump to an absolute index when it is `false`.
@@ -267,6 +292,14 @@ pub enum Instruction {
     /// makes. Reading one element cost the whole array before this, so a loop
     /// over `n` elements cost `O(n²)`.
     ArrayGetLocal(u16),
+    /// Pop three `Int` operands (last pushed is the third), carry out one task
+    /// primitive, and push its `Int` answer.
+    ///
+    /// The whole async spine reaches the VM through this one instruction: the
+    /// scheduler itself is generated Kira, so what the interpreter implements
+    /// is the task *table*, not the policy. Its native mirror is
+    /// `kira_rt_task_op`, called with the same four numbers.
+    TaskOp(TaskPrim),
     /// Pop a string, push its length in bytes as an `Int`, and drop the string.
     ///
     /// Bytes, not characters: `charAt` and `substring` index the same units, so
@@ -318,6 +351,17 @@ pub enum Instruction {
     /// world a question and hear no. The one failure is a host with no
     /// filesystem, which is a build-time mistake surfacing late.
     FileSystem(FileSystemOp),
+    /// Perform one compiler operation through the host.
+    ///
+    /// The same shape as [`Instruction::FileSystem`], for the same reason: the
+    /// operands are popped in reverse source order and dropped, the operation's
+    /// result is pushed, and which operands there are follows from the
+    /// [`CompilerOp`] alone.
+    ///
+    /// A package that does not compile is not a trap — its diagnostics are the
+    /// result. The one failure is a host with no compiler, which the VM cannot
+    /// have of its own: it sits below one.
+    Compiler(CompilerOp),
     /// Pop a value and store it through a place that may index arrays.
     ///
     /// The general form of [`Instruction::StoreField`], which stays for the
@@ -366,6 +410,25 @@ pub enum Instruction {
     /// independent of the box — a `String` payload is cloned — which is what
     /// lets the arm's binding outlive the enum.
     EnumPayload,
+    /// Pop a value and push a fresh capture cell holding it.
+    ///
+    /// The value moves into the box: whatever it owned is the box's now. One
+    /// cell per execution of this instruction, which is what makes a `var`
+    /// declared inside a loop a fresh binding each time round.
+    NewCell,
+    /// Push an owned copy of what the cell in a local slot holds.
+    ///
+    /// Rooted at a slot rather than the stack so a read does not have to take —
+    /// and then drop — a share of the handle just to look inside it, the same
+    /// reason [`Instruction::ArrayGetLocal`] exists.
+    CellGet(u16),
+    /// Pop a value and store it in the cell a local slot holds, releasing
+    /// whatever was there.
+    ///
+    /// **One instruction, not two.** A separate drop and store would leave a
+    /// freed handle in the box for the window between them, and a trap in that
+    /// window leaves it there for good.
+    CellSet(u16),
     /// Pop an `Int`, push it as a `Float` (signed, round to nearest ties even).
     ///
     /// Emitted for a scalar conversion `Float(intValue)`. The integer-to-integer
@@ -669,6 +732,35 @@ mod opcode {
     // `CONVERT_BITS32_TO_FLOAT`. Appended after `ARRAY_GET_LOCAL`; adding an
     // opcode is not an ABI change.
     pub const CONVERT_FLOAT_TO_BITS32: u8 = 0x5c;
+    // Float remainder. Appended after `TASK_OP`; adding an opcode is not an ABI
+    // change.
+    pub const REM_FLOAT: u8 = 0x5e;
+    // One primitive of the deferred-task executor. Appended after
+    // `CONVERT_FLOAT_TO_BITS32`; carries one `TaskPrim` byte, whose own
+    // numbering is append-only, so a new primitive costs neither an opcode nor
+    // a version — the same arrangement `FILE_SYSTEM` uses.
+    pub const TASK_OP: u8 = 0x5d;
+    // The three capture-cell primitives. Appended after `REM_FLOAT`, which was
+    // the last opcode before them; adding an opcode is not an ABI change.
+    // `NEW_CELL` is nullary, while the get and set forms carry the `u16` slot
+    // the cell lives in.
+    pub const NEW_CELL: u8 = 0x5f;
+    pub const CELL_GET: u8 = 0x60;
+    pub const CELL_SET: u8 = 0x61;
+    // One compiler operation. Appended after `CELL_SET`; carries one
+    // `CompilerOp` byte, whose own numbering is append-only, so a new operation
+    // costs neither an opcode nor a version — the same arrangement
+    // `FILE_SYSTEM` and `TASK_OP` use.
+    pub const COMPILER: u8 = 0x62;
+    // Structural equality and inequality of two erased values. Appended after
+    // `COMPILER`; adding an opcode is not an ABI change. Nullary like every
+    // other comparison — both operands come off the stack.
+    pub const EQ_ANY: u8 = 0x63;
+    pub const NE_ANY: u8 = 0x64;
+    // Erasure into `Any`, carrying the `ErasedTypeId` word as a `u64`
+    // immediate. Appended after `NE_ANY`; adding an opcode is not an ABI
+    // change.
+    pub const ERASE: u8 = 0x65;
 }
 
 #[cfg(test)]

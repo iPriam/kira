@@ -1,0 +1,77 @@
+// Structs: nested fields, methods with `self`, `borrow mut` writeback, value
+// copy semantics, and deep nesting churned in a loop.
+
+struct StVec {
+    var x: Int
+    var y: Int
+    var z: Int
+
+    function sum() -> Int {
+        return self.x + self.y + self.z
+    }
+
+    function scaled(k: Int) -> StVec {
+        return StVec { x: self.x * k, y: self.y * k, z: self.z * k }
+    }
+}
+
+struct StBox {
+    var origin: StVec
+    var size: StVec
+    var label: Int
+}
+
+function stBumpZ(v: borrow mut StVec) {
+    v.z = v.z + 100
+    return
+}
+
+function stBumpBox(b: borrow mut StBox) {
+    b.label = b.label + 1
+    b.size.x = b.size.x + 10
+    return
+}
+
+function structsSection() -> Int {
+    var acc = 0
+
+    // Methods and value copies.
+    var i = 0
+    while i < 100 {
+        let v = StVec { x: i, y: i + 1, z: i + 2 }
+        acc = acc + v.sum()
+        let w = v.scaled(3)
+        acc = acc + w.sum()
+        i = i + 1
+    }
+
+    // borrow mut writeback to a local.
+    var v = StVec { x: 1, y: 2, z: 3 }
+    var j = 0
+    while j < 25 {
+        stBumpZ(v)
+        j = j + 1
+    }
+    acc = acc + v.z
+
+    // Nested struct mutation through borrow mut.
+    var b = StBox {
+        origin: StVec { x: 0, y: 0, z: 0 },
+        size: StVec { x: 1, y: 1, z: 1 },
+        label: 0
+    }
+    var k = 0
+    while k < 30 {
+        stBumpBox(b)
+        k = k + 1
+    }
+    acc = acc + b.label + b.size.x + b.origin.x
+
+    // Value-copy independence: copying a struct must not alias.
+    let a1 = StVec { x: 5, y: 5, z: 5 }
+    var a2 = a1
+    a2.x = 999
+    acc = acc + a1.x + a2.x
+
+    return acc
+}

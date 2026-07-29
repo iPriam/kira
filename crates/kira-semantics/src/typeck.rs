@@ -18,12 +18,14 @@ use crate::classes::Qualifier;
 use crate::operators::{resolve_binary, resolve_unary, unary_spelling};
 
 mod calls;
+mod compiler;
 mod conditional;
 mod file_system;
 mod labels;
 mod memberwise;
 mod native_state;
 mod print;
+mod qualified;
 
 impl Analyzer<'_> {
     /// Type-checks an AST expression, returning its HIR handle.
@@ -148,8 +150,9 @@ impl Analyzer<'_> {
                             let definition = kira_source::FileSpan::new(self.source, binding);
                             self.link(span, definition);
                         }
-                        let ty = ctx.local_type(local);
-                        self.program.exprs.alloc(HirExpr::Local { local, ty })
+                        // A boxed `var` reads through its box, so nothing past
+                        // this point learns the box exists.
+                        self.read_local(ctx, local)
                     }
                     // A local wins over a field of the same name: the nearer
                     // binding is what a reader expects, and it is what lets a
@@ -262,6 +265,11 @@ impl Analyzer<'_> {
                 {
                     return intrinsic;
                 }
+                if let Some(intrinsic) =
+                    self.analyze_compiler_intrinsic(ctx, &name, &type_args, &args, callee_span)
+                {
+                    return intrinsic;
+                }
                 if !type_args.is_empty() {
                     self.emit(
                         callee_span,
@@ -362,6 +370,13 @@ impl Analyzer<'_> {
                 if let Some(call) = self.analyze_string_conversion(ctx, &name, &args, callee_span) {
                     return call;
                 }
+                // `taskYield()` / `taskSleep(ms)` are the executor's two
+                // suspend points. They are builtins rather than library
+                // functions because the compiler has to *see* them: a call to
+                // one is where the drive loop gets its turn.
+                if let Some(call) = self.analyze_task_builtin(ctx, &name, &values, callee_span) {
+                    return call;
+                }
                 if name == "print" {
                     // `print` borrows: it renders its argument and consumes
                     // nothing the caller could miss.
@@ -411,18 +426,36 @@ impl Analyzer<'_> {
                 // leading dot — the base names the enum, `field` names the
                 // variant. Recognized before the base is analyzed as a value,
                 // because an enum name is not one.
-                if let Some(enum_id) = self.qualified_enum_at(ctx, base) {
-                    return self.analyze_dot_member(
-                        ctx,
-                        field,
-                        field_span,
-                        &None,
-                        span,
-                        Some(Type::Enum(enum_id)),
-                    );
+                match self.qualified_enum_at(ctx, base, expected) {
+                    crate::enums::QualifiedEnum::Enum(enum_id) => {
+                        return self.analyze_dot_member(
+                            ctx,
+                            field,
+                            field_span,
+                            &None,
+                            span,
+                            Some(Type::Enum(enum_id)),
+                        );
+                    }
+                    // `Result.Ok` where the position asks for no instantiation
+                    // of `Result`. The base is a template, not a value, so
+                    // analyzing it as one would report an undefined name.
+                    crate::enums::QualifiedEnum::Unanchored(template) => {
+                        return self.report_unanchored_generic_construction(
+                            ctx, &template, field, &None, span, expected,
+                        );
+                    }
+                    crate::enums::QualifiedEnum::NotAnEnum => {}
                 }
                 let base_hir = self.analyze_expr(ctx, base);
                 let base_ty = self.program.expr(base_hir).type_of();
+                // `handle.await` is the one property a task handle has, and the
+                // handle is opaque, so anything else read off one is refused
+                // here rather than falling through to a field lookup that would
+                // report the wrong thing.
+                if let Type::Task(result) = base_ty {
+                    return self.analyze_task_property(base_hir, result, &name, field_span);
+                }
                 // An array has no fields, but it does have `.count` — a
                 // property, written with the same syntax a field read uses.
                 if base_ty.is_array() {
@@ -439,6 +472,14 @@ impl Analyzer<'_> {
                     return self.analyze_construct_family_property(
                         ctx, base_hir, family_id, &name, field_span,
                     );
+                }
+                // A `@Required let` of the family is read the same way, but
+                // dispatches to a stored field or a computed member depending on
+                // what each backed declaration chose to satisfy it with.
+                if let Type::Enum(family_id) = base_ty
+                    && let Some(result) = self.construct_family_field_member(family_id, &name)
+                {
+                    return self.analyze_construct_family_field(base_hir, family_id, &name, result);
                 }
                 // A construct's computed bridge member (`value.node`) is read as
                 // a property but runs the member, so it lowers to a method call
@@ -476,7 +517,7 @@ impl Analyzer<'_> {
                 method_span,
                 args,
                 ..
-            } => self.analyze_method_call(ctx, receiver, method, method_span, &args),
+            } => self.analyze_method_call(ctx, receiver, method, method_span, &args, expected),
             // A `For`/`if` builder only ever reaches analysis as a construction's
             // content child, where [`fill_content_slots`] expands it or refuses
             // the surrounding block (`KSEM229`/`KSEM230`/`KSEM242`). Reaching
@@ -505,6 +546,7 @@ impl Analyzer<'_> {
                 }
                 self.program.exprs.alloc(HirExpr::Error)
             }
+            Expr::TaskSpawn { body, span } => self.analyze_task_spawn(ctx, body, span),
             Expr::Error { .. } => self.program.exprs.alloc(HirExpr::Error),
         }
     }

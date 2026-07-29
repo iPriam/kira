@@ -34,7 +34,20 @@ impl Vm<'_> {
                 Value::Array(_) => return Err(VmError::ArrayAtSeam { function: id }),
                 Value::Enum(_) => return Err(VmError::EnumAtSeam { function: id }),
                 Value::RawPtr(value) => NativeArg::RawPtr(value),
-                Value::NativeState(_) | Value::NativeView { .. } => {
+                // A cell is refused with the handles, and for the strongest
+                // reason among them: it is shared mutable storage this heap
+                // counts holds on, and the other side of the seam has no way to
+                // release one. The compiler never routes one here — a cell is
+                // not surface and cannot appear in a signature — so this is a
+                // guard on the desugar, not a message a reader can provoke.
+                // An erased value is refused with them. `Any` is not a foreign
+                // signature type — nothing in a C signature spells the top
+                // type — so, like a cell, this guards the desugar rather than
+                // reporting something a reader can provoke.
+                Value::NativeState(_)
+                | Value::NativeView { .. }
+                | Value::Cell(_)
+                | Value::Erased(_) => {
                     return Err(VmError::HandleAtSeam { function: id });
                 }
             });

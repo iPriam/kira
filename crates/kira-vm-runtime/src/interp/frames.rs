@@ -13,7 +13,7 @@
 //! together is what makes that reviewable.
 
 use kira_bytecode::module::Module;
-use kira_runtime_abi::{HostCapabilities, NativeArg};
+use kira_runtime_abi::{HostCapabilities, NativeArg, TaskExecutor};
 
 use crate::error::VmError;
 use crate::value::{Heap, Value};
@@ -74,6 +74,8 @@ impl<'h> Vm<'h> {
             heap,
             stack: Vec::new(),
             steps: Vec::new(),
+            native_path: Vec::new(),
+            tasks: TaskExecutor::new(),
         }
     }
 

@@ -30,6 +30,7 @@ impl FunctionLowering<'_, '_> {
             // both to StoreLocal, which drops whatever the slot held.
             IrStmt::Let { local, init } => self.store_local(*local, *init),
             IrStmt::Assign { place, value } => self.store_place(place, *value),
+            IrStmt::CellSet { slot, value } => self.lower_cell_set(*slot, *value),
             IrStmt::Return { value } => {
                 let returned = match value {
                     Some(expr) => Some(self.lower_expr(*expr)?),

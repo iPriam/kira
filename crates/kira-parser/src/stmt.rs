@@ -80,7 +80,11 @@ impl Parser<'_> {
         // keeps parsing as it always did.
         let (ownership, ownership_span, ty) = if self.eat(TokenKind::Colon) {
             let (ownership, ownership_span) = self.parse_ownership_prefix();
-            (ownership, ownership_span, Some(self.parse_type_ref()))
+            (
+                ownership,
+                ownership_span,
+                Some(self.parse_type_ref_statement_final()),
+            )
         } else {
             (OwnershipMode::Owned, None, None)
         };

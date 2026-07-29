@@ -26,4 +26,4 @@ pub use item::{
     StructDecl, TypeAliasDecl, TypeParamDecl, TypeRef, UnsupportedItem, VariantDecl,
 };
 pub use stmt::{Block, ForIterable, MatchArm, MatchBinding, Stmt, SwitchCase};
-pub use tree::{ExprId, StmtId, SyntaxTree, TypeRefId};
+pub use tree::{ExprId, FileNodes, FilePart, NodeBase, StmtId, SyntaxTree, TypeRefId};

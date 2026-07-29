@@ -1,0 +1,510 @@
+import Foundation
+
+// EmxTests.kira — corpus migration of tests/pass/run/{enum_basic_parity,
+// enum_equality_tag_compare, enum_kind_split_cache_parity,
+// enum_payload_move_chain_parity, enum_result_parity,
+// enum_var_reassign_return, nested_enum_payload_parity,
+// copyable_payload_enum_field_reuse, fieldless_enum_is_copy,
+// attempt_handle_payloadless_variant, attempt_try_handle} into the
+// `kira test` Test-construct format. All top-level names use prefix
+// emx / Emx.
+
+// ---------------------------------------------------------------------------
+// enum_basic_parity
+// ---------------------------------------------------------------------------
+
+enum EmxParseError {
+    InvalidFormat: String = "Not the expected format"
+    UnexpectedEnd
+    EmptyInput
+}
+
+Test EmxParseErrorInvalidText {
+    test {
+        let invalid: EmxParseError = .InvalidFormat
+        var out = ""
+        match invalid {
+            InvalidFormat(text) -> { out = text }
+            UnexpectedEnd -> { out = "unexpected" }
+            EmptyInput -> { out = "empty" }
+        }
+        return out
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("Not the expected format"); return e }
+}
+
+Test EmxParseErrorEndedBranch {
+    test {
+        let ended: EmxParseError = .UnexpectedEnd
+        var out = ""
+        match ended {
+            InvalidFormat(text) -> { out = text }
+            UnexpectedEnd -> { out = "end" }
+            EmptyInput -> { out = "empty" }
+        }
+        return out
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("end"); return e }
+}
+
+Test EmxParseErrorEmptyBranch {
+    test {
+        let empty: EmxParseError = .EmptyInput
+        var out = ""
+        match empty {
+            InvalidFormat(text) -> { out = text }
+            UnexpectedEnd -> { out = "end" }
+            EmptyInput -> { out = "empty" }
+        }
+        return out
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("empty"); return e }
+}
+
+// ---------------------------------------------------------------------------
+// enum_equality_tag_compare
+// ---------------------------------------------------------------------------
+
+enum EmxColor { Red Green Blue }
+
+struct EmxBox { let c: EmxColor }
+
+function emxRank(c: EmxColor) -> Int {
+    if c == .Red { return 1 }
+    if c == .Green { return 2 }
+    return 3
+}
+
+function emxIsBlue(b: borrow EmxBox) -> Bool {
+    return b.c == .Blue
+}
+
+Test EmxEqualityTagCompareTotal {
+    test {
+        var total = emxRank(.Red) + emxRank(.Green) + emxRank(.Blue)
+        let red: EmxColor = .Red
+        let green: EmxColor = .Green
+        if red != green { total = total + 10 }
+        let blueBox = EmxBox { c: .Blue }
+        let blueResult = emxIsBlue(blueBox)
+        if blueResult == true { total = total + 100 }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(116); return e }
+}
+
+// ---------------------------------------------------------------------------
+// enum_kind_split_cache_parity
+// ---------------------------------------------------------------------------
+
+construct EmxShape {
+    @Required let area: Int
+}
+
+EmxShape EmxCircle {
+    let r: Int = 1
+    let area: Int {
+        r
+    }
+}
+
+EmxShape EmxSquare {
+    let s: Int = 1
+    let area: Int {
+        s
+    }
+}
+
+enum EmxCell {
+    Filled(some EmxShape)
+    Empty
+}
+
+struct EmxGrid {
+    var cells: [EmxCell]
+}
+
+function emxAreaOf(c: borrow EmxCell) -> Int {
+    match c {
+        Filled(shape) -> return shape.area;
+        Empty -> return 0;
+    }
+}
+
+function emxTotalArea(grid: borrow EmxGrid) -> Int {
+    var sum = 0
+    var index = 0
+    while index < grid.cells.count {
+        sum = sum + emxAreaOf(grid.cells[index])
+        index = index + 1
+    }
+    return sum
+}
+
+Test EmxEnumKindSplitCacheParity {
+    test {
+        let cells: [EmxCell] = [.Filled(EmxCircle(r: 3)), .Empty, .Filled(EmxSquare(s: 4))]
+        let grid = EmxGrid { cells: move cells }
+        var out = grid.cells.count
+        out = out * 100 + emxTotalArea(grid)
+        return out
+    }
+    // count=3, totalArea=7 -> 3*100+7=307
+    expect { let e: Result<Int, TestFailure> = .Ok(307); return e }
+}
+
+// ---------------------------------------------------------------------------
+// enum_payload_move_chain_parity
+// ---------------------------------------------------------------------------
+
+enum EmxInner {
+    A: String = "a"
+    B: String = "b"
+}
+
+enum EmxWrap {
+    One(EmxInner)
+    Two(EmxInner)
+}
+
+function emxRewrap(w: EmxWrap) -> EmxWrap {
+    match w {
+        One(failure) -> { return .Two(move failure) }
+        Two(failure) -> { return .One(move failure) }
+    }
+}
+
+Test EmxPayloadMoveChainParity {
+    test {
+        let original: EmxWrap = .One(.A("payload"))
+        let swapped = emxRewrap(move original)
+        var out = ""
+        match swapped {
+            One(failure) -> {
+                match failure {
+                    A(reason) -> { out = reason }
+                    B(reason) -> { out = reason }
+                }
+            }
+            Two(failure) -> {
+                match failure {
+                    A(reason) -> { out = reason }
+                    B(reason) -> { out = reason }
+                }
+            }
+        }
+        return out
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("payload"); return e }
+}
+
+// ---------------------------------------------------------------------------
+// enum_result_parity
+// ---------------------------------------------------------------------------
+
+enum EmxResultParseError {
+    InvalidFormat: String = "bad"
+    UnexpectedEnd
+}
+
+Test EmxResultParitySuccess {
+    test {
+        let success: Result<String, EmxResultParseError> = .Ok("ok")
+        var out = ""
+        match success {
+            Ok(text) -> { out = text }
+            Error(err) -> { out = "err" }
+        }
+        return out
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("ok"); return e }
+}
+
+Test EmxResultParityFailureText {
+    test {
+        let failure: Result<String, EmxResultParseError> = .Error(.InvalidFormat)
+        var out = ""
+        match failure {
+            Ok(text) -> { out = text }
+            Error(err) -> {
+                match err {
+                    InvalidFormat(t) -> { out = t }
+                    UnexpectedEnd -> { out = "end" }
+                }
+            }
+        }
+        return out
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("bad"); return e }
+}
+
+// ---------------------------------------------------------------------------
+// enum_var_reassign_return
+// ---------------------------------------------------------------------------
+
+enum EmxShade { Light Dark Mid }
+
+function emxShadeWeight(s: borrow EmxShade) -> Int {
+    match s {
+        Light -> { return 1 }
+        Dark -> { return 2 }
+        Mid -> { return 3 }
+    }
+}
+
+function emxShadeFor(i: Int) -> EmxShade {
+    var s: EmxShade = .Light
+    switch i % 3 {
+        case 0 { s = .Light }
+        case 1 { s = .Dark }
+        case 2 { s = .Mid }
+        default { s = .Light }
+    }
+    return s
+}
+
+enum EmxValBox { Empty  Val(Int) }
+
+function emxBoxVal(b: borrow EmxValBox) -> Int {
+    match b {
+        Empty -> { return 0 }
+        Val(v) -> { return v }
+    }
+}
+
+function emxPick(i: Int) -> EmxValBox {
+    var b: EmxValBox = .Empty
+    if i % 2 == 0 { b = .Val(i * 10) }
+    if i % 3 == 0 { b = .Val(i * 100) }
+    return b
+}
+
+Test EmxVarReassignReturn {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 60 {
+            acc = acc + emxShadeWeight(emxShadeFor(i))
+            i = i + 1
+        }
+        var j = 0
+        while j < 20 {
+            acc = acc + emxBoxVal(emxPick(j))
+            j = j + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(6960); return e }
+}
+
+// ---------------------------------------------------------------------------
+// nested_enum_payload_parity (also reused by attempt_try_handle below)
+// ---------------------------------------------------------------------------
+
+enum EmxRenderFailure {
+    MissingNode: String = "missing"
+    InvalidState: String = "invalid"
+}
+
+function emxFailWith(useMissing: Bool) -> Result<Int, EmxRenderFailure> {
+    if useMissing {
+        return .Error(.MissingNode("boom"))
+    }
+    return .Error(.InvalidState("halt"))
+}
+
+function emxReportReason(r: Result<Int, EmxRenderFailure>) -> String {
+    var out = ""
+    match r {
+        Ok(value) -> { out = "ok" }
+        Error(failure) -> {
+            match failure {
+                MissingNode(reason) -> { out = reason }
+                InvalidState(reason) -> { out = reason }
+            }
+        }
+    }
+    return out
+}
+
+Test EmxNestedEnumPayloadParityMissing {
+    test { return emxReportReason(emxFailWith(true)) }
+    expect { let e: Result<String, TestFailure> = .Ok("boom"); return e }
+}
+
+Test EmxNestedEnumPayloadParityInvalid {
+    test { return emxReportReason(emxFailWith(false)) }
+    expect { let e: Result<String, TestFailure> = .Ok("halt"); return e }
+}
+
+// ---------------------------------------------------------------------------
+// copyable_payload_enum_field_reuse
+// ---------------------------------------------------------------------------
+
+enum EmxDimension {
+    Fixed(Float)
+    Fill
+    Bounded(Float)
+}
+
+struct EmxSizeBox {
+    let width: EmxDimension
+    let height: EmxDimension
+}
+
+function emxConsume(d: EmxDimension) -> Int {
+    match d {
+        Fill -> return 1;
+        Fixed(_) -> return 0;
+        Bounded(_) -> return 0;
+    }
+}
+
+function emxCheck(box: EmxSizeBox) -> Int {
+    let a = emxConsume(box.width)
+    let b = emxConsume(box.width)
+    return a + b
+}
+
+Test EmxCopyablePayloadEnumFieldReuse {
+    test {
+        let box = EmxSizeBox { width: .Fill, height: .Fixed(3.0) }
+        return emxCheck(move box)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+// ---------------------------------------------------------------------------
+// fieldless_enum_is_copy
+// ---------------------------------------------------------------------------
+
+enum EmxAxis {
+    Horizontal
+    Vertical
+}
+
+function emxCode(axis: EmxAxis) -> Int {
+    if axis == .Horizontal {
+        return 1
+    }
+    return 2
+}
+
+struct EmxDescriptor {
+    let axis: EmxAxis
+    let weight: Int
+}
+
+function emxScore(descriptor: EmxDescriptor) -> Int {
+    let first = emxCode(descriptor.axis)
+    let second = emxCode(descriptor.axis)
+    return first + second + descriptor.weight
+}
+
+Test EmxFieldlessEnumIsCopy {
+    test {
+        let descriptor = EmxDescriptor {
+            axis: .Vertical
+            weight: 5
+        }
+        return emxScore(move descriptor)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+}
+
+// ---------------------------------------------------------------------------
+// attempt_handle_payloadless_variant
+// ---------------------------------------------------------------------------
+
+enum EmxClampError {
+    TooSmall
+    TooBig
+}
+
+function emxClamp(n: Int) -> Result<Int, EmxClampError> {
+    if n < 0 {
+        return .Error(.TooSmall)
+    }
+    if n > 100 {
+        return .Error(.TooBig)
+    }
+    return .Ok(n)
+}
+
+function emxProcess(n: Int) -> Int {
+    attempt {
+        let v = try emxClamp(n)
+        return v * 2
+    } handle {
+        TooSmall { return 0 - 1 }
+        TooBig { return 0 - 2 }
+    }
+}
+
+function emxBump(x: Int) -> Int {
+    let f: (Int) -> Int = { v in return v + 1 }
+    return f(x)
+}
+
+Test EmxAttemptHandlePayloadlessVariantOk {
+    test { return emxProcess(50) }
+    expect { let e: Result<Int, TestFailure> = .Ok(100); return e }
+}
+
+Test EmxAttemptHandlePayloadlessVariantTooSmall {
+    test { return emxProcess(0 - 5) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 1); return e }
+}
+
+Test EmxAttemptHandlePayloadlessVariantTooBig {
+    test { return emxProcess(200) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 2); return e }
+}
+
+Test EmxAttemptHandlePayloadlessVariantBump {
+    test { return emxBump(41) }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+// ---------------------------------------------------------------------------
+// attempt_try_handle
+// ---------------------------------------------------------------------------
+
+function emxRenderOk() -> Result<Int, EmxRenderFailure> {
+    return .Ok(42)
+}
+
+function emxRenderFail() -> Result<Int, EmxRenderFailure> {
+    return .Error(.MissingNode("boom"))
+}
+
+function emxAttemptTryHandleOk() -> Int {
+    attempt {
+        let value = try emxRenderOk()
+        return value
+    } handle {
+        MissingNode(reason) { return 0 - 1 }
+        InvalidState(reason) { return 0 - 2 }
+    }
+}
+
+function emxAttemptTryHandleFailReason() -> String {
+    attempt {
+        let value = try emxRenderFail()
+        return "ok"
+    } handle {
+        MissingNode(reason) { return reason }
+        InvalidState(reason) { return reason }
+    }
+}
+
+Test EmxAttemptTryHandleOk {
+    test { return emxAttemptTryHandleOk() }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+Test EmxAttemptTryHandleFail {
+    test { return emxAttemptTryHandleFailReason() }
+    expect { let e: Result<String, TestFailure> = .Ok("boom"); return e }
+}
+

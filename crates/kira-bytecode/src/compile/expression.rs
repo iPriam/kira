@@ -2,6 +2,7 @@
 
 use kira_ir::{ConvertKind, IrBinOp, IrCallee, IrExpr, IrExprId, IrWriteback};
 use kira_runtime_abi::Execution;
+use kira_semantics_model::ErasedTypeId;
 
 use crate::op::{Instruction, WritebackTarget};
 
@@ -24,6 +25,15 @@ impl FnCompiler<'_> {
             IrExpr::Local(slot) => {
                 let slot = self.local_slot(*slot)?;
                 self.code.push(Instruction::LoadLocal(slot));
+            }
+            IrExpr::CellNew { value, .. } => {
+                let value = *value;
+                self.compile_expr(value)?;
+                self.code.push(Instruction::NewCell);
+            }
+            IrExpr::CellGet { slot, .. } => {
+                let slot = self.local_slot(*slot)?;
+                self.code.push(Instruction::CellGet(slot));
             }
             IrExpr::Unary { op, operand } => {
                 let operand = *operand;
@@ -89,6 +99,17 @@ impl FnCompiler<'_> {
                     self.code.push(Instruction::ArrayGet);
                 }
             }
+            IrExpr::TaskOp { prim, operands } => {
+                let prim = *prim;
+                let operands = *operands;
+                // Three operands, deepest first, exactly as a three-argument
+                // call would push them — so the instruction pops them in the
+                // one order both engines already agree on.
+                for operand in operands {
+                    self.compile_expr(operand)?;
+                }
+                self.code.push(Instruction::TaskOp(prim));
+            }
             IrExpr::ArrayLen { array } => {
                 let array = *array;
                 self.compile_expr(array)?;
@@ -140,6 +161,13 @@ impl FnCompiler<'_> {
                 }
                 self.code.push(Instruction::FileSystem(op));
             }
+            IrExpr::Compiler { op, args, .. } => {
+                let (op, args) = (*op, args.clone());
+                for arg in args {
+                    self.compile_expr(arg)?;
+                }
+                self.code.push(Instruction::Compiler(op));
+            }
             IrExpr::NativeState { value, type_id, .. } => {
                 let (value, type_id) = (*value, *type_id);
                 self.compile_expr(value)?;
@@ -179,6 +207,49 @@ impl FnCompiler<'_> {
                     ConvertKind::FloatToBits32 => {
                         self.code.push(Instruction::ConvertFloatToBits32);
                     }
+                }
+            }
+            // Erasure boxes on this side too, carrying the type that crossed
+            // in. It did not always: a `Value` is a tagged union, so the erased
+            // form of a value *was* that value and this emitted nothing.
+            //
+            // What that could not answer is which *declaration* wrote a struct.
+            // A struct object here is a tuple of values — the VM is
+            // structurally typed on purpose — so `Point(1, 2)` and `Rect(1, 2)`
+            // are indistinguishable once erased, and `EqAny` would have to call
+            // them equal where the LLVM backend, holding an aggregate as
+            // untyped bytes plus generated leaves, cannot read one as the other
+            // at all. The id written here is what lets both engines answer
+            // alike. Carrying a value still costs only the box; comparing one
+            // is what needed the type.
+            //
+            // See `kira_semantics_model::ErasedTypeId` for the encoding, and
+            // `Heap::alloc_erased` for what the box holds.
+            IrExpr::IntoAny { value, from } => {
+                let (value, from) = (*value, *from);
+                self.compile_expr(value)?;
+                let type_id =
+                    ErasedTypeId::of(from).ok_or(CompileError::ErasureOfAValuelessType)?;
+                self.code.push(Instruction::Erase(type_id.as_u64()));
+            }
+            // Widening one generic instantiation into another used to cost the
+            // VM nothing: the payload a `Result<Int, E>` carried was already a
+            // tagged `Value`, so it *was* the payload a `Result<Any, E>`
+            // carries, and no instruction was emitted.
+            //
+            // Erasure boxing ended that. An `Any` payload is now an erasure box
+            // carrying the type that crossed in, so the two rows hold different
+            // objects and the rebuild is real work — the same conclusion the
+            // LLVM backend already reached from the other direction, where an
+            // `Int` payload sits inline and an `Any` payload is a pointer.
+            //
+            // A pair whose rows share a runtime form still costs nothing, which
+            // is what `helper_for` answering `None` means.
+            IrExpr::Widen { value, from, to } => {
+                let (value, from, to) = (*value, *from, *to);
+                self.compile_expr(value)?;
+                if let Some(index) = self.widens.helper_for(self.program, from, to)? {
+                    self.code.push(Instruction::Call(index));
                 }
             }
             IrExpr::ArrayAppend { place, value } => {

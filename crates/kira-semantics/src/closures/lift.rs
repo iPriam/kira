@@ -343,6 +343,7 @@ impl Analyzer<'_> {
                 locals: ctx.locals,
                 body,
                 is_main: false,
+                is_async: false,
                 execution: kira_semantics_model::Execution::Inherited,
                 mutates_self: false,
                 name_span: Span::new(0, 0),
@@ -364,12 +365,26 @@ impl Analyzer<'_> {
         body: &Block,
     ) -> HirExprId {
         let function = self.reserve_synth();
+        // The tag is claimed **before** the body is analyzed, not after. A
+        // literal nested inside this one is lifted while this body is being
+        // analyzed, and if the row were only appended afterwards both would
+        // read the same `impls.len()` and take the same tag — so the dispatcher
+        // would send every call to whichever body was registered second. The
+        // function id is already reserved, so the row can be complete here.
         let tag = self
             .fn_types
             .get(repr)
             .map_or(0, |info| info.impls.len() as u32);
+        if let Some(info) = self.fn_types.get_mut(repr) {
+            info.impls.push(ClosureImpl { function });
+        }
 
         let mut inner = FnCtx::new(result);
+        // A closure body is part of the same function's text, so it boxes its
+        // own `var`s against the same set of mentioned names — which is what
+        // makes a `var` declared in one closure and captured by a nested one
+        // boxed too.
+        inner.set_closure_mentions(ctx.closure_mentions());
         // Slot 0 is the closure value itself. It is bound to no name, so the
         // body cannot reach it: captures arrive through the prologue below,
         // which is the only thing that reads it.
@@ -459,6 +474,7 @@ impl Analyzer<'_> {
                 locals: inner.locals,
                 body: stmts,
                 is_main: false,
+                is_async: false,
                 execution,
                 mutates_self: false,
                 name_span: body.span,
@@ -466,9 +482,6 @@ impl Analyzer<'_> {
         );
 
         let capture_fields: Vec<u32> = closure.captures.iter().map(|c| c.field).collect();
-        if let Some(info) = self.fn_types.get_mut(repr) {
-            info.impls.push(ClosureImpl { function });
-        }
 
         // The value: the tag plus this literal's captures, read in the frame
         // that is creating it. The remaining fields belong to other literals of
@@ -563,14 +576,21 @@ impl Analyzer<'_> {
             return Captured::Refused;
         }
         let ty = outer.local_type(outer_local);
-        if outer.is_mutable(outer_local) {
+        // A mutable binding is captured by *sharing its box*, which is what the
+        // declaration already put it in when this function's closures mention
+        // the name. A mutable binding that has no box is one a cell cannot hold
+        // — a `borrow mut` parameter, a recovered callback-state view — and is
+        // refused, because capturing it by copy would run and quietly give a
+        // different answer.
+        if outer.is_mutable(outer_local) && !matches!(ty, Type::Cell(_)) {
             self.emit(
                 span,
                 "KSEM117",
                 format!(
-                    "closure captures `{name}`, which is declared `var`; a closure may only \
-                     capture immutable bindings, because capturing a mutable one would share \
-                     storage and nothing in this runtime shares storage yet"
+                    "closure captures `{name}`, which is declared `var` and cannot be moved \
+                     into shared storage; a closure shares a captured `var` with the scope \
+                     that declared it, and a value of type `{}` has no shared form",
+                    self.type_name(ty)
                 ),
             );
             return Captured::Refused;

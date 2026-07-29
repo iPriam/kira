@@ -2,9 +2,9 @@
 //!
 //! A consumer of a Kira library has two ways to reach the generated wrapper
 //! crate: depend on `.kira-build/rust/<name>/` by path after running
-//! `kirac build`, or generate it from a `build.rs` into `OUT_DIR`. This takes the
+//! `kira build`, or generate it from a `build.rs` into `OUT_DIR`. This takes the
 //! second route, because it is the one that works on a machine that has never
-//! run `kirac` — which is what makes this crate provable on CI, from a clean
+//! run `kira` — which is what makes this crate provable on CI, from a clean
 //! checkout, with no LLVM and no prior build step.
 //!
 //! Both routes produce the identical crate from the identical generator; the
@@ -173,7 +173,7 @@ fn vm(
 /// that generated `build.rs` would have emitted are emitted here instead,
 /// against the same archive. That is the one place the `include!` route costs
 /// something, and it is worth paying: it is what lets the whole proof run from a
-/// clean checkout with no prior `kirac`.
+/// clean checkout with no prior `kira`.
 fn native(
     ir: &kira_ir::IrProgram,
     name: String,

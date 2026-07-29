@@ -16,7 +16,7 @@ fn program(text: &str) -> HirProgram {
     let db = salsa::DatabaseImpl::new();
     let source =
         SourceProgram::application(&db, text.to_owned(), "test.kira".to_owned(), Vec::new());
-    analyzed(&db, source)
+    analyzed(&db, source).clone()
 }
 
 /// The field expressions of the last `StructNew` the program built.
@@ -313,6 +313,67 @@ fn a_foreign_forward_declaration_yields_to_the_definition() {
             .and_then(|id| analyzed.types.structs().get(id))
             .is_some_and(|def| def.fields.len() == 2),
         "`Version` should name the two-field definition"
+    );
+}
+
+/// The same, with the forward declaration and the definition in **different
+/// files** — which is how autobind actually emits them, one C header per
+/// generated module.
+///
+/// This is the shape a per-file parse can silently get wrong. Each file interns
+/// its own names, so the `Version` written in the binding and the `Version`
+/// written beside the definition are two distinct symbols for one spelling.
+/// Deciding "does something define this name" by comparing symbols would answer
+/// no here, register the alias in front of the definition, and turn a two-field
+/// C struct into `U32` with nothing reported.
+#[test]
+fn a_foreign_forward_declaration_yields_to_a_definition_in_another_file() {
+    let diagnostics = module_diagnostics(
+        "import binding\nimport shape\n@Main function main() { return }",
+        &[
+            (
+                "binding",
+                "@FFI.Alias { target: union Version; }\nstruct Version {}",
+            ),
+            (
+                "shape",
+                "@FFI.Struct { layout: c; }\n\
+                 struct Version {\n    var major: U32\n    var minor: U32\n}",
+            ),
+        ],
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+    let db = salsa::DatabaseImpl::new();
+    let modules = vec![
+        ModuleSource {
+            module: "binding".to_owned(),
+            path: "binding.kira".to_owned(),
+            text: "@FFI.Alias { target: union Version; }\nstruct Version {}".to_owned(),
+        },
+        ModuleSource {
+            module: "shape".to_owned(),
+            path: "shape.kira".to_owned(),
+            text: "@FFI.Struct { layout: c; }\n\
+                   struct Version {\n    var major: U32\n    var minor: U32\n}"
+                .to_owned(),
+        },
+    ];
+    let source = SourceProgram::application(
+        &db,
+        "import binding\nimport shape\n@Main function main() { return }".to_owned(),
+        "test.kira".to_owned(),
+        modules,
+    );
+    let analyzed = analyzed(&db, source);
+    assert!(
+        analyzed
+            .types
+            .structs()
+            .lookup("Version")
+            .and_then(|id| analyzed.types.structs().get(id))
+            .is_some_and(|def| def.fields.len() == 2),
+        "`Version` should name the two-field definition in the other file"
     );
 }
 

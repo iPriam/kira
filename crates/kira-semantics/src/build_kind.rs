@@ -28,8 +28,18 @@ pub enum BuildKind {
     #[default]
     Application,
     /// A library: it has no entrypoint, and declaring one is an error
-    /// (`KSEM158`).
+    /// (`KSEM255`).
     Library,
+    /// A test run: an `@Main` is neither required nor refused.
+    ///
+    /// A suite is entered through the runner a collector generated rather than
+    /// through `@Main`, so demanding one would refuse a package whose only
+    /// purpose is tests. Refusing one would be worse: a package that is both an
+    /// application and a suite is an ordinary thing to write, and `kira test`
+    /// must not force it to choose. When an `@Main` is present it is recorded
+    /// exactly as an application's is, so the two entrypoints coexist and the
+    /// caller picks which one it enters.
+    Test,
 }
 
 impl BuildKind {
@@ -38,6 +48,7 @@ impl BuildKind {
         match self {
             Self::Application => "application",
             Self::Library => "library",
+            Self::Test => "test run",
         }
     }
 
@@ -60,7 +71,7 @@ mod tests {
     #[test]
     fn the_default_is_the_runnable_kind() {
         // A file with no manifest is analyzed as a program, so a missing
-        // `@Main` is still reported in the editor and on `kirac check`.
+        // `@Main` is still reported in the editor and on `kira check`.
         assert_eq!(BuildKind::default(), BuildKind::Application);
     }
 }

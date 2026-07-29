@@ -1,0 +1,4 @@
+enum Result<Value, Failure> {
+    Ok(Value)
+    Error(Failure)
+}

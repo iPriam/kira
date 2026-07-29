@@ -98,7 +98,7 @@ fn list_groups_by_channel_newest_first_and_marks_the_selected_one() {
         );
         assert!(
             entry.is_complete,
-            "an installed toolchain ships bin/kirac: {}",
+            "an installed toolchain ships bin/kira: {}",
             entry.version
         );
     }
@@ -130,7 +130,7 @@ fn list_shows_a_toolchain_that_lost_its_binary_as_broken_rather_than_hiding_it()
             .join("release")
             .join("1.7.3")
             .join("bin")
-            .join("kirac"),
+            .join("kira"),
     )
     .expect("break the installed toolchain");
 
@@ -159,7 +159,7 @@ fn use_reselects_an_installed_version_without_disturbing_the_trees() {
         .expect("a toolchain is selected");
     assert_eq!(current.channel, Channel::Release);
     assert_eq!(current.version, "1.7.3");
-    assert_eq!(current.primary, "kirac");
+    assert_eq!(current.primary, "kira");
 
     assert!(
         home.path().join("release").join("1.10.0").is_dir(),
@@ -230,12 +230,12 @@ fn use_refuses_an_installed_tree_that_cannot_be_dispatched_to() {
             .join("release")
             .join("1.7.3")
             .join("bin")
-            .join("kirac"),
+            .join("kira"),
     )
     .expect("break the installed toolchain");
 
     let error = select(home.path(), Channel::Release, "1.7.3")
-        .expect_err("selecting a tree with no kirac would leave `kira` unable to dispatch");
+        .expect_err("selecting a tree with no kira would leave `kira` unable to dispatch");
     assert!(
         matches!(error, ManageError::Incomplete { .. }),
         "expected a typed refusal, got: {error}"

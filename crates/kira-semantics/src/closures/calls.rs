@@ -131,9 +131,12 @@ impl Analyzer<'_> {
                 None => all.push(self.analyze_expr(ctx, arg)),
             }
         }
-        for (index, (&arg, &expected)) in all.iter().skip(1).zip(params.iter()).enumerate() {
+        for (index, &expected) in params.iter().enumerate() {
+            let Some(arg) = all.get(index + 1).copied() else {
+                break;
+            };
             let actual = self.program.expr(arg).type_of();
-            if !actual.assignable_to(expected) {
+            if !self.admits(actual, expected) {
                 self.emit(
                     span,
                     "KSEM063",
@@ -146,6 +149,9 @@ impl Analyzer<'_> {
                     ),
                 );
             }
+            // A closure with an `Any` parameter takes the erased form, at the
+            // call site like every other crossing.
+            all[index + 1] = self.coerce_into(arg, expected);
         }
         self.program.exprs.alloc(HirExpr::Call {
             callee: Callee::User(dispatcher),
@@ -202,6 +208,7 @@ impl Analyzer<'_> {
                     locals: Vec::new(),
                     body: Vec::new(),
                     is_main: false,
+                    is_async: false,
                     execution: kira_semantics_model::Execution::Inherited,
                     mutates_self: false,
                     name_span: Span::new(0, 0),
@@ -349,17 +356,34 @@ impl Analyzer<'_> {
                     payload,
                 }
             }
+            // A padding slot of cell type gets a real, empty box rather than a
+            // zero word. Nothing reads it, but a copy of the representation
+            // struct walks every field, and a copy that bumped a share count
+            // through a null handle would be a crash rather than a wasted
+            // allocation.
+            Type::Cell(id) => {
+                let inner = self.program.types.cells().inner(id).unwrap_or(Type::Error);
+                let value = self.default_value(inner);
+                HirExpr::CellNew { value, ty }
+            }
             // `Void` never reaches here (its callers return without a value)
             // and `Error` means the program is already rejected. `RawPtr` and
             // `CString` are C-seam types that never reach a closure slot in this
             // subset — a foreign value does not flow into a closure — so they
             // fall to the same zero-word placeholder rather than growing a HIR
             // node nothing constructs.
+            // `Any` has no default either, and for a reason of its own: every
+            // erased value is *some* concrete value, and there is no concrete
+            // type this could pick without the type system having chosen one.
+            // A capture slot of type `Any` is filled by the erasure that put a
+            // value there, never by a placeholder.
             Type::Int(_)
             | Type::Void
             | Type::Error
             | Type::RawPtr
             | Type::CString
+            | Type::Any
+            | Type::Task(_)
             | Type::NativeState(_) => HirExpr::Int(0),
         };
         self.program.exprs.alloc(node)
@@ -399,6 +423,7 @@ impl Analyzer<'_> {
                 locals: Vec::new(),
                 body: Vec::new(),
                 is_main: false,
+                is_async: false,
                 execution: kira_semantics_model::Execution::Inherited,
                 mutates_self: false,
                 name_span: Span::new(0, 0),
@@ -481,6 +506,7 @@ impl Analyzer<'_> {
             locals: ctx.locals,
             body,
             is_main: false,
+            is_async: false,
             execution: kira_semantics_model::Execution::Inherited,
             mutates_self: false,
             name_span: Span::new(0, 0),

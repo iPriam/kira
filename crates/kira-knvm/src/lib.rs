@@ -1,7 +1,7 @@
 //! knvm: the installer that provisions Kira toolchains into `~/.kira/toolchains`.
 //!
 //! Standalone tool crate at the binary layer, outside the layered package
-//! graph — a leaf like `kira-bootstrapper`, depending only on `kira-toolchain`
+//! graph — a leaf like `kira-launcher`, depending only on `kira-toolchain`
 //! (layer 0).
 //!
 //! # Where the layout is defined

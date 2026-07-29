@@ -3,10 +3,15 @@
 //!
 //! Declarations are located at brace depth 0 of each file: `macro` and
 //! `comptime` are contextual identifiers, so a local variable called `macro`
-//! inside a function body is never mistaken for one. A macro is registered
+//! inside a function body is never mistaken for one. A macro is *visible*
 //! program-wide rather than per file — the only top-level name a macro
 //! introduces is its own, and both call sites and `@Derive` targets are
 //! resolved against one table.
+//!
+//! Finding them is nonetheless a per-file question: [`collect_file`] reads one
+//! file and nothing else, and [`Registry::absorb`] merges the results in file
+//! order. Splitting it that way is what lets the frontend memoize the scan of a
+//! dependency that has not changed instead of redoing it every compilation.
 
 use std::collections::HashMap;
 
@@ -27,6 +32,19 @@ pub(crate) enum ProceduralKind {
     Derive,
     /// `@Name` on a struct declares a wrapper template summoned by a field.
     Wrapper,
+    /// Runs once for the whole program, over every declaration in it.
+    ///
+    /// The one kind that is not summoned by a site. Every other form is
+    /// attached to the declaration or call it rewrites, so none of them can
+    /// answer "which declarations does this program have?" — a suite runner
+    /// needs exactly that, and it must be able to ask without the compiler
+    /// knowing the family it is looking for.
+    ///
+    /// Its `expand` takes the declarations and returns the source of a file
+    /// appended to the program, rather than an edit to an existing one: there
+    /// is no site to splice into, and inventing one would make the answer
+    /// depend on file order.
+    Collector,
 }
 
 impl ProceduralKind {
@@ -37,6 +55,7 @@ impl ProceduralKind {
             "attribute" => Some(ProceduralKind::Attribute),
             "derive" => Some(ProceduralKind::Derive),
             "wrapper" => Some(ProceduralKind::Wrapper),
+            "collector" => Some(ProceduralKind::Collector),
             _ => None,
         }
     }
@@ -53,7 +72,7 @@ pub(crate) enum FragmentKind {
 }
 
 /// One declarative macro parameter.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Fragment {
     /// The parameter's name, as the template refers to it.
     pub(crate) name: String,
@@ -62,7 +81,7 @@ pub(crate) struct Fragment {
 }
 
 /// A `macro Name(p: expr) { expand { … } }` declaration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Declarative {
     /// The macro's name.
     pub(crate) name: String,
@@ -73,7 +92,7 @@ pub(crate) struct Declarative {
 }
 
 /// A `comptime macro Name { … }` declaration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Procedural {
     /// The macro's name.
     pub(crate) name: String,
@@ -96,13 +115,30 @@ pub(crate) struct Procedural {
 }
 
 /// Every macro a program declares.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct Registry {
     declarative: HashMap<String, Declarative>,
     procedural: HashMap<String, Procedural>,
 }
 
 impl Registry {
+    /// Adds one file's declarations, a later file's name winning over an
+    /// earlier one's.
+    ///
+    /// The same rule the whole-program scan followed when it inserted into one
+    /// map as it walked the files in order — merging per-file results in that
+    /// same order reproduces it exactly.
+    pub(crate) fn absorb(&mut self, file: &FileRegistry) {
+        for declared in &file.declarative {
+            self.declarative
+                .insert(declared.name.clone(), declared.clone());
+        }
+        for declared in &file.procedural {
+            self.procedural
+                .insert(declared.name.clone(), declared.clone());
+        }
+    }
+
     /// Whether the program declares no macros at all.
     ///
     /// The whole expansion pass is skipped when this holds, which is what keeps
@@ -120,77 +156,91 @@ impl Registry {
     pub(crate) fn procedural(&self, name: &str) -> Option<&Procedural> {
         self.procedural.get(name)
     }
+
+    /// Every procedural macro of one kind, in name order.
+    ///
+    /// Sorted rather than in hash order so a program with two collectors
+    /// appends their files in an order that does not change between runs.
+    pub(crate) fn of_kind(&self, kind: ProceduralKind) -> Vec<&Procedural> {
+        let mut found: Vec<&Procedural> = self
+            .procedural
+            .values()
+            .filter(|declared| declared.kind == kind)
+            .collect();
+        found.sort_by(|a, b| a.name.cmp(&b.name));
+        found
+    }
 }
 
-/// The byte range one macro declaration covers, so the caller can blank it.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DeclarationSpan {
-    /// The file the declaration was written in.
-    pub(crate) source: SourceId,
-    /// The bytes it covers, `macro` keyword through closing brace.
-    pub(crate) span: Span,
+/// Every macro **one file** declares, in declaration order.
+///
+/// Per file rather than per program because what a file declares depends on
+/// nothing but that file's own bytes. That is what lets a caller memoize the
+/// scan and pay for a dependency's macros once rather than once per
+/// compilation; [`Registry::absorb`] puts the pieces back together in file
+/// order.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct FileRegistry {
+    /// The declarative macros this file declares, in declaration order.
+    pub(crate) declarative: Vec<Declarative>,
+    /// The procedural macros this file declares, in declaration order.
+    pub(crate) procedural: Vec<Procedural>,
+    /// The bytes each declaration covers, `macro` keyword through closing
+    /// brace, so the caller can blank them.
+    pub(crate) spans: Vec<Span>,
 }
 
-/// Collects every macro declaration in `files`, reporting malformed ones.
-pub(crate) fn collect(
-    files: &[Lexed<'_>],
-    reporter: &mut Reporter,
-) -> (Registry, Vec<DeclarationSpan>) {
-    let mut registry = Registry::default();
-    let mut spans = Vec::new();
-    for file in files {
-        let mut index = 0usize;
-        while index < file.len() {
-            match file.kind(index) {
-                TokenKind::Eof => break,
-                TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => {
-                    match file.match_close(index) {
-                        Some(end) => index = end + 1,
-                        None => break,
-                    }
+impl FileRegistry {
+    /// Whether this file declares no macro at all.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.declarative.is_empty() && self.procedural.is_empty()
+    }
+}
+
+/// Collects every macro declaration in one file, reporting malformed ones.
+pub(crate) fn collect_file(file: &Lexed<'_>, reporter: &mut Reporter) -> FileRegistry {
+    let mut found = FileRegistry::default();
+    let mut index = 0usize;
+    while index < file.len() {
+        match file.kind(index) {
+            TokenKind::Eof => break,
+            TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => {
+                match file.match_close(index) {
+                    Some(end) => index = end + 1,
+                    None => break,
+                }
+                continue;
+            }
+            _ => {}
+        }
+        if file.is_word(index, "comptime") && file.is_word(index + 1, "macro") {
+            match scan_procedural(file, index, reporter) {
+                Some((macro_declaration, span, next)) => {
+                    found.spans.push(span);
+                    found.procedural.push(macro_declaration);
+                    index = next;
                     continue;
                 }
-                _ => {}
+                None => break,
             }
-            if file.is_word(index, "comptime") && file.is_word(index + 1, "macro") {
-                match scan_procedural(file, index, reporter) {
-                    Some((macro_declaration, span, next)) => {
-                        spans.push(DeclarationSpan {
-                            source: file.source,
-                            span,
-                        });
-                        registry
-                            .procedural
-                            .insert(macro_declaration.name.clone(), macro_declaration);
-                        index = next;
-                        continue;
-                    }
-                    None => break,
-                }
-            }
-            if file.is_word(index, "macro")
-                && file.is_ident(index + 1)
-                && file.kind(index + 2) == TokenKind::LParen
-            {
-                match scan_declarative(file, index, reporter) {
-                    Some((macro_declaration, span, next)) => {
-                        spans.push(DeclarationSpan {
-                            source: file.source,
-                            span,
-                        });
-                        registry
-                            .declarative
-                            .insert(macro_declaration.name.clone(), macro_declaration);
-                        index = next;
-                        continue;
-                    }
-                    None => break,
-                }
-            }
-            index += 1;
         }
+        if file.is_word(index, "macro")
+            && file.is_ident(index + 1)
+            && file.kind(index + 2) == TokenKind::LParen
+        {
+            match scan_declarative(file, index, reporter) {
+                Some((macro_declaration, span, next)) => {
+                    found.spans.push(span);
+                    found.declarative.push(macro_declaration);
+                    index = next;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        index += 1;
     }
-    (registry, spans)
+    found
 }
 
 /// Scans `macro Name(p: expr) { expand { … } }` starting at the `macro` word.
@@ -427,6 +477,12 @@ fn validate_shape(declared: &Procedural, reporter: &mut Reporter) {
     } = declared;
     let (source, span, kind) = (*source, *span, *kind);
     match kind {
+        ProceduralKind::Collector if !applies_to.is_empty() => reporter.error(
+            source,
+            span,
+            diagnostics::APPLIES_TO_PRESENCE,
+            format!("`appliesTo` says which declarations a macro may annotate, so a `collector` macro like `{name}`, which annotates none, has none"),
+        ),
         ProceduralKind::Function if !applies_to.is_empty() => reporter.error(
             source,
             span,
@@ -483,6 +539,7 @@ pub(crate) fn kind_word(kind: ProceduralKind) -> &'static str {
         ProceduralKind::Attribute => "attribute",
         ProceduralKind::Derive => "derive",
         ProceduralKind::Wrapper => "wrapper",
+        ProceduralKind::Collector => "collector",
     }
 }
 
@@ -491,9 +548,12 @@ mod tests {
     use super::*;
 
     fn collect_text(text: &str) -> (Registry, Vec<kira_diagnostics::Diagnostic>) {
-        let files = vec![Lexed::new(SourceId::new(0), text)];
         let mut reporter = Reporter::new();
-        let (registry, _) = collect(&files, &mut reporter);
+        let mut registry = Registry::default();
+        registry.absorb(&collect_file(
+            &Lexed::new(SourceId::new(0), text),
+            &mut reporter,
+        ));
         (registry, reporter.into_diagnostics())
     }
 

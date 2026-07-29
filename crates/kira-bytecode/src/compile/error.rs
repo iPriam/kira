@@ -34,6 +34,38 @@ pub enum CompileError {
     /// Internal invariant: a short-circuit operator reached opcode selection.
     #[error("bytecode compiler invariant violated: short-circuit operator has no opcode")]
     ShortCircuitOpcode,
+    /// Internal invariant: a type with no runtime value reached an erasure.
+    ///
+    /// Nothing analysis admits can get here — `Void`, `Cell`, `Task`, and
+    /// `NativeState` are all refused by `Type::assignable_to` before `Any`
+    /// takes them — so this is a compiler bug surfaced typed rather than a
+    /// program the user can write.
+    #[error("bytecode compiler invariant violated: a type with no value was erased into `Any`")]
+    ErasureOfAValuelessType,
+    /// A program has more functions than the format's `u32` call operand.
+    #[error("the program has {count} functions; the format allows 4294967295")]
+    TooManyFunctions {
+        /// How many functions the program has.
+        count: usize,
+    },
+    /// Internal invariant: a widening reached codegen with a non-enum row.
+    ///
+    /// Only a generic instantiation widens, and `TypeTable::admits` refuses
+    /// every other pair before lowering runs.
+    #[error("bytecode compiler invariant violated: a widening of something not an enum")]
+    WidenedNonEnum,
+    /// Internal invariant: a widening named an enum the program never declared.
+    #[error("bytecode compiler invariant violated: a widening of an undeclared enum")]
+    WidenedUndeclaredEnum,
+    /// Internal invariant: the two rows of a widening disagree about their
+    /// variants — a different count, or one carrying a payload where the other
+    /// does not.
+    #[error("bytecode compiler invariant violated: a widening between rows that disagree")]
+    WidenedMismatchedRows,
+    /// Internal invariant: a widened payload crossed to a type the type rule
+    /// admits no crossing to.
+    #[error("bytecode compiler invariant violated: a widening of a payload the type rule refuses")]
+    WidenedPayloadTypeRefused,
     /// Internal invariant: a `break`/`continue` reached codegen with no
     /// enclosing loop, which analysis is supposed to have rejected.
     #[error(

@@ -6,7 +6,7 @@
 //! environment is never mutated and the developer's real `~/.kira` is never
 //! read. A drop guard removes the tree even when a case fails.
 //!
-//! The fixture `kirac` is an executable `#!/bin/sh` script that echoes its own
+//! The fixture `kira` is an executable `#!/bin/sh` script that echoes its own
 //! marker plus every argument it received and exits with a chosen code, so a
 //! passing assertion can only come from the launcher genuinely resolving
 //! `current.toml` and handing the process over. Those cases are `cfg(unix)`:
@@ -55,7 +55,7 @@ impl Drop for TempTree {
 /// The child is always waited on with its output collected, so a hung fixture
 /// is impossible: the fixture script exits immediately.
 fn launcher(home: &Path, args: &[&str]) -> Output {
-    std::process::Command::new(env!("CARGO_BIN_EXE_kira"))
+    std::process::Command::new(env!("CARGO_BIN_EXE_kira-launcher"))
         .args(args)
         .env("KIRA_HOME", home)
         .output()
@@ -69,7 +69,7 @@ fn write_current(tree: &TempTree, contents: &str) {
     std::fs::write(toolchains.join("current.toml"), contents).expect("write current.toml");
 }
 
-/// Installs a fixture toolchain whose `bin/kirac` echoes `marker` and every
+/// Installs a fixture toolchain whose `bin/kira` echoes `marker` and every
 /// argument it received, then exits with `exit_code`.
 #[cfg(unix)]
 fn write_fixture_toolchain(
@@ -83,9 +83,9 @@ fn write_fixture_toolchain(
 
     let bin = tree.toolchains().join(channel).join(version).join("bin");
     std::fs::create_dir_all(&bin).expect("create fixture bin dir");
-    let kirac = bin.join("kirac");
+    let kira = bin.join("kira");
     std::fs::write(
-        &kirac,
+        &kira,
         format!(
             "#!/bin/sh\n\
              echo \"{marker}\"\n\
@@ -93,10 +93,10 @@ fn write_fixture_toolchain(
              exit {exit_code}\n"
         ),
     )
-    .expect("write fixture kirac");
-    std::fs::set_permissions(&kirac, std::fs::Permissions::from_mode(0o755))
-        .expect("mark fixture kirac executable");
-    kirac
+    .expect("write fixture kira");
+    std::fs::set_permissions(&kira, std::fs::Permissions::from_mode(0o755))
+        .expect("mark fixture kira executable");
+    kira
 }
 
 /// `current.toml` text selecting a fixture toolchain, built through the real
@@ -105,7 +105,7 @@ fn current_toml(channel: kira_toolchain::Channel, version: &str) -> String {
     kira_toolchain::CurrentToolchain {
         channel,
         version: version.to_string(),
-        primary: "kirac".to_string(),
+        primary: "kira".to_string(),
     }
     .to_toml()
 }
@@ -154,7 +154,7 @@ fn unknown_channel_in_current_toml_exits_two() {
     let tree = TempTree::create("channel");
     write_current(
         &tree,
-        "channel = \"nightly\"\nversion = \"1.0.0\"\nprimary = \"kirac\"\n",
+        "channel = \"nightly\"\nversion = \"1.0.0\"\nprimary = \"kira\"\n",
     );
     let output = launcher(tree.home(), &[]);
     assert_eq!(output.status.code(), Some(2));
@@ -176,7 +176,7 @@ fn selected_toolchain_without_its_binary_exits_two_naming_the_path() {
     assert_eq!(output.status.code(), Some(2));
     let stderr = stderr_of(&output);
     assert!(stderr.contains("release/1.2.3"), "stderr was: {stderr}");
-    assert!(stderr.contains("kirac"), "stderr was: {stderr}");
+    assert!(stderr.contains("kira"), "stderr was: {stderr}");
     assert!(
         stderr.contains("knvm install latest"),
         "stderr was: {stderr}"
@@ -187,7 +187,7 @@ fn selected_toolchain_without_its_binary_exits_two_naming_the_path() {
 #[test]
 fn dispatches_to_the_selected_toolchain_and_forwards_arguments() {
     let tree = TempTree::create("dispatch");
-    write_fixture_toolchain(&tree, "release", "1.2.3", "fixture-kirac-1.2.3", 0);
+    write_fixture_toolchain(&tree, "release", "1.2.3", "fixture-kira-1.2.3", 0);
     write_current(
         &tree,
         &current_toml(kira_toolchain::Channel::Release, "1.2.3"),
@@ -202,7 +202,7 @@ fn dispatches_to_the_selected_toolchain_and_forwards_arguments() {
     );
     let stdout = stdout_of(&output);
     assert_eq!(
-        stdout, "fixture-kirac-1.2.3\narg:run\narg:--release\narg:main.kira\n",
+        stdout, "fixture-kira-1.2.3\narg:run\narg:--release\narg:main.kira\n",
         "stdout was: {stdout}"
     );
 }
@@ -211,7 +211,7 @@ fn dispatches_to_the_selected_toolchain_and_forwards_arguments() {
 #[test]
 fn forwards_the_toolchain_exit_code() {
     let tree = TempTree::create("exitcode");
-    write_fixture_toolchain(&tree, "release", "2.0.0", "fixture-kirac-2.0.0", 37);
+    write_fixture_toolchain(&tree, "release", "2.0.0", "fixture-kira-2.0.0", 37);
     write_current(
         &tree,
         &current_toml(kira_toolchain::Channel::Release, "2.0.0"),
@@ -220,7 +220,7 @@ fn forwards_the_toolchain_exit_code() {
     let output = launcher(tree.home(), &["check"]);
     assert_eq!(output.status.code(), Some(37));
     assert!(
-        stdout_of(&output).starts_with("fixture-kirac-2.0.0\n"),
+        stdout_of(&output).starts_with("fixture-kira-2.0.0\n"),
         "stdout was: {}",
         stdout_of(&output)
     );
@@ -230,7 +230,7 @@ fn forwards_the_toolchain_exit_code() {
 #[test]
 fn arguments_with_spaces_and_leading_dashes_survive_untouched() {
     let tree = TempTree::create("argv");
-    write_fixture_toolchain(&tree, "dev", "2026.07.2", "fixture-kirac-dev", 0);
+    write_fixture_toolchain(&tree, "dev", "2026.07.2", "fixture-kira-dev", 0);
     write_current(
         &tree,
         &current_toml(kira_toolchain::Channel::Dev, "2026.07.2"),
@@ -240,7 +240,7 @@ fn arguments_with_spaces_and_leading_dashes_survive_untouched() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         stdout_of(&output),
-        "fixture-kirac-dev\narg:--\narg:-x\narg:two words\narg:\n"
+        "fixture-kira-dev\narg:--\narg:-x\narg:two words\narg:\n"
     );
 }
 
@@ -267,7 +267,7 @@ fn the_channel_recorded_in_current_toml_selects_which_toolchain_runs() {
     );
 }
 
-/// Installs a fixture `bin/kira-language-server` beside the fixture `kirac`.
+/// Installs a fixture `bin/kira-language-server` beside the fixture `kira`.
 #[cfg(unix)]
 fn write_fixture_language_server(
     tree: &TempTree,
@@ -296,7 +296,7 @@ fn invoked_as_the_language_server_it_dispatches_to_the_toolchains_server() {
     use std::os::unix::fs::PermissionsExt;
 
     let tree = TempTree::create("multicall");
-    write_fixture_toolchain(&tree, "release", "5.0.0", "wrong-binary-kirac", 0);
+    write_fixture_toolchain(&tree, "release", "5.0.0", "wrong-binary-kira", 0);
     write_fixture_language_server(&tree, "release", "5.0.0", "fixture-server-5.0.0");
     write_current(
         &tree,
@@ -305,7 +305,8 @@ fn invoked_as_the_language_server_it_dispatches_to_the_toolchains_server() {
 
     let alias_dir = TempTree::create("multicall_alias");
     let alias = alias_dir.home().join("kira-language-server");
-    std::fs::copy(env!("CARGO_BIN_EXE_kira"), &alias).expect("copy launcher under alias name");
+    std::fs::copy(env!("CARGO_BIN_EXE_kira-launcher"), &alias)
+        .expect("copy launcher under alias name");
     std::fs::set_permissions(&alias, std::fs::Permissions::from_mode(0o755))
         .expect("mark alias executable");
 
@@ -334,7 +335,7 @@ fn the_alias_reports_a_toolchain_without_a_server_and_exits_two() {
     use std::os::unix::fs::PermissionsExt;
 
     let tree = TempTree::create("multicall_missing");
-    write_fixture_toolchain(&tree, "release", "6.0.0", "fixture-kirac-6.0.0", 0);
+    write_fixture_toolchain(&tree, "release", "6.0.0", "fixture-kira-6.0.0", 0);
     write_current(
         &tree,
         &current_toml(kira_toolchain::Channel::Release, "6.0.0"),
@@ -342,7 +343,8 @@ fn the_alias_reports_a_toolchain_without_a_server_and_exits_two() {
 
     let alias_dir = TempTree::create("multicall_missing_alias");
     let alias = alias_dir.home().join("kira-language-server");
-    std::fs::copy(env!("CARGO_BIN_EXE_kira"), &alias).expect("copy launcher under alias name");
+    std::fs::copy(env!("CARGO_BIN_EXE_kira-launcher"), &alias)
+        .expect("copy launcher under alias name");
     std::fs::set_permissions(&alias, std::fs::Permissions::from_mode(0o755))
         .expect("mark alias executable");
 
@@ -360,7 +362,7 @@ fn the_alias_reports_a_toolchain_without_a_server_and_exits_two() {
     let primary = launcher(tree.home(), &[]);
     assert_eq!(
         stdout_of(&primary),
-        "fixture-kirac-6.0.0\n",
+        "fixture-kira-6.0.0\n",
         "the primary dispatch must be untouched by the missing server"
     );
 }
@@ -370,8 +372,8 @@ fn the_alias_reports_a_toolchain_without_a_server_and_exits_two() {
 fn a_non_executable_primary_binary_is_reported_rather_than_dispatched() {
     let tree = TempTree::create("notexec");
     use std::os::unix::fs::PermissionsExt;
-    let kirac = write_fixture_toolchain(&tree, "release", "4.0.0", "unreachable", 0);
-    std::fs::set_permissions(&kirac, std::fs::Permissions::from_mode(0o644))
+    let kira = write_fixture_toolchain(&tree, "release", "4.0.0", "unreachable", 0);
+    std::fs::set_permissions(&kira, std::fs::Permissions::from_mode(0o644))
         .expect("clear the executable bit");
     write_current(
         &tree,

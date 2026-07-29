@@ -162,6 +162,7 @@ impl FunctionLowering<'_, '_> {
                 IrBinOp::SubFloat => LLVMBuildFSub(builder, left, right, c"fsub".as_ptr()),
                 IrBinOp::MulFloat => LLVMBuildFMul(builder, left, right, c"fmul".as_ptr()),
                 IrBinOp::DivFloat => LLVMBuildFDiv(builder, left, right, c"fdiv".as_ptr()),
+                IrBinOp::RemFloat => LLVMBuildFRem(builder, left, right, c"frem".as_ptr()),
                 IrBinOp::ConcatStr => {
                     return Ok(self.call(
                         self.codegen.runtime.str_concat,
@@ -171,6 +172,29 @@ impl FunctionLowering<'_, '_> {
                 }
                 IrBinOp::EqStr | IrBinOp::NeStr => {
                     return Ok(self.lower_string_compare(op, left, right));
+                }
+                // Both operands are erasure boxes, and the runtime reads the
+                // type each carries before it reads either payload. The two are
+                // dropped afterwards, as every comparison drops what it
+                // consumed — `kira_rt_any_eq` takes nothing.
+                IrBinOp::EqAny | IrBinOp::NeAny => {
+                    let equal =
+                        self.call(self.codegen.runtime.any_eq, &mut [left, right], c"any.eq");
+                    self.drop_value(left, Type::Any)?;
+                    self.drop_value(right, Type::Any)?;
+                    let builder = self.codegen.builder;
+                    let types = self.codegen.types;
+                    // The helper returns an `i8` of 0 or 1; comparing it
+                    // against the appropriate constant yields the `i1` Kira
+                    // booleans are, exactly as the string compare does.
+                    let expected = LLVMConstInt(types.i8, u64::from(op == IrBinOp::EqAny), 0);
+                    return Ok(LLVMBuildICmp(
+                        builder,
+                        LLVMIntPredicate::LLVMIntEQ,
+                        equal,
+                        expected,
+                        c"any.cmp".as_ptr(),
+                    ));
                 }
                 IrBinOp::BitAnd => LLVMBuildAnd(builder, left, right, c"and".as_ptr()),
                 IrBinOp::BitOr => LLVMBuildOr(builder, left, right, c"or".as_ptr()),

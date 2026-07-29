@@ -54,7 +54,7 @@ pub enum LinkError {
     /// The native runtime archive is missing.
     #[error(
         "the native runtime archive `{path}` is missing; build it with \
-         `cargo build -p kira-native-bridge`"
+         `cargo build --workspace`"
     )]
     RuntimeArchiveMissing {
         /// Where the archive was expected.
@@ -603,7 +603,7 @@ mod tests {
         };
         let text = error.to_string();
         assert!(text.contains("libkira_native_bridge.a"));
-        assert!(text.contains("cargo build -p kira-native-bridge"));
+        assert!(text.contains("cargo build --workspace"));
     }
 
     #[test]

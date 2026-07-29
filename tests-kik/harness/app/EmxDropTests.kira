@@ -1,0 +1,193 @@
+import Foundation
+
+// ---------------------------------------------------------------------------
+// Native drop-elaboration leak guards (2026-07-10). Each exercise churns the
+// pattern in a loop so a per-element/per-iteration native leak scales and is
+// caught by the harness leak run (KIRA_RUNTIME_MEMORY_REPORT=1 / leaks
+// --atExit on the llvm binary) while the returned checksum pins parity.
+// ---------------------------------------------------------------------------
+
+// Array-of-enum element teardown (Destructors.elementDestroy enum branch): an
+// enum stored as a RAW_PTR-tagged array element must tear down through the
+// typed kira_destroy_enum_<T> — previously it fell through to the tag-safe
+// closure no-op and leaked the 16-byte enum block AND its String payload box +
+// buffer on every array release.
+enum EmxTag {
+    Named(String)
+    Anon
+}
+
+struct EmxBag {
+    var tags: [EmxTag]
+}
+
+function emxScoreTag(tag: borrow EmxTag) -> Int {
+    match tag {
+        Named(name) -> {
+            if name == "ab" {
+                return 1
+            }
+            return 2
+        }
+        Anon -> return 0
+    }
+    return 0
+}
+
+function emxCountNamed(bag: borrow EmxBag) -> Int {
+    var n = 0
+    var i = 0
+    while i < bag.tags.count {
+        n = n + emxScoreTag(bag.tags[i])
+        i = i + 1
+    }
+    return n
+}
+
+Test EmxArrayEnumStringPayloadFree {
+    test {
+        var total = 0
+        var i = 0
+        while i < 500 {
+            let tags: [EmxTag] = [.Named("a" + "b"), .Anon, .Named("c" + "d")]
+            let bag = EmxBag { tags: move tags }
+            total = total + emxCountNamed(bag)
+            i = i + 1
+        }
+        return total
+    }
+    // 500 * (1 + 0 + 2) = 1500
+    expect { let e: Result<Int, TestFailure> = .Ok(1500); return e }
+}
+
+// Struct-payload enum teardown (kira_destroy_enum_<T> ffi_struct arm): an enum
+// variant carrying a struct payload owns the shell + contents; destroy frees it
+// via kira_destroy_<T> and clone deep-copies via kira_clone_<T>. Previously the
+// payload shell leaked (the field_override_enum_payload_defaults 2-leak class:
+// class-field default arrays of struct-payload enums).
+struct EmxColorVal {
+    let r: Int = 1
+}
+
+struct EmxGlowPayload {
+    let color: EmxColorVal = EmxColorVal {}
+    let radius: Int = 4
+}
+
+enum EmxPaint {
+    Flat
+    Glow(EmxGlowPayload)
+}
+
+class EmxSurface {
+    let paint: EmxPaint = .Flat
+    let effects: [EmxPaint] = []
+}
+
+class EmxCard extends EmxSurface {
+    override let paint: EmxPaint = .Flat
+    override let effects: [EmxPaint] = [.Glow(EmxGlowPayload { color: EmxColorVal { r: 5 } })]
+}
+
+function emxPaintScore(p: borrow EmxPaint) -> Int {
+    match p {
+        Flat -> return 1;
+        Glow(payload) -> return payload.color.r * 10 + payload.radius;
+    }
+    return 0
+}
+
+Test EmxStructPayloadEnumDefaultsFree {
+    test {
+        var total = 0
+        var i = 0
+        while i < 200 {
+            let card = EmxCard()
+            total = total + emxPaintScore(card.paint)
+            var j = 0
+            while j < card.effects.count {
+                total = total + emxPaintScore(card.effects[j])
+                j = j + 1
+            }
+            i = i + 1
+        }
+        return total
+    }
+    // per iteration: Flat=1, Glow(r:5, radius:4)=54 -> 55; 200 * 55 = 11000
+    expect { let e: Result<Int, TestFailure> = .Ok(11000); return e }
+}
+
+// Construct_any-payload enum teardown churn (kira_capi_dynamic_destroy arm +
+// KIR002 move-only guarantee): loops the enum_kind_split_cache_parity shape so
+// a per-iteration shell leak scales. The clone arm for the Filled variant is
+// unreachable-by-checker (contains-any enums are move-only) and traps.
+Test EmxConstructAnyPayloadEnumChurn {
+    test {
+        var total = 0
+        var i = 0
+        while i < 200 {
+            let cells: [EmxCell] = [.Filled(EmxCircle(r: 3)), .Empty, .Filled(EmxSquare(s: 4))]
+            let grid = EmxGrid { cells: move cells }
+            total = total + grid.cells.count + emxTotalArea(grid)
+            i = i + 1
+        }
+        return total
+    }
+    // per iteration: count=3 + area=7 -> 10; 200 * 10 = 2000
+    expect { let e: Result<Int, TestFailure> = .Ok(2000); return e }
+}
+
+// Array-payload enum teardown (kira_destroy_enum_<T> .array arm): a variant
+// carrying an owned array (Result<[Int], E>.Ok shape) moves the KiraArray* in;
+// destroy releases it with the typed element destructor, clone deep-copies it.
+// Previously the whole array (box + storage) leaked per constructed value (the
+// kik-harness genRange 22-leak class).
+enum EmxRangeResult {
+    Ok([Int])
+    Fail(Int)
+}
+
+function emxMakeRange(n: Int) -> EmxRangeResult {
+    if n <= 0 {
+        return .Fail(0 - 1)
+    }
+    var xs: [Int] = []
+    var i = 0
+    while i < n {
+        xs.append(i * 2)
+        i = i + 1
+    }
+    return .Ok(move xs)
+}
+
+function emxSumRange(r: borrow EmxRangeResult) -> Int {
+    match r {
+        Ok(xs) -> {
+            var total = 0
+            var i = 0
+            while i < xs.count {
+                total = total + xs[i]
+                i = i + 1
+            }
+            return total
+        }
+        Fail(code) -> { return code }
+    }
+    return 0
+}
+
+Test EmxArrayPayloadEnumFree {
+    test {
+        var total = 0
+        var i = 0
+        while i < 300 {
+            let ok = emxMakeRange(5)
+            let bad = emxMakeRange(0)
+            total = total + emxSumRange(ok) + emxSumRange(bad)
+            i = i + 1
+        }
+        return total
+    }
+    // per iteration: sum(0,2,4,6,8)=20 + (-1) -> 19; 300 * 19 = 5700
+    expect { let e: Result<Int, TestFailure> = .Ok(5700); return e }
+}

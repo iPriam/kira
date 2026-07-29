@@ -24,13 +24,23 @@ use crate::install::InstallError;
 ///
 /// The launcher lands twice: once as `kira`, and once under the language
 /// server's name, where it dispatches to the selected toolchain's server
-/// instead of its primary (see the multi-call note in `kira-bootstrapper`).
+/// instead of its primary (see the multi-call note in `kira-launcher`).
 /// PATH then always resolves the *selected* server, never a frozen copy.
+///
+/// It is built as `kira-launcher` and installed as `kira`, which is the one
+/// place those two names differ. The compiler CLI is also built as `kira` — one
+/// cargo workspace cannot produce two binaries of one name — and it is the
+/// *toolchain's* `kira`, installed under `toolchains/<version>/bin/`. What
+/// lands on PATH here is the launcher, which resolves the selected toolchain
+/// and execs that one.
 const TOOLS: [(&str, &str); 3] = [
     ("knvm", "knvm"),
-    ("kira", "kira"),
-    ("kira", kira_toolchain::LANGUAGE_SERVER_BINARY),
+    (LAUNCHER_BINARY, "kira"),
+    (LAUNCHER_BINARY, kira_toolchain::LANGUAGE_SERVER_BINARY),
 ];
+
+/// The launcher's name as cargo builds it.
+const LAUNCHER_BINARY: &str = "kira-launcher";
 
 /// What a self-install did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,7 +74,7 @@ pub fn sinstall(
     })?;
 
     let built = Command::new("cargo")
-        .args(["build", "-p", "kira-knvm", "-p", "kira-bootstrapper"])
+        .args(["build", "-p", "kira-knvm", "-p", "kira-launcher"])
         .current_dir(&checkout)
         .status()
         .map_err(|error| match error.kind() {

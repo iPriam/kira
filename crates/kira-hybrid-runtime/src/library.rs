@@ -5,7 +5,7 @@
 //!
 //! This crate deliberately does not depend on `kira-native-bridge`. The process
 //! hosting a hybrid program almost certainly carries its own copy of the
-//! `kira_rt_*` symbols already — `kirac` links the runtime as an rlib so cargo
+//! `kira_rt_*` symbols already — `kira` links the runtime as an rlib so cargo
 //! also builds the staticlib the compiler links — and a string handle allocated
 //! by one copy and freed by the other is a cross-allocator free.
 //!

@@ -4,7 +4,7 @@
 //! That file is the source of truth for which LLVM Kira expects, which release
 //! owns the published bundles, and the exact archive name per supported host.
 //! It is compiled in with `include_str!` rather than read from disk at runtime:
-//! an installed `kirac` has no repo to read, and baking it in means the pin can
+//! an installed `kira` has no repo to read, and baking it in means the pin can
 //! never disagree with the binary that was built from it. Editing the TOML and
 //! rebuilding is the whole update flow.
 
@@ -67,7 +67,7 @@ pub struct TargetBundle {
 /// The compiled-in `llvm-metadata.toml` could not be parsed.
 ///
 /// An authoring error in this repo, not a condition of the machine running
-/// `kirac`: the same bytes are parsed on every run, so this is either always
+/// `kira`: the same bytes are parsed on every run, so this is either always
 /// hit or never. It is still a typed error rather than a panic, because a
 /// library does not get to decide that its caller's process should end.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

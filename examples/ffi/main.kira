@@ -5,9 +5,9 @@
 // sites below look like any other Kira call. Build the C archive first — see
 // README.md — then run this on any backend:
 //
-//     kirac run --backend vm main.kira
-//     kirac run --backend llvm main.kira
-//     kirac run --backend hybrid main.kira
+//     kira run --backend vm main.kira
+//     kira run --backend llvm main.kira
+//     kira run --backend hybrid main.kira
 
 @FFI.Extern { library: ffimath; symbol: ffi_add; abi: c; }
 function add(a: I32, b: I32) -> I32;

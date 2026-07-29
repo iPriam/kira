@@ -83,16 +83,24 @@ fn a_method_may_write_its_return_type_with_a_colon() {
 }
 
 #[test]
-fn an_override_field_may_not_restate_a_type() {
-    // The inherited field already decided its type; a second one could only
-    // disagree with it.
+fn an_override_field_may_restate_its_type() {
+    // The inherited field decided the type; restating it is legal and inert.
+    // Whether the restatement *agrees* is a question about resolved types, so
+    // the parser records it and semantics answers it (`KSEM059`).
     let result = parse_text("class Savings extends Account {\n  override let rate: Int = 5\n}");
-    let codes: Vec<&str> = result
-        .diagnostics
-        .iter()
-        .filter_map(|diagnostic| diagnostic.code)
-        .collect();
-    assert_eq!(codes, ["KPAR036"]);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let overrides = &only_class(&result).overrides;
+    assert_eq!(overrides.len(), 1);
+    assert!(overrides[0].ty.is_some());
+}
+
+#[test]
+fn an_override_field_need_not_restate_its_type() {
+    let result = parse_text("class Savings extends Account {\n  override let rate = 5\n}");
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let overrides = &only_class(&result).overrides;
+    assert_eq!(overrides.len(), 1);
+    assert!(overrides[0].ty.is_none());
 }
 
 #[test]

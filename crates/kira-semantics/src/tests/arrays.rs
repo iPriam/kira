@@ -1,6 +1,6 @@
 //! Array analysis: literals, element-type inference, the two-member surface
 //! (`.append`/`.count`), index reads and writes, `for`-in, and the ownership
-//! and print refusals — the same diagnostics `kirac check` reports.
+//! and print refusals — the same diagnostics `kira check` reports.
 
 use super::{codes, diagnostics};
 

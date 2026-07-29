@@ -149,13 +149,22 @@ impl Analyzer<'_> {
         match self.tree.expr(target).clone() {
             Expr::Name { symbol, span } => {
                 let name = self.interner.resolve(symbol).to_owned();
-                let Some(local) = ctx.resolve(&name) else {
-                    self.emit(
-                        span,
-                        "KSEM023",
-                        format!("cannot assign to undefined name `{name}`"),
-                    );
-                    return None;
+                // A name written inside a closure body may belong to an
+                // enclosing frame, and a write is as much a use of it as a read
+                // — so the same capture path answers both. Without this, a
+                // closure assigning to a captured binding reported it undefined
+                // instead of capturing it.
+                let local = match self.resolve_capturing(ctx, &name, span) {
+                    crate::closures::Captured::Local(local) => local,
+                    crate::closures::Captured::Refused => return None,
+                    crate::closures::Captured::Absent => {
+                        self.emit(
+                            span,
+                            "KSEM023",
+                            format!("cannot assign to undefined name `{name}`"),
+                        );
+                        return None;
+                    }
                 };
                 // A moved-out local names no storage: whatever it held is gone.
                 // Assigning to the binding *itself* is the exception — `tree =
@@ -174,6 +183,14 @@ impl Analyzer<'_> {
                 if let Some(binding) = ctx.binding_span(local) {
                     let definition = kira_source::FileSpan::new(self.source, binding);
                     self.link(span, definition);
+                }
+                // A boxed `var` names the box, not the value: replacing the
+                // binding writes into the box, and writing *through* it reads
+                // the value out, writes the copy, and stores it back. See
+                // [`crate::cells`] for why that order is the semantics rather
+                // than an implementation choice.
+                if let Some(place) = self.cell_place(ctx, local, through_path, reinitializes) {
+                    return Some(place);
                 }
                 Some((
                     HirPlace {

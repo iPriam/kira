@@ -127,6 +127,16 @@ pub enum LlvmError {
          keep both sides on one engine"
     )]
     EnumAtSeam,
+    /// A value of the top type reached the hybrid seam.
+    ///
+    /// Not a size problem — an erased value is one word — but a reading one: the
+    /// seam's tag tells the far side how to read the payload, and `Any` says
+    /// only that some type was erased, which the far side cannot act on.
+    #[error(
+        "`Any` cannot cross the `@Native`/`@Runtime` boundary; an erased value \
+         has no type for the far side to read it back as"
+    )]
+    AnyAtSeam,
     /// The managed LLVM was built without the WebAssembly code generator.
     #[error(
         "the managed LLVM has no WebAssembly code generator; re-provision the \

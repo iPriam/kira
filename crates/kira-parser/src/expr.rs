@@ -393,6 +393,13 @@ impl Parser<'_> {
         let name = self.text_of(name_span).to_owned();
         let symbol = self.intern_span(name_span);
         self.bump();
+        // `Task { work(1, 2) }` spawns a deferred task. Its block holds one
+        // expression rather than a child list, so it is recognized before the
+        // content-block and struct-literal arms, both of which would read the
+        // body as something it is not.
+        if name == "Task" && self.at(TokenKind::LBrace) {
+            return self.parse_task_spawn(name_span);
+        }
         let type_args = if name == "nativeRecover" && self.at(TokenKind::Lt) {
             self.parse_call_type_args()
         } else {
@@ -433,6 +440,53 @@ impl Parser<'_> {
                 symbol,
                 span: name_span,
             })
+        }
+    }
+
+    /// Parses `Task { expression }`, with `Task` already consumed.
+    ///
+    /// The block holds exactly one expression. A second one is refused here
+    /// rather than silently dropped: a task body that ran only its first
+    /// statement would be a wrong answer, not a syntax error.
+    fn parse_task_spawn(&mut self, name_span: Span) -> ExprId {
+        let open = self.current().span;
+        self.bump(); // `{`
+        let body = if self.at(TokenKind::RBrace) {
+            self.error(
+                open,
+                "KPAR060",
+                "a `Task { … }` block holds the one expression the task defers",
+            );
+            self.tree.add_expr(Expr::Error { span: open })
+        } else {
+            self.parse_expr()
+        };
+        while self.eat(TokenKind::Semicolon) {}
+        if !self.at(TokenKind::RBrace) && !self.at_eof() {
+            self.error(
+                self.current().span,
+                "KPAR060",
+                "a `Task { … }` block holds one expression; write a function and \
+                 spawn a call to it for anything longer",
+            );
+            self.skip_to_close_brace();
+        }
+        self.expect(TokenKind::RBrace);
+        let span = Span::from_bounds(name_span.start, self.previous_end());
+        self.tree.add_expr(Expr::TaskSpawn { body, span })
+    }
+
+    /// Consumes tokens up to the `}` closing the current block.
+    fn skip_to_close_brace(&mut self) {
+        let mut depth = 0usize;
+        while !self.at_eof() {
+            match self.current_kind() {
+                TokenKind::LBrace => depth += 1,
+                TokenKind::RBrace if depth == 0 => return,
+                TokenKind::RBrace => depth -= 1,
+                _ => {}
+            }
+            self.bump();
         }
     }
 

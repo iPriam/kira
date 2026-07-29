@@ -51,7 +51,7 @@ without it pre-installed.
   any `kira_rt_*` signature changes.
 - **Stale runtime archive.** Remember that `cargo build -p kira-cli` refreshes
   that crate's rlib but **not** `kira-native-bridge`'s staticlib, so the
-  archive beside `kirac` can predate the compiler linking it. Use
+  archive beside `kira` can predate the compiler linking it. Use
   `cargo build --workspace` to cover both.
 
 ## Report what actually ran

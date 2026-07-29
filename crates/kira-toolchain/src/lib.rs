@@ -58,7 +58,7 @@ impl Channel {
 pub struct CurrentToolchain {
     pub channel: Channel,
     pub version: String,
-    /// The primary binary name the launcher executes (e.g. `kirac`).
+    /// The primary binary name the launcher executes (e.g. `kira`).
     pub primary: String,
 }
 
@@ -276,7 +276,7 @@ mod tests {
         let current = CurrentToolchain {
             channel: Channel::Release,
             version: "0.1.0".to_string(),
-            primary: "kirac".to_string(),
+            primary: "kira".to_string(),
         };
         let text = current.to_toml();
         let parsed = CurrentToolchain::parse_toml(&text).unwrap();
@@ -288,7 +288,7 @@ mod tests {
         assert!(CurrentToolchain::parse_toml("channel = \"release\"\n").is_err());
         assert!(
             CurrentToolchain::parse_toml(
-                "channel = \"nightly\"\nversion = \"1.0.0\"\nprimary = \"kirac\"\n"
+                "channel = \"nightly\"\nversion = \"1.0.0\"\nprimary = \"kira\"\n"
             )
             .is_err()
         );

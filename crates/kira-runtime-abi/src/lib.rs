@@ -19,12 +19,15 @@
 pub mod aggregate;
 pub mod bridge;
 pub mod c_storage;
+pub mod compiler;
 pub mod enum_payload;
+pub mod erased;
 pub mod execution;
 pub mod file_system;
 pub mod foreign;
 pub mod native_state;
 pub mod ownership;
+pub mod tasks;
 
 pub use aggregate::{
     ForeignAggregate, ForeignAggregateError, ForeignAggregateId, ForeignAggregates,
@@ -32,7 +35,12 @@ pub use aggregate::{
     scalar_layout,
 };
 pub use bridge::{BridgeData, BridgeValue, BridgeValueTag};
+pub use compiler::{
+    CheckDiagnostic, CheckFile, CheckPackage, CheckRequest, CheckSeverity, CheckWireError,
+    CompilerError, CompilerOp, DIAGNOSTIC_FIELDS, PackageChecker,
+};
 pub use enum_payload::EnumPayloadKind;
+pub use erased::ErasedKind;
 pub use execution::Execution;
 pub use file_system::{FileRequest, FileResponse, FileSystemError, FileSystemHost, FileSystemOp};
 pub use foreign::{
@@ -42,10 +50,12 @@ pub use foreign::{
     ForeignImport, ForeignResult, ForeignSignature, ForeignType, ForeignTypeSpec,
 };
 pub use native_state::{
-    NativeStateError, NativeStateHost, NativeStateStatus, NativeStateStore, NativeStateToken,
-    NativeStateTypeId, NativeStateValue, NativeStateValueTag,
+    NativeStateError, NativeStateHost, NativeStatePathStep, NativeStateStatus, NativeStateStore,
+    NativeStateToken, NativeStateTypeId, NativeStateValue, NativeStateValueTag, native_state_walk,
+    native_state_walk_mut,
 };
 pub use ownership::Ownership;
+pub use tasks::{TASK_SLOTS, TaskExecutor, TaskPrim, TaskTrap};
 
 /// The version of the `kira_rt_*` native runtime contract.
 ///
@@ -329,6 +339,70 @@ pub trait HostCapabilities {
         Err(NativeStateError::NoStateHost)
     }
 
+    /// Checks that a token names live state of this type, reading nothing.
+    ///
+    /// `nativeRecover` needs the type check and nothing else — it hands back a
+    /// handle, not a copy. The default answers by recovering, which deep-copies
+    /// the whole state and discards it: a host that owns its storage should
+    /// override this, or every recovery pays for the state's entire contents.
+    fn native_state_check(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+    ) -> Result<(), NativeStateError> {
+        self.native_state_recover(token, ty).map(|_| ())
+    }
+
+    /// Reads one value out of callback state, addressed by path.
+    ///
+    /// The default recovers the whole state and walks it, which is what
+    /// [`Self::native_state_recover`] costs. A host that owns its storage
+    /// should override this: reading one integer field is otherwise a deep copy
+    /// of everything the state holds, and a UI batch holding a glyph cache pays
+    /// that on every field access of every frame.
+    fn native_state_read(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+    ) -> Result<NativeStateValue, NativeStateError> {
+        let root = self.native_state_recover(token, ty)?;
+        native_state_walk(&root, path).cloned()
+    }
+
+    /// Writes one value into callback state, addressed by path.
+    ///
+    /// The default recovers, walks, writes, and replaces — two deep copies of
+    /// the whole state per field write. Overriding it is the difference between
+    /// a field assignment costing the state's size and costing its depth.
+    fn native_state_write(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+        value: NativeStateValue,
+    ) -> Result<(), NativeStateError> {
+        let mut root = self.native_state_recover(token, ty)?;
+        *native_state_walk_mut(&mut root, path)? = value;
+        self.native_state_replace(token, ty, root)
+    }
+
+    /// Appends one element to an array inside callback state, addressed by path.
+    fn native_state_append(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+        value: NativeStateValue,
+    ) -> Result<(), NativeStateError> {
+        let mut root = self.native_state_recover(token, ty)?;
+        match native_state_walk_mut(&mut root, path)? {
+            NativeStateValue::Array(elements) => elements.push(value),
+            _ => return Err(NativeStateError::PathMismatch),
+        }
+        self.native_state_replace(token, ty, root)
+    }
+
     /// Releases callback state exactly once.
     fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
         let _ = token;
@@ -348,6 +422,25 @@ pub trait HostCapabilities {
     fn file_system(&mut self, request: FileRequest<'_>) -> Result<FileResponse, FileSystemError> {
         let _ = request;
         Err(FileSystemError::NoFileSystemHost)
+    }
+
+    /// Checks a package set the program built in memory, answering with its
+    /// diagnostics.
+    ///
+    /// The default answers through the compiler the embedder installed with
+    /// [`compiler::install`], and refuses when it installed none. That is the
+    /// same arrangement [`Self::file_system`] has with
+    /// [`file_system::perform`] and it is what the VM's position in the
+    /// layering forces: the VM sits *below* the compiler and can never hold
+    /// one, so a build that contains a frontend has to hand it in. Every other
+    /// host — a browser tab, a test, a sandbox — refuses by name instead of
+    /// answering with an empty diagnostic list that would read as success.
+    ///
+    /// A package that does not compile is not an error here: its problems are
+    /// the answer. The error is for a host with no compiler at all, and for a
+    /// request that could not be read.
+    fn compiler(&mut self, request: &CheckRequest) -> Result<Vec<CheckDiagnostic>, CompilerError> {
+        compiler::perform(request)
     }
 }
 
@@ -399,6 +492,17 @@ mod tests {
         host.write_line("second");
         assert_eq!(host.lines(), ["first".to_owned(), "second".to_owned()]);
         assert_eq!(host.into_output(), "first\nsecond\n");
+    }
+
+    /// A host that was never given a compiler says so, rather than answering
+    /// "no diagnostics" — which a caller would read as "it compiled".
+    #[test]
+    fn host_capabilities_refuses_the_compiler_by_default() {
+        let mut host = CapturingHost::new();
+        assert_eq!(
+            host.compiler(&CheckRequest::default()),
+            Err(CompilerError::NoCompilerHost)
+        );
     }
 
     #[test]

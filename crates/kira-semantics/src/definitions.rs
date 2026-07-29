@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use kira_core::Interner;
+use kira_core::Names;
 use kira_source::{FileSpan, Span};
 use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::Item;
@@ -50,7 +50,7 @@ pub(crate) struct DeclSpans {
 
 impl DeclSpans {
     /// Indexes every type, field, and variant declaration in the tree.
-    pub(crate) fn collect(tree: &SyntaxTree, interner: &Interner) -> Self {
+    pub(crate) fn collect(tree: &SyntaxTree, interner: &Names) -> Self {
         let mut spans = Self::default();
         for (source, item) in tree.items_with_source() {
             match item {

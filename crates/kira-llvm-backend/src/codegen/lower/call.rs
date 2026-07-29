@@ -70,8 +70,18 @@ impl FunctionLowering<'_, '_> {
                     // Analysis rejects `print` of a raw pointer (an opaque
                     // foreign word has no pinned rendering) and `CString` is
                     // seam-only, so neither reaches a type-checked program.
-                    Type::RawPtr | Type::CString | Type::NativeState(_) => {
+                    Type::RawPtr
+                    | Type::CString
+                    | Type::NativeState(_)
+                    | Type::Task(_)
+                    | Type::Cell(_) => {
                         return Err(LlvmError::Unsupported("a print of a raw pointer"));
+                    }
+                    // Analysis rejects `print` of an erased value for the same
+                    // reason it rejects a struct or an array: no rendering is
+                    // pinned, and here there is not even a type to pin one for.
+                    Type::Any => {
+                        return Err(LlvmError::Unsupported("a print of an erased value"));
                     }
                     Type::Void | Type::Error => {
                         return Err(LlvmError::Unsupported("printing a value with no type"));

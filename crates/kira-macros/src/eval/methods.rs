@@ -221,6 +221,10 @@ fn member(value: &Value, name: &str) -> Result<Value, EvalError> {
                 .map(|field| Value::Field(Box::new(field.clone())))
                 .collect(),
         )),
+        // The family a construct-backed declaration is written in, as a
+        // string, so a macro can select declarations by family without the
+        // compiler knowing any family by name. Empty for every other form.
+        (Value::Declaration(declaration), "family") => Ok(Value::Str(declaration.family.clone())),
         (Value::Declaration(declaration), "syntax") => {
             Ok(Value::Syntax(declaration.syntax.clone()))
         }

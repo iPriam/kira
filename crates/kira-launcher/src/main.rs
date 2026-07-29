@@ -1,4 +1,5 @@
-//! The `kira` launcher: resolves the installed toolchain and dispatches to kirac.
+//! The `kira` launcher: resolves the installed toolchain and dispatches to its
+//! primary binary, the compiler CLI that `kira-cli` builds as `kira`.
 //!
 //! Standalone tool crate (outside the layered package graph). Resolution reads
 //! `<kira-home>/toolchains/current.toml` (see `kira-toolchain`) and executes the

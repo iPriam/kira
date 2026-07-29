@@ -247,9 +247,10 @@ mod tests {
 
     /// Expands every call in `program` against the macros `program` declares.
     fn expand_all(program: &str) -> (String, Vec<kira_diagnostics::Diagnostic>) {
-        let files = vec![Lexed::new(SourceId::new(0), program)];
+        let files = [Lexed::new(SourceId::new(0), program)];
         let mut reporter = Reporter::new();
-        let (registry, _) = registry::collect(&files, &mut reporter);
+        let mut registry = registry::Registry::default();
+        registry.absorb(&registry::collect_file(&files[0], &mut reporter));
         let file = &files[0];
         let mut gensym = Gensym::new();
         let mut buffer = crate::edits::EditBuffer::new();

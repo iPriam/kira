@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use kira_core::Interner;
+use kira_core::Names;
 use kira_diagnostics::{Diagnostic, Label, Severity};
 use kira_semantics_model::hir::{FuncId, HirExprId, HirFunction, HirProgram};
 use kira_semantics_model::{EnumId, OwnershipMode, StructId, Type};
@@ -94,7 +94,7 @@ impl FieldDefault {
 /// split, which is why the kind is a frontend input rather than a backend flag.
 pub fn analyze(
     tree: &SyntaxTree,
-    interner: &Interner,
+    interner: &Names,
     modules: &[(String, SourceId)],
     build_kind: BuildKind,
 ) -> Analysis {
@@ -114,7 +114,7 @@ pub(crate) struct Analyzer<'a> {
     /// Every file's imports, keyed by file.
     pub(crate) imports: crate::imports::ImportTable,
     pub(crate) tree: &'a SyntaxTree,
-    pub(crate) interner: &'a Interner,
+    pub(crate) interner: &'a Names,
     sigs: Vec<FuncSig>,
     pub(crate) sig_index: HashMap<String, FuncId>,
     /// Whether each callable, by [`FuncId`], is a method that mutates its
@@ -356,7 +356,7 @@ impl Analyzer<'_> {
 impl<'a> Analyzer<'a> {
     fn new(
         tree: &'a SyntaxTree,
-        interner: &'a Interner,
+        interner: &'a Names,
         modules: &[(String, SourceId)],
         build_kind: BuildKind,
     ) -> Self {
@@ -644,12 +644,19 @@ impl<'a> Analyzer<'a> {
                 self.program.main = self.sig_index.get(&name).copied();
             }
             // A library has no entrypoint by definition, so its absence is not
-            // an error and `program.main` stays `None`.
-            (BuildKind::Library, None) => {}
+            // an error and `program.main` stays `None`. A test run is the same
+            // about absence, and unlike a library it accepts one when written.
+            (BuildKind::Library | BuildKind::Test, None) => {}
+            (BuildKind::Test, Some((name, no_params, name_span))) => {
+                if !no_params {
+                    self.emit(name_span, "KSEM012", "`@Main` must take no parameters");
+                }
+                self.program.main = self.sig_index.get(&name).copied();
+            }
             (BuildKind::Library, Some((_, _, name_span))) => {
                 self.emit(
                     name_span,
-                    "KSEM158",
+                    "KSEM255",
                     "a library package cannot declare `@Main`: a library is \
                      entered by its consumer, not run",
                 );
@@ -666,6 +673,17 @@ impl<'a> Analyzer<'a> {
         let sig_return = self.sigs[id.0 as usize].return_type;
         self.current_execution = function.execution;
         let mut ctx = FnCtx::new(sig_return);
+        // Which names this body's closures mention, decided from the syntax
+        // before anything is analyzed: a `var` among them is boxed where it is
+        // declared, which is earlier than the capture that needs the box is
+        // discovered. See `crate::closures::captures`.
+        ctx.set_closure_mentions(std::rc::Rc::new(
+            crate::closures::captures::names_closures_mention(
+                self.tree,
+                self.interner,
+                &function.body,
+            ),
+        ));
         // A method's receiver is local 0, named `self`. A non-mutating method
         // receives it as an immutable copy — writing to it would change nothing
         // the caller could see. A mutating method receives it as a mutable,
@@ -723,6 +741,7 @@ impl<'a> Analyzer<'a> {
             locals: ctx.locals,
             body,
             is_main: function.is_main,
+            is_async: function.is_async,
             execution: function.execution,
             mutates_self: self.mutates_self(id),
             name_span: function.name_span,

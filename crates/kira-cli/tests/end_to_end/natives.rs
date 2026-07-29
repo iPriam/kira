@@ -11,7 +11,7 @@
 //! and hybrid engines, and one API over three engines is the claim this whole
 //! feature is measured on.
 
-use crate::{LIBRARY_SOURCE, kirac, run_source, write_package};
+use crate::{LIBRARY_SOURCE, kira, run_source, write_package};
 
 /// A library with one `@Native` function among ordinary ones.
 const NATIVE_LIBRARY: &str = "\
@@ -23,7 +23,7 @@ function fast(value: Int) -> Int { return value * 2 }";
 #[test]
 fn a_native_function_does_not_stop_a_vm_library_building() {
     let path = write_package(".Library", NATIVE_LIBRARY);
-    let output = kirac(&["build", "--backend", "vm", path.to_str().unwrap()]);
+    let output = kira(&["build", "--backend", "vm", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
     assert!(
         output.status.success(),
@@ -59,7 +59,7 @@ fn a_library_that_exports_nothing_still_builds() {
     // The refusal is scoped to a declared export, not to libraries: step 0's
     // artifact must keep working.
     let path = write_package(".Library", LIBRARY_SOURCE);
-    let output = kirac(&["build", "--backend", "vm", path.to_str().unwrap()]);
+    let output = kira(&["build", "--backend", "vm", path.to_str().unwrap()]);
     let _ = std::fs::remove_dir_all(path.parent().expect("package directory"));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");

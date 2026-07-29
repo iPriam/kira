@@ -42,6 +42,11 @@ impl FnCompiler<'_> {
                     self.code.push(Instruction::StorePlace { slot, path });
                 }
             }
+            IrStmt::CellSet { slot, value } => {
+                self.compile_expr(*value)?;
+                let slot = self.local_slot(*slot)?;
+                self.code.push(Instruction::CellSet(slot));
+            }
             IrStmt::Return { value } => match value {
                 Some(expr) => {
                     self.compile_expr(*expr)?;

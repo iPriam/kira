@@ -203,6 +203,7 @@ fn the_manifest_records_a_library_as_having_no_entrypoint() {
         "uifoundation.kbc",
         "libuifoundation.dylib",
         &[],
+        0,
     )
     .expect("describe");
     assert_eq!(described.entry, None);
@@ -228,6 +229,7 @@ fn the_manifest_records_the_symbol_the_backend_emitted_rather_than_deriving_one(
         "uifoundation.kbc",
         "libuifoundation.dylib",
         &[(1, "kira_native_fn_1".to_owned())],
+        0,
     )
     .expect("describe");
     assert_eq!(described.functions[0].exported_name, None);
@@ -253,6 +255,7 @@ fn the_manifest_round_trips_through_its_own_bytes() {
         "uifoundation.kbc",
         "libuifoundation.dylib",
         &[],
+        0,
     )
     .expect("describe");
     let bytes = described.to_bytes();
@@ -326,6 +329,7 @@ fn every_type_a_v1_signature_can_have_gets_a_bridge_tag() {
         "demo.kbc",
         "libdemo.dylib",
         &[],
+        0,
     )
     .expect("describe");
     let tags: Vec<_> = described.functions[0]
@@ -365,7 +369,7 @@ fn the_error_type_is_refused_rather_than_encoded() {
         Arena::new(),
         Vec::new(),
     );
-    let error = manifest(&ir, "demo", "demo.kbc", "libdemo.dylib", &[])
+    let error = manifest(&ir, "demo", "demo.kbc", "libdemo.dylib", &[], 0)
         .expect_err("the error type cannot be described");
     assert!(
         matches!(

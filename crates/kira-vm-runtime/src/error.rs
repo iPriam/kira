@@ -8,7 +8,8 @@
 
 use kira_bytecode::ModuleValidateError;
 use kira_runtime_abi::{
-    FileSystemError, ForeignCallError, ForeignTypeSpec, NativeCallError, NativeStateError,
+    CompilerError, FileSystemError, ForeignCallError, ForeignTypeSpec, NativeCallError,
+    NativeStateError,
 };
 
 /// A trap raised while executing bytecode.
@@ -98,6 +99,14 @@ pub enum VmError {
     /// is a build-time mistake surfacing at run time.
     #[error("file-system operation failed: {0}")]
     FileSystem(FileSystemError),
+    /// A `Compiler` instruction reached a host with no compiler.
+    ///
+    /// Not a package that failed to compile — that comes back as diagnostics the
+    /// program reads. This is a host that cannot even be asked, which is what
+    /// every embedded VM is: the VM sits below the compiler and can hold one
+    /// only if its embedder hands it one.
+    #[error("compiler operation failed: {0}")]
+    Compiler(CompilerError),
     /// A Kira array held more elements than the inline C array of a
     /// `@FFI.Array` member reserves.
     ///
@@ -116,8 +125,19 @@ pub enum VmError {
     #[error("native callback state failed: {0}")]
     NativeState(NativeStateError),
     /// A callback-state instruction received a value it cannot box or name.
-    #[error("native callback-state value has the wrong runtime shape")]
-    NativeStateValueMismatch,
+    ///
+    /// `operation` names the instruction that refused it, because the four
+    /// callback-state instructions fail for different reasons — storing a value
+    /// no box can hold, recovering through something that is not a token — and
+    /// a program hitting this needs to know which one it was.
+    #[error("{operation} cannot take {kind}")]
+    NativeStateValueMismatch {
+        /// The callback-state instruction that refused the value.
+        operation: NativeStateOperation,
+        /// The refused shape as a noun phrase the message reads as an object
+        /// ("a void value", "an array still shared with another value").
+        kind: &'static str,
+    },
     /// A foreign argument did not have the exact-width type its signature named.
     ///
     /// Analysis checks every foreign call's argument types, so this is a
@@ -235,6 +255,14 @@ pub enum VmError {
     /// A tag instruction found something other than an enum.
     #[error("read a tag from a value that is not an enum")]
     NotAnEnum,
+    /// A cell instruction found a slot holding something other than a cell.
+    ///
+    /// The analyzer boxes a `var` at its declaration and rewrites every read
+    /// and write of it in the same pass, so a slot a cell instruction names
+    /// always holds one — reaching this is a compiler that boxed a binding on
+    /// one path and not another, never a program that merely type-checked.
+    #[error("read or wrote a capture cell through a slot that does not hold one")]
+    NotACell,
     /// A payload projection found a variant carrying no payload.
     ///
     /// A `match` only projects inside the arm its tag test selected, so the
@@ -308,4 +336,36 @@ pub enum VmError {
         /// ("an array result", "this argument").
         kind: &'static str,
     },
+    /// A task primitive refused: a join that can never succeed, or a handle
+    /// naming no task.
+    ///
+    /// The trap set is the executor's, defined once in `kira-runtime-abi`, so
+    /// the VM and native code agree on *which* programs trap rather than each
+    /// deciding for itself.
+    #[error("task trap: {0}")]
+    Task(#[from] kira_runtime_abi::TaskTrap),
+}
+
+/// Which callback-state instruction refused a value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeStateOperation {
+    /// `nativeState(...)`: the value has no boxed form the host can hold.
+    Store,
+    /// `nativeUserData(...)`: the value is not callback state.
+    UserData,
+    /// `nativeRecover<T>(...)`: the value is not a callback-state token.
+    Recover,
+    /// Freeing callback state: the value is neither state nor a token.
+    Free,
+}
+
+impl std::fmt::Display for NativeStateOperation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Store => "nativeState",
+            Self::UserData => "nativeUserData",
+            Self::Recover => "nativeRecover",
+            Self::Free => "free",
+        })
+    }
 }

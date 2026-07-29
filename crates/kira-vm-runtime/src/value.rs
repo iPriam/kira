@@ -42,6 +42,14 @@ pub struct ArrayId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EnumId(u32);
 
+/// A handle to a heap-allocated capture cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CellId(u32);
+
+/// A handle to a heap-allocated erased (`Any`) value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ErasedId(u32);
+
 /// A runtime value on the operand stack or in a local slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value {
@@ -59,6 +67,18 @@ pub enum Value {
     Array(ArrayId),
     /// A handle to a heap enum value.
     Enum(EnumId),
+    /// A handle to an erased value: what a value becomes on crossing into
+    /// `Any`, carrying the type it had on the way in.
+    Erased(ErasedId),
+    /// A handle to a capture cell: the shared, mutable storage a `var` moves
+    /// into when a closure captures it.
+    ///
+    /// The one value here with reference semantics. Copying one takes another
+    /// hold on the same box — deliberately, because a closure and the frame
+    /// that wrote the `var` have to see each other's writes — and the last hold
+    /// releases what is inside. Everything else on this heap is a value, and
+    /// a cell being the exception is the whole of the feature.
+    Cell(CellId),
     /// An opaque, target-width pointer word from a foreign (`@FFI.Extern`) call.
     ///
     /// Inline and `Copy` like the other scalars: it owns no heap storage, and
@@ -105,6 +125,42 @@ enum Object {
         /// The payload value, absent for a payload-less variant.
         payload: Option<Value>,
         /// How many values hold this object; the payload goes with the last.
+        shares: u32,
+    },
+    /// An erased value: the type it had before `Any` took it away, and the
+    /// value itself.
+    ///
+    /// Shared and never written through, exactly as an enum object is, and for
+    /// the same reason: nothing may write through an `Any`, so a copy needs no
+    /// object of its own.
+    ///
+    /// The VM would not need a box here to *carry* an erased value — its
+    /// values are tagged already, which is why erasure emitted no instruction
+    /// before this existed. It needs one to *compare* them. A struct object on
+    /// this heap is a tuple of values with no record of which declaration built
+    /// it, so without the id written here `Point(1, 2)` and `Rect(1, 2)` would
+    /// compare equal on the VM and could not compare at all on native. See
+    /// [`kira_semantics_model::ErasedTypeId`].
+    Erased {
+        /// The [`kira_semantics_model::ErasedTypeId`] word of the type that
+        /// crossed in.
+        type_id: u64,
+        /// The value that crossed in.
+        payload: Value,
+        /// How many values hold this object; the payload goes with the last.
+        shares: u32,
+    },
+    /// A capture cell: one value, shared by every holder, and written through.
+    ///
+    /// The one *mutable* shared object on this heap. An enum is shared and
+    /// never written through, and an array's elements are shared only until a
+    /// writer buys its own; a cell is shared precisely so that a write through
+    /// one holder is visible through the others.
+    Cell {
+        /// What the cell holds. Replaced whole by a write, never edited in
+        /// place — see [`Heap::cell_set`].
+        payload: Value,
+        /// How many values hold this box; the payload goes with the last.
         shares: u32,
     },
 }
@@ -368,6 +424,130 @@ impl Heap {
         }
     }
 
+    /// Boxes `payload` as an erased value of type `type_id`.
+    ///
+    /// The payload is taken rather than copied: the operand stack hands over
+    /// ownership, exactly as it does for an enum's payload.
+    pub fn alloc_erased(&mut self, type_id: u64, payload: Value) -> ErasedId {
+        ErasedId(self.alloc_object(Object::Erased {
+            type_id,
+            payload,
+            shares: 1,
+        }))
+    }
+
+    /// The type id of the erased value behind a handle, or `None` when the
+    /// handle does not name one.
+    pub fn erased_type_id(&self, id: ErasedId) -> Option<u64> {
+        match self.slots.get(id.0 as usize) {
+            Some(Some(Object::Erased { type_id, .. })) => Some(*type_id),
+            _ => None,
+        }
+    }
+
+    /// The value behind an erasure, without copying it.
+    ///
+    /// A reader that only compares wants neither a copy nor a `&mut`, and a
+    /// [`Value`] is `Copy` — the same arrangement [`Heap::enum_payload_ref`]
+    /// uses, and for the same reason.
+    fn erased_payload_ref(&self, id: ErasedId) -> Option<Value> {
+        match self.slots.get(id.0 as usize) {
+            Some(Some(Object::Erased { payload, .. })) => Some(*payload),
+            _ => None,
+        }
+    }
+
+    /// Releases one hold on an erasure, dropping what it holds with the last.
+    ///
+    /// Bounded by the value's nesting depth, exactly as [`Heap::free_enum`] is.
+    pub fn free_erased(&mut self, id: ErasedId) {
+        // Another value still reads this object, so nothing it owns goes here.
+        if let Some(Some(Object::Erased { shares, .. })) = self.slots.get_mut(id.0 as usize)
+            && *shares > 1
+        {
+            *shares -= 1;
+            return;
+        }
+        let taken = match self.slots.get_mut(id.0 as usize) {
+            Some(slot @ Some(Object::Erased { .. })) => slot.take(),
+            _ => None,
+        };
+        let Some(Object::Erased { payload, .. }) = taken else {
+            return;
+        };
+        self.freed += 1;
+        self.free_list.push(id.0);
+        self.drop_value(payload);
+    }
+
+    /// Boxes `payload` into a fresh capture cell, returning its handle.
+    ///
+    /// The payload is taken rather than copied: whatever produced it (the
+    /// operand stack) hands over ownership, exactly as an enum's payload is
+    /// handed over.
+    pub fn alloc_cell(&mut self, payload: Value) -> CellId {
+        CellId(self.alloc_object(Object::Cell { payload, shares: 1 }))
+    }
+
+    /// An **owned** copy of what a capture cell holds.
+    ///
+    /// `None` when the handle does not name a cell. The copy answers to
+    /// [`Heap::copy_value`], so the caller owns what it gets back and the box
+    /// keeps owning its own: a later write through the cell cannot free a value
+    /// a reader is still holding.
+    pub fn cell_get(&mut self, id: CellId) -> Option<Value> {
+        let payload = match self.slots.get(id.0 as usize) {
+            Some(Some(Object::Cell { payload, .. })) => *payload,
+            _ => return None,
+        };
+        Some(self.copy_value(payload))
+    }
+
+    /// Replaces what a capture cell holds, dropping what was there, and reports
+    /// whether the handle named one.
+    ///
+    /// **One step.** The old payload is taken out of the box *before* it is
+    /// dropped, so nothing can observe the box holding storage that is being
+    /// released; the new value is in place before the drop runs. A drop
+    /// followed by a store would leave a freed handle readable in between, and
+    /// a trap in that window would leave it there for good.
+    pub fn cell_set(&mut self, id: CellId, value: Value) -> bool {
+        let previous = match self.slots.get_mut(id.0 as usize) {
+            Some(Some(Object::Cell { payload, .. })) => std::mem::replace(payload, value),
+            _ => return false,
+        };
+        self.drop_value(previous);
+        true
+    }
+
+    /// Releases one hold on a capture cell, dropping its payload with the last.
+    ///
+    /// Bounded by the program's nesting depth for every value a cell can hold
+    /// *except* one: a cell holding a closure that captures the same cell is a
+    /// genuine reference cycle, and share counts cannot collect it. That leaks
+    /// the box and its payload — memory-safe, never freed twice, never freed
+    /// early — and is recorded rather than defended against, because detecting
+    /// it needs a tracing collector this runtime does not have.
+    pub fn free_cell(&mut self, id: CellId) {
+        // Another value still holds this box, so nothing it owns goes here.
+        if let Some(Some(Object::Cell { shares, .. })) = self.slots.get_mut(id.0 as usize)
+            && *shares > 1
+        {
+            *shares -= 1;
+            return;
+        }
+        let taken = match self.slots.get_mut(id.0 as usize) {
+            Some(slot @ Some(Object::Cell { .. })) => slot.take(),
+            _ => None,
+        };
+        let Some(Object::Cell { payload, .. }) = taken else {
+            return;
+        };
+        self.freed += 1;
+        self.free_list.push(id.0);
+        self.drop_value(payload);
+    }
+
     fn alloc_object(&mut self, object: Object) -> u32 {
         self.allocated += 1;
         if let Some(index) = self.free_list.pop() {
@@ -478,6 +658,8 @@ impl Heap {
             Value::Struct(id) => self.free_struct(id),
             Value::Array(id) => self.free_array(id),
             Value::Enum(id) => self.free_enum(id),
+            Value::Erased(id) => self.free_erased(id),
+            Value::Cell(id) => self.free_cell(id),
             _ => {}
         }
     }
@@ -535,7 +717,130 @@ impl Heap {
                 }
                 Value::Enum(id)
             }
+            // A hold on the same object, for the same reason an enum takes one:
+            // nothing may write through an `Any`, so a second holder can
+            // observe nothing a deep copy would have hidden.
+            Value::Erased(id) => {
+                if let Some(Some(Object::Erased { shares, .. })) = self.slots.get_mut(id.0 as usize)
+                {
+                    *shares += 1;
+                }
+                Value::Erased(id)
+            }
+            // A hold on the same box, and here the sharing is *observable* —
+            // which is the point. A closure and the frame that declared the
+            // `var` must see each other's writes, so a copy of a cell must not
+            // be independent. This is the one arm of this function that does
+            // not preserve value semantics, because the type it copies does not
+            // have them.
+            Value::Cell(id) => {
+                if let Some(Some(Object::Cell { shares, .. })) = self.slots.get_mut(id.0 as usize) {
+                    *shares += 1;
+                }
+                Value::Cell(id)
+            }
             scalar => scalar,
+        }
+    }
+
+    /// Whether two values are structurally equal.
+    ///
+    /// What `EqAny` answers. Handles are followed rather than compared: two
+    /// strings are equal when their bytes are, two structs when every field
+    /// pair is, two arrays when they have the same length and every element
+    /// pair is, and two enums when their tags and payloads are. So a value and
+    /// an independent copy of it compare equal, which is the whole point —
+    /// nothing that reaches here can rely on having been the same object.
+    ///
+    /// Values of different kinds are unequal rather than an error. `EqAny` is
+    /// the one comparison whose operands are not known to agree statically, and
+    /// a caller asking whether an `Int` equals a `String` is asking a question
+    /// with an answer.
+    ///
+    /// `Float` compares as `EqFloat` does, on the bit-level `==` of `f64`, so
+    /// `NaN` is equal to nothing including itself. Making erasure the one place
+    /// where `NaN` compares equal would be a worse surprise than the IEEE rule.
+    ///
+    /// Bounded by the value's nesting depth for the same reason
+    /// [`Heap::free_struct`] is: a payload is a value analysis resolved against
+    /// types that already resolve, so a cycle is unrepresentable.
+    pub fn values_equal(&self, left: Value, right: Value) -> bool {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::RawPtr(a), Value::RawPtr(b)) => a == b,
+            (Value::Void, Value::Void) => true,
+            (Value::Str(a), Value::Str(b)) => self.get(a) == self.get(b),
+            (Value::Struct(a), Value::Struct(b)) => {
+                let (left, right) = (self.fields(a), self.fields(b));
+                left.len() == right.len()
+                    && left
+                        .iter()
+                        .zip(right)
+                        .all(|(&one, &other)| self.values_equal(one, other))
+            }
+            (Value::Array(a), Value::Array(b)) => {
+                let (left, right) = (self.elements(a), self.elements(b));
+                left.len() == right.len()
+                    && left
+                        .iter()
+                        .zip(right)
+                        .all(|(&one, &other)| self.values_equal(one, other))
+            }
+            // The arm `EqAny` actually reaches, and the only one that consults
+            // a nominal identity. Once the two ids agree, both sides are known
+            // to be the same Kira type, which is what makes the structural
+            // walk below sound: a `Point`'s fields are never read as a
+            // `Rect`'s. Ids differing is an ordinary `false`.
+            (Value::Erased(a), Value::Erased(b)) => {
+                self.erased_type_id(a) == self.erased_type_id(b)
+                    && match (self.erased_payload_ref(a), self.erased_payload_ref(b)) {
+                        (Some(one), Some(other)) => self.values_equal(one, other),
+                        _ => false,
+                    }
+            }
+            (Value::Enum(a), Value::Enum(b)) => {
+                self.enum_tag(a) == self.enum_tag(b)
+                    && match (self.enum_payload_ref(a), self.enum_payload_ref(b)) {
+                        (Some(one), Some(other)) => self.values_equal(one, other),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
+            // A cell has reference semantics, so identity *is* its equality —
+            // two cells with equal contents are still two places to write. It
+            // cannot reach here through `EqAny` regardless: a cell does not
+            // erase into `Any` (`Type::assignable_to`).
+            (Value::Cell(a), Value::Cell(b)) => a == b,
+            // Opaque handles into a host's storage. This runtime cannot read
+            // what is behind one, so identity is the only honest answer, and
+            // neither erases into `Any` either.
+            (Value::NativeState(a), Value::NativeState(b)) => a == b,
+            (
+                Value::NativeView {
+                    token: a,
+                    type_id: a_ty,
+                },
+                Value::NativeView {
+                    token: b,
+                    type_id: b_ty,
+                },
+            ) => a == b && a_ty == b_ty,
+            _ => false,
+        }
+    }
+
+    /// The payload of the enum behind a handle, without copying it.
+    ///
+    /// [`Heap::enum_payload`] hands back an owned copy because its callers take
+    /// the payload away from the box. A reader that only compares wants neither
+    /// the copy nor the `&mut`, and a `Value` is `Copy`, so the handle comes
+    /// back as-is and stays owned by the box.
+    fn enum_payload_ref(&self, id: EnumId) -> Option<Value> {
+        match self.slots.get(id.0 as usize) {
+            Some(Some(Object::Enum { payload, .. })) => *payload,
+            _ => None,
         }
     }
 }

@@ -1,7 +1,7 @@
-//! `kirac live`: what the verb was asked for, and how a bundle gets built.
+//! `kira live`: what the verb was asked for, and how a bundle gets built.
 //!
 //! ```text
-//! kirac live [runner] <file> [--backend vm|hybrid] [--watch] [--quit-after 5s]
+//! kira live [runner] <file> [--backend vm|hybrid] [--watch] [--quit-after 5s]
 //! ```
 //!
 //! The session itself — the server, the runner process, the watching, the
@@ -56,7 +56,7 @@ impl LiveBackend {
     }
 }
 
-/// What a `kirac live` invocation asked for.
+/// What a `kira live` invocation asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveOptions {
     /// The runner to run on.
@@ -74,7 +74,7 @@ pub struct LiveOptions {
     pub quit_after: Option<Duration>,
 }
 
-/// A usage error in a `kirac live` invocation.
+/// A usage error in a `kira live` invocation.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LiveOptionsError {
     /// No program was named.
@@ -100,10 +100,10 @@ pub enum LiveOptionsError {
 }
 
 impl LiveOptions {
-    /// Parses `kirac live`'s arguments.
+    /// Parses `kira live`'s arguments.
     ///
     /// The first positional is a runner if it names one and a path otherwise, so
-    /// `kirac live ios` is the iOS runner while `kirac live ./ios` is a path.
+    /// `kira live ios` is the iOS runner while `kira live ./ios` is a path.
     /// The distinction is made on shape, not on what happens to exist on disk:
     /// a path-looking argument stays a path even when nothing is there, so the
     /// error says the file is missing rather than that the runner is unknown.
@@ -236,7 +236,7 @@ pub enum LiveError {
     ///
     /// The most likely cause by far is a `cargo build -p kira-cli`, which builds
     /// this binary and no other: cargo builds a dependency's lib target, never
-    /// its `[[bin]]`, so the runner is only beside `kirac` after a workspace
+    /// its `[[bin]]`, so the runner is only beside `kira` after a workspace
     /// build. Saying so beats leaving someone to discover it.
     #[error(
         "could not start the `{runner}` runner client at `{path}`: {source}\n\

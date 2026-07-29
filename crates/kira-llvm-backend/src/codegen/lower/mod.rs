@@ -16,7 +16,10 @@
 //! [`stmt`] for statements and control flow, [`expr`] for expressions and
 //! operators, and [`call`] for calls, including the crossing into the VM half.
 
+mod boxes;
 mod call;
+mod cells;
+mod compiler;
 mod expr;
 mod file_system;
 mod foreign;
@@ -186,11 +189,23 @@ impl<'a> Codegen<'a> {
                 // its first store, exactly as a `String`'s null handle is. An
                 // enum handle is the same: `kira_rt_enum_free` treats null as
                 // nothing to free.
-                Type::String | Type::Array(_) | Type::Enum(_) => LLVMConstPointerNull(llvm_type),
+                // An `Any` slot is the same null handle for the same reason: its
+                // box *is* an enum box, so `kira_rt_enum_free` reads null as
+                // nothing to free and a slot is reclaimable before its first
+                // store.
+                // A fresh cell slot holds the null handle too:
+                // `kira_rt_cell_free` reads null as nothing to free, so a slot
+                // is reclaimable before the `CellNew` that fills it — which is
+                // what a slot inside a branch that never ran needs.
+                Type::String | Type::Array(_) | Type::Enum(_) | Type::Any | Type::Cell(_) => {
+                    LLVMConstPointerNull(llvm_type)
+                }
                 // A fresh `RawPtr` slot holds the null pointer word (zero), the
                 // same value the VM initializes a `Value::RawPtr` slot to. It
                 // owns nothing, so no first-store special case is needed.
-                Type::RawPtr | Type::NativeState(_) => LLVMConstInt(llvm_type, 0, 0),
+                Type::RawPtr | Type::NativeState(_) | Type::Task(_) => {
+                    LLVMConstInt(llvm_type, 0, 0)
+                }
                 // `CString` is seam-only and never names a local slot.
                 Type::CString => {
                     return Err(LlvmError::Unsupported(

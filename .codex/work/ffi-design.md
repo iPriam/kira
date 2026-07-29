@@ -17,7 +17,7 @@ about the Kira/Kira boundary and does not touch this.
 
 `CallNative` already sets the precedent, and FFI copies it: **the VM performs no
 call itself.** It hands the embedder safe Rust values through
-`HostCapabilities` and pushes back what returns. For FFI the host — `kirac`, the
+`HostCapabilities` and pushes back what returns. For FFI the host — `kira`, the
 runner — does the `dlopen`/libffi work through `kira-dynamic-ffi`. "Handled by
 Kira" is satisfied by Kira's own host doing it; it is the same path `print`
 already takes.

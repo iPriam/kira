@@ -1,9 +1,9 @@
-//! End-to-end C-FFI on the built `kirac`: a real VM foreign call through a
+//! End-to-end C-FFI on the built `kira`: a real VM foreign call through a
 //! generated adapter sidecar, and the typed diagnostics a misdeclared package
 //! gets.
 //!
 //! The sidecar call is the one that proves the VM path is not a smoke surface:
-//! `kirac run --backend vm` builds a foreign-adapter sidecar, loads it through a
+//! `kira run --backend vm` builds a foreign-adapter sidecar, loads it through a
 //! native-capable host, and answers `call_foreign` out of it — the VM itself
 //! still links and `dlopen`s nothing. The output is Kira-produced, computed by
 //! real C symbols reached through the generated adapters.
@@ -21,7 +21,7 @@ pub(crate) fn scratch(tag: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "kirac_e2e_ffi_{tag}_{}_{unique}",
+        "kira_e2e_ffi_{tag}_{}_{unique}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
@@ -91,12 +91,12 @@ triple = "aarch64-linux-gnu"
 staticLib = "lib/libffifixture.a"
 "#;
 
-/// Runs `kirac run` with `args` and returns its output.
+/// Runs `kira run` with `args` and returns its output.
 fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_kirac"))
+    Command::new(env!("CARGO_BIN_EXE_kira"))
         .args(args)
         .output()
-        .expect("run kirac")
+        .expect("run kira")
 }
 
 #[test]

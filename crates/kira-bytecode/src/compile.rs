@@ -16,6 +16,7 @@ use kira_ir::{IrBinOp, IrProgram, IrUnOp};
 mod error;
 mod expression;
 mod function;
+mod widen;
 
 pub use error::CompileError;
 
@@ -58,6 +59,11 @@ pub fn compile_hybrid(program: &IrProgram) -> Result<Module, CompileError> {
 fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, CompileError> {
     let mut strings = StringPool::default();
     let mut functions = Vec::with_capacity(program.functions.len());
+    let function_count =
+        u32::try_from(program.functions.len()).map_err(|_| CompileError::TooManyFunctions {
+            count: program.functions.len(),
+        })?;
+    let mut widens = widen::WidenHelpers::new(function_count);
     for (index, function) in program.functions.iter().enumerate() {
         let execution = engines.get(index).copied().unwrap_or(Execution::Runtime);
         let param_count =
@@ -81,6 +87,7 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
                 strings: &mut strings,
                 engines,
                 code: Vec::new(),
+                widens: &mut widens,
                 loops: Vec::new(),
             };
             compiler.compile_body(&function.body)?;
@@ -98,6 +105,24 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
             code,
         });
     }
+    // The helpers go last, keeping every index a call site was compiled with.
+    // Emitting one may register another, so this drains a worklist rather than
+    // walking a fixed set.
+    widens.emit_pending(program)?;
+    for (index, code) in widens.into_protos() {
+        debug_assert_eq!(index as usize, functions.len());
+        functions.push(FuncProto {
+            name: widen::HELPER_NAME.to_owned(),
+            // One parameter — the value being carried — and no other local.
+            param_count: 1,
+            local_count: 1,
+            // A helper is bytecode wherever it is called from: the native half
+            // of a hybrid build has its own leaf and never calls this one.
+            execution: Execution::Runtime,
+            code,
+        });
+    }
+
     Ok(Module {
         functions,
         main: program.main,
@@ -144,6 +169,12 @@ struct FnCompiler<'a> {
     /// call instructions it is emitting.
     engines: &'a [Execution],
     code: Vec<Instruction>,
+    /// The synthesized widen helpers, shared by every function being compiled.
+    ///
+    /// Shared rather than per-function because a helper is a module-level
+    /// object: two functions widening the same pair call one helper, and its
+    /// index has to mean the same thing in both.
+    widens: &'a mut widen::WidenHelpers,
     /// The loops enclosing the statement being compiled, innermost last.
     ///
     /// A `break`/`continue` acts on the innermost, so it reads the top of this
@@ -185,6 +216,7 @@ fn binary_instruction(op: IrBinOp) -> Result<Instruction, CompileError> {
         IrBinOp::SubFloat => Instruction::SubFloat,
         IrBinOp::MulFloat => Instruction::MulFloat,
         IrBinOp::DivFloat => Instruction::DivFloat,
+        IrBinOp::RemFloat => Instruction::RemFloat,
         IrBinOp::ConcatStr => Instruction::ConcatStr,
         IrBinOp::EqInt => Instruction::EqInt,
         IrBinOp::NeInt => Instruction::NeInt,
@@ -206,6 +238,8 @@ fn binary_instruction(op: IrBinOp) -> Result<Instruction, CompileError> {
         IrBinOp::NeBool => Instruction::NeBool,
         IrBinOp::EqStr => Instruction::EqStr,
         IrBinOp::NeStr => Instruction::NeStr,
+        IrBinOp::EqAny => Instruction::EqAny,
+        IrBinOp::NeAny => Instruction::NeAny,
         IrBinOp::BitAnd => Instruction::BitAnd,
         IrBinOp::BitOr => Instruction::BitOr,
         IrBinOp::BitXor => Instruction::BitXor,

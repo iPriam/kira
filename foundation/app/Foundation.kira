@@ -17,6 +17,25 @@ function printLine(text: borrow String) {
     return
 }
 
+// An RGBA colour, each channel nominally in 0.0..=1.0.
+//
+// Foundation's rather than a graphics package's: a colour is a value type with
+// no rendering in it, and putting it here is what lets a layout package, an
+// app, and a backend name *one* type. Two packages each declaring their own
+// `Color` produced the error this moved to fix — structs are nominal, so two
+// identical declarations are two types, and passing one where the other is
+// expected reads as `expects Color, found Color`.
+//
+// Unclamped on purpose: a channel outside the range is a value a renderer may
+// still want — an HDR highlight, or an intermediate in a blend — and clamping
+// here would silently change a program's arithmetic rather than its output.
+struct Color {
+    var r: Float = 0.0
+    var g: Float = 0.0
+    var b: Float = 0.0
+    var a: Float = 1.0
+}
+
 // A point in a 2D coordinate space.
 struct Point {
     var x: Float = 0.0

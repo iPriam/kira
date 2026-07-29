@@ -28,10 +28,16 @@ fn describe_entry(entry: Option<u32>) -> String {
 
 /// Proves `manifest` and `module` describe the same program.
 pub fn bundle(manifest: &HybridManifest, module: &Module) -> Result<(), HybridError> {
-    if manifest.functions.len() != module.functions.len() {
+    // The bytecode half may carry helpers of its own after the program's
+    // functions — the widen rebuilds — so the manifest describes a *prefix*.
+    // The count is still exact: the helpers are declared in the manifest, so a
+    // stale half carrying a function neither side described is still caught.
+    let described = manifest.functions.len() + manifest.internal_functions as usize;
+    if described != module.functions.len() {
         return Err(HybridError::Mismatch(format!(
-            "the manifest carries {} functions and the bytecode half carries {}",
-            manifest.functions.len(),
+            "the manifest describes {described} functions ({} of them internal to the \
+             bytecode half) and the bytecode half carries {}",
+            manifest.internal_functions,
             module.functions.len(),
         )));
     }
@@ -189,6 +195,7 @@ mod tests {
             ],
             foreign: Vec::new(),
             foreign_aggregates: Default::default(),
+            internal_functions: 0,
         }
     }
 

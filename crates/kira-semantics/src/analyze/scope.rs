@@ -9,7 +9,8 @@
 //! lets a name resolve outward through any depth of nesting while every frame
 //! still reaches its own state through one `&mut`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use kira_semantics_model::hir::{HirLocal, HirStmtId, LocalId};
 use kira_semantics_model::{OwnershipMode, StructId, Type};
@@ -69,6 +70,30 @@ pub(crate) struct FnCtx {
     /// Empty except for the brief window between an expression pushing onto it
     /// and [`Analyzer::analyze_stmt`] flushing it.
     pending_stmts: Vec<HirStmtId>,
+    /// Statements produced while analyzing a statement that must run *after*
+    /// it.
+    ///
+    /// The store-back half of writing through a capture cell: a place rooted at
+    /// a boxed `var` is rewritten to a temporary the write lands in, and the
+    /// temporary's final value goes back into the box here. Draining it after
+    /// the statement rather than inside each writing construct is what makes
+    /// one rule serve an assignment, an `append`, a mutating method, and a
+    /// `borrow mut` argument alike.
+    deferred_stmts: Vec<HirStmtId>,
+    /// Every name a closure literal in this function mentions.
+    ///
+    /// Computed once from the syntax before the body is analyzed, and shared
+    /// with the frames of the closure bodies inside it, because they are part
+    /// of the same function's text. A `var` whose name is in here is boxed at
+    /// its declaration — see [`crate::closures::captures`] for why the question
+    /// is asked by name and answered early.
+    closure_mentions: Rc<HashSet<String>>,
+    /// The temporary standing in for each cell written through in the statement
+    /// being analyzed, cleared when its deferred store-backs are drained.
+    ///
+    /// One temporary per cell per statement, so two writes through one cell in
+    /// one statement stay recognizably the same storage to the aliasing check.
+    cell_temps: HashMap<LocalId, LocalId>,
 }
 
 impl FnCtx {
@@ -84,7 +109,58 @@ impl FnCtx {
             enclosing: None,
             closure: None,
             pending_stmts: Vec::new(),
+            deferred_stmts: Vec::new(),
+            closure_mentions: Rc::new(HashSet::new()),
+            cell_temps: HashMap::new(),
         }
+    }
+
+    /// Records which names this function's closure literals mention, so a `var`
+    /// among them is boxed at its declaration.
+    pub(crate) fn set_closure_mentions(&mut self, mentions: Rc<HashSet<String>>) {
+        self.closure_mentions = mentions;
+    }
+
+    /// The set to hand a nested closure body's frame: the same one, because a
+    /// closure body is part of the same function's text.
+    pub(crate) fn closure_mentions(&self) -> Rc<HashSet<String>> {
+        Rc::clone(&self.closure_mentions)
+    }
+
+    /// Whether a mutable binding named `name` must live in a shared box.
+    ///
+    /// True when a closure in this function mentions the name at all. The
+    /// answer over-approximates on purpose: see [`crate::closures::captures`].
+    pub(crate) fn must_box(&self, name: &str, mutable: bool) -> bool {
+        mutable && self.closure_mentions.contains(name)
+    }
+
+    /// Queues a statement to run *after* the statement currently being
+    /// analyzed.
+    pub(crate) fn defer_stmt(&mut self, stmt: HirStmtId) {
+        self.deferred_stmts.push(stmt);
+    }
+
+    /// Takes the deferred statements queued since the last drain, in order,
+    /// and forgets the temporaries they wrote back.
+    ///
+    /// The two go together: a temporary standing in for a cell is only good for
+    /// the statement that hoisted it, because the statement after it has its
+    /// own `CellGet` to do.
+    pub(crate) fn take_deferred_stmts(&mut self) -> Vec<HirStmtId> {
+        self.cell_temps.clear();
+        std::mem::take(&mut self.deferred_stmts)
+    }
+
+    /// The temporary standing in for a cell in the statement being analyzed.
+    pub(crate) fn cell_temp(&self, cell: LocalId) -> Option<LocalId> {
+        self.cell_temps.get(&cell).copied()
+    }
+
+    /// Records the temporary standing in for a cell for the rest of this
+    /// statement.
+    pub(crate) fn note_cell_temp(&mut self, cell: LocalId, temp: LocalId) {
+        self.cell_temps.insert(cell, temp);
     }
 
     /// Queues a statement to run before the statement currently being analyzed.
@@ -286,12 +362,18 @@ impl FnCtx {
     /// The outermost scope rather than the innermost is what makes a capture
     /// behave like the binding it copies: visible everywhere in the body, and
     /// shadowable by an inner `let` of the same name from that `let` onward.
+    ///
+    /// A capture of a **capture cell** is mutable, and it is the only mutable
+    /// one. The binding it stands for was declared `var`, and the whole reason
+    /// its value moved into a box is that a write here has to reach the frame
+    /// that declared it. Every other capture is a copy, so writing to it would
+    /// change something no one can see, and it stays immutable.
     pub(crate) fn declare_capture(&mut self, name: &str, ty: Type) -> LocalId {
         let id = LocalId(self.locals.len() as u32);
         self.locals.push(HirLocal {
             name: name.to_owned(),
             ty,
-            mutable: false,
+            mutable: matches!(ty, Type::Cell(_)),
             ownership: OwnershipMode::Owned,
             native_state: None,
         });

@@ -1,8 +1,8 @@
-//! The `kirac` command verbs and their parsing.
+//! The `kira` command verbs and their parsing.
 //!
 //! Hand-rolled on purpose — the CLI takes no argument-parsing dependency.
 
-/// Every verb `kirac` accepts.
+/// Every verb `kira` accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Run,
@@ -106,7 +106,7 @@ impl Command {
     pub fn arguments(self) -> &'static str {
         match self {
             Self::Run | Self::Build => " [file|dir] [--backend vm|llvm|hybrid] [--device]",
-            Self::Check => " [file|dir]",
+            Self::Check | Self::Sync => " [file|dir]",
             Self::Live => " [runner] <file> [--backend vm|hybrid] [--watch]",
             Self::Help => " [all]",
             _ => "",
@@ -128,7 +128,7 @@ impl Command {
             Self::Instruments => "profile a running program",
             Self::Shader => "compile KSL shaders",
             Self::New => "scaffold a new project",
-            Self::Sync => "sync dependencies with the manifest",
+            Self::Sync => "write `kira.lock` from the package manifests",
             Self::Add => "add a dependency",
             Self::Remove => "remove a dependency",
             Self::Update => "update dependencies",

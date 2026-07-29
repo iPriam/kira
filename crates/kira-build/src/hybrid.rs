@@ -113,6 +113,21 @@ pub enum HybridLibraryError {
     /// The export surface has no legal Rust spelling.
     #[error("this library's export surface cannot be generated for Rust: {0}")]
     Wrapper(#[from] wrapper::WrapperError),
+    /// Internal invariant: the compiled bytecode half has fewer functions than
+    /// the program it was compiled from.
+    ///
+    /// The compiler only ever appends to the function table, so this is a
+    /// compiler bug surfaced typed rather than anything a program can cause.
+    #[error(
+        "bytecode compiler invariant violated: the program has {program} functions but the \
+         bytecode half carries only {module}"
+    )]
+    BytecodeHalfLostFunctions {
+        /// How many functions the program declares.
+        program: usize,
+        /// How many the compiled bytecode half carries.
+        module: usize,
+    },
     /// An exported function is annotated `@Native`.
     #[error(
         "`{function}` is both `@Export` and `@Native`, which the hybrid engine cannot build: \
@@ -225,17 +240,44 @@ pub fn check_library(program: &IrProgram) -> Result<(), HybridLibraryError> {
     Ok(())
 }
 
+/// How many functions the compiled bytecode half carries beyond the program's.
+///
+/// The VM synthesizes widen helpers and appends them, so this is a subtraction
+/// rather than a count of anything the IR holds. A module with *fewer*
+/// functions than the program is a compiler bug, and is reported as one rather
+/// than wrapping into an enormous count.
+pub fn internal_function_count(
+    program: &IrProgram,
+    module: &kira_bytecode::module::Module,
+) -> Result<u32, HybridLibraryError> {
+    module
+        .functions
+        .len()
+        .checked_sub(program.functions.len())
+        .and_then(|extra| u32::try_from(extra).ok())
+        .ok_or(HybridLibraryError::BytecodeHalfLostFunctions {
+            program: program.functions.len(),
+            module: module.functions.len(),
+        })
+}
+
 /// Describes `program` as a `.khm` manifest, given the trampolines the backend
 /// emitted.
 ///
 /// `exports` is the backend's own `(function id, symbol)` list: the manifest
 /// records the name the backend *emitted*, never a second guess at it.
+///
+/// `internal_functions` is how many functions the compiled bytecode half
+/// carries beyond the program's own — the VM's synthesized widen helpers. It is
+/// taken from the compiled module rather than recomputed, for the same reason
+/// `exports` is taken from the backend: the manifest records what was built.
 pub fn manifest(
     program: &IrProgram,
     module_name: &str,
     bytecode_file: &str,
     native_file: &str,
     exports: &[(u32, String)],
+    internal_functions: u32,
 ) -> Result<HybridManifest, HybridLibraryError> {
     let functions = program
         .functions
@@ -273,6 +315,7 @@ pub fn manifest(
         // sentinel for it, and this is the case it was added for.
         entry: program.main,
         functions,
+        internal_functions,
         // One row per `@FFI.Extern` import, paired with the adapter symbol the
         // LLVM backend emits for that import index — the same symbol the hybrid
         // session resolves out of the native half. The name comes from
@@ -315,7 +358,17 @@ fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridLibraryError> {
         Type::RawPtr => BridgeValueTag::RAW_PTR,
         // `CString` is seam-only — legal only as a foreign parameter — so it
         // never appears in a manifest row for an ordinary function.
-        Type::CString | Type::NativeState(_) => {
+        // Described like a struct, and travelling no more than one does: a
+        // `@Runtime` function may mention `Any` and never cross, and a crossing
+        // is refused where it is emitted rather than by refusing the row.
+        Type::Any => BridgeValueTag::ANY,
+        // A task handle names a row in the running program's own task table, so
+        // it means nothing to the other engine and never crosses a hybrid seam.
+        // A capture cell is shared mutable storage this engine counts holds on,
+        // so it never crosses either — a hold taken on one side and released on
+        // the other is a count neither engine owns. It is not surface, so no
+        // signature an author writes reaches this arm.
+        Type::CString | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
             return Err(HybridLibraryError::UnsupportedType {
                 function: function.to_owned(),
                 ty,
@@ -395,13 +448,14 @@ pub fn build_hybrid_library(
         &bytecode_file,
         &native_file,
         &built.exports,
+        internal_function_count(program, &module)?,
     )?;
     let manifest_bytes = described.to_bytes();
     write(&manifest_path, &manifest_bytes)?;
 
     // Absolute, and resolved after the files exist so the answer is real rather
     // than lexical: this path is read at *run* time from wherever the consumer's
-    // binary is, which is not where `kirac` was invoked.
+    // binary is, which is not where `kira` was invoked.
     let resolved = std::fs::canonicalize(&lib_directory).map_err(|source| {
         HybridLibraryError::Unresolvable {
             path: lib_directory.display().to_string(),

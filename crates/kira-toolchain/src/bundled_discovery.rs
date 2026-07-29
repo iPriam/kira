@@ -10,12 +10,12 @@
 //!
 //! # The shipped layout is the binary's neighbour
 //!
-//! An installed toolchain is `<root>/bin/kirac` and `<root>/foundation/`, so
+//! An installed toolchain is `<root>/bin/kira` and `<root>/foundation/`, so
 //! the primary rule resolves the bundle **relative to the running executable**
 //! and never consults `$HOME`, `current.toml`, or the working directory. That
 //! is what makes a toolchain relocatable: move the whole directory and the
 //! stdlib moves with it, still matching the compiler that was installed with
-//! it. A version-skewed pairing of one toolchain's `kirac` with another's
+//! it. A version-skewed pairing of one toolchain's `kira` with another's
 //! Foundation cannot be reached by this rule at all.
 //!
 //! # Discovery is explicit and ordered
@@ -25,7 +25,7 @@
 //!    [`crate::llvm_discovery`].
 //! 2. `<exe-dir>/../foundation` — the shipped layout above.
 //! 3. The active managed toolchain named by `~/.kira/toolchains/current.toml`.
-//!    This is the route for a *consumer* that is not `kirac` itself — a
+//!    This is the route for a *consumer* that is not `kira` itself — a
 //!    `build.rs` compiling a Kira library through `kira-build`, whose
 //!    executable is a Cargo build script sitting nowhere near a toolchain.
 //! 4. A source checkout: walking up from the executable for a directory that
@@ -33,7 +33,7 @@
 //!
 //! Rule 4 is the developer's rule and only the developer's: it is reached only
 //! after rules 2 and 3 both failed, so a shipped toolchain never depends on a
-//! checkout existing, and a `kirac` built into `target/debug/` still finds the
+//! checkout existing, and a `kira` built into `target/debug/` still finds the
 //! `foundation/` that is committed in the repo it was built from.
 
 use std::path::{Path, PathBuf};
@@ -148,7 +148,7 @@ pub fn discover_foundation_from(
 
     let exe_dir = executable.and_then(Path::parent);
 
-    // 2. The shipped layout: `<root>/bin/kirac` next to `<root>/foundation`.
+    // 2. The shipped layout: `<root>/bin/kira` next to `<root>/foundation`.
     if let Some(root) = exe_dir.and_then(Path::parent) {
         let candidate = root.join(FOUNDATION_DIR_NAME);
         if is_package_root(&candidate) {
@@ -283,14 +283,14 @@ mod tests {
         }
     }
 
-    /// The rule that matters on a shipped toolchain: `bin/kirac` finds the
+    /// The rule that matters on a shipped toolchain: `bin/kira` finds the
     /// `foundation/` that is its own directory's sibling, with no home
     /// directory, no `current.toml`, and no checkout in play.
     #[test]
     fn the_shipped_layout_resolves_beside_the_binary() {
         let dir = TempDir::new("shipped");
         let expected = dir.write_package("toolchain/foundation");
-        let exe = dir.0.join("toolchain/bin/kirac");
+        let exe = dir.0.join("toolchain/bin/kira");
         std::fs::create_dir_all(exe.parent().expect("bin dir")).expect("bin dir");
 
         let found = discover_foundation_from(Some(&exe)).expect("the shipped Foundation");
@@ -319,7 +319,7 @@ mod tests {
         assert!(!is_package_root(&root));
     }
 
-    /// The developer's rule: a `kirac` built into `target/debug/` walks up to
+    /// The developer's rule: a `kira` built into `target/debug/` walks up to
     /// the checkout that holds both a workspace `Cargo.toml` and `foundation/`.
     #[test]
     fn a_source_checkout_resolves_by_walking_up_from_the_binary() {
@@ -361,7 +361,7 @@ mod tests {
     #[test]
     fn nothing_found_names_the_paths_it_checked() {
         let dir = TempDir::new("missing");
-        let exe = dir.0.join("empty/bin/kirac");
+        let exe = dir.0.join("empty/bin/kira");
         std::fs::create_dir_all(exe.parent().expect("bin dir")).expect("bin dir");
         // Only meaningful when this machine has no managed toolchain to fall
         // back to; where it has one, discovery legitimately succeeds.

@@ -1,0 +1,325 @@
+// Aggregates IN DEPTH.
+//
+// Exercises aggregate data structures without tripping the known S2 nested
+// array-element-mutation bug:
+//   - deeply nested structs (struct holding struct holding struct), read & mutated
+//   - structs with multiple array fields, summed by reading the fields
+//   - arrays of structs summed by reading their fields
+//   - large/wide structs with many fields
+//   - value-copy independence (copying a struct must not alias)
+//   - borrow mut writeback on LOCAL struct vars (including nested fields)
+//   - the SAFE nested-array-element update idiom: copy element to a local var,
+//     mutate the local, then write it back with a single-projection arr[i] = local
+//
+// All sub-results fold into one deterministic Int checksum. No printing here.
+
+// ---------------------------------------------------------------------------
+// Deeply nested structs: AggRoot -> AggMid -> AggLeaf.
+// ---------------------------------------------------------------------------
+
+struct AggLeaf {
+    var a: Int
+    var b: Int
+
+    function sum() -> Int {
+        return self.a + self.b
+    }
+
+    function scaled(k: Int) -> AggLeaf {
+        return AggLeaf { a: self.a * k, b: self.b * k }
+    }
+}
+
+struct AggMid {
+    var leaf: AggLeaf
+    var tag: Int
+
+    function sum() -> Int {
+        return self.leaf.sum() + self.tag
+    }
+}
+
+struct AggRoot {
+    var mid: AggMid
+    var scale: Int
+
+    function sum() -> Int {
+        return self.mid.sum() + self.scale
+    }
+
+    function deepLeafSum() -> Int {
+        return self.mid.leaf.a + self.mid.leaf.b
+    }
+}
+
+// borrow mut writeback through three levels of struct nesting on a LOCAL var.
+function aggBumpRoot(r: borrow mut AggRoot) {
+    r.scale = r.scale + 1
+    r.mid.tag = r.mid.tag + 2
+    r.mid.leaf.a = r.mid.leaf.a + 3
+    r.mid.leaf.b = r.mid.leaf.b + 4
+    return
+}
+
+// ---------------------------------------------------------------------------
+// Struct with multiple array fields.
+// ---------------------------------------------------------------------------
+
+struct AggBag {
+    var xs: [Int]
+    var ys: [Int]
+    var zs: [Int]
+    var label: Int
+
+    function total() -> Int {
+        var t = self.label
+        var i = 0
+        while i < self.xs.count {
+            t = t + self.xs[i]
+            i = i + 1
+        }
+        var j = 0
+        while j < self.ys.count {
+            t = t + self.ys[j]
+            j = j + 1
+        }
+        var k = 0
+        while k < self.zs.count {
+            t = t + self.zs[k]
+            k = k + 1
+        }
+        return t
+    }
+}
+
+function aggBuildSquares(n: Int) -> [Int] {
+    var xs: [Int] = []
+    var i = 0
+    while i < n {
+        xs.append(i * i)
+        i = i + 1
+    }
+    return xs
+}
+
+function aggBuildLinear(n: Int, step: Int) -> [Int] {
+    var xs: [Int] = []
+    var i = 0
+    while i < n {
+        xs.append(i * step + 1)
+        i = i + 1
+    }
+    return xs
+}
+
+// ---------------------------------------------------------------------------
+// Large / wide struct with many fields.
+// ---------------------------------------------------------------------------
+
+struct AggWide {
+    var f0: Int
+    var f1: Int
+    var f2: Int
+    var f3: Int
+    var f4: Int
+    var f5: Int
+    var f6: Int
+    var f7: Int
+    var f8: Int
+    var f9: Int
+    var f10: Int
+    var f11: Int
+
+    function total() -> Int {
+        return self.f0 + self.f1 + self.f2 + self.f3
+            + self.f4 + self.f5 + self.f6 + self.f7
+            + self.f8 + self.f9 + self.f10 + self.f11
+    }
+
+    function bumped() -> AggWide {
+        return AggWide {
+            f0: self.f0 + 1, f1: self.f1 + 1, f2: self.f2 + 1,
+            f3: self.f3 + 1, f4: self.f4 + 1, f5: self.f5 + 1,
+            f6: self.f6 + 1, f7: self.f7 + 1, f8: self.f8 + 1,
+            f9: self.f9 + 1, f10: self.f10 + 1, f11: self.f11 + 1
+        }
+    }
+}
+
+function aggMakeWide(seed: Int) -> AggWide {
+    return AggWide {
+        f0: seed, f1: seed + 1, f2: seed + 2, f3: seed + 3,
+        f4: seed + 4, f5: seed + 5, f6: seed + 6, f7: seed + 7,
+        f8: seed + 8, f9: seed + 9, f10: seed + 10, f11: seed + 11
+    }
+}
+
+// borrow mut writeback on a wide LOCAL struct var.
+function aggBumpWide(w: borrow mut AggWide) {
+    w.f0 = w.f0 + 1
+    w.f5 = w.f5 + 2
+    w.f11 = w.f11 + 3
+    return
+}
+
+// ---------------------------------------------------------------------------
+// Arrays of structs summed by reading fields.
+// ---------------------------------------------------------------------------
+
+function aggSumLeaves(leaves: borrow [AggLeaf]) -> Int {
+    var total = 0
+    var i = 0
+    while i < leaves.count {
+        total = total + leaves[i].a + leaves[i].b
+        i = i + 1
+    }
+    return total
+}
+
+// ---------------------------------------------------------------------------
+// Section entry: fold every sub-result into one deterministic checksum.
+// ---------------------------------------------------------------------------
+
+function aggSection() -> Int {
+    var acc = 0
+
+    // -- 1. Deeply nested struct reads & methods, churned in a loop. --------
+    var i = 0
+    while i < 120 {
+        let root = AggRoot {
+            mid: AggMid {
+                leaf: AggLeaf { a: i, b: i + 1 },
+                tag: i + 2
+            },
+            scale: i + 3
+        }
+        acc = acc + root.sum()           // (a+b) + tag + scale
+        acc = acc + root.deepLeafSum()   // a + b
+        let s = root.mid.leaf.scaled(2)  // method returning a new leaf
+        acc = acc + s.sum()
+        i = i + 1
+    }
+
+    // -- 2. borrow mut writeback through three levels of nesting. -----------
+    var deep = AggRoot {
+        mid: AggMid {
+            leaf: AggLeaf { a: 0, b: 0 },
+            tag: 0
+        },
+        scale: 0
+    }
+    var b = 0
+    while b < 50 {
+        aggBumpRoot(deep)
+        b = b + 1
+    }
+    // After 50 bumps: scale=50, tag=100, leaf.a=150, leaf.b=200.
+    acc = acc + deep.scale + deep.mid.tag + deep.mid.leaf.a + deep.mid.leaf.b
+    acc = acc + deep.sum()
+
+    // -- 3. Struct with multiple array fields, built & summed in a loop. ----
+    var round = 0
+    while round < 60 {
+        let bag = AggBag {
+            xs: move aggBuildSquares(10),
+            ys: move aggBuildLinear(10, 2),
+            zs: move aggBuildLinear(8, 3),
+            label: round
+        }
+        acc = acc + bag.total()
+        round = round + 1
+    }
+
+    // -- 4. Large/wide struct: total, value-bump method, borrow mut. --------
+    var w = 0
+    while w < 40 {
+        let wide = aggMakeWide(w)
+        acc = acc + wide.total()
+        let bumped = wide.bumped()
+        acc = acc + bumped.total()       // total + 12
+        w = w + 1
+    }
+    var live = aggMakeWide(100)
+    var wb = 0
+    while wb < 30 {
+        aggBumpWide(live)
+        wb = wb + 1
+    }
+    // f0 += 30, f5 += 60, f11 += 90 over baseline aggMakeWide(100).
+    acc = acc + live.total()
+
+    // -- 5. Arrays of structs summed by reading fields. ---------------------
+    var leaves: [AggLeaf] = []
+    var p = 0
+    while p < 64 {
+        leaves.append(AggLeaf { a: p, b: p * 3 })
+        p = p + 1
+    }
+    acc = acc + aggSumLeaves(leaves)
+
+    // -- 6. SAFE nested-array-element update idiom. -------------------------
+    //   copy element to a local var, mutate the local, write back via arr[i]=local
+    var u = 0
+    while u < leaves.count {
+        var localLeaf = leaves[u]   // value copy out of the array
+        localLeaf.a = localLeaf.a + 10
+        localLeaf.b = localLeaf.b * 2
+        leaves[u] = localLeaf       // single-projection write-back (supported)
+        u = u + 1
+    }
+    acc = acc + aggSumLeaves(leaves)
+
+    // Repeat the safe idiom on an array of wide structs to churn more.
+    var wides: [AggWide] = []
+    var q = 0
+    while q < 24 {
+        wides.append(aggMakeWide(q))
+        q = q + 1
+    }
+    var wq = 0
+    while wq < wides.count {
+        var lw = wides[wq]          // copy out
+        lw.f0 = lw.f0 + 5
+        lw.f11 = lw.f11 + 7
+        wides[wq] = lw             // write back
+        wq = wq + 1
+    }
+    var wsum = 0
+    var ws = 0
+    while ws < wides.count {
+        wsum = wsum + wides[ws].total()
+        ws = ws + 1
+    }
+    acc = acc + wsum
+
+    // -- 7. Value-copy independence: copying must not alias. ----------------
+    let baseLeaf = AggLeaf { a: 7, b: 9 }
+    var copyLeaf = baseLeaf
+    copyLeaf.a = 999
+    copyLeaf.b = 888
+    acc = acc + baseLeaf.a + baseLeaf.b + copyLeaf.a + copyLeaf.b
+
+    let baseWide = aggMakeWide(1)
+    var copyWide = baseWide
+    copyWide.f0 = 500
+    copyWide.f11 = 700
+    // baseWide must be unchanged; copyWide reflects the edits.
+    acc = acc + baseWide.total() + copyWide.total()
+
+    // Nested copy independence: copy a deep struct, mutate the copy's nested
+    // fields via borrow mut, original must remain untouched.
+    let origRoot = AggRoot {
+        mid: AggMid { leaf: AggLeaf { a: 10, b: 20 }, tag: 30 },
+        scale: 40
+    }
+    var copyRoot = origRoot
+    var ci = 0
+    while ci < 5 {
+        aggBumpRoot(copyRoot)
+        ci = ci + 1
+    }
+    acc = acc + origRoot.sum() + copyRoot.sum()
+
+    return acc
+}
+

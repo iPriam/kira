@@ -37,9 +37,16 @@ fn conditional_branches_must_agree_on_a_type() {
         codes(r#"@Main function main() { let x = true ? 1 : "b" print(x) return }"#),
         vec!["KSEM132"]
     );
-    // No numeric widening here either: `Int` and `Float` do not meet.
+    // An integer *literal* opposite a `Float` branch is the float it spells:
+    // a literal has no width of its own until a position gives it one, and the
+    // other branch is that position.
+    assert!(
+        diagnostics("@Main function main() { let x = true ? 1 : 2.0 print(x) return }").is_empty()
+    );
+    // That is a property of the literal and not a widening rule, so a value
+    // that already has a width still does not meet a `Float`.
     assert_eq!(
-        codes("@Main function main() { let x = true ? 1 : 2.0 print(x) return }"),
+        codes("@Main function main() { let n = 1 let x = true ? n : 2.0 print(x) return }"),
         vec!["KSEM132"]
     );
 }

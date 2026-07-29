@@ -1,6 +1,6 @@
 # knvm
 
-`knvm` installs Kira. It is the first thing a user runs, before any `kirac`
+`knvm` installs Kira. It is the first thing a user runs, before any `kira`
 exists on the machine:
 
 ```sh
@@ -22,7 +22,7 @@ and `switch` is accepted as a spelling of `use`.
 Selection is what the `kira` launcher reads. It resolves `current.toml`, finds
 the selected toolchain's primary binary, and hands the process over with every
 argument and the whole environment forwarded untouched: on unix by replacing
-its own process image, so the exit status, signals, and stdio belong to `kirac`
+its own process image, so the exit status, signals, and stdio belong to `kira`
 by construction, and on Windows by waiting and forwarding the exit code. Exit
 code 2 from `kira` therefore means exactly one thing - the launcher itself
 could not dispatch - and each such failure names `knvm install latest` as the
@@ -38,10 +38,13 @@ compiler and never goes stale when the language moves.
 
 ```
 ~/.kira/toolchains/
- current.toml channel = "release", version = "1.10.0", primary = "kirac"
+ current.toml channel = "release", version = "1.10.0", primary = "kira"
  release/1.10.0/
- bin/kirac
- bin/kira-language-server the editor server, same frontend as its kirac
+ bin/kira
+ bin/kira-language-server the editor server, same frontend as its kira
+ bin/libkira_native_bridge.a the native runtime
+ bin/libkira_compiler_bridge.a native runtime plus the compiler capability
+ bin/libkira_native_bridge-wasm32-emscripten.a the Web runtime
  foundation/ the standard library, a real Kira package
  package.kira
  app/*.kira
@@ -54,7 +57,7 @@ compiler and never goes stale when the language moves.
 than merely present: it is the marker `kira-toolchain`'s `bundled_discovery`
 looks for, and install refuses an archive that lacks it. `current.toml` is not
 inert bookkeeping either - discovery rule 3 reads it to find Foundation for a
-consumer that is not `kirac` itself, such as a `build.rs` running through
+consumer that is not `kira` itself, such as a `build.rs` running through
 `kira-build`. See [docs/foundation.md](foundation.md).
 
 Every one of those paths comes from `kira-toolchain`. The `kira-knvm` crate
@@ -70,15 +73,16 @@ transfer. A version already present under `<channel>/<version>/` skips the
 fetch entirely and is selected as it stands - `install` always implies `use`.
 
 Otherwise the archive is fetched into a staging directory belonging to this
-process alone, unpacked with the system `tar`, and validated: the tree must
-hold `bin/kirac` and `bin/kira-language-server`, both executable on unix, and
-`foundation/package.kira` must exist. The language server is required on
-purpose: a toolchain without one leaves an editor silently running whatever
-stale server it finds elsewhere on PATH. Only then is the validated tree moved
-into place with a single `rename`, and `current.toml` written. Nothing appears
-under `<channel>/` until the toolchain is known-good, so a failed install
-leaves no half-toolchain a launcher could dispatch to. Staging is removed on
-every exit path.
+process alone, unpacked with the system `tar`, and validated. The tree must
+hold executable `bin/kira` and `bin/kira-language-server`, all three runtime
+archives shown above, and `foundation/package.kira`. Requiring the language
+server prevents an editor from silently finding a stale server elsewhere;
+requiring the archives prevents the compiler from being selected when it
+cannot run native, compiler-using, or Web programs. Only then is the validated
+tree moved into place with a single `rename`, and `current.toml` written.
+Nothing appears under `<channel>/` until the toolchain is known-good, so a
+failed install leaves no half-toolchain a launcher could dispatch to. Staging
+is removed on every exit path.
 
 The one hole in that guarantee is `SIGKILL`: the staging cleanup is a `Drop`
 guard, which a hard kill does not run, leaving an inert directory under
@@ -90,7 +94,7 @@ guard, which a hard kill does not run, leaving an inert directory under
 first within each, and marks the selected one with `*`. A toolchains root that
 does not exist is an empty listing rather than an error - it is the state of a
 machine that has never run `knvm install`. A version whose tree has lost its
-`bin/kirac` is listed and flagged broken instead of being hidden.
+`bin/kira` is listed and flagged broken instead of being hidden.
 
 `use` refuses a version that is not installed, and equally refuses one missing
 the binary the launcher runs: selecting either would leave `kira` unable to
@@ -104,16 +108,15 @@ change which compiler a user runs.
 ## `binstall`: the checkout as a toolchain
 
 `knvm binstall` is the developer route: run inside a Kira checkout, it builds
-`kirac` and `kira-language-server` with cargo (dev profile), shapes the result
-into the same tree a release unpacks to — the built binaries under `bin/`, the
-checkout's `foundation/` beside them — and installs it on the `dev` channel,
-named by the workspace's `[workspace.package] version`. The LLVM backend is a
-hard part of every kirac, so `binstall` discovers the managed LLVM, points
-`llvm-sys` at it, and refuses up front — naming the provisioning route — when
-no bundle exists. It goes through the
-same staging, validation, and rename-into-place pipeline as a release install,
-and selects what it lands, so `kira` dispatches to the fresh build
-immediately.
+`kira`, `kira-language-server`, and both host runtime archives with cargo (dev
+profile), cross-builds the Web runtime archive, and shapes them into the same
+tree a release unpacks to with the checkout's `foundation/` beside them. It
+installs that tree on the `dev` channel, named by the workspace's
+`[workspace.package] version`. The LLVM backend is a hard part of every kira,
+so `binstall` discovers the managed LLVM and refuses up front — naming the
+provisioning route — when no bundle exists. It goes through the same staging,
+validation, and rename-into-place pipeline as a release install, and selects
+what it lands, so `kira` dispatches to the fresh build immediately.
 
 Running it again replaces the installed tree. A dev toolchain names a moving
 target, so `binstall` never answers "already installed" — that would mean

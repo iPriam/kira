@@ -16,7 +16,7 @@ kira-runtime-abi.workspace = true
 kira-semantics-model.workspace = true
 kira-toolchain.workspace = true
 thiserror.workspace = true
-# A hard dependency by decision: every kirac carries the LLVM backend, and a
+# A hard dependency by decision: every kira carries the LLVM backend, and a
 # machine without a managed LLVM does not build this workspace. The two
 # features turn off llvm-sys's own environment-driven LLVM search entirely —
 # it compiles as pure declarations — and this crate's build script links the

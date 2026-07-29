@@ -51,10 +51,12 @@ pub fn host_key() -> &'static str {
 /// What a fixture toolchain ships. Omitting a file is how the validation guards
 /// build a deliberately broken release.
 pub struct FixtureToolchain {
-    /// Whether `bin/kirac` is present and executable.
+    /// Whether `bin/kira` is present and executable.
     pub with_primary_binary: bool,
     /// Whether `bin/kira-language-server` is present and executable.
     pub with_language_server: bool,
+    /// Whether the host compiler bridge archive is present.
+    pub with_compiler_bridge: bool,
     /// Whether `foundation/package.kira` is present.
     pub with_foundation: bool,
 }
@@ -65,6 +67,7 @@ impl FixtureToolchain {
         Self {
             with_primary_binary: true,
             with_language_server: true,
+            with_compiler_bridge: true,
             with_foundation: true,
         }
     }
@@ -73,7 +76,7 @@ impl FixtureToolchain {
 /// Builds `<releases>/<channel>/<version>/kira-<version>-<host>.tar.gz` holding
 /// a toolchain tree.
 ///
-/// `bin/kirac` is an executable shell script that prints a marker naming its own
+/// `bin/kira` is an executable shell script that prints a marker naming its own
 /// version, so a dispatch test can prove *which* installed toolchain ran rather
 /// than that something ran.
 pub fn publish(releases: &Path, channel: Channel, version: &str, shape: &FixtureToolchain) {
@@ -84,17 +87,17 @@ pub fn publish(releases: &Path, channel: Channel, version: &str, shape: &Fixture
     if shape.with_primary_binary {
         let bin = payload.join("bin");
         std::fs::create_dir_all(&bin).expect("create bin");
-        let script = bin.join("kirac");
+        let script = bin.join("kira");
         std::fs::write(
             &script,
-            format!("#!/bin/sh\necho \"kirac {version} argv: $*\"\nexit 0\n"),
+            format!("#!/bin/sh\necho \"kira {version} argv: $*\"\nexit 0\n"),
         )
-        .expect("write fixture kirac");
+        .expect("write fixture kira");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
-                .expect("mark fixture kirac executable");
+                .expect("mark fixture kira executable");
         }
     } else {
         // A release with no binary at all still has a tree, so the failure under
@@ -117,6 +120,23 @@ pub fn publish(releases: &Path, channel: Channel, version: &str, shape: &Fixture
             std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755))
                 .expect("mark fixture language server executable");
         }
+    }
+
+    let bin = payload.join("bin");
+    std::fs::create_dir_all(&bin).expect("create bin for runtime archives");
+    for archive in [
+        "libkira_native_bridge.a",
+        "libkira_native_bridge-wasm32-emscripten.a",
+    ] {
+        std::fs::write(bin.join(archive), "fixture runtime archive")
+            .expect("write fixture runtime archive");
+    }
+    if shape.with_compiler_bridge {
+        std::fs::write(
+            bin.join("libkira_compiler_bridge.a"),
+            "fixture compiler runtime archive",
+        )
+        .expect("write fixture compiler runtime archive");
     }
 
     if shape.with_foundation {

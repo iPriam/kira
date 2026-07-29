@@ -21,42 +21,8 @@
 use kira_runtime_abi::{FileRequest, FileResponse};
 
 use crate::array::{KArray, kira_rt_array_free, kira_rt_array_len, kira_rt_array_new};
-use crate::runtime::{KStr, kira_rt_str_data, kira_rt_str_free, kira_rt_str_len, kira_rt_str_new};
-
-/// Reads one string handle's bytes as text, without taking ownership.
-///
-/// Lossy on invalid UTF-8, exactly as the VM is when it reads the same value out
-/// of its heap: a `String` there is Rust-owned text, so both engines round the
-/// same non-UTF-8 bytes the same way.
-///
-/// # Safety
-/// `handle` must be null or a live handle from this runtime.
-unsafe fn text_of(handle: KStr) -> String {
-    // SAFETY: the caller vouches for the handle; both accessors accept null.
-    let (data, len) = unsafe { (kira_rt_str_data(handle), kira_rt_str_len(handle)) };
-    if data.is_null() || len == 0 {
-        return String::new();
-    }
-    // SAFETY: `data` addresses `len` initialized bytes owned by the handle,
-    // which stays live for this borrow.
-    let bytes = unsafe { std::slice::from_raw_parts(data, len) };
-    String::from_utf8_lossy(bytes).into_owned()
-}
-
-/// Frees a string handle.
-///
-/// # Safety
-/// `handle` must be null or a live handle from this runtime, freed at most once.
-unsafe fn release(handle: KStr) {
-    // SAFETY: forwarded contract.
-    unsafe { kira_rt_str_free(handle) };
-}
-
-/// Boxes text into a fresh string handle.
-fn handle_of(text: &str) -> KStr {
-    // SAFETY: the pointer and length describe one live UTF-8 buffer.
-    unsafe { kira_rt_str_new(text.as_ptr(), text.len()) }
-}
+use crate::runtime::KStr;
+use crate::values::{handle_of, int_array, release, string_array, text_of};
 
 /// The C truth value the backend reads back as a Kira `Bool`.
 fn flag(response: FileResponse) -> u8 {
@@ -66,69 +32,6 @@ fn flag(response: FileResponse) -> u8 {
         // as a value rather than a panic, because a runtime never gets to end its
         // caller's process.
         _ => 0,
-    }
-}
-
-/// Builds a Kira array whose elements are eight-byte integers.
-///
-/// `esize` is the element stride the backend computed from the target's ABI. A
-/// Kira integer is an `i64` in generated code, so the value written into each
-/// slot is an `i64`; `esize` decides where the next slot starts.
-///
-/// # Safety
-/// `esize` must be the ABI size the backend gives a Kira integer element.
-unsafe fn int_array(values: &[i64], esize: i64) -> KArray {
-    let stride = esize.max(0) as usize;
-    let array = kira_rt_array_new(values.len(), stride);
-    // SAFETY: the array was just built with exactly `values.len()` slots, and
-    // `stride` is the size it was built with.
-    unsafe {
-        write_slots(array, values.len(), stride, |slot, index| {
-            slot.cast::<i64>().write(values[index])
-        })
-    };
-    array
-}
-
-/// Builds a Kira array of string handles, one fresh handle per name.
-///
-/// # Safety
-/// `esize` must be the ABI size the backend gives a string-handle element.
-unsafe fn string_array(names: &[String], esize: i64) -> KArray {
-    let stride = esize.max(0) as usize;
-    let array = kira_rt_array_new(names.len(), stride);
-    // SAFETY: as in `int_array`; each slot receives one owned handle, which the
-    // array's element free leaf releases.
-    unsafe {
-        write_slots(array, names.len(), stride, |slot, index| {
-            slot.cast::<KStr>().write(handle_of(&names[index]));
-        });
-    }
-    array
-}
-
-/// Writes each of `count` slots of a freshly built array.
-///
-/// # Safety
-/// `array` must be a live array with at least `count` slots of `stride` bytes,
-/// and `write` must initialize exactly one element at the address it is handed.
-unsafe fn write_slots(
-    array: KArray,
-    count: usize,
-    stride: usize,
-    mut write: impl FnMut(*mut u8, usize),
-) {
-    if array.is_null() || count == 0 {
-        return;
-    }
-    // SAFETY: the caller guarantees a live array built with this stride.
-    let items = unsafe { (*array).items };
-    if items.is_null() {
-        return;
-    }
-    for index in 0..count {
-        // SAFETY: `index < count <= len`, so the offset lands inside the block.
-        write(unsafe { items.add(index * stride) }, index);
     }
 }
 

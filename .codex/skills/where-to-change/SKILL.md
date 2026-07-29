@@ -32,9 +32,9 @@ upward reference in `[dev-dependencies]` (cargo's only legal cycle).
   `kira-program-graph`
   (6), `kira-build` (7), `kira-app-generation`, `kira-doc`,
   `kira-instruments`, `kira-linter`, `kira-live` (8)
-- **top — binaries:** `kira-cli` (`kirac`), `kira-bootstrapper` (`kira`),
-  `kira-devflow` (`devflow`), `kira-lsp`, `kira-desktop-runner`. Leaves — keep
-  logic lower.
+- **top — binaries:** `kira-cli` (`kira`), `kira-launcher` (`kira-launcher`,
+  installed onto PATH as `kira`), `kira-devflow` (`devflow`), `kira-lsp`,
+  `kira-desktop-runner`. Leaves — keep logic lower.
 
 ## Runners consume bundles, never compiler internals
 
