@@ -9,6 +9,7 @@ pub mod llvm_discovery;
 pub mod llvm_layout;
 pub mod llvm_metadata;
 pub mod paint;
+pub mod version;
 
 pub use bundled_discovery::{
     BundledDiscoveryError, BundledPackage, BundledSource, discover_foundation,
@@ -17,6 +18,7 @@ pub use bundled_discovery::{
 pub use llvm_discovery::{DiscoverySource, LlvmDiscoveryError, LlvmInstallation, discover};
 pub use llvm_metadata::{LlvmMetadata, MalformedMetadata, pinned, pinned_version};
 pub use paint::Paint;
+pub use version::RELEASE_VERSION;
 
 use std::path::{Path, PathBuf};
 
