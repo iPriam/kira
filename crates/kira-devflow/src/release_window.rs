@@ -1,7 +1,6 @@
 //! The Kira version scheme, and the release window it implies.
 //!
-//! A version is `<year>.<month>.<week>`, and every field comes from the
-//! release date alone:
+//! A version is `<year>.<month>.<week>[.<increment>]`:
 //!
 //! - `year` counts from the version epoch, so 2026 is `1`.
 //! - `month` is the calendar month, so August 2026 is `1.8`. It is not a
@@ -9,14 +8,20 @@
 //!   not anything shipped.
 //! - `week` is the zero-based week of that month — days 1-7 are week `0`,
 //!   days 8-14 week `1`, and so on. A month's first release is always `.0`.
+//! - `increment` disambiguates a second release inside one week, and is
+//!   omitted for the first. `1.8.0` is the week's first release, `1.8.0.1`
+//!   its second.
 //!
-//! Nothing here depends on the release landing on a particular weekday. The
-//! usual cadence is Tuesday and the report names the next one, but a version
-//! shipped on any other day is still the version that day names.
+//! The first three fields come from the date alone, so nothing depends on
+//! the release landing on a particular weekday; the usual cadence is Tuesday
+//! and the report names the next one. The increment is the one field read
+//! from the tags, and it exists because two releases in one week would
+//! otherwise compute the same version.
 //!
-//! One consequence is worth stating plainly: two releases in the same week
-//! of the same month compute the same version. The report flags a version
-//! that is already tagged rather than letting it collide silently.
+//! Cargo cannot hold a four-component version — `version = "1.8.0.1"` is
+//! rejected outright as `unexpected character '.' after patch version
+//! number`. [`Version::cargo_version`] is the three-component prefix that
+//! belongs in `Cargo.toml`, and the report prints it whenever the two differ.
 
 use crate::calendar::{CalendarError, CivilDate, DayNumber, Weekday};
 
@@ -55,38 +60,77 @@ pub struct Version {
     pub month: u8,
     /// The zero-based week of the month.
     pub week: u32,
+    /// Which release of that week this is; zero for the first, and omitted
+    /// from the printed form.
+    pub increment: u32,
 }
 
 impl Version {
-    /// The version a release on this date carries.
-    pub fn for_date(date: CivilDate) -> Result<Self, ReleaseError> {
+    /// The version a release on this date carries, given the tags that exist.
+    ///
+    /// The date fixes year, month, and week; the tags fix only the increment,
+    /// which is one past the highest already tagged for that same week.
+    pub fn for_date(date: CivilDate, tags: &[Version]) -> Result<Self, ReleaseError> {
         let major = u32::try_from(date.year - VERSION_EPOCH_YEAR)
             .map_err(|_| ReleaseError::YearBeforeEpoch { year: date.year })?;
+        let week = u32::from(date.day.saturating_sub(1) / 7);
+        let highest = tags
+            .iter()
+            .filter(|tag| tag.major == major && tag.month == date.month && tag.week == week)
+            .map(|tag| tag.increment)
+            .max();
         Ok(Self {
             major,
             month: date.month,
-            week: u32::from(date.day.saturating_sub(1) / 7),
+            week,
+            increment: highest.map_or(0, |highest| highest + 1),
         })
+    }
+
+    /// The three-component prefix, which is what `Cargo.toml` can hold.
+    ///
+    /// Equal to the printed form for a week's first release, and the printed
+    /// form minus its increment for any later one.
+    pub fn cargo_version(self) -> String {
+        format!("{}.{}.{}", self.major, self.month, self.week)
+    }
+
+    /// Whether this version needs an increment Cargo cannot express.
+    pub fn exceeds_cargo(self) -> bool {
+        self.increment > 0
     }
 }
 
 impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}.{}", self.major, self.month, self.week)
+        write!(f, "{}.{}.{}", self.major, self.month, self.week)?;
+        if self.increment > 0 {
+            write!(f, ".{}", self.increment)?;
+        }
+        Ok(())
     }
 }
 
-/// Parse a `v<major>.<month>.<week>` tag; `None` for anything else, which
-/// covers the LLVM bundle tags and any branch-shaped ref.
+/// Parse a `v<major>.<month>.<week>[.<increment>]` tag; `None` for anything
+/// else, which covers the LLVM bundle tags and any branch-shaped ref.
 pub fn parse_tag(tag: &str) -> Option<Version> {
     let mut parts = tag.strip_prefix('v')?.split('.');
     let major = parts.next()?.parse::<u32>().ok()?;
     let month = parts.next()?.parse::<u8>().ok()?;
     let week = parts.next()?.parse::<u32>().ok()?;
+    let increment = match parts.next() {
+        Some(text) => text.parse::<u32>().ok()?,
+        None => 0,
+    };
     if parts.next().is_some() || month == 0 || month > 12 {
         return None;
     }
-    Some(Version { major, month, week })
+    Some(Version {
+        major,
+        month,
+        week,
+        increment,
+    })
 }
 
 /// Every version tag in a newline-separated `git tag --list` output.
@@ -97,7 +141,7 @@ pub fn parse_tags(listing: &str) -> Vec<Version> {
         .collect()
 }
 
-/// A version, the day it ships, and whether that version is already tagged.
+/// A version and the day it ships.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Slot {
     /// The version this day carries.
@@ -106,8 +150,6 @@ pub struct Slot {
     pub date: CivilDate,
     /// Whole days from today; zero for today.
     pub days_away: u32,
-    /// Whether a tag for this version already exists.
-    pub already_tagged: bool,
 }
 
 /// What ships today, and what the next cadence day carries.
@@ -146,16 +188,20 @@ impl ReleaseWindow {
 
     /// The report `devflow release-window` prints.
     pub fn report(&self) -> String {
-        let cadence_note = if self.on_cadence_today() {
-            format!("{} — on cadence", self.today_weekday.label())
+        let cadence = if self.on_cadence_today() {
+            "on cadence"
         } else {
-            format!("{} — off cadence", self.today_weekday.label())
+            "off cadence"
         };
-        let mut out = format!("today     {} {}\n", self.current.date, cadence_note);
+        let mut out = format!(
+            "today     {} {} — {cadence}\n",
+            self.current.date,
+            self.today_weekday.label()
+        );
         out.push_str(&format!(
             "current   {}  ships today{}\n",
             self.current.version,
-            tag_note(self.current.already_tagged)
+            cargo_note(self.current.version)
         ));
         out.push_str(&format!(
             "next      {}  ships {} {} — in {}{}\n",
@@ -163,7 +209,7 @@ impl ReleaseWindow {
             CADENCE_DAY.label(),
             self.next.date,
             days_phrase(self.next.days_away),
-            tag_note(self.next.already_tagged)
+            cargo_note(self.next.version)
         ));
         out
     }
@@ -172,21 +218,19 @@ impl ReleaseWindow {
 /// One line's worth of the window.
 fn slot(day: DayNumber, today: DayNumber, tags: &[Version]) -> Result<Slot, ReleaseError> {
     let date = day.civil();
-    let version = Version::for_date(date)?;
     Ok(Slot {
-        version,
+        version: Version::for_date(date, tags)?,
         date,
         days_away: today.days_until(day),
-        already_tagged: tags.contains(&version),
     })
 }
 
-/// `already tagged` marker, for a version that would collide.
-fn tag_note(already_tagged: bool) -> &'static str {
-    if already_tagged {
-        "  [already tagged]"
+/// What `Cargo.toml` must say, named only when it differs from the version.
+fn cargo_note(version: Version) -> String {
+    if version.exceeds_cargo() {
+        format!("  (Cargo.toml: {})", version.cargo_version())
     } else {
-        ""
+        String::new()
     }
 }
 
@@ -230,76 +274,120 @@ mod tests {
     }
 
     fn version(major: u32, month: u8, week: u32) -> Version {
-        Version { major, month, week }
+        Version {
+            major,
+            month,
+            week,
+            increment: 0,
+        }
+    }
+
+    fn incremented(major: u32, month: u8, week: u32, increment: u32) -> Version {
+        Version {
+            major,
+            month,
+            week,
+            increment,
+        }
+    }
+
+    fn untagged(date: CivilDate) -> Version {
+        Version::for_date(date, &[]).expect("version")
     }
 
     #[test]
     fn the_first_seven_days_of_a_month_are_week_zero() {
         for day in 1..=7 {
-            let computed = Version::for_date(date(2026, 8, day)).expect("version");
-            assert_eq!(computed, version(1, 8, 0), "2026-08-{day:02}");
+            assert_eq!(untagged(date(2026, 8, day)), version(1, 8, 0), "day {day}");
         }
     }
 
     #[test]
     fn the_week_advances_every_seven_days() {
-        assert_eq!(
-            Version::for_date(date(2026, 8, 8)).expect("v"),
-            version(1, 8, 1)
-        );
-        assert_eq!(
-            Version::for_date(date(2026, 8, 14)).expect("v"),
-            version(1, 8, 1)
-        );
-        assert_eq!(
-            Version::for_date(date(2026, 8, 15)).expect("v"),
-            version(1, 8, 2)
-        );
-        assert_eq!(
-            Version::for_date(date(2026, 8, 29)).expect("v"),
-            version(1, 8, 4)
-        );
+        assert_eq!(untagged(date(2026, 8, 8)), version(1, 8, 1));
+        assert_eq!(untagged(date(2026, 8, 14)), version(1, 8, 1));
+        assert_eq!(untagged(date(2026, 8, 15)), version(1, 8, 2));
+        assert_eq!(untagged(date(2026, 8, 29)), version(1, 8, 4));
     }
 
     #[test]
     fn august_the_fourth_is_one_eight_zero() {
-        assert_eq!(
-            Version::for_date(date(2026, 8, 4)).expect("v"),
-            version(1, 8, 0)
-        );
-    }
-
-    #[test]
-    fn julys_tuesdays_number_consecutively() {
-        let weeks: Vec<u32> = [7, 14, 21, 28]
-            .into_iter()
-            .map(|d| Version::for_date(date(2026, 7, d)).expect("v").week)
-            .collect();
-        assert_eq!(weeks, vec![0, 1, 2, 3]);
+        assert_eq!(untagged(date(2026, 8, 4)).to_string(), "1.8.0");
     }
 
     #[test]
     fn a_new_month_returns_to_week_zero() {
-        assert_eq!(
-            Version::for_date(date(2026, 9, 1)).expect("v"),
-            version(1, 9, 0)
-        );
+        assert_eq!(untagged(date(2026, 9, 1)), version(1, 9, 0));
     }
 
     #[test]
     fn the_year_rolls_the_major_over() {
-        assert_eq!(
-            Version::for_date(date(2027, 1, 5)).expect("v"),
-            version(2, 1, 0)
-        );
+        assert_eq!(untagged(date(2027, 1, 5)), version(2, 1, 0));
     }
 
     #[test]
     fn a_year_before_the_epoch_has_no_major() {
         assert!(matches!(
-            Version::for_date(date(2020, 1, 7)),
+            Version::for_date(date(2020, 1, 7), &[]),
             Err(ReleaseError::YearBeforeEpoch { year: 2020 })
         ));
+    }
+
+    #[test]
+    fn the_first_release_of_a_week_carries_no_increment() {
+        let computed = untagged(date(2026, 8, 4));
+        assert_eq!(computed.increment, 0);
+        assert_eq!(computed.to_string(), "1.8.0");
+    }
+
+    #[test]
+    fn a_second_release_in_one_week_increments() {
+        let tags = [version(1, 8, 0)];
+        // Thursday of the same week as Tuesday the 4th.
+        let computed = Version::for_date(date(2026, 8, 6), &tags).expect("version");
+        assert_eq!(computed, incremented(1, 8, 0, 1));
+        assert_eq!(computed.to_string(), "1.8.0.1");
+    }
+
+    #[test]
+    fn increments_keep_stacking_within_the_week() {
+        let tags = [version(1, 8, 0), incremented(1, 8, 0, 1)];
+        let computed = Version::for_date(date(2026, 8, 7), &tags).expect("version");
+        assert_eq!(computed.to_string(), "1.8.0.2");
+    }
+
+    #[test]
+    fn an_increment_in_one_week_does_not_leak_into_the_next() {
+        let tags = [version(1, 8, 0), incremented(1, 8, 0, 1)];
+        let computed = Version::for_date(date(2026, 8, 11), &tags).expect("version");
+        assert_eq!(computed.to_string(), "1.8.1");
+    }
+
+    #[test]
+    fn an_increment_in_one_month_does_not_leak_into_the_next() {
+        let tags = [version(1, 8, 0), incremented(1, 8, 0, 1)];
+        let computed = Version::for_date(date(2026, 9, 1), &tags).expect("version");
+        assert_eq!(computed.to_string(), "1.9.0");
+    }
+
+    #[test]
+    fn a_computed_version_is_never_one_that_is_already_tagged() {
+        let mut tags = vec![];
+        // Ten releases on the same day must produce ten distinct versions.
+        for _ in 0..10 {
+            let computed = Version::for_date(date(2026, 8, 4), &tags).expect("version");
+            assert!(!tags.contains(&computed), "{computed} was already tagged");
+            tags.push(computed);
+        }
+        assert_eq!(tags.len(), 10);
+    }
+
+    #[test]
+    fn cargo_gets_the_three_component_prefix() {
+        assert_eq!(version(1, 8, 0).cargo_version(), "1.8.0");
+        assert_eq!(incremented(1, 8, 0, 3).cargo_version(), "1.8.0");
+        assert!(!version(1, 8, 0).exceeds_cargo());
+        assert!(incremented(1, 8, 0, 1).exceeds_cargo());
     }
 
     #[test]
@@ -324,28 +412,39 @@ mod tests {
         let window = ReleaseWindow::compute(day(2026, 8, 4), &[]).expect("window");
         assert!(window.on_cadence_today());
         assert_eq!(window.current.version, version(1, 8, 0));
-        assert_eq!(window.current.days_away, 0);
         assert_eq!(window.next.date, date(2026, 8, 11));
         assert_eq!(window.next.version, version(1, 8, 1));
         assert_eq!(window.next.days_away, 7);
     }
 
     #[test]
-    fn an_existing_tag_is_flagged_rather_than_silently_reused() {
+    fn the_report_names_the_cargo_version_only_when_it_differs() {
+        let plain = ReleaseWindow::compute(day(2026, 8, 4), &[]).expect("window");
+        assert!(!plain.report().contains("Cargo.toml"), "{}", plain.report());
+
         let tags = [version(1, 8, 0)];
-        let window = ReleaseWindow::compute(day(2026, 8, 4), &tags).expect("window");
-        assert!(window.current.already_tagged);
-        assert!(!window.next.already_tagged);
-        assert!(window.report().contains("[already tagged]"));
+        let bumped = ReleaseWindow::compute(day(2026, 8, 6), &tags).expect("window");
+        let report = bumped.report();
+        assert!(
+            report.contains("current   1.8.0.1  ships today  (Cargo.toml: 1.8.0)"),
+            "{report}"
+        );
     }
 
     #[test]
     fn only_version_shaped_tags_are_read() {
-        let listing = "llvm-v22.1.4-kira.1\nv1.7.5\nbackup-2026-07\nv1.8\nv1.13.0\nv0.1.0\n";
+        let listing =
+            "llvm-v22.1.4-kira.1\nv1.7.5\nbackup-2026-07\nv1.8\nv1.13.0\nv1.8.0.1\nv1.2.3.4.5\n";
         assert_eq!(
             parse_tags(listing),
-            vec![version(1, 7, 5), version(0, 1, 0)]
+            vec![version(1, 7, 5), incremented(1, 8, 0, 1)]
         );
+    }
+
+    #[test]
+    fn a_three_component_tag_reads_as_increment_zero() {
+        assert_eq!(parse_tag("v1.8.0"), Some(version(1, 8, 0)));
+        assert_eq!(parse_tag("v1.8.0.0"), Some(version(1, 8, 0)));
     }
 
     #[test]
@@ -387,7 +486,7 @@ mod tests {
             for month in 1..=12u8 {
                 let weeks: Vec<u32> = cadence_days(year, month)
                     .into_iter()
-                    .map(|date| Version::for_date(date).expect("version").week)
+                    .map(|date| untagged(date).week)
                     .collect();
                 let consecutive_from_zero: Vec<u32> =
                     (0..u32::try_from(weeks.len()).expect("count")).collect();
@@ -408,7 +507,7 @@ mod tests {
                 let mut cursor = date(year, month, 1).day_number();
                 while cursor.civil().year == year && cursor.civil().month == month {
                     let civil = cursor.civil();
-                    let week = Version::for_date(civil).expect("version").week;
+                    let week = untagged(civil).week;
                     assert!(week <= 4, "{civil} computed week {week}");
                     cursor = cursor.plus_days(1);
                 }
@@ -422,18 +521,18 @@ mod tests {
         // Tuesdays are the 2nd, 9th, 16th, and 23rd.
         let weeks: Vec<u32> = cadence_days(2027, 2)
             .into_iter()
-            .map(|date| Version::for_date(date).expect("version").week)
+            .map(|date| untagged(date).week)
             .collect();
         assert_eq!(weeks, vec![0, 1, 2, 3]);
-        assert_eq!(Version::for_date(date(2027, 2, 28)).expect("v").week, 3);
+        assert_eq!(untagged(date(2027, 2, 28)).week, 3);
     }
 
     #[test]
     fn the_short_last_week_still_numbers_its_days() {
         // Week 4 holds whatever the month has past day 28: one day in a leap
         // February, two in a 30-day month, three in a 31-day one.
-        assert_eq!(Version::for_date(date(2028, 2, 29)).expect("v").week, 4);
-        assert_eq!(Version::for_date(date(2026, 9, 30)).expect("v").week, 4);
-        assert_eq!(Version::for_date(date(2026, 8, 31)).expect("v").week, 4);
+        assert_eq!(untagged(date(2028, 2, 29)).week, 4);
+        assert_eq!(untagged(date(2026, 9, 30)).week, 4);
+        assert_eq!(untagged(date(2026, 8, 31)).week, 4);
     }
 }
