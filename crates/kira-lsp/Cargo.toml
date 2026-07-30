@@ -17,6 +17,9 @@ kira-program-graph.workspace = true
 kira-semantics.workspace = true
 kira-diagnostics.workspace = true
 kira-source.workspace = true
+# The server reports the same version string the compiler does; a release
+# increment lives outside the Cargo version, so both read it from one place.
+kira-toolchain.workspace = true
 salsa.workspace = true
 lsp-server.workspace = true
 lsp-types.workspace = true

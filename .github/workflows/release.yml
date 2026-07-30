@@ -51,8 +51,30 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # A version may carry a fourth component — `1.8.0.1`, the second release
+      # of one week — which Cargo's version field cannot hold. The tag is the
+      # full string, and KIRA_RELEASE_VERSION carries it into the build so the
+      # binaries report the release rather than the Cargo prefix they compiled
+      # under.
       - name: Resolve the version from the tag
-        run: echo "KIRA_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "KIRA_VERSION=$version" >> "$GITHUB_ENV"
+          echo "KIRA_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+
+      # The tag names the release; Cargo.toml must agree on the part it can
+      # express, or the archive and the compiler inside it claim different
+      # versions.
+      - name: Check the tag against the workspace version
+        run: |
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          case "$KIRA_VERSION" in
+            "$cargo_version" | "$cargo_version".*) ;;
+            *)
+              echo "tag $KIRA_VERSION does not extend Cargo.toml $cargo_version" >&2
+              exit 1
+              ;;
+          esac
 
       # The LLVM backend is a hard dependency of kira; the managed bundle is
       # published by the llvm-bundles workflow, once per pin.

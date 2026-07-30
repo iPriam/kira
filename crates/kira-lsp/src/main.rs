@@ -77,7 +77,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "capabilities": capabilities,
             "serverInfo": {
                 "name": "kira-language-server",
-                "version": env!("CARGO_PKG_VERSION"),
+                "version": kira_toolchain::RELEASE_VERSION,
             },
         }),
     )?;
