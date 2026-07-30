@@ -9,5 +9,8 @@ repository.workspace = true
 name = "devflow"
 path = "src/main.rs"
 
+[dependencies]
+thiserror.workspace = true
+
 [lints]
 workspace = true
