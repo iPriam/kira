@@ -369,4 +369,71 @@ mod tests {
         assert_eq!(window.next.days_away, 1);
         assert!(window.report().contains("in 1 day"), "{}", window.report());
     }
+
+    /// Every Tuesday of a month, in order.
+    fn cadence_days(year: i64, month: u8) -> Vec<CivilDate> {
+        let mut days = Vec::new();
+        let mut cursor = date(year, month, 1).day_number().next_or_same(CADENCE_DAY);
+        while cursor.civil().year == year && cursor.civil().month == month {
+            days.push(cursor.civil());
+            cursor = cursor.plus_days(7);
+        }
+        days
+    }
+
+    #[test]
+    fn month_length_never_breaks_the_cadence_numbering() {
+        for year in 2026..=2040 {
+            for month in 1..=12u8 {
+                let weeks: Vec<u32> = cadence_days(year, month)
+                    .into_iter()
+                    .map(|date| Version::for_date(date).expect("version").week)
+                    .collect();
+                let consecutive_from_zero: Vec<u32> =
+                    (0..u32::try_from(weeks.len()).expect("count")).collect();
+                assert_eq!(weeks, consecutive_from_zero, "{year}-{month:02}");
+                assert!(
+                    weeks.len() == 4 || weeks.len() == 5,
+                    "{year}-{month:02} has {} cadence days",
+                    weeks.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_day_of_any_month_reaches_week_five() {
+        for year in 2026..=2040 {
+            for month in 1..=12u8 {
+                let mut cursor = date(year, month, 1).day_number();
+                while cursor.civil().year == year && cursor.civil().month == month {
+                    let civil = cursor.civil();
+                    let week = Version::for_date(civil).expect("version").week;
+                    assert!(week <= 4, "{civil} computed week {week}");
+                    cursor = cursor.plus_days(1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_twenty_eight_day_february_stops_at_week_three() {
+        // 2027 is not a leap year, and 2027-02-01 is a Monday, so its
+        // Tuesdays are the 2nd, 9th, 16th, and 23rd.
+        let weeks: Vec<u32> = cadence_days(2027, 2)
+            .into_iter()
+            .map(|date| Version::for_date(date).expect("version").week)
+            .collect();
+        assert_eq!(weeks, vec![0, 1, 2, 3]);
+        assert_eq!(Version::for_date(date(2027, 2, 28)).expect("v").week, 3);
+    }
+
+    #[test]
+    fn the_short_last_week_still_numbers_its_days() {
+        // Week 4 holds whatever the month has past day 28: one day in a leap
+        // February, two in a 30-day month, three in a 31-day one.
+        assert_eq!(Version::for_date(date(2028, 2, 29)).expect("v").week, 4);
+        assert_eq!(Version::for_date(date(2026, 9, 30)).expect("v").week, 4);
+        assert_eq!(Version::for_date(date(2026, 8, 31)).expect("v").week, 4);
+    }
 }
