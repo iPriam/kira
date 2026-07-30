@@ -19,13 +19,14 @@ pub enum Verb {
     Land,
     Sync,
     OpenUpstreamPr,
+    ReleaseWindow,
     NextVersion,
     ReleasePrep,
     Release,
 }
 
 /// All verbs, in help order.
-pub const ALL: [Verb; 19] = [
+pub const ALL: [Verb; 20] = [
     Verb::Status,
     Verb::Commit,
     Verb::Push,
@@ -42,6 +43,7 @@ pub const ALL: [Verb; 19] = [
     Verb::Land,
     Verb::Sync,
     Verb::OpenUpstreamPr,
+    Verb::ReleaseWindow,
     Verb::NextVersion,
     Verb::ReleasePrep,
     Verb::Release,
@@ -70,6 +72,7 @@ impl Verb {
             Self::Land => "land",
             Self::Sync => "sync",
             Self::OpenUpstreamPr => "open-upstream-pr",
+            Self::ReleaseWindow => "release-window",
             Self::NextVersion => "next-version",
             Self::ReleasePrep => "release-prep",
             Self::Release => "release",
