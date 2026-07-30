@@ -26,7 +26,7 @@ pub fn dispatch(command: Command, args: &[String]) -> i32 {
             0
         }
         Command::Version => {
-            println!("kira {}", env!("CARGO_PKG_VERSION"));
+            println!("kira {}", kira_toolchain::RELEASE_VERSION);
             0
         }
         other => unavailable(other),
