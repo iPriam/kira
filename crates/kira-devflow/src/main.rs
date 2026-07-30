@@ -2,9 +2,12 @@
 //!
 //! Standalone tool crate (outside the layered package graph).
 
+mod calendar;
 mod commands;
+mod release_window;
 
 use commands::Verb;
+use release_window::ReleaseWindow;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -18,8 +21,24 @@ fn main() {
         usage();
         std::process::exit(2);
     };
-    eprintln!("devflow {}: not yet implemented", verb.label());
-    std::process::exit(2);
+    match verb {
+        Verb::ReleaseWindow => release_window(),
+        other => {
+            eprintln!("devflow {}: not yet implemented", other.label());
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Print which version ships on which Tuesday, and how long the wait is.
+fn release_window() {
+    match ReleaseWindow::for_today() {
+        Ok(window) => print!("{}", window.report()),
+        Err(error) => {
+            eprintln!("devflow release-window: {error}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn usage() {
