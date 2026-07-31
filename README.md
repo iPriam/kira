@@ -125,9 +125,13 @@ See [docs/ffi.md](docs/ffi.md) for the manifest format and the current limits.
 
 KSL is Kira's shader language, parsed and validated by a sibling pipeline rather
 than the executable `.kira` frontend. Its crates —
-`kira-ksl-parser`, `kira-ksl-semantics`, `kira-shader-ir`, and the MSL, GLSL,
-WGSL, HLSL, and SPIR-V backends — are in this workspace, and the `ksl!` macro
-compiles shaders as part of a build. The standalone `kira shader` verb is not
+`kira-ksl-parser`, `kira-ksl-semantics`, `kira-shader-ir`, and the MSL, WGSL,
+and GLSL 330 backends — are in this workspace, and a build compiles every shader
+its program names for all three. The HLSL and SPIR-V crates exist but emit
+nothing yet, so D3D12 and Vulkan have no shader path. `ksl!` is no builtin: it
+is an ordinary `comptime macro` the engine declares, over the one compile-time
+call the compiler owns, `Ksl.compile(path, target)`. See
+[docs/macros.md](docs/macros.md). The standalone `kira shader` verb is not
 implemented yet.
 
 ## Packages and toolchains
