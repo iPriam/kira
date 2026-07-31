@@ -64,6 +64,11 @@ struct KslArtifact {
     var fragmentWgsl: String = ""
     var vertexGlsl: String = ""
     var fragmentGlsl: String = ""
+    var vertexHlsl: String = ""
+    var fragmentHlsl: String = ""
+    var computeHlsl: String = ""
+    var vertexSpirv: String = ""
+    var computeSpirv: String = ""
     var uniformReflection: String = ""
 }
 
@@ -73,6 +78,8 @@ comptime macro ksl {
         let msl = Ksl.compile(input, "msl")
         let wgsl = Ksl.compile(input, "wgsl")
         let glsl = Ksl.compile(input, "glsl_330")
+        let hlsl = Ksl.compile(input, "hlsl")
+        let spirv = Ksl.compile(input, "spirv")
         return quote {
             KslArtifact(
                 shaderName: #{msl.shaderName},
@@ -84,6 +91,11 @@ comptime macro ksl {
                 fragmentWgsl: #{wgsl.fragmentSource},
                 vertexGlsl: #{glsl.vertexSource},
                 fragmentGlsl: #{glsl.fragmentSource},
+                vertexHlsl: #{hlsl.vertexSource},
+                fragmentHlsl: #{hlsl.fragmentSource},
+                computeHlsl: #{hlsl.computeSource},
+                vertexSpirv: #{spirv.vertexSource},
+                computeSpirv: #{spirv.computeSource},
                 uniformReflection: #{msl.uniformReflection}
             )
         }
@@ -114,6 +126,10 @@ function main() {{
     print(art.vertexWgsl.indexOf("@vertex") >= 0)
     print(art.fragmentWgsl.indexOf("@fragment") >= 0)
     print(art.vertexGlsl.indexOf("#version 330 core") >= 0)
+    print(art.vertexHlsl.indexOf("column_major float4x4") >= 0)
+    print(art.fragmentHlsl.indexOf("SV_Target0") >= 0)
+    // SPIR-V is binary, so it crossed as hexadecimal — the magic word first.
+    print(art.vertexSpirv.substring(0, 8))
     return
 }}
 "##
@@ -125,7 +141,8 @@ function main() {{
          vertex_main\n\
          fragment_main\n\
          camera:0:64:1:1:view_projection@0#64;\n\
-         true\ntrue\ntrue\ntrue\ntrue\n",
+         true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n\
+         07230203\n",
     );
 }
 
@@ -145,6 +162,10 @@ function main() {{
     let art = ksl!("Shaders/Step.ksl")
     print(art.computeEntry)
     print(art.combinedMsl.indexOf("kernel") >= 0)
+    // D3D and Vulkan both have a compute stage where GLSL 330 does not, so
+    // these two carry it.
+    print(art.computeHlsl.indexOf("[numthreads(64, 1, 1)]") >= 0)
+    print(art.computeSpirv.substring(0, 8))
     // Never compiled, so empty — and readable rather than missing.
     print(art.vertexGlsl.count)
     print(art.vertexEntry.count)
@@ -177,5 +198,5 @@ shader Step {
 ",
         )],
     );
-    assert_eq!(output, "compute_main\ntrue\n0\n0\n");
+    assert_eq!(output, "compute_main\ntrue\ntrue\n07230203\n0\n0\n");
 }
