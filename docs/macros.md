@@ -469,16 +469,61 @@ the wrapper struct's own `get`/`set`; the compiler knows nothing about it.
 The generated names are derived by splice gluing rather than by hygienic gensym,
 because the rewritten uses must be able to name them.
 
-## The builtin `ksl!` shader macro
+## The `Ksl` shader namespace
 
-`ksl!("Shaders/Name.ksl")` needs no declaration: it compiles a KSL file at
-compile time and expands to the artifact literal holding every backend's shader
-source. Its macro surface is implemented — where it may be written, and the
-validation of its single string-literal argument (`KMAC023`, `KMAC024`) — but
-the KSL pipeline it delegates to is not implemented in this compiler, so a
-well-formed call is refused with `KMAC022` naming what is missing rather than
-expanding to a fabricated artifact. A shader that silently compiled to nothing
-would take a render path down at runtime instead of at build time.
+`ksl!` is not a compiler builtin. It is an ordinary `comptime macro` the engine
+declares, and the compiler's whole half of the contract is one compile-time
+call, `Ksl.compile(path, target)`, which answers with one backend's output for
+one shader:
+
+```kira
+comptime macro ksl {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        let msl = Ksl.compile(input, "msl")
+        let wgsl = Ksl.compile(input, "wgsl")
+        return quote {
+            KslArtifact(
+                combinedMsl: #{msl.combinedSource},
+                vertexWgsl: #{wgsl.vertexSource},
+                fragmentWgsl: #{wgsl.fragmentSource},
+                vertexEntry: #{msl.vertexEntry},
+                uniformReflection: #{msl.uniformReflection},
+            )
+        }
+    }
+}
+```
+
+Note what the compiler does not know there: `KslArtifact`, its field names, and
+how many backends get inlined are all Kira source, so an engine can add a
+target, drop one, or rename a field without a compiler release.
+
+The value `Ksl.compile` returns is a record whose every member is a `String` —
+`shaderName`, `combinedSource`, `vertexSource`, `fragmentSource`,
+`computeSource`, `vertexEntry`, `fragmentEntry`, `computeEntry`, and
+`uniformReflection`. Every member is always present: a stage a shader does not
+have, and a source form a target does not use, read as the empty string rather
+than as an absent member, so a macro body asks whether one is empty instead of
+branching on a shape that varies per target. Being strings is also what makes
+inlining work at all — each one splices into a `quote` as a Kira string literal
+with its newlines and quotes already escaped.
+
+`path` is relative to the package root, the way `assets` in a manifest is:
+`ksl!("Shaders/X.ksl")` written in `app/main.kira` names `Shaders/X.ksl` beside
+`package.kira`. It must be a literal known at compile time (`KMAC024`), and the
+call site's own syntax counts as one, so a `function` macro can hand `input`
+straight through without unquoting it by hand.
+
+Shaders are compiled *before* analysis rather than during it: expansion runs
+inside salsa queries, which may not read files, so the build layer scans the
+program for `name!("….ksl")` call sites, compiles each one, and hands the
+results in as a query input. Matching on the shape rather than on the macro's
+name is deliberate — an engine that calls its shader macro something else still
+gets its shaders compiled. A compiler handed no pipeline refuses with `KMAC022`
+naming what is missing rather than expanding to a fabricated artifact, because a
+shader that silently compiled to nothing would take a render path down at
+runtime instead of at build time.
 
 ## Diagnostics
 
@@ -500,9 +545,9 @@ would take a render path down at runtime instead of at build time.
 | `KMAC017` | expression-position expansion that is not a single expression |
 | `KMAC020` | an `expand` body used a construct the evaluator does not support |
 | `KMAC021` | a macro raised `Diagnostics.error` |
-| `KMAC022` | `ksl!` could not compile the shader it names |
-| `KMAC023` | `ksl!` passed other than one argument |
-| `KMAC024` | `ksl!` passed a path that is not a string literal |
+| `KMAC022` | `Ksl.compile` could not compile the shader it names |
+| `KMAC023` | `Ksl.compile` passed other than two arguments |
+| `KMAC024` | `Ksl.compile` passed a path that is not a string literal |
 | `KMAC025` | `Syntax.dropField` on a field that does not exist |
 | `KMAC026` | a declaration-only `Syntax` method on a non-declaration value |
 | `KMAC027` | assignment through a wrapped property path |
@@ -513,9 +558,8 @@ would take a render path down at runtime instead of at build time.
 
 `kira-macros` (layer 1) owns the whole pass and is called from
 `kira_semantics::expanded`, the one query between reading a file and parsing it.
-A program that declares no macros and writes no `ksl!` is returned
-byte-identical after one lexing pass per file, so nothing downstream can tell
-the pass ran.
+A program that declares no macros is returned byte-identical after one lexing
+pass per file, so nothing downstream can tell the pass ran.
 
 The pass is split per file, and `expanded` is an orchestrator over the pieces:
 `kira_macros::scan` finds what one file declares, the macro-declaring files
