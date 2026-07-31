@@ -174,7 +174,13 @@ fn env_override() -> Option<PathBuf> {
 ///
 /// The C API header is the load-bearing artifact: it is what the backend's
 /// bindings are generated against, and every layout Kira accepts ships it.
-fn is_llvm_home(home: &Path) -> bool {
+///
+/// Public because whatever *installs* a bundle must accept exactly what
+/// discovery will later look for. A provisioner with its own idea of a
+/// complete tree is how an install succeeds and the next build reports that
+/// nothing is installed.
+#[must_use]
+pub fn is_llvm_home(home: &Path) -> bool {
     home.join("include").join("llvm-c").join("Core.h").is_file()
 }
 

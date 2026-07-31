@@ -45,6 +45,27 @@ pub enum KnvmCommand {
     Sinstall,
     /// Report the locally installed toolchains.
     List,
+    /// Report the versions published on every channel.
+    ListRemote,
+    /// Provision the pinned LLVM bundle the native backend links.
+    InstallLlvm {
+        /// Whether to replace a bundle that is already installed.
+        force: bool,
+    },
+    /// Replace the installed tools with the newest published build.
+    SelfUpdate {
+        /// Which channel to take the newest tools from.
+        channel: Channel,
+    },
+    /// Pin the toolchain a directory tree uses.
+    Pin {
+        /// Which version to pin to.
+        version: String,
+        /// Which channel it is installed on.
+        channel: Channel,
+    },
+    /// Remove a directory tree's pin.
+    Unpin,
     /// Select an already-installed toolchain.
     Use {
         /// Which installed version to select.
@@ -136,9 +157,55 @@ pub fn parse(arguments: &[String]) -> Result<KnvmCommand, UsageError> {
         }
         "list" => {
             // `list` reports every channel at once, so it takes no `--channel`
-            // and rejects one rather than silently ignoring it.
+            // and rejects one rather than silently ignoring it. `--remote` asks
+            // the same question of the feed instead of of the disk, which is
+            // why it is a flag on `list` and not a verb of its own.
+            match rest.first().map(String::as_str) {
+                None => Ok(KnvmCommand::List),
+                Some("--remote") => {
+                    reject_arguments(&rest[1..])?;
+                    Ok(KnvmCommand::ListRemote)
+                }
+                Some(_) => {
+                    reject_arguments(rest)?;
+                    Ok(KnvmCommand::List)
+                }
+            }
+        }
+        "install-llvm" => {
+            // The version is the compiled-in pin and the host is this machine,
+            // so the only choice is whether to replace what is already there.
+            match rest.first().map(String::as_str) {
+                None => Ok(KnvmCommand::InstallLlvm { force: false }),
+                Some("--force") => {
+                    reject_arguments(&rest[1..])?;
+                    Ok(KnvmCommand::InstallLlvm { force: true })
+                }
+                Some(_) => {
+                    reject_arguments(rest)?;
+                    Ok(KnvmCommand::InstallLlvm { force: false })
+                }
+            }
+        }
+        "self-update" => {
+            let parsed = parse_version_and_channel(rest)?;
+            if let Some(version) = parsed.version {
+                return Err(UsageError::UnexpectedArgument(version));
+            }
+            Ok(KnvmCommand::SelfUpdate {
+                channel: parsed.channel,
+            })
+        }
+        "pin" => {
+            let parsed = parse_version_and_channel(rest)?;
+            Ok(KnvmCommand::Pin {
+                version: parsed.version.ok_or(UsageError::MissingVersion("pin"))?,
+                channel: parsed.channel,
+            })
+        }
+        "unpin" => {
             reject_arguments(rest)?;
-            Ok(KnvmCommand::List)
+            Ok(KnvmCommand::Unpin)
         }
         "binstall" => {
             // The checkout is found from the working directory and the channel
@@ -208,20 +275,28 @@ pub fn usage(paint: crate::Paint) -> String {
     // Invocation, arguments, one-line note. The note column is aligned by the
     // *visible* width of the invocation — padding is computed before color is
     // applied, because ANSI escapes inflate `len()` and would stagger it.
-    const VERBS: [(&str, &str, &str); 6] = [
+    const VERBS: [(&str, &str, &str); 10] = [
         (
             "install",
             " <version|latest> [--channel]",
             "fetch a release and select it",
         ),
+        ("install-llvm", " [--force]", "the LLVM the backend links"),
         ("binstall", "", "this checkout as the dev toolchain"),
         ("sinstall", "", "knvm and kira themselves, onto PATH"),
-        ("list", "", "what is installed; * marks selected"),
+        ("self-update", " [--channel]", "the newest published tools"),
+        ("list", " [--remote]", "what is installed, or published"),
         (
             "use",
             " <version> [--channel]",
             "select an installed version",
         ),
+        (
+            "pin",
+            " <version> [--channel]",
+            "pin this directory tree to a version",
+        ),
+        ("unpin", "", "remove this directory tree's pin"),
         (
             "uninstall",
             " <version> [--channel]",
@@ -252,9 +327,13 @@ pub fn usage(paint: crate::Paint) -> String {
     text.push_str(&format!(
         "\n{options}\n\
          \x20 --channel <release|dev>   {channel_note}\n\
+         \x20 --remote                  {remote_note}\n\
+         \x20 --force                   {force_note}\n\
          \x20 -h, --help                {help_note}\n",
         options = paint.bold("Options:"),
         channel_note = paint.dim("which channel to act on (default: release)"),
+        remote_note = paint.dim("list what is published rather than installed"),
+        force_note = paint.dim("replace an already-installed LLVM bundle"),
         help_note = paint.dim("print this message"),
     ));
     text
@@ -424,14 +503,94 @@ mod tests {
     }
 
     #[test]
+    fn parses_the_two_shapes_of_list() {
+        assert_eq!(parse_args(&["list"]), Ok(KnvmCommand::List));
+        assert_eq!(
+            parse_args(&["list", "--remote"]),
+            Ok(KnvmCommand::ListRemote)
+        );
+        assert_eq!(
+            parse_args(&["list", "--remote", "dev"]),
+            Err(UsageError::UnexpectedArgument("dev".to_string())),
+            "`--remote` reports every channel, so a filter must be refused"
+        );
+    }
+
+    #[test]
+    fn parses_install_llvm_and_its_only_option() {
+        assert_eq!(
+            parse_args(&["install-llvm"]),
+            Ok(KnvmCommand::InstallLlvm { force: false })
+        );
+        assert_eq!(
+            parse_args(&["install-llvm", "--force"]),
+            Ok(KnvmCommand::InstallLlvm { force: true })
+        );
+        assert_eq!(
+            parse_args(&["install-llvm", "22.1.4"]),
+            Err(UsageError::UnexpectedArgument("22.1.4".to_string())),
+            "the version is the compiled-in pin, never an argument"
+        );
+    }
+
+    #[test]
+    fn parses_self_update_which_takes_a_channel_and_no_version() {
+        assert_eq!(
+            parse_args(&["self-update"]),
+            Ok(KnvmCommand::SelfUpdate {
+                channel: Channel::Release
+            })
+        );
+        assert_eq!(
+            parse_args(&["self-update", "--channel", "dev"]),
+            Ok(KnvmCommand::SelfUpdate {
+                channel: Channel::Dev
+            })
+        );
+        assert_eq!(
+            parse_args(&["self-update", "1.7.3"]),
+            Err(UsageError::UnexpectedArgument("1.7.3".to_string())),
+            "self-update takes the newest, so naming a version is a misunderstanding to report"
+        );
+    }
+
+    #[test]
+    fn parses_pin_and_unpin() {
+        assert_eq!(
+            parse_args(&["pin", "1.10.0"]),
+            Ok(KnvmCommand::Pin {
+                version: "1.10.0".to_string(),
+                channel: Channel::Release,
+            })
+        );
+        assert_eq!(
+            parse_args(&["pin", "2026.07.2", "--channel", "dev"]),
+            Ok(KnvmCommand::Pin {
+                version: "2026.07.2".to_string(),
+                channel: Channel::Dev,
+            })
+        );
+        assert_eq!(parse_args(&["pin"]), Err(UsageError::MissingVersion("pin")));
+        assert_eq!(parse_args(&["unpin"]), Ok(KnvmCommand::Unpin));
+        assert_eq!(
+            parse_args(&["unpin", "1.10.0"]),
+            Err(UsageError::UnexpectedArgument("1.10.0".to_string()))
+        );
+    }
+
+    #[test]
     fn every_verb_the_usage_text_names_parses() {
         let text = usage(crate::Paint::plain());
         for verb in [
             "install",
+            "install-llvm",
             "binstall",
             "sinstall",
+            "self-update",
             "list",
             "use",
+            "pin",
+            "unpin",
             "uninstall",
         ] {
             assert!(
