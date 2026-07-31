@@ -17,6 +17,34 @@ use std::time::Instant;
 
 use kira_diagnostics::progress::ProgressSink;
 
+/// Prints to stdout with the status surface stood aside first.
+///
+/// The surface erases itself by moving the cursor up over the rows it drew.
+/// Anything printed between the last redraw and that erase moves the cursor
+/// too, so the erase walks up from the wrong place and wipes the *output*
+/// instead of the surface — which is how a command can fail and leave nothing
+/// but a stale title line on screen.
+///
+/// Suspending first is the fix, and going through these macros is what makes
+/// it hold: a bare `println!` added later is the bug coming back. Suspending
+/// twice is free — the erase does nothing once the surface is already down.
+macro_rules! out {
+    ($($argument:tt)*) => {{
+        let _suspended = kira_diagnostics::progress::suspended();
+        println!($($argument)*);
+    }};
+}
+
+/// [`out`] for stderr: diagnostics, refusals, and every `kira: …` failure.
+macro_rules! err {
+    ($($argument:tt)*) => {{
+        let _suspended = kira_diagnostics::progress::suspended();
+        eprintln!($($argument)*);
+    }};
+}
+
+pub(crate) use {err, out};
+
 /// How many recent phases stay on screen.
 const VISIBLE: usize = 6;
 
