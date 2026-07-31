@@ -14,6 +14,7 @@ use kira_runtime_abi::NativeStateHost;
 
 use super::{EXIT_FAILURE, EXIT_OK};
 use crate::options::CompileOptions;
+use crate::progress::err;
 use crate::{hybrid, native, wasm};
 
 /// Builds a program for the Web and serves it, opening a browser at it.
@@ -31,7 +32,7 @@ pub(super) fn run_web(
     ) {
         Ok(()) => EXIT_OK,
         Err(error) => {
-            eprintln!("kira: {error}");
+            err!("kira: {error}");
             EXIT_FAILURE
         }
     }
@@ -54,7 +55,7 @@ pub(super) fn run_hybrid(
     ) {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("kira: {error}");
+            err!("kira: {error}");
             EXIT_FAILURE
         }
     }
@@ -74,7 +75,7 @@ pub(super) fn run_on_vm(
     let module = match kira_bytecode::compile(ir) {
         Ok(module) => module,
         Err(error) => {
-            eprintln!("kira: bytecode compilation failed: {error}");
+            err!("kira: bytecode compilation failed: {error}");
             return EXIT_FAILURE;
         }
     };
@@ -87,7 +88,7 @@ pub(super) fn run_on_vm(
         return match kira_vm_runtime::execute(&module, &mut host) {
             Ok(_) => EXIT_OK,
             Err(trap) => {
-                eprintln!("kira: runtime trap: {trap}");
+                err!("kira: runtime trap: {trap}");
                 EXIT_FAILURE
             }
         };
@@ -96,14 +97,14 @@ pub(super) fn run_on_vm(
     let sidecar = match native::build_adapter_sidecar(ir, source, foreign_link) {
         Ok(path) => path,
         Err(error) => {
-            eprintln!("kira: {error}");
+            err!("kira: {error}");
             return EXIT_FAILURE;
         }
     };
     let program = match kira_vm_runtime::Program::load(module) {
         Ok(program) => program,
         Err(error) => {
-            eprintln!("kira: {error}");
+            err!("kira: {error}");
             return EXIT_FAILURE;
         }
     };
@@ -119,14 +120,14 @@ pub(super) fn run_on_vm(
     ) {
         Ok(session) => session,
         Err(error) => {
-            eprintln!("kira: cannot load the foreign-adapter sidecar: {error}");
+            err!("kira: cannot load the foreign-adapter sidecar: {error}");
             return EXIT_FAILURE;
         }
     };
     match session.run() {
         Ok(_) => EXIT_OK,
         Err(trap) => {
-            eprintln!("kira: runtime trap: {trap}");
+            err!("kira: runtime trap: {trap}");
             EXIT_FAILURE
         }
     }
@@ -160,13 +161,13 @@ pub(super) fn run_native(
         return EXIT_FAILURE;
     };
     let Some(executable) = artifacts.executable else {
-        eprintln!("kira run: the native build produced no executable");
+        err!("kira run: the native build produced no executable");
         return EXIT_FAILURE;
     };
     match native::execute(&executable) {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("kira: {error}");
+            err!("kira: {error}");
             EXIT_FAILURE
         }
     }
@@ -187,7 +188,7 @@ pub(super) fn build_native(
     ) {
         Ok(artifacts) => Some(artifacts),
         Err(error) => {
-            eprintln!("kira: {error}");
+            err!("kira: {error}");
             None
         }
     }

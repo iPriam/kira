@@ -43,6 +43,7 @@ use crate::library;
 use crate::native;
 use crate::native_library;
 use crate::options::{CompileOptions, Device};
+use crate::progress::{err, out};
 use crate::wasm;
 
 mod execute;
@@ -73,7 +74,7 @@ pub fn check(args: &[String]) -> i32 {
             if compiled.has_errors() {
                 EXIT_FAILURE
             } else {
-                println!("ok: {path}");
+                out!("ok: {path}");
                 EXIT_OK
             }
         }
@@ -170,7 +171,7 @@ pub fn test(args: &[String]) -> i32 {
     {
         Some(index) => ir.main = Some(index as u32),
         None => {
-            eprintln!(
+            err!(
                 "kira test: this program has no tests to run\n\
                  note: a test is a `Test` declaration, and `import Foundation` is what \
                  brings the family and its runner into a package"
@@ -207,7 +208,7 @@ fn resolve_foreign(
 ) -> Result<Option<NativeLinkInputs>, i32> {
     let target = crate::foreign_libs::target_for_device(device);
     crate::foreign_libs::resolve(std::path::Path::new(source), ir, target).map_err(|error| {
-        eprintln!("kira: {error}");
+        err!("kira: {error}");
         EXIT_FAILURE
     })
 }
@@ -231,7 +232,7 @@ pub fn live(args: &[String]) -> i32 {
     let options = match crate::live::LiveOptions::parse(args) {
         Ok(options) => options,
         Err(error) => {
-            eprintln!("kira live: {error}");
+            err!("kira live: {error}");
             return EXIT_USAGE;
         }
     };
@@ -253,7 +254,7 @@ pub fn live(args: &[String]) -> i32 {
     match crate::supervisor::run(&options, source, &rebuild) {
         Ok(()) => EXIT_OK,
         Err(error) => {
-            eprintln!("kira live: {error}");
+            err!("kira live: {error}");
             EXIT_FAILURE
         }
     }
@@ -320,7 +321,7 @@ fn export_engine_is_built(
             BackendMode::Hybrid => return Ok(()),
         },
     };
-    eprintln!(
+    err!(
         "kira {verb}: `--backend {}` on `--device {}`: library export is not built yet: \
          {missing}\n\
          note: this package exports {}\n\
@@ -330,7 +331,7 @@ fn export_engine_is_built(
         device.label(),
         names.join(", "),
     );
-    println!("Failed to {verb}");
+    out!("Failed to {verb}");
     Err(EXIT_FAILURE)
 }
 
@@ -370,7 +371,7 @@ pub fn build(args: &[String]) -> i32 {
     let foreign = match resolve_foreign(&options.path, ir, options.device) {
         Ok(foreign) => foreign,
         Err(_) => {
-            println!("Failed to build");
+            out!("Failed to build");
             return EXIT_FAILURE;
         }
     };
@@ -379,12 +380,12 @@ pub fn build(args: &[String]) -> i32 {
     if let Device::Web(device) = options.device {
         return match wasm::build(ir, std::path::Path::new(&options.path), device, link) {
             Ok(artifacts) => {
-                println!("Successfully built {}", artifacts.wasm.display());
+                out!("Successfully built {}", artifacts.wasm.display());
                 EXIT_OK
             }
             Err(error) => {
-                eprintln!("kira: {error}");
-                println!("Failed to build");
+                err!("kira: {error}");
+                out!("Failed to build");
                 EXIT_FAILURE
             }
         };
@@ -402,8 +403,8 @@ pub fn build(args: &[String]) -> i32 {
                     EXIT_OK
                 }
                 Err(error) => {
-                    eprintln!("kira: {error}");
-                    println!("Failed to build");
+                    err!("kira: {error}");
+                    out!("Failed to build");
                     EXIT_FAILURE
                 }
             }
@@ -422,16 +423,16 @@ pub fn build(args: &[String]) -> i32 {
                             link,
                         )
                     {
-                        eprintln!("kira: {error}");
-                        println!("Failed to build");
+                        err!("kira: {error}");
+                        out!("Failed to build");
                         return EXIT_FAILURE;
                     }
-                    println!("Successfully built");
+                    out!("Successfully built");
                     EXIT_OK
                 }
                 Err(error) => {
-                    eprintln!("kira: bytecode compilation failed: {error}");
-                    println!("Failed to build");
+                    err!("kira: bytecode compilation failed: {error}");
+                    out!("Failed to build");
                     EXIT_FAILURE
                 }
             }
@@ -451,19 +452,19 @@ pub fn build(args: &[String]) -> i32 {
                     EXIT_OK
                 }
                 Err(error) => {
-                    eprintln!("kira: {error}");
-                    println!("Failed to build");
+                    err!("kira: {error}");
+                    out!("Failed to build");
                     EXIT_FAILURE
                 }
             }
         }
         BackendMode::LlvmNative => match build_native(ir, &options, link) {
             Some(_) => {
-                println!("Successfully built");
+                out!("Successfully built");
                 EXIT_OK
             }
             None => {
-                println!("Failed to build");
+                out!("Failed to build");
                 EXIT_FAILURE
             }
         },
@@ -482,8 +483,8 @@ pub fn build(args: &[String]) -> i32 {
                     EXIT_OK
                 }
                 Err(error) => {
-                    eprintln!("kira: {error}");
-                    println!("Failed to build");
+                    err!("kira: {error}");
+                    out!("Failed to build");
                     EXIT_FAILURE
                 }
             }
@@ -495,12 +496,12 @@ pub fn build(args: &[String]) -> i32 {
             link,
         ) {
             Ok(_) => {
-                println!("Successfully built");
+                out!("Successfully built");
                 EXIT_OK
             }
             Err(error) => {
-                eprintln!("kira: {error}");
-                println!("Failed to build");
+                err!("kira: {error}");
+                out!("Failed to build");
                 EXIT_FAILURE
             }
         },
@@ -510,7 +511,7 @@ pub fn build(args: &[String]) -> i32 {
 /// Parses shared options, reporting usage errors against `verb`.
 fn parse_options(verb: &str, args: &[String]) -> Result<CompileOptions, i32> {
     CompileOptions::parse(args).map_err(|error| {
-        eprintln!("kira {verb}: {error}");
+        err!("kira {verb}: {error}");
         EXIT_USAGE
     })
 }
@@ -518,7 +519,7 @@ fn parse_options(verb: &str, args: &[String]) -> Result<CompileOptions, i32> {
 /// Resolves a package directory to the source file that seeds compilation.
 fn resolve_path(path: &str) -> Result<String, i32> {
     let target = kira_project::resolve_target(std::path::Path::new(path)).map_err(|error| {
-        eprintln!("kira: {error}");
+        err!("kira: {error}");
         match error {
             kira_project::DiscoveryError::NotPackageDirectory { .. }
             | kira_project::DiscoveryError::MissingEntrypoint { .. }
@@ -528,7 +529,7 @@ fn resolve_path(path: &str) -> Result<String, i32> {
         }
     })?;
     target.source_path.ok_or_else(|| {
-        eprintln!("kira: `{path}` did not resolve to a compilable Kira source");
+        err!("kira: `{path}` did not resolve to a compilable Kira source");
         EXIT_USAGE
     })
 }
@@ -546,7 +547,7 @@ fn apply_manifest_defaults(
         && let Some(target) = compiled.default_build_target.as_deref()
     {
         options.device = manifest_device(target).ok_or_else(|| {
-            eprintln!("kira {verb}: unknown manifest build target `{target}`");
+            err!("kira {verb}: unknown manifest build target `{target}`");
             EXIT_FAILURE
         })?;
     }
@@ -556,13 +557,13 @@ fn apply_manifest_defaults(
             && let Some(mode) = compiled.default_execution_mode.as_deref()
         {
             options.backend = manifest_backend(mode).ok_or_else(|| {
-                eprintln!("kira {verb}: unknown manifest execution mode `{mode}`");
+                err!("kira {verb}: unknown manifest execution mode `{mode}`");
                 EXIT_FAILURE
             })?;
         }
     } else {
         if options.backend_explicit && options.backend != BackendMode::LlvmNative {
-            eprintln!(
+            err!(
                 "kira: `--device {}` overrides `--backend {}`: the Web device has one code generator",
                 options.device.label(),
                 options.backend.label(),
@@ -602,7 +603,7 @@ fn verified_as(verb: &str, path: &str, kind: kira_semantics::BuildKind) -> Resul
     let resolved = resolve_path(path)?;
     let compiled =
         kira_build::compile_as(std::path::Path::new(&resolved), Some(kind)).map_err(|error| {
-            eprintln!("kira {verb}: {error}");
+            err!("kira {verb}: {error}");
             EXIT_FAILURE
         })?;
     emit_diagnostics(&compiled.diagnostics, &compiled.sources);
@@ -635,7 +636,7 @@ fn runnable_path_ir(verb: &str, path: &str) -> Result<IrProgram, i32> {
 fn runnable_ir(verb: &str, compiled: Compiled) -> Result<IrProgram, i32> {
     let ir = compiled.ir;
     if ir.main.is_none() {
-        eprintln!(
+        err!(
             "kira {verb}: cannot {verb} a library: a library has no `@Main` \
              entrypoint, because it is entered by whatever consumes it\n\
              note: `kira build` compiles a library to an artifact a consumer links"
@@ -655,7 +656,7 @@ fn runnable_ir(verb: &str, compiled: Compiled) -> Result<IrProgram, i32> {
 fn compile(path: &str) -> Result<Compiled, i32> {
     let resolved = resolve_path(path)?;
     kira_build::compile(std::path::Path::new(&resolved)).map_err(|error| {
-        eprintln!("kira: {error}");
+        err!("kira: {error}");
         // A path the user typed that is not there is a usage error; everything
         // else got far enough that the invocation itself was fine.
         match error {
@@ -672,7 +673,9 @@ fn compile(path: &str) -> Result<Compiled, i32> {
 fn emit_diagnostics(diagnostics: &[Diagnostic], sources: &SourceMap) {
     // The status surface redraws in place; a diagnostic printed underneath it
     // would interleave into half a status block, a note, and a block that
-    // scrolled. It stands aside and redraws on the next phase.
+    // scrolled. It stands aside and redraws on the next phase. Suspended once
+    // for the whole run rather than per line, which `err!` would also do
+    // correctly but at one erase check per diagnostic.
     let _surface = kira_diagnostics::progress::suspended();
     for diagnostic in diagnostics {
         eprint!("{}", renderer::render(diagnostic, sources));
