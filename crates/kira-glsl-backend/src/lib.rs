@@ -221,7 +221,7 @@ fn emit_entry(
         emitter.line(1, &declared);
         for field in &reflected.inputs {
             let source = match (field.builtin, stage) {
-                (Some(builtin), _) => emit::builtin_name(builtin).to_owned(),
+                (Some(builtin), _) => emit::builtin_name(builtin, stage).to_owned(),
                 (None, Stage::Vertex) => field.name.clone(),
                 (None, _) => format!("v_{}", field.name),
             };
@@ -238,7 +238,7 @@ fn emit_entry(
                 let returned = emitter.expr(value);
                 for field in &reflected.outputs {
                     let target = match (field.builtin, stage) {
-                        (Some(builtin), _) => emit::builtin_name(builtin).to_owned(),
+                        (Some(builtin), _) => emit::builtin_name(builtin, stage).to_owned(),
                         (None, Stage::Fragment) => field.name.clone(),
                         (None, _) => format!("v_{}", field.name),
                     };
