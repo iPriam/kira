@@ -61,6 +61,49 @@ fn write_program(entry: &str, modules: &[(&str, &str)]) -> PathBuf {
     path
 }
 
+/// Asserts every backend agrees on a program shipping files beside it.
+///
+/// `files` are written verbatim at the paths named, relative to the entry's own
+/// directory — a `.ksl` shader keeps its extension, unlike the `.kira` modules
+/// [`write_program`] names by stem.
+fn assert_parity_with_files(entry: &str, files: &[(&str, &str)]) -> String {
+    let path = write_source(entry);
+    let directory = path.parent().expect("program directory").to_path_buf();
+    for (name, text) in files {
+        let file = directory.join(name);
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent).expect("file directory");
+        }
+        std::fs::write(&file, text).expect("write file");
+    }
+    let runs: Vec<(&str, Output)> = BACKENDS
+        .iter()
+        .map(|backend| (*backend, run_on(&path, backend)))
+        .collect();
+    let _ = std::fs::remove_dir_all(&directory);
+
+    let (_, reference) = &runs[0];
+    let expected = String::from_utf8_lossy(&reference.stdout).into_owned();
+    for (backend, run) in &runs[1..] {
+        assert_eq!(
+            expected,
+            String::from_utf8_lossy(&run.stdout),
+            "the vm and {backend} backends disagree on output for:\n{entry}\n\
+             vm stderr: {}\n{backend} stderr: {}",
+            String::from_utf8_lossy(&reference.stderr),
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            reference.status.code(),
+            run.status.code(),
+            "the vm and {backend} backends disagree on exit code for:\n{entry}\n\
+             {backend} stderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+    expected
+}
+
 /// Asserts every backend agrees on a multi-module program.
 fn assert_module_parity(entry: &str, modules: &[(&str, &str)]) -> String {
     let path = write_program(entry, modules);
@@ -262,6 +305,7 @@ mod mutation;
 mod native_state;
 mod ownership;
 mod seam;
+mod shaders;
 mod strings;
 mod structs;
 mod tasks;
