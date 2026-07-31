@@ -228,3 +228,53 @@ fn a_compute_entry_declares_its_workgroup_size_and_takes_builtins_directly() {
     );
     assert!(compute.contains("var q: QIn = QIn(gid);"), "{compute}");
 }
+
+#[test]
+fn a_buffer_an_atomic_names_is_declared_atomic_and_read_through_atomic_ops() {
+    // WGSL has no atomic operation on an ordinary integer: `atomicAdd` over an
+    // `array<u32>` is rejected outright, which is what naga reported about this
+    // backend's output before the element type followed the use.
+    let ir = build(
+        r#"
+type QIn {
+    @builtin(thread_id)
+    let gid: UInt3
+}
+shader S {
+    group Work {
+        storage read_write counter: [UInt]
+        storage read_write other: [UInt]
+    }
+    compute {
+        input QIn
+        threads(1, 1, 1)
+        function entry(q: QIn) {
+            let zero: UInt = 0
+            let one: UInt = 1
+            let slot = atomicAdd(counter, zero, one)
+            counter[slot] = q.gid.x
+            other[zero] = one
+            return
+        }
+    }
+}
+"#,
+    );
+    let compute = emit(&ir, Stage::Compute);
+    assert!(
+        compute.contains("var<storage, read_write> counter: array<atomic<u32>>;"),
+        "{compute}"
+    );
+    // An ordinary access to that same buffer has to follow the element type.
+    assert!(
+        compute.contains("atomicStore(&counter[slot], q.gid.x);"),
+        "{compute}"
+    );
+    // And a buffer no atomic names stays a plain array, read and written
+    // plainly — the spelling follows the use, not the shader.
+    assert!(
+        compute.contains("var<storage, read_write> other: array<u32>;"),
+        "{compute}"
+    );
+    assert!(compute.contains("other[zero] = one;"), "{compute}");
+}
