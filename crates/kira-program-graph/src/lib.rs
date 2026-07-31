@@ -33,6 +33,7 @@
 //! resolves with no path and no dependency entry. See [`bundled`] for which
 //! names a bundle owns and why the project's own files always win.
 
+pub mod assembly;
 pub mod bundled;
 pub mod package_roots;
 
@@ -43,6 +44,8 @@ use bundled::BundledRoot;
 use kira_semantics::ModuleSource;
 use kira_source::SourceId;
 use kira_syntax_model::ast::Item;
+
+pub use assembly::{AssemblyError, ProgramSources, load_program, load_program_with};
 pub use package_roots::PackageRoot;
 
 /// The maximum number of modules one program may be built from.

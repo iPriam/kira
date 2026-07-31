@@ -21,7 +21,6 @@
 //! question a caller asks; what to print, and what exit code to use, stays with
 //! whoever owns the terminal.
 
-use std::collections::HashSet;
 use std::path::Path;
 
 use kira_diagnostic_messages::diagnostic_code::DiagnosticCode;
@@ -106,12 +105,13 @@ pub enum FrontendError {
         /// The source map's own account of the limit it hit.
         message: String,
     },
-    /// A `package.kira` was found above the source and could not be used.
+    /// The program's source set could not be assembled from the tree.
+    ///
+    /// Manifest discovery, dependency resolution, and reading a package's own
+    /// sources all report through here, because all three happen inside the one
+    /// assembly step this frontend shares with the language server.
     #[error(transparent)]
-    Discovery(#[from] kira_project::DiscoveryError),
-    /// The governing package's dependency graph could not be started.
-    #[error(transparent)]
-    Resolution(#[from] kira_package_manager::ResolveError),
+    Assembly(#[from] kira_program_graph::AssemblyError),
 }
 
 /// Reads and compiles `path` through the salsa frontend and IR lowering.
@@ -136,36 +136,26 @@ pub fn compile_as(path: &Path, kind: Option<BuildKind>) -> Result<Compiled, Fron
         source,
     })?;
     kira_diagnostics::progress!("resolving packages");
-    let package = package_of(path)?;
-    let (package_roots, mut diagnostics) = resolve_package_roots(package.as_ref())?;
+    // Discovery, dependency resolution, module loading, and package-member
+    // aggregation are one step shared with the language server: an editor and
+    // `kira check` must assemble the same program from the same tree.
+    let assembled = kira_program_graph::load_program(path, &text)?;
+    let package = assembled.package;
+    let modules = assembled.modules;
+    let mut diagnostics = assembled.diagnostics;
 
-    // Everything the entry file imports, transitively, dependencies first. An
-    // import that names no readable file comes back as nothing here and is
-    // reported by the frontend, which has the span to point at. Resolved package
-    // roots sit between project-local modules and toolchain bundles.
-    let bundled_roots = kira_program_graph::bundled::bundled_roots();
-    let mut modules =
-        kira_program_graph::load_modules_with_packages(path, &text, &bundled_roots, &package_roots);
-    // Every `.kira` file under a package's source root is a member of that
-    // package — app or library. What a package *produces* does not decide which
-    // of its own files belong to it, and an app used to compile its entry file
-    // plus that file's imports and nothing else: a program split across
-    // `app/main.kira` and `app/area/Thing.kira` reported every function in the
-    // sibling as undefined, while the identical library layout compiled.
-    //
-    // Aggregating adds files to the package, not to each other's scope: imports
-    // stay file-scoped, so a sibling's `import Foundation` still does not put
-    // `Foundation` in this file's namespace.
-    if let Some(found) = package.as_ref()
-        && let Some(library_sources) = kira_project::library_sources_for_entry(found, path)?
+    // A lockfile that drifted is rewritten here rather than inside assembly:
+    // resolution never writes, and a language server assembling the same
+    // program on a keystroke must not touch the tree.
+    if let Some(graph) = assembled.graph.as_ref()
+        && let Some(found) = package.as_ref()
     {
-        aggregate_library_modules(
-            path,
-            &library_sources,
-            &bundled_roots,
-            &package_roots,
-            &mut modules,
-        )?;
+        sync_drifted_lockfile(
+            &package_root_dir(found),
+            &graph.lockfile,
+            &graph.packages,
+            &mut diagnostics,
+        );
     }
 
     // Enforce the `bind-types/` convention across every loaded source: a
@@ -174,10 +164,7 @@ pub fn compile_as(path: &Path, kind: Option<BuildKind>) -> Result<Compiled, Fron
     // path converge with the diagnostics channel.
     diagnostics.extend(bind_types_placement_diagnostics(path, &modules));
 
-    let build_kind = kind.unwrap_or(match package.as_ref().map(|found| found.kind()) {
-        Some(kira_manifest::PackageKind::Library) => BuildKind::Library,
-        Some(kira_manifest::PackageKind::App) | None => BuildKind::Application,
-    });
+    let build_kind = kind.unwrap_or(assembled.build_kind);
 
     // Shaders are compiled before analysis: expansion runs inside salsa
     // queries, which may not read files, so the paths its call sites name are
@@ -295,83 +282,12 @@ fn bind_types_placement_diagnostics(entry: &Path, modules: &[ModuleSource]) -> V
         .collect()
 }
 
-/// Adds every unreferenced library source and each source's import closure.
-fn aggregate_library_modules(
-    entry_path: &Path,
-    library_sources: &kira_project::LibrarySources,
-    bundled_roots: &[kira_program_graph::bundled::BundledRoot],
-    package_roots: &[kira_program_graph::PackageRoot],
-    modules: &mut Vec<ModuleSource>,
-) -> Result<(), FrontendError> {
-    let entry_identity = source_identity(entry_path);
-    let mut seen = modules
-        .iter()
-        .map(|module| source_identity(Path::new(&module.path)))
-        .collect::<HashSet<_>>();
-    seen.insert(entry_identity.clone());
-
-    for source in library_sources.iter() {
-        let identity = source_identity(source.path());
-        if identity == entry_identity || seen.contains(&identity) {
-            continue;
-        }
-
-        let display = source.path().display().to_string();
-        let text =
-            std::fs::read_to_string(source.path()).map_err(|read_error| FrontendError::Read {
-                path: display.clone(),
-                source: read_error,
-            })?;
-        let imported = kira_program_graph::load_modules_with_packages(
-            source.path(),
-            &text,
-            bundled_roots,
-            package_roots,
-        );
-        for module in imported {
-            if seen.insert(source_identity(Path::new(&module.path))) {
-                modules.push(module);
-            }
-        }
-        if seen.insert(identity) {
-            modules.push(ModuleSource {
-                module: source.module().to_owned(),
-                path: display,
-                text,
-            });
-        }
+/// The directory a manifest governs, which is the directory it sits in.
+fn package_root_dir(package: &kira_project::Manifest) -> std::path::PathBuf {
+    match Path::new(&package.path).parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
     }
-    Ok(())
-}
-
-/// Produces a stable filesystem identity without changing diagnostic path spelling.
-fn source_identity(path: &Path) -> std::path::PathBuf {
-    std::fs::canonicalize(path)
-        .or_else(|_| std::path::absolute(path))
-        .unwrap_or_else(|_| path.to_path_buf())
-}
-
-/// Resolves the dependency package roots and preserves every non-fatal package diagnostic.
-fn resolve_package_roots(
-    package: Option<&kira_project::Manifest>,
-) -> Result<(Vec<kira_program_graph::PackageRoot>, Vec<Diagnostic>), FrontendError> {
-    let Some(package) = package else {
-        return Ok((Vec::new(), Vec::new()));
-    };
-    let manifest_path = Path::new(&package.path);
-    let root_dir = match manifest_path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    };
-    let graph = kira_package_manager::resolve(root_dir)?;
-    let mut diagnostics = graph.diagnostics;
-    sync_drifted_lockfile(root_dir, &graph.lockfile, &graph.packages, &mut diagnostics);
-    let roots = graph
-        .packages
-        .into_iter()
-        .map(|package| kira_program_graph::PackageRoot::new(package.name, package.source_dir))
-        .collect();
-    Ok((roots, diagnostics))
 }
 
 /// Rewrites `kira.lock` when the manifests have moved out from under it.
@@ -405,20 +321,6 @@ fn sync_drifted_lockfile(
         }
         Err(error) => diagnostics.push(lockfile_sync_failed(&display, &error.to_string())),
     }
-}
-
-/// The manifest governing `source`, if a `package.kira` sits above it.
-///
-/// The manifest is discovered by walking up from the source file, which is what
-/// makes `kira build lib/thing.kira` inside a library package build a library
-/// without a flag: the package already said so, and a flag that could disagree
-/// with it would be a second source of truth.
-///
-/// No manifest means an application — a bare `.kira` file is a program. A
-/// manifest that exists and cannot be read is an error, because building the
-/// wrong kind of artifact silently is worse than not building.
-fn package_of(source: &Path) -> Result<Option<kira_project::Manifest>, FrontendError> {
-    Ok(kira_project::manifest_for(source)?)
 }
 
 #[cfg(test)]
