@@ -55,6 +55,14 @@ pub(crate) struct Emitter<'a> {
     pub(crate) module: &'a CheckedModule,
     pub(crate) reflection: &'a Reflection,
     pub(crate) out: String,
+    /// Every storage buffer some atomic in this shader names.
+    ///
+    /// WGSL has no atomic operation on an ordinary integer: the element type
+    /// itself must be `atomic<u32>`, and a buffer declared `array<u32>` is
+    /// rejected outright rather than raced on. Which buffers those are is a
+    /// property of the whole shader, so it is measured once and every access to
+    /// one of them — atomic or not — is spelled for an atomic element.
+    pub(crate) atomics: Vec<String>,
 }
 
 impl Emitter<'_> {
@@ -112,7 +120,17 @@ impl Emitter<'_> {
                 self.line(depth, &declared);
             }
             CheckedStmt::Assign { target, value } => {
-                let assignment = format!("{} = {};", self.expr(target), self.expr(value));
+                let assignment = match self.module.expr(target).kind.clone() {
+                    // Writing one element of an atomic buffer is `atomicStore`,
+                    // for the same reason reading one is `atomicLoad`.
+                    CheckedExprKind::Index { base, index } if self.is_atomic(base) => format!(
+                        "atomicStore(&{}[{}], {});",
+                        self.expr(base),
+                        self.expr(index),
+                        self.expr(value)
+                    ),
+                    _ => format!("{} = {};", self.expr(target), self.expr(value)),
+                };
                 self.line(depth, &assignment);
             }
             CheckedStmt::If {
@@ -172,6 +190,12 @@ impl Emitter<'_> {
             CheckedExprKind::ArrayLength { base } => {
                 format!("arrayLength(&{})", self.expr(*base))
             }
+            // Reading one element of an atomic buffer is `atomicLoad`; the
+            // element is an `atomic<u32>`, and an `atomic<u32>` is not a `u32`
+            // any expression can use directly.
+            CheckedExprKind::Index { base, index } if self.is_atomic(*base) => {
+                format!("atomicLoad(&{}[{}])", self.expr(*base), self.expr(*index))
+            }
             CheckedExprKind::Index { base, index } => {
                 format!("{}[{}]", self.expr(*base), self.expr(*index))
             }
@@ -201,6 +225,14 @@ impl Emitter<'_> {
                 )
             }
             CheckedExprKind::Invalid => "0".to_owned(),
+        }
+    }
+
+    /// Whether `id` names a storage buffer this shader uses atomically.
+    fn is_atomic(&self, id: CheckedExprId) -> bool {
+        match &self.module.expr(id).kind {
+            CheckedExprKind::Resource(name) => self.atomics.contains(name),
+            _ => false,
         }
     }
 
@@ -286,10 +318,13 @@ impl Emitter<'_> {
                         } else {
                             "read"
                         };
-                    format!(
-                        "{at} var<storage, {access}> {name}: array<{}>;",
-                        element_name(&resource.type_name)
-                    )
+                    let element = element_name(&resource.type_name);
+                    let element = if self.atomics.contains(name) {
+                        format!("atomic<{element}>")
+                    } else {
+                        element
+                    };
+                    format!("{at} var<storage, {access}> {name}: array<{element}>;")
                 }
                 kira_shader_model::ResourceKind::Texture => {
                     format!("{at} var {name}: {};", texture_name(&resource.type_name))
@@ -304,6 +339,34 @@ impl Emitter<'_> {
             self.out.push('\n');
         }
     }
+}
+
+/// Every storage buffer some atomic in `module` names.
+///
+/// Measured over the whole module rather than per stage: the buffer's
+/// declaration is one, so a buffer one stage increments atomically is an
+/// `atomic<u32>` array in every stage that binds it.
+#[must_use]
+pub(crate) fn atomic_resources(module: &CheckedModule) -> Vec<String> {
+    let mut found = Vec::new();
+    for (_, expr) in module.exprs.iter() {
+        let CheckedExprKind::Builtin {
+            which: BuiltinFn::AtomicAdd,
+            args,
+        } = &expr.kind
+        else {
+            continue;
+        };
+        let Some(&target) = args.first() else {
+            continue;
+        };
+        if let CheckedExprKind::Resource(name) = &module.expr(target).kind
+            && !found.contains(name)
+        {
+            found.push(name.clone());
+        }
+    }
+    found
 }
 
 /// The element type inside a reflected `[T]`.

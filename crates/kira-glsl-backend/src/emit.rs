@@ -4,7 +4,7 @@ use kira_ksl_semantics::model::{
     BinaryOp, BuiltinFn, CheckedExprId, CheckedExprKind, CheckedFunction, CheckedModule,
     CheckedStmt, CheckedStmtId, ConstValue, UnaryOp,
 };
-use kira_shader_model::{Builtin, Reflection, ScalarType, Type};
+use kira_shader_model::{Builtin, Reflection, ScalarType, Stage, Type};
 
 /// The GLSL spelling of a type.
 #[must_use]
@@ -45,10 +45,17 @@ pub fn type_name(ty: &Type) -> String {
     }
 }
 
-/// The GLSL name a builtin is read or written through.
+/// The GLSL name a builtin is read or written through in `stage`.
+///
+/// The stage is load-bearing for exactly one of them. `@builtin(position)` is
+/// one KSL annotation and two GLSL names: `gl_Position` is the clip-space
+/// position a vertex stage writes, and `gl_FragCoord` is the window-space
+/// coordinate a fragment stage reads. A fragment shader naming `gl_Position`
+/// does not compile — it is not declared there at all.
 #[must_use]
-pub fn builtin_name(builtin: Builtin) -> &'static str {
+pub fn builtin_name(builtin: Builtin, stage: Stage) -> &'static str {
     match builtin {
+        Builtin::Position if stage == Stage::Fragment => "gl_FragCoord",
         Builtin::Position => "gl_Position",
         Builtin::FragCoord => "gl_FragCoord",
         Builtin::VertexIndex => "gl_VertexID",

@@ -121,6 +121,20 @@ fn a_position_builtin_becomes_gl_position_rather_than_a_varying() {
 }
 
 #[test]
+fn the_same_position_builtin_is_gl_fragcoord_where_a_fragment_stage_reads_it() {
+    // `gl_Position` is not declared in a fragment shader at all, so a stage
+    // that named it there did not compile — which is what glslang reported
+    // about this backend's output before the stage was taken into account.
+    let ir = build(TEXTURED);
+    let fragment = emit(&ir, Stage::Fragment).expect("emits");
+    assert!(
+        fragment.contains("f.clip_position = gl_FragCoord;"),
+        "{fragment}"
+    );
+    assert!(!fragment.contains("gl_Position"), "{fragment}");
+}
+
+#[test]
 fn a_fragment_output_is_a_located_out_variable() {
     let ir = build(TEXTURED);
     let fragment = emit(&ir, Stage::Fragment).expect("emits");

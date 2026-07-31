@@ -50,6 +50,7 @@ pub fn emit(ir: &ShaderIr, stage: Stage) -> String {
         module: &ir.module,
         reflection,
         out: String::new(),
+        atomics: emit::atomic_resources(&ir.module),
     };
 
     for option in &shader.options {

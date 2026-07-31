@@ -48,6 +48,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      # The shader validators. `crates/kira-cli/tests/shader_validation.rs`
+      # puts every backend's output through the compiler that consumes it, and
+      # fails rather than skipping when one of these is absent — a shader
+      # nobody compiled is not a shader anybody checked.
+      - name: Provision the shader validators
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install spirv-tools glslang
+          else
+            sudo apt-get update
+            sudo apt-get install -y spirv-tools glslang-tools
+          fi
+          cargo install naga-cli --locked
+
+      # Apple's `metal` is a component of Xcode rather than part of it, and the
+      # MSL case is compiled out on every other platform.
+      - name: Provision the Metal toolchain
+        if: runner.os == 'macOS'
+        run: xcodebuild -downloadComponent MetalToolchain
+
       # The Web pipeline: emcc links the modules the backend emits, node runs
       # them in the end-to-end tests, and the bridge crate cross-builds the
       # runtime archive those links consume.
