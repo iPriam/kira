@@ -499,6 +499,17 @@ Note what the compiler does not know there: `KslArtifact`, its field names, and
 how many backends get inlined are all Kira source, so an engine can add a
 target, drop one, or rename a field without a compiler release.
 
+The targets are `msl`, `wgsl`, `glsl_330`, `hlsl`, and `spirv`. Metal compiles
+one module holding every stage, so its whole source arrives in `combinedSource`;
+the other four compile a stage at a time and fill `vertexSource`,
+`fragmentSource`, and `computeSource`. A target that cannot express a shader —
+GLSL 330 has no compute stage and no storage buffers, and SPIR-V has no output
+variables in a compute entry point — leaves its sources empty and reports a
+note, because the other targets still carry the shader and the build should
+still succeed. SPIR-V is binary rather than source, and arrives as hexadecimal
+with eight characters to a word, ready to be read straight into the `uint32_t`
+array `vkCreateShaderModule` takes.
+
 The value `Ksl.compile` returns is a record whose every member is a `String` —
 `shaderName`, `combinedSource`, `vertexSource`, `fragmentSource`,
 `computeSource`, `vertexEntry`, `fragmentEntry`, `computeEntry`, and

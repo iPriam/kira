@@ -24,10 +24,12 @@ use kira_source::{FileSpan, SourceId, Span};
 ///
 /// All of them, every time: a shader that compiled for Metal but silently not
 /// for WebGPU would fail on the platform nobody built on.
-const TARGETS: [BackendTarget; 3] = [
+const TARGETS: [BackendTarget; 5] = [
     BackendTarget::Msl,
     BackendTarget::Wgsl,
     BackendTarget::Glsl330,
+    BackendTarget::Hlsl,
+    BackendTarget::Spirv,
 ];
 
 /// Every KSL file one compilation read, in the order it was given an id.
@@ -312,7 +314,60 @@ fn emit(
                 }
             }
         }
-        BackendTarget::Hlsl | BackendTarget::Spirv => {}
+        // HLSL refuses the same way GLSL does and for the same reason: a
+        // shader it cannot express arrives with empty sources and a note,
+        // because the other targets still carry it.
+        BackendTarget::Hlsl => {
+            for stage in [Stage::Vertex, Stage::Fragment, Stage::Compute] {
+                match kira_hlsl_backend::emit(ir, stage) {
+                    Ok(source) => match stage {
+                        Stage::Vertex => compiled.vertex_source = source,
+                        Stage::Fragment => compiled.fragment_source = source,
+                        Stage::Compute => compiled.compute_source = source,
+                    },
+                    // Reported once, not once per stage: a shader HLSL cannot
+                    // express fails the same way for all of them.
+                    Err(refusal) => {
+                        if stage == Stage::Vertex {
+                            diagnostics.push(unsupported_target(
+                                path,
+                                source,
+                                "hlsl",
+                                &refusal.to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        // SPIR-V is the one target whose output is not text. It travels as
+        // hexadecimal, eight characters per word, because the artifact a macro
+        // splices into generated Kira carries strings — see
+        // `kira_spirv_backend::hex` for what a host does with it.
+        BackendTarget::Spirv => {
+            for stage in [Stage::Vertex, Stage::Fragment, Stage::Compute] {
+                match kira_spirv_backend::emit(ir, stage) {
+                    Ok(words) => {
+                        let text = kira_spirv_backend::hex(&words);
+                        match stage {
+                            Stage::Vertex => compiled.vertex_source = text,
+                            Stage::Fragment => compiled.fragment_source = text,
+                            Stage::Compute => compiled.compute_source = text,
+                        }
+                    }
+                    Err(refusal) => {
+                        if stage == Stage::Vertex {
+                            diagnostics.push(unsupported_target(
+                                path,
+                                source,
+                                "spirv",
+                                &refusal.to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
     }
     compiled
 }
@@ -418,6 +473,17 @@ shader Tri {
 
         let glsl = table.compile("Shaders/Tri.ksl", "glsl_330").expect("glsl");
         assert!(glsl.vertex_source.contains("#version 330 core"));
+
+        let hlsl = table.compile("Shaders/Tri.ksl", "hlsl").expect("hlsl");
+        assert!(hlsl.vertex_source.contains("vs_VOut_out vertex_main("));
+        assert!(hlsl.fragment_source.contains("SV_Target0"));
+
+        // SPIR-V travels as hexadecimal because the artifact carries strings;
+        // the magic is the first word either way.
+        let spirv = table.compile("Shaders/Tri.ksl", "spirv").expect("spirv");
+        assert!(spirv.vertex_source.starts_with("07230203"));
+        assert!(spirv.fragment_source.starts_with("07230203"));
+        assert!(spirv.compute_source.is_empty(), "no compute stage");
     }
 
     #[test]

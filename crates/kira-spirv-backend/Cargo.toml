@@ -5,5 +5,18 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+kira-ksl-semantics.workspace = true
+kira-shader-ir.workspace = true
+kira-shader-model.workspace = true
+# A shader SPIR-V cannot express is refused by name, this workspace's rule for
+# any fallible function crossing a crate boundary.
+thiserror.workspace = true
+
+[dev-dependencies]
+kira-ksl-parser.workspace = true
+kira-ksl-syntax-model.workspace = true
+kira-source.workspace = true
+
 [lints]
 workspace = true
