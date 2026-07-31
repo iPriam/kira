@@ -73,6 +73,7 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
                         installed.version,
                         installed.root.display()
                     );
+                    report_verification(installed.verified.as_ref(), installed.already_installed);
                     println!("knvm: selected it; `kira` now dispatches to this toolchain");
                     EXIT_OK
                 }
@@ -104,6 +105,9 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
                         installed.root.display()
                     );
                     println!("knvm: selected it; `kira` now dispatches to this build");
+                    // No checksum line: a build from the working tree has no
+                    // publisher, so there is nothing to have verified it
+                    // against.
                     EXIT_OK
                 }
                 Err(error) => {
@@ -158,6 +162,94 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
                     EXIT_FAILED
                 }
             }
+        }
+        KnvmCommand::InstallLlvm { force } => {
+            match kira_knvm::install_llvm(&toolchains_root, kira_knvm::DEFAULT_REPOSITORY, force) {
+                Ok(installed) => {
+                    if installed.already_installed {
+                        println!(
+                            "knvm: LLVM {} for {} is already installed at {}",
+                            installed.version,
+                            installed.host_key,
+                            installed.home.display()
+                        );
+                        println!("knvm: run `knvm install-llvm --force` to replace it");
+                    } else {
+                        println!(
+                            "knvm: installed LLVM {} for {} at {}",
+                            installed.version,
+                            installed.host_key,
+                            installed.home.display()
+                        );
+                        report_verification(installed.verified.as_ref(), false);
+                    }
+                    EXIT_OK
+                }
+                Err(error) => {
+                    eprintln!("knvm: {error}");
+                    EXIT_FAILED
+                }
+            }
+        }
+        KnvmCommand::SelfUpdate { channel } => {
+            let kira_home = match kira_toolchain::kira_home() {
+                Ok(home) => home,
+                Err(error) => {
+                    eprintln!("knvm: {error}");
+                    return EXIT_FAILED;
+                }
+            };
+            let source = match GitHubReleaseSource::for_host() {
+                Ok(source) => source,
+                Err(error) => {
+                    eprintln!("knvm: {error}");
+                    return EXIT_FAILED;
+                }
+            };
+            match kira_knvm::self_update(
+                &kira_home,
+                &source,
+                channel,
+                kira_toolchain::RELEASE_VERSION,
+            ) {
+                Ok(updated) => {
+                    println!(
+                        "knvm: updated the tools from {} to {} in {}",
+                        updated.previous_version,
+                        updated.version,
+                        updated.bin_dir.display()
+                    );
+                    report_verification(updated.verified.as_ref(), false);
+                    println!(
+                        "knvm: installed toolchains are unchanged; \
+                         `knvm install latest` moves the selected one"
+                    );
+                    EXIT_OK
+                }
+                // Nothing to do is the good outcome of an update, not a
+                // failure: a script running this on a schedule must not go red
+                // on every run that finds the tools current.
+                Err(kira_knvm::SelfUpdateError::AlreadyCurrent { version, channel }) => {
+                    println!("knvm: already {version}, the newest on the `{channel}` channel");
+                    EXIT_OK
+                }
+                Err(error) => {
+                    eprintln!("knvm: {error}");
+                    EXIT_FAILED
+                }
+            }
+        }
+        KnvmCommand::Pin { version, channel } => pin(&toolchains_root, channel, &version),
+        KnvmCommand::Unpin => unpin(),
+        KnvmCommand::ListRemote => {
+            let source = match GitHubReleaseSource::for_host() {
+                Ok(source) => source,
+                Err(error) => {
+                    eprintln!("knvm: {error}");
+                    return EXIT_FAILED;
+                }
+            };
+            print_remote_listing(paint, &source)
         }
         KnvmCommand::List => match kira_knvm::list(&toolchains_root) {
             Ok(installed) => {
@@ -299,6 +391,136 @@ fn print_listing(paint: kira_knvm::Paint, installed: &[kira_knvm::InstalledToolc
         };
         println!("{line}{note}");
     }
+}
+
+/// Reports what an artifact's checksum proved, or that there was none.
+///
+/// Said out loud rather than passed over: "verified" and "no checksum was
+/// published" are different installs, and a user who cannot tell them apart
+/// has no way to notice the day verification silently stops happening.
+fn report_verification(verified: Option<&kira_knvm::Sha256>, already_installed: bool) {
+    if already_installed {
+        return;
+    }
+    match verified {
+        Some(digest) => println!("knvm: verified sha256 {digest}"),
+        None => eprintln!(
+            "knvm: warning: no checksum is published for this artifact; \
+             it was installed unverified"
+        ),
+    }
+}
+
+/// Pins the working directory's tree to an installed toolchain.
+///
+/// The version must be installed: writing a pin at a version this machine does
+/// not have would leave every later `kira` in the tree refusing to dispatch,
+/// which is a failure better reported now, by the command that caused it.
+fn pin(toolchains_root: &std::path::Path, channel: kira_knvm::Channel, version: &str) -> i32 {
+    let directory = match std::env::current_dir() {
+        Ok(directory) => directory,
+        Err(error) => {
+            eprintln!("knvm: could not read the working directory: {error}");
+            return EXIT_FAILED;
+        }
+    };
+
+    let installed = match kira_knvm::list(toolchains_root) {
+        Ok(installed) => installed,
+        Err(error) => {
+            eprintln!("knvm: {error}");
+            return EXIT_FAILED;
+        }
+    };
+    if !installed
+        .iter()
+        .any(|toolchain| toolchain.channel == channel && toolchain.version == version)
+    {
+        eprintln!(
+            "knvm: `{version}` is not installed on the `{}` channel; \
+             install it first with `knvm install {version}`",
+            channel.dir_name()
+        );
+        return EXIT_FAILED;
+    }
+
+    let pin = kira_toolchain::PinnedToolchain {
+        channel,
+        version: version.to_string(),
+        path: std::path::PathBuf::new(),
+    };
+    match kira_toolchain::write_pin(&directory, &pin) {
+        Ok(path) => {
+            println!(
+                "knvm: pinned {} {version} in {}",
+                channel.dir_name(),
+                path.display()
+            );
+            println!("knvm: `kira` under this directory now uses that toolchain");
+            EXIT_OK
+        }
+        Err(error) => {
+            eprintln!("knvm: could not write the pin: {error}");
+            EXIT_FAILED
+        }
+    }
+}
+
+/// Removes the working directory's pin.
+fn unpin() -> i32 {
+    let directory = match std::env::current_dir() {
+        Ok(directory) => directory,
+        Err(error) => {
+            eprintln!("knvm: could not read the working directory: {error}");
+            return EXIT_FAILED;
+        }
+    };
+    match kira_toolchain::remove_pin(&directory) {
+        Ok(true) => {
+            println!(
+                "knvm: removed {}; `kira` here follows the selected toolchain again",
+                kira_toolchain::PIN_FILE_NAME
+            );
+            EXIT_OK
+        }
+        Ok(false) => {
+            println!(
+                "knvm: no {} here; nothing to remove",
+                kira_toolchain::PIN_FILE_NAME
+            );
+            EXIT_OK
+        }
+        Err(error) => {
+            eprintln!("knvm: could not remove the pin: {error}");
+            EXIT_FAILED
+        }
+    }
+}
+
+/// Renders what each channel publishes, newest first.
+fn print_remote_listing(paint: kira_knvm::Paint, source: &GitHubReleaseSource) -> i32 {
+    let mut any = false;
+    for channel in kira_knvm::Channel::ALL {
+        let versions = match kira_knvm::published_versions(source, channel) {
+            Ok(versions) => versions,
+            Err(error) => {
+                eprintln!("knvm: {error}");
+                return EXIT_FAILED;
+            }
+        };
+        if versions.is_empty() {
+            continue;
+        }
+        any = true;
+        println!("{}", paint.bold(&format!("{}:", channel.dir_name())));
+        for version in versions {
+            println!("    {version}");
+        }
+    }
+    if !any {
+        println!("knvm: nothing is published yet");
+    }
+    EXIT_OK
 }
 
 /// The source releases are fetched from: a local directory when

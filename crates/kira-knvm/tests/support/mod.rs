@@ -175,5 +175,29 @@ pub fn publish(releases: &Path, channel: Channel, version: &str, shape: &Fixture
         .expect("run tar to build the fixture archive");
     assert!(status.success(), "fixture archive must be built by tar");
 
+    // A published release carries its digest beside it, so the default fixture
+    // exercises the verifying path rather than the unverified fallback. A test
+    // that wants the other case removes or rewrites this file.
+    let digest = kira_knvm::Sha256::of_file(&archive).expect("hash the fixture archive");
+    std::fs::write(
+        checksum_sidecar_path(releases, channel, version),
+        format!("{digest}  {}\n", archive_file_name(version, host_key())),
+    )
+    .expect("write the fixture checksum sidecar");
+
     std::fs::remove_dir_all(&staging).expect("clean fixture staging");
+}
+
+/// Where [`publish`] writes a release's checksum sidecar.
+///
+/// Exposed so a test can delete it (a release published before sidecars) or
+/// rewrite it (a corrupted or substituted download).
+pub fn checksum_sidecar_path(releases: &Path, channel: Channel, version: &str) -> PathBuf {
+    releases
+        .join(channel.dir_name())
+        .join(version)
+        .join(kira_knvm::checksum_file_name(&archive_file_name(
+            version,
+            host_key(),
+        )))
 }

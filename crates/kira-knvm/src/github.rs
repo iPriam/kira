@@ -21,7 +21,10 @@ use std::process::Command;
 
 use kira_toolchain::Channel;
 
-use crate::source::{ReleaseSource, ReleaseSourceError, archive_file_name, compare_versions};
+use crate::digest::{Sha256, checksum_file_name};
+use crate::source::{
+    ReleaseSource, ReleaseSourceError, archive_file_name, compare_versions, read_published_checksum,
+};
 
 /// The repository releases are published from.
 pub const DEFAULT_REPOSITORY: &str = "kira-lang-com/kira";
@@ -68,58 +71,83 @@ pub fn parse_release_feed(json: &str) -> Result<Vec<ReleaseEntry>, ReleaseSource
 
     let mut entries = Vec::new();
     for release in releases {
-        if release.get("draft").and_then(serde_json::Value::as_bool) == Some(true) {
-            continue;
+        if let Some(entry) = parse_release(release)? {
+            entries.push(entry);
         }
-        let tag = release
-            .get("tag_name")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| ReleaseSourceError::MalformedFeed {
-                detail: "a release has no string `tag_name`".to_string(),
-            })?;
-        let prerelease = release
-            .get("prerelease")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-
-        let mut assets = Vec::new();
-        if let Some(listed) = release.get("assets") {
-            let listed = listed
-                .as_array()
-                .ok_or_else(|| ReleaseSourceError::MalformedFeed {
-                    detail: format!("release `{tag}` has a non-array `assets`"),
-                })?;
-            for asset in listed {
-                let name = asset.get("name").and_then(serde_json::Value::as_str);
-                let url = asset
-                    .get("browser_download_url")
-                    .and_then(serde_json::Value::as_str);
-                let (Some(name), Some(url)) = (name, url) else {
-                    return Err(ReleaseSourceError::MalformedFeed {
-                        detail: format!(
-                            "release `{tag}` has an asset without a `name` and \
-                             `browser_download_url`"
-                        ),
-                    });
-                };
-                assets.push(ReleaseAsset {
-                    name: name.to_string(),
-                    url: url.to_string(),
-                });
-            }
-        }
-
-        entries.push(ReleaseEntry {
-            version: strip_tag_prefix(tag).to_string(),
-            channel: if prerelease {
-                Channel::Dev
-            } else {
-                Channel::Release
-            },
-            assets,
-        });
     }
     Ok(entries)
+}
+
+/// Parses a GitHub `/releases/tags/<tag>` API response into one release.
+///
+/// The by-tag endpoint answers with a single object rather than an array. It
+/// is what the LLVM provisioner asks, because it already knows the tag its
+/// bundles are published under and has no use for the whole feed.
+pub fn parse_release_by_tag(json: &str) -> Result<ReleaseEntry, ReleaseSourceError> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|error| ReleaseSourceError::MalformedFeed {
+            detail: format!("response is not JSON: {error}"),
+        })?;
+    parse_release(&value)?.ok_or_else(|| ReleaseSourceError::MalformedFeed {
+        detail: "the release named by that tag is a draft".to_string(),
+    })
+}
+
+/// One release object, or `None` when it is a draft.
+///
+/// Shared by the feed and by-tag readers so both answer the same way about
+/// what a release is — a second copy would be a second contract.
+fn parse_release(release: &serde_json::Value) -> Result<Option<ReleaseEntry>, ReleaseSourceError> {
+    if release.get("draft").and_then(serde_json::Value::as_bool) == Some(true) {
+        return Ok(None);
+    }
+    let tag = release
+        .get("tag_name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| ReleaseSourceError::MalformedFeed {
+            detail: "a release has no string `tag_name`".to_string(),
+        })?;
+    let prerelease = release
+        .get("prerelease")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    let mut assets = Vec::new();
+    if let Some(listed) = release.get("assets") {
+        let listed = listed
+            .as_array()
+            .ok_or_else(|| ReleaseSourceError::MalformedFeed {
+                detail: format!("release `{tag}` has a non-array `assets`"),
+            })?;
+        for asset in listed {
+            let name = asset.get("name").and_then(serde_json::Value::as_str);
+            let url = asset
+                .get("browser_download_url")
+                .and_then(serde_json::Value::as_str);
+            let (Some(name), Some(url)) = (name, url) else {
+                return Err(ReleaseSourceError::MalformedFeed {
+                    detail: format!(
+                        "release `{tag}` has an asset without a `name` and \
+                         `browser_download_url`"
+                    ),
+                });
+            };
+            assets.push(ReleaseAsset {
+                name: name.to_string(),
+                url: url.to_string(),
+            });
+        }
+    }
+
+    Ok(Some(ReleaseEntry {
+        version: strip_tag_prefix(tag).to_string(),
+        channel: if prerelease {
+            Channel::Dev
+        } else {
+            Channel::Release
+        },
+        assets,
+    }))
 }
 
 /// The version a release tag names: `v1.7.3` and `1.7.3` both mean `1.7.3`.
@@ -134,15 +162,22 @@ pub fn select_asset<'a>(
     host_key: &str,
 ) -> Result<&'a str, ReleaseSourceError> {
     let wanted = archive_file_name(&release.version, host_key);
-    release
-        .assets
-        .iter()
-        .find(|asset| asset.name == wanted)
-        .map(|asset| asset.url.as_str())
-        .ok_or(ReleaseSourceError::MissingHostArtifact {
-            version: release.version.clone(),
-            artifact: wanted,
-        })
+    asset_named(release, &wanted).ok_or(ReleaseSourceError::MissingHostArtifact {
+        version: release.version.clone(),
+        artifact: wanted,
+    })
+}
+
+/// The download URL of the checksum sidecar for this host's asset.
+///
+/// `None` when the release publishes no sidecar — releases cut before sidecars
+/// existed have none, and those install as unverified rather than failing.
+#[must_use]
+pub fn select_checksum_asset<'a>(release: &'a ReleaseEntry, host_key: &str) -> Option<&'a str> {
+    asset_named(
+        release,
+        &checksum_file_name(&archive_file_name(&release.version, host_key)),
+    )
 }
 
 /// The releases of one channel, newest first.
@@ -191,15 +226,68 @@ impl GitHubReleaseSource {
         )
     }
 
+    /// The host key this source installs artifacts for.
+    #[must_use]
+    pub fn host_key(&self) -> &str {
+        &self.host_key
+    }
+
     /// The whole feed, parsed.
-    fn feed(&self) -> Result<Vec<ReleaseEntry>, ReleaseSourceError> {
+    pub(crate) fn entries(&self) -> Result<Vec<ReleaseEntry>, ReleaseSourceError> {
         parse_release_feed(&transport::get_text(&self.feed_url())?)
     }
+
+    /// One channel's release by version, or a typed refusal naming both.
+    pub(crate) fn release_on(
+        &self,
+        channel: Channel,
+        version: &str,
+    ) -> Result<ReleaseEntry, ReleaseSourceError> {
+        releases_on_channel(&self.entries()?, channel)
+            .into_iter()
+            .find(|entry| entry.version == version)
+            .ok_or_else(|| ReleaseSourceError::VersionNotFound {
+                channel: channel.dir_name(),
+                version: version.to_string(),
+            })
+    }
+}
+
+/// The API URL of one release, named by its tag.
+///
+/// The LLVM provisioner knows the tag its bundles are published under, so it
+/// asks for that release rather than reading and filtering the whole feed.
+#[must_use]
+pub fn release_by_tag_url(repository: &str, tag: &str) -> String {
+    format!("https://api.github.com/repos/{repository}/releases/tags/{tag}")
+}
+
+/// The download URL of a release asset with exactly this name.
+#[must_use]
+pub fn asset_named<'a>(release: &'a ReleaseEntry, name: &str) -> Option<&'a str> {
+    release
+        .assets
+        .iter()
+        .find(|asset| asset.name == name)
+        .map(|asset| asset.url.as_str())
+}
+
+/// Fetches a URL as text.
+///
+/// The one transport, shared: the LLVM provisioner downloads from the same
+/// host as a toolchain install and has no reason to grow a second copy.
+pub(crate) fn get_text(url: &str) -> Result<String, ReleaseSourceError> {
+    transport::get_text(url)
+}
+
+/// Downloads a URL to a file.
+pub(crate) fn download(url: &str, destination: &Path) -> Result<(), ReleaseSourceError> {
+    transport::download(url, destination)
 }
 
 impl ReleaseSource for GitHubReleaseSource {
     fn available_versions(&self, channel: Channel) -> Result<Vec<String>, ReleaseSourceError> {
-        let versions: Vec<String> = releases_on_channel(&self.feed()?, channel)
+        let versions: Vec<String> = releases_on_channel(&self.entries()?, channel)
             .into_iter()
             .map(|entry| entry.version)
             .collect();
@@ -217,13 +305,7 @@ impl ReleaseSource for GitHubReleaseSource {
         version: &str,
         dest_dir: &Path,
     ) -> Result<PathBuf, ReleaseSourceError> {
-        let release = releases_on_channel(&self.feed()?, channel)
-            .into_iter()
-            .find(|entry| entry.version == version)
-            .ok_or_else(|| ReleaseSourceError::VersionNotFound {
-                channel: channel.dir_name(),
-                version: version.to_string(),
-            })?;
+        let release = self.release_on(channel, version)?;
         let url = select_asset(&release, &self.host_key)?;
 
         std::fs::create_dir_all(dest_dir)
@@ -231,6 +313,19 @@ impl ReleaseSource for GitHubReleaseSource {
         let destination = dest_dir.join(archive_file_name(version, &self.host_key));
         transport::download(url, &destination)?;
         Ok(destination)
+    }
+
+    fn published_checksum(
+        &self,
+        channel: Channel,
+        version: &str,
+    ) -> Result<Option<Sha256>, ReleaseSourceError> {
+        let release = self.release_on(channel, version)?;
+        let Some(url) = select_checksum_asset(&release, &self.host_key) else {
+            return Ok(None);
+        };
+        let contents = transport::get_text(url)?;
+        read_published_checksum(&archive_file_name(version, &self.host_key), &contents).map(Some)
     }
 }
 

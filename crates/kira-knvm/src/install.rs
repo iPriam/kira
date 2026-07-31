@@ -55,6 +55,23 @@ pub enum InstallError {
     /// `tar` is required to unpack an archive and is not on this host.
     #[error("`tar` was not found on PATH; knvm unpacks release archives with it")]
     TarUnavailable,
+    /// The fetched archive is not the one the release published.
+    #[error(
+        "`{}` does not match the checksum published for it\n  \
+         published: {expected}\n  \
+         downloaded: {actual}\n\
+         The download is corrupt or the artifact was changed after publication; \
+         nothing was installed",
+        .archive.display()
+    )]
+    ChecksumMismatch {
+        /// The archive that was fetched.
+        archive: PathBuf,
+        /// The digest the release publishes.
+        expected: crate::digest::Sha256,
+        /// The digest of the bytes that arrived.
+        actual: crate::digest::Sha256,
+    },
     /// `tar` ran and refused the archive.
     #[error("could not unpack `{archive}`: {detail}")]
     ExtractFailed {
@@ -178,6 +195,13 @@ pub struct Installed {
     ///
     /// An already-installed version is still selected: `install` implies `use`.
     pub already_installed: bool,
+    /// The digest that was verified, when the release published one.
+    ///
+    /// `None` means the source published no checksum and the archive was
+    /// installed unverified — reported to the user rather than passed over,
+    /// since "no checksum" and "checksum matched" are not the same install.
+    /// Also `None` for an already-installed version, which fetched nothing.
+    pub verified: Option<crate::digest::Sha256>,
 }
 
 /// `<toolchains-root>/<channel>/<version>` — an installed toolchain root.
@@ -255,9 +279,13 @@ pub fn install(
             detail: error.to_string(),
         })?;
     }
+    let mut verified = None;
     if !already_installed {
         let staging = Staging::create(toolchains_root)?;
         let archive = source.fetch_archive(channel, &version, staging.path())?;
+        // Before `tar` is handed the bytes: an archive that is not the one the
+        // release published must not be unpacked, let alone validated.
+        verified = verify_checksum(source, channel, &version, &archive)?;
         let unpacked = staging.path().join("unpacked");
         extract(&archive, &unpacked)?;
         let payload = locate_payload(&unpacked, &archive)?;
@@ -286,7 +314,34 @@ pub fn install(
         version,
         root: destination,
         already_installed,
+        verified,
     })
+}
+
+/// Checks a fetched archive against the digest its release publishes.
+///
+/// Returns the digest that matched, or `None` when the source publishes none.
+/// A mismatch is fatal: the caller is inside a staging directory that its
+/// `Drop` removes, so refusing here leaves the toolchains root untouched.
+fn verify_checksum(
+    source: &dyn ReleaseSource,
+    channel: Channel,
+    version: &str,
+    archive: &Path,
+) -> Result<Option<crate::digest::Sha256>, InstallError> {
+    let Some(expected) = source.published_checksum(channel, version)? else {
+        return Ok(None);
+    };
+    let actual = crate::digest::Sha256::of_file(archive)
+        .map_err(|error| InstallError::io("read the downloaded archive", archive, error))?;
+    if actual != expected {
+        return Err(InstallError::ChecksumMismatch {
+            archive: archive.to_path_buf(),
+            expected,
+            actual,
+        });
+    }
+    Ok(Some(expected))
 }
 
 /// Turns a requested version into a concrete one.

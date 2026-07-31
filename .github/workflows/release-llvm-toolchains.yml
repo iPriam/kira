@@ -167,12 +167,27 @@ jobs:
             -ArchiveFormat "${{ matrix.archive }}"
           "ARCHIVE_PATH=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8NoBOM -Append
 
+      # The digest `knvm install-llvm` verifies the bundle against. Published
+      # beside the archive under the same `<asset>.sha256` name knvm's
+      # toolchain archives use, so one rule covers every artifact this project
+      # ships.
+      - name: Publish a checksum beside the bundle
+        shell: bash
+        run: |
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$ARCHIVE_PATH" | sed "s| .*| ${{ matrix.asset }}|" > "$ARCHIVE_PATH.sha256"
+          else
+            shasum -a 256 "$ARCHIVE_PATH" | sed "s| .*| ${{ matrix.asset }}|" > "$ARCHIVE_PATH.sha256"
+          fi
+          cat "$ARCHIVE_PATH.sha256"
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: llvm-bundle-${{ matrix.target_key }}
           path: |
             ${{ env.ARCHIVE_PATH }}
+            ${{ env.ARCHIVE_PATH }}.sha256
           if-no-files-found: error
 
   publish:

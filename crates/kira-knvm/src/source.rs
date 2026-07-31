@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use kira_toolchain::Channel;
 
+use crate::digest::{Sha256, checksum_file_name, parse_checksum_file};
+
 /// Why a release could not be listed or fetched.
 #[derive(Debug, thiserror::Error)]
 pub enum ReleaseSourceError {
@@ -61,6 +63,21 @@ pub enum ReleaseSourceError {
         /// What was wrong with the feed.
         detail: String,
     },
+    /// A checksum sidecar was published but carries no readable digest.
+    ///
+    /// Refused rather than treated as absent: a sidecar that exists is a claim
+    /// about the artifact, and one that cannot be read is a publishing failure
+    /// to report, not a verification to skip.
+    #[error(
+        "the published checksum for `{artifact}` is not a SHA-256 digest \
+         (found `{found}`)"
+    )]
+    MalformedChecksum {
+        /// The artifact the sidecar belongs to.
+        artifact: String,
+        /// What the sidecar held instead, truncated to one line.
+        found: String,
+    },
     /// A filesystem operation against the source failed.
     #[error("{operation} `{path}`: {source}")]
     Io {
@@ -100,6 +117,33 @@ pub trait ReleaseSource {
         version: &str,
         dest_dir: &Path,
     ) -> Result<PathBuf, ReleaseSourceError>;
+
+    /// The digest this source publishes for `version`'s host artifact.
+    ///
+    /// `Ok(None)` means the source publishes no digest for it, which installs
+    /// as unverified. There is deliberately no default implementation: a source
+    /// added later must state its answer rather than inherit "unverified" from
+    /// a trait definition nobody looked at.
+    fn published_checksum(
+        &self,
+        channel: Channel,
+        version: &str,
+    ) -> Result<Option<Sha256>, ReleaseSourceError>;
+}
+
+/// Reads a checksum sidecar's text into a digest, naming the artifact when it
+/// cannot be read.
+///
+/// Shared by every source: the sidecar format is the feed's contract, not one
+/// transport's.
+pub(crate) fn read_published_checksum(
+    artifact: &str,
+    contents: &str,
+) -> Result<Sha256, ReleaseSourceError> {
+    parse_checksum_file(contents).ok_or_else(|| ReleaseSourceError::MalformedChecksum {
+        artifact: artifact.to_string(),
+        found: contents.lines().next().unwrap_or("").trim().to_string(),
+    })
 }
 
 /// The artifact file name a release publishes for one host.
@@ -253,6 +297,24 @@ impl ReleaseSource for DirectoryReleaseSource {
         std::fs::copy(&archive, &destination)
             .map_err(|error| ReleaseSourceError::io("copy", &archive, error))?;
         Ok(destination)
+    }
+
+    fn published_checksum(
+        &self,
+        channel: Channel,
+        version: &str,
+    ) -> Result<Option<Sha256>, ReleaseSourceError> {
+        let file_name = archive_file_name(version, &self.host_key);
+        let sidecar = self
+            .channel_dir(channel)
+            .join(version)
+            .join(checksum_file_name(&file_name));
+        let contents = match std::fs::read_to_string(&sidecar) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(ReleaseSourceError::io("read", &sidecar, error)),
+        };
+        read_published_checksum(&file_name, &contents).map(Some)
     }
 }
 

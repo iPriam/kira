@@ -232,6 +232,10 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
         version,
         root: destination,
         already_installed: replaced,
+        // A build from the working tree has no publisher and therefore no
+        // published digest; hashing bytes this process just produced would
+        // verify nothing.
+        verified: None,
     })
 }
 

@@ -23,10 +23,18 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use kira_toolchain::{CurrentToolchain, HomeDirectoryUnavailable, InvalidCurrentToolchain};
+use kira_toolchain::{
+    CurrentToolchain, HomeDirectoryUnavailable, InvalidCurrentToolchain, PinError,
+};
 
 /// Process exit code for "the launcher could not dispatch".
 const EXIT_LAUNCHER_FAILED: i32 = 2;
+
+/// The primary binary a pin implies.
+///
+/// A pin names a toolchain, never a binary inside it; which binary to run is
+/// decided from `argv[0]` exactly as it is for the global selection.
+const PINNED_PRIMARY: &str = "kira";
 
 /// Everything that stops the launcher before the toolchain binary starts.
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +56,19 @@ enum LaunchError {
     MalformedState {
         path: PathBuf,
         source: InvalidCurrentToolchain,
+    },
+    /// A `kira-toolchain.toml` was found and could not be read as a pin.
+    #[error("{0}")]
+    UnreadablePin(#[from] PinError),
+    /// The pinned toolchain is not installed.
+    #[error(
+        "`{}` pins {channel}/{version}, which is not installed",
+        pin.display()
+    )]
+    PinnedToolchainMissing {
+        pin: PathBuf,
+        channel: &'static str,
+        version: String,
     },
     /// The selected toolchain does not carry the primary binary it names.
     #[error(
@@ -78,6 +99,10 @@ impl LaunchError {
             Self::MalformedState { .. } | Self::MissingPrimaryBinary { .. } => {
                 Some("repair it with `knvm install latest`")
             }
+            Self::PinnedToolchainMissing { .. } => {
+                Some("install it with `knvm install <version>`, or drop the pin with `knvm unpin`")
+            }
+            Self::UnreadablePin(_) => Some("fix the pin, or drop it with `knvm unpin`"),
             Self::HomeUnavailable(_) | Self::UnreadableState { .. } | Self::NotExecuted { .. } => {
                 None
             }
@@ -102,7 +127,7 @@ fn main() {
 
 /// Resolves the selected toolchain and hands the process over to it.
 fn run() -> Result<std::convert::Infallible, LaunchError> {
-    let selected = read_selection()?;
+    let selected = resolve_toolchain()?;
     let target = dispatch_target(&selected);
     let binary =
         kira_toolchain::managed_primary_binary_path(selected.channel, &selected.version, &target)?;
@@ -139,6 +164,40 @@ fn dispatch_target(selected: &CurrentToolchain) -> String {
         }
         _ => selected.primary.clone(),
     }
+}
+
+/// The toolchain this invocation runs: a directory tree's pin, else the
+/// global selection.
+///
+/// The pin wins because it is the more specific statement — the same reason a
+/// project's `rust-toolchain.toml` outranks the default toolchain. A pin whose
+/// toolchain is not installed is refused here rather than falling back: falling
+/// back would run a compiler the project explicitly said it does not want, and
+/// would do it silently.
+fn resolve_toolchain() -> Result<CurrentToolchain, LaunchError> {
+    let Ok(working_directory) = std::env::current_dir() else {
+        // No working directory to walk up from — a deleted cwd, or a caller
+        // that unset it. There is no pin to find, so the global selection is
+        // the whole answer.
+        return read_selection();
+    };
+    let Some(pin) = kira_toolchain::find_pin(&working_directory)? else {
+        return read_selection();
+    };
+
+    let root = kira_toolchain::managed_toolchain_root(pin.channel, &pin.version)?;
+    if !root.is_dir() {
+        return Err(LaunchError::PinnedToolchainMissing {
+            pin: pin.path,
+            channel: pin.channel.dir_name(),
+            version: pin.version,
+        });
+    }
+    Ok(CurrentToolchain {
+        channel: pin.channel,
+        version: pin.version,
+        primary: PINNED_PRIMARY.to_string(),
+    })
 }
 
 /// Reads and parses `current.toml`, distinguishing "absent" from "broken".

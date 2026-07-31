@@ -9,15 +9,21 @@ pub mod llvm_discovery;
 pub mod llvm_layout;
 pub mod llvm_metadata;
 pub mod paint;
+pub mod pin;
 pub mod version;
 
 pub use bundled_discovery::{
     BundledDiscoveryError, BundledPackage, BundledSource, discover_foundation,
     discover_foundation_from,
 };
-pub use llvm_discovery::{DiscoverySource, LlvmDiscoveryError, LlvmInstallation, discover};
-pub use llvm_metadata::{LlvmMetadata, MalformedMetadata, pinned, pinned_version};
+pub use llvm_discovery::{
+    DiscoverySource, LlvmDiscoveryError, LlvmInstallation, discover, is_llvm_home,
+};
+pub use llvm_metadata::{
+    LlvmMetadata, MalformedMetadata, TargetBundle, bundle_for, pinned, pinned_version,
+};
 pub use paint::Paint;
+pub use pin::{PIN_FILE_NAME, PinError, PinnedToolchain, find_pin, remove_pin, write_pin};
 pub use version::RELEASE_VERSION;
 
 use std::path::{Path, PathBuf};
