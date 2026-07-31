@@ -659,10 +659,11 @@ fn compile(path: &str) -> Result<Compiled, i32> {
         // A path the user typed that is not there is a usage error; everything
         // else got far enough that the invocation itself was fine.
         match error {
-            FrontendError::Read { .. } => EXIT_USAGE,
-            FrontendError::SourceMapFull { .. }
-            | FrontendError::Discovery(_)
-            | FrontendError::Resolution(_) => EXIT_FAILURE,
+            // A file that could not be read is the same usage error whether it
+            // is the path the user typed or a source the package claims to own.
+            FrontendError::Read { .. }
+            | FrontendError::Assembly(kira_program_graph::AssemblyError::Read { .. }) => EXIT_USAGE,
+            FrontendError::SourceMapFull { .. } | FrontendError::Assembly(_) => EXIT_FAILURE,
         }
     })
 }

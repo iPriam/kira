@@ -6,15 +6,26 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The non-fatal package-resolution problems assembly hands back to its caller.
+kira-diagnostics.workspace = true
 # Reads a bundled package's `package.kira` for the module root it owns.
 kira-manifest.workspace = true
+# Resolves a package's declared path dependencies into the source roots an
+# import may name — the step that makes a dependency's modules loadable.
+kira-package-manager.workspace = true
 kira-parser.workspace = true
+# Finds the `package.kira` governing an entry file, and every `.kira` file that
+# package owns. Manifest discovery is defined once, there.
+kira-project.workspace = true
 kira-semantics.workspace = true
 kira-source.workspace = true
 kira-syntax-model.workspace = true
 # Finds the packages installed beside the compiler — how `import Foundation`
 # resolves with no path. Path discovery is defined once, there.
 kira-toolchain.workspace = true
+# Assembly returns a typed error, this workspace's rule for any fallible
+# function crossing a crate boundary.
+thiserror.workspace = true
 
 [lints]
 workspace = true
