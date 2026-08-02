@@ -85,15 +85,21 @@ pub struct Expansion {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Every `.ksl` path a macro call site names, in the order they appear.
+/// Every `.ksl` path a macro call site names, with the file that named it, in
+/// the order they appear.
 ///
 /// The build layer needs these *before* expansion, because compiling a shader
 /// reads files and expansion runs inside pure queries. Matched by the shape of
 /// the call rather than by the macro's name — `name!("…​.ksl")` — so an engine
 /// that renames its shader macro still gets its shaders compiled.
+///
+/// The source id travels with the path because a path is written relative to
+/// the package the call site lives in, and a program is built from more than
+/// one package: a library's `ksl!("Shaders/X.ksl")` names a file beside *its*
+/// manifest, not beside the manifest of whichever app depends on it.
 #[must_use]
-pub fn shader_paths(files: &[(SourceId, &str)]) -> Vec<String> {
-    let mut found: Vec<String> = Vec::new();
+pub fn shader_paths(files: &[(SourceId, &str)]) -> Vec<(SourceId, String)> {
+    let mut found: Vec<(SourceId, String)> = Vec::new();
     for &(source, text) in files {
         let file = Lexed::new(source, text);
         for call in invoke::find(&file) {
@@ -105,8 +111,8 @@ pub fn shader_paths(files: &[(SourceId, &str)]) -> Vec<String> {
                 continue;
             }
             let path = kira_lexer::decode_string_literal(written);
-            if path.ends_with(".ksl") && !found.contains(&path) {
-                found.push(path);
+            if path.ends_with(".ksl") && !found.iter().any(|(_, known)| *known == path) {
+                found.push((source, path));
             }
         }
     }

@@ -21,7 +21,7 @@
 //! question a caller asks; what to print, and what exit code to use, stays with
 //! whoever owns the terminal.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use kira_diagnostic_messages::diagnostic_code::DiagnosticCode;
 use kira_diagnostic_messages::package_messages::{lockfile_sync_failed, lockfile_synced};
@@ -186,11 +186,23 @@ pub fn compile_as(path: &Path, kind: Option<BuildKind>) -> Result<Compiled, Fron
             module.text.as_str(),
         )
     }));
+    // Which package each module was loaded from, so a `ksl!` written in a
+    // DEPENDENCY resolves against that dependency's manifest. Modules arrive as
+    // file paths, so the package is the nearest ancestor directory holding a
+    // manifest; a module with none falls back to the root package below.
+    let shader_roots: Vec<(kira_source::SourceId, PathBuf)> = modules
+        .iter()
+        .enumerate()
+        .filter_map(|(index, module)| {
+            package_root_of(Path::new(&module.path))
+                .map(|directory| (kira_semantics::module_source_id(index), directory))
+        })
+        .collect();
     // Shader sources are numbered after the entry file and every module, which
     // is where the `SourceMap` below has room for them.
     let shader_base = u32::try_from(modules.len() + 1).unwrap_or(u32::MAX);
     let (shaders, shader_diagnostics, shader_sources) =
-        crate::shader::precompile(&shader_root, &shader_files, shader_base);
+        crate::shader::precompile(&shader_root, &shader_roots, &shader_files, shader_base);
     diagnostics.extend(shader_diagnostics);
     drop(shader_files);
 
@@ -282,11 +294,30 @@ fn bind_types_placement_diagnostics(entry: &Path, modules: &[ModuleSource]) -> V
         .collect()
 }
 
+/// The package a source file belongs to: the nearest ancestor directory holding
+/// a manifest.
+///
+/// A module is loaded by file path, and the package it came from is not carried
+/// alongside it — but anything written relative to "the package" (a `ksl!`
+/// shader path) has to resolve against that package rather than against whoever
+/// is building. Walking up from the file is what finds it, and a file with no
+/// manifest above it belongs to no package, which the caller reads as "use the
+/// root package's directory".
+fn package_root_of(file: &Path) -> Option<PathBuf> {
+    let mut directory = file.parent()?;
+    loop {
+        if directory.join("package.kira").is_file() {
+            return Some(directory.to_path_buf());
+        }
+        directory = directory.parent()?;
+    }
+}
+
 /// The directory a manifest governs, which is the directory it sits in.
-fn package_root_dir(package: &kira_project::Manifest) -> std::path::PathBuf {
+fn package_root_dir(package: &kira_project::Manifest) -> PathBuf {
     match Path::new(&package.path).parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
-        _ => std::path::PathBuf::from("."),
+        _ => PathBuf::from("."),
     }
 }
 
@@ -329,7 +360,7 @@ mod tests {
 
     /// A scratch directory that removes itself, so a failing test leaves no
     /// litter and no test depends on another's leftovers.
-    struct TempDir(std::path::PathBuf);
+    struct TempDir(PathBuf);
 
     impl TempDir {
         fn new(tag: &str) -> TempDir {
@@ -342,7 +373,7 @@ mod tests {
             TempDir(base)
         }
 
-        fn write(&self, name: &str, text: &str) -> std::path::PathBuf {
+        fn write(&self, name: &str, text: &str) -> PathBuf {
             let path = self.0.join(name);
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).expect("create fixture directories");

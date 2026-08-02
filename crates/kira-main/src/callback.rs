@@ -233,7 +233,9 @@ impl HostCapabilities for SessionHost<'_> {
         value: NativeStateValue,
     ) -> Result<(), NativeStateError> {
         match self.session.state.borrow_mut().write_at(token, ty, path)? {
-            NativeStateValue::Array(elements) => elements.push(value),
+            // The elements are shared with whoever last read this array, so the
+            // append buys a block of its own before it lands.
+            NativeStateValue::Array(elements) => std::sync::Arc::make_mut(elements).push(value),
             _ => return Err(NativeStateError::PathMismatch),
         }
         Ok(())

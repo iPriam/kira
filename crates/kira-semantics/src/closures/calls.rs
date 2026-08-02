@@ -9,6 +9,7 @@ use kira_source::Span;
 use kira_syntax_model::ast::ExprId;
 
 use crate::analyze::{Analyzer, FnCtx};
+use crate::closures::ClosureImpl;
 
 impl Analyzer<'_> {
     /// Type-checks `f(args)` when `f` names a binding of function type.
@@ -406,6 +407,31 @@ impl Analyzer<'_> {
         }
     }
 
+    /// The engine a function type's dispatcher runs on.
+    ///
+    /// Native when any implementation it dispatches to is, because the branch
+    /// that reaches a native body has to be on the same engine as the body —
+    /// a `borrow mut` parameter is a writeback, and a writeback call cannot
+    /// cross the seam. Taking it from `current_execution` instead would take it
+    /// from whichever call site happened to mint the dispatcher first, which is
+    /// analysis order rather than a property of the program.
+    ///
+    /// A type whose literals are split across both engines would need a
+    /// dispatcher per engine. That program does not exist yet, and it fails
+    /// loudly at the bytecode compiler rather than silently, so this stays the
+    /// simple rule until one does.
+    fn dispatcher_execution(&self, impls: &[ClosureImpl]) -> kira_semantics_model::Execution {
+        for entry in impls {
+            let index = (entry.function.0 - self.synth_base) as usize;
+            if let Some(Some(function)) = self.synth.get(index)
+                && function.execution == kira_semantics_model::Execution::Native
+            {
+                return kira_semantics_model::Execution::Native;
+            }
+        }
+        kira_semantics_model::Execution::Inherited
+    }
+
     /// The dispatcher for one function type: a branch per closure literal.
     fn dispatcher_body(&mut self, repr: StructId) -> HirFunction {
         let Some((params, modes, result, impls)) = self.fn_types.get(repr).map(|info| {
@@ -429,6 +455,7 @@ impl Analyzer<'_> {
                 name_span: Span::new(0, 0),
             };
         };
+        let execution = self.dispatcher_execution(&impls);
         let mut ctx = FnCtx::new(result);
         let env = ctx.declare_hidden(Type::Struct(repr), false);
         let mut param_locals = Vec::with_capacity(params.len());
@@ -507,7 +534,7 @@ impl Analyzer<'_> {
             body,
             is_main: false,
             is_async: false,
-            execution: kira_semantics_model::Execution::Inherited,
+            execution,
             mutates_self: false,
             name_span: Span::new(0, 0),
         }

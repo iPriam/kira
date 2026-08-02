@@ -14,7 +14,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use kira_toolchain::{Channel, CurrentToolchain, LANGUAGE_SERVER_BINARY, executable_name};
+use kira_toolchain::{
+    Channel, CurrentToolchain, DESKTOP_RUNNER_BINARY, LANGUAGE_SERVER_BINARY, executable_name,
+};
 
 use crate::install::{
     InstallError, Installed, PRIMARY_BINARY, Staging, toolchain_root, validate, write_current,
@@ -81,9 +83,15 @@ pub enum BinstallError {
 /// the crate itself is a target. Leaving either out installs a fresh compiler
 /// beside an absent or stale archive: ordinary native programs need the base
 /// bridge, while programs that call the compiler need its superset.
-const BUILD_PACKAGES: [&str; 4] = [
+///
+/// The desktop runner is here for the same reason and a different one: nothing
+/// depends on it at all, so only naming it builds it, and `kira live` starts it
+/// beside the compiler — a toolchain without it builds a bundle and then has
+/// nowhere to run it.
+const BUILD_PACKAGES: [&str; 5] = [
     "kira-cli",
     "kira-lsp",
+    "kira-desktop-runner",
     "kira-native-bridge",
     "kira-compiler-bridge",
 ];
@@ -147,6 +155,7 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
     let debug_dir = target_dir(&checkout).join("debug");
     let compiler = debug_dir.join(executable_name(PRIMARY_BINARY));
     let language_server = debug_dir.join(executable_name(LANGUAGE_SERVER_BINARY));
+    let desktop_runner = debug_dir.join(executable_name(DESKTOP_RUNNER_BINARY));
     let host_archive = debug_dir.join("libkira_native_bridge.a");
     let compiler_archive = debug_dir.join("libkira_compiler_bridge.a");
     let wasm_archive = target_dir(&checkout)
@@ -156,6 +165,7 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
     for artifact in [
         &compiler,
         &language_server,
+        &desktop_runner,
         &host_archive,
         &compiler_archive,
         &wasm_archive,
@@ -183,6 +193,13 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
     let staged_server = bin.join(executable_name(LANGUAGE_SERVER_BINARY));
     std::fs::copy(&language_server, &staged_server)
         .map_err(|error| InstallError::io("copy the language server to", &staged_server, error))?;
+    // `kira live` starts the runner client from beside itself, so the runner
+    // belongs to the toolchain rather than to whatever checkout happened to
+    // build one: a session that picked a runner off PATH would run a bundle on
+    // a client from a different build.
+    let staged_runner = bin.join(executable_name(DESKTOP_RUNNER_BINARY));
+    std::fs::copy(&desktop_runner, &staged_runner)
+        .map_err(|error| InstallError::io("copy the desktop runner to", &staged_runner, error))?;
     // The runtime archives ride beside the compiler, where its archive
     // resolution looks: the host's under its cargo name, the Web's under a
     // target-suffixed one so neither can be linked in the other's place.
@@ -327,5 +344,17 @@ mod tests {
         );
         assert!(BUILD_PACKAGES.contains(&"kira-cli"));
         assert!(BUILD_PACKAGES.contains(&"kira-lsp"));
+    }
+
+    /// Nothing in the workspace depends on the runner client, so a build that
+    /// does not name it does not produce it — and `kira live` on the installed
+    /// toolchain then builds a bundle and fails to start anything.
+    #[test]
+    fn the_desktop_runner_is_built_rather_than_inherited() {
+        assert!(
+            BUILD_PACKAGES.contains(&"kira-desktop-runner"),
+            "`kira live` starts the runner from beside the compiler, so the \
+             toolchain has to install one"
+        );
     }
 }

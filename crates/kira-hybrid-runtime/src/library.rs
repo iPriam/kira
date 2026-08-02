@@ -425,7 +425,7 @@ impl NativeLibrary {
         value: NativeStateValue,
     ) -> Result<NativeStateToken, NativeStateError> {
         // SAFETY: every node is allocated and consumed by this same loaded library.
-        let node = unsafe { self.encode_state_value(value)? };
+        let node = unsafe { self.encode_state_value(&value)? };
         let mut token = 0;
         // SAFETY: `node` is live and `token` is one writable word.
         let status = unsafe { (self.state_new)(ty.as_word(), node, &mut token) };
@@ -455,7 +455,7 @@ impl NativeLibrary {
         value: NativeStateValue,
     ) -> Result<(), NativeStateError> {
         // SAFETY: every node is allocated and consumed by this same loaded library.
-        let node = unsafe { self.encode_state_value(value)? };
+        let node = unsafe { self.encode_state_value(&value)? };
         // SAFETY: `node` is live and consumed by the runtime call.
         let status = unsafe { (self.state_replace)(token.as_word(), ty.as_word(), node) };
         self.check_state_status(status, token.as_word())
@@ -468,21 +468,25 @@ impl NativeLibrary {
         self.check_state_status(status, token.as_word())
     }
 
+    /// Builds the library's node tree from a stored value, reading it.
+    ///
+    /// Read rather than consumed: an aggregate's children are shared, so taking
+    /// ownership of one would mean copying the whole subtree just to walk it.
     unsafe fn encode_state_value(
         &self,
-        value: NativeStateValue,
+        value: &NativeStateValue,
     ) -> Result<StateNode, NativeStateError> {
         Ok(match value {
             // SAFETY: the constructor accepts its scalar by value.
-            NativeStateValue::Int(value) => unsafe { (self.state_value_int)(value) },
+            NativeStateValue::Int(value) => unsafe { (self.state_value_int)(*value) },
             // SAFETY: the constructor accepts its opaque word by value.
-            NativeStateValue::RawPtr(value) => unsafe { (self.state_value_raw_ptr)(value) },
+            NativeStateValue::RawPtr(value) => unsafe { (self.state_value_raw_ptr)(*value) },
             // SAFETY: the constructor accepts its scalar by value.
-            NativeStateValue::Float(value) => unsafe { (self.state_value_float)(value) },
+            NativeStateValue::Float(value) => unsafe { (self.state_value_float)(*value) },
             // SAFETY: the constructor accepts its scalar by value.
-            NativeStateValue::Bool(value) => unsafe { (self.state_value_bool)(u8::from(value)) },
+            NativeStateValue::Bool(value) => unsafe { (self.state_value_bool)(u8::from(*value)) },
             NativeStateValue::String(value) => {
-                let string = self.new_string(&value) as *mut c_void;
+                let string = self.new_string(value) as *mut c_void;
                 // SAFETY: the constructor consumes this live string handle.
                 unsafe { (self.state_value_string)(string) }
             }
@@ -495,9 +499,9 @@ impl NativeLibrary {
                 self.encode_aggregate(NativeStateValueTag::ARRAY, 0, values)?
             },
             NativeStateValue::Enum { tag, payload } => {
-                let values = payload.into_iter().map(|value| *value).collect();
+                let values = payload.as_deref().map_or(&[][..], std::slice::from_ref);
                 // SAFETY: the aggregate owns every child this builds.
-                unsafe { self.encode_aggregate(NativeStateValueTag::ENUM, tag, values)? }
+                unsafe { self.encode_aggregate(NativeStateValueTag::ENUM, *tag, values)? }
             }
         })
     }
@@ -506,11 +510,11 @@ impl NativeLibrary {
         &self,
         tag: NativeStateValueTag,
         enum_tag: u32,
-        values: Vec<NativeStateValue>,
+        values: &[NativeStateValue],
     ) -> Result<StateNode, NativeStateError> {
         // SAFETY: constructor takes plain scalar metadata.
         let node = unsafe { (self.state_value_aggregate)(tag.0, enum_tag, values.len()) };
-        for (index, value) in values.into_iter().enumerate() {
+        for (index, value) in values.iter().enumerate() {
             // SAFETY: recursion allocates a child in this same library.
             let child = unsafe { self.encode_state_value(value)? };
             // SAFETY: node and child are live; each in-range slot is set once.
@@ -569,9 +573,9 @@ impl NativeLibrary {
                     values.push(unsafe { self.decode_state_value(child)? });
                 }
                 if tag == NativeStateValueTag::STRUCT {
-                    NativeStateValue::Struct(values)
+                    NativeStateValue::struct_of(values)
                 } else {
-                    NativeStateValue::Array(values)
+                    NativeStateValue::array_of(values)
                 }
             }
             NativeStateValueTag::ENUM => {
@@ -585,16 +589,13 @@ impl NativeLibrary {
                     // SAFETY: child zero exists and is returned owned.
                     let child = unsafe { (self.state_value_child)(node, 0) };
                     // SAFETY: recursion consumes the child.
-                    Some(Box::new(unsafe { self.decode_state_value(child)? }))
+                    Some(unsafe { self.decode_state_value(child)? })
                 } else {
                     // SAFETY: `node` is still live and uniquely owned.
                     unsafe { (self.state_value_free)(node) };
                     return Err(NativeStateError::MalformedValue);
                 };
-                NativeStateValue::Enum {
-                    tag: enum_tag,
-                    payload,
-                }
+                NativeStateValue::enum_of(enum_tag, payload)
             }
             _ => {
                 // SAFETY: `node` is still live and uniquely owned.

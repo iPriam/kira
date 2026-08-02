@@ -53,6 +53,7 @@ compiler and never goes stale when the language moves.
  release/1.10.0/
  bin/kira
  bin/kira-language-server the editor server, same frontend as its kira
+ bin/kira-desktop-runner the client `kira live` starts, built by the same kira
  bin/libkira_native_bridge.a the native runtime
  bin/libkira_compiler_bridge.a native runtime plus the compiler capability
  bin/libkira_native_bridge-wasm32-emscripten.a the Web runtime
@@ -208,15 +209,15 @@ outcome of an update, and a scheduled run must not go red on it.
 ## `binstall`: the checkout as a toolchain
 
 `knvm binstall` is the developer route: run inside a Kira checkout, it builds
-`kira`, `kira-language-server`, and both host runtime archives with cargo (dev
-profile), cross-builds the Web runtime archive, and shapes them into the same
-tree a release unpacks to with the checkout's `foundation/` beside them. It
-installs that tree on the `dev` channel, named by the workspace's
-`[workspace.package] version`. The LLVM backend is a hard part of every kira,
-so `binstall` discovers the managed LLVM and refuses up front — naming the
-provisioning route — when no bundle exists. It goes through the same staging,
-validation, and rename-into-place pipeline as a release install, and selects
-what it lands, so `kira` dispatches to the fresh build immediately.
+`kira`, `kira-language-server`, `kira-desktop-runner`, and both host runtime
+archives with cargo (dev profile), cross-builds the Web runtime archive, and
+shapes them into the same tree a release unpacks to with the checkout's
+`foundation/` beside them. It installs that tree on the `dev` channel, named by
+the workspace's `[workspace.package] version`. The LLVM backend is a hard part
+of every kira, so `binstall` discovers the managed LLVM and refuses up front —
+naming the provisioning route — when no bundle exists. It goes through the same
+staging, validation, and rename-into-place pipeline as a release install, and
+selects what it lands, so `kira` dispatches to the fresh build immediately.
 
 Running it again replaces the installed tree. A dev toolchain names a moving
 target, so `binstall` never answers "already installed" — that would mean

@@ -8,6 +8,19 @@ use crate::error::VmError;
 use crate::value::{AggregateMismatch, Value};
 
 impl Vm<'_> {
+    /// Rebuilds every deferred state read sitting at or above `first` on the
+    /// operand stack.
+    ///
+    /// A seam call is where a value stops being the VM's: the other side reads
+    /// it as an object, so the deferral cannot cross.
+    pub(super) fn own_arguments(&mut self, first: usize) {
+        for index in first..self.stack.len() {
+            if matches!(self.stack[index], Value::NativeSnapshot(_)) {
+                self.stack[index] = self.heap.own(self.stack[index]);
+            }
+        }
+    }
+
     /// Calls into the native half through the embedder.
     pub(super) fn call_native(&mut self, module: &Module, id: u32) -> Result<(), VmError> {
         let proto = module
@@ -20,6 +33,10 @@ impl Vm<'_> {
             .len()
             .checked_sub(count)
             .ok_or(VmError::StackUnderflow)?;
+        // A deferred state read becomes objects before it reaches the seam, so
+        // an aggregate arriving here is refused by the shape it actually has
+        // rather than as an opaque handle.
+        self.own_arguments(first);
         let arguments = &self.stack[first..];
 
         let mut lowered = Vec::with_capacity(count);
@@ -44,8 +61,12 @@ impl Vm<'_> {
                 // signature type — nothing in a C signature spells the top
                 // type — so, like a cell, this guards the desugar rather than
                 // reporting something a reader can provoke.
+                // A deferred read is refused with them, and is unreachable:
+                // `own_arguments` above rebuilt every one on this stack, so a
+                // state read arrives as the struct, array or enum it holds.
                 Value::NativeState(_)
                 | Value::NativeView { .. }
+                | Value::NativeSnapshot(_)
                 | Value::Cell(_)
                 | Value::Erased(_) => {
                     return Err(VmError::HandleAtSeam { function: id });
@@ -99,6 +120,9 @@ impl Vm<'_> {
             .len()
             .checked_sub(count)
             .ok_or(VmError::StackUnderflow)?;
+        // Same reason as the native seam: an aggregate crossing into C is laid
+        // out from real objects, so the deferral ends before the lowering does.
+        self.own_arguments(first);
 
         // An aggregate argument's C-layout bytes are built here and held for the
         // whole call: `ForeignArg::Aggregate` borrows them, so the buffers must

@@ -65,6 +65,21 @@ impl Vm<'_> {
         self.walk_value(frame.locals[slot as usize], steps)
     }
 
+    /// Rebuilds a local that holds a deferred state read, so a write can land.
+    ///
+    /// This is where a read stops being deferred. A read of callback state hands
+    /// back the stored node rather than objects, which is sound only while
+    /// nobody writes to it: the local was bound by a *copy*, so a write through
+    /// it must reach the copy and not the state. Rebuilding here is that copy,
+    /// paid at the first write instead of at every read — and a local that is
+    /// only ever read never pays it at all.
+    fn own_local(&mut self, frame: &mut Frame, slot: u16) {
+        let local = frame.locals[slot as usize];
+        if matches!(local, Value::NativeSnapshot(_)) {
+            frame.locals[slot as usize] = self.heap.own(local);
+        }
+    }
+
     fn walk_value(&mut self, mut current: Value, steps: &[ResolvedStep]) -> Result<Value, VmError> {
         for step in steps {
             current = self.walk_step(current, *step)?;
@@ -109,6 +124,7 @@ impl Vm<'_> {
         steps: &[ResolvedStep],
         value: Value,
     ) -> Result<(), VmError> {
+        self.own_local(frame, slot);
         if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
             if steps.is_empty() {
                 self.heap.drop_value(value);
@@ -136,6 +152,7 @@ impl Vm<'_> {
         path: &[u16],
         value: Value,
     ) -> Result<(), VmError> {
+        self.own_local(frame, slot);
         if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
             if path.is_empty() {
                 self.heap.drop_value(value);
@@ -199,6 +216,7 @@ impl Vm<'_> {
         steps: &[ResolvedStep],
         value: Value,
     ) -> Result<(), VmError> {
+        self.own_local(frame, slot);
         if let Value::NativeView { token, type_id } = frame.locals[slot as usize] {
             return self.write_through_view_appending(token, type_id, steps, value);
         }

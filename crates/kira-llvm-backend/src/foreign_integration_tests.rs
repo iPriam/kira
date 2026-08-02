@@ -295,6 +295,7 @@ fn a_native_program_calls_c_symbols_through_generated_adapters() {
     assert_eq!(program.foreign_imports.len(), 11);
 
     let executable = dir.join("ffi_program");
+    let ir_path = dir.join("ffi_program.ll");
     let artifacts = build_native(
         &program,
         &NativeBuildOptions {
@@ -304,7 +305,7 @@ fn a_native_program_calls_c_symbols_through_generated_adapters() {
             shared_library_path: None,
             archive_path: None,
             exports: crate::NativeExportSurface::default(),
-            ir_path: None,
+            ir_path: Some(ir_path.clone()),
             runtime_archive: runtime_archive(),
             foreign_link: link_inputs(&archive),
             optimize: false,
@@ -324,6 +325,19 @@ fn a_native_program_calls_c_symbols_through_generated_adapters() {
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(stdout, EXPECTED_OUTPUT, "adapter output mismatch");
+
+    // The CString adapter owns only its transient C copy. The call expression
+    // still owns the Kira String argument and must release that handle after
+    // the adapter returns. This program has exactly one String allocation and
+    // no other string-consuming operation, so one release is the native
+    // ownership proof; zero is the per-foreign-call leak that a render loop
+    // amplifies every frame.
+    let ir = std::fs::read_to_string(&ir_path).expect("the emitted IR is readable");
+    assert_eq!(
+        ir.matches("call void @kira_rt_str_free").count(),
+        1,
+        "the owned CString argument was not released exactly once\n{ir}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

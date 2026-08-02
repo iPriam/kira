@@ -72,6 +72,13 @@ pub enum IrExpr {
         /// What is being called.
         callee: IrCallee,
         /// The arguments, in order.
+        ///
+        /// Each expression produces an owned temporary consumed by this call.
+        /// A user callee receives that ownership unless its parameter is a
+        /// borrow; a foreign adapter borrows only for the duration of the C
+        /// call, so the calling engine must reclaim every temporary after the
+        /// adapter returns. Backends may optimize a borrow into a pointer, but
+        /// may not silently let an evaluated argument escape ownership.
         args: Vec<IrExprId>,
         /// The result type (`Void` for `print`).
         result: Type,

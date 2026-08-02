@@ -344,7 +344,13 @@ impl Analyzer<'_> {
                 body,
                 is_main: false,
                 is_async: false,
-                execution: kira_semantics_model::Execution::Inherited,
+                // The engine the reference was written on, exactly as a closure
+                // literal takes it in `lift_closure`. A wrapper is not a function
+                // the author wrote — it exists only to carry one — so leaving it
+                // `Inherited` sent it to the VM regardless of where it was taken,
+                // and a wrapper for a `borrow mut` parameter is a writeback call,
+                // which the bytecode compiler refuses when its callee is native.
+                execution: self.current_execution,
                 mutates_self: false,
                 name_span: Span::new(0, 0),
             },

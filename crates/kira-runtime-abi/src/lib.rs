@@ -397,7 +397,9 @@ pub trait HostCapabilities {
     ) -> Result<(), NativeStateError> {
         let mut root = self.native_state_recover(token, ty)?;
         match native_state_walk_mut(&mut root, path)? {
-            NativeStateValue::Array(elements) => elements.push(value),
+            // The elements are shared with whoever last read this array, so the
+            // append buys a block of its own before it lands.
+            NativeStateValue::Array(elements) => std::sync::Arc::make_mut(elements).push(value),
             _ => return Err(NativeStateError::PathMismatch),
         }
         self.native_state_replace(token, ty, root)

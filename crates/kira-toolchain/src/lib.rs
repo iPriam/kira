@@ -203,6 +203,15 @@ pub fn managed_binary_dir(
 /// editor finds the selected toolchain's server on PATH, never a stale copy.
 pub const LANGUAGE_SERVER_BINARY: &str = "kira-language-server";
 
+/// The desktop runner client a toolchain ships beside its primary.
+///
+/// `kira live` starts this next to itself, so it has to be installed with the
+/// compiler rather than left in a checkout's `target/debug`: a toolchain
+/// without it can build a bundle and has nowhere to run it. One spelling
+/// shared by the compiler that spawns it, knvm's staging, and the release
+/// workflow that packages it.
+pub const DESKTOP_RUNNER_BINARY: &str = "kira-desktop-runner";
+
 /// The full path of an installed toolchain's primary binary.
 pub fn managed_primary_binary_path(
     channel: Channel,

@@ -1109,6 +1109,7 @@ bytecode-only edit swaps into the running process, and anything the process
 cannot take in place relaunches it and says why.
 
 ```sh
+kira live                                      # the package you are standing in
 kira live app.kira                             # the VM half
 kira live --backend hybrid app.kira            # both halves
 kira live --watch app.kira                     # reload on every save

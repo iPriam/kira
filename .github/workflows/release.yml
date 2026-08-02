@@ -3,7 +3,8 @@ name: Release
 # Pushing a `v*` tag publishes a GitHub release with, per platform:
 #
 #   kira-<version>-<host-key>.tar.gz   the toolchain: bin/kira +
-#                                      bin/kira-language-server + foundation/
+#                                      bin/kira-language-server +
+#                                      bin/kira-desktop-runner + foundation/
 #   knvm-<version>-<host-key>.tar.gz   the tools: bin/knvm + bin/kira +
 #                                      bin/kira-language-server (launcher alias)
 #   <archive>.sha256                   the digest each archive is verified
@@ -99,7 +100,7 @@ jobs:
         run: |
           rustup target add wasm32-unknown-emscripten
           cargo build --release -p kira-cli -p kira-lsp -p kira-knvm -p kira-launcher \
-            -p kira-native-bridge -p kira-compiler-bridge
+            -p kira-desktop-runner -p kira-native-bridge -p kira-compiler-bridge
           cargo build --release -p kira-native-bridge --target wasm32-unknown-emscripten
 
       - name: Package the toolchain and tools archives
@@ -113,6 +114,9 @@ jobs:
           # The language server ships with its compiler so the two cannot
           # drift; knvm's validate refuses an archive without it.
           cp "target/release/kira-language-server$exe" "$stage/bin/"
+          # `kira live` starts the runner client from beside itself, so it
+          # ships with the compiler rather than being fetched or built later.
+          cp "target/release/kira-desktop-runner$exe" "$stage/bin/"
           # The runtime archives ride beside the compiler, where its archive
           # resolution looks; compiler-using programs select the compiler
           # bridge, and the Web one is target-suffixed.

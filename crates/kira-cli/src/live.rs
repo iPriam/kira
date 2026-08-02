@@ -1,7 +1,7 @@
 //! `kira live`: what the verb was asked for, and how a bundle gets built.
 //!
 //! ```text
-//! kira live [runner] <file> [--backend vm|hybrid] [--watch] [--quit-after 5s]
+//! kira live [runner] [file|dir] [--backend vm|hybrid] [--watch] [--quit-after 5s]
 //! ```
 //!
 //! The session itself — the server, the runner process, the watching, the
@@ -19,7 +19,9 @@ use std::time::Duration;
 
 use kira_ir::IrProgram;
 use kira_live::{Bundle, BundleError, NamedPayload, PayloadKind, ServerError};
+use kira_llvm_backend::NativeLinkInputs;
 use kira_manifest::{BuildProfile, RunnerId};
+use kira_runtime_abi::Execution;
 
 use crate::hybrid;
 use crate::native::Artifacts;
@@ -61,7 +63,7 @@ impl LiveBackend {
 pub struct LiveOptions {
     /// The runner to run on.
     pub runner: RunnerId,
-    /// The program to run.
+    /// The program to run: a `.kira` file, or a package directory.
     pub path: String,
     /// Which backend builds the bundle.
     pub backend: LiveBackend,
@@ -77,9 +79,6 @@ pub struct LiveOptions {
 /// A usage error in a `kira live` invocation.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LiveOptionsError {
-    /// No program was named.
-    #[error("expected a path to a .kira file")]
-    NoPath,
     /// A flag needed a value it did not get.
     #[error("`{0}` needs a value")]
     MissingValue(String),
@@ -107,6 +106,11 @@ impl LiveOptions {
     /// The distinction is made on shape, not on what happens to exist on disk:
     /// a path-looking argument stays a path even when nothing is there, so the
     /// error says the file is missing rather than that the runner is unknown.
+    ///
+    /// No path at all means the package you are standing in — the same default
+    /// `run`, `build`, and `check` take. Nothing is guessed here: `.` goes
+    /// through the same package discovery an explicit path does, so a directory
+    /// holding no `package.kira` is refused by name there.
     pub fn parse(args: &[String]) -> Result<LiveOptions, LiveOptionsError> {
         let mut runner = None;
         let mut path: Option<String> = None;
@@ -163,7 +167,7 @@ impl LiveOptions {
             // Desktop is the default runner: a live session with no runner named
             // is a session on the machine you are sitting at.
             runner: runner.unwrap_or(RunnerId::Desktop),
-            path: path.ok_or(LiveOptionsError::NoPath)?,
+            path: path.unwrap_or_else(|| crate::options::DEFAULT_PATH.to_owned()),
             backend,
             watch,
             quit_after,
@@ -234,14 +238,18 @@ pub enum LiveError {
     Server(#[from] ServerError),
     /// The runner client binary could not be found or started.
     ///
-    /// The most likely cause by far is a `cargo build -p kira-cli`, which builds
-    /// this binary and no other: cargo builds a dependency's lib target, never
-    /// its `[[bin]]`, so the runner is only beside `kira` after a workspace
-    /// build. Saying so beats leaving someone to discover it.
+    /// Nothing depends on the runner, so only a build that names it produces
+    /// one: `cargo build -p kira-cli` builds this binary and no other, because
+    /// cargo builds a dependency's lib target and never its `[[bin]]`. Both
+    /// routes to a runner are named, because the path in the message says which
+    /// one applies — a checkout's `target/debug`, or an installed toolchain's
+    /// `bin/` — and someone reading it should not have to know that.
     #[error(
         "could not start the `{runner}` runner client at `{path}`: {source}\n\
-         note: the runner client is built by `cargo build --workspace`, \
-         not by `cargo build -p kira-cli`"
+         note: in a checkout the runner client is built by \
+         `cargo build --workspace`, not by `cargo build -p kira-cli`\n\
+         note: an installed toolchain ships one; `knvm binstall` rebuilds this \
+         checkout into a complete toolchain"
     )]
     Spawn {
         /// The runner it was for.
@@ -296,13 +304,27 @@ impl LiveError {
 /// The bundle is what the runner gets, so this is where a backend choice stops
 /// mattering: a VM bundle and a hybrid bundle are both just payloads by the time
 /// they reach the wire.
+///
+/// `foreign_link` is what a program's `@FFI.Extern` imports resolved to. A
+/// program with none links nothing and the value is empty; a program with them
+/// gets a native half either way, because reaching C needs generated adapters
+/// and a library to hold them — on the VM exactly as much as in a hybrid build.
 pub fn build_bundle(
     program: &IrProgram,
     source: &Path,
     runner: RunnerId,
     backend: LiveBackend,
+    foreign_link: &NativeLinkInputs,
 ) -> Result<Bundle, LiveError> {
     match backend {
+        // A VM program that reaches C is still a VM program: every function runs
+        // on the VM, and the native half exists only to hold the adapters the
+        // foreign calls go through. That is a hybrid bundle whose split is
+        // entirely on one side, so it is built as one rather than as a second
+        // artifact shape the runner would have to learn.
+        LiveBackend::Vm if reaches_foreign_code(program) => {
+            build_hybrid_bundle(&on_the_vm(program), source, runner, backend, foreign_link)
+        }
         LiveBackend::Vm => {
             let module = kira_bytecode::compile(program)
                 .map_err(|error| LiveError::build(backend, &error))?;
@@ -317,8 +339,32 @@ pub fn build_bundle(
                 0,
             )?)
         }
-        LiveBackend::Hybrid => build_hybrid_bundle(program, source, runner),
+        LiveBackend::Hybrid => build_hybrid_bundle(program, source, runner, backend, foreign_link),
     }
+}
+
+/// Whether this program calls out to C, in either direction.
+///
+/// A callback counts: handing a Kira function to C needs the same generated
+/// entry thunk an import needs, and it lives in the same native half.
+fn reaches_foreign_code(program: &IrProgram) -> bool {
+    !program.foreign_imports.is_empty() || !program.foreign_callbacks.is_empty()
+}
+
+/// The same program with every function assigned to the VM.
+///
+/// `@Native` is a boundary a VM build does not have — `kira run --backend vm`
+/// compiles every function to bytecode whatever it was annotated with, and this
+/// is that decision made once, up front, so the bytecode, the manifest, and the
+/// native half all describe the same program. Without it the manifest would
+/// claim a trampoline for each `@Native` function and the native half would be
+/// asked to carry bodies the VM is already running.
+fn on_the_vm(program: &IrProgram) -> IrProgram {
+    let mut program = program.clone();
+    for function in &mut program.functions {
+        function.execution = Execution::Runtime;
+    }
+    program
 }
 
 /// Builds a hybrid bundle: the manifest, its bytecode, and its native library.
@@ -331,16 +377,11 @@ fn build_hybrid_bundle(
     program: &IrProgram,
     source: &Path,
     runner: RunnerId,
+    backend: LiveBackend,
+    foreign_link: &NativeLinkInputs,
 ) -> Result<Bundle, LiveError> {
-    // Live sessions do not build a foreign surface in this milestone; a program
-    // with `@FFI.Extern` imports would link nothing foreign here.
-    let bundle = hybrid::build(
-        program,
-        source,
-        false,
-        &kira_llvm_backend::NativeLinkInputs::EMPTY,
-    )
-    .map_err(|error| LiveError::build(LiveBackend::Hybrid, &error))?;
+    let bundle = hybrid::build(program, source, false, foreign_link)
+        .map_err(|error| LiveError::build(backend, &error))?;
     let artifacts = Artifacts::for_source(source).map_err(|source| LiveError::Io {
         path: PathBuf::from("."),
         source,
@@ -388,7 +429,7 @@ pub(crate) fn runner_client_path(runner: RunnerId) -> Result<PathBuf, LiveError>
     let current = std::env::current_exe().map_err(LiveError::Locate)?;
     let directory = current.parent().unwrap_or(Path::new("."));
     let name = match runner {
-        RunnerId::Desktop => "kira-desktop-runner",
+        RunnerId::Desktop => kira_toolchain::DESKTOP_RUNNER_BINARY,
         // Unreachable today: `session` refuses a non-desktop runner before it
         // gets here. Named rather than asserted so adding a runner client is a
         // matter of naming it, and a missing one is still a real error.
@@ -469,16 +510,26 @@ mod tests {
         );
     }
 
+    /// `kira live` in a package directory is the package you are standing in,
+    /// exactly as `kira run` reads a bare invocation. A runner with no path is
+    /// the same session on that runner.
     #[test]
-    fn a_session_without_a_path_is_a_usage_error() {
+    fn a_session_without_a_path_is_the_package_you_are_standing_in() {
         assert_eq!(
-            LiveOptions::parse(&args(&[])),
-            Err(LiveOptionsError::NoPath)
+            LiveOptions::parse(&args(&[])).expect("parses").path,
+            crate::options::DEFAULT_PATH
         );
+        // Flags alone leave the path defaulted too, so `kira live --backend vm`
+        // in a package directory means what it looks like.
         assert_eq!(
-            LiveOptions::parse(&args(&["desktop"])),
-            Err(LiveOptionsError::NoPath)
+            LiveOptions::parse(&args(&["--backend", "vm"]))
+                .expect("parses")
+                .path,
+            crate::options::DEFAULT_PATH
         );
+        let options = LiveOptions::parse(&args(&["desktop"])).expect("parses");
+        assert_eq!(options.runner, RunnerId::Desktop);
+        assert_eq!(options.path, crate::options::DEFAULT_PATH);
     }
 
     #[test]

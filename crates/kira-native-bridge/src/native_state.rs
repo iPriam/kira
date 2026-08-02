@@ -69,16 +69,13 @@ fn finish(node: KNativeStateValue) -> Result<NativeStateValue, NativeStateStatus
                 return Err(NativeStateStatus::MALFORMED_VALUE);
             };
             Ok(match tag {
-                NativeStateValueTag::STRUCT => NativeStateValue::Struct(values),
-                NativeStateValueTag::ARRAY => NativeStateValue::Array(values),
+                NativeStateValueTag::STRUCT => NativeStateValue::struct_of(values),
+                NativeStateValueTag::ARRAY => NativeStateValue::array_of(values),
                 NativeStateValueTag::ENUM => {
                     if values.len() > 1 {
                         return Err(NativeStateStatus::MALFORMED_VALUE);
                     }
-                    NativeStateValue::Enum {
-                        tag: enum_tag,
-                        payload: values.pop().map(Box::new),
-                    }
+                    NativeStateValue::enum_of(enum_tag, values.pop())
                 }
                 _ => return Err(NativeStateStatus::MALFORMED_VALUE),
             })

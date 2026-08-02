@@ -41,7 +41,8 @@ impl Heap {
             | Value::Erased(_)
             | Value::NativeState(_)
             | Value::Cell(_)
-            | Value::NativeView { .. } => {
+            | Value::NativeView { .. }
+            | Value::NativeSnapshot(_) => {
                 self.drop_value(value);
                 return None;
             }
@@ -126,7 +127,8 @@ impl Heap {
             | Value::Erased(_)
             | Value::NativeState(_)
             | Value::Cell(_)
-            | Value::NativeView { .. } => return None,
+            | Value::NativeView { .. }
+            | Value::NativeSnapshot(_) => return None,
         })
     }
 

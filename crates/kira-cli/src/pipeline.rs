@@ -221,13 +221,16 @@ fn foreign_link(foreign: &Option<NativeLinkInputs>) -> &NativeLinkInputs {
 /// The inputs a program with no foreign imports links: nothing at all.
 static EMPTY_FOREIGN_LINK: NativeLinkInputs = NativeLinkInputs::EMPTY;
 
-/// Runs `kira live [runner] <file> [--backend vm|hybrid]`: build a bundle,
+/// Runs `kira live [runner] [file|dir] [--backend vm|hybrid]`: build a bundle,
 /// serve it, and run it on a runner client.
 ///
 /// Unlike `run`, this does not execute the program in this process: it builds a
 /// `.klbundle`, serves it over a socket, and a runner client runs it. That is
 /// what makes a live session a live session rather than a run — the app is
 /// hosted somewhere that can outlive the compiler and take a new bundle later.
+///
+/// With no path, this is the package you are standing in — the same default
+/// `run`, `build`, and `check` take.
 pub fn live(args: &[String]) -> i32 {
     let options = match crate::live::LiveOptions::parse(args) {
         Ok(options) => options,
@@ -236,22 +239,44 @@ pub fn live(args: &[String]) -> i32 {
             return EXIT_USAGE;
         }
     };
-    let source = std::path::Path::new(&options.path);
+    // Two paths, because a package is a tree and a build has one entry. The
+    // watched path is what the user named — for a package, the whole directory,
+    // so a save anywhere in `app/` reloads. The source is the entry package
+    // discovery resolves it to, which is what names the build artifacts.
+    let watched = std::path::PathBuf::from(&options.path);
+    let entry = match resolve_path(&options.path) {
+        Ok(entry) => entry,
+        Err(code) => return code,
+    };
+    let source = std::path::Path::new(&entry);
 
     // Compiling is a closure rather than a value, because a watched session
     // rebuilds: the frontend runs again for every save, and a save that does not
     // compile yields `None` rather than an error, so the session keeps the app
     // that is already running.
     let rebuild = || -> Result<Option<kira_live::Bundle>, crate::live::LiveError> {
-        match runnable_path_ir("live", &options.path) {
-            Ok(ir) => {
-                crate::live::build_bundle(&ir, source, options.runner, options.backend).map(Some)
-            }
-            Err(_) => Ok(None),
-        }
+        let Ok(ir) = runnable_path_ir("live", &entry) else {
+            return Ok(None);
+        };
+        // A live session runs on the machine the runner runs on, so the foreign
+        // libraries it links are the host's — resolved on every rebuild, because
+        // a save can add an import that needs one. A resolution failure is a
+        // failed build like any other: the session keeps the app it is running
+        // and the diagnostic is already on stderr.
+        let Ok(foreign) = resolve_foreign(&entry, &ir, Device::Host) else {
+            return Ok(None);
+        };
+        crate::live::build_bundle(
+            &ir,
+            source,
+            options.runner,
+            options.backend,
+            foreign_link(&foreign),
+        )
+        .map(Some)
     };
 
-    match crate::supervisor::run(&options, source, &rebuild) {
+    match crate::supervisor::run(&options, &watched, &rebuild) {
         Ok(()) => EXIT_OK,
         Err(error) => {
             err!("kira live: {error}");
