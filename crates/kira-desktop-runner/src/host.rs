@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use kira_bytecode::{Module, ModuleDecodeError};
 use kira_live::{Bundle, BundleError, PayloadKind, RunnerHost};
-use kira_runtime_abi::HostCapabilities;
+use kira_runtime_abi::{HostCapabilities, NativeStateHost};
 use kira_vm_runtime::{Program, VmError};
 
 use crate::staged::Staged;
@@ -268,7 +268,12 @@ impl RunnerHost for DesktopHost {
     fn start(&mut self) -> Result<(), DesktopRunnerError> {
         match &self.staged {
             Staged::VmLinked { program } => {
-                let mut host = StdoutHost;
+                // The same stack `kira run` puts under a VM program: callback
+                // state is portable storage the host provides, not something the
+                // VM carries, so a runner that hands over a bare `StdoutHost`
+                // traps the moment an app boxes state for a native callback —
+                // which every UI app does, on its first frame.
+                let mut host = NativeStateHost::new(StdoutHost);
                 program.run(&mut host)?;
                 Ok(())
             }

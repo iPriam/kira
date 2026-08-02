@@ -1,6 +1,6 @@
 # Kira Live
 
-`kira live <file>` builds a program into a `.klbundle`, serves it over a
+`kira live [file|dir]` builds a program into a `.klbundle`, serves it over a
 loopback socket, and starts a runner client that downloads it, loads it, links
 it, and starts it. With `--watch`, every save rebuilds and the change goes into
 the app that is already running.
@@ -10,12 +10,26 @@ that outlives the compiler and can take a new bundle later — which is the whol
 reason reload is possible at all.
 
 ```sh
+kira live                                      # the package you are standing in
 kira live app.kira                             # the VM half
 kira live --backend hybrid app.kira            # both halves
 kira live --watch app.kira                     # reload on every save
 kira live --watch --quit-after 30s app.kira    # bounded, for scripts and CI
 kira live ios app.kira                         # a runner with no client yet: says so
 ```
+
+A path is optional, and naming none means the package you are standing in — the
+same default `run`, `build`, and `check` take. The path goes through the same
+package discovery either way, so a directory holding no `package.kira` is
+refused by name.
+
+A program that calls C gets a native half on either backend. `@FFI.Extern`
+reaches a C symbol through a generated adapter, and an adapter has to live in a
+library the runner can load — which is as true of a VM program as of a hybrid
+one. So a VM bundle for a program with foreign imports is three payloads rather
+than one: every function still runs on the VM, and the native half holds only
+the adapters. It is a hybrid bundle whose split happens to be entirely on one
+side, which is why the runner needs to know nothing new about it.
 
 | Flag | Meaning |
 |---|---|
@@ -157,6 +171,10 @@ hot patch must not be trusted for them until they are there.
 
 ## Watching
 
+The watch set is the path the invocation named: one file for a standalone
+program, and the whole directory for a package, so a save anywhere under `app/`
+reloads rather than only a save to the entry.
+
 The interesting part is what is *not* watched. A watcher that sees its own build
 output rebuilds forever, and an editor writing `app.kira~` and `.app.kira.swp` on
 the way to saving would trigger three rebuilds per save, two of them of an
@@ -190,18 +208,18 @@ missing.
 
 The runner is resolved beside `kira` rather than from `PATH`, so a session never
 picks up a runner from a different build than the bundle it is about to serve.
-Cargo builds a dependency's lib target and never its `[[bin]]`, so it is
-`cargo build --workspace` that puts it there — `cargo build -p kira-cli` does not,
-and a session that cannot find its runner says so.
+An installed toolchain therefore ships one in its `bin/`, staged by `knvm
+binstall` and packaged by the release workflow alongside the compiler and the
+language server. In a checkout it is `cargo build --workspace` that puts one in
+`target/debug`: nothing depends on the runner, and cargo builds a dependency's
+lib target and never its `[[bin]]`, so `cargo build -p kira-cli` leaves none. A
+session that cannot find its runner says so, and names both routes.
 
 ## Limits
 
 - **Headless.** Sessions stop at `live.entrypoint.started` and never claim
   `live.frame.presented`. Presenting a frame needs a window and a swapchain, and
   kira-graphics owns those, not this repo.
-- **One file is the watch set.** That is what `kira live` is given; there are no
-  packages, manifests, or `app/` directory to walk yet. `WatchSet` takes roots
-  precisely so this grows without the watching changing.
 - **The session socket is unauthenticated.** It is loopback and first-come, so
   any local process that wins the accept gets the bundle.
 - **`--quit-after` bounds the session, not a rebuild.** A save landing near the

@@ -29,7 +29,7 @@ impl Heap {
                 for field in fields {
                     values.push(self.into_native_state(field)?);
                 }
-                NativeStateValue::Struct(values)
+                NativeStateValue::struct_of(values)
             }
             Value::Array(id) => {
                 // Moving the elements out is a write like any other: an array
@@ -47,7 +47,7 @@ impl Heap {
                 for element in elements {
                     values.push(self.into_native_state(element)?);
                 }
-                NativeStateValue::Array(values)
+                NativeStateValue::array_of(values)
             }
             // Moving the payload out is the one thing an enum is never asked to
             // do elsewhere, and a shared object cannot answer it: the values
@@ -69,13 +69,24 @@ impl Heap {
                         (tag, payload)
                     }
                 };
-                NativeStateValue::Enum {
+                NativeStateValue::enum_of(
                     tag,
-                    payload: match payload {
-                        Some(value) => Some(Box::new(self.into_native_state(value)?)),
+                    match payload {
+                        Some(value) => Some(self.into_native_state(value)?),
                         None => None,
                     },
-                }
+                )
+            }
+            // A read of callback state going back into callback state: the node
+            // it holds is already in the stored form, so this is where the
+            // deferral pays off most — `state.a = state.b` moves a node instead
+            // of rebuilding a subtree as objects and encoding it again.
+            Value::NativeSnapshot(id) => {
+                let Some(node) = self.snapshot_node(id).cloned() else {
+                    return Err("a callback-state read whose node was already taken");
+                };
+                self.free_snapshot(id);
+                node
             }
             Value::Void => return Err("a void value"),
             Value::Erased(_) => return Err("an `Any` inside callback state"),
@@ -87,31 +98,39 @@ impl Heap {
         })
     }
 
-    /// Moves a backend-neutral callback-state tree into this heap.
-    pub fn from_native_state(&mut self, value: NativeStateValue) -> Value {
+    /// Builds a heap value from a backend-neutral callback-state tree.
+    ///
+    /// Reads the tree rather than consuming it. The stored node is shared —
+    /// every aggregate holds its children behind an `Arc` — so a caller that had
+    /// to hand over ownership would have to clone the whole subtree first, and
+    /// then this would walk the clone and free it again. Two walks and a full
+    /// copy to build what one walk builds.
+    pub fn from_native_state(&mut self, value: &NativeStateValue) -> Value {
         match value {
-            NativeStateValue::Int(value) => Value::Int(value),
-            NativeStateValue::Float(value) => Value::Float(value),
-            NativeStateValue::Bool(value) => Value::Bool(value),
-            NativeStateValue::RawPtr(value) => Value::RawPtr(value),
-            NativeStateValue::String(value) => Value::Str(self.alloc(value)),
+            NativeStateValue::Int(value) => Value::Int(*value),
+            NativeStateValue::Float(value) => Value::Float(*value),
+            NativeStateValue::Bool(value) => Value::Bool(*value),
+            NativeStateValue::RawPtr(value) => Value::RawPtr(*value),
+            NativeStateValue::String(value) => Value::Str(self.alloc(value.clone())),
             NativeStateValue::Struct(fields) => {
                 let fields = fields
-                    .into_iter()
+                    .iter()
                     .map(|field| self.from_native_state(field))
                     .collect();
                 Value::Struct(self.alloc_struct(fields))
             }
             NativeStateValue::Array(elements) => {
                 let elements = elements
-                    .into_iter()
+                    .iter()
                     .map(|element| self.from_native_state(element))
                     .collect();
                 Value::Array(self.alloc_array(elements))
             }
             NativeStateValue::Enum { tag, payload } => {
-                let payload = payload.map(|value| self.from_native_state(*value));
-                Value::Enum(self.alloc_enum(tag, payload))
+                let payload = payload
+                    .as_deref()
+                    .map(|value| self.from_native_state(value));
+                Value::Enum(self.alloc_enum(*tag, payload))
             }
         }
     }

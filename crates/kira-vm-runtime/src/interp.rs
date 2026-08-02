@@ -316,8 +316,20 @@ impl Vm<'_> {
                             &[NativeStatePathStep::Field(index.into())],
                         )
                         .map_err(VmError::NativeState)?;
-                    let value = self.heap.from_native_state(stored);
+                    // An aggregate stops here as the node it already is. A whole
+                    // widget tree read out of state is one refcount, and the
+                    // reads that walk into it are refcounts too.
+                    let value = self.heap.read_state_node(stored);
                     self.stack.push(value);
+                    return Ok(());
+                }
+                if let Value::NativeSnapshot(id) = base {
+                    let field = self.read_snapshot_child(
+                        id,
+                        NativeStatePathStep::Field(index.into()),
+                        VmError::NoSuchField { index },
+                    )?;
+                    self.stack.push(field);
                     return Ok(());
                 }
                 let Value::Struct(id) = base else {
@@ -389,6 +401,19 @@ impl Vm<'_> {
             Instruction::ArrayGet => {
                 let index = self.pop_int()?;
                 let base = self.pop()?;
+                if let Value::NativeSnapshot(id) = base {
+                    let Ok(index) = u64::try_from(index) else {
+                        self.heap.free_snapshot(id);
+                        return Err(VmError::NegativeIndex);
+                    };
+                    let element = self.read_snapshot_child(
+                        id,
+                        NativeStatePathStep::Index(index),
+                        VmError::IndexOutOfBounds,
+                    )?;
+                    self.stack.push(element);
+                    return Ok(());
+                }
                 let Value::Array(id) = base else {
                     self.heap.drop_value(base);
                     return Err(VmError::NotAnArray);
@@ -428,6 +453,26 @@ impl Vm<'_> {
                 // the array, and nothing is dropped here because this
                 // instruction does not own it. Only the element is copied out,
                 // which is what keeps a handed-out element unshared.
+                if let Value::NativeSnapshot(id) = frame.locals[slot as usize] {
+                    // Borrowed here too: the read stays in the local, so this
+                    // takes a hold of its own rather than consuming it.
+                    let Value::NativeSnapshot(borrowed) =
+                        self.heap.copy_value(Value::NativeSnapshot(id))
+                    else {
+                        return Err(VmError::NotAnArray);
+                    };
+                    let Ok(index) = u64::try_from(index) else {
+                        self.heap.free_snapshot(borrowed);
+                        return Err(VmError::NegativeIndex);
+                    };
+                    let element = self.read_snapshot_child(
+                        borrowed,
+                        NativeStatePathStep::Index(index),
+                        VmError::IndexOutOfBounds,
+                    )?;
+                    self.stack.push(element);
+                    return Ok(());
+                }
                 let Value::Array(id) = frame.locals[slot as usize] else {
                     return Err(VmError::NotAnArray);
                 };
@@ -441,6 +486,12 @@ impl Vm<'_> {
             }
             Instruction::ArrayLen => {
                 let base = self.pop()?;
+                if let Value::NativeSnapshot(id) = base {
+                    let len = self.snapshot_array_len(id)?;
+                    let counted = i64::try_from(len).map_err(|_| VmError::ArrayTooLong)?;
+                    self.stack.push(Value::Int(counted));
+                    return Ok(());
+                }
                 let Value::Array(id) = base else {
                     self.heap.drop_value(base);
                     return Err(VmError::NotAnArray);
@@ -523,6 +574,11 @@ impl Vm<'_> {
             Instruction::CellSet(slot) => self.cell_set(frame, slot)?,
             Instruction::EnumTag => {
                 let base = self.pop()?;
+                if let Value::NativeSnapshot(id) = base {
+                    let tag = self.snapshot_enum_tag(id)?;
+                    self.stack.push(Value::Int(i64::from(tag)));
+                    return Ok(());
+                }
                 let Value::Enum(id) = base else {
                     self.heap.drop_value(base);
                     return Err(VmError::NotAnEnum);
@@ -538,6 +594,11 @@ impl Vm<'_> {
                 // copy of what was read is pushed, and the box is freed — so
                 // the binding outlives the enum it came from.
                 let base = self.pop()?;
+                if let Value::NativeSnapshot(id) = base {
+                    let payload = self.snapshot_enum_payload(id)?;
+                    self.stack.push(payload);
+                    return Ok(());
+                }
                 let Value::Enum(id) = base else {
                     self.heap.drop_value(base);
                     return Err(VmError::NotAnEnum);

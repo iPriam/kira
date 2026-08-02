@@ -3,6 +3,7 @@
 //! Layer 5 of the Kira package graph.
 
 pub mod native_libraries;
+pub mod native_sources;
 pub mod package_discovery;
 pub mod project;
 pub mod workspace;

@@ -1,6 +1,7 @@
 //! Portable callback-state values, tokens, stores, and host errors.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -120,6 +121,22 @@ impl From<NativeStateError> for NativeStateStatus {
 }
 
 /// An owned, backend-neutral copy of a Kira value held as callback state.
+///
+/// # An aggregate is shared until somebody writes to it
+///
+/// Every aggregate node holds its children behind an [`Arc`], so cloning one is
+/// a refcount bump rather than a walk of everything underneath it. That is what
+/// makes reading a field out of live state cost the field: the read hands back a
+/// node that shares its children with the stored one, and only a *write* through
+/// [`native_state_walk_mut`] gives the writer children of its own — one
+/// [`Arc::make_mut`] per level of the path, once, after which the path is
+/// unshared and every later write through it is a compare.
+///
+/// This is the same bargain [`crate`]'s arrays strike on both engines: share the
+/// block, make it unique on the first write. It matters here because the shared
+/// node is also a *snapshot* — a reader holding one keeps seeing what it read
+/// even if the stored value is written afterwards, which is exactly the value
+/// semantics a Kira read has.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NativeStateValue {
     /// A Kira integer value.
@@ -130,19 +147,79 @@ pub enum NativeStateValue {
     Bool(bool),
     /// A Kira string value.
     String(String),
-    /// A Kira struct's fields in declaration order.
-    Struct(Vec<NativeStateValue>),
-    /// A Kira array's elements in index order.
-    Array(Vec<NativeStateValue>),
+    /// A Kira struct's fields in declaration order, shared until written to.
+    Struct(Arc<Vec<NativeStateValue>>),
+    /// A Kira array's elements in index order, shared until written to.
+    Array(Arc<Vec<NativeStateValue>>),
     /// An opaque raw-pointer word.
     RawPtr(u64),
     /// A Kira enum's tag and optional payload.
     Enum {
         /// The declaration-order variant tag.
         tag: u32,
-        /// The selected variant's payload, when it has one.
-        payload: Option<Box<NativeStateValue>>,
+        /// The selected variant's payload, when it has one, shared until
+        /// written to.
+        payload: Option<Arc<NativeStateValue>>,
     },
+}
+
+impl NativeStateValue {
+    /// A struct node owning `fields`.
+    pub fn struct_of(fields: Vec<NativeStateValue>) -> NativeStateValue {
+        NativeStateValue::Struct(Arc::new(fields))
+    }
+
+    /// An array node owning `elements`.
+    pub fn array_of(elements: Vec<NativeStateValue>) -> NativeStateValue {
+        NativeStateValue::Array(Arc::new(elements))
+    }
+
+    /// An enum node with `tag` and an optional owned `payload`.
+    pub fn enum_of(tag: u32, payload: Option<NativeStateValue>) -> NativeStateValue {
+        NativeStateValue::Enum {
+            tag,
+            payload: payload.map(Arc::new),
+        }
+    }
+
+    /// This aggregate's children as a slice, or `None` for a scalar.
+    ///
+    /// A struct and an array answer with their fields and elements; an enum
+    /// answers with its payload, which is why the caller gets a slice rather
+    /// than one of the three shapes.
+    pub fn children(&self) -> Option<&[NativeStateValue]> {
+        match self {
+            NativeStateValue::Struct(values) | NativeStateValue::Array(values) => Some(values),
+            NativeStateValue::Enum { payload, .. } => {
+                Some(payload.as_deref().map_or(&[], std::slice::from_ref))
+            }
+            _ => None,
+        }
+    }
+
+    /// Takes this aggregate's children, cloning them only if they are shared.
+    ///
+    /// The unshared case is the common one — a node built to be taken apart —
+    /// and it moves rather than copies.
+    pub fn into_children(self) -> Option<Vec<NativeStateValue>> {
+        match self {
+            NativeStateValue::Struct(values) | NativeStateValue::Array(values) => {
+                Some(unwrap_children(values))
+            }
+            NativeStateValue::Enum { payload, .. } => Some(match payload {
+                Some(payload) => {
+                    vec![Arc::try_unwrap(payload).unwrap_or_else(|arc| (*arc).clone())]
+                }
+                None => Vec::new(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Takes a shared child list over, copying it only when it is shared.
+fn unwrap_children(values: Arc<Vec<NativeStateValue>>) -> Vec<NativeStateValue> {
+    Arc::try_unwrap(values).unwrap_or_else(|arc| (*arc).clone())
 }
 
 /// A deterministic failure from the opaque callback-state store.
@@ -214,6 +291,12 @@ pub fn native_state_walk<'a>(
 }
 
 /// Follows `path` into a stored value, borrowing what it addresses mutably.
+///
+/// Every level the walk passes through is made unique on the way down: the
+/// children are shared with whoever else read this node, and a write must not
+/// land in their copy. That is one [`Arc::make_mut`] per level of the path, and
+/// only while the level is actually shared — a path walked twice unshares on the
+/// first walk and compares on the second.
 pub fn native_state_walk_mut<'a>(
     root: &'a mut NativeStateValue,
     path: &[NativeStatePathStep],
@@ -221,12 +304,16 @@ pub fn native_state_walk_mut<'a>(
     let mut cursor = root;
     for step in path {
         cursor = match (step, cursor) {
-            (NativeStatePathStep::Field(index), NativeStateValue::Struct(fields)) => fields
-                .get_mut(*index as usize)
-                .ok_or(NativeStateError::PathMismatch)?,
-            (NativeStatePathStep::Index(index), NativeStateValue::Array(elements)) => elements
-                .get_mut(usize::try_from(*index).map_err(|_| NativeStateError::PathMismatch)?)
-                .ok_or(NativeStateError::PathMismatch)?,
+            (NativeStatePathStep::Field(index), NativeStateValue::Struct(fields)) => {
+                Arc::make_mut(fields)
+                    .get_mut(*index as usize)
+                    .ok_or(NativeStateError::PathMismatch)?
+            }
+            (NativeStatePathStep::Index(index), NativeStateValue::Array(elements)) => {
+                Arc::make_mut(elements)
+                    .get_mut(usize::try_from(*index).map_err(|_| NativeStateError::PathMismatch)?)
+                    .ok_or(NativeStateError::PathMismatch)?
+            }
             _ => return Err(NativeStateError::PathMismatch),
         };
     }
@@ -506,7 +593,9 @@ impl<H: HostCapabilities> HostCapabilities for NativeStateHost<H> {
         value: NativeStateValue,
     ) -> Result<(), NativeStateError> {
         match self.store.write_at(token, ty, path)? {
-            NativeStateValue::Array(elements) => elements.push(value),
+            // The elements are shared with whoever last read this array, so the
+            // append buys a block of its own before it lands.
+            NativeStateValue::Array(elements) => Arc::make_mut(elements).push(value),
             _ => return Err(NativeStateError::PathMismatch),
         }
         Ok(())
@@ -553,24 +642,24 @@ mod tests {
         let token = store
             .create(
                 LEFT,
-                NativeStateValue::Struct(vec![NativeStateValue::Int(3)]),
+                NativeStateValue::struct_of(vec![NativeStateValue::Int(3)]),
             )
             .expect("state allocates");
         assert_ne!(token.as_word(), 0);
         assert_eq!(
             store.recover(token, LEFT),
-            Ok(NativeStateValue::Struct(vec![NativeStateValue::Int(3)]))
+            Ok(NativeStateValue::struct_of(vec![NativeStateValue::Int(3)]))
         );
         store
             .replace(
                 token,
                 LEFT,
-                NativeStateValue::Struct(vec![NativeStateValue::Int(7)]),
+                NativeStateValue::struct_of(vec![NativeStateValue::Int(7)]),
             )
             .expect("state mutates");
         assert_eq!(
             store.recover(token, LEFT),
-            Ok(NativeStateValue::Struct(vec![NativeStateValue::Int(7)]))
+            Ok(NativeStateValue::struct_of(vec![NativeStateValue::Int(7)]))
         );
         assert_eq!(store.free(token), Ok(()));
         assert_eq!(

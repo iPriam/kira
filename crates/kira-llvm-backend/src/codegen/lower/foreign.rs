@@ -127,6 +127,18 @@ impl FunctionLowering<'_, '_> {
             (out, result_buffer, status)
         };
 
+        // A call owns the values its argument expressions produced. The
+        // adapter only borrows them while it marshals and invokes C: even a
+        // `String -> CString` crossing copies the bytes into separate,
+        // transient C storage. Reclaim the Kira values as soon as the adapter
+        // returns, exactly as the VM drops the operand-stack arguments after
+        // `call_foreign`. Omitting this leaked every heap-owning argument once
+        // per call -- most visibly one string handle for every Metal selector
+        // literal on every frame.
+        for (value, ty) in values {
+            self.drop_value(value, ty)?;
+        }
+
         // A non-success status is a runtime trap (an interior NUL, say): there is
         // no value to hand back, so native code reports it and exits, mirroring
         // the VM surfacing a `ForeignCallError`.

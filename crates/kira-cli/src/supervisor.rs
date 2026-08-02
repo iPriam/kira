@@ -221,10 +221,11 @@ fn relaunch(
 
 /// The inputs a change to which rebuilds this program.
 ///
-/// One file today, because that is what `kira live` is given: there are no
-/// packages, no manifests, and no `app/` directory to walk yet. The watcher takes
-/// roots rather than a file precisely so that this grows into the real set
-/// without the watching itself changing.
+/// Whatever the invocation named: one file for a standalone program, and the
+/// package directory for a package — which the watcher walks, so a save
+/// anywhere under `app/` reloads rather than only a save to the entry. The
+/// watcher takes roots rather than a file precisely so that both are the same
+/// watching.
 fn watch_set(source: &Path) -> WatchSet {
     WatchSet::new().root(source)
 }
@@ -256,12 +257,17 @@ fn spawn_runner(
 mod tests {
     use super::*;
 
-    /// The watch set is what a session rebuilds from, and today that is the one
-    /// file it was given.
+    /// The watch set is what a session rebuilds from: the path the invocation
+    /// named, file or package directory alike.
     #[test]
     fn the_watch_set_is_the_program() {
         let set = watch_set(Path::new("/tmp/app.kira"));
         assert_eq!(set.roots(), [std::path::PathBuf::from("/tmp/app.kira")]);
+        let package = watch_set(Path::new("/tmp/liquid-glass-app"));
+        assert_eq!(
+            package.roots(),
+            [std::path::PathBuf::from("/tmp/liquid-glass-app")]
+        );
     }
 
     /// A live session polls in the background of somebody's editor for hours. It
