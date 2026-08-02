@@ -10,7 +10,7 @@
 
 use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// A scratch program that removes itself and its build directory.
@@ -42,16 +42,35 @@ impl Drop for Scratch {
     }
 }
 
+/// A spawned `kira` process that is killed when it goes out of scope.
+///
+/// An unwatched session ends on its own, but only when nothing goes wrong: a
+/// panic between the spawn and the wait leaves the process running, and `kira
+/// live` supervises a runner of its own, so the survivor holds the inherited
+/// pipe and the whole suite reads as leaking. Killing on drop turns either into
+/// a failing test rather than a hanging one.
+struct Session(Child);
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// Runs one unwatched `kira live --backend vm` session and returns
 /// (stdout, stderr, ok).
 fn live(scratch: &Scratch) -> (String, String, bool) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_kira"))
-        .args(["live", "--backend", "vm"])
-        .arg(scratch.program())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("kira spawns");
+    let mut session = Session(
+        Command::new(env!("CARGO_BIN_EXE_kira"))
+            .args(["live", "--backend", "vm"])
+            .arg(scratch.program())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("kira spawns"),
+    );
+    let child = &mut session.0;
 
     let mut stdout = String::new();
     child
@@ -102,8 +121,19 @@ fn the_runner_provides_native_callback_state() {
     let (stdout, stderr, ok) = live(&scratch);
 
     assert!(ok, "the session must exit 0.\nstderr: {stderr}");
-    assert!(
-        stdout.contains("\n9\n3\n"),
+    // The program's own lines, with the session's markers taken out. The two
+    // write to one pipe and the runner's next marker can land between the
+    // program's two prints, so asserting they are adjacent asserts a race:
+    // `live.bundle.linked` arriving between `9` and `3` failed a run that was
+    // entirely correct.
+    let printed: Vec<&str> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("live.") && !line.starts_with("@kira"))
+        .collect();
+    assert_eq!(
+        printed,
+        ["9", "3"],
         "the program's own output must be the VM's.\nstdout: {stdout}\nstderr: {stderr}"
     );
     assert!(
