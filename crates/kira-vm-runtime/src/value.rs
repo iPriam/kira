@@ -24,7 +24,7 @@
 
 use std::rc::Rc;
 
-use kira_runtime_abi::{NativeStateToken, NativeStateTypeId};
+use kira_runtime_abi::{NativeStateToken, NativeStateTypeId, NativeStateValue};
 
 /// A handle to a heap-allocated string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +49,10 @@ pub struct CellId(u32);
 /// A handle to a heap-allocated erased (`Any`) value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ErasedId(u32);
+
+/// A handle to a heap-held read of callback state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotId(u32);
 
 /// A runtime value on the operand stack or in a local slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -95,6 +99,15 @@ pub enum Value {
         /// The type identity recovery validated.
         type_id: NativeStateTypeId,
     },
+    /// An aggregate read out of callback state, not yet rebuilt as objects.
+    ///
+    /// The value semantics of a read are already complete when this exists: the
+    /// stored node shares its children with the read, and a later write to the
+    /// state gives the writer children of its own, so what this holds is what
+    /// was read. Rebuilding it as heap objects is the part that is deferred, and
+    /// most reads never need it — a walk over a UI tree reads scalars out of the
+    /// leaves and never asks for an object at all.
+    NativeSnapshot(SnapshotId),
     /// The unit value.
     Void,
 }
@@ -163,6 +176,19 @@ enum Object {
         /// How many values hold this box; the payload goes with the last.
         shares: u32,
     },
+    /// An aggregate read out of callback state, held as the store's own node.
+    ///
+    /// Shared and never written through, exactly as an enum object is: the node
+    /// is what a read produced, and a write through the state does not reach it
+    /// (see [`kira_runtime_abi::NativeStateValue`]). Anything that would edit
+    /// what this holds rebuilds it as objects first — [`Heap::own`] — so a
+    /// snapshot is only ever read.
+    Snapshot {
+        /// The node this read landed on.
+        node: NativeStateValue,
+        /// How many values hold this object.
+        shares: u32,
+    },
 }
 
 /// A snapshot of heap allocation counters.
@@ -205,6 +231,7 @@ impl Heap {
     /// The fields are taken, not copied: whatever produced them (the operand
     /// stack) hands over ownership, exactly as a `Str` handle is handed over.
     pub fn alloc_struct(&mut self, fields: Vec<Value>) -> StructId {
+        let fields = self.own_all(fields);
         StructId(self.alloc_object(Object::Struct(fields)))
     }
 
@@ -213,7 +240,95 @@ impl Heap {
     /// As with a struct, the elements are taken rather than copied: whatever
     /// produced them hands over ownership.
     pub fn alloc_array(&mut self, elements: Vec<Value>) -> ArrayId {
+        let elements = self.own_all(elements);
         ArrayId(self.alloc_object(Object::Array(Rc::new(elements))))
+    }
+
+    /// Holds `node` as a deferred read, or builds it now if it is a scalar.
+    ///
+    /// A scalar is cheaper as a value than as a handle — an `Int` read out of
+    /// state is an `Int` — so only an aggregate becomes a snapshot. That is also
+    /// what keeps the deferral invisible: every instruction that computes with a
+    /// value gets a value, and only the ones that *navigate* one meet a
+    /// snapshot.
+    pub fn read_state_node(&mut self, node: NativeStateValue) -> Value {
+        match node {
+            NativeStateValue::Struct(_) | NativeStateValue::Array(_) => Value::NativeSnapshot(
+                SnapshotId(self.alloc_object(Object::Snapshot { node, shares: 1 })),
+            ),
+            // An enum is a snapshot too: reading its tag is the common case and
+            // needs no object, and its payload is another node.
+            NativeStateValue::Enum { .. } => Value::NativeSnapshot(SnapshotId(
+                self.alloc_object(Object::Snapshot { node, shares: 1 }),
+            )),
+            scalar => self.from_native_state(&scalar),
+        }
+    }
+
+    /// The node behind a snapshot handle.
+    pub fn snapshot_node(&self, id: SnapshotId) -> Option<&NativeStateValue> {
+        match self.slots.get(id.0 as usize) {
+            Some(Some(Object::Snapshot { node, .. })) => Some(node),
+            _ => None,
+        }
+    }
+
+    /// Releases one hold on a snapshot, freeing the node with the last.
+    ///
+    /// A handle that names no snapshot frees nothing, exactly as
+    /// [`Heap::free_struct`] does for one that names no struct.
+    pub fn free_snapshot(&mut self, id: SnapshotId) {
+        // Another value still reads this node, so it stays.
+        if let Some(Some(Object::Snapshot { shares, .. })) = self.slots.get_mut(id.0 as usize)
+            && *shares > 1
+        {
+            *shares -= 1;
+            return;
+        }
+        let taken = match self.slots.get_mut(id.0 as usize) {
+            Some(slot @ Some(Object::Snapshot { .. })) => slot.take(),
+            _ => None,
+        };
+        if taken.is_some() {
+            self.freed += 1;
+            self.free_list.push(id.0);
+        }
+    }
+
+    /// Rebuilds a deferred read as heap objects, leaving anything else alone.
+    ///
+    /// This is where the deferral ends. Every route by which a value could be
+    /// *edited* or stored inside something editable goes through here first, so
+    /// a snapshot is never reachable from an aggregate and never written
+    /// through — which is what lets the read that produced it copy nothing.
+    pub fn own(&mut self, value: Value) -> Value {
+        let Value::NativeSnapshot(id) = value else {
+            return value;
+        };
+        let node = match self.snapshot_node(id) {
+            Some(node) => node.clone(),
+            // A handle naming no snapshot rebuilds as the unit value rather
+            // than trapping: the slot is still freed below, so the accounting
+            // balances either way.
+            None => {
+                self.free_snapshot(id);
+                return Value::Void;
+            }
+        };
+        let rebuilt = self.from_native_state(&node);
+        self.free_snapshot(id);
+        rebuilt
+    }
+
+    /// [`Heap::own`] over a list, in place.
+    fn own_all(&mut self, values: Vec<Value>) -> Vec<Value> {
+        if !values
+            .iter()
+            .any(|value| matches!(value, Value::NativeSnapshot(_)))
+        {
+            return values;
+        }
+        values.into_iter().map(|value| self.own(value)).collect()
     }
 
     /// Gives an array elements of its own, so a write reaches nothing else.
@@ -274,6 +389,7 @@ impl Heap {
     /// Returns `false` — having changed nothing and dropped nothing — when the
     /// handle does not name an array with that element.
     pub fn set_element(&mut self, id: ArrayId, index: usize, value: Value) -> bool {
+        let value = self.own(value);
         // Bounds first, so an index that is about to trap copies nothing; then
         // the copy, and only then the read of what is being replaced. In that
         // order the value dropped below is this array's own — read before the
@@ -306,6 +422,7 @@ impl Heap {
     /// is that the *caller's* array changes, which is why `append` resolves a
     /// place rather than taking a value.
     pub fn push_element(&mut self, id: ArrayId, value: Value) -> bool {
+        let value = self.own(value);
         // An append is a write like any other, so it lengthens this array's own
         // elements rather than the ones it was sharing.
         self.make_array_unique(id);
@@ -358,6 +475,7 @@ impl Heap {
     /// produced it (the operand stack) hands over ownership, exactly as a
     /// struct's fields are handed over.
     pub fn alloc_enum(&mut self, tag: u32, payload: Option<Value>) -> EnumId {
+        let payload = payload.map(|payload| self.own(payload));
         EnumId(self.alloc_object(Object::Enum {
             tag,
             payload,
@@ -429,6 +547,7 @@ impl Heap {
     /// The payload is taken rather than copied: the operand stack hands over
     /// ownership, exactly as it does for an enum's payload.
     pub fn alloc_erased(&mut self, type_id: u64, payload: Value) -> ErasedId {
+        let payload = self.own(payload);
         ErasedId(self.alloc_object(Object::Erased {
             type_id,
             payload,
@@ -486,6 +605,7 @@ impl Heap {
     /// operand stack) hands over ownership, exactly as an enum's payload is
     /// handed over.
     pub fn alloc_cell(&mut self, payload: Value) -> CellId {
+        let payload = self.own(payload);
         CellId(self.alloc_object(Object::Cell { payload, shares: 1 }))
     }
 
@@ -512,6 +632,7 @@ impl Heap {
     /// followed by a store would leave a freed handle readable in between, and
     /// a trap in that window would leave it there for good.
     pub fn cell_set(&mut self, id: CellId, value: Value) -> bool {
+        let value = self.own(value);
         let previous = match self.slots.get_mut(id.0 as usize) {
             Some(Some(Object::Cell { payload, .. })) => std::mem::replace(payload, value),
             _ => return false,
@@ -595,6 +716,7 @@ impl Heap {
     /// Returns `false` — having changed nothing and dropped nothing — when the
     /// handle does not name a struct with that field.
     pub fn set_field(&mut self, id: StructId, index: u16, value: Value) -> bool {
+        let value = self.own(value);
         let Some(previous) = self.field(id, index) else {
             return false;
         };
@@ -660,6 +782,7 @@ impl Heap {
             Value::Enum(id) => self.free_enum(id),
             Value::Erased(id) => self.free_erased(id),
             Value::Cell(id) => self.free_cell(id),
+            Value::NativeSnapshot(id) => self.free_snapshot(id),
             _ => {}
         }
     }
@@ -739,6 +862,18 @@ impl Heap {
                 }
                 Value::Cell(id)
             }
+            // A hold on the same node, for the same reason an enum takes one:
+            // a snapshot is never written through, so a second holder can
+            // observe nothing a deep copy would have hidden. This is the arm
+            // that makes passing a state read down a recursion free.
+            Value::NativeSnapshot(id) => {
+                if let Some(Some(Object::Snapshot { shares, .. })) =
+                    self.slots.get_mut(id.0 as usize)
+                {
+                    *shares += 1;
+                }
+                Value::NativeSnapshot(id)
+            }
             scalar => scalar,
         }
     }
@@ -765,6 +900,67 @@ impl Heap {
     /// [`Heap::free_struct`] is: a payload is a value analysis resolved against
     /// types that already resolve, so a cycle is unrepresentable.
     pub fn values_equal(&self, left: Value, right: Value) -> bool {
+        // A deferred read compares as what it was read as. It cannot reach here
+        // through `EqAny` — erasure rebuilds one first ([`Heap::own`]) — but
+        // answering by identity would be a wrong answer rather than a refused
+        // one, and this comparison is meant to follow handles.
+        match (left, right) {
+            (Value::NativeSnapshot(a), Value::NativeSnapshot(b)) => {
+                match (self.snapshot_node(a), self.snapshot_node(b)) {
+                    (Some(one), Some(other)) => one == other,
+                    _ => false,
+                }
+            }
+            (Value::NativeSnapshot(a), other) => match self.snapshot_node(a) {
+                Some(node) => self.value_equals_node(other, node),
+                None => false,
+            },
+            (other, Value::NativeSnapshot(b)) => match self.snapshot_node(b) {
+                Some(node) => self.value_equals_node(other, node),
+                None => false,
+            },
+            _ => self.objects_equal(left, right),
+        }
+    }
+
+    /// Whether a heap value equals a stored callback-state node.
+    fn value_equals_node(&self, value: Value, node: &NativeStateValue) -> bool {
+        match (value, node) {
+            (Value::Int(a), NativeStateValue::Int(b)) => a == *b,
+            (Value::Float(a), NativeStateValue::Float(b)) => a == *b,
+            (Value::Bool(a), NativeStateValue::Bool(b)) => a == *b,
+            (Value::RawPtr(a), NativeStateValue::RawPtr(b)) => a == *b,
+            (Value::Str(a), NativeStateValue::String(b)) => self.get(a) == b,
+            (Value::Struct(a), NativeStateValue::Struct(b)) => {
+                let fields = self.fields(a);
+                fields.len() == b.len()
+                    && fields
+                        .iter()
+                        .zip(b.iter())
+                        .all(|(&field, node)| self.value_equals_node(field, node))
+            }
+            (Value::Array(a), NativeStateValue::Array(b)) => {
+                let elements = self.elements(a);
+                elements.len() == b.len()
+                    && elements
+                        .iter()
+                        .zip(b.iter())
+                        .all(|(&element, node)| self.value_equals_node(element, node))
+            }
+            (Value::Enum(a), NativeStateValue::Enum { tag, payload }) => {
+                self.enum_tag(a) == Some(*tag)
+                    && match (self.enum_payload_ref(a), payload.as_deref()) {
+                        (Some(one), Some(other)) => self.value_equals_node(one, other),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
+            _ => false,
+        }
+    }
+
+    /// [`Heap::values_equal`] for two values that are both real objects.
+    fn objects_equal(&self, left: Value, right: Value) -> bool {
         match (left, right) {
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,

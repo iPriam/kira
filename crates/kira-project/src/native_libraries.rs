@@ -18,6 +18,8 @@ use kira_native_lib_definition::{
     TargetTriple,
 };
 
+use crate::native_sources::{NativeSourceBuildError, ensure_archive_current};
+
 /// A resolved native-library catalog together with the target it was resolved
 /// for, ready to hand to a code-generation backend.
 #[derive(Debug, Clone)]
@@ -55,6 +57,9 @@ pub enum NativeLibraryResolveError {
     /// duplicate library).
     #[error(transparent)]
     Model(#[from] NativeLibraryError),
+    /// A library's declared C sources could not be built into its archive.
+    #[error(transparent)]
+    SourceBuild(#[from] NativeSourceBuildError),
 }
 
 /// Resolves everything a package declares about its C libraries into one
@@ -178,8 +183,12 @@ fn locate(
     spec: &NativeLibrarySpec,
     base_dir: &Path,
     target: &TargetTriple,
-) -> Result<ResolvedNativeLibrary, NativeLibraryError> {
-    spec.resolve(base_dir, Some(target), |candidate| candidate.exists())
+) -> Result<ResolvedNativeLibrary, NativeLibraryResolveError> {
+    // Build before looking: a declaration that says how to build the library is
+    // the authority on what its archive should contain, and locating first would
+    // find — and link — whatever happened to be there from last time.
+    ensure_archive_current(spec, base_dir, target)?;
+    Ok(spec.resolve(base_dir, Some(target), |candidate| candidate.exists())?)
 }
 
 #[cfg(test)]

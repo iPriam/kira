@@ -71,6 +71,25 @@ fn box_layout(size: usize, align: usize) -> Option<(Layout, usize)> {
     header_layout().extend(payload).ok()
 }
 
+/// Where the payload starts inside a box whose payload has `align`.
+///
+/// The same number [`box_layout`] returns, arrived at by rounding rather than by
+/// building two `Layout`s to ask one of them. Recovery is not an occasional
+/// call: a native UI frame recovers its compositor state once per emitted quad,
+/// and `Layout::from_size_align` plus `extend` put alignment validation,
+/// overflow checks and two `Result`s on that path for an offset that is fixed
+/// the moment the box is allocated.
+///
+/// A live box always carries a power-of-two alignment —
+/// [`kira_rt_native_state_box_new`] refuses anything else before the box
+/// exists, so a header that fails the magic check never reaches here — which is
+/// what makes the mask exact. `payload_offset_matches_the_layout` pins the two
+/// against each other.
+fn payload_offset(align: usize) -> usize {
+    let align = align.max(1);
+    (size_of::<BoxHeader>() + align - 1) & !(align - 1)
+}
+
 /// Allocates a box for a value of `size`/`align` and returns its token.
 ///
 /// `free` drops what the payload's fields own when the state is released, and
@@ -155,12 +174,10 @@ pub unsafe extern "C" fn kira_rt_native_state_box_payload(
     if header.type_id != type_id {
         return NativeStateStatus::WRONG_TYPE.0;
     }
-    let Some((_, offset)) = box_layout(header.size, header.align) else {
-        return NativeStateStatus::MALFORMED_VALUE.0;
-    };
-    // SAFETY: the payload starts `offset` bytes into an allocation that covers
-    // the header and the payload both.
-    let payload = unsafe { base.add(offset) };
+    // SAFETY: the payload starts `payload_offset` bytes into an allocation that
+    // covers the header and the payload both — the box was allocated with the
+    // layout that offset comes from, and the magic above proved it is that box.
+    let payload = unsafe { base.add(payload_offset(header.align)) };
     // SAFETY: the caller supplies one writable pointer slot.
     unsafe { *out = payload };
     NativeStateStatus::OK.0
@@ -226,6 +243,23 @@ mod tests {
 
     /// The type id these tests box under; any stable word does.
     const TYPE: u64 = 77;
+
+    /// The recovery path derives the payload offset by rounding instead of
+    /// building the layout. It has to land on the same byte the box was
+    /// allocated with, or every recovered field is read at the wrong address —
+    /// so pin the two against each other across the alignments a backend
+    /// emits, and sizes either side of the header.
+    #[test]
+    fn payload_offset_matches_the_layout() {
+        for align in [1usize, 2, 4, 8, 16, 32, 64, 128] {
+            for size in [0usize, 1, 7, 8, 40, 41, 1024] {
+                let Some((_, offset)) = box_layout(size, align) else {
+                    continue;
+                };
+                assert_eq!(payload_offset(align), offset, "size {size}, align {align}");
+            }
+        }
+    }
 
     /// Allocates a box for one `i64` payload.
     fn new_box(free: Option<NativeStateBoxFree>) -> u64 {

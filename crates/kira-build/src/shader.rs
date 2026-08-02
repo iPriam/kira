@@ -35,12 +35,20 @@ const TARGETS: [BackendTarget; 5] = [
 /// Every KSL file one compilation read, in the order it was given an id.
 pub(crate) type ShaderSources = Vec<(String, String)>;
 
-/// Compiles every shader `files` names, relative to `root`.
+/// Compiles every shader `files` names, each relative to the package its call
+/// site was written in.
 ///
 /// Returns the table, everything the compilation reported, and the text of
 /// every `.ksl` file read. A shader that fails to compile contributes
 /// diagnostics and no entry, so the macro call site refuses too rather than
 /// expanding to something wrong.
+///
+/// `roots` answers, for the file a path was written in, the package root that
+/// path is relative to; `root` is the fallback for a file it has no answer for
+/// (the entry file, and any module whose package could not be located). A
+/// dependency's shader lives beside the dependency's manifest, so resolving
+/// every path against the ROOT package would leave a library unable to ship a
+/// shader for the apps that consume it.
 ///
 /// `base` is the first source id the shaders may use. They are numbered from
 /// there so a diagnostic about a shader renders against the shader's own text
@@ -48,15 +56,20 @@ pub(crate) type ShaderSources = Vec<(String, String)>;
 /// registers the returned sources at those same ids.
 pub(crate) fn precompile(
     root: &Path,
+    roots: &[(SourceId, PathBuf)],
     files: &[(SourceId, &str)],
     base: u32,
 ) -> (PrecompiledShaders, Vec<Diagnostic>, ShaderSources) {
     let mut entries = Vec::new();
     let mut diagnostics = Vec::new();
     let mut sources: ShaderSources = Vec::new();
-    for path in kira_macros::shader_paths(files) {
+    for (source_id, path) in kira_macros::shader_paths(files) {
         kira_diagnostics::progress!("compiling shader {path}");
-        let resolved = root.join(&path);
+        let owner = roots
+            .iter()
+            .find(|(known, _)| *known == source_id)
+            .map_or(root, |(_, directory)| directory.as_path());
+        let resolved = owner.join(&path);
         let Some(ir) = compile_one(&resolved, base, &mut diagnostics, &mut sources) else {
             continue;
         };
@@ -450,7 +463,7 @@ shader Tri {
         let program =
             "@Main function main() {\n    let art = ksl!(\"Shaders/Tri.ksl\")\n    return\n}\n";
         let (table, diagnostics, sources) =
-            precompile(directory.path(), &[(SourceId::new(0), program)], 1);
+            precompile(directory.path(), &[], &[(SourceId::new(0), program)], 1);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(sources.len(), 1, "one shader was read");
 
@@ -496,7 +509,7 @@ shader Tri {
         .expect("the shader");
         let program = "@Main function main() {\n    let art = ksl!(\"Bad.ksl\")\n    return\n}\n";
         let (table, diagnostics, sources) =
-            precompile(directory.path(), &[(SourceId::new(0), program)], 4);
+            precompile(directory.path(), &[], &[(SourceId::new(0), program)], 4);
         let reported = diagnostics
             .iter()
             .find(|d| d.code == Some("KSLS001"))
@@ -543,7 +556,7 @@ shader Step {
         .expect("the shader");
         let program = "@Main function main() {\n    let art = ksl!(\"Step.ksl\")\n    return\n}\n";
         let (table, diagnostics, _) =
-            precompile(directory.path(), &[(SourceId::new(0), program)], 1);
+            precompile(directory.path(), &[], &[(SourceId::new(0), program)], 1);
         let note = diagnostics
             .iter()
             .find(|d| d.code == Some("KSLS016"))
@@ -566,7 +579,7 @@ shader Step {
         let directory = Scratch::new("no-shaders");
         let program = "@Main function main() {\n    return\n}\n";
         let (table, diagnostics, sources) =
-            precompile(directory.path(), &[(SourceId::new(0), program)], 1);
+            precompile(directory.path(), &[], &[(SourceId::new(0), program)], 1);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert!(table.is_empty());
         assert!(sources.is_empty());

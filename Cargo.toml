@@ -106,4 +106,17 @@ opt-level = 3
 [profile.dev.package.kira-bytecode]
 opt-level = 3
 
+# The runtime archive a native program links, for the same reason as the
+# interpreter above: it is not tooling that runs once, it is the inner loop of
+# every program the compiler produces. Unoptimized, `kira_rt_native_state_box_payload`
+# and `kira_rt_*` raw-memory writes are a chain of un-inlined helpers, and a UI
+# frame calls them per field and per vertex — measured on the native-4K liquid
+# glass app, an unoptimized archive turned a 3 ms text-emission spike into 20 ms.
+# `debug_assertions` still apply; only the inlining changes.
+[profile.dev.package.kira-native-bridge]
+opt-level = 3
+
+[profile.dev.package.kira-runtime-abi]
+opt-level = 3
+
 
