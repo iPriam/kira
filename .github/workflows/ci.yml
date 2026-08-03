@@ -19,6 +19,12 @@ jobs:
             host_key: x86_64-linux-gnu
           - os: macos-latest
             host_key: aarch64-macos
+          # The third host the LLVM pin already names. `llvm-metadata.toml` has
+          # carried `[target.x86_64-windows-msvc]` since the pin was written and
+          # the bundle workflow builds it, so the platform was supported
+          # everywhere except the gate that would have proved it.
+          - os: windows-latest
+            host_key: x86_64-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -39,12 +45,33 @@ jobs:
         run: |
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' llvm-metadata.toml | head -1)"
           release="$(sed -n 's/^release_tag = "\(.*\)"/\1/p' llvm-metadata.toml | head -1)"
+          # The asset name is read out of the metadata rather than spelled here.
+          # That file says nothing invents asset names, and it means it: it
+          # carries one archive format per host, and a name assembled from a
+          # hardcoded `.tar.xz` is a second source of truth that the Windows
+          # bundle — a `.zip` — contradicts on its first run.
+          asset="$(awk -v section="[target.${{ matrix.host_key }}]" '
+            $0 == section { inside = 1; next }
+            /^\[/ { inside = 0 }
+            inside && $1 == "asset" { gsub(/^[^"]*"|"$/, ""); print; exit }
+          ' llvm-metadata.toml)"
+          if [ -z "$asset" ]; then
+            echo "llvm-metadata.toml names no asset for ${{ matrix.host_key }}" >&2
+            exit 1
+          fi
           home="$HOME/.kira/toolchains/llvm/$version/${{ matrix.host_key }}"
           mkdir -p "$home"
-          gh release download "$release" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "llvm-$version-${{ matrix.host_key }}.tar.xz" \
-            --output - | tar -xJ -C "$home"
+          case "$asset" in
+            *.zip)
+              gh release download "$release" --repo "$GITHUB_REPOSITORY" \
+                --pattern "$asset" --output "$RUNNER_TEMP/llvm-bundle.zip"
+              unzip -q "$RUNNER_TEMP/llvm-bundle.zip" -d "$home"
+              ;;
+            *)
+              gh release download "$release" --repo "$GITHUB_REPOSITORY" \
+                --pattern "$asset" --output - | tar -xJ -C "$home"
+              ;;
+          esac
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -57,6 +84,12 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then
             brew install spirv-tools glslang
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            # `validator()` in shader_validation.rs resolves a tool with
+            # `sh -c 'command -v <name>'`, so what matters is that these land on
+            # the PATH the test's shell sees — which on a Windows runner is Git
+            # for Windows' bash, reading the machine PATH choco has extended.
+            choco install --no-progress --yes glslang spirv-tools
           else
             sudo apt-get update
             sudo apt-get install -y spirv-tools glslang-tools
