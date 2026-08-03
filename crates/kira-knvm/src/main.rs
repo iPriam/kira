@@ -131,9 +131,16 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
                     return EXIT_FAILED;
                 }
             };
-            let Some(shell_home) = std::env::home_dir() else {
-                eprintln!("knvm: no home directory, so no shell startup file to configure");
-                return EXIT_FAILED;
+            // The startup file lives in the user's home — on unix. Windows
+            // configures the registry environment instead and never looks at
+            // this, so an unfindable home is fatal only where one is needed.
+            let shell_home = match std::env::home_dir() {
+                Some(home) => home,
+                None if cfg!(windows) => kira_home.clone(),
+                None => {
+                    eprintln!("knvm: no home directory, so no shell startup file to configure");
+                    return EXIT_FAILED;
+                }
             };
             let shell = std::env::var("SHELL").ok();
             match kira_knvm::sinstall(&kira_home, &shell_home, shell.as_deref(), &start) {
@@ -143,17 +150,7 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
                          alias into {}",
                         installed.bin_dir.display()
                     );
-                    if installed.startup_file_updated {
-                        println!(
-                            "knvm: added a PATH line to {}",
-                            installed.startup_file.display()
-                        );
-                    } else {
-                        println!(
-                            "knvm: {} already sources the env script",
-                            installed.startup_file.display()
-                        );
-                    }
+                    report_path_setup(&installed);
                     reload_shell(&installed.bin_dir, shell.as_deref());
                     EXIT_OK
                 }
@@ -312,6 +309,40 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
     }
 }
 
+/// Says which PATH this run configured, in the terms that host uses.
+fn report_path_setup(installed: &kira_knvm::SelfInstalled) {
+    match &installed.path {
+        kira_knvm::PathConfigured::StartupFile {
+            env_script,
+            startup_file,
+            updated,
+        } => {
+            if *updated {
+                println!("knvm: added a PATH line to {}", startup_file.display());
+            } else {
+                println!(
+                    "knvm: {} already sources {}",
+                    startup_file.display(),
+                    env_script.display()
+                );
+            }
+        }
+        kira_knvm::PathConfigured::UserEnvironment { updated } => {
+            if *updated {
+                println!(
+                    "knvm: added {} to this user's persistent `Path`",
+                    installed.bin_dir.display()
+                );
+            } else {
+                println!(
+                    "knvm: this user's persistent `Path` already lists {}",
+                    installed.bin_dir.display()
+                );
+            }
+        }
+    }
+}
+
 /// Replaces this process with a fresh login shell that has the tools on PATH.
 ///
 /// A child process cannot change its parent shell's PATH, so "reload" means
@@ -320,6 +351,8 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
 /// the startup file. Skipped when stdout is not a terminal — a script driving
 /// `knvm sinstall` wants its exit code, not an interactive shell — or when the
 /// shell is unknown; `exec` failing is reported and the install still counts.
+/// Windows has no `exec` and no startup file: there the message is to open a
+/// new terminal, which the broadcast `WM_SETTINGCHANGE` has already reached.
 fn reload_shell(bin_dir: &std::path::Path, shell: Option<&str>) {
     #[cfg(unix)]
     {
