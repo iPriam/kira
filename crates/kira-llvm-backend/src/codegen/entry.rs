@@ -104,6 +104,23 @@ impl Codegen<'_> {
             let signature =
                 LLVMFunctionType(types.void, params.as_mut_ptr(), params.len() as u32, 0);
             let trampoline = LLVMAddFunction(self.module, symbol.as_ptr(), signature);
+            // The one thing a trampoline is for is being found by name from
+            // outside, and on PE/COFF that does not follow from defining it.
+            // ELF and Mach-O export a definition by default, so a hybrid
+            // library built on those hosts needed nothing here; a DLL exports
+            // only what it was told to, and the host's own check caught the
+            // result exactly — `app.dll` "does not export `kira_native_fn_0`".
+            //
+            // Marked at emission rather than with a `/EXPORT:` flag per symbol
+            // because the trampolines are ours: the count and the names are
+            // decided right here, and a link-time list would be a second place
+            // to keep them in step.
+            if cfg!(target_env = "msvc") {
+                LLVMSetDLLStorageClass(
+                    trampoline,
+                    llvm_sys::LLVMDLLStorageClass::LLVMDLLExportStorageClass,
+                );
+            }
             let block = LLVMAppendBasicBlockInContext(self.context, trampoline, c"entry".as_ptr());
             LLVMPositionBuilderAtEnd(self.builder, block);
 
