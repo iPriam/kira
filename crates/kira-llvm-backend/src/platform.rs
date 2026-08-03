@@ -50,6 +50,34 @@ pub const PLATFORM_LINK_LISTS: &[PlatformLinkList] = &[
         libraries: &["pthread", "dl", "m", "rt", "gcc_s", "util"],
         frameworks: &[],
     },
+    PlatformLinkList {
+        // Windows was absent, so `link_list_for` answered with the empty list
+        // and a hybrid link went out carrying a Rust `staticlib` and none of
+        // the import libraries its standard library calls into — 33 unresolved
+        // `__imp_*` externals, every one of them explained by a name below:
+        // the sockets (`accept`, `bind`, `getaddrinfo`) are ws2_32, the home
+        // directory (`GetUserProfileDirectoryW`) is userenv, and the file
+        // opening (`NtCreateFile`) is ntdll.
+        //
+        // The CRT itself is not here: the driver links it, exactly as
+        // `-lSystem` and `-lc` are left off the two lists above.
+        target_os: "windows",
+        libraries: &[
+            "kernel32",
+            "advapi32",
+            "bcrypt",
+            "ntdll",
+            "userenv",
+            "ws2_32",
+            "dbghelp",
+            "synchronization",
+            "ole32",
+            "oleaut32",
+            "shell32",
+            "uuid",
+        ],
+        frameworks: &[],
+    },
 ];
 
 /// The empty list, for a host nothing above names.
@@ -83,6 +111,28 @@ mod tests {
         // consumer's crate rather than here.
         let list = host_link_list();
         assert_eq!(list.target_os, std::env::consts::OS, "{list:?}");
+    }
+
+    /// Every platform the gate builds on names its libraries here.
+    ///
+    /// The empty list is the answer for a host nobody taught this module about,
+    /// and it is indistinguishable from "this host needs nothing" right up
+    /// until the link fails in somebody else's crate naming nothing. Windows
+    /// sat in that gap: supported by the toolchain, absent from this table, and
+    /// silently linked against no import libraries at all. This is what makes
+    /// adding a platform to CI without adding it here a failing test rather
+    /// than a puzzling one.
+    #[test]
+    fn every_host_the_gate_builds_on_names_its_libraries() {
+        for os in ["macos", "linux", "windows"] {
+            let list = link_list_for(os);
+            assert_eq!(list.target_os, os, "`{os}` is not in the table");
+            assert!(
+                !list.libraries.is_empty(),
+                "`{os}` links against nothing extra, which is a link failure \
+                 waiting to happen in a consumer's crate"
+            );
+        }
     }
 
     #[test]

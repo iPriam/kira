@@ -236,18 +236,29 @@ fn print_stmt(
     program.stmts.alloc(HirStmt::Expr { expr: print })
 }
 
-/// Locates `libkira_native_bridge.a`, built as a workspace staticlib, by
+/// Locates the native bridge staticlib, built as a workspace staticlib, by
 /// searching the profile directory the test binary lives under.
+///
+/// Asked for under the name the host's own toolchain gives it — `.lib` under
+/// MSVC — because that is the file cargo wrote. Hardcoding the Unix spelling
+/// searches for a name that exists on two of the three platforms and reports
+/// the miss as "run under `cargo test --workspace`", which is the one thing
+/// that would not have helped.
 fn runtime_archive() -> PathBuf {
+    let name = if cfg!(target_env = "msvc") {
+        "kira_native_bridge.lib"
+    } else {
+        "libkira_native_bridge.a"
+    };
     let exe = std::env::current_exe().expect("test binary has a path");
     for ancestor in exe.ancestors() {
-        let candidate = ancestor.join("libkira_native_bridge.a");
+        let candidate = ancestor.join(name);
         if candidate.is_file() {
             return candidate;
         }
     }
     panic!(
-        "libkira_native_bridge.a not found near {}; run under `cargo test --workspace`",
+        "{name} not found near {}; run under `cargo test --workspace`",
         exe.display()
     );
 }
