@@ -190,6 +190,14 @@ pub enum ManifestDecodeError {
     /// A string in the manifest was not valid UTF-8.
     #[error("invalid UTF-8 in hybrid manifest")]
     InvalidString,
+    /// A counted run claimed more elements than the remaining bytes can hold.
+    #[error("hybrid manifest declares {count} elements with only {remaining} bytes left")]
+    CountExceedsInput {
+        /// The count the stream asked for.
+        count: usize,
+        /// How many bytes were actually left to read.
+        remaining: usize,
+    },
     /// An execution byte named no engine this build knows.
     #[error("unknown execution engine `{0}` in hybrid manifest")]
     UnknownExecution(u8),
@@ -355,17 +363,17 @@ impl HybridManifest {
         let bytecode_path = reader.string()?;
         let native_library_path = reader.string()?;
         let entry = reader.u32()?;
-        let count = reader.u32()?;
+        let count = reader.count()?;
 
-        let mut functions = Vec::with_capacity(count as usize);
+        let mut functions = Vec::with_capacity(count);
         for _ in 0..count {
             let id = reader.u32()?;
             let byte = reader.byte()?;
             let execution =
                 Execution::from_byte(byte).ok_or(ManifestDecodeError::UnknownExecution(byte))?;
             let name = reader.string()?;
-            let param_count = reader.u32()?;
-            let mut params = Vec::with_capacity(param_count as usize);
+            let param_count = reader.count()?;
+            let mut params = Vec::with_capacity(param_count);
             for _ in 0..param_count {
                 let ty = BridgeValueTag(reader.byte()?);
                 let byte = reader.byte()?;
@@ -396,13 +404,16 @@ impl HybridManifest {
         // here, and so does one for a program that widens nothing.
         let internal_functions = reader.u32().unwrap_or_default();
 
-        // A library carries no entrypoint, so there is no index to bound.
+        // A library carries no entrypoint, so there is no index to bound. The
+        // count is reported as it was written — it was read as a `u32` and the
+        // reader only ever narrows it, so this conversion cannot lose one.
+        let reported = u32::try_from(count).unwrap_or(u32::MAX);
         let entry = match entry {
             NO_ENTRYPOINT => None,
-            index if index >= count => {
+            index if index as usize >= count => {
                 return Err(ManifestDecodeError::EntryOutOfRange {
                     entry: index,
-                    count,
+                    count: reported,
                 });
             }
             index => Some(index),
@@ -430,8 +441,8 @@ fn read_foreign(reader: &mut Reader<'_>) -> Result<Vec<HybridForeign>, ManifestD
     if reader.is_at_end() {
         return Ok(Vec::new());
     }
-    let count = reader.u32()?;
-    let mut foreign = Vec::with_capacity(count as usize);
+    let count = reader.count()?;
+    let mut foreign = Vec::with_capacity(count);
     for _ in 0..count {
         let library = reader.string()?;
         let symbol = reader.string()?;
@@ -442,8 +453,8 @@ fn read_foreign(reader: &mut Reader<'_>) -> Result<Vec<HybridForeign>, ManifestD
                 tag: abi_byte,
             }
         })?;
-        let param_count = reader.u32()?;
-        let mut parameters = Vec::with_capacity(param_count as usize);
+        let param_count = reader.count()?;
+        let mut parameters = Vec::with_capacity(param_count);
         for _ in 0..param_count {
             parameters.push(read_spec(reader, &symbol)?);
         }
@@ -473,8 +484,8 @@ fn read_foreign_aggregates(
     if !reader.is_at_end() {
         let count = reader.u32()?;
         for index in 0..count {
-            let member_count = reader.u32()?;
-            let mut members = Vec::with_capacity(member_count as usize);
+            let member_count = reader.count()?;
+            let mut members = Vec::with_capacity(member_count);
             for _ in 0..member_count {
                 members.push(read_member(reader, index)?);
             }
@@ -618,6 +629,26 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
+    /// Reads a count that is about to size an allocation, and rejects one the
+    /// input could not possibly satisfy.
+    ///
+    /// Every element of every counted run in this format costs at least one
+    /// byte, so a count larger than the bytes remaining is malformed however
+    /// the rest of the stream reads. Checking it here is what keeps a
+    /// `Vec::with_capacity` off a number the artifact chose: one corrupted byte
+    /// in the high end of a count is two billion elements, and reserving for
+    /// them aborts the process on a host that will not overcommit — a decoder
+    /// killing its caller instead of returning the typed error every other
+    /// malformed byte gets.
+    fn count(&mut self) -> Result<usize, ManifestDecodeError> {
+        let count = self.u32()? as usize;
+        let remaining = self.bytes.len().saturating_sub(self.pos);
+        if count > remaining {
+            return Err(ManifestDecodeError::CountExceedsInput { count, remaining });
+        }
+        Ok(count)
+    }
+
     fn string(&mut self) -> Result<String, ManifestDecodeError> {
         let length = self.u32()? as usize;
         let bytes = self.take(length)?;
@@ -745,6 +776,49 @@ mod tests {
         assert!(
             saw_typed,
             "a foreign-type byte in the section must decode to a typed error"
+        );
+    }
+
+    #[test]
+    fn a_count_larger_than_the_input_is_typed_rather_than_reserved() {
+        // Every counted run in this format spends at least a byte per element,
+        // so a count past the end of the stream is malformed on its face. It
+        // has to be REJECTED rather than reserved for: the decoder used to hand
+        // the number straight to `Vec::with_capacity`, and one corrupted high
+        // byte is then a two-billion-element reservation — which a host that
+        // refuses to overcommit answers by aborting the process, taking the
+        // caller with it instead of returning an error it could handle.
+        //
+        // Every count in the manifest gets the same treatment, so this walks
+        // them: the function count, a function's parameter count, the foreign
+        // import count, an import's parameter count, and an aggregate's member
+        // count all sit somewhere in these bytes as a little-endian `u32`.
+        let bytes = foreign_manifest().to_bytes();
+        let mut reserved = 0;
+        for index in 0..bytes.len().saturating_sub(4) {
+            let mut corrupt = bytes.clone();
+            // Raise the high byte only. The low bytes stay whatever they were,
+            // so this lands on a plausible-looking count rather than a value no
+            // encoder would ever produce.
+            corrupt[index + 3] = 0x7f;
+            // Any other outcome is fine — the byte landed on a tag, a length or
+            // a string instead, and a typed error or a clean decode both say the
+            // decoder stayed in control. What must never happen is the process
+            // dying, which is a failure no assertion here can catch and the
+            // reason this walks every offset rather than one known one.
+            if let Err(ManifestDecodeError::CountExceedsInput { count, remaining }) =
+                HybridManifest::from_bytes(&corrupt)
+            {
+                assert!(
+                    count > remaining,
+                    "a count error must actually exceed the input: {count} vs {remaining}"
+                );
+                reserved += 1;
+            }
+        }
+        assert!(
+            reserved > 0,
+            "no corrupted count reached the guard; the walk covers no count field"
         );
     }
 
