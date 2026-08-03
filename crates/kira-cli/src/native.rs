@@ -214,10 +214,22 @@ pub fn runtime_archive(program: &IrProgram) -> Result<PathBuf, NativeError> {
 ///
 /// Split from the path so a test can assert the choice without a built `kira`
 /// beside it.
+///
+/// The spelling is the host toolchain's, because the file being named is one
+/// cargo just wrote for this host: MSVC writes `<name>.lib` and everything else
+/// writes `lib<name>.a`. Naming it the Unix way on Windows looks for a file
+/// cargo never produced, which is the "native runtime archive is missing" error
+/// with nothing missing.
 fn archive_file_name(uses_compiler: bool) -> &'static str {
-    match uses_compiler {
-        true => "libkira_compiler_bridge.a",
-        false => "libkira_native_bridge.a",
+    let crate_name = match uses_compiler {
+        true => "kira_compiler_bridge",
+        false => "kira_native_bridge",
+    };
+    match (crate_name, cfg!(target_env = "msvc")) {
+        ("kira_compiler_bridge", true) => "kira_compiler_bridge.lib",
+        ("kira_compiler_bridge", false) => "libkira_compiler_bridge.a",
+        (_, true) => "kira_native_bridge.lib",
+        (_, false) => "libkira_native_bridge.a",
     }
 }
 
@@ -261,8 +273,16 @@ mod tests {
     /// never both — two Rust static libraries in one link line do not link.
     #[test]
     fn the_archive_a_program_links_follows_from_whether_it_checks_packages() {
-        assert_eq!(archive_file_name(false), "libkira_native_bridge.a");
-        assert_eq!(archive_file_name(true), "libkira_compiler_bridge.a");
+        // Asserted against the host's own spelling: the name has to be the one
+        // cargo wrote next to this binary, so a test that pinned the Unix name
+        // everywhere would pass on the platform where the name is wrong.
+        if cfg!(target_env = "msvc") {
+            assert_eq!(archive_file_name(false), "kira_native_bridge.lib");
+            assert_eq!(archive_file_name(true), "kira_compiler_bridge.lib");
+        } else {
+            assert_eq!(archive_file_name(false), "libkira_native_bridge.a");
+            assert_eq!(archive_file_name(true), "libkira_compiler_bridge.a");
+        }
     }
 
     #[test]
