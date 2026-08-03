@@ -97,7 +97,13 @@ try {
             Say "$binDir is already on your PATH"
         }
         else {
-            [Environment]::SetEnvironmentVariable('Path', "$binDir;$userPath", 'User')
+            $newPath = if ($userPath) { "$binDir;$userPath" } else { $binDir }
+            # The first write is the one that broadcasts WM_SETTINGCHANGE, so a
+            # terminal opened afterwards sees this without a sign-out. It stores
+            # the value as REG_SZ, so the second restores the expandable type
+            # that entries like %USERPROFILE%\bin need to keep working.
+            [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+            Set-ItemProperty -Path 'HKCU:\Environment' -Name 'Path' -Value $newPath -Type ExpandString
             Say "added $binDir to your user PATH"
         }
     }

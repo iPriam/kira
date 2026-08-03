@@ -71,6 +71,18 @@ pub enum BinstallError {
         /// Where the binary was expected.
         expected: PathBuf,
     },
+    /// The user's persistent environment could not be read (Windows).
+    #[error("could not read this user's persistent `Path`: {detail}")]
+    UserPathUnreadable {
+        /// What the read reported.
+        detail: String,
+    },
+    /// The user's persistent environment could not be written (Windows).
+    #[error("could not add the kira tools to this user's persistent `Path`: {detail}")]
+    UserPathUnwritable {
+        /// What the write reported.
+        detail: String,
+    },
     /// Staging, validating, or landing the tree failed.
     #[error(transparent)]
     Install(#[from] InstallError),
