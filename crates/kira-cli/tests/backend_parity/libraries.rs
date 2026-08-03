@@ -388,13 +388,16 @@ fn two_native_libraries_really_do_collide_on_the_runtime() {
     let second = write_library(LIBRARY);
     let built_first = build_on(&first, "llvm");
     let built_second = build_on(&second, "llvm");
+    // Asked for by the same function the build names it with, so the two cannot
+    // drift: the spelling is the host linker's, and hardcoding one of them here
+    // reads the wrong path on the platform that uses the other.
     let archive_of = |source: &std::path::Path| {
         source
             .parent()
             .expect("package directory")
             .join(".kira-build")
             .join("lib")
-            .join("libparity.a")
+            .join(kira_build::archive_file_name("parity"))
     };
     let bytes_first = std::fs::read(archive_of(&first)).unwrap_or_default();
     let bytes_second = std::fs::read(archive_of(&second)).unwrap_or_default();
@@ -459,6 +462,11 @@ fn two_native_libraries_really_do_collide_on_the_runtime() {
 /// - **GNU** (Linux): the index member is named `/` outright — `/SYM64/` for
 ///   the 64-bit offsets variant — and carries no embedded name, so its table is
 ///   the member data entire.
+/// - **MSVC** (Windows): the first linker member is also named `/`, and its
+///   data likewise holds the names, so it reads the same way here. The layout
+///   inside differs — big-endian counts, and a second `/` member with a sorted
+///   directory follows — but this only ever searches the bytes for a name, and
+///   the names are NUL-terminated strings in both.
 ///
 /// Either way what comes back is a run of bytes holding the defined symbols'
 /// names, which is all the caller searches.

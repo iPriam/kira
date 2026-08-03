@@ -121,10 +121,16 @@ pub fn export_surface(library: &str, exports: &ExportTable) -> NativeExportSurfa
 
 /// The archive file name for a library, as a linker expects to find it.
 ///
-/// `lib<name>.a` on every platform this targets; cargo's
-/// `cargo:rustc-link-lib=static=<name>` looks for exactly that.
+/// `cargo:rustc-link-lib=static=<name>` resolves to whatever the host
+/// toolchain's static libraries are called, and that is not one spelling:
+/// MSVC links `<name>.lib`, every other target this builds for links
+/// `lib<name>.a`. This used to claim one name "on every platform this targets",
+/// which was true only while Windows was not one of them.
 pub fn archive_file_name(library: &str) -> String {
-    format!("lib{library}.a")
+    match cfg!(target_env = "msvc") {
+        true => format!("{library}.lib"),
+        false => format!("lib{library}.a"),
+    }
 }
 
 /// Compiles `program` as a native library and generates the crate that links it.
@@ -289,7 +295,12 @@ mod tests {
 
     #[test]
     fn the_archive_is_named_the_way_a_linker_looks_for_it() {
-        // `cargo:rustc-link-lib=static=uifoundation` searches for exactly this.
-        assert_eq!(archive_file_name("uifoundation"), "libuifoundation.a");
+        // `cargo:rustc-link-lib=static=uifoundation` searches for exactly this,
+        // and what "this" is depends on the host's linker rather than on us.
+        if cfg!(target_env = "msvc") {
+            assert_eq!(archive_file_name("uifoundation"), "uifoundation.lib");
+        } else {
+            assert_eq!(archive_file_name("uifoundation"), "libuifoundation.a");
+        }
     }
 }

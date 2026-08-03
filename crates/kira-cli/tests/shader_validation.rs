@@ -221,8 +221,15 @@ fn emitted(tag: &str) -> PathBuf {
 /// fine, and a test that passed on that basis would be reporting a shader
 /// nobody compiled.
 fn validator(name: &str, install: &str) -> String {
-    let found = Command::new("sh")
-        .args(["-c", &format!("command -v {name}")])
+    // Asked of the tool itself rather than of a shell. `sh -c 'command -v'`
+    // needs a POSIX shell to exist and to see the same PATH this process does,
+    // and on Windows that is neither guaranteed nor the same lookup the
+    // `Command::new` below performs — so a tool that is present could report
+    // absent, and one that resolves here could fail to spawn there. Running it
+    // is the only question that matters: what fails is being unable to start
+    // it, and every one of these answers `--version`.
+    let found = Command::new(name)
+        .arg("--version")
         .output()
         .map(|out| out.status.success())
         .unwrap_or(false);
