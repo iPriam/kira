@@ -544,6 +544,9 @@ fn link_with(
     for argument in platform_link_arguments() {
         command.arg(argument);
     }
+    for argument in reproducible_link_arguments() {
+        command.arg(argument);
+    }
     // The managed clang is not Apple's, so it has no built-in knowledge of
     // where the platform libraries live; without an explicit sysroot the link
     // fails on `library 'System' not found`.
@@ -593,6 +596,26 @@ fn platform_link_arguments() -> Vec<String> {
         arguments.push((*framework).to_owned());
     }
     arguments
+}
+
+/// Flags that make this host's linker write the same bytes for the same inputs.
+///
+/// Kira's live reload decides its tier by byte identity: a `@Runtime`-only edit
+/// hot patches only while the native library it sits beside is *the same
+/// library*, compared by hash. ELF and Mach-O give that for free — relinking
+/// unchanged inputs reproduces the file — but a PE header carries a timestamp,
+/// so every relink on Windows produces different bytes and every edit looks
+/// like the native half changed. The tier decision then always says relaunch,
+/// and tier 1 is unreachable on the platform rather than unimplemented.
+///
+/// `/Brepro` replaces that timestamp with a hash of the content, which is what
+/// makes the comparison mean what it says.
+fn reproducible_link_arguments() -> Vec<String> {
+    if cfg!(target_env = "msvc") {
+        vec!["-Wl,/Brepro".to_owned()]
+    } else {
+        Vec::new()
+    }
 }
 
 /// The macOS SDK to link against, or `None` off macOS.
