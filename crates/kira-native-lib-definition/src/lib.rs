@@ -47,8 +47,8 @@ pub use catalog::{ImportResolveError, ResolvedNativeLibraries};
 // dependency: [`ResolvedNativeLibraries::from_resolved`] takes ownership of one.
 pub use kira_core::Interner;
 pub use resolved::{
-    NativeLibraryError, NativeLinkAttributes, NativeLinkInputs, ResolvedNativeLibrary,
-    ResolvedTargetRow,
+    MissingArchive, NativeLibraryError, NativeLinkAttributes, NativeLinkInputs,
+    ResolvedNativeLibrary, ResolvedTargetRow,
 };
 pub use spec::{
     AutobindMode, AutobindProfile, AutobindSpec, Availability, LinkMode, NativeArtifact,

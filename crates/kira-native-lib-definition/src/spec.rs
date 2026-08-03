@@ -16,7 +16,8 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::resolved::{
-    NativeLibraryError, NativeLinkAttributes, ResolvedNativeLibrary, ResolvedTargetRow,
+    MissingArchive, NativeLibraryError, NativeLinkAttributes, ResolvedNativeLibrary,
+    ResolvedTargetRow,
 };
 use crate::triple::TargetTriple;
 
@@ -458,11 +459,13 @@ impl NativeLibrarySpec {
                     let located = base_dir.join(relative);
                     if !exists(&located) {
                         if required {
-                            return Err(NativeLibraryError::MissingArchive {
-                                library: self.name.clone(),
-                                triple: row.triple.clone(),
-                                path: located,
-                            });
+                            return Err(NativeLibraryError::MissingArchive(Box::new(
+                                MissingArchive {
+                                    library: self.name.clone(),
+                                    triple: row.triple.clone(),
+                                    path: located,
+                                },
+                            )));
                         }
                         None
                     } else {
@@ -684,11 +687,11 @@ mod tests {
             .expect_err("a missing archive is rejected");
         assert_eq!(
             error,
-            NativeLibraryError::MissingArchive {
+            NativeLibraryError::MissingArchive(Box::new(MissingArchive {
                 library: "ffimath".to_owned(),
                 triple: triple("aarch64-macos-none"),
                 path: PathBuf::from("/pkg/NativeLibs/lib/absent.a"),
-            }
+            }))
         );
     }
 
