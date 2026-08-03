@@ -16,6 +16,7 @@ use std::process::Command;
 
 use kira_toolchain::{
     Channel, CurrentToolchain, DESKTOP_RUNNER_BINARY, LANGUAGE_SERVER_BINARY, executable_name,
+    static_archive_name,
 };
 
 use crate::install::{
@@ -156,8 +157,11 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
     let compiler = debug_dir.join(executable_name(PRIMARY_BINARY));
     let language_server = debug_dir.join(executable_name(LANGUAGE_SERVER_BINARY));
     let desktop_runner = debug_dir.join(executable_name(DESKTOP_RUNNER_BINARY));
-    let host_archive = debug_dir.join("libkira_native_bridge.a");
-    let compiler_archive = debug_dir.join("libkira_compiler_bridge.a");
+    // Under the names cargo wrote them: `<name>.lib` under MSVC. The Web
+    // archive keeps its Unix spelling on every host, because emscripten wrote
+    // that one rather than the host toolchain.
+    let host_archive = debug_dir.join(static_archive_name("kira_native_bridge"));
+    let compiler_archive = debug_dir.join(static_archive_name("kira_compiler_bridge"));
     let wasm_archive = target_dir(&checkout)
         .join("wasm32-unknown-emscripten")
         .join("debug")
@@ -203,10 +207,10 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
     // The runtime archives ride beside the compiler, where its archive
     // resolution looks: the host's under its cargo name, the Web's under a
     // target-suffixed one so neither can be linked in the other's place.
-    let staged_host = bin.join("libkira_native_bridge.a");
+    let staged_host = bin.join(static_archive_name("kira_native_bridge"));
     std::fs::copy(&host_archive, &staged_host)
         .map_err(|error| InstallError::io("copy the runtime archive to", &staged_host, error))?;
-    let staged_compiler = bin.join("libkira_compiler_bridge.a");
+    let staged_compiler = bin.join(static_archive_name("kira_compiler_bridge"));
     std::fs::copy(&compiler_archive, &staged_compiler).map_err(|error| {
         InstallError::io(
             "copy the compiler runtime archive to",
