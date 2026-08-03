@@ -13,6 +13,7 @@ use std::path::Path;
 use kira_knvm::{
     Channel, DirectoryReleaseSource, InstallError, VersionSpec, install, read_current,
 };
+use kira_toolchain::executable_name;
 
 mod support;
 use support::{FixtureToolchain, TempTree, host_key, publish};
@@ -64,7 +65,7 @@ fn install_latest_lays_out_the_toolchain_and_selects_it() {
         "the toolchain must land under <root>/<channel>/<version>"
     );
 
-    let binary = installed.root.join("bin").join("kira");
+    let binary = installed.root.join("bin").join(executable_name("kira"));
     assert!(binary.is_file(), "bin/kira must be installed");
     assert!(
         is_executable(&binary),

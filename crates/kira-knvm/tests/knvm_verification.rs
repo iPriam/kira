@@ -11,6 +11,7 @@ use kira_knvm::{
     Channel, DirectoryReleaseSource, InstallError, ReleaseSource, ReleaseSourceError, Sha256,
     VersionSpec, install,
 };
+use kira_toolchain::executable_name;
 
 mod support;
 use support::{FixtureToolchain, TempTree, checksum_sidecar_path, publish};
@@ -143,7 +144,13 @@ fn a_release_without_a_sidecar_installs_and_says_it_was_not_verified() {
         installed.verified, None,
         "an unverified install must report itself as one"
     );
-    assert!(installed.root.join("bin").join("kira").is_file());
+    assert!(
+        installed
+            .root
+            .join("bin")
+            .join(executable_name("kira"))
+            .is_file()
+    );
 }
 
 #[test]

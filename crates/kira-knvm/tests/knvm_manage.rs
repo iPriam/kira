@@ -13,6 +13,7 @@ use kira_knvm::{
     Channel, DirectoryReleaseSource, ManageError, VersionSpec, install, list, read_current, select,
     uninstall,
 };
+use kira_toolchain::executable_name;
 
 mod support;
 use support::{FixtureToolchain, TempTree, host_key, publish};
@@ -130,7 +131,7 @@ fn list_shows_a_toolchain_that_lost_its_binary_as_broken_rather_than_hiding_it()
             .join("release")
             .join("1.7.3")
             .join("bin")
-            .join("kira"),
+            .join(executable_name("kira")),
     )
     .expect("break the installed toolchain");
 
@@ -230,7 +231,7 @@ fn use_refuses_an_installed_tree_that_cannot_be_dispatched_to() {
             .join("release")
             .join("1.7.3")
             .join("bin")
-            .join("kira"),
+            .join(executable_name("kira")),
     )
     .expect("break the installed toolchain");
 
