@@ -377,7 +377,7 @@ Package Demo {
                 .expect_err("a missing archive for the target is rejected");
         assert!(matches!(
             error,
-            NativeLibraryResolveError::Model(NativeLibraryError::MissingArchive { .. })
+            NativeLibraryResolveError::Model(NativeLibraryError::MissingArchive(_))
         ));
     }
 
