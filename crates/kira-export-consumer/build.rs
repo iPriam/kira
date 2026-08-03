@@ -248,9 +248,20 @@ fn hybrid(
 /// build for an explicit target triple adds a directory and a computed depth
 /// would find nothing there.
 fn find_runtime_archive(out: &Path) -> Result<PathBuf, BuildError> {
+    // The name cargo gave it on this host — `<name>.lib` under MSVC. Spelled
+    // the Unix way only, this search walks the whole tree and finds nothing on
+    // Windows, then reports the archive as missing from a directory that has
+    // it. Written out rather than shared with `kira-toolchain`, because a build
+    // script is the one place that must not grow a dependency to answer a
+    // question about a filename.
+    let name = if cfg!(target_env = "msvc") {
+        "kira_native_bridge.lib"
+    } else {
+        "libkira_native_bridge.a"
+    };
     let mut directory = Some(out);
     while let Some(current) = directory {
-        let candidate = current.join("libkira_native_bridge.a");
+        let candidate = current.join(name);
         if candidate.is_file() {
             println!("cargo:rerun-if-changed={}", candidate.display());
             return Ok(candidate);
