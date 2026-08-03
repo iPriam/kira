@@ -85,11 +85,22 @@ jobs:
           if [ "$RUNNER_OS" = "macOS" ]; then
             brew install spirv-tools glslang
           elif [ "$RUNNER_OS" = "Windows" ]; then
-            # `validator()` in shader_validation.rs resolves a tool with
-            # `sh -c 'command -v <name>'`, so what matters is that these land on
-            # the PATH the test's shell sees — which on a Windows runner is Git
-            # for Windows' bash, reading the machine PATH choco has extended.
-            choco install --no-progress --yes glslang spirv-tools
+            # The Vulkan SDK, because it is the one Windows source that carries
+            # both binaries the gate asks for — `glslangValidator` and
+            # `spirv-val`. Chocolatey has no `glslang` or `spirv-tools` package
+            # of its own (the first run here proved it: "not installed, the
+            # package was not found"), and glslang's own release zip ships the
+            # compiler without the SPIR-V validator.
+            choco install --no-progress --yes vulkan-sdk
+            # The SDK installs under a versioned directory, so its tools reach
+            # the later steps by being put on PATH here rather than by being
+            # anywhere predictable.
+            sdk="$(ls -d /c/VulkanSDK/*/ 2>/dev/null | sort -V | tail -1)"
+            if [ -z "$sdk" ]; then
+              echo "the Vulkan SDK is not under C:/VulkanSDK after install" >&2
+              exit 1
+            fi
+            cygpath -w "${sdk}Bin" >> "$GITHUB_PATH"
           else
             sudo apt-get update
             sudo apt-get install -y spirv-tools glslang-tools
