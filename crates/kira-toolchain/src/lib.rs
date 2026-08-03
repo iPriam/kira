@@ -268,6 +268,20 @@ pub fn executable_name(base: &str) -> String {
     }
 }
 
+/// The file name a static archive has on this host.
+///
+/// `<base>.lib` under MSVC, `lib<base>.a` everywhere else — the same split
+/// [`executable_name`] makes for `.exe`, for the other artifact kind a
+/// toolchain ships. The discriminator is the toolchain rather than the OS:
+/// a GNU-toolchain Windows build still writes `lib<base>.a`.
+pub fn static_archive_name(base: &str) -> String {
+    if cfg!(target_env = "msvc") {
+        format!("{base}.lib")
+    } else {
+        format!("lib{base}.a")
+    }
+}
+
 /// `<llvm-home>/bin/<tool>` — the path of a tool inside a managed LLVM home.
 /// Existence checks live with the caller during the port.
 pub fn managed_llvm_tool_path(llvm_home: &Path, tool_name: &str) -> PathBuf {

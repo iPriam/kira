@@ -22,7 +22,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use kira_toolchain::{Channel, CurrentToolchain, LANGUAGE_SERVER_BINARY, executable_name};
+use kira_toolchain::{
+    Channel, CurrentToolchain, LANGUAGE_SERVER_BINARY, executable_name, static_archive_name,
+};
 
 use crate::cli::VersionSpec;
 use crate::source::{ReleaseSource, ReleaseSourceError};
@@ -37,11 +39,22 @@ const FOUNDATION_DIR_NAME: &str = "foundation";
 const PACKAGE_MANIFEST_FILE_NAME: &str = "package.kira";
 
 /// Native archives every toolchain must carry beside its compiler.
-const RUNTIME_ARCHIVE_NAMES: [&str; 3] = [
-    "libkira_native_bridge.a",
-    "libkira_compiler_bridge.a",
-    "libkira_native_bridge-wasm32-emscripten.a",
-];
+///
+/// The two host archives are named the way the host's own toolchain names them
+/// — `<name>.lib` under MSVC — because that is what cargo wrote and what a
+/// toolchain therefore ships. Spelled `lib<name>.a` unconditionally, this
+/// contract rejected every Windows toolchain for carrying the files it actually
+/// has.
+///
+/// The Web archive keeps its Unix spelling on every host: emscripten writes it,
+/// not the host toolchain, and it is the same file wherever it was built.
+fn runtime_archive_names() -> [String; 3] {
+    [
+        static_archive_name("kira_native_bridge"),
+        static_archive_name("kira_compiler_bridge"),
+        "libkira_native_bridge-wasm32-emscripten.a".to_string(),
+    ]
+}
 
 /// The directory installs are staged in before being moved into place.
 const STAGING_DIR_NAME: &str = ".staging";
@@ -445,7 +458,7 @@ pub(crate) fn validate(payload: &Path) -> Result<(), InstallError> {
         return Err(InstallError::MissingLanguageServer { expected: server });
     }
 
-    for name in RUNTIME_ARCHIVE_NAMES {
+    for name in runtime_archive_names() {
         let archive = payload.join("bin").join(name);
         if !archive.is_file() {
             return Err(InstallError::MissingRuntimeArchive { expected: archive });

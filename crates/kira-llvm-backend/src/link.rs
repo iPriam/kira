@@ -411,18 +411,57 @@ fn force_foreign_symbols(adapter_symbols: &[String]) -> Vec<String> {
 ///
 /// `kira_runtime_abi::HYBRID_HOST_SYMBOLS` is the same list the host resolves
 /// from, so what is forced in and what is looked up cannot drift.
+///
+/// PE/COFF needs a second flag that the other two formats do not. Pulling an
+/// archive member in is the whole job on Mach-O and ELF, where a definition is
+/// exported by default; a DLL exports *nothing* it was not explicitly told to.
+/// So the member is forced in with `/INCLUDE:` and then named again in
+/// `/EXPORT:`, or the library links clean, holds the code, and resolves nothing
+/// by name — which is exactly what the host reported: `app.dll` "does not
+/// export `kira_rt_str_new`".
 fn force_host_symbols() -> Vec<String> {
     kira_runtime_abi::HYBRID_HOST_SYMBOLS
         .iter()
-        .map(|symbol| {
+        .flat_map(|symbol| {
             if cfg!(target_os = "macos") {
                 // Mach-O prefixes C symbols with an underscore; ELF does not.
-                format!("-Wl,-u,_{symbol}")
+                vec![format!("-Wl,-u,_{symbol}")]
+            } else if cfg!(target_env = "msvc") {
+                // No leading underscore: that is the 32-bit x86 convention, and
+                // the 64-bit Windows ABI drops it.
+                vec![
+                    format!("-Wl,/INCLUDE:{symbol}"),
+                    format!("-Wl,/EXPORT:{symbol}"),
+                ]
             } else {
-                format!("-Wl,--undefined={symbol}")
+                vec![format!("-Wl,--undefined={symbol}")]
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod force_host_symbol_tests {
+    use super::*;
+
+    /// Every host-facing symbol is forced in, in the spelling this host's
+    /// linker takes — and on Windows it is also exported, which is the step
+    /// the other two formats get for free.
+    #[test]
+    fn every_host_symbol_is_forced_in_this_platforms_spelling() {
+        let flags = force_host_symbols();
+        for symbol in kira_runtime_abi::HYBRID_HOST_SYMBOLS {
+            let forced = flags.iter().any(|flag| flag.contains(symbol));
+            assert!(forced, "`{symbol}` is never forced into the link");
+            if cfg!(target_env = "msvc") {
+                assert!(
+                    flags.contains(&format!("-Wl,/EXPORT:{symbol}")),
+                    "`{symbol}` is pulled in but never exported, so no host can \
+                     resolve it out of the DLL"
+                );
+            }
+        }
+    }
 }
 
 /// Runs the linker driver over `object` plus the runtime archive and any
