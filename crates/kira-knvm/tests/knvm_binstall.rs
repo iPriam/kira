@@ -11,6 +11,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use kira_knvm::{BinstallError, Channel, binstall, read_current};
+use kira_toolchain::{executable_name, static_archive_name};
 
 /// A temp directory that removes itself, so a failing assert cannot leak a tree.
 struct TempTree {
@@ -58,16 +59,20 @@ fn binstall_installs_this_checkout_as_the_selected_dev_toolchain() {
 
     assert_eq!(installed.channel, Channel::Dev);
     assert!(
-        installed.root.join("bin").join("kira").is_file(),
+        installed
+            .root
+            .join("bin")
+            .join(executable_name("kira"))
+            .is_file(),
         "the dev toolchain must hold the built compiler"
     );
     for archive in [
-        "libkira_native_bridge.a",
-        "libkira_compiler_bridge.a",
-        "libkira_native_bridge-wasm32-emscripten.a",
+        static_archive_name("kira_native_bridge"),
+        static_archive_name("kira_compiler_bridge"),
+        "libkira_native_bridge-wasm32-emscripten.a".to_owned(),
     ] {
         assert!(
-            installed.root.join("bin").join(archive).is_file(),
+            installed.root.join("bin").join(&archive).is_file(),
             "the dev toolchain must hold `{archive}`"
         );
     }
@@ -95,7 +100,7 @@ fn binstall_installs_this_checkout_as_the_selected_dev_toolchain() {
         "import Foundation\n@Main function main() { printLine(\"dev toolchain\") return }",
     )
     .expect("write the program");
-    let output = Command::new(installed.root.join("bin").join("kira"))
+    let output = Command::new(installed.root.join("bin").join(executable_name("kira")))
         .arg("run")
         .arg(&program)
         .current_dir(workspace.path())
@@ -132,7 +137,11 @@ fn a_second_binstall_replaces_the_previous_build() {
         "a rebuild must land a fresh tree, not touch up the old one"
     );
     assert!(
-        second.root.join("bin").join("kira").is_file(),
+        second
+            .root
+            .join("bin")
+            .join(executable_name("kira"))
+            .is_file(),
         "the replacement must be a whole toolchain"
     );
 }
