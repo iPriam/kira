@@ -26,6 +26,7 @@ pub mod github;
 pub mod install;
 pub mod llvm;
 pub mod manage;
+pub mod path_setup;
 pub mod selfupdate;
 pub mod sinstall;
 pub mod source;
@@ -48,6 +49,7 @@ pub use install::{
 };
 pub use llvm::{LlvmInstallError, LlvmInstalled, install_llvm, llvm_home};
 pub use manage::{InstalledToolchain, ManageError, Selected, Uninstalled, list, select, uninstall};
+pub use path_setup::{PathConfigured, user_path_with};
 pub use selfupdate::{
     SelfUpdateError, SelfUpdated, published_versions, self_update, tools_archive_file_name,
 };

@@ -235,19 +235,33 @@ whatever workspace it happens to be standing in.
 `knvm` and the `kira` launcher, which live outside any toolchain version
 because they are what selects between versions. Run inside a checkout, it
 builds both with cargo, lands them in `<kira-home>/bin` (replacing a running
-`knvm` atomically, stage-then-rename), writes a `<kira-home>/env` script that
-prepends that directory to `PATH`, and appends one source line to the startup
-file *the user's shell actually reads*, chosen from `$SHELL` and created when
-missing: `.zshenv` for zsh, `.bashrc` for bash, `.profile` otherwise. Chosen
-from the shell, not from what exists, because a default macOS home has no
-dotfiles at all and a line in `.profile` configures nothing for the zsh that
-machine runs. Every part is idempotent — a second run replaces binaries and
-appends nothing.
+`knvm` atomically, stage-then-rename), and points this host's PATH at that
+directory. Every part is idempotent — a second run replaces the binaries and
+adds no second PATH entry.
 
-When run in a terminal, it finishes by replacing itself with a fresh login
+On unix that means a `<kira-home>/env` script that prepends the directory to
+`PATH`, plus one source line appended to the startup file *the user's shell
+actually reads*, chosen from `$SHELL` and created when missing: `.zshenv` for
+zsh, `.bashrc` for bash, `.profile` otherwise. Chosen from the shell, not from
+what exists, because a default macOS home has no dotfiles at all and a line in
+`.profile` configures nothing for the zsh that machine runs.
+
+On Windows no startup file configures anything, so the entry goes where that
+host keeps it: the user's own `Path` under `HKCU\Environment`, read raw,
+prepended, written back as `REG_EXPAND_SZ`, and followed by the
+`WM_SETTINGCHANGE` broadcast that lets a terminal opened afterwards see it
+without a sign-out. `setx` is the tool that looks right for this and is not —
+it truncates the stored value at 1024 characters and folds the machine `Path`
+into the user's, so a developer machine with a long PATH quietly loses entries.
+The registry write goes through `powershell.exe`, whose
+`[Environment]::SetEnvironmentVariable(.., 'User')` performs exactly that write
+and that broadcast, which costs neither a Win32 dependency nor an `unsafe`
+block in a tool crate.
+
+When run in a unix terminal, it finishes by replacing itself with a fresh login
 shell that already has the tools on PATH, so `knvm` and `kira` work in the
 very next prompt; a non-interactive caller (a script, CI) gets the exit code
-and no shell.
+and no shell, and on Windows it says to open a new terminal.
 
 From a bare machine with a checkout, the whole setup is:
 
