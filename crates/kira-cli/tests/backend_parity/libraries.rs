@@ -447,10 +447,21 @@ fn two_native_libraries_really_do_collide_on_the_runtime() {
 /// plain bytes, so reading it needs no tool the machine might not have.
 ///
 /// Layout: the `!<arch>\n` magic, then a 60-byte member header whose last
-/// fields are an ASCII decimal size at 48..58 and a `` `\n `` terminator. macOS
-/// spells a long member name as `#1/<len>` in the name field, with the name
-/// itself occupying the first `<len>` bytes of the member's data — which is how
-/// `__.SYMDEF` is stored.
+/// fields are an ASCII decimal size at 48..58 and a `` `\n `` terminator.
+///
+/// The two `ar` conventions name that first member differently, and the archive
+/// this reads is whichever one the host's archiver writes:
+///
+/// - **BSD** (macOS): a long member name is spelled `#1/<len>` in the name
+///   field, with the name itself occupying the first `<len>` bytes of the
+///   member's data. The index is stored that way, under `__.SYMDEF`, so its
+///   table starts after the name.
+/// - **GNU** (Linux): the index member is named `/` outright — `/SYM64/` for
+///   the 64-bit offsets variant — and carries no embedded name, so its table is
+///   the member data entire.
+///
+/// Either way what comes back is a run of bytes holding the defined symbols'
+/// names, which is all the caller searches.
 fn symbol_index(archive: &[u8]) -> &[u8] {
     const MAGIC: &[u8] = b"!<arch>\n";
     const HEADER: usize = 60;
@@ -468,16 +479,20 @@ fn symbol_index(archive: &[u8]) -> &[u8] {
     let start = MAGIC.len() + HEADER;
     let member = &archive[start..start + size];
 
-    // Step over the extended name, and check it really is the symbol index: a
-    // first member that is an object file would make every lookup below a
-    // lookup of nothing, and pass silently.
+    // Check it really is the symbol index: a first member that is an object
+    // file would make every lookup below a lookup of nothing, and pass
+    // silently. Both conventions get that check — the shape of the name is what
+    // says which one wrote this archive.
     let name_field = std::str::from_utf8(&header[..16]).expect("ar name field");
-    let name_length: usize = name_field
-        .trim_end()
-        .strip_prefix("#1/")
-        .expect("the first member has an extended name")
-        .parse()
-        .expect("an extended name length");
+    let name_field = name_field.trim_end();
+    let Some(name_length) = name_field.strip_prefix("#1/") else {
+        assert!(
+            name_field == "/" || name_field == "/SYM64/",
+            "the archive's first member is neither a BSD nor a GNU symbol index: {name_field:?}",
+        );
+        return member;
+    };
+    let name_length: usize = name_length.parse().expect("an extended name length");
     let (name, data) = member.split_at(name_length);
     let name = String::from_utf8_lossy(name);
     assert!(
@@ -485,6 +500,57 @@ fn symbol_index(archive: &[u8]) -> &[u8] {
         "the archive's first member is not the symbol index: {name}",
     );
     data
+}
+
+/// One `ar` member: the 60-byte header the format fixes, then the data.
+///
+/// Only the name and the size carry meaning for [`symbol_index`]; the rest of
+/// the header is the zeroed-out mtime/uid/gid/mode every archiver writes for a
+/// symbol table anyway.
+#[cfg(test)]
+fn ar_member(name: &str, data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(format!("{name:<16}").as_bytes());
+    out.extend_from_slice(format!("{:<12}", 0).as_bytes());
+    out.extend_from_slice(format!("{:<6}", 0).as_bytes());
+    out.extend_from_slice(format!("{:<6}", 0).as_bytes());
+    out.extend_from_slice(format!("{:<8}", 0).as_bytes());
+    out.extend_from_slice(format!("{:<10}", data.len()).as_bytes());
+    out.extend_from_slice(b"`\n");
+    out.extend_from_slice(data);
+    out
+}
+
+/// The reader takes the symbol table out of both archive conventions.
+///
+/// This exists because it did not: the reader assumed the BSD spelling, which
+/// made every run on a GNU host fail in the parser rather than in the thing
+/// under test — green on macOS, red on Linux, and saying nothing either way
+/// about the collision the caller is checking for. A host only ever writes one
+/// of the two, so the other convention is only ever covered by a built archive,
+/// which is to say never on that host. Both are built here instead.
+#[test]
+fn the_symbol_index_reader_takes_either_ar_convention() {
+    let table = b"kira_rt_abi_version_7\0other_symbol\0";
+
+    // GNU: the index member is named `/`, and its data is the table entire.
+    let mut gnu = b"!<arch>\n".to_vec();
+    gnu.extend_from_slice(&ar_member("/", table));
+    assert_eq!(symbol_index(&gnu), table);
+
+    // GNU, 64-bit offsets: same shape, different name.
+    let mut gnu64 = b"!<arch>\n".to_vec();
+    gnu64.extend_from_slice(&ar_member("/SYM64/", table));
+    assert_eq!(symbol_index(&gnu64), table);
+
+    // BSD: the member's name is stored in its first bytes, and the table
+    // follows it — so the reader has to step over the name to reach the table.
+    let name = b"__.SYMDEF\0\0\0\0\0\0\0";
+    let mut bsd_data = name.to_vec();
+    bsd_data.extend_from_slice(table);
+    let mut bsd = b"!<arch>\n".to_vec();
+    bsd.extend_from_slice(&ar_member(&format!("#1/{}", name.len()), &bsd_data));
+    assert_eq!(symbol_index(&bsd), table);
 }
 
 #[test]
