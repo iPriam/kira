@@ -293,15 +293,16 @@ pub enum NativeLibraryError {
     #[error("a native library declaration has no name")]
     NamelessLibrary,
     /// A row's library file was not present where it resolved to.
-    #[error("native library `{library}` target `{triple}` is missing its archive at `{}`", path.display())]
-    MissingArchive {
-        /// The library whose file is missing.
-        library: String,
-        /// The target whose file is missing.
-        triple: TargetTriple,
-        /// Where the file was expected.
-        path: PathBuf,
-    },
+    ///
+    /// Boxed because it is the widest variant and it sets the size of every
+    /// `Result` in this crate. A `PathBuf` is wider on Windows than on the
+    /// platforms this was written on, which pushed the enum past the threshold
+    /// `clippy::result_large_err` draws and made four otherwise-portable
+    /// functions fail to compile there. One heap word on the error path — a
+    /// path taken when a build is already failing — buys back the size of every
+    /// success return in the crate.
+    #[error("{0}")]
+    MissingArchive(Box<MissingArchive>),
     /// Two libraries in one catalog shared a name.
     #[error("native library `{library}` is declared more than once")]
     DuplicateLibrary {
@@ -311,6 +312,21 @@ pub enum NativeLibraryError {
     /// The catalog could not intern another distinct library name.
     #[error("too many distinct native-library names to intern")]
     NameSpaceExhausted,
+}
+
+/// Which library file was missing, and where it was looked for.
+///
+/// Its own type so [`NativeLibraryError::MissingArchive`] can box it: the
+/// fields are what they always were, one indirection away.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("native library `{library}` target `{triple}` is missing its archive at `{}`", path.display())]
+pub struct MissingArchive {
+    /// The library whose file is missing.
+    pub library: String,
+    /// The target whose file is missing.
+    pub triple: TargetTriple,
+    /// Where the file was expected.
+    pub path: PathBuf,
 }
 
 #[cfg(test)]
