@@ -22,6 +22,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use kira_knvm::{Channel, DirectoryReleaseSource, VersionSpec, archive_file_name, install};
+use kira_toolchain::{executable_name, static_archive_name};
 
 /// The version the fixture release publishes.
 ///
@@ -99,11 +100,18 @@ fn publish_fixture_release(feed: &Path, staging: &Path) {
     let payload = staging.join(format!("kira-{FIXTURE_VERSION}"));
     let bin = payload.join("bin");
     std::fs::create_dir_all(&bin).expect("create bin");
-    std::fs::copy(env!("CARGO_BIN_EXE_kira"), bin.join("kira")).expect("stage the compiler");
+    // Staged under the name the host's own tooling gives it. A fixture that
+    // hardcodes the Unix spellings builds a tree the installer is right to
+    // reject on Windows, which reads as an installer bug and is a fixture one.
+    std::fs::copy(
+        env!("CARGO_BIN_EXE_kira"),
+        bin.join(executable_name("kira")),
+    )
+    .expect("stage the compiler");
     // Install validation requires a language server beside the compiler. What
     // these tests prove is Foundation discovery, not the server, so a stub
     // satisfies the tree contract without pretending to speak LSP.
-    let server = bin.join("kira-language-server");
+    let server = bin.join(executable_name("kira-language-server"));
     std::fs::write(&server, "#!/bin/sh\nexit 0\n").expect("stage the language-server stub");
     #[cfg(unix)]
     {
@@ -116,9 +124,9 @@ fn publish_fixture_release(feed: &Path, staging: &Path) {
     // contract-only files keep this fixture shaped like a selectable toolchain
     // without coupling a discovery test to cross-compilation.
     for archive in [
-        "libkira_native_bridge.a",
-        "libkira_compiler_bridge.a",
-        "libkira_native_bridge-wasm32-emscripten.a",
+        static_archive_name("kira_native_bridge"),
+        static_archive_name("kira_compiler_bridge"),
+        "libkira_native_bridge-wasm32-emscripten.a".to_string(),
     ] {
         std::fs::write(bin.join(archive), "fixture runtime archive")
             .expect("stage the runtime-archive fixture");
