@@ -105,13 +105,31 @@ pub enum LinkError {
         marker: &'static str,
     },
     /// The linker ran and rejected the link.
-    #[error("linking `{output}` failed:\n{stderr}")]
+    #[error("linking `{output}` failed:\n{diagnostic}")]
     Failed {
         /// The executable being linked.
         output: PathBuf,
-        /// The driver's diagnostics.
-        stderr: String,
+        /// The driver's diagnostics, from both of its output streams.
+        diagnostic: String,
     },
+}
+
+/// Everything a tool said, whichever stream it said it on.
+///
+/// Reading only `stderr` loses the whole diagnostic under MSVC, where
+/// `link.exe` writes `LNK2001`/`LNK1120` to *stdout* and leaves stderr empty —
+/// so a failed Windows link reported nothing but an exit code, and the
+/// stale-marker case below could never recognise itself either. Unix linkers
+/// use stderr, so joining the two costs nothing there and is the difference
+/// between a diagnosis and a number here.
+fn tool_diagnostic(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    [stderr.trim(), stdout.trim()]
+        .into_iter()
+        .filter(|stream| !stream.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Links `object` against the native runtime archive into a shared library.
@@ -226,7 +244,7 @@ pub fn archive_static_library(
     if !output.status.success() {
         return Err(LinkError::Failed {
             output: archive.to_path_buf(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            diagnostic: tool_diagnostic(&output),
         });
     }
     if !archive.is_file() {
@@ -540,10 +558,10 @@ fn link_with(
             source,
         })?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let diagnostic = tool_diagnostic(&output);
         // The ABI marker is the one undefined symbol with a known cause, so say
         // the cause rather than making the reader decode a linker diagnostic.
-        if stderr.contains(kira_runtime_abi::RUNTIME_ABI_MARKER) {
+        if diagnostic.contains(kira_runtime_abi::RUNTIME_ABI_MARKER) {
             return Err(LinkError::RuntimeArchiveStale {
                 path: runtime_archive.to_path_buf(),
                 marker: kira_runtime_abi::RUNTIME_ABI_MARKER,
@@ -551,7 +569,7 @@ fn link_with(
         }
         return Err(LinkError::Failed {
             output: executable.to_path_buf(),
-            stderr,
+            diagnostic,
         });
     }
     Ok(())
