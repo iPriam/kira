@@ -321,9 +321,13 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
 /// `knvm sinstall` wants its exit code, not an interactive shell — or when the
 /// shell is unknown; `exec` failing is reported and the install still counts.
 fn reload_shell(bin_dir: &std::path::Path, shell: Option<&str>) {
-    use std::io::IsTerminal as _;
     #[cfg(unix)]
     {
+        // Imported inside the branch that uses it. At function scope it is an
+        // unused import everywhere else, which `-D warnings` makes a build
+        // failure on Windows and nothing at all on the platforms this was
+        // written on.
+        use std::io::IsTerminal as _;
         let Some(shell) = shell else { return };
         if !std::io::stdout().is_terminal() {
             return;
