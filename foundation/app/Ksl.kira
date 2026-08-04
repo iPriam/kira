@@ -23,11 +23,13 @@ struct KslArtifact {
     // Every stage merged into one MSL library, for a backend that compiles a
     // single module — the direct Metal backend does. For a compute shader this
     // is the kernel.
+    //
+    // There is no per-stage MSL beside it, because Metal has none to give: one
+    // library holds every stage, and a pipeline picks between them by entry
+    // name. Fields for it used to be declared here and nothing could ever fill
+    // them — a renderer reading `vertexMsl` got an empty string and no reason.
     var combinedMsl: String = ""
     // Per-stage sources.
-    var vertexMsl: String = ""
-    var fragmentMsl: String = ""
-    var computeMsl: String = ""
     var vertexHlsl: String = ""
     var fragmentHlsl: String = ""
     var vertexGlsl: String = ""
@@ -57,8 +59,9 @@ struct KslArtifact {
 // `Shaders/` directory.
 //
 // Targets: "msl" is Metal, which compiles one module holding every stage, so
-// its whole source lands in `combinedMsl`. "wgsl" is WebGPU and "glsl_330" is
-// OpenGL, and both compile a stage at a time. A shader GLSL 330 cannot express
+// its whole source lands in `combinedMsl`. "wgsl" is WebGPU, "glsl_330" is
+// OpenGL and "hlsl" is Direct3D, and all three compile a stage at a time. A
+// shader GLSL 330 cannot express
 // — one using compute or storage, both of which arrived in 430 — comes back
 // with its GLSL fields empty rather than failing the build, because the other
 // backends still carry it. A field no target fills keeps the empty default
@@ -70,6 +73,7 @@ comptime macro ksl {
         let msl = Ksl.compile(input, "msl")
         let wgsl = Ksl.compile(input, "wgsl")
         let glsl = Ksl.compile(input, "glsl_330")
+        let hlsl = Ksl.compile(input, "hlsl")
         return quote {
             KslArtifact(
                 shaderName: #{msl.shaderName},
@@ -81,6 +85,8 @@ comptime macro ksl {
                 fragmentGlsl: #{glsl.fragmentSource},
                 vertexWgsl: #{wgsl.vertexSource},
                 fragmentWgsl: #{wgsl.fragmentSource},
+                vertexHlsl: #{hlsl.vertexSource},
+                fragmentHlsl: #{hlsl.fragmentSource},
                 uniformReflection: #{msl.uniformReflection}
             )
         }

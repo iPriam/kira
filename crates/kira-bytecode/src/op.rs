@@ -20,7 +20,7 @@ pub use codec::{DecodeError, decode, encode, encode_one};
 /// The deferred-task primitives, re-exported so an instruction names them from
 /// the one place the executor defines them.
 pub use kira_runtime_abi::TaskPrim;
-pub use kira_runtime_abi::{CompilerOp, FileSystemOp, StringOp};
+pub use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, StringOp};
 
 /// One decoded VM instruction.
 #[derive(Debug, Clone, PartialEq)]
@@ -376,6 +376,11 @@ pub enum Instruction {
     /// result. The one failure is a host with no compiler, which the VM cannot
     /// have of its own: it sits below one.
     Compiler(CompilerOp),
+    /// One environment read, its operation in the byte that follows.
+    ///
+    /// The same shape as [`Instruction::Compiler`]: the name is popped, the
+    /// answer is pushed, and an unset variable is an answer rather than a trap.
+    Env(EnvOp),
     /// Pop a value and store it through a place that may index arrays.
     ///
     /// The general form of [`Instruction::StoreField`], which stays for the
@@ -780,6 +785,10 @@ mod opcode {
     // new string operation costs neither an opcode nor a version — the same
     // arrangement `FILE_SYSTEM`, `TASK_OP` and `COMPILER` use.
     pub const STRING_OP: u8 = 0x66;
+    // One environment read. Appended after `STRING_OP`, on the same
+    // arrangement every other operation family uses: the opcode says which
+    // family and the byte after it says which operation.
+    pub const ENV_OP: u8 = 0x67;
 }
 
 #[cfg(test)]

@@ -20,6 +20,7 @@ mod boxes;
 mod call;
 mod cells;
 mod compiler;
+mod env;
 mod expr;
 mod file_system;
 mod foreign;

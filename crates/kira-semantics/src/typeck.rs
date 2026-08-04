@@ -20,6 +20,7 @@ use crate::operators::{resolve_binary, resolve_unary, unary_spelling};
 mod calls;
 mod compiler;
 mod conditional;
+mod env;
 mod file_system;
 mod labels;
 mod memberwise;
@@ -267,6 +268,11 @@ impl Analyzer<'_> {
                 }
                 if let Some(intrinsic) =
                     self.analyze_compiler_intrinsic(ctx, &name, &type_args, &args, callee_span)
+                {
+                    return intrinsic;
+                }
+                if let Some(intrinsic) =
+                    self.analyze_env_intrinsic(ctx, &name, &type_args, &args, callee_span)
                 {
                     return intrinsic;
                 }
