@@ -92,12 +92,27 @@ jobs:
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' llvm-metadata.toml | head -1)"
           release="$(sed -n 's/^release_tag = "\(.*\)"/\1/p' llvm-metadata.toml | head -1)"
           asset="$(sed -n "/^\[target.${{ matrix.host_key }}\]/,/^\[/s/^asset = \"\(.*\)\"/\1/p" llvm-metadata.toml | head -1)"
+          # The metadata declares the format per target — `zip` for Windows,
+          # `tar.xz` elsewhere — and this is what reads it. Unpacking every
+          # bundle with `tar` answered "This does not look like a tar archive"
+          # on Windows, so no Windows release could ever be published; knvm's
+          # own unpacker (kira-knvm/src/llvm.rs) has always made this split.
+          format="$(sed -n "/^\[target.${{ matrix.host_key }}\]/,/^\[/s/^archive = \"\(.*\)\"/\1/p" llvm-metadata.toml | head -1)"
           home="$HOME/.kira/toolchains/llvm/$version/${{ matrix.host_key }}"
           mkdir -p "$home"
           gh release download "$release" \
             --repo "$GITHUB_REPOSITORY" \
             --pattern "$asset" --output "bundle-$asset"
-          tar -xf "bundle-$asset" -C "$home"
+          case "$format" in
+            zip)
+              if command -v unzip >/dev/null 2>&1; then
+                unzip -q "bundle-$asset" -d "$home"
+              else
+                7z x -y -o"$home" "bundle-$asset" >/dev/null
+              fi
+              ;;
+            *) tar -xf "bundle-$asset" -C "$home" ;;
+          esac
           rm "bundle-$asset"
         env:
           GH_TOKEN: ${{ github.token }}
@@ -126,8 +141,18 @@ jobs:
           # The runtime archives ride beside the compiler, where its archive
           # resolution looks; compiler-using programs select the compiler
           # bridge, and the Web one is target-suffixed.
-          cp target/release/libkira_native_bridge.a "$stage/bin/"
-          cp target/release/libkira_compiler_bridge.a "$stage/bin/"
+          # `<base>.lib` under MSVC and `lib<base>.a` everywhere else — the
+          # split `static_archive_name` makes in kira-toolchain, which is the
+          # name knvm looks for and the name the compiler resolves beside
+          # itself. Naming only the Unix one meant the Windows archive would
+          # have shipped without either bridge, had it ever got this far.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/release/kira_native_bridge.lib "$stage/bin/"
+            cp target/release/kira_compiler_bridge.lib "$stage/bin/"
+          else
+            cp target/release/libkira_native_bridge.a "$stage/bin/"
+            cp target/release/libkira_compiler_bridge.a "$stage/bin/"
+          fi
           cp target/wasm32-unknown-emscripten/release/libkira_native_bridge.a \
              "$stage/bin/libkira_native_bridge-wasm32-emscripten.a"
           cp -R foundation "$stage/foundation"
