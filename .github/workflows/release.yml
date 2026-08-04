@@ -71,7 +71,13 @@ jobs:
       - name: Check the tag against the workspace version
         run: |
           cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
-          case "$KIRA_VERSION" in
+          # A prerelease tag carries a suffix the version it extends does not:
+          # `v1.8.0-dev1` releases 1.8.0's line as a prerelease, and the header
+          # above promises exactly that. Compare the part before the suffix, or
+          # the check contradicts the contract this file documents and no
+          # `-dev` tag can ever publish.
+          base="${KIRA_VERSION%%-*}"
+          case "$base" in
             "$cargo_version" | "$cargo_version".*) ;;
             *)
               echo "tag $KIRA_VERSION does not extend Cargo.toml $cargo_version" >&2
