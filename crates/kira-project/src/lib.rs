@@ -2,14 +2,19 @@
 //!
 //! Layer 5 of the Kira package graph.
 
+pub mod autobind;
 pub mod native_libraries;
 pub mod native_sources;
 pub mod package_discovery;
 pub mod project;
 pub mod workspace;
 
+pub use autobind::{
+    AutobindContext, AutobindError, AutobindPlan, AutobindReport, AutobindStatus, BindingModule,
+    host_target,
+};
 pub use native_libraries::{
-    NativeLibraryPackage, NativeLibraryResolveError, NativeLinkResolution,
+    NativeLibraryPackage, NativeLibraryResolveError, NativeLinkResolution, declared_libraries,
     resolve_native_libraries, resolve_native_library_packages,
 };
 pub use package_discovery::{

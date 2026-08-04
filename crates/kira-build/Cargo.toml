@@ -7,6 +7,8 @@ repository.workspace = true
 
 [dependencies]
 kira-bytecode.workspace = true
+# Header autobinding loads the managed toolchain's C parser before analysis.
+kira-clang.workspace = true
 kira-diagnostic-messages.workspace = true
 kira-diagnostics.workspace = true
 kira-ir.workspace = true
@@ -24,6 +26,9 @@ kira-hybrid-main.workspace = true
 # hash, the contract types, and `Library`/`Instance` are defined once, there.
 kira-main.workspace = true
 kira-manifest.workspace = true
+# Autobind is planned per target triple, the vocabulary the native-library
+# model already defines.
+kira-native-lib-definition.workspace = true
 kira-package-manager.workspace = true
 kira-program-graph.workspace = true
 kira-project.workspace = true
@@ -46,6 +51,8 @@ kira-glsl-backend.workspace = true
 kira-hlsl-backend.workspace = true
 kira-spirv-backend.workspace = true
 kira-source.workspace = true
+# Autobind discovers the managed LLVM bundle the C parser ships in.
+kira-toolchain.workspace = true
 salsa.workspace = true
 thiserror.workspace = true
 

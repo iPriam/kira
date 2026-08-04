@@ -1,0 +1,22 @@
+[package]
+name = "kira-clang"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# libclang is opened at run time rather than linked, so a toolchain that ships
+# no `libclang` fails with a diagnostic instead of failing to start.
+libloading.workspace = true
+# The loader and the parser both fail in ways a caller has to tell apart, this
+# workspace's rule for any fallible function crossing a crate boundary.
+thiserror.workspace = true
+
+[dev-dependencies]
+# The smoke test parses a real header, which needs the managed LLVM bundle the
+# rest of the workspace already discovers through this crate.
+kira-toolchain.workspace = true

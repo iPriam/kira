@@ -10,11 +10,18 @@ workspace = true
 
 [dependencies]
 kira-core.workspace = true
+# Header autobinding parses C with the managed toolchain's own clang.
+kira-clang.workspace = true
 kira-diagnostics.workspace = true
 kira-manifest.workspace = true
 # Native-library manifests are read from disk here and resolved into the model
 # catalog this crate threads onto a build target.
 kira-native-lib-definition.workspace = true
+# The keyword set a generated binding may not spell is the lexer's, read from
+# the one table that defines it rather than copied.
+kira-syntax-model.workspace = true
+# Autobind reads clang out of the managed LLVM bundle this crate now discovers.
+kira-toolchain.workspace = true
 # Manifest discovery returns a typed error, this workspace's rule for any
 # fallible function crossing a crate boundary.
 thiserror.workspace = true

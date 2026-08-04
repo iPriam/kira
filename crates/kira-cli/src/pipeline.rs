@@ -68,7 +68,7 @@ pub fn check(args: &[String]) -> i32 {
         .first()
         .map(String::as_str)
         .unwrap_or(crate::options::DEFAULT_PATH);
-    match compile(path) {
+    match compile(path, &compile_target(path, None)) {
         Ok(compiled) => {
             emit_diagnostics(&compiled.diagnostics, &compiled.sources);
             if compiled.has_errors() {
@@ -98,7 +98,7 @@ pub fn run(args: &[String]) -> i32 {
         Ok(path) => path,
         Err(code) => return code,
     };
-    let compiled = match verified(&options.path) {
+    let compiled = match verified(&options.path, &options_target(&options)) {
         Ok(compiled) => compiled,
         Err(code) => return code,
     };
@@ -154,7 +154,12 @@ pub fn test(args: &[String]) -> i32 {
     // Compiled as a test run, which neither requires an `@Main` nor refuses
     // one: a suite is entered through the generated runner, and a package that
     // is both an application and a suite keeps both entrypoints.
-    let compiled = match verified_as("test", &options.path, kira_semantics::BuildKind::Test) {
+    let compiled = match verified_as(
+        "test",
+        &options.path,
+        kira_semantics::BuildKind::Test,
+        &options_target(&options),
+    ) {
         Ok(compiled) => compiled,
         Err(code) => return code,
     };
@@ -255,7 +260,11 @@ pub fn live(args: &[String]) -> i32 {
     // compile yields `None` rather than an error, so the session keeps the app
     // that is already running.
     let rebuild = || -> Result<Option<kira_live::Bundle>, crate::live::LiveError> {
-        let Ok(ir) = runnable_path_ir("live", &entry) else {
+        let Ok(ir) = runnable_path_ir(
+            "live",
+            &entry,
+            &crate::foreign_libs::target_for_device(Device::Host),
+        ) else {
             return Ok(None);
         };
         // A live session runs on the machine the runner runs on, so the foreign
@@ -374,7 +383,7 @@ pub fn build(args: &[String]) -> i32 {
         Ok(path) => path,
         Err(code) => return code,
     };
-    let compiled = match verified(&options.path) {
+    let compiled = match verified(&options.path, &options_target(&options)) {
         Ok(compiled) => compiled,
         Err(code) => return code,
     };
@@ -559,6 +568,36 @@ fn resolve_path(path: &str) -> Result<String, i32> {
     })
 }
 
+/// The target a build for `path` selects, decided before the program compiles.
+///
+/// Autobind runs inside the frontend and generates per target, so the target
+/// cannot wait for [`apply_manifest_defaults`] — that reads the compiled
+/// program, which is already too late. An explicit `--device` wins; otherwise
+/// the manifest's own `buildTarget` decides, read straight off the manifest;
+/// otherwise this host.
+fn compile_target(
+    path: &str,
+    explicit: Option<Device>,
+) -> kira_native_lib_definition::TargetTriple {
+    if let Some(device) = explicit {
+        return crate::foreign_libs::target_for_device(device);
+    }
+    let declared = kira_project::manifest_for(std::path::Path::new(path))
+        .ok()
+        .flatten()
+        .map(|found| found.manifest.build_target)
+        .and_then(|target| manifest_device(&target));
+    crate::foreign_libs::target_for_device(declared.unwrap_or(Device::Host))
+}
+
+/// [`compile_target`] for a verb that has already parsed its options.
+fn options_target(options: &CompileOptions) -> kira_native_lib_definition::TargetTriple {
+    compile_target(
+        &options.path,
+        options.device_explicit.then_some(options.device),
+    )
+}
+
 /// Applies package defaults without replacing any command-line choice.
 fn apply_manifest_defaults(
     verb: &str,
@@ -624,10 +663,15 @@ fn manifest_device(target: &str) -> Option<Device> {
 /// Diagnostics are rendered here, so callers only decide what to do with a
 /// program that is known good. The IR may be a library's — it carries no
 /// entrypoint then, and the caller decides whether that is usable.
-fn verified_as(verb: &str, path: &str, kind: kira_semantics::BuildKind) -> Result<Compiled, i32> {
+fn verified_as(
+    verb: &str,
+    path: &str,
+    kind: kira_semantics::BuildKind,
+    target: &kira_native_lib_definition::TargetTriple,
+) -> Result<Compiled, i32> {
     let resolved = resolve_path(path)?;
-    let compiled =
-        kira_build::compile_as(std::path::Path::new(&resolved), Some(kind)).map_err(|error| {
+    let compiled = kira_build::compile_for(std::path::Path::new(&resolved), Some(kind), target)
+        .map_err(|error| {
             err!("kira {verb}: {error}");
             EXIT_FAILURE
         })?;
@@ -638,8 +682,11 @@ fn verified_as(verb: &str, path: &str, kind: kira_semantics::BuildKind) -> Resul
     Ok(compiled)
 }
 
-fn verified(path: &str) -> Result<Compiled, i32> {
-    let compiled = compile(path)?;
+fn verified(
+    path: &str,
+    target: &kira_native_lib_definition::TargetTriple,
+) -> Result<Compiled, i32> {
+    let compiled = compile(path, target)?;
     emit_diagnostics(&compiled.diagnostics, &compiled.sources);
     if compiled.has_errors() {
         return Err(EXIT_FAILURE);
@@ -648,8 +695,12 @@ fn verified(path: &str) -> Result<Compiled, i32> {
 }
 
 /// Compiles a path and returns runnable IR for callers without package defaults.
-fn runnable_path_ir(verb: &str, path: &str) -> Result<IrProgram, i32> {
-    runnable_ir(verb, verified(path)?)
+fn runnable_path_ir(
+    verb: &str,
+    path: &str,
+    target: &kira_native_lib_definition::TargetTriple,
+) -> Result<IrProgram, i32> {
+    runnable_ir(verb, verified(path, target)?)
 }
 
 /// Returns a compiled program's IR, refusing a library by name.
@@ -678,9 +729,9 @@ fn runnable_ir(verb: &str, compiled: Compiled) -> Result<IrProgram, i32> {
 /// Returns `Err(exit_code)` only for problems that prevent compiling at all
 /// (a missing or unreadable file, an unusable manifest); compile errors are
 /// carried as diagnostics, not as an error here.
-fn compile(path: &str) -> Result<Compiled, i32> {
+fn compile(path: &str, target: &kira_native_lib_definition::TargetTriple) -> Result<Compiled, i32> {
     let resolved = resolve_path(path)?;
-    kira_build::compile(std::path::Path::new(&resolved)).map_err(|error| {
+    kira_build::compile_for(std::path::Path::new(&resolved), None, target).map_err(|error| {
         err!("kira: {error}");
         // A path the user typed that is not there is a usage error; everything
         // else got far enough that the invocation itself was fine.
@@ -715,6 +766,24 @@ mod tests {
     fn a_frontend_read_failure_is_a_usage_error_and_the_rest_are_not() {
         // The exit-code split the CLI owns: a path the user typed that is not
         // there is bad usage, and anything past that is a failed build.
-        assert_eq!(compile("/nonexistent/kira/x.kira").err(), Some(EXIT_USAGE));
+        let path = "/nonexistent/kira/x.kira";
+        assert_eq!(
+            compile(path, &compile_target(path, None)).err(),
+            Some(EXIT_USAGE)
+        );
+    }
+
+    #[test]
+    fn an_explicit_device_decides_the_target_bindings_are_generated_for() {
+        let path = "/nonexistent/kira/x.kira";
+        assert_eq!(
+            compile_target(path, Some(Device::Web(WasmDevice::Wasm32))).to_string(),
+            "wasm32-emscripten-unknown"
+        );
+        // No manifest above it and no explicit device: this machine.
+        assert_eq!(
+            compile_target(path, None),
+            crate::foreign_libs::target_for_device(Device::Host)
+        );
     }
 }

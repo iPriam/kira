@@ -124,9 +124,9 @@ whatsoever links the library by its own name (`dynamicLib: ""` on a library
 called `vulkan` is `-lvulkan`); the same row under `.Static` is refused,
 because it says nothing about what to link.
 
-`headers`, `sources`, and `autobind` are read and carried, and not yet acted on:
-a library's own C sources are not compiled for it, and bindings are not
-generated. Ship the archive.
+`headers` and `sources` describe how the library is built, and `autobind`
+describes what to call in it — see [Generated bindings](#generated-bindings)
+below.
 
 ## Structs by value
 
@@ -263,23 +263,69 @@ emitted at the *host's* pointer width. The emscripten archive expects a 32-bit
 trapped. The backend now declares that parameter at the target's width, which is
 also why `Types` carries a `usize_ty` rather than reusing `i64`.
 
+## Generated bindings
+
+A library that declares `autobind` gets its `@FFI.Extern` declarations written
+for it, from its own headers, before anything is analyzed:
+
+```text
+autobind: Autobind { module: "text", headers: ["NativeLibs/Text/kira_text.h"], mode: AutobindMode.AllPublic },
+```
+
+`kira check`, `run`, `build`, `test`, and `live` all generate first, for every
+package in the dependency graph — a library is declared by the package that owns
+it, so an app importing UI Foundation gets `kiratext` bound into UI Foundation's
+own `app/bindings/text.kira`. The generated file is ordinary Kira source in the
+dialect above, compiled with the rest of that package, and readable: nothing
+about it is generator-private.
+
+The C parser is the managed toolchain's own `libclang`, and every width is read
+from it rather than assumed. `long length` binds as `I64` on macOS and `I32`
+under MSVC because that is what `long` *is* on each — the mistake a hand-written
+binding makes silently, and the reason this is the compiler's job.
+
+**What is bound.** Functions come from the listed headers and nowhere else: a
+header includes `<stdio.h>` to get a `FILE *`, and binding what it reaches would
+declare libc into every package that used it, colliding on `fread` with the next
+library that did the same. `AllPublic` binds every function those headers
+declare; `Selected` binds the ones the declaration names. Types follow the
+signatures, at any depth, plus the structs the headers define.
+
+**What is not, and why you can tell.** A variadic function has no fixed
+signature, a `long double` has no portable width, `char *argv[]` has no length.
+Each is written into the generated file as a comment naming the declaration and
+the reason, so a missing function reads as a decision rather than a gap. A
+hand-written `@FFI.Extern` for one of them would be refused by the same rule.
+
+**Caching.** A binding is regenerated when it is missing or when a header it was
+generated from has changed; a stamp under `.kira-build/autobind/` records what
+it was generated from, and an unchanged tree loads no C parser at all. A binding
+that exists with *no* stamp is the package's own source — `kira-graphics` ships
+its Vulkan and Direct3D bindings because regenerating them needs an SDK that is
+not on every machine — so it is adopted as it stands and reported once (KPK041).
+Delete it to have it generated.
+
 ## Binding type vocabulary (`bind-types/`)
 
-A generated binding leans on C primitive typedefs it never defines — `VkFlags`,
-`UINT`, `BOOL`, `HRESULT`. Until header-driven autobind emits them, define each
-as a transparent alias to its Kira scalar (`type VkFlags = U32`,
-`type HANDLE = RawPtr`) in a `*_types.kira` file. The alias resolves away in the
-frontend, so a use site and its scalar are the same type on every backend.
+A *hand-written* binding leans on C primitive typedefs it never defines —
+`VkFlags`, `UINT`, `BOOL`, `HRESULT`. Define each as a transparent alias to its
+Kira scalar (`type VkFlags = U32`, `type HANDLE = RawPtr`) in a `*_types.kira`
+file. The alias resolves away in the frontend, so a use site and its scalar are
+the same type on every backend.
 
 Such a file must live in a `bind-types/` directory — a peer of `bindings/`,
 kept apart from a package's own `types/` domain types and from generated
 `bindings/`. A `*_types.kira` source anywhere else is rejected with `KPK025`.
 The rule is a convention enforced at project discovery, not a compiler
-mechanism; delete the file once autobind emits the typedefs into the binding.
+mechanism.
+
+A generated binding needs none of this: autobind resolves each typedef through
+clang and writes the scalar the target actually uses, so `VkFlags` arrives as
+`U32` at every use with nothing to declare.
 
 ## Deferred to later milestones
 
 `CString` results, Kira enums and heap types across the seam, aggregates and
-strings in a callback signature, non-C ABIs, variadics, generic externs, header
-parsing and autobind, dynamic-only C libraries, and compiling native-library
-sources. Each is refused today with a typed diagnostic rather than mislowered.
+strings in a callback signature, non-C ABIs, variadics, generic externs, and
+dynamic-only C libraries. Each is refused today with a typed diagnostic rather
+than mislowered.
