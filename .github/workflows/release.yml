@@ -114,6 +114,11 @@ jobs:
             *) tar -xf "bundle-$asset" -C "$home" ;;
           esac
           rm "bundle-$asset"
+          # Named for every later step. Discovery looks under `$KIRA_HOME`, and
+          # the verification below points that at a scratch directory so it can
+          # install the packed archive into a clean home — which left the
+          # compiler unable to find the LLVM this step just provisioned.
+          echo "KIRA_LLVM_HOME=$home" >> "$GITHUB_ENV"
         env:
           GH_TOKEN: ${{ github.token }}
 
