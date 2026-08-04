@@ -29,9 +29,15 @@
 //! Rust — which is exactly why this is the engine that a consumer can build on a
 //! machine with no LLVM and no linker.
 //!
-//! FFI autobind — generating *Kira* bindings for a native library, the opposite
-//! direction — is designed in here too, and is not built yet.
+//! # Bindings come before analysis
+//!
+//! [`autobind`] generates *Kira* bindings for a native library — the opposite
+//! direction from the wrapper — out of the C headers its manifest declares. It
+//! runs inside [`frontend::compile_for`], before a module is loaded, for every
+//! package in the dependency graph, because what it writes is Kira source the
+//! analyzer reads.
 
+pub mod autobind;
 pub mod callgraph;
 pub mod frontend;
 pub mod hybrid;
@@ -40,7 +46,8 @@ pub mod native;
 mod shader;
 pub mod wrapper;
 
-pub use frontend::{Compiled, FrontendError, compile, compile_as};
+pub use autobind::{NativeDeclarationError, declaring_packages};
+pub use frontend::{Compiled, FrontendError, compile, compile_as, compile_for};
 pub use hybrid::{
     HybridLibraryArtifacts, HybridLibraryError, HybridLibraryOptions, build_hybrid_library,
     check_library as check_hybrid_library,

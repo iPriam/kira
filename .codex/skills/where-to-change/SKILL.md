@@ -15,7 +15,8 @@ upward reference in `[dev-dependencies]` (cargo's only legal cycle).
 - **0 — vocabulary:** `kira-core` (`Symbol`, interner), `kira-source`
   (`Span`, `SourceId`, `SourceMap`), `kira-runtime-abi` (`BridgeValue`,
   `Execution`, `Ownership`, `HostCapabilities`), `kira-diagnostics`,
-  `kira-diagnostic-messages`, `kira-toolchain`, `kira-dynamic-ffi`
+  `kira-diagnostic-messages`, `kira-toolchain`, `kira-dynamic-ffi`,
+  `kira-clang` (the loaded `libclang` autobind reads C headers through)
 - **1 — syntax:** `kira-lexer`, `kira-parser`, `kira-syntax-model`,
   `kira-ksl-parser`, `kira-ksl-syntax-model`
 - **2 — semantics:** `kira-semantics`, `kira-semantics-model`,
@@ -102,8 +103,10 @@ that linked the LLVM backend could not ship to a machine without it.
 
 - **Graphics.** This repo does not render: kira-graphics owns
   Metal/Sokol/Vulkan/D3D12. The surface here ends at shader codegen and the
-  FFI/native bridge kira-graphics hangs off — which makes dynamic FFI and
-  autobind critical path, not tail work.
+  FFI/native bridge kira-graphics hangs off — which makes dynamic FFI critical
+  path, not tail work. Header autobind lives in `kira-project::autobind`, driven
+  from `kira-build::autobind` inside the frontend; put a change to what a
+  binding *says* in the first and a change to *when* it runs in the second.
 - **Emscripten for the compiler.** Kira *apps* targeting Web keep the emcc
   subprocess pipeline; the compiler itself, if ever browser-hosted, targets
   `wasm32-unknown-unknown`. No rustc-emscripten linkage.

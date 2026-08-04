@@ -213,6 +213,35 @@ pub fn unknown_root_package(root: &str) -> Diagnostic {
     )
 }
 
+/// Builds KPK040: `library`'s declared headers could not be bound.
+///
+/// An error rather than a warning: the package declared that these bindings are
+/// how its C library is called, so a build that carried on would report every
+/// one of those calls as an undefined function and blame the caller.
+pub fn autobind_failed(library: &str, reason: &str) -> Diagnostic {
+    package_error(
+        DiagnosticCode::Kpk040AutobindFailed,
+        "native library bindings could not be generated",
+        format!("`{library}` declares `autobind`, and generating its bindings failed: {reason}"),
+        "Fix the header or the `autobind` declaration; the generated file is not \
+         something to write by hand.",
+    )
+}
+
+/// Builds KPK041: a binding file the package ships was adopted as it stands.
+pub fn autobind_adopted(library: &str, path: &str) -> Diagnostic {
+    package_note(
+        DiagnosticCode::Kpk041AutobindAdopted,
+        "native library bindings were already present",
+        format!(
+            "`{library}` declares `autobind` and `{path}` already exists, so it is used as \
+             the package wrote it rather than regenerated."
+        ),
+        "Delete the file to have it generated from the headers; edits to the headers \
+         regenerate it from now on.",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
