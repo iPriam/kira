@@ -1,0 +1,415 @@
+import Foundation
+
+// ColxCollectionTests.kira
+// Deep array test suite. All top-level names use colx / Colx prefix.
+// ~85 tests (including ~20 trap tests).
+
+// ---------------------------------------------------------------------------
+// GROUP I - ColxGrid
+// ---------------------------------------------------------------------------
+
+Test ColxGridSum5 {
+    test {
+        var cells: [Int] = []
+        cells.append(1)
+        cells.append(2)
+        cells.append(3)
+        cells.append(4)
+        cells.append(5)
+        let grid = ColxGrid { cells: move cells }
+        return grid.sum()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+}
+
+Test ColxGridCellCount7 {
+    test {
+        var cells: [Int] = []
+        var i = 0
+        while i < 7 {
+            cells.append(i)
+            i = i + 1
+        }
+        let grid = ColxGrid { cells: move cells }
+        return grid.cellCount()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+}
+
+Test ColxGridLarge100 {
+    test {
+        var cells: [Int] = []
+        var i = 0
+        while i < 100 {
+            cells.append(i)
+            i = i + 1
+        }
+        let grid = ColxGrid { cells: move cells }
+        return grid.sum()
+    }
+    // 0+1+...+99 = 4950
+    expect { let e: Result<Int, TestFailure> = .Ok(4950); return e }
+}
+
+Test ColxGridMultiRowSum {
+    test {
+        // 3 grids with 4 cells each: grid r has cells r*4, r*4+1, r*4+2, r*4+3
+        var total = 0
+        var r = 0
+        while r < 3 {
+            var cells: [Int] = []
+            var c = 0
+            while c < 4 {
+                cells.append(r * 4 + c)
+                c = c + 1
+            }
+            let grid = ColxGrid { cells: move cells }
+            total = total + grid.sum()
+            r = r + 1
+        }
+        return total
+    }
+    // r=0: 0+1+2+3=6, r=1: 4+5+6+7=22, r=2: 8+9+10+11=38 -> 66
+    expect { let e: Result<Int, TestFailure> = .Ok(66); return e }
+}
+
+Test ColxGridEmptySum {
+    test {
+        let cells: [Int] = []
+        let grid = ColxGrid { cells: move cells }
+        return grid.sum()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+Test ColxGridEmptyCount {
+    test {
+        let cells: [Int] = []
+        let grid = ColxGrid { cells: move cells }
+        return grid.cellCount()
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+Test ColxGridRangeSum {
+    test {
+        let cells = colxBuildRange(10)
+        let grid = ColxGrid { cells: move cells }
+        return grid.sum()
+    }
+    // 0+1+...+9 = 45
+    expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
+}
+
+Test ColxGridSquaresSum {
+    test {
+        let cells = colxBuildSquares(8)
+        let grid = ColxGrid { cells: move cells }
+        return grid.sum()
+    }
+    // 0+1+4+9+16+25+36+49 = 140
+    expect { let e: Result<Int, TestFailure> = .Ok(140); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GROUP J - Allocation churn
+// ---------------------------------------------------------------------------
+
+Test ColxChurnRange100 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 100 {
+            let xs = colxBuildRange(5)
+            total = total + colxSum(xs)
+            round = round + 1
+        }
+        return total
+    }
+    // 10 per round * 100 = 1000
+    expect { let e: Result<Int, TestFailure> = .Ok(1000); return e }
+}
+
+Test ColxChurnSquares50 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 50 {
+            let xs = colxBuildSquares(10)
+            total = total + colxSum(xs)
+            round = round + 1
+        }
+        return total
+    }
+    // 285 per round * 50 = 14250
+    expect { let e: Result<Int, TestFailure> = .Ok(14250); return e }
+}
+
+Test ColxChurnFib30 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 30 {
+            let xs = colxBuildFib(8)
+            total = total + colxSum(xs)
+            round = round + 1
+        }
+        return total
+    }
+    // 33 per round * 30 = 990
+    expect { let e: Result<Int, TestFailure> = .Ok(990); return e }
+}
+
+Test ColxChurnReverse20 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 20 {
+            let xs = colxBuildRange(8)
+            let rev = colxReverse(xs)
+            total = total + rev[0]
+            round = round + 1
+        }
+        return total
+    }
+    // rev[0]=7 per round, 7*20=140
+    expect { let e: Result<Int, TestFailure> = .Ok(140); return e }
+}
+
+Test ColxChurnStructs40 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 40 {
+            var pts: [ColxPt] = []
+            var i = 0
+            while i < 5 {
+                pts.append(ColxPt { x: i, y: 0 })
+                i = i + 1
+            }
+            var s = 0
+            var j = 0
+            while j < pts.count {
+                s = s + pts[j].x
+                j = j + 1
+            }
+            total = total + s
+            round = round + 1
+        }
+        return total
+    }
+    // sum x = 10 per round * 40 = 400
+    expect { let e: Result<Int, TestFailure> = .Ok(400); return e }
+}
+
+Test ColxChurnGrids25 {
+    test {
+        var total = 0
+        var r = 0
+        while r < 25 {
+            var cells: [Int] = []
+            cells.append(r)
+            cells.append(r + 1)
+            cells.append(r + 2)
+            let grid = ColxGrid { cells: move cells }
+            total = total + grid.sum()
+            r = r + 1
+        }
+        return total
+    }
+    // r-th round sum=3r+3; total=sum(3r+3 for r=0..24)=3*(0+...+24)+3*25=3*300+75=975
+    expect { let e: Result<Int, TestFailure> = .Ok(975); return e }
+}
+
+Test ColxChurnLarge200 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 200 {
+            let xs = colxBuildSquares(20)
+            total = total + colxSum(xs)
+            round = round + 1
+        }
+        return total
+    }
+    // sum(i^2 for i=0..19)=19*20*39/6=2470; 2470*200=494000
+    expect { let e: Result<Int, TestFailure> = .Ok(494000); return e }
+}
+
+Test ColxChurnMixed30 {
+    test {
+        var total = 0
+        var round = 0
+        while round < 30 {
+            let a = colxBuildRange(5)
+            let b = colxBuildSquares(5)
+            let c = colxBuildFib(5)
+            total = total + colxSum(a) + colxSum(b) + colxSum(c)
+            round = round + 1
+        }
+        return total
+    }
+    // range(5)=10, squares(5)=30, fib(5)=[0,1,1,2,3]=7; 47*30=1410
+    expect { let e: Result<Int, TestFailure> = .Ok(1410); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GROUP K - Arithmetic and write traps
+// ---------------------------------------------------------------------------
+
+Test ColxTrapDivByZero {
+    test {
+        let x = 10 / 0
+        return x
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test ColxTrapModByZero {
+    test {
+        let x = 10 % 0
+        return x
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test ColxTrapDivByZeroVar {
+    test {
+        var xs: [Int] = []
+        xs.append(0)
+        let result = 100 / xs[0]
+        return result
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test ColxTrapModByZeroVar {
+    test {
+        var xs: [Int] = []
+        xs.append(0)
+        let result = 100 % xs[0]
+        return result
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test ColxTrapIndexAtCount {
+    test {
+        let xs = colxBuildRange(5)
+        let _ = xs[xs.count]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test ColxTrapLoopOOB {
+    test {
+        var xs: [Int] = []
+        xs.append(1)
+        xs.append(2)
+        xs.append(3)
+        var i = 0
+        var acc = 0
+        while i <= xs.count {
+            acc = acc + xs[i]
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test ColxTrapWriteOOB {
+    test {
+        var xs: [Int] = []
+        xs.append(1)
+        xs.append(2)
+        xs[2] = 99
+        return xs[2]
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test ColxTrapFibOOBDirect {
+    test {
+        let xs = colxBuildFib(5)
+        let _ = xs[5]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Nested arrays ([[T]]): the inner-array element teardown/clone leak. Array
+// elements are tag-5 RAW_PTR bridge values, so a [[Int]]/[[String]]'s boxed
+// inner arrays are freed by a per-element wrapper (kira_destroy_arr_<[T]>); the
+// overwrite path drops the replaced inner array through the ARRAY's element
+// destructor, and a struct copy deep-clones the outer nested array so box and
+// copy own independent inner arrays. String payloads prove the inner OWNED
+// contents (byte buffers) free too. Guards the fix under the harness leak run
+// (a per-iteration inner-array box + storage leak scales) and cross-backend
+// parity (the checksum must be byte-identical on vm/llvm/hybrid).
+// ---------------------------------------------------------------------------
+
+struct ColxNestBox {
+    var rows: [[Int]]
+}
+
+function colxSumNest(b: borrow ColxNestBox) -> Int {
+    var total = 0
+    var gi = 0
+    while gi < b.rows.count {
+        var gj = 0
+        while gj < b.rows[gi].count {
+            total = total + b.rows[gi][gj]
+            gj = gj + 1
+        }
+        gi = gi + 1
+    }
+    return total
+}
+
+Test ColxNestedArrayFree {
+    test {
+        var total = 0
+        var i = 0
+        while i < 200 {
+            // [[Int]]: build 4x4, move inner arrays in.
+            var grid: [[Int]] = []
+            var r = 0
+            while r < 4 {
+                var row: [Int] = []
+                var c = 0
+                while c < 4 {
+                    row.append(r * 4 + c)
+                    c = c + 1
+                }
+                grid.append(move row)
+                r = r + 1
+            }
+            // Overwrite/replace an inner array (the drop-replaced element path).
+            var repl: [Int] = []
+            repl.append(100)
+            grid[0] = move repl
+            // A struct copy deep-clones the outer nested array (independent inners).
+            let box = ColxNestBox { rows: move grid }
+            let copy = box
+            total = total + colxSumNest(box) + colxSumNest(copy)
+            // [[String]]: inner arrays own heap string buffers that must free too.
+            var words: [[String]] = []
+            var w = 0
+            while w < 3 {
+                var line: [String] = []
+                line.append("a" + "b")
+                line.append("c" + "d")
+                words.append(move line)
+                w = w + 1
+            }
+            total = total + words.count + words[0].count + words[0][0].count
+            i = i + 1
+        }
+        return total
+    }
+    // per iteration: 2*214 + 3 + 2 + 2 = 435; 200 * 435 = 87000
+    expect { let e: Result<Int, TestFailure> = .Ok(87000); return e }
+}

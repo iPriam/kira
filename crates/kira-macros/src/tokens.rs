@@ -16,8 +16,19 @@ pub(crate) struct Lexed<'a> {
     pub(crate) source: SourceId,
     /// The file's full text.
     pub(crate) text: &'a str,
+    /// The path the file was read from, or `""` when the caller did not locate
+    /// it — a re-scan of detached text, or a scan whose caller has the id and
+    /// not the name.
+    pub(crate) path: std::sync::Arc<str>,
     /// The token stream, always ending in [`TokenKind::Eof`].
     pub(crate) tokens: Vec<Token>,
+    /// The byte offset of every line break, ascending.
+    ///
+    /// Built once per file so asking where a declaration sits is a binary
+    /// search rather than a scan. Counting newlines per declaration instead
+    /// made scanning quadratic in file size, which took a real package's
+    /// `kira check` from nine seconds to minutes.
+    line_breaks: Vec<u32>,
 }
 
 impl<'a> Lexed<'a> {
@@ -27,11 +38,39 @@ impl<'a> Lexed<'a> {
     /// the same text (or its expansion) is lexed again by the real frontend,
     /// which reports them once. Reporting here would double every stray byte.
     pub(crate) fn new(source: SourceId, text: &'a str) -> Self {
+        Self::at(source, text, "")
+    }
+
+    /// [`Lexed::new`], for a caller that knows where the file came from.
+    pub(crate) fn at(source: SourceId, text: &'a str, path: &str) -> Self {
         Self {
             source,
             text,
+            path: std::sync::Arc::from(path),
             tokens: lex(source, text).tokens,
+            line_breaks: text
+                .bytes()
+                .enumerate()
+                .filter(|&(_, byte)| byte == b'\n')
+                .filter_map(|(at, _)| u32::try_from(at).ok())
+                .collect(),
         }
+    }
+
+    /// The 1-based line `offset` falls on.
+    pub(crate) fn line_of(&self, offset: u32) -> u32 {
+        let before = self.line_breaks.partition_point(|&at| at < offset);
+        u32::try_from(before + 1).unwrap_or(u32::MAX)
+    }
+
+    /// How many lines the file holds.
+    ///
+    /// A file ending in a newline holds as many lines as that newline closes,
+    /// which is what `wc -l` counts and what a reader sees at the bottom of the
+    /// editor — a trailing newline terminates a line rather than starting one.
+    pub(crate) fn line_count(&self) -> u32 {
+        let unterminated = usize::from(!self.text.is_empty() && !self.text.ends_with('\n'));
+        u32::try_from(self.line_breaks.len() + unterminated).unwrap_or(u32::MAX)
     }
 
     /// The number of tokens, `Eof` included.
@@ -263,5 +302,25 @@ mod tests {
         assert!(file.is_word(0, "comptime"));
         assert!(file.is_word(1, "macro"));
         assert!(!file.is_word(1, "comptime"));
+    }
+
+    #[test]
+    fn a_line_number_is_a_search_of_the_index_not_a_scan() {
+        // Built once per file. Counting newlines per declaration instead made
+        // scanning quadratic, and a real package went from nine seconds to
+        // minutes — so what this pins is the answer, and the shape it comes
+        // from is what keeps that from coming back.
+        let file = lexed("a\nbb\n\nccc");
+        assert_eq!(file.line_of(0), 1);
+        assert_eq!(file.line_of(2), 2);
+        assert_eq!(file.line_of(5), 3);
+        assert_eq!(file.line_of(6), 4);
+    }
+
+    #[test]
+    fn a_trailing_newline_terminates_the_last_line_rather_than_starting_one() {
+        assert_eq!(lexed("a\nb\n").line_count(), 2);
+        assert_eq!(lexed("a\nb").line_count(), 2);
+        assert_eq!(lexed("").line_count(), 0);
     }
 }

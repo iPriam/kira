@@ -37,9 +37,6 @@ const KEYWORDS: &[&str] = &[
     "break",
     "continue",
     "match",
-    "switch",
-    "case",
-    "default",
     "true",
     "false",
 ];

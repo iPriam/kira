@@ -25,7 +25,7 @@ fn build(text: &str) -> ShaderIr {
         checked
             .diagnostics
             .iter()
-            .map(|d| (d.code, d.message.clone()))
+            .map(|d| (d.code.clone(), d.message.clone()))
             .collect::<Vec<_>>()
     );
     lower(checked.module, BackendTarget::Wgsl)
@@ -277,4 +277,50 @@ shader S {
         "{compute}"
     );
     assert!(compute.contains("other[zero] = one;"), "{compute}");
+}
+const STORAGE_TEXTURE: &str = r#"
+type Q {
+    @builtin(thread_id)
+    let gid: UInt3
+}
+
+shader Writer {
+    group Work {
+        texture source: Texture2d
+        sampler linear: Sampler
+        texture write result: Texture2d
+    }
+
+    compute {
+        input Q
+        threads(8, 8, 1)
+
+        function entry(q: Q) {
+            let colour = sample(source, linear, Float2(0.5, 0.5))
+            store(result, q.gid.xy, colour)
+            return
+        }
+    }
+}
+"#;
+
+/// A `texture write` is a storage binding, not a sampled one.
+///
+/// Emitting it as sampled compiles just as happily and binds a read-only view a
+/// write cannot use, so what this pins is the *declaration* rather than the
+/// fact that the shader came out at all.
+#[test]
+fn a_write_texture_is_declared_as_storage_and_written_through() {
+    let ir = build(STORAGE_TEXTURE);
+    let compute = emit(&ir, Stage::Compute);
+    assert!(
+        compute.contains("var result: texture_storage_2d<rgba8unorm, write>;"),
+        "{compute}"
+    );
+    assert!(compute.contains("textureStore(result,"), "{compute}");
+    // The sampled binding beside it keeps its own kind.
+    assert!(
+        compute.contains("var source: texture_2d<f32>;"),
+        "{compute}"
+    );
 }

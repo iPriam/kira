@@ -85,12 +85,6 @@ pub enum TokenKind {
     For,
     /// `in`
     In,
-    /// `switch`
-    Switch,
-    /// `case`
-    Case,
-    /// `default`
-    Default,
     /// `break`
     Break,
     /// `continue`
@@ -206,9 +200,6 @@ impl TokenKind {
             "try" => TokenKind::Try,
             "for" => TokenKind::For,
             "in" => TokenKind::In,
-            "switch" => TokenKind::Switch,
-            "case" => TokenKind::Case,
-            "default" => TokenKind::Default,
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
             "type" => TokenKind::Type,
@@ -245,9 +236,6 @@ impl TokenKind {
             TokenKind::Try => "`try`",
             TokenKind::For => "`for`",
             TokenKind::In => "`in`",
-            TokenKind::Switch => "`switch`",
-            TokenKind::Case => "`case`",
-            TokenKind::Default => "`default`",
             TokenKind::Break => "`break`",
             TokenKind::Continue => "`continue`",
             TokenKind::Type => "`type`",

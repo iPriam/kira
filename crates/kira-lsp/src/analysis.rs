@@ -64,6 +64,8 @@ impl AnalysisSession {
                 build_kind,
                 kira_semantics::PrecompiledShaders::default(),
                 kira_semantics::host_platform(),
+                // The language server never lints: it answers about code as written.
+                false,
             );
             self.program = Some(program);
             return program;

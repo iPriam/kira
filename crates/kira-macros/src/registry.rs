@@ -605,7 +605,7 @@ mod tests {
              trigger { field }\n    expand(t: Declaration) -> Syntax { return quote { } }\n}\n",
         );
         assert!(
-            diagnostics.iter().any(|d| d.code == Some("KMAC029")),
+            diagnostics.iter().any(|d| d.has_code("KMAC029")),
             "{diagnostics:?}"
         );
     }
@@ -617,7 +617,7 @@ mod tests {
         );
         assert!(registry.procedural("T").is_none());
         assert!(
-            diagnostics.iter().any(|d| d.code == Some("KMAC006")),
+            diagnostics.iter().any(|d| d.has_code("KMAC006")),
             "{diagnostics:?}"
         );
     }
@@ -629,7 +629,7 @@ mod tests {
              expand(input: Syntax) -> Syntax { return quote { } }\n}\n",
         );
         assert!(
-            diagnostics.iter().any(|d| d.code == Some("KMAC008")),
+            diagnostics.iter().any(|d| d.has_code("KMAC008")),
             "{diagnostics:?}"
         );
     }

@@ -36,7 +36,7 @@ fn reports_an_empty_native_recover_type_argument_list() {
         result
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KPAR046")),
+            .any(|diagnostic| diagnostic.has_code("KPAR046")),
         "{:?}",
         result.diagnostics,
     );
@@ -50,7 +50,7 @@ fn reports_an_unclosed_native_recover_type_argument_list_without_bailing() {
         result
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KPAR045")),
+            .any(|diagnostic| diagnostic.has_code("KPAR045")),
         "{:?}",
         result.diagnostics,
     );

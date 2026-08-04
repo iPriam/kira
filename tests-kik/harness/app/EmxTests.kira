@@ -70,8 +70,10 @@ enum EmxColor { Red Green Blue }
 struct EmxBox { let c: EmxColor }
 
 function emxRank(c: EmxColor) -> Int {
-    if c == .Red { return 1 }
-    if c == .Green { return 2 }
+    if c == .Red {
+        return 1 }
+    if c == .Green {
+        return 2 }
     return 3
 }
 
@@ -84,10 +86,12 @@ Test EmxEqualityTagCompareTotal {
         var total = emxRank(.Red) + emxRank(.Green) + emxRank(.Blue)
         let red: EmxColor = .Red
         let green: EmxColor = .Green
-        if red != green { total = total + 10 }
+        if red != green {
+            total = total + 10 }
         let blueBox = EmxBox { c: .Blue }
         let blueResult = emxIsBlue(blueBox)
-        if blueResult == true { total = total + 100 }
+        if blueResult == true {
+            total = total + 100 }
         return total
     }
     expect { let e: Result<Int, TestFailure> = .Ok(116); return e }
@@ -254,11 +258,14 @@ function emxShadeWeight(s: borrow EmxShade) -> Int {
 
 function emxShadeFor(i: Int) -> EmxShade {
     var s: EmxShade = .Light
-    switch i % 3 {
-        case 0 { s = .Light }
-        case 1 { s = .Dark }
-        case 2 { s = .Mid }
-        default { s = .Light }
+    if (i % 3) == 0 {
+        s = .Light
+    } else if (i % 3) == 1 {
+        s = .Dark
+    } else if (i % 3) == 2 {
+        s = .Mid
+    } else {
+        s = .Light
     }
     return s
 }
@@ -274,8 +281,10 @@ function emxBoxVal(b: borrow EmxValBox) -> Int {
 
 function emxPick(i: Int) -> EmxValBox {
     var b: EmxValBox = .Empty
-    if i % 2 == 0 { b = .Val(i * 10) }
-    if i % 3 == 0 { b = .Val(i * 100) }
+    if i % 2 == 0 {
+        b = .Val(i * 10) }
+    if i % 3 == 0 {
+        b = .Val(i * 100) }
     return b
 }
 

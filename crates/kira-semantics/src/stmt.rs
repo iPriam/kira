@@ -26,7 +26,7 @@
 use kira_semantics_model::hir::{HirExprId, HirStmt, HirStmtId, LocalId};
 use kira_semantics_model::{HirExpr, OwnershipMode, Type};
 use kira_source::Span;
-use kira_syntax_model::ast::{Block, ExprId, ForIterable, Stmt, StmtId, SwitchCase};
+use kira_syntax_model::ast::{Block, ExprId, ForIterable, Stmt, StmtId};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::place::PlacePurpose;
@@ -325,12 +325,6 @@ impl Analyzer<'_> {
                     ),
                 }
             }
-            Stmt::Switch {
-                subject,
-                cases,
-                default_block,
-                ..
-            } => self.analyze_switch(ctx, subject, &cases, default_block.as_ref(), out),
             Stmt::Match {
                 subject,
                 arms,
@@ -377,135 +371,6 @@ impl Analyzer<'_> {
             return false;
         }
         true
-    }
-
-    /// Desugars a `switch` into the `if`/`else` chain it already means.
-    ///
-    /// Given `switch s { case a { A } case b { B } default { D } }`:
-    ///
-    /// ```text
-    /// let <subject> = s              // hidden: evaluated once
-    /// if <subject> == a { A }
-    /// else if <subject> == b { B }
-    /// else { D }
-    /// ```
-    ///
-    /// Every rule the language states falls out of that shape rather than
-    /// needing to be enforced:
-    ///
-    /// * **The subject is evaluated once** — it is bound to a hidden local
-    ///   before any comparison.
-    /// * **Labels are evaluated lazily, in source order** — each label sits in
-    ///   the previous arm's `else`, so a label after the matching one is never
-    ///   reached.
-    /// * **There is no fallthrough** — the arms are alternatives by
-    ///   construction.
-    /// * **A `switch` with no `default` and no match does nothing** — the chain
-    ///   simply ends with no `else`.
-    /// * **`break` inside an arm breaks the enclosing loop, not the switch** —
-    ///   an `if` does not push loop depth, so a `break` here means what it would
-    ///   mean written anywhere else in the same block.
-    ///
-    /// A label whose type does not match the subject's is reported: `==` is
-    /// what compares them, so a label the subject cannot be compared to is the
-    /// same error `s == label` would be.
-    fn analyze_switch(
-        &mut self,
-        ctx: &mut FnCtx,
-        subject: ExprId,
-        cases: &[SwitchCase],
-        default_block: Option<&Block>,
-        out: &mut Vec<HirStmtId>,
-    ) {
-        let subject_expr = self.analyze_expr(ctx, subject);
-        let subject_ty = self.program.expr(subject_expr).type_of();
-
-        // Hidden, so no arm can name or shadow the subject's storage.
-        let slot = ctx.declare_hidden(subject_ty, false);
-        let bind = self.program.stmts.alloc(HirStmt::Let {
-            local: slot,
-            init: subject_expr,
-        });
-        out.push(bind);
-
-        // Each arm is analyzed in source order so its diagnostics come out in
-        // that order, then the chain is assembled from the back — an `else`
-        // has to exist before the `if` that points at it.
-        let mut arms = Vec::with_capacity(cases.len());
-        // At most one case runs, so each is analyzed from the state at the
-        // `switch` rather than from whatever the previous case left behind.
-        let mut branch = crate::ownership::BranchMoves::start(ctx);
-        for case in cases {
-            branch.enter_arm(ctx);
-            let cond = self.switch_condition(ctx, slot, subject_ty, case.label);
-            let body = self.analyze_block(ctx, &case.body);
-            branch.leave_arm(ctx, self.body_definitely_returns(&body));
-            arms.push((cond, body));
-        }
-        branch.enter_arm(ctx);
-        let mut chain = match default_block {
-            Some(block) => self.analyze_block(ctx, block),
-            None => Vec::new(),
-        };
-        if default_block.is_some() {
-            branch.leave_arm(ctx, self.body_definitely_returns(&chain));
-        }
-        // Without a `default` a switch covers nothing in particular: the path
-        // where no label matched reaches the join too.
-        branch.finish(ctx, default_block.is_some());
-        for (cond, body) in arms.into_iter().rev() {
-            let hir = self.program.stmts.alloc(HirStmt::If {
-                cond,
-                then_body: body,
-                else_body: chain,
-            });
-            chain = vec![hir];
-        }
-        out.extend(chain);
-    }
-
-    /// Builds one arm's `<subject> == <label>` test.
-    ///
-    /// Reports a label the subject cannot be compared to, and yields a `false`
-    /// condition in that case so the arm is dead rather than ill-typed — one
-    /// bad label costs its own arm and nothing else.
-    fn switch_condition(
-        &mut self,
-        ctx: &mut FnCtx,
-        slot: LocalId,
-        subject_ty: Type,
-        label: ExprId,
-    ) -> HirExprId {
-        let label_span = self.tree.expr(label).span();
-        let label_expr = self.analyze_expr(ctx, label);
-        let label_ty = self.program.expr(label_expr).type_of();
-        let read = self.program.exprs.alloc(HirExpr::Local {
-            local: slot,
-            ty: subject_ty,
-        });
-        match crate::operators::equality_op(subject_ty, label_ty) {
-            Some(op) => self.program.exprs.alloc(HirExpr::Binary {
-                op,
-                lhs: read,
-                rhs: label_expr,
-                ty: Type::Bool,
-            }),
-            None => {
-                if subject_ty != Type::Error && label_ty != Type::Error {
-                    self.emit(
-                        label_span,
-                        "KSEM044",
-                        format!(
-                            "a `case` label of type `{}` cannot be compared to a subject \
-                             of type `{}`",
-                            self.type_name(label_ty),
-                            self.type_name(subject_ty)
-                        ),
-                    );
-                }
-                self.program.exprs.alloc(HirExpr::Bool(false))
-            }
-        }
     }
 
     /// Allocates a read of an `Int`-typed local, for a desugaring building one.

@@ -17,6 +17,7 @@ pub fn dispatch(command: Command, args: &[String]) -> i32 {
         Command::Run => pipeline::run(args),
         Command::Build => pipeline::build(args),
         Command::Check => pipeline::check(args),
+        Command::Lint => pipeline::lint(args),
         Command::Test => pipeline::test(args),
         Command::Live => pipeline::live(args),
         Command::Sync => crate::sync::sync(args),
@@ -49,6 +50,7 @@ fn implemented(command: Command) -> bool {
         Command::Run
             | Command::Build
             | Command::Check
+            | Command::Lint
             | Command::Test
             | Command::Live
             | Command::Sync

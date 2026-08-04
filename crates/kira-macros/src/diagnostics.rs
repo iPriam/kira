@@ -6,7 +6,7 @@
 //! macro still reaches semantics and still reports everything else wrong with
 //! it.
 
-use kira_diagnostics::{Diagnostic, Label, Severity};
+use kira_diagnostics::{Code, Diagnostic, Label, Severity, Suggestion};
 use kira_source::{FileSpan, SourceId, Span};
 
 /// Collects the diagnostics one expansion run produced.
@@ -32,6 +32,37 @@ impl Reporter {
         self.items.push(error(source, span, code, message));
     }
 
+    /// Records a diagnostic under a code named at run time.
+    ///
+    /// `code` is what a macro passed as `code:`; `None` falls back to
+    /// [`MACRO_REPORTED`], the shared code for a macro that named none. A lint
+    /// always names one, because the code is what a reader suppresses by.
+    pub(crate) fn coded(
+        &mut self,
+        severity: Severity,
+        source: SourceId,
+        span: Span,
+        code: Option<&str>,
+        fix: Option<&str>,
+        message: impl Into<String>,
+    ) {
+        let message = message.into();
+        let mut item = diagnostic(severity, source, span, MACRO_REPORTED, message);
+        if let Some(code) = code {
+            item.code = Some(Code::named(code));
+        }
+        // The macro named the span it pointed at *and* what to write there, so
+        // the fix replaces exactly what the caret underlines.
+        if let Some(replacement) = fix {
+            item.suggestion = Some(Suggestion::rewrite(
+                "rewritten by the lint that found it",
+                FileSpan::new(source, span),
+                replacement,
+            ));
+        }
+        self.items.push(item);
+    }
+
     /// Everything reported, in the order it was reported.
     pub(crate) fn into_diagnostics(self) -> Vec<Diagnostic> {
         self.items
@@ -45,14 +76,25 @@ pub(crate) fn error(
     code: &'static str,
     message: impl Into<String>,
 ) -> Diagnostic {
+    diagnostic(Severity::Error, source, span, code, message)
+}
+
+/// Builds one macro-expansion diagnostic at `severity`.
+pub(crate) fn diagnostic(
+    severity: Severity,
+    source: SourceId,
+    span: Span,
+    code: &'static str,
+    message: impl Into<String>,
+) -> Diagnostic {
     let message = message.into();
     let file_span = FileSpan::new(source, span);
     let mut diagnostic = Diagnostic::single(
-        Severity::Error,
+        severity,
         message.clone(),
         Label::primary(file_span, message),
     );
-    diagnostic.code = Some(code);
+    diagnostic.code = Some(Code::known(code));
     diagnostic.phase = Some("macro expansion");
     diagnostic
 }
@@ -87,7 +129,11 @@ pub(crate) const NOT_STATEMENTS: &str = "KMAC016";
 pub(crate) const NOT_AN_EXPRESSION: &str = "KMAC017";
 /// KMAC020 — an `expand` body used a construct the evaluator does not support.
 pub(crate) const UNSUPPORTED_IN_EXPAND: &str = "KMAC020";
-/// KMAC021 — a macro raised `Diagnostics.error`.
+/// KMAC021 — a macro raised `Diagnostics.error`, `.warning`, or `.note`.
+///
+/// One code for all three: what a macro reported is the macro's own message,
+/// and the severity is what says whether it stops the build. A lint wanting its
+/// own code is a separate matter — see the lint code registry.
 pub(crate) const MACRO_REPORTED: &str = "KMAC021";
 /// KMAC022 — `Ksl.compile` could not compile the shader it names.
 pub(crate) const SHADER_COMPILE: &str = "KMAC022";
@@ -122,7 +168,7 @@ mod tests {
             "unknown macro `f`",
         );
         let items = reporter.into_diagnostics();
-        assert_eq!(items[0].code, Some("KMAC001"));
+        assert!(items[0].has_code("KMAC001"));
         assert_eq!(items[0].phase, Some("macro expansion"));
     }
 }

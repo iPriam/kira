@@ -1,6 +1,8 @@
 //! Class parsing: the `extends` list, `override` members, and what a malformed
 //! class body recovers to.
 
+use kira_diagnostics::Diagnostic;
+
 use crate::*;
 use kira_syntax_model::ast::Item;
 
@@ -109,7 +111,7 @@ fn override_var_is_refused() {
     let codes: Vec<&str> = result
         .diagnostics
         .iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .filter_map(Diagnostic::code_text)
         .collect();
     assert_eq!(codes, ["KPAR035"]);
 }
@@ -124,7 +126,7 @@ fn a_malformed_member_is_reported_and_the_class_still_parses() {
     let codes: Vec<&str> = result
         .diagnostics
         .iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .filter_map(Diagnostic::code_text)
         .collect();
     assert_eq!(codes, ["KPAR009"]);
     match result.tree.items() {
@@ -141,7 +143,7 @@ fn a_missing_parent_name_is_reported() {
     let codes: Vec<&str> = result
         .diagnostics
         .iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .filter_map(Diagnostic::code_text)
         .collect();
     assert_eq!(codes, ["KPAR034"]);
 }

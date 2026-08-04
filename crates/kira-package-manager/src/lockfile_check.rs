@@ -409,7 +409,7 @@ dependencies = ["Core", "MathX"]
         let diagnostics = check_text(Some(&drifted), &project_matter_packages());
 
         assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].code, Some("KPK024"));
+        assert!(diagnostics[0].has_code("KPK024"));
         assert_eq!(diagnostics[0].severity, Severity::Warning);
     }
 
@@ -439,7 +439,7 @@ dependencies = []
         let diagnostics = check_text(Some("[root"), &[]);
 
         assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].code, Some("KPK024"));
+        assert!(diagnostics[0].has_code("KPK024"));
         assert_eq!(diagnostics[0].severity, Severity::Warning);
     }
 

@@ -187,6 +187,18 @@ pub struct SourceProgram {
     /// has to invalidate analysis.
     #[returns(clone)]
     pub platform: String,
+    /// Whether this compilation was asked for by `kira lint`, behind
+    /// `Build.linting`.
+    ///
+    /// An input rather than something a macro reads from the environment: the
+    /// collector query is memoized, so an environment read inside it would fix
+    /// lint mode to whatever the first compilation saw. As an input, turning it
+    /// on invalidates analysis exactly as changing the platform does.
+    ///
+    /// It is what keeps lints out of every *other* verb. A lint runs during
+    /// expansion, so without this every `check`, `run` and `build` would pay
+    /// for the whole lint pass and report its findings.
+    pub lint: bool,
 }
 
 impl SourceProgram {
@@ -200,6 +212,8 @@ impl SourceProgram {
             BuildKind::Application,
             PrecompiledShaders::default(),
             host_platform(),
+            // A program built by these helpers was not asked for by `kira lint`.
+            false,
         )
     }
 
@@ -223,6 +237,8 @@ impl SourceProgram {
             BuildKind::Application,
             PrecompiledShaders::default(),
             host_platform(),
+            // A program built by these helpers was not asked for by `kira lint`.
+            false,
         )
     }
 }
@@ -317,7 +333,9 @@ fn file_declarations<'db>(
     db: &'db dyn salsa::Database,
     file: SourceFile<'db>,
 ) -> kira_macros::FileDeclarations {
-    kira_macros::declarations(*file.id(db), file.text(db))
+    // No path: this is keyed on the file's id and text, and only a wrapper
+    // macro reads it — none of which asks where the file came from.
+    kira_macros::declarations(*file.id(db), file.text(db), "")
 }
 
 /// The program-wide inputs one file's expansion depends on.
@@ -342,6 +360,8 @@ struct MacroContext<'db> {
     /// The operating system behind `Build.platform`.
     #[returns(ref)]
     platform: String,
+    /// Whether `kira lint` asked for this compilation, behind `Build.linting`.
+    lint: bool,
     /// The compiled shaders behind the `Ksl` namespace.
     #[returns(ref)]
     shaders: PrecompiledShaders,
@@ -457,18 +477,46 @@ pub fn expanded(db: &dyn salsa::Database, source: SourceProgram) -> ExpandedProg
 ///
 /// Empty for a program that declares no collector, which is every program that
 /// does not ask for one.
+/// The path `id` names, or `""` when it names no file of this program.
+///
+/// Indexed by the same total function the ids were minted from rather than
+/// searched for, so a file that moved cannot silently answer with its
+/// neighbour's path.
+fn path_of(db: &dyn salsa::Database, source: SourceProgram, id: SourceId) -> String {
+    if id == FILE_SOURCE_ID {
+        return source.path(db);
+    }
+    let index = (id.value() as usize).wrapping_sub(1);
+    source
+        .modules(db)
+        .get(index)
+        .map(|module| module.path.clone())
+        .unwrap_or_default()
+}
+
 #[salsa::tracked(returns(ref))]
 fn collected(db: &dyn salsa::Database, source: SourceProgram) -> String {
     let program = program_files(db, source);
     let context = *program.context(db);
     let files = program.files(db);
-    let texts: Vec<(SourceId, String)> = files
+    // Each file's path travels with its text: a lint that asks *where* a
+    // declaration is — to leave generated bindings alone, say — has no other
+    // way to know, because a `SourceId` is a number and the map that resolves
+    // it is on the far side of the macro boundary.
+    let texts: Vec<(SourceId, String, String)> = files
         .iter()
-        .map(|&file| (*file.id(db), expanded_file(db, file, context).text.clone()))
+        .map(|&file| {
+            let id = *file.id(db);
+            (
+                id,
+                expanded_file(db, file, context).text.clone(),
+                path_of(db, source, id),
+            )
+        })
         .collect();
-    let sources: Vec<(SourceId, &str)> = texts
+    let sources: Vec<(SourceId, &str, &str)> = texts
         .iter()
-        .map(|(id, text)| (*id, text.as_str()))
+        .map(|(id, text, path)| (*id, text.as_str(), path.as_str()))
         .collect();
     let environment = macro_environment(db, context);
     let shaders = context.shaders(db);
@@ -477,8 +525,17 @@ fn collected(db: &dyn salsa::Database, source: SourceProgram) -> String {
     } else {
         Some(shaders)
     };
-    let (appended, reported) =
-        kira_macros::collect_program(environment, &sources, pipeline, context.platform(db));
+    // Every collector still runs: `TestRunner` generates the suite entry point
+    // and `kira test` needs it whatever verb is compiling. What lint mode gates
+    // is the *lint* collector, which reads `Build.linting` and returns nothing
+    // when no one asked — so the decision stays in the Kira that owns it.
+    let (appended, reported) = kira_macros::collect_program(
+        environment,
+        &sources,
+        pipeline,
+        context.platform(db),
+        *context.lint(db),
+    );
     for diagnostic in reported {
         DiagnosticAccumulator(diagnostic).accumulate(db);
     }
@@ -557,6 +614,7 @@ fn program_files<'db>(db: &'db dyn salsa::Database, source: SourceProgram) -> Pr
         declaring,
         templates,
         source.platform(db),
+        source.lint(db),
         source.shaders(db),
     );
     ProgramFiles::new(db, files, context)

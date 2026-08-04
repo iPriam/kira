@@ -20,6 +20,7 @@ mod ffi;
 mod ffi_wasm;
 mod foundation;
 mod installed_toolchain;
+mod lint_verb;
 mod modules;
 mod natives;
 mod packages;

@@ -184,3 +184,88 @@ fn a_string_index_out_of_range_traps_on_every_backend() {
         assert_eq!(output, "", "`{body}` produced output instead of trapping");
     }
 }
+
+/// The predicates: `contains`, `startsWith` and `endsWith` all answer the same
+/// `Bool` on both engines, empty needles and empty receivers included.
+#[test]
+fn string_predicates_agree() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    let text = "hello world"
+    print(text.contains("o w"))
+    print(text.contains("zebra"))
+    print(text.contains(""))
+    print(text.startsWith("hello"))
+    print(text.startsWith("world"))
+    print(text.endsWith("world"))
+    print(text.endsWith("hello"))
+    print("".contains(""))
+    print("".startsWith("x"))
+    return
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "true\nfalse\ntrue\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse\n"
+    );
+}
+
+/// The text-producing operations. `trim` and the case pair are defined on
+/// characters, so a non-ASCII case change must agree rather than each engine
+/// going its own way per byte.
+#[test]
+fn string_rewrites_agree() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    print("  padded  ".trim())
+    print("".trim())
+    print("a-b-c".replace("-", "+"))
+    print("aaa".replace("a", ""))
+    print("no match".replace("zebra", "x"))
+    print("MiXeD".lowercase())
+    print("MiXeD".uppercase())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "padded\n\na+b+c\n\nno match\nmixed\nMIXED\n");
+}
+
+/// `split` builds an array, which is the one operation here that allocates a
+/// container rather than a string — so both engines must agree on the piece
+/// count as well as the pieces, and reclaim every one of them.
+#[test]
+fn string_split_agrees() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    let pieces = "a,b,c".split(",")
+    print(pieces.count)
+    for piece in pieces {
+        print(piece)
+    }
+    // A separator that never occurs yields the whole text as one piece.
+    let whole = "abc".split(",")
+    print(whole.count)
+    print(whole[0])
+    // Adjacent separators yield the empty pieces between them.
+    let empties = "a,,b".split(",")
+    print(empties.count)
+    print(empties[1] == "")
+    // An empty separator is not a split of anything, so the text comes back
+    // whole rather than one piece per character.
+    let unsplit = "abc".split("")
+    print(unsplit.count)
+    print(unsplit[0])
+    return
+}
+"#,
+    );
+    assert_eq!(output, "3\na\nb\nc\n1\nabc\n3\ntrue\n1\nabc\n");
+}

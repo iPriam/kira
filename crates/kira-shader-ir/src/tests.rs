@@ -24,7 +24,7 @@ fn build(text: &str, target: BackendTarget) -> ShaderIr {
         checked
             .diagnostics
             .iter()
-            .map(|d| (d.code, d.message.clone()))
+            .map(|d| (d.code.clone(), d.message.clone()))
             .collect::<Vec<_>>()
     );
     lower(checked.module, target)

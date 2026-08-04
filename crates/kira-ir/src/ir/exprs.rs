@@ -211,6 +211,18 @@ pub enum IrExpr {
         /// The string being searched for.
         needle: IrExprId,
     },
+    /// One of the string operations that share an opcode. See
+    /// [`kira_semantics_model::hir::HirExpr::StringOperation`].
+    StringOperation {
+        /// Which operation to perform.
+        op: kira_runtime_abi::StringOp,
+        /// The string it is performed on.
+        text: IrExprId,
+        /// Its arguments, in source order.
+        arguments: Vec<IrExprId>,
+        /// What it answers with.
+        ty: Type,
+    },
     /// A scalar rendered as text (`String(x)`).
     StringOf {
         /// The value being rendered.

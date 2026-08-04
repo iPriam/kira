@@ -106,11 +106,14 @@ function genPointNorm(x: Int, y: Int) -> Int {
 // --- Result with T = enum -----------------------------------------------
 
 function genColorFor(i: Int) -> Result<GenColor, GenErr> {
-    switch i % 4 {
-        case 0 { return .Ok(.Red) }
-        case 1 { return .Ok(.Green) }
-        case 2 { return .Ok(.Blue) }
-        default { return .Error(.BadColor) }
+    if (i % 4) == 0 {
+        return .Ok(.Red)
+    } else if (i % 4) == 1 {
+        return .Ok(.Green)
+    } else if (i % 4) == 2 {
+        return .Ok(.Blue)
+    } else {
+        return .Error(.BadColor)
     }
 }
 

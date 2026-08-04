@@ -335,7 +335,7 @@ mod tests {
         let codes: Vec<Option<&str>> = resolved
             .diagnostics
             .iter()
-            .map(|diagnostic| diagnostic.code)
+            .map(|diagnostic| diagnostic.code.as_ref().map(kira_diagnostics::Code::as_str))
             .collect();
         assert_eq!(codes, vec![Some("KPK030"), Some("KPK031")]);
         assert_eq!(resolved.entry, None);
@@ -355,7 +355,7 @@ mod tests {
             resolved
                 .diagnostics
                 .iter()
-                .map(|diagnostic| diagnostic.code)
+                .map(|diagnostic| diagnostic.code.as_ref().map(kira_diagnostics::Code::as_str))
                 .collect::<Vec<_>>(),
             vec![Some("KPK031")]
         );
@@ -375,7 +375,7 @@ mod tests {
             resolved
                 .diagnostics
                 .iter()
-                .map(|diagnostic| diagnostic.code)
+                .map(|diagnostic| diagnostic.code.as_ref().map(kira_diagnostics::Code::as_str))
                 .collect::<Vec<_>>(),
             vec![Some("KPK007")]
         );

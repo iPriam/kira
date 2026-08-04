@@ -11,6 +11,7 @@
 //! end of a string fails the same way on every backend instead of producing a
 //! value only one of them agrees with.
 
+use kira_runtime_abi::StringOp;
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_source::Span;
@@ -125,6 +126,13 @@ impl Analyzer<'_> {
             );
             return self.program.exprs.alloc(HirExpr::Error);
         }
+        // The shared-opcode operations, told apart by name here and by an
+        // operand byte from there down. Handled before the older primitives
+        // because the set is meant to grow: a new one is a variant in
+        // `StringOp` and nothing in this function.
+        if let Some(op) = StringOp::from_method_name(name) {
+            return self.analyze_string_operation(ctx, text, op, span, args);
+        }
         let arity = match name {
             "charAt" | "indexOf" => 1,
             "substring" => 2,
@@ -191,5 +199,69 @@ impl Analyzer<'_> {
             }),
             _ => self.program.exprs.alloc(HirExpr::Error),
         }
+    }
+
+    /// Type-checks one of the shared-opcode string operations.
+    ///
+    /// Every one of them takes `String` arguments and never an `Int`, so there
+    /// is one expected type rather than the per-method table the older
+    /// primitives need.
+    fn analyze_string_operation(
+        &mut self,
+        ctx: &mut FnCtx,
+        text: HirExprId,
+        op: StringOp,
+        span: Span,
+        args: &[ExprId],
+    ) -> HirExprId {
+        let arity = op.argument_count();
+        if args.len() != arity {
+            for &argument in args {
+                self.analyze_expr(ctx, argument);
+            }
+            self.emit(
+                span,
+                "KSEM210",
+                format!(
+                    "`s.{}` takes exactly {arity} argument(s), found {}",
+                    op.method_name(),
+                    args.len()
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        let mut arguments = Vec::with_capacity(arity);
+        for &argument in args {
+            let hir = self.analyze_expr(ctx, argument);
+            let ty = self.program.expr(hir).type_of();
+            if ty != Type::Error && ty != Type::String {
+                let found = self.type_name(ty);
+                self.emit(
+                    self.tree.expr(argument).span(),
+                    "KSEM211",
+                    format!("`s.{}` takes `String`, not `{found}`", op.method_name()),
+                );
+                return self.program.exprs.alloc(HirExpr::Error);
+            }
+            arguments.push(hir);
+        }
+        // `split` is the one that answers with an array, and an array type is a
+        // row in the program's table rather than a constant, so it is interned
+        // here where the program is in reach.
+        let ty = if op.answers_bool() {
+            Type::Bool
+        } else if op.answers_string_array() {
+            // `array_of` answers `Type::Error` when the id space is exhausted,
+            // which flows on as an error node rather than stopping analysis.
+            self.program.types.array_of(Type::String)
+        } else {
+            Type::String
+        };
+        self.program.exprs.alloc(HirExpr::StringOperation {
+            op,
+            text,
+            arguments,
+            ty,
+        })
     }
 }

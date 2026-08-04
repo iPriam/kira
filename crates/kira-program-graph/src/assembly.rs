@@ -93,6 +93,31 @@ pub fn load_program(entry_path: &Path, entry_text: &str) -> Result<ProgramSource
     load_program_with(entry_path, entry_text, &crate::bundled::bundled_roots())
 }
 
+/// Adds a package's root `linter.kira` to its modules, when it has one.
+///
+/// Silent when absent, which is every package that configures no lints. A file
+/// that exists but cannot be read is left to the frontend: it has the span to
+/// point at, and inventing a diagnostic here would report the same problem
+/// twice.
+fn add_package_linter(package: &Manifest, modules: &mut Vec<ModuleSource>) {
+    let Some(root) = Path::new(&package.path).parent() else {
+        return;
+    };
+    let path = root.join("linter.kira");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let display = path.display().to_string();
+    if modules.iter().any(|module| module.path == display) {
+        return;
+    }
+    modules.push(ModuleSource {
+        module: "linter".to_owned(),
+        path: display,
+        text,
+    });
+}
+
 /// [`load_program`], against an explicit set of bundled packages.
 ///
 /// Split out for the same reason [`crate::load_modules_with`] is: a test hands
@@ -134,6 +159,18 @@ pub fn load_program_with(
             &package_roots,
             &mut modules,
         )?;
+    }
+
+    // A package's `linter.kira` sits beside its manifest rather than under
+    // `app/`, so aggregation above never reaches it. It is ordinary Kira — the
+    // `Lint` entries in it are declarations the lint collector reads — and it
+    // has to be compiled with the package or the lints it configures never
+    // exist.
+    //
+    // Beside the manifest because that is where a reader looks for what governs
+    // the whole package, next to what it depends on and what it is called.
+    if let Some(found) = package.as_ref() {
+        add_package_linter(found, &mut modules);
     }
 
     let build_kind = match package.as_ref().map(Manifest::kind) {

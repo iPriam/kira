@@ -171,6 +171,8 @@ pub struct CheckedResource {
     pub kind: ResourceKind,
     /// Its access mode, present only on storage.
     pub access: Option<AccessMode>,
+    /// The slot written as `@binding(n)`, absent when position decides it.
+    pub binding: Option<u32>,
     /// Its type.
     pub ty: Type,
 }
@@ -459,6 +461,9 @@ pub enum BuiltinFn {
     Sample,
     /// `load(texture, coordinate)`
     Load,
+    /// `store(texture, coord, value)` — writing one texel of a storage
+    /// texture. Returns nothing: it is the one builtin called for its effect.
+    Store,
     /// `atomicAdd(buffer, index, value)`
     AtomicAdd,
 }

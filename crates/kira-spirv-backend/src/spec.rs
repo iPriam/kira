@@ -64,6 +64,9 @@ pub(crate) mod op {
     pub(crate) const SAMPLED_IMAGE: u16 = 86;
     pub(crate) const IMAGE_SAMPLE_IMPLICIT_LOD: u16 = 87;
     pub(crate) const IMAGE_FETCH: u16 = 95;
+    /// `OpImageWrite` — one texel into a storage image. Takes no result id:
+    /// it is the one image op called purely for its effect.
+    pub(crate) const IMAGE_WRITE: u16 = 99;
     pub(crate) const CONVERT_F_TO_U: u16 = 109;
     pub(crate) const CONVERT_F_TO_S: u16 = 110;
     pub(crate) const CONVERT_S_TO_F: u16 = 111;

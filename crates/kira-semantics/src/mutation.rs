@@ -113,21 +113,6 @@ impl<'a> Analyzer<'a> {
                 };
                 iter || self.block_mutates_self(body, owner)
             }
-            Stmt::Switch {
-                subject,
-                cases,
-                default_block,
-                ..
-            } => {
-                self.expr_mutates_self(*subject, owner)
-                    || cases.iter().any(|case| {
-                        self.expr_mutates_self(case.label, owner)
-                            || self.block_mutates_self(&case.body, owner)
-                    })
-                    || default_block
-                        .as_ref()
-                        .is_some_and(|block| self.block_mutates_self(block, owner))
-            }
             Stmt::Match { subject, arms, .. } => {
                 self.expr_mutates_self(*subject, owner)
                     || arms

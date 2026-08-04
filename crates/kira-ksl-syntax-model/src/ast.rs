@@ -21,6 +21,10 @@ pub enum Item {
     Import(Import),
     /// `type Name { … }`
     Type(TypeDecl),
+    /// `const name: Type = <literal>`
+    Const(ConstDecl),
+    /// `enum Name { A = 0, B = 1 }`
+    Enum(EnumDecl),
     /// A free function, written outside any shader.
     Function(Function),
     /// `shader Name { … }`
@@ -34,6 +38,8 @@ impl Item {
         match self {
             Item::Import(item) => item.span,
             Item::Type(item) => item.span,
+            Item::Const(item) => item.span,
+            Item::Enum(item) => item.span,
             Item::Function(item) => item.span,
             Item::Shader(item) => item.span,
         }
@@ -48,6 +54,54 @@ pub struct Import {
     /// The name the module is reached by, when one was written.
     pub alias: Option<Symbol>,
     /// Where the import was written.
+    pub span: Span,
+}
+
+/// `const name: Type = <literal>`
+///
+/// A name for a number, which KSL previously spelled as a zero-argument
+/// function — `function washCeiling() -> Float { return 0.9 }` — because there
+/// was nothing else to spell it with. Folded during checking, so nothing
+/// downstream sees a constant at all.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstDecl {
+    /// The declared name.
+    pub name: Symbol,
+    /// Its written type.
+    pub ty: TypeRefId,
+    /// Its value, which must be a literal.
+    pub value: ExprId,
+    /// Where the declaration was written.
+    pub span: Span,
+}
+
+/// `enum Name { A = 0, B = 1 }`
+///
+/// Every variant carries its number, written out. A shader reads a value that
+/// arrived from outside — a vertex attribute, a uniform — and the number is
+/// what arrived, so declaration order would be a guess about someone else's
+/// encoding. Writing it makes the shader's table and the host's the same table.
+///
+/// Folded to its variants' values during checking, exactly as an option is: no
+/// backend learns the word `enum`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDecl {
+    /// The declared name.
+    pub name: Symbol,
+    /// Its variants, in declaration order.
+    pub variants: Vec<EnumVariant>,
+    /// Where the declaration was written.
+    pub span: Span,
+}
+
+/// One `A = 0` inside an `enum` body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariant {
+    /// The variant's name.
+    pub name: Symbol,
+    /// The value it stands for, which must be a literal.
+    pub value: ExprId,
+    /// Where the variant was written.
     pub span: Span,
 }
 
@@ -151,6 +205,11 @@ pub struct Resource {
     pub access: Option<Access>,
     /// The resource's name.
     pub name: Symbol,
+    /// The slot written as `@binding(n)`, absent when the slot is taken from
+    /// the declaration's position in its group. A shader that must land on a
+    /// layout the host already binds — one shared with another shader, say —
+    /// says so here rather than padding its group to push a name into place.
+    pub binding: Option<u32>,
     /// Its written type.
     pub ty: TypeRefId,
     /// Where the resource was written.
@@ -177,6 +236,12 @@ pub enum Access {
     Read,
     /// `read_write`
     ReadWrite,
+    /// `write`
+    ///
+    /// Only a texture takes this: a shader writes a storage texture without
+    /// ever reading it, and saying so is what lets a backend declare the
+    /// binding write-only rather than guessing.
+    Write,
 }
 
 /// `vertex { … }`, `fragment { … }`, or `compute { … }`

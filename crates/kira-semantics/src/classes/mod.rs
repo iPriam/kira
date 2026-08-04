@@ -12,8 +12,16 @@
 //! divergence the oracle documents for inherited `self.m()` cannot arise here.
 //! See `.codex/work/classes.md`.
 //!
-//! Nothing here admits subtyping: a class instance's static type is always its
-//! dynamic type, which is what makes the per-class copy total.
+//! Subtyping is admitted, and the per-class copy is what makes it safe rather
+//! than what it costs. A subclass may be passed where a parent is declared, and
+//! the callee is registered again with that parameter typed as the subclass —
+//! so the argument reaches a body where it is statically the concrete class and
+//! an override still wins with nothing to dispatch. See
+//! `Analyzer::specialize_callables`.
+//!
+//! The layout is free: a class flattens its parents' fields first, so a
+//! subclass already has the parent's prefix and a position expecting the parent
+//! reads exactly the slots it means to.
 
 mod exprs;
 mod fields;
@@ -314,20 +322,73 @@ impl Analyzer<'_> {
             info.slot_origin.push((owner, plain));
         }
         self.record_bare_fields(&mut info);
-        self.own_methods.insert(
-            id,
-            declaration
-                .methods
-                .iter()
-                .map(|method| OwnMethod {
-                    name: self.interner.resolve(method.function.name).to_owned(),
-                    arity: method.function.params.len(),
-                })
-                .collect(),
-        );
+        let mut own: Vec<OwnMethod> = declaration
+            .methods
+            .iter()
+            .map(|method| OwnMethod {
+                name: self.interner.resolve(method.function.name).to_owned(),
+                arity: method.function.params.len(),
+            })
+            .collect();
+        own.extend(self.extended_methods(&name, &own));
+        self.own_methods.insert(id, own);
         self.resolve_methods(id, &parents, &mut info);
         self.classes.insert(id, info);
         self.check_overrides(declaration, id);
+    }
+
+    /// The methods `extend <Class> { … }` blocks add, reporting any that
+    /// collides with one the class body already declares.
+    ///
+    /// This is what lets a class be written in more than one file. A class is
+    /// one declaration by construction — its fields are flattened into one row,
+    /// and that row is minted once — so the *body* cannot be split. Its methods
+    /// can: an `extend` block adds ordinary methods to an existing class, and
+    /// they resolve, lower and dispatch exactly as ones written inside the
+    /// braces do, because they join the same `own_methods` list before anything
+    /// downstream reads it.
+    ///
+    /// `already` is what the class body declared. A collision is refused rather
+    /// than resolved by order: two definitions of the same method, one of them
+    /// in a file the reader may not have open, is a coin toss dressed up as a
+    /// rule.
+    fn extended_methods(&mut self, class_name: &str, already: &[OwnMethod]) -> Vec<OwnMethod> {
+        let blocks: Vec<(SourceId, &kira_syntax_model::ast::ExtendDecl)> = self
+            .tree
+            .items_with_source()
+            .filter_map(|(source, item)| match item {
+                Item::Extend(declaration)
+                    if self.interner.resolve(declaration.name) == class_name =>
+                {
+                    Some((source, declaration))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut added: Vec<OwnMethod> = Vec::new();
+        for (source, block) in blocks {
+            self.source = source;
+            for method in &block.methods {
+                let name = self.interner.resolve(method.name).to_owned();
+                if already
+                    .iter()
+                    .chain(added.iter())
+                    .any(|seen| seen.name == name)
+                {
+                    self.emit(
+                        method.name_span,
+                        "KSEM257",
+                        format!("`{class_name}` already declares a method named `{name}`"),
+                    );
+                    continue;
+                }
+                added.push(OwnMethod {
+                    name,
+                    arity: method.params.len(),
+                });
+            }
+        }
+        added
     }
 
     /// Resolves the `extends` list to ids, reporting unknown and duplicated
@@ -517,6 +578,7 @@ impl<'a> Analyzer<'a> {
             callables.push(crate::analyze::Callable {
                 receiver: Some(id),
                 origin: Some(*owner),
+                specialize: Vec::new(),
                 function,
                 source: if *owner == id { source } else { origin_source },
             });
@@ -545,6 +607,14 @@ impl<'a> Analyzer<'a> {
                     .methods
                     .iter()
                     .map(|method| &method.function)
+                    .find(|method| self.interner.resolve(method.name) == name),
+                // A method an `extend <Class>` block added, which is how a class
+                // is written across more than one file. Found here rather than
+                // registered separately so it is the same lookup: everything
+                // downstream asks this one question to reach a method's body.
+                Item::Extend(def) if self.interner.resolve(def.name) == owner_name => def
+                    .methods
+                    .iter()
                     .find(|method| self.interner.resolve(method.name) == name),
                 _ => None,
             }?;

@@ -51,9 +51,9 @@ fn each_primitive_has_its_own_type() {
 fn a_property_written_as_a_method_says_so() {
     let items = diagnostics("@Main function main() {\n    print(\"a\".count())\n    return\n}\n");
     assert!(
-        items.iter().any(
-            |item| item.code == Some("KSEM101") && item.message.contains("without parentheses")
-        ),
+        items
+            .iter()
+            .any(|item| item.has_code("KSEM101") && item.message.contains("without parentheses")),
         "{items:?}"
     );
 }
@@ -64,7 +64,7 @@ fn a_method_written_as_a_property_says_so() {
     assert!(
         items
             .iter()
-            .any(|item| item.code == Some("KSEM101") && item.message.contains("is a method")),
+            .any(|item| item.has_code("KSEM101") && item.message.contains("is a method")),
         "{items:?}"
     );
 }
@@ -74,7 +74,7 @@ fn a_wrong_argument_type_is_refused() {
     let items =
         diagnostics("@Main function main() {\n    print(\"a\".charAt(\"b\"))\n    return\n}\n");
     assert!(
-        items.iter().any(|item| item.code == Some("KSEM211")),
+        items.iter().any(|item| item.has_code("KSEM211")),
         "{items:?}"
     );
 }
@@ -84,7 +84,7 @@ fn a_wrong_argument_count_is_refused() {
     let items =
         diagnostics("@Main function main() {\n    print(\"a\".substring(1))\n    return\n}\n");
     assert!(
-        items.iter().any(|item| item.code == Some("KSEM210")),
+        items.iter().any(|item| item.has_code("KSEM210")),
         "{items:?}"
     );
 }
@@ -93,7 +93,7 @@ fn a_wrong_argument_count_is_refused() {
 fn an_unknown_string_member_is_refused() {
     let items = diagnostics("@Main function main() {\n    print(\"a\".nope())\n    return\n}\n");
     assert!(
-        items.iter().any(|item| item.code == Some("KSEM101")),
+        items.iter().any(|item| item.has_code("KSEM101")),
         "{items:?}"
     );
 }
@@ -105,7 +105,7 @@ fn a_non_scalar_cannot_be_rendered_as_text() {
          @Main function main() {\n    print(String(P { x: 1 }))\n    return\n}\n",
     );
     assert!(
-        items.iter().any(|item| item.code == Some("KSEM209")),
+        items.iter().any(|item| item.has_code("KSEM209")),
         "{items:?}"
     );
 }
@@ -119,7 +119,7 @@ fn a_local_shadows_the_conversion() {
         "@Main function main() {\n    let String = 1\n    print(String(2))\n    return\n}\n",
     );
     assert!(
-        !items.iter().any(|item| item.code == Some("KSEM209")),
+        !items.iter().any(|item| item.has_code("KSEM209")),
         "the conversion answered for a shadowed name: {items:?}"
     );
 }

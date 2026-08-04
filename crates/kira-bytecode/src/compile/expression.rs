@@ -139,6 +139,20 @@ impl FnCompiler<'_> {
                 self.compile_expr(needle)?;
                 self.code.push(Instruction::StringIndexOf);
             }
+            IrExpr::StringOperation {
+                op,
+                text,
+                arguments,
+                ..
+            } => {
+                let (op, text) = (*op, *text);
+                let arguments = arguments.clone();
+                self.compile_expr(text)?;
+                for argument in arguments {
+                    self.compile_expr(argument)?;
+                }
+                self.code.push(Instruction::StringOp(op));
+            }
             IrExpr::StringOf { value } => {
                 let value = *value;
                 self.compile_expr(value)?;

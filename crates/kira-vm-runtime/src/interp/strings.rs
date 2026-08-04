@@ -5,6 +5,8 @@
 //! including the failing ones: a popped value is this VM's to own, so a trap
 //! must not strand storage in a heap that outlives the call.
 
+use kira_runtime_abi::StringOp;
+
 use crate::error::VmError;
 use crate::interp::Vm;
 use crate::value::Value;
@@ -97,5 +99,91 @@ impl Vm<'_> {
         self.heap.drop_value(base);
         self.heap.drop_value(needle);
         found
+    }
+
+    /// One of the shared-opcode string operations.
+    ///
+    /// `arguments` are in source order and `base` is the receiver; this owns
+    /// all of them and drops every one on every path out, failing ones
+    /// included, exactly as the primitives above do.
+    ///
+    /// The searching operations lean on `str::find`, which is a two-way search
+    /// with a memchr-accelerated scan underneath — so the substring hunt is
+    /// already vectorized where the platform allows, without this file knowing
+    /// anything about vectors.
+    pub(super) fn perform_string_op(
+        &mut self,
+        op: StringOp,
+        base: Value,
+        arguments: &[Value],
+    ) -> Result<Value, VmError> {
+        let performed = self.string_op_result(op, base, arguments);
+        self.heap.drop_value(base);
+        for &argument in arguments {
+            self.heap.drop_value(argument);
+        }
+        performed
+    }
+
+    /// The operation itself, leaving ownership to the caller.
+    fn string_op_result(
+        &mut self,
+        op: StringOp,
+        base: Value,
+        arguments: &[Value],
+    ) -> Result<Value, VmError> {
+        let Value::Str(id) = base else {
+            return Err(VmError::NotAString);
+        };
+        let text = self.heap.get(id);
+        // Every argument is a `String`; a receiver that is not one has already
+        // been refused above.
+        let mut written: Vec<&str> = Vec::with_capacity(arguments.len());
+        for &argument in arguments {
+            let Value::Str(argument) = argument else {
+                return Err(VmError::NotAString);
+            };
+            written.push(self.heap.get(argument));
+        }
+        match (op, written.as_slice()) {
+            (StringOp::Contains, [needle]) => Ok(Value::Bool(text.contains(needle))),
+            (StringOp::StartsWith, [prefix]) => Ok(Value::Bool(text.starts_with(prefix))),
+            (StringOp::EndsWith, [suffix]) => Ok(Value::Bool(text.ends_with(suffix))),
+            (StringOp::Replace, [from, to]) => {
+                let replaced = text.replace(from, to);
+                Ok(Value::Str(self.heap.alloc(replaced)))
+            }
+            (StringOp::Trim, []) => {
+                let trimmed = text.trim().to_owned();
+                Ok(Value::Str(self.heap.alloc(trimmed)))
+            }
+            (StringOp::Lowercase, []) => {
+                let lowered = text.to_lowercase();
+                Ok(Value::Str(self.heap.alloc(lowered)))
+            }
+            (StringOp::Uppercase, []) => {
+                let raised = text.to_uppercase();
+                Ok(Value::Str(self.heap.alloc(raised)))
+            }
+            (StringOp::Split, [separator]) => {
+                // An empty separator would make `split` yield one empty piece
+                // per character boundary plus two ends, which is not a split of
+                // anything. The whole text as one piece is the honest answer to
+                // "split this on nothing".
+                let pieces: Vec<String> = if separator.is_empty() {
+                    vec![text.to_owned()]
+                } else {
+                    text.split(separator).map(str::to_owned).collect()
+                };
+                let elements: Vec<Value> = pieces
+                    .into_iter()
+                    .map(|piece| Value::Str(self.heap.alloc(piece)))
+                    .collect();
+                Ok(Value::Array(self.heap.alloc_array(elements)))
+            }
+            // The arity was fixed by analysis and by the operand byte, so a
+            // mismatch here is a malformed module rather than a program error.
+            _ => Err(VmError::TypeMismatch { expected: "String" }),
+        }
     }
 }

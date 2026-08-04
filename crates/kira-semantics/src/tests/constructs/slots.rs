@@ -334,7 +334,8 @@ function counts() -> [Int] {
 }
 "#,
         )
-        .contains(&"KSEM232")
+        .iter()
+        .any(|code| code == "KSEM232")
     );
 }
 
@@ -375,7 +376,8 @@ function counts() -> [Int] {
 }
 "#,
         )
-        .contains(&"KSEM242")
+        .iter()
+        .any(|code| code == "KSEM242")
     );
 }
 
@@ -394,7 +396,7 @@ fn some_over_a_non_construct_is_refused_in_every_type_position() {
     for case in cases {
         let source = format!("struct Leaf {{ var value: Int = 0 }}\n{case}\n");
         assert!(
-            library_codes(&source).contains(&"KSEM237"),
+            library_codes(&source).iter().any(|code| code == "KSEM237"),
             "`{case}` was not refused: {:?}",
             library_codes(&source)
         );

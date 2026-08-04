@@ -217,8 +217,8 @@ pub(crate) fn compile(
 fn literal_path(value: &Value) -> Result<String, EvalError> {
     match value {
         Value::Str(text) => Ok(text.clone()),
-        Value::Syntax(text) => {
-            let trimmed = text.trim();
+        Value::Syntax(syntax) => {
+            let trimmed = syntax.text.trim();
             if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
                 Ok(kira_lexer::decode_string_literal(trimmed))
             } else {
@@ -350,7 +350,7 @@ mod tests {
         let value = compile(
             Some(&shaders),
             &[
-                Value::Syntax("\"Shaders/X.ksl\"".to_owned()),
+                Value::built("\"Shaders/X.ksl\""),
                 Value::Str("msl".to_owned()),
             ],
         )
@@ -363,10 +363,7 @@ mod tests {
         let shaders = fixture();
         let error = compile(
             Some(&shaders),
-            &[
-                Value::Syntax("name".to_owned()),
-                Value::Str("msl".to_owned()),
-            ],
+            &[Value::built("name"), Value::Str("msl".to_owned())],
         )
         .expect_err("not a literal");
         assert_eq!(error.code, diagnostics::SHADER_PATH_NOT_LITERAL);

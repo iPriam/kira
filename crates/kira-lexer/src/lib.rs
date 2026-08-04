@@ -12,7 +12,7 @@
 //! recovers statement boundaries structurally, so the lexer does not emit
 //! newline tokens.
 
-use kira_diagnostics::{Diagnostic, Label, Severity};
+use kira_diagnostics::{Code, Diagnostic, Label, Severity};
 use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::{Token, TokenKind};
 
@@ -308,7 +308,7 @@ fn unknown_byte(source: SourceId, span: Span) -> Diagnostic {
         "unexpected character in source",
         Label::primary(file_span, "not a valid Kira token"),
     );
-    diagnostic.code = Some("KLEX001");
+    diagnostic.code = Some(Code::known("KLEX001"));
     diagnostic.phase = Some("lexer");
     diagnostic
 }
@@ -320,7 +320,7 @@ fn unterminated_string(source: SourceId, span: Span) -> Diagnostic {
         "unterminated string literal",
         Label::primary(file_span, "string is not closed before end of line"),
     );
-    diagnostic.code = Some("KLEX002");
+    diagnostic.code = Some(Code::known("KLEX002"));
     diagnostic.phase = Some("lexer");
     diagnostic
 }
