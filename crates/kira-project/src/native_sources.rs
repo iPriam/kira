@@ -113,16 +113,6 @@ pub fn ensure_archive_current(
 
     let compiler = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
     let mut flags: Vec<String> = vec!["-O2".into(), "-fPIC".into()];
-    // macOS framework-backed implementations (notably Sokol) commonly keep a
-    // cross-platform `.c` filename while compiling Objective-C sections behind
-    // `__APPLE__`. Clang chooses its language from the suffix unless told
-    // otherwise, so an otherwise harmless source timestamp change used to rebuild
-    // that file as plain C and fail on AppKit's `@class` declarations. Objective-C
-    // is a strict superset for these C sources; keep other targets in C mode.
-    if target.to_string().contains("macos") {
-        flags.push("-x".into());
-        flags.push("objective-c".into());
-    }
     if let Some(headers) = spec.headers() {
         for directory in &headers.include_dirs {
             flags.push("-I".into());
@@ -156,6 +146,7 @@ pub fn ensure_archive_current(
         let object = objects_dir.join(format!("{index:04}-{stem}.o"));
         let output = Command::new(&compiler)
             .args(&flags)
+            .args(["-x", source_language(source, target)])
             .arg("-c")
             .arg(source)
             .arg("-o")
@@ -198,6 +189,30 @@ pub fn ensure_archive_current(
         });
     }
     Ok(())
+}
+
+/// The language clang compiles one declared source as.
+///
+/// Stated per source rather than left to the suffix, for one reason on each
+/// side of the split. A framework-backed implementation keeps a cross-platform
+/// `.c` filename and hides Objective-C behind `__APPLE__` — Sokol does — so on
+/// Apple targets C sources compile as Objective-C, which is a strict superset
+/// of the C they otherwise are. And a library that ships C++ ships it as `.cc`
+/// — HarfBuzz does — so a blanket Objective-C mode compiled it as the wrong
+/// language and every `<cassert>` it includes went missing.
+fn source_language(source: &Path, target: &TargetTriple) -> &'static str {
+    let apple = matches!(target.os(), "macos" | "ios" | "tvos" | "xros");
+    let suffix = source
+        .extension()
+        .and_then(|suffix| suffix.to_str())
+        .unwrap_or_default();
+    match (suffix, apple) {
+        ("cc" | "cpp" | "cxx" | "mm", true) => "objective-c++",
+        ("cc" | "cpp" | "cxx" | "mm", false) => "c++",
+        ("m", _) => "objective-c",
+        (_, true) => "objective-c",
+        (_, false) => "c",
+    }
 }
 
 fn create_dir(library: &str, path: &Path) -> Result<(), NativeSourceBuildError> {
@@ -272,4 +287,34 @@ fn is_stale(
 
 fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The split that decides whether a declared source compiles at all: a
+    /// framework-backed `.c` needs Objective-C on Apple, and a C++ source needs
+    /// C++ everywhere — one blanket mode gets one of them wrong.
+    #[test]
+    fn each_source_compiles_as_the_language_it_is_written_in() {
+        let apple = TargetTriple::new("aarch64", "macos", "none");
+        let linux = TargetTriple::new("x86_64", "linux", "gnu");
+
+        assert_eq!(
+            source_language(Path::new("sokol_impl.c"), &apple),
+            "objective-c"
+        );
+        assert_eq!(source_language(Path::new("sokol_impl.c"), &linux), "c");
+        assert_eq!(
+            source_language(Path::new("harfbuzz.cc"), &apple),
+            "objective-c++"
+        );
+        assert_eq!(source_language(Path::new("harfbuzz.cc"), &linux), "c++");
+        assert_eq!(
+            source_language(Path::new("shim.mm"), &apple),
+            "objective-c++"
+        );
+        assert_eq!(source_language(Path::new("shim.m"), &linux), "objective-c");
+    }
 }
