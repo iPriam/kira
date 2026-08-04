@@ -123,7 +123,18 @@ pub fn ensure_archive_current(
     // Position-independent code is what a PE image does anyway, and there is no
     // flag for asking: clang targeting Windows answers `-fPIC` with "argument
     // unused during compilation", which is noise on every source of every build.
-    if !windows {
+    if windows {
+        // The UCRT marks `sscanf`, `strcpy` and most of <string.h> deprecated,
+        // advising the `_s` variants — which are Microsoft's alone. Portable C
+        // cannot take that advice, so the warning fires on every source of
+        // every library and says nothing actionable. Silencing it is what the
+        // define exists for.
+        flags.push("-D_CRT_SECURE_NO_WARNINGS".into());
+        // And the same again for the POSIX names it deprecates in favour of an
+        // underscored spelling — `strdup` for `_strdup`. Those are the portable
+        // ones; taking the advice is what would make the source non-portable.
+        flags.push("-D_CRT_NONSTDC_NO_WARNINGS".into());
+    } else {
         flags.push("-fPIC".into());
     }
     if let Some(headers) = spec.headers() {
