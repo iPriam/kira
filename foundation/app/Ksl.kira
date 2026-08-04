@@ -1,0 +1,86 @@
+// KSL shaders — the `ksl!("Shaders/Name.ksl")` compile-time macro and the
+// artifact it expands to.
+//
+// Foundation's rather than each renderer's, for the reason `Color` is here:
+// structs are nominal, so an engine and a UI package that each declared their
+// own `KslArtifact` declared two types, and a shader compiled by one could not
+// be handed to the other. One declaration is what lets a layout package, an
+// app, and a backend name the same artifact.
+//
+// The artifact carries every backend's shader source inline, compiled at build
+// time by the toolchain, so a renderer picks the variant its active graphics
+// backend needs with no runtime file IO and no path fragility.
+
+struct KslArtifact {
+    var shaderName: String = ""
+    // Entry-point names, in the KSL convention `{shader}__{stage}__main`.
+    var vertexEntry: String = ""
+    var fragmentEntry: String = ""
+    // The compute kernel's entry name; empty for a graphics shader.
+    var computeEntry: String = ""
+    // Every stage merged into one MSL library, for a backend that compiles a
+    // single module — the direct Metal backend does. For a compute shader this
+    // is the kernel.
+    var combinedMsl: String = ""
+    // Per-stage sources.
+    var vertexMsl: String = ""
+    var fragmentMsl: String = ""
+    var computeMsl: String = ""
+    var vertexHlsl: String = ""
+    var fragmentHlsl: String = ""
+    var vertexGlsl: String = ""
+    var fragmentGlsl: String = ""
+    // WGSL, for WebGPU and wasm32-emscripten. Graphics stages only today, and a
+    // compute-only shader leaves these empty. Entry names reuse
+    // `vertexEntry`/`fragmentEntry`.
+    var vertexWgsl: String = ""
+    var fragmentWgsl: String = ""
+    // A compact uniform-block descriptor emitted from KSL reflection
+    // (`name:binding:sizeBytes:stageMask:memberCount:members;` per block), for a
+    // backend that configures blocks per shader rather than by convention.
+    // Empty for a shader with no uniform blocks.
+    var uniformReflection: String = ""
+}
+
+// `ksl!("Shaders/Name.ksl")` — the compile-time shader macro, written in Kira.
+//
+// An ordinary `comptime macro` rather than a compiler builtin, and that is the
+// whole point: the compiler knows nothing about `KslArtifact` above, so a
+// backend can be added, dropped, or renamed here without a compiler release.
+// The compiler's half of the contract is only `Ksl.compile(path, target)`,
+// which answers with one backend's output for one shader.
+//
+// The path is resolved against the package that *writes* the call, not against
+// this file, so `ksl!("Shaders/UiBatch.ksl")` in an app names that app's own
+// `Shaders/` directory.
+//
+// Targets: "msl" is Metal, which compiles one module holding every stage, so
+// its whole source lands in `combinedMsl`. "wgsl" is WebGPU and "glsl_330" is
+// OpenGL, and both compile a stage at a time. A shader GLSL 330 cannot express
+// — one using compute or storage, both of which arrived in 430 — comes back
+// with its GLSL fields empty rather than failing the build, because the other
+// backends still carry it. A field no target fills keeps the empty default
+// declared above, so a renderer reads the same fields either way.
+
+comptime macro ksl {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        let msl = Ksl.compile(input, "msl")
+        let wgsl = Ksl.compile(input, "wgsl")
+        let glsl = Ksl.compile(input, "glsl_330")
+        return quote {
+            KslArtifact(
+                shaderName: #{msl.shaderName},
+                vertexEntry: #{msl.vertexEntry},
+                fragmentEntry: #{msl.fragmentEntry},
+                computeEntry: #{msl.computeEntry},
+                combinedMsl: #{msl.combinedSource},
+                vertexGlsl: #{glsl.vertexSource},
+                fragmentGlsl: #{glsl.fragmentSource},
+                vertexWgsl: #{wgsl.vertexSource},
+                fragmentWgsl: #{wgsl.fragmentSource},
+                uniformReflection: #{msl.uniformReflection}
+            )
+        }
+    }
+}
