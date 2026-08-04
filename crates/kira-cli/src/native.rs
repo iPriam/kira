@@ -43,8 +43,15 @@ impl Artifacts {
     }
 
     /// The native executable path.
+    ///
+    /// Through `executable_name`, so the file carries the extension its host
+    /// needs to run it: Windows will not execute a PE by a name with no `.exe`,
+    /// and this wrote the bare stem on every platform. The release gate that
+    /// builds a program and runs the result is what surfaced it — the binary
+    /// was there, under a name nothing could launch.
     pub fn executable(&self) -> PathBuf {
-        self.directory.join(&self.stem)
+        self.directory
+            .join(kira_toolchain::executable_name(&self.stem))
     }
 
     /// The textual LLVM IR dump path.
@@ -293,7 +300,10 @@ mod tests {
 
         let artifacts = Artifacts::for_source(&source).expect("layout");
         assert!(artifacts.object().ends_with(".kira-build/hello.o"));
-        assert!(artifacts.executable().ends_with(".kira-build/hello"));
+        assert!(artifacts.executable().ends_with(format!(
+            ".kira-build/{}",
+            kira_toolchain::executable_name("hello")
+        )));
         assert!(artifacts.llvm_ir().ends_with(".kira-build/hello.ll"));
         assert!(artifacts.object().starts_with(&directory));
 
