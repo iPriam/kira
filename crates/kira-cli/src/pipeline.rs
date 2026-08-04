@@ -663,7 +663,7 @@ pub fn build(args: &[String]) -> i32 {
             // the adapter sidecar a VM run loads, so `build` and `run` produce
             // the same artifacts.
             match kira_bytecode::compile(ir) {
-                Ok(_) => {
+                Ok(module) => {
                     if !ir.foreign_imports.is_empty()
                         && let Err(error) = native::build_adapter_sidecar(
                             ir,
@@ -675,7 +675,28 @@ pub fn build(args: &[String]) -> i32 {
                         out!("Failed to build");
                         return EXIT_FAILURE;
                     }
-                    out!("Successfully built");
+                    // The module the compile just produced, written where every
+                    // other backend writes. It used to be dropped on the floor:
+                    // the match bound `Ok(_)`, nothing reached the disk, and
+                    // the command still said it had built something — so `kira
+                    // build` on the default backend reported success and left
+                    // the directory exactly as it found it.
+                    let artifacts =
+                        match native::Artifacts::for_source(std::path::Path::new(&options.path)) {
+                            Ok(artifacts) => artifacts,
+                            Err(error) => {
+                                err!("kira: {error}");
+                                out!("Failed to build");
+                                return EXIT_FAILURE;
+                            }
+                        };
+                    let bytecode = artifacts.bytecode();
+                    if let Err(error) = std::fs::write(&bytecode, module.to_bytes()) {
+                        err!("kira: cannot write {}: {error}", bytecode.display());
+                        out!("Failed to build");
+                        return EXIT_FAILURE;
+                    }
+                    out!("Successfully built {}", bytecode.display());
                     EXIT_OK
                 }
                 Err(error) => {

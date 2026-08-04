@@ -208,7 +208,20 @@ jobs:
           printf 'import Foundation\n@Main function main() { printLine("release verified") return }\n' > "$program/main.kira"
 
           out="$("target/release/kira$exe" run "$program/main.kira")"
-          echo "launcher said: $out"
+          echo "launcher said (vm): $out"
+          [ "$out" = "release verified" ]
+
+          # And the native engine, which is the half this step used to take on
+          # faith. `kira run` proves the VM; a toolchain whose LLVM backend or
+          # bridge archive is missing would have published anyway, and the
+          # bridges are exactly what a Windows package got wrong. The managed
+          # LLVM is already provisioned above, so the installed compiler links
+          # against the same one this job built with.
+          "target/release/kira$exe" build --backend llvm "$program/main.kira"
+          native="$program/.kira-build/main$exe"
+          [ -x "$native" ] || { echo "no native binary at $native" >&2; exit 1; }
+          out="$("$native")"
+          echo "the built binary said: $out"
           [ "$out" = "release verified" ]
 
       - uses: actions/upload-artifact@v4
