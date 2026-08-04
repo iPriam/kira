@@ -129,7 +129,7 @@ pub fn ensure_archive_current(
     if let Some(headers) = spec.headers() {
         for directory in &headers.include_dirs {
             flags.push("-I".into());
-            flags.push(base_dir.join(directory).display().to_string());
+            flags.push(compiler_path(&base_dir.join(directory)));
         }
         for define in &headers.defines {
             flags.push(format!("-D{define}"));
@@ -206,6 +206,31 @@ pub fn ensure_archive_current(
         });
     }
     Ok(())
+}
+
+/// A path in the form a compiler will accept.
+///
+/// Windows canonicalization answers with an extended-length path
+/// (`\\?\C:\...`). The OS opens one of those without complaint, which is why
+/// a source file named that way compiles — but clang's *header search* does not
+/// resolve them, so an `-I` handed one contributes nothing and every angle
+/// include below it goes missing. The first Windows build of this workspace hit
+/// exactly that: freetype compiled its own sources and could not find
+/// `<freetype/internal/ftdebug.h>` in the include directory the manifest
+/// declares.
+///
+/// Stripping the prefix costs the >260-character path support it exists for.
+/// That is the right trade here: the compiler cannot use those paths anyway, so
+/// the choice is a working build with ordinary paths or a broken one with long
+/// ones.
+pub(crate) fn compiler_path(path: &Path) -> String {
+    let text = path.display().to_string();
+    // `\\?\UNC\server\share` is the verbatim spelling of `\\server\share`.
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    text.strip_prefix(r"\\?\")
+        .map_or_else(|| text.clone(), ToOwned::to_owned)
 }
 
 /// Which binary to run for a tool: what the environment names, else the one in
@@ -408,6 +433,29 @@ mod tests {
         assert_eq!(
             tool("KIRA_TEST_TOOL_UNSET", None, fallback_compiler(true)),
             PathBuf::from("clang")
+        );
+    }
+
+    #[test]
+    fn an_include_path_loses_the_prefix_a_header_search_cannot_read() {
+        // The break this exists for: clang opened the source fine and then
+        // could not find a header in the directory `-I` named.
+        assert_eq!(
+            compiler_path(Path::new(r"\\?\C:\Users\x\vendor\freetype\include")),
+            r"C:\Users\x\vendor\freetype\include"
+        );
+        // A share keeps its two leading slashes: `\\?\UNC\srv\share` IS
+        // `\\srv\share`, so dropping the prefix outright would name a
+        // different path rather than the same one spelled plainly.
+        assert_eq!(
+            compiler_path(Path::new(r"\\?\UNC\srv\share\include")),
+            r"\\srv\share\include"
+        );
+        // Everything else is handed through untouched, which is every path on
+        // every other platform.
+        assert_eq!(
+            compiler_path(Path::new("/usr/local/include")),
+            "/usr/local/include"
         );
     }
 }
