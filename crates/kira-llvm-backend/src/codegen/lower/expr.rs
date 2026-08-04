@@ -92,6 +92,7 @@ impl FunctionLowering<'_, '_> {
             }
             IrExpr::FileSystem { op, args, ty } => self.lower_file_system(op, &args, ty),
             IrExpr::Compiler { op, args, ty } => self.lower_compiler(op, &args, ty),
+            IrExpr::Env { op, args, .. } => self.lower_env(op, &args),
             IrExpr::ArrayAppend { place, value } => self.lower_array_append(&place, value),
             IrExpr::NativeState { value, type_id, .. } => {
                 self.lower_native_state_new(value, type_id)

@@ -21,6 +21,7 @@ pub mod bridge;
 pub mod c_storage;
 pub mod compiler;
 pub mod enum_payload;
+pub mod env;
 pub mod erased;
 pub mod execution;
 pub mod file_system;
@@ -41,6 +42,7 @@ pub use compiler::{
     CompilerError, CompilerOp, DIAGNOSTIC_FIELDS, PackageChecker,
 };
 pub use enum_payload::EnumPayloadKind;
+pub use env::EnvOp;
 pub use erased::ErasedKind;
 pub use execution::Execution;
 pub use file_system::{FileRequest, FileResponse, FileSystemError, FileSystemHost, FileSystemOp};

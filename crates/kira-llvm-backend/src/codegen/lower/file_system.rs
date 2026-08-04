@@ -80,7 +80,10 @@ impl FunctionLowering<'_, '_> {
     }
 
     /// Narrows a runtime `i8` of 0 or 1 to the `i1` a Kira `Bool` is.
-    fn byte_to_bool(&mut self, value: LLVMValueRef) -> LLVMValueRef {
+    ///
+    /// Shared with the environment lowering, which gets its truth byte from
+    /// `kira_rt_env_is_set` the same way this gets one from `kira_rt_fs_*`.
+    pub(in crate::codegen) fn byte_to_bool(&mut self, value: LLVMValueRef) -> LLVMValueRef {
         let builder = self.codegen.builder;
         let types = self.codegen.types;
         // SAFETY: the helper returns an `i8` of 0 or 1, and the builder is
@@ -92,7 +95,7 @@ impl FunctionLowering<'_, '_> {
                 LLVMIntPredicate::LLVMIntNE,
                 value,
                 zero,
-                c"fs.flag".as_ptr(),
+                c"rt.flag".as_ptr(),
             )
         }
     }

@@ -30,6 +30,7 @@ use std::process::Command;
 use std::time::SystemTime;
 
 use kira_native_lib_definition::{NativeLibrarySpec, TargetTriple};
+use kira_toolchain::llvm_discovery::LlvmInstallation;
 
 /// Why a library's sources could not be built into its archive.
 #[derive(Debug, thiserror::Error)]
@@ -111,8 +112,20 @@ pub fn ensure_archive_current(
         return Ok(());
     }
 
-    let compiler = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
-    let mut flags: Vec<String> = vec!["-O2".into(), "-fPIC".into()];
+    let windows = target.os() == "windows";
+    let installation = kira_toolchain::llvm_discovery::discover(None).ok();
+    let compiler = tool(
+        "CC",
+        installation.as_ref().map(LlvmInstallation::clang),
+        fallback_compiler(windows),
+    );
+    let mut flags: Vec<String> = vec!["-O2".into()];
+    // Position-independent code is what a PE image does anyway, and there is no
+    // flag for asking: clang targeting Windows answers `-fPIC` with "argument
+    // unused during compilation", which is noise on every source of every build.
+    if !windows {
+        flags.push("-fPIC".into());
+    }
     if let Some(headers) = spec.headers() {
         for directory in &headers.include_dirs {
             flags.push("-I".into());
@@ -154,7 +167,7 @@ pub fn ensure_archive_current(
             .output()
             .map_err(|error| NativeSourceBuildError::CompilerUnavailable {
                 library: spec.name().to_string(),
-                compiler: compiler.clone(),
+                compiler: compiler.display().to_string(),
                 message: error.to_string(),
             })?;
         if !output.status.success() {
@@ -170,7 +183,11 @@ pub fn ensure_archive_current(
     // Written from scratch: `ar r` into a surviving archive would keep objects
     // for sources the manifest no longer lists.
     let _ = std::fs::remove_file(&archive);
-    let archiver = std::env::var("AR").unwrap_or_else(|_| "ar".to_string());
+    let archiver = tool(
+        "AR",
+        installation.as_ref().map(LlvmInstallation::llvm_ar),
+        fallback_archiver(windows),
+    );
     let output = Command::new(&archiver)
         .arg("rcs")
         .arg(&archive)
@@ -178,7 +195,7 @@ pub fn ensure_archive_current(
         .output()
         .map_err(|error| NativeSourceBuildError::CompilerUnavailable {
             library: spec.name().to_string(),
-            compiler: archiver.clone(),
+            compiler: archiver.display().to_string(),
             message: error.to_string(),
         })?;
     if !output.status.success() {
@@ -189,6 +206,47 @@ pub fn ensure_archive_current(
         });
     }
     Ok(())
+}
+
+/// Which binary to run for a tool: what the environment names, else the one in
+/// the managed LLVM install, else a bare name off `PATH`.
+///
+/// The environment wins because a cross build or a distribution package has to
+/// be able to say. The managed install comes next for the reason
+/// [`LlvmInstallation::llvm_ar`] gives about itself — a toolchain that picks its
+/// tools off `PATH` works on one machine — and it is the install this crate
+/// already reads clang out of for header autobinding, so the C a package
+/// compiles and the C its bindings are parsed with come from one place.
+fn tool(variable: &str, managed: Option<PathBuf>, fallback: &str) -> PathBuf {
+    if let Ok(named) = std::env::var(variable)
+        && !named.is_empty()
+    {
+        return PathBuf::from(named);
+    }
+    managed
+        .filter(|path| path.exists())
+        .unwrap_or_else(|| PathBuf::from(fallback))
+}
+
+/// The compiler to look for on `PATH` when no install was discovered.
+///
+/// `cc` is a Unix convention — a name every POSIX host has, usually a symlink to
+/// whichever compiler it installed. Windows has no such name, so a native-source
+/// build there failed with "program not found" and named a compiler the machine
+/// had never been asked to have. `clang` is the name to try instead: it is what
+/// the managed toolchain installs, and `clang.exe` drives the GNU-style command
+/// line this passes (`-c`, `-o`, `-I`, `-x`), unlike `clang-cl.exe`, which wants
+/// MSVC spellings for every one of them.
+fn fallback_compiler(windows: bool) -> &'static str {
+    if windows { "clang" } else { "cc" }
+}
+
+/// The archiver to look for on `PATH` when no install was discovered.
+///
+/// Same shape: `ar` is a name Windows does not have, and `llvm-ar` takes the
+/// same `rcs` arguments this passes.
+fn fallback_archiver(windows: bool) -> &'static str {
+    if windows { "llvm-ar" } else { "ar" }
 }
 
 /// The language clang compiles one declared source as.
@@ -223,7 +281,7 @@ fn create_dir(library: &str, path: &Path) -> Result<(), NativeSourceBuildError> 
     })
 }
 
-/// Whether this host can compile for `target` with its own `cc`.
+/// Whether this host can compile for `target` with its own C compiler.
 ///
 /// Deliberately narrow: the triple has to be the machine we are on. Anything else
 /// wants a cross toolchain this cannot assume, and a wrong archive is worse than
@@ -316,5 +374,40 @@ mod tests {
             "objective-c++"
         );
         assert_eq!(source_language(Path::new("shim.m"), &linux), "objective-c");
+    }
+
+    #[test]
+    fn windows_names_the_compiler_and_archiver_that_host_actually_has() {
+        // `cc` and `ar` are Unix conventions. Naming them on Windows fails with
+        // "program not found", which reads as a broken install rather than as a
+        // toolchain this never had.
+        assert_eq!(fallback_compiler(true), "clang");
+        assert_eq!(fallback_archiver(true), "llvm-ar");
+        assert_eq!(fallback_compiler(false), "cc");
+        assert_eq!(fallback_archiver(false), "ar");
+    }
+
+    #[test]
+    fn a_managed_tool_beats_the_bare_name_but_the_environment_beats_both() {
+        let managed = std::env::current_exe().expect("this test binary exists");
+        // Nothing names the variable: the discovered install wins over `PATH`.
+        assert_eq!(
+            tool("KIRA_TEST_TOOL_UNSET", Some(managed.clone()), "cc"),
+            managed
+        );
+        // A discovered path that is not actually there is not worth running.
+        assert_eq!(
+            tool(
+                "KIRA_TEST_TOOL_UNSET",
+                Some(PathBuf::from("/nowhere/clang")),
+                "cc"
+            ),
+            PathBuf::from("cc")
+        );
+        // No install at all falls back to the bare name for the host.
+        assert_eq!(
+            tool("KIRA_TEST_TOOL_UNSET", None, fallback_compiler(true)),
+            PathBuf::from("clang")
+        );
     }
 }

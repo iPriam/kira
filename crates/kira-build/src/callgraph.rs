@@ -154,7 +154,7 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
                 walk_expr(program, arg, found);
             }
         }
-        IrExpr::Compiler { args, .. } => {
+        IrExpr::Compiler { args, .. } | IrExpr::Env { args, .. } => {
             for &arg in args {
                 walk_expr(program, arg, found);
             }

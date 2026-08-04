@@ -163,6 +163,7 @@ impl IrProgram {
             | IrExpr::Convert { ty, .. }
             | IrExpr::FileSystem { ty, .. }
             | IrExpr::Compiler { ty, .. }
+            | IrExpr::Env { ty, .. }
             | IrExpr::CellNew { ty, .. }
             | IrExpr::CellGet { ty, .. }
             | IrExpr::StringOperation { ty, .. }

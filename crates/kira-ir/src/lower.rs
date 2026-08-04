@@ -400,6 +400,11 @@ impl Lowerer<'_> {
                 args: args.into_iter().map(|arg| self.lower_expr(arg)).collect(),
                 ty,
             },
+            HirExpr::Env { op, args, ty } => IrExpr::Env {
+                op,
+                args: args.into_iter().map(|arg| self.lower_expr(arg)).collect(),
+                ty,
+            },
             HirExpr::ArrayAppend { place, value } => IrExpr::ArrayAppend {
                 place: self.lower_place(&place),
                 value: self.lower_expr(value),

@@ -182,6 +182,13 @@ impl FnCompiler<'_> {
                 }
                 self.code.push(Instruction::Compiler(op));
             }
+            IrExpr::Env { op, args, .. } => {
+                let (op, args) = (*op, args.clone());
+                for arg in args {
+                    self.compile_expr(arg)?;
+                }
+                self.code.push(Instruction::Env(op));
+            }
             IrExpr::NativeState { value, type_id, .. } => {
                 let (value, type_id) = (*value, *type_id);
                 self.compile_expr(value)?;

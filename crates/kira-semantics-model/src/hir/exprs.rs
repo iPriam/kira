@@ -8,7 +8,7 @@
 use super::ops::{Callee, HirBinaryOp, HirUnaryOp};
 use super::{FuncId, HirPlace, HirWriteback, LocalId};
 use crate::ty::{EnumId, StructId, Type};
-use kira_runtime_abi::{CompilerOp, FileSystemOp, ForeignAggregateId, NativeStateTypeId};
+use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, ForeignAggregateId, NativeStateTypeId};
 use la_arena::Idx;
 
 /// Handle to a HIR expression.
@@ -308,6 +308,15 @@ pub enum HirExpr {
         /// What the operation produces.
         ty: Type,
     },
+    /// One environment read, which only the engine can perform.
+    Env {
+        /// Which operation this performs.
+        op: EnvOp,
+        /// Its arguments, in source order.
+        args: Vec<HirExprId>,
+        /// What the operation produces.
+        ty: Type,
+    },
     /// `xs.append(v)`: push one element onto an array, in place.
     ///
     /// The receiver is a **place**, not an expression, and that is the whole
@@ -561,6 +570,7 @@ impl HirExpr {
             | HirExpr::Convert { ty, .. }
             | HirExpr::FileSystem { ty, .. }
             | HirExpr::Compiler { ty, .. }
+            | HirExpr::Env { ty, .. }
             | HirExpr::TaskSpawn { ty, .. }
             | HirExpr::TaskJoin { ty, .. }
             | HirExpr::CellNew { ty, .. }

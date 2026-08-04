@@ -15,6 +15,7 @@ use crate::value::{Heap, Value};
 
 mod cells;
 mod compiler;
+mod env;
 mod file_system;
 mod frames;
 mod host;
@@ -690,6 +691,7 @@ impl Vm<'_> {
             }
             Instruction::FileSystem(op) => self.file_system(op)?,
             Instruction::Compiler(op) => self.compiler(op)?,
+            Instruction::Env(op) => self.env(op)?,
             Instruction::ConvertBitsToFloat => {
                 let value = self.pop_int()?;
                 self.stack.push(Value::Float(f64::from_bits(value as u64)));
