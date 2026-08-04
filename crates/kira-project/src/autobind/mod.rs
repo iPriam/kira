@@ -376,7 +376,13 @@ fn clang_arguments(
     }
     include_dirs.dedup();
     for directory in include_dirs {
-        arguments.push(format!("-I{}", directory.display()));
+        // Through the same normalizer the source build uses: libclang's header
+        // search cannot read a Windows verbatim path any more than clang's can,
+        // and these directories are canonicalized above.
+        arguments.push(format!(
+            "-I{}",
+            crate::native_sources::compiler_path(&directory)
+        ));
     }
     if let Some(declared) = spec.headers() {
         for define in &declared.defines {
