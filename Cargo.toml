@@ -33,6 +33,7 @@ kira-hybrid-definition = { path = "crates/kira-hybrid-definition" }
 kira-backend-api = { path = "crates/kira-backend-api" }
 kira-native-lib-definition = { path = "crates/kira-native-lib-definition" }
 kira-dynamic-ffi = { path = "crates/kira-dynamic-ffi" }
+kira-clang = { path = "crates/kira-clang" }
 kira-glsl-backend = { path = "crates/kira-glsl-backend" }
 kira-wgsl-backend = { path = "crates/kira-wgsl-backend" }
 kira-hlsl-backend = { path = "crates/kira-hlsl-backend" }

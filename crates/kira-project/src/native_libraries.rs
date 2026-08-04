@@ -143,19 +143,23 @@ pub fn resolve_native_library_packages(
     })
 }
 
-/// Resolves one package's two declaration sources into `resolved`.
-fn resolve_one(
+/// Every library one package declares, each with the directory its relative
+/// paths are written against.
+///
+/// The two declaration sources differ only in that anchor — the package root
+/// for an inline entry, the TOML's own directory for a file — so reading them
+/// is one step, shared by everything that wants the declarations themselves
+/// rather than the archives they resolve to.
+pub fn declared_libraries(
     package: &NativeLibraryPackage,
-    target: &TargetTriple,
-    resolved: &mut Vec<ResolvedNativeLibrary>,
-) -> Result<(), NativeLibraryResolveError> {
+) -> Result<Vec<(NativeLibrarySpec, PathBuf)>, NativeLibraryResolveError> {
     let package_root = package.root.as_path();
-    let inline = &package.inline;
-    let manifest_paths = &package.manifest_paths;
-    for spec in inline {
-        resolved.push(locate(spec, package_root, target)?);
-    }
-    for relative in manifest_paths {
+    let mut declared: Vec<(NativeLibrarySpec, PathBuf)> = package
+        .inline
+        .iter()
+        .map(|spec| (spec.clone(), package_root.to_path_buf()))
+        .collect();
+    for relative in &package.manifest_paths {
         let manifest_path = package_root.join(relative);
         let text = std::fs::read_to_string(&manifest_path).map_err(|error| {
             NativeLibraryResolveError::Unreadable {
@@ -169,8 +173,23 @@ fn resolve_one(
                 source: Box::new(source),
             }
         })?;
-        let base_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-        resolved.push(locate(&spec, base_dir, target)?);
+        let base_dir = manifest_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        declared.push((spec, base_dir));
+    }
+    Ok(declared)
+}
+
+/// Resolves one package's two declaration sources into `resolved`.
+fn resolve_one(
+    package: &NativeLibraryPackage,
+    target: &TargetTriple,
+    resolved: &mut Vec<ResolvedNativeLibrary>,
+) -> Result<(), NativeLibraryResolveError> {
+    for (spec, base_dir) in declared_libraries(package)? {
+        resolved.push(locate(&spec, &base_dir, target)?);
     }
     Ok(())
 }

@@ -130,19 +130,42 @@ pub fn compile(path: &Path) -> Result<Compiled, FrontendError> {
 /// tests. Everything else takes the manifest's word, which is why the override
 /// is a parameter here rather than a field on the manifest.
 pub fn compile_as(path: &Path, kind: Option<BuildKind>) -> Result<Compiled, FrontendError> {
+    compile_for(path, kind, &kira_project::host_target())
+}
+
+/// Compiles `path` for `target`, which decides what its C bindings are
+/// generated against.
+///
+/// The target reaches the frontend because autobind runs inside it: a `long` is
+/// 32 bits under MSVC and 64 elsewhere, so the same header produces a different
+/// binding per target, and the binding is Kira source the analyzer reads. Every
+/// other decision the target drives happens after this and takes it again.
+pub fn compile_for(
+    path: &Path,
+    kind: Option<BuildKind>,
+    target: &kira_native_lib_definition::TargetTriple,
+) -> Result<Compiled, FrontendError> {
     let display = path.display().to_string();
     let text = std::fs::read_to_string(path).map_err(|source| FrontendError::Read {
         path: display.clone(),
         source,
     })?;
     kira_diagnostics::progress!("resolving packages");
+    // Manifest-declared bindings are generated first, because they are Kira
+    // source: a `@FFI.Extern` that does not exist on disk when the module walk
+    // runs is an undefined function at every call site, blaming the caller for
+    // a file the build was supposed to write. Failures come back as
+    // diagnostics — a program that cannot bind one library still has every
+    // other diagnostic worth reporting.
+    let mut diagnostics = crate::autobind::run(path, target);
+
     // Discovery, dependency resolution, module loading, and package-member
     // aggregation are one step shared with the language server: an editor and
     // `kira check` must assemble the same program from the same tree.
     let assembled = kira_program_graph::load_program(path, &text)?;
     let package = assembled.package;
     let modules = assembled.modules;
-    let mut diagnostics = assembled.diagnostics;
+    diagnostics.extend(assembled.diagnostics);
 
     // A lockfile that drifted is rewritten here rather than inside assembly:
     // resolution never writes, and a language server assembling the same
@@ -687,6 +710,49 @@ mod tests {
                 .iter()
                 .any(|d| d.code == Some("KSEM060"))
         );
+    }
+
+    /// The whole point of running autobind inside the frontend: a package that
+    /// declares `autobind` and ships no bindings compiles anyway, because the
+    /// bindings are written before a module is loaded. Without it, every call
+    /// into the C library is an undefined function and the caller gets blamed
+    /// for a file the build was supposed to write.
+    #[test]
+    fn a_declared_binding_is_generated_before_the_call_to_it_is_analyzed() {
+        let dir = TempDir::new("autobind");
+        dir.write(
+            "package.kira",
+            "Package demo {\n\
+             \x20   let version = \"0.1.0\"\n\
+             \x20   let kind = PackageKind.App\n\
+             \x20   let nativeLibraries = [\n\
+             \x20       NativeLibrary {\n\
+             \x20           name: \"demo\",\n\
+             \x20           linkMode: LinkMode.Static,\n\
+             \x20           autobind: Autobind { module: \"demo\", headers: [\"NativeLibs/demo.h\"], mode: AutobindMode.AllPublic },\n\
+             \x20           nativeTargets: [\n\
+             \x20               NativeTarget { triple: \"HOST_TRIPLE\", staticLib: \"generated/libdemo.a\" }\n\
+             \x20           ],\n\
+             \x20       }\n\
+             \x20   ]\n\
+             }\n"
+                .replace("HOST_TRIPLE", &kira_project::host_target().to_string())
+                .as_str(),
+        );
+        dir.write(
+            "NativeLibs/demo.h",
+            "double demo_measure(const char *text, double size);\n",
+        );
+        let entry = dir.write(
+            "app/main.kira",
+            "@Main function main() { print(demo_measure(\"hi\", 14.0)) return }",
+        );
+
+        let compiled = compile(&entry).expect("compile");
+        assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
+        let generated = std::fs::read_to_string(dir.0.join("app/bindings/demo.kira"))
+            .expect("the binding was written into the package");
+        assert!(generated.contains("symbol: demo_measure"), "{generated}");
     }
 
     #[test]

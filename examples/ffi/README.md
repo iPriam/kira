@@ -46,8 +46,8 @@ kira build --device wasm32 main.kira
 
 ## Deferred to later milestones
 
-`CString` **results** (returned-string ownership is unspecified), aggregates
-(structs, arrays, enums) across the seam, callbacks and function pointers,
-non-C ABIs, variadics, generic externs, header parsing / autobind, dynamic-only
-C libraries, and compiling native library sources. Each is refused today with a
-typed diagnostic rather than mislowered.
+`../../docs/ffi.md` keeps the list, and keeps it once: this example predates
+half of what has landed since, and a second copy of the list is how a reader
+learns that structs, arrays, callbacks, and generated bindings are unavailable
+when they are not. Everything still deferred is refused with a typed diagnostic
+rather than mislowered.
