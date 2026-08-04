@@ -17,6 +17,7 @@ pub mod array;
 pub mod boxes;
 pub mod cells;
 pub mod enums;
+pub mod env;
 pub mod file_system;
 pub mod foreign;
 pub mod hybrid;

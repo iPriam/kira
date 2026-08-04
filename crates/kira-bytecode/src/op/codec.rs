@@ -11,8 +11,8 @@
 //! unknown opcode is rejected rather than guessed at.
 
 use super::{
-    CompilerOp, FieldPath, FileSystemOp, Instruction, PathStep, PlacePath, StringOp, TaskPrim,
-    WritebackTarget, opcode as o, step_tag,
+    CompilerOp, EnvOp, FieldPath, FileSystemOp, Instruction, PathStep, PlacePath, StringOp,
+    TaskPrim, WritebackTarget, opcode as o, step_tag,
 };
 
 /// An error decoding a byte stream back into instructions.
@@ -183,6 +183,10 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         }
         Instruction::Compiler(op) => {
             out.push(o::COMPILER);
+            out.push(op.as_byte());
+        }
+        Instruction::Env(op) => {
+            out.push(o::ENV_OP);
             out.push(op.as_byte());
         }
         Instruction::NewCell => out.push(o::NEW_CELL),
@@ -407,6 +411,15 @@ impl Cursor<'_> {
                     offset: tag_offset,
                 })?;
                 Instruction::Compiler(op)
+            }
+            o::ENV_OP => {
+                let tag_offset = self.offset;
+                let [tag] = self.take::<1>()?;
+                let op = EnvOp::from_byte(tag).ok_or(DecodeError::UnknownOpcode {
+                    opcode: tag,
+                    offset: tag_offset,
+                })?;
+                Instruction::Env(op)
             }
             o::TASK_OP => {
                 let tag_offset = self.offset;

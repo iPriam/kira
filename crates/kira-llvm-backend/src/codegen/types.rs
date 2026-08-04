@@ -9,7 +9,7 @@ use std::ffi::{CStr, CString};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 
-use kira_runtime_abi::{CompilerOp, FileSystemOp, ForeignPointerWidth};
+use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, ForeignPointerWidth};
 
 use super::ffi::c_string;
 
@@ -276,6 +276,8 @@ pub(crate) struct Runtime {
     /// An array for the same reason the file-system row is: the set is written
     /// down once, in [`CompilerOp::ALL`], and indexed by a total function.
     pub(super) compiler: [Callable; CompilerOp::ALL.len()],
+    /// The `kira_rt_env_*` helpers, indexed by [`EnvOp::as_byte`].
+    pub(super) env: [Callable; EnvOp::ALL.len()],
 }
 
 /// The LLVM form of `kira_native_bridge::enums::KiraEnum`.
@@ -688,6 +690,17 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
             compiler: CompilerOp::ALL.map(|op| {
                 let name = c_string(op.runtime_symbol());
                 declare(&name, types.ptr, &mut [types.ptr, types.i64])
+            }),
+            // Appended after the compiler helpers. Each takes one string
+            // handle; `Text` answers with another and `IsSet` with a flag, so
+            // the return type is the one thing that differs between them.
+            env: EnvOp::ALL.map(|op| {
+                let name = c_string(op.runtime_symbol());
+                let ret = match op {
+                    EnvOp::Text => types.ptr,
+                    EnvOp::IsSet => types.i8,
+                };
+                declare(&name, ret, &mut [types.ptr])
             }),
         }
     }

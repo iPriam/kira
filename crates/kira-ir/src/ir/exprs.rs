@@ -9,7 +9,7 @@
 //! deliberately — it resolves a local against the enclosing function's slot
 //! types, so it is a question about a program, not about a node.
 
-use kira_runtime_abi::{CompilerOp, FileSystemOp, NativeStateTypeId, TaskPrim};
+use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, NativeStateTypeId, TaskPrim};
 use kira_semantics_model::{EnumId, StructId, Type};
 
 use super::{ConvertKind, IrBinOp, IrExprId, IrPlace, IrUnOp, IrWriteback};
@@ -266,6 +266,15 @@ pub enum IrExpr {
     Compiler {
         /// Which operation this performs.
         op: CompilerOp,
+        /// Its arguments, in source order.
+        args: Vec<IrExprId>,
+        /// What the operation produces.
+        ty: Type,
+    },
+    /// One environment read, which only the engine can perform.
+    Env {
+        /// Which operation this performs.
+        op: EnvOp,
         /// Its arguments, in source order.
         args: Vec<IrExprId>,
         /// What the operation produces.
