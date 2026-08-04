@@ -13,7 +13,8 @@ function sgxGreet(name: String) -> String {
 }
 
 function sgxPick(i: Int) -> String {
-    if i == 0 { return "alpha" }
+    if i == 0 {
+        return "alpha" }
     return "beta"
 }
 

@@ -360,6 +360,20 @@ impl Lowerer<'_> {
                 text: self.lower_expr(text),
                 needle: self.lower_expr(needle),
             },
+            HirExpr::StringOperation {
+                op,
+                text,
+                arguments,
+                ty,
+            } => IrExpr::StringOperation {
+                op,
+                text: self.lower_expr(text),
+                arguments: arguments
+                    .into_iter()
+                    .map(|argument| self.lower_expr(argument))
+                    .collect(),
+                ty,
+            },
             HirExpr::StringOf { value } => IrExpr::StringOf {
                 value: self.lower_expr(value),
             },

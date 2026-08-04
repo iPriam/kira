@@ -11,6 +11,7 @@ pub enum Command {
     Tokens,
     Ast,
     Check,
+    Lint,
     Test,
     Build,
     Ffi,
@@ -30,13 +31,14 @@ pub enum Command {
 }
 
 /// All verbs, in the order they appear in help output.
-pub const ALL: [Command; 21] = [
+pub const ALL: [Command; 22] = [
     Command::Run,
     Command::Debug,
     Command::FetchLlvm,
     Command::Tokens,
     Command::Ast,
     Command::Check,
+    Command::Lint,
     Command::Test,
     Command::Build,
     Command::Ffi,
@@ -75,6 +77,7 @@ impl Command {
             Self::Tokens => "tokens",
             Self::Ast => "ast",
             Self::Check => "check",
+            Self::Lint => "lint",
             Self::Test => "test",
             Self::Build => "build",
             Self::Ffi => "ffi",
@@ -106,7 +109,7 @@ impl Command {
     pub fn arguments(self) -> &'static str {
         match self {
             Self::Run | Self::Build => " [file|dir] [--backend vm|llvm|hybrid] [--device]",
-            Self::Check | Self::Sync => " [file|dir]",
+            Self::Check | Self::Lint | Self::Sync => " [file|dir]",
             Self::Live => " [runner] <file> [--backend vm|hybrid] [--watch]",
             Self::Help => " [all]",
             _ => "",
@@ -122,6 +125,7 @@ impl Command {
             Self::Tokens => "print a file's tokens",
             Self::Ast => "print a file's syntax tree",
             Self::Check => "analyze a program without running it",
+            Self::Lint => "report what a package's `linter.kira` asks about",
             Self::Test => "build and run a program's tests",
             Self::Build => "compile to a native binary via LLVM",
             Self::Ffi => "inspect and bind native libraries",

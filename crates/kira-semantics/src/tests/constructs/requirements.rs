@@ -149,7 +149,8 @@ Case Counted(number: Int) {
 }
 "#,
         )
-        .contains(&"KSEM241")
+        .iter()
+        .any(|code| code == "KSEM241")
     );
 }
 
@@ -203,7 +204,8 @@ Shape Square(side: Int) {
 }
 "#,
         )
-        .contains(&"KSEM249")
+        .iter()
+        .any(|code| code == "KSEM249")
     );
 }
 
@@ -261,7 +263,8 @@ function main() {
 }
 "#,
         )
-        .contains(&"KSEM234")
+        .iter()
+        .any(|code| code == "KSEM234")
     );
 }
 
@@ -293,6 +296,7 @@ function main() {
 }
 "#,
         )
-        .contains(&"KSEM249")
+        .iter()
+        .any(|code| code == "KSEM249")
     );
 }

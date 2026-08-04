@@ -148,7 +148,7 @@ fn one_spelling_in_two_files_is_two_declarations() {
     assert!(
         diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KSEM004")),
+            .any(|diagnostic| diagnostic.has_code("KSEM004")),
         "two declarations of one name in one program collide: {diagnostics:?}"
     );
 }

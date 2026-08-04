@@ -172,6 +172,8 @@ impl CheckSession {
                 build_kind,
                 kira_semantics::PrecompiledShaders::default(),
                 kira_semantics::host_platform(),
+                // Not a lint run: this path answers about code as it is written.
+                false,
             );
             self.program = Some(program);
             return program;

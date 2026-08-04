@@ -86,6 +86,7 @@ pub fn builtin_fn(name: &str) -> Option<BuiltinFn> {
         "fract" => BuiltinFn::Fract,
         "sample" => BuiltinFn::Sample,
         "load" => BuiltinFn::Load,
+        "store" => BuiltinFn::Store,
         "atomicAdd" => BuiltinFn::AtomicAdd,
         _ => return None,
     })
@@ -120,6 +121,7 @@ pub fn arity(which: BuiltinFn) -> usize {
         | BuiltinFn::Mix
         | BuiltinFn::Smoothstep
         | BuiltinFn::Sample
+        | BuiltinFn::Store
         | BuiltinFn::AtomicAdd => 3,
     }
 }

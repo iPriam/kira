@@ -134,6 +134,14 @@ fn walk_expr(program: &IrProgram, id: IrExprId, found: &mut BTreeSet<u32>) {
             walk_expr(program, *text, found);
             walk_expr(program, *needle, found);
         }
+        IrExpr::StringOperation {
+            text, arguments, ..
+        } => {
+            walk_expr(program, *text, found);
+            for &argument in arguments {
+                walk_expr(program, argument, found);
+            }
+        }
         IrExpr::StringSubstring { text, start, end } => {
             walk_expr(program, *text, found);
             walk_expr(program, *start, found);

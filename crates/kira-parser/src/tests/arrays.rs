@@ -230,7 +230,7 @@ fn an_unclosed_array_literal_is_reported_and_recovers() {
 #[test]
 fn a_malformed_type_recovers_to_an_error_node_the_parser_reported() {
     let result = parse_text("function f(a: [) { return }");
-    assert!(result.diagnostics.iter().any(|d| d.code == Some("KPAR006")));
+    assert!(result.diagnostics.iter().any(|d| d.has_code("KPAR006")));
     let params = &only_function(&result).params;
     assert_eq!(type_spelling(&result, params[0].ty), "[<error>]");
 }

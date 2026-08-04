@@ -1,5 +1,11 @@
 //! Semantic analysis of classes: flattening, override checking, ambiguity, and
-//! the subtyping this port deliberately does not have.
+//! how far subtyping reaches.
+//!
+//! A subclass is admitted at a call argument, where the callee is specialized
+//! for its concrete class and an override still wins. It is refused everywhere
+//! else — a parent-typed binding, an array of the parent — because there is
+//! nothing yet to carry the concrete class across the widening, and running the
+//! parent's method on a child is a wrong answer rather than a limitation.
 
 use super::{codes, diagnostics};
 
@@ -52,7 +58,7 @@ fn a_value_cycle_through_a_class_is_refused() {
     ));
     let codes: Vec<&str> = reported
         .iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .filter_map(kira_diagnostics::Diagnostic::code_text)
         .collect();
     assert_eq!(codes, vec!["KSEM052"], "{reported:?}");
 }
@@ -239,17 +245,54 @@ fn a_parent_qualifier_outside_a_method_is_refused() {
 }
 
 #[test]
-fn a_subclass_is_not_assignable_to_its_parents_type() {
-    // No subtyping: a class instance's static type is always its dynamic type,
-    // which is what makes the per-class method copy total. Admitting this would
-    // reintroduce the dispatch question the whole design avoids.
+fn a_subclass_is_refused_where_no_specialization_can_pick_the_override() {
+    // Subtyping is admitted at a call argument because the callee is
+    // specialized for the concrete class there. A binding annotated with the
+    // parent has no such copy: `a.speak()` would resolve against `Base` and run
+    // the parent's method on a `Child`. Refused until a value can carry its
+    // class across the widening and dispatch on it — a wrong answer is worse
+    // than the refusal it would replace.
+    assert_eq!(
+        codes(
+            "class Base { function ping() -> Int { return 1 } }\n\
+             class Child extends Base { override function ping() -> Int { return 2 } }\n\
+             @Main function main() { let b: Base = Child {} print(b.ping()) return }"
+        ),
+        vec!["KSEM020"]
+    );
+}
+
+#[test]
+fn an_array_of_a_parent_is_refused_a_subclass_element() {
+    assert_eq!(
+        codes(
+            "class Base { function ping() -> Int { return 1 } }\n\
+             class Child extends Base { override function ping() -> Int { return 2 } }\n\
+             @Main function main() { let all: [Base] = [Child {}] print(all.count) return }"
+        ),
+        vec!["KSEM105"]
+    );
+}
+
+#[test]
+fn a_subclass_is_assignable_to_its_parents_type() {
+    // This used to be refused, on the reasoning that admitting it would
+    // reintroduce the dispatch question the per-class method copy avoids. It
+    // does not: the copy is what makes it safe. A parameter typed `Base` is
+    // registered again with that parameter typed `Child`, so the argument
+    // reaches a body where `b` is statically a `Child` and an override wins —
+    // still with nothing to dispatch at run time.
+    //
+    // The layout costs nothing either: a class flattens its parents' fields
+    // first, so `Child` already *has* `Base`'s prefix and a position expecting
+    // `Base` reads the slots it means to.
     assert_eq!(
         codes(
             "class Base { let a: Int = 1 }\nclass Child extends Base {}\n\
              function take(b: Base) -> Int { return b.a }\n\
              @Main function main() { print(take(move Child())) return }"
         ),
-        vec!["KSEM063"]
+        Vec::<String>::new()
     );
 }
 
@@ -298,5 +341,47 @@ fn a_class_may_extend_a_struct_and_inherit_its_methods() {
              @Main function main() { print(Derived().label()) return }"
         )
         .is_empty()
+    );
+}
+
+#[test]
+fn an_extend_block_may_add_methods_to_a_class() {
+    // What lets a class outgrow one file: its body is minted once, but its
+    // methods may be declared anywhere.
+    assert_eq!(
+        codes(&format!(
+            "class Meter {{ var ticks: Int = 0 }}\n\
+             extend Meter {{ function reading() -> Int {{ return self.ticks }} }}\n\
+             {MAIN}"
+        )),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_extend_block_may_not_redeclare_a_method_the_class_body_has() {
+    // Refused rather than resolved by file order. Two definitions of one
+    // method, one of them in a file the reader may not have open, is a coin
+    // toss dressed up as a rule.
+    assert_eq!(
+        codes(&format!(
+            "class Meter {{\n\
+             \x20   var ticks: Int = 0\n\
+             \x20   function reading() -> Int {{ return self.ticks }}\n\
+             }}\n\
+             extend Meter {{ function reading() -> Int {{ return 0 }} }}\n\
+             {MAIN}"
+        )),
+        vec!["KSEM257"]
+    );
+}
+
+#[test]
+fn an_extend_naming_neither_a_family_nor_a_class_is_reported() {
+    assert_eq!(
+        codes(&format!(
+            "extend Nowhere {{ function reading() -> Int {{ return 0 }} }}\n{MAIN}"
+        )),
+        vec!["KSEM238"]
     );
 }

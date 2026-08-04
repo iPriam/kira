@@ -100,7 +100,7 @@ fn a_malformed_variant_does_not_derail_the_file() {
     // function after the enum still parses.
     let result = parse_text("enum C { 123 A }\n@Main function main() { return }");
     assert!(
-        result.diagnostics.iter().any(|d| d.code == Some("KPAR031")),
+        result.diagnostics.iter().any(|d| d.has_code("KPAR031")),
         "{:?}",
         result.diagnostics
     );

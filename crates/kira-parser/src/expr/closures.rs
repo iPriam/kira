@@ -12,7 +12,7 @@
 //! appends the closure as a final argument to the call it follows. That is
 //! gated on struct literals being permitted, because both forms answer the same
 //! question — whether a `{` after an expression belongs to the expression or
-//! opens the block of an enclosing `if`/`while`/`for`/`switch`.
+//! opens the block of an enclosing `if`/`while`/`for`/`match`.
 
 use kira_source::Span;
 use kira_syntax_model::TokenKind;

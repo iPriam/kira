@@ -4,7 +4,7 @@
 //! [`Stmt::Error`] and the cursor resynchronizes at the next `;`, `}`, or
 //! statement-starting keyword, so one bad statement never derails the block.
 //!
-//! The two multi-arm branch statements, `switch` and `match`, live in
+//! The multi-arm branch statement, `match`, lives in
 //! [`branches`] — they are long enough together to crowd everything else, and
 //! they share the struct-literal suppression rule that makes `subject {` open a
 //! body rather than a literal.
@@ -32,7 +32,6 @@ impl Parser<'_> {
             TokenKind::For => Some(self.parse_for()),
             TokenKind::Break => Some(self.parse_break()),
             TokenKind::Continue => Some(self.parse_continue()),
-            TokenKind::Switch => Some(self.parse_switch()),
             TokenKind::Match => Some(self.parse_match()),
             TokenKind::Attempt => Some(self.parse_attempt()),
             _ => Some(self.parse_expr_or_assign()),

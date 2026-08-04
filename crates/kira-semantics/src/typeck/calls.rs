@@ -592,12 +592,46 @@ impl Analyzer<'_> {
         writebacks.push(HirWriteback { param, place });
     }
 
+    /// The name of the copy specialized for these arguments' concrete classes.
+    ///
+    /// Built from the arguments rather than looked up by signature because the
+    /// specialization *is* named after them — see `Analyzer::callable_name`. An
+    /// argument whose type is the declared class contributes nothing, so a call
+    /// that passes no subclass asks for the function as written and finds it.
+    ///
+    /// Returns the plain name when no specialization exists, which keeps a
+    /// function past the specialization limit callable.
+    fn specialized_name(&self, name: &str, args: &[HirExprId]) -> String {
+        let mut suffix = String::new();
+        for (index, arg) in args.iter().enumerate() {
+            let Type::Struct(id) = self.program.expr(*arg).type_of() else {
+                continue;
+            };
+            if !self.classes.contains_key(&id) {
+                continue;
+            }
+            suffix.push_str(&format!(
+                "${index}${}",
+                self.program.types.type_name(Type::Struct(id))
+            ));
+        }
+        let specialized = format!("{name}{suffix}");
+        if !suffix.is_empty() && self.sig_index.contains_key(&specialized) {
+            return specialized;
+        }
+        name.to_owned()
+    }
+
     fn analyze_user_call(
         &mut self,
         name: &str,
         args: &[HirExprId],
         span: kira_source::Span,
     ) -> HirExprId {
+        // A subclass argument reaches the copy specialized for it, so the
+        // override inside the body wins. Falls back to the function as written
+        // when no argument is a subclass, which is every ordinary call.
+        let name = &self.specialized_name(name, args);
         let Some((id, params, ret)) = self
             .lookup_function(name)
             .map(|(id, params, ret)| (id, params.to_vec(), ret))
@@ -624,7 +658,7 @@ impl Analyzer<'_> {
         } else {
             for (index, (arg, &expected)) in args.iter_mut().zip(params.iter()).enumerate() {
                 let actual = self.program.expr(*arg).type_of();
-                if !self.admits(actual, expected) {
+                if !self.admits_argument(actual, expected) {
                     self.emit(
                         span,
                         "KSEM063",

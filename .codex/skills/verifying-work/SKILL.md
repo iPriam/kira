@@ -41,6 +41,13 @@ without it pre-installed.
 - **Portable core.** Confirm `kira-vm-runtime` and everything below it still
   compiles for wasm:
   `cargo check -p kira-vm-runtime --target wasm32-unknown-unknown`.
+- **Lint.** Prove a change to `kira lint` or to Foundation's `LintRunner.kira`
+  against a package that *has* a `linter.kira`, pinning this checkout:
+  `KIRA_FOUNDATION_HOME=$PWD/foundation cargo run -p kira-cli -- lint
+  ../ui-foundation`. Without the pin the lints come from whichever toolchain is
+  installed rather than from here. Expect `foundation/` itself to have no
+  `linter.kira`: a `Lint` entry needs `import Foundation`, which inside
+  Foundation is a self-import that resolves to nothing.
 - **Parity.** Prove it rather than asserting it: run
   `crates/kira-cli/tests/backend_parity/` for any lowering or semantics
   change — same program, same stdout, same exit status on VM and native. Reject

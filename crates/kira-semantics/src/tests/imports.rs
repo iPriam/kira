@@ -197,7 +197,7 @@ fn importing_foundation_reports_that_there_is_no_such_module() {
         &[],
     );
     assert_eq!(diagnostics.len(), 1);
-    assert_eq!(diagnostics[0].code, Some("KSEM032"));
+    assert!(diagnostics[0].has_code("KSEM032"));
     assert!(
         diagnostics[0].message.contains("Foundation"),
         "{}",
@@ -386,7 +386,7 @@ fn a_package_declaration_needs_an_import_to_be_named() {
     assert!(
         diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.0.code == Some("KSEM061")),
+            .any(|diagnostic| diagnostic.0.has_code("KSEM061")),
         "without the import the name is not in scope: {diagnostics:?}"
     );
 }
@@ -417,7 +417,7 @@ fn visibility_does_not_compose_through_a_dependencys_own_imports() {
     assert!(
         diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.0.code == Some("KSEM061")),
+            .any(|diagnostic| diagnostic.0.has_code("KSEM061")),
         "`Outer` importing `Inner` does not lend `Inner` to whoever imports `Outer`: \
          {diagnostics:?}"
     );
@@ -488,7 +488,7 @@ fn one_package_may_not_declare_the_same_struct_name_twice() {
     assert!(
         diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.0.code == Some("KSEM004")),
+            .any(|diagnostic| diagnostic.0.has_code("KSEM004")),
         "one package is one flat scope, so the second declaration collides: {diagnostics:?}"
     );
 }
@@ -634,7 +634,7 @@ fn a_qualifier_does_not_reach_a_package_this_file_never_imported() {
     assert!(
         diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.0.code == Some("KSEM050")),
+            .any(|diagnostic| diagnostic.0.has_code("KSEM050")),
         "`Views` importing `Palette` does not lend `Palette` to whoever imports \
          `Views`: {diagnostics:?}"
     );
@@ -720,7 +720,7 @@ fn a_modules_diagnostic_points_into_the_module() {
     );
     let diagnostic = diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == Some("KSEM060"))
+        .find(|diagnostic| diagnostic.has_code("KSEM060"))
         .expect("the module's undefined name is reported");
     let label = diagnostic.labels.first().expect("a span to point at");
     assert_eq!(label.span.source, module_source_id(0));

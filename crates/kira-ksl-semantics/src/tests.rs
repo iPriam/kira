@@ -6,6 +6,8 @@ use kira_source::SourceId;
 use crate::model::{CheckedExprKind, ConstValue};
 use crate::{Checked, Module, check};
 
+mod constants;
+
 /// Parses and checks `text` on its own.
 fn check_text(text: &str) -> Checked {
     let parsed = kira_ksl_parser::parse(SourceId::new(0), text);
@@ -29,18 +31,19 @@ fn clean(text: &str) -> Checked {
         checked
             .diagnostics
             .iter()
-            .map(|d| (d.code, d.message.clone()))
+            .map(|d| (d.code.clone(), d.message.clone()))
             .collect::<Vec<_>>()
     );
     checked
 }
 
 /// The codes checking `text` reported.
-fn codes(text: &str) -> Vec<&'static str> {
+fn codes(text: &str) -> Vec<String> {
     check_text(text)
         .diagnostics
-        .into_iter()
-        .filter_map(|d| d.code)
+        .iter()
+        .filter_map(kira_diagnostics::Diagnostic::code_text)
+        .map(str::to_owned)
         .collect()
 }
 
@@ -239,25 +242,38 @@ fn mul_takes_the_matrixs_row_count_as_its_result_width() {
 
 #[test]
 fn an_unknown_type_is_reported_by_name() {
-    assert!(codes("type T {\n    let a: Nonsense\n}\n").contains(&"KSLS001"));
+    assert!(
+        codes("type T {\n    let a: Nonsense\n}\n")
+            .iter()
+            .any(|code| code == "KSLS001")
+    );
 }
 
 #[test]
 fn an_unbound_name_is_reported() {
-    assert!(codes("function f() -> Float {\n    return missing\n}\n").contains(&"KSLS002"));
+    assert!(
+        codes("function f() -> Float {\n    return missing\n}\n")
+            .iter()
+            .any(|code| code == "KSLS002")
+    );
 }
 
 #[test]
 fn a_member_that_does_not_exist_is_reported() {
     assert!(
         codes("type T { let a: Float }\nfunction f(t: T) -> Float {\n    return t.b\n}\n")
-            .contains(&"KSLS006")
+            .iter()
+            .any(|code| code == "KSLS006")
     );
 }
 
 #[test]
 fn a_component_past_the_end_of_a_vector_is_reported() {
-    assert!(codes("function f(v: Float2) -> Float {\n    return v.z\n}\n").contains(&"KSLS006"));
+    assert!(
+        codes("function f(v: Float2) -> Float {\n    return v.z\n}\n")
+            .iter()
+            .any(|code| code == "KSLS006")
+    );
 }
 
 #[test]
@@ -283,7 +299,8 @@ shader S {
 }
 "#
         )
-        .contains(&"KSLS007")
+        .iter()
+        .any(|code| code == "KSLS007")
     );
 }
 
@@ -307,7 +324,8 @@ shader S {
 }
 "#
         )
-        .contains(&"KSLS008")
+        .iter()
+        .any(|code| code == "KSLS008")
     );
 }
 
@@ -350,7 +368,8 @@ shader S {
 }
 "#
         )
-        .contains(&"KSLS008")
+        .iter()
+        .any(|code| code == "KSLS008")
     );
 }
 
@@ -358,7 +377,8 @@ shader S {
 fn a_uniform_of_a_non_struct_type_is_refused() {
     assert!(
         codes("shader S {\n    group G {\n        uniform x: Float\n    }\n}\n")
-            .contains(&"KSLS012")
+            .iter()
+            .any(|code| code == "KSLS012")
     );
 }
 
@@ -368,20 +388,25 @@ fn a_compute_stage_without_threads_is_refused() {
         codes(
             "shader S {\n    compute {\n        function entry() {\n            return\n        }\n    }\n}\n"
         )
-        .contains(&"KSLS009")
+        .iter().any(|code| code == "KSLS009")
     );
 }
 
 #[test]
 fn a_stage_without_an_entry_is_refused() {
-    assert!(codes("shader S {\n    vertex {\n    }\n}\n").contains(&"KSLS009"));
+    assert!(
+        codes("shader S {\n    vertex {\n    }\n}\n")
+            .iter()
+            .any(|code| code == "KSLS009")
+    );
 }
 
 #[test]
 fn a_function_that_can_fall_out_without_returning_is_refused() {
     assert!(
         codes("function f(x: Float) -> Float {\n    if x > 0.0 {\n        return x\n    }\n}\n")
-            .contains(&"KSLS015")
+            .iter()
+            .any(|code| code == "KSLS015")
     );
 }
 
@@ -395,7 +420,9 @@ fn a_return_in_both_branches_satisfies_the_result() {
 #[test]
 fn a_wrong_component_count_in_a_constructor_is_reported() {
     assert!(
-        codes("function f() -> Float4 {\n    return Float4(1.0, 2.0)\n}\n").contains(&"KSLS005")
+        codes("function f() -> Float4 {\n    return Float4(1.0, 2.0)\n}\n")
+            .iter()
+            .any(|code| code == "KSLS005")
     );
 }
 
@@ -409,7 +436,8 @@ fn a_vector_constructor_counts_its_arguments_components() {
 fn comparing_two_different_types_is_reported() {
     assert!(
         codes("function f(a: Float, b: UInt) -> Bool {\n    return a < b\n}\n")
-            .contains(&"KSLS014")
+            .iter()
+            .any(|code| code == "KSLS014")
     );
 }
 
@@ -474,7 +502,8 @@ shader S {
 }
 "#
         )
-        .contains(&"KSLS006")
+        .iter()
+        .any(|code| code == "KSLS006")
     );
 }
 
@@ -516,7 +545,7 @@ fn an_unqualified_call_inside_an_imported_module_reaches_its_own_sibling() {
         checked
             .diagnostics
             .iter()
-            .map(|d| (d.code, d.message.clone()))
+            .map(|d| (d.code.clone(), d.message.clone()))
             .collect::<Vec<_>>()
     );
     assert!(
@@ -544,11 +573,39 @@ fn an_import_with_no_module_supplied_is_reported() {
         &[],
     );
     assert!(
-        checked
-            .diagnostics
-            .iter()
-            .any(|d| d.code == Some("KSLS011")),
+        checked.diagnostics.iter().any(|d| d.has_code("KSLS011")),
         "{:?}",
         checked.diagnostics
     );
+}
+
+#[test]
+fn two_resources_on_one_slot_are_refused() {
+    // `albedo` is positional, so it takes slot 0; `extra` writes slot 0. On
+    // Metal the two would still compile, because a texture and a sampler live
+    // in separate spaces there — but WGSL and SPIR-V address a resource as
+    // (set, binding), so one would shadow the other. A shader that draws on
+    // Metal and reads the wrong resource on WebGPU has to fail here instead.
+    let found = codes(
+        "shader Clash {\n\
+         \x20   group Frame {\n\
+         \x20       texture albedo: Texture2d\n\
+         \x20       @binding(0) texture extra: Texture2d\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert!(found.iter().any(|code| code == "KSLS018"), "{found:?}");
+}
+
+#[test]
+fn a_written_slot_that_collides_with_nothing_is_accepted() {
+    let found = codes(
+        "shader Pinned {\n\
+         \x20   group Frame {\n\
+         \x20       texture albedo: Texture2d\n\
+         \x20       @binding(4) texture extra: Texture2d\n\
+         \x20   }\n\
+         }\n",
+    );
+    assert!(!found.iter().any(|code| code == "KSLS018"), "{found:?}");
 }

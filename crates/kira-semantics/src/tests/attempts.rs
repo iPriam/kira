@@ -69,7 +69,10 @@ fn a_try_inside_a_larger_expression_is_reported() {
          handle { A { return 0 } } }\n\
          @Main function main() { print(g()) return }",
     );
-    assert!(reported.contains(&"KSEM137"), "got {reported:?}");
+    assert!(
+        reported.iter().any(|code| code == "KSEM137"),
+        "got {reported:?}"
+    );
 }
 
 /// `try` on something that is not `Result`-shaped is reported once — and the

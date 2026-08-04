@@ -403,7 +403,7 @@ construct Shape {
 "#,
     );
     assert!(
-        result.diagnostics.iter().any(|d| d.code == Some("KPAR066")),
+        result.diagnostics.iter().any(|d| d.has_code("KPAR066")),
         "{:?}",
         result.diagnostics
     );
@@ -465,7 +465,7 @@ construct Shape {
 "#,
     );
     assert!(
-        result.diagnostics.iter().any(|d| d.code == Some("KPAR065")),
+        result.diagnostics.iter().any(|d| d.has_code("KPAR065")),
         "{:?}",
         result.diagnostics
     );
@@ -483,7 +483,7 @@ construct Shape {
 "#,
     );
     assert!(
-        result.diagnostics.iter().any(|d| d.code == Some("KPAR060")),
+        result.diagnostics.iter().any(|d| d.has_code("KPAR060")),
         "{:?}",
         result.diagnostics
     );
@@ -499,7 +499,7 @@ extend Widget {
 "#,
     );
     assert!(
-        result.diagnostics.iter().any(|d| d.code == Some("KPAR064")),
+        result.diagnostics.iter().any(|d| d.has_code("KPAR064")),
         "{:?}",
         result.diagnostics
     );

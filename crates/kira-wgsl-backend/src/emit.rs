@@ -256,6 +256,9 @@ impl Emitter<'_> {
             // `textureLoad` needs integer texel coordinates and an explicit
             // mip level; KSL's `load` names neither, so level 0 is implied.
             BuiltinFn::Load => format!("textureLoad({}, vec2<i32>({}), 0)", at(0), at(1)),
+            BuiltinFn::Store => {
+                format!("textureStore({}, vec2<i32>({}), {})", at(0), at(1), at(2))
+            }
             BuiltinFn::AtomicAdd => format!("atomicAdd(&{}[{}], {})", at(0), at(1), at(2)),
             BuiltinFn::Abs => format!("abs({})", at(0)),
             BuiltinFn::Atan2 => format!("atan2({}, {})", at(0), at(1)),
@@ -327,7 +330,10 @@ impl Emitter<'_> {
                     format!("{at} var<storage, {access}> {name}: array<{element}>;")
                 }
                 kira_shader_model::ResourceKind::Texture => {
-                    format!("{at} var {name}: {};", texture_name(&resource.type_name))
+                    format!(
+                        "{at} var {name}: {};",
+                        texture_name(&resource.type_name, resource.access)
+                    )
                 }
                 kira_shader_model::ResourceKind::Sampler => {
                     format!("{at} var {name}: sampler;")
@@ -384,7 +390,27 @@ pub(crate) fn wgsl_name(name: &str) -> String {
 }
 
 /// The WGSL texture type a reflected texture name spells.
-fn texture_name(name: &str) -> &'static str {
+/// A texture's WGSL type, including its access when it is a storage texture.
+///
+/// WGSL demands the texel *format* on a storage texture, which KSL does not
+/// say. The default is the one a colour target has — and a shader that needs
+/// another cannot ask for it yet, which is the honest limit of this until KSL
+/// grows the syntax.
+fn texture_name(name: &str, access: Option<kira_shader_model::AccessMode>) -> &'static str {
+    use kira_shader_model::AccessMode;
+    let written = match access {
+        Some(AccessMode::Write) => Some("write"),
+        Some(AccessMode::ReadWrite) => Some("read_write"),
+        Some(AccessMode::Read) | None => None,
+    };
+    if let Some(mode) = written {
+        return match (name, mode) {
+            ("Texture2dUint", "write") => "texture_storage_2d<r32uint, write>",
+            ("Texture2dUint", _) => "texture_storage_2d<r32uint, read_write>",
+            (_, "write") => "texture_storage_2d<rgba8unorm, write>",
+            _ => "texture_storage_2d<rgba8unorm, read_write>",
+        };
+    }
     match name {
         "Texture2dUint" => "texture_2d<u32>",
         "TextureCube" => "texture_cube<f32>",

@@ -76,6 +76,12 @@ impl FunctionLowering<'_, '_> {
                 self.lower_string_substring(text, start, end)
             }
             IrExpr::StringIndexOf { text, needle } => self.lower_string_index_of(text, needle),
+            IrExpr::StringOperation {
+                op,
+                text,
+                ref arguments,
+                ..
+            } => self.lower_string_operation(op, text, arguments.clone()),
             IrExpr::StringOf { value } => self.lower_string_of(value),
             IrExpr::CLayoutAddress { value, aggregate } => {
                 self.lower_clayout_address(value, aggregate)
@@ -421,6 +427,27 @@ impl FunctionLowering<'_, '_> {
             &mut [value, pattern],
             c"s.indexOf",
         ))
+    }
+
+    /// One of the shared-opcode string operations, the VM's `StringOp`.
+    ///
+    /// The operand byte indexes the callable table, so a new operation needs a
+    /// row there and nothing here — the receiver and arguments are pushed in
+    /// source order whatever the operation is, and each helper frees every
+    /// handle it was given.
+    fn lower_string_operation(
+        &mut self,
+        op: kira_runtime_abi::StringOp,
+        text: IrExprId,
+        arguments: Vec<IrExprId>,
+    ) -> Result<LLVMValueRef, LlvmError> {
+        let mut operands = Vec::with_capacity(arguments.len() + 1);
+        operands.push(self.lower_expr(text)?);
+        for argument in arguments {
+            operands.push(self.lower_expr(argument)?);
+        }
+        let callable = self.codegen.runtime.string_ops[usize::from(op.as_byte())];
+        Ok(self.call(callable, &mut operands, c"s.stringOp"))
     }
 
     /// A scalar rendered as text (`String(x)`), the VM's `StringOf`.

@@ -25,7 +25,7 @@ fn build(text: &str) -> ShaderIr {
         checked
             .diagnostics
             .iter()
-            .map(|d| (d.code, d.message.clone()))
+            .map(|d| (d.code.clone(), d.message.clone()))
             .collect::<Vec<_>>()
     );
     lower(checked.module, BackendTarget::Hlsl)
@@ -358,4 +358,50 @@ shader S {
 fn a_stage_the_shader_does_not_declare_emits_nothing() {
     let hlsl = emit(&build(COMPUTE), Stage::Vertex).expect("no vertex stage");
     assert!(hlsl.is_empty(), "{hlsl}");
+}
+
+const STORAGE_TEXTURE: &str = r#"
+type Q {
+    @builtin(thread_id)
+    let gid: UInt3
+}
+
+shader Writer {
+    group Work {
+        texture source: Texture2d
+        sampler linear: Sampler
+        texture write result: Texture2d
+    }
+
+    compute {
+        input Q
+        threads(8, 8, 1)
+
+        function entry(q: Q) {
+            let colour = sample(source, linear, Float2(0.5, 0.5))
+            store(result, q.gid.xy, colour)
+            return
+        }
+    }
+}
+"#;
+
+/// A `texture write` is unordered access, in the `u` register space.
+///
+/// Emitting it as `t` compiles and binds a read-only view a write cannot use,
+/// so the register letter is the assertion that matters here.
+#[test]
+fn a_write_texture_is_declared_read_write_in_the_u_space() {
+    let ir = build(STORAGE_TEXTURE);
+    let compute = emit(&ir, Stage::Compute).expect("compute");
+    assert!(
+        compute.contains("RWTexture2D<float4> result : register(u"),
+        "{compute}"
+    );
+    assert!(compute.contains("result["), "{compute}");
+    // The sampled binding beside it stays in `t`.
+    assert!(
+        compute.contains("Texture2D<float4> source : register(t"),
+        "{compute}"
+    );
 }

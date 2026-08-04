@@ -109,7 +109,8 @@ fn an_arity_mismatch_is_reported() {
             "{RESULT}\
              @Main function main() {{ let x: Result<Int> = .Ok(1) print(1) return }}"
         ))
-        .contains(&"KSEM174")
+        .iter()
+        .any(|code| code == "KSEM174")
     );
     assert!(
         codes(&format!(
@@ -120,7 +121,8 @@ fn an_arity_mismatch_is_reported() {
                  return\n\
              }}"
         ))
-        .contains(&"KSEM174")
+        .iter()
+        .any(|code| code == "KSEM174")
     );
 }
 
@@ -131,7 +133,8 @@ fn a_generic_enum_written_bare_says_what_is_missing() {
             "{RESULT}\
              @Main function main() {{ let x: Result = .Ok(1) print(1) return }}"
         ))
-        .contains(&"KSEM172")
+        .iter()
+        .any(|code| code == "KSEM172")
     );
 }
 
@@ -142,11 +145,13 @@ fn type_arguments_on_a_non_generic_type_are_refused() {
             "enum Color { Red Green }\n\
              @Main function main() {{ let x: Color<Int> = .Red print(1) return }}"
         )
-        .contains(&"KSEM173")
+        .iter()
+        .any(|code| code == "KSEM173")
     );
     assert!(
         codes("@Main function main() { let x: Int<Bool> = 1 print(x) return }")
-            .contains(&"KSEM173")
+            .iter()
+            .any(|code| code == "KSEM173")
     );
 }
 
@@ -154,7 +159,8 @@ fn type_arguments_on_a_non_generic_type_are_refused() {
 fn an_unknown_generic_name_is_an_unknown_type() {
     assert!(
         codes("@Main function main() { let x: Missing<Int> = 1 print(1) return }")
-            .contains(&"KSEM050")
+            .iter()
+            .any(|code| code == "KSEM050")
     );
 }
 
@@ -162,7 +168,8 @@ fn an_unknown_generic_name_is_an_unknown_type() {
 fn a_type_parameter_may_not_shadow_a_builtin() {
     assert!(
         codes("enum Box<Int> { One(Int) }\n@Main function main() { print(1) return }")
-            .contains(&"KSEM170")
+            .iter()
+            .any(|code| code == "KSEM170")
     );
 }
 
@@ -170,7 +177,8 @@ fn a_type_parameter_may_not_shadow_a_builtin() {
 fn a_repeated_type_parameter_is_reported() {
     assert!(
         codes("enum Pair<Value, Value> { One(Value) }\n@Main function main() { print(1) return }")
-            .contains(&"KSEM171")
+            .iter()
+            .any(|code| code == "KSEM171")
     );
 }
 
@@ -182,7 +190,8 @@ fn a_duplicate_generic_enum_is_reported() {
              enum Result<A, B> { Ok(A) Error(B) }\n\
              @Main function main() { print(1) return }"
         )
-        .contains(&"KSEM169")
+        .iter()
+        .any(|code| code == "KSEM169")
     );
 }
 
@@ -195,7 +204,8 @@ fn a_template_that_grows_its_own_argument_is_refused_not_overflowed() {
             "enum Grow<Value> { More(Grow<[Value]>) }\n\
              @Main function main() { let x: Grow<Int> = .More(.More(.More(.More(x)))) return }"
         )
-        .contains(&"KSEM175")
+        .iter()
+        .any(|code| code == "KSEM175")
     );
 }
 
@@ -315,7 +325,8 @@ fn a_qualified_spelling_with_no_instantiation_to_build_says_so() {
             "{RESULT}\
              @Main function main() {{ let r = Result.Ok(1) print(1) return }}"
         ))
-        .contains(&"KSEM254")
+        .iter()
+        .any(|code| code == "KSEM254")
     );
     // A payload-less variant reaches the same refusal down the field path.
     assert!(
@@ -323,7 +334,8 @@ fn a_qualified_spelling_with_no_instantiation_to_build_says_so() {
             "enum Flag<Value> { On Held(Value) }\n\
              @Main function main() { let f = Flag.On print(1) return }"
         )
-        .contains(&"KSEM254")
+        .iter()
+        .any(|code| code == "KSEM254")
     );
 }
 
@@ -337,7 +349,8 @@ fn a_qualified_spelling_against_an_unrelated_expected_type_is_refused() {
              enum Color {{ Red Green }}\n\
              @Main function main() {{ let c: Color = Result.Ok(1) print(1) return }}"
         ))
-        .contains(&"KSEM254")
+        .iter()
+        .any(|code| code == "KSEM254")
     );
     // A non-enum expectation is the same mistake.
     assert!(
@@ -345,7 +358,8 @@ fn a_qualified_spelling_against_an_unrelated_expected_type_is_refused() {
             "{RESULT}\
              @Main function main() {{ let n: Int = Result.Ok(1) print(1) return }}"
         ))
-        .contains(&"KSEM254")
+        .iter()
+        .any(|code| code == "KSEM254")
     );
 }
 
@@ -363,7 +377,8 @@ fn one_templates_name_does_not_construct_anothers_instantiation() {
                  return\n\
              }}"
         ))
-        .contains(&"KSEM254")
+        .iter()
+        .any(|code| code == "KSEM254")
     );
 }
 
@@ -381,7 +396,8 @@ fn a_hand_written_enums_name_does_not_construct_an_instantiation() {
                  return\n\
              }}"
         ))
-        .contains(&"KSEM120")
+        .iter()
+        .any(|code| code == "KSEM120")
     );
 }
 
@@ -398,7 +414,8 @@ fn a_variant_no_instantiation_has_is_still_a_missing_variant() {
                  return\n\
              }}"
         ))
-        .contains(&"KSEM120")
+        .iter()
+        .any(|code| code == "KSEM120")
     );
 }
 
@@ -424,17 +441,19 @@ fn a_local_named_like_a_template_wins_over_it() {
 fn a_generic_struct_class_and_function_are_refused_by_name() {
     assert!(
         codes("struct Box<Value> { let v: Int }\n@Main function main() { print(1) return }")
-            .contains(&"KPAR047")
+            .iter()
+            .any(|code| code == "KPAR047")
     );
     assert!(
         codes("class Box<Value> { let v: Int = 1 }\n@Main function main() { print(1) return }")
-            .contains(&"KPAR047")
+            .iter()
+            .any(|code| code == "KPAR047")
     );
     assert!(
         codes(
             "function id<Value>(v: Int) -> Int { return v }\n@Main function main() { print(1) return }"
         )
-        .contains(&"KPAR047")
+        .iter().any(|code| code == "KPAR047")
     );
 }
 
@@ -442,7 +461,8 @@ fn a_generic_struct_class_and_function_are_refused_by_name() {
 fn an_empty_type_parameter_list_is_reported() {
     assert!(
         codes("enum Result<> { Ok Error }\n@Main function main() { print(1) return }")
-            .contains(&"KPAR046")
+            .iter()
+            .any(|code| code == "KPAR046")
     );
 }
 

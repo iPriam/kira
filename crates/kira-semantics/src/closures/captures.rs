@@ -132,23 +132,6 @@ impl Scan<'_> {
                 }
                 self.block(&body);
             }
-            Stmt::Switch {
-                subject,
-                cases,
-                default_block,
-                ..
-            } => {
-                let (subject, cases, default_block) =
-                    (*subject, cases.clone(), default_block.clone());
-                self.expr(subject);
-                for case in &cases {
-                    self.expr(case.label);
-                    self.block(&case.body);
-                }
-                if let Some(block) = &default_block {
-                    self.block(block);
-                }
-            }
             Stmt::Match { subject, arms, .. } => {
                 let (subject, arms) = (*subject, arms.clone());
                 self.expr(subject);

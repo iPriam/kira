@@ -1,5 +1,5 @@
 //! Semantic-analysis tests for `match`: variant resolution, payload bindings,
-//! and the two checks `match` has that `switch` deliberately does not —
+//! and the two checks `match` has —
 //! exhaustive coverage and duplicate arms.
 
 use super::codes;
@@ -85,7 +85,7 @@ fn a_coverage_report_names_every_missing_variant() {
                 match s { Light -> { print(1) } } return }";
     let message = super::diagnostics(text)
         .into_iter()
-        .find(|diagnostic| diagnostic.code == Some("KSEM129"))
+        .find(|diagnostic| diagnostic.has_code("KSEM129"))
         .expect("a coverage diagnostic")
         .message;
     assert!(message.contains("Mid"), "{message}");
@@ -178,21 +178,5 @@ fn an_arm_may_ignore_a_payload_it_does_not_need() {
              match n { Tag -> { print(1) } Blank -> { print(2) } } return }"
         )
         .is_empty()
-    );
-}
-
-/// `switch` gains neither check. Its labels are arbitrary expressions, so
-/// there is no variant set to be exhaustive over — and a label written twice is
-/// dead code, not a diagnostic. The duplicate below is the one a `match` would
-/// report as `KSEM127`; a `switch` says nothing.
-#[test]
-fn switch_gains_neither_check() {
-    assert!(
-        codes(
-            "@Main function main() { let n = 1\n\
-             switch n { case 1 { print(1) } case 1 { print(9) } case 2 { print(2) } } return }"
-        )
-        .is_empty(),
-        "a switch is neither exhaustive-checked nor duplicate-checked"
     );
 }

@@ -1,0 +1,392 @@
+// Foundation's lint runner: the `collector` macro that reads a package's
+// `Lint` entries and checks the package against them.
+//
+// The same shape `TestRunner` has, for the same reason. Every other macro form
+// is attached to the declaration or call it rewrites, so none of them can ask
+// what a program *contains*. A `collector` runs once for the whole program and
+// is handed every declaration in it, which is both halves of a lint run at
+// once: the `Lint` entries a `linter.kira` wrote, and the code they judge.
+//
+// Nothing here is privileged. The selection is `d.family == "Lint"` — a string
+// compare against the family a declaration was written in — so a library could
+// declare its own family and its own runner with no change to the compiler.
+//
+// # What a lint may look at
+//
+// Reflection hands a declaration its name, its family, its fields — each with a
+// name, a written type, an initializer and its annotations — and the source
+// text of the whole thing, which a lint may search with the same `contains` /
+// `startsWith` / `split` a program has.
+//
+// It also hands over a declaration's *body* — the statements inside it, each
+// with its kind, the expression it branches on, and the statements nested in
+// turn — so a lint about what a function does is a walk rather than a guess at
+// text. What is still missing is expression structure: a lint can read what a
+// condition says, not take it apart.
+//
+// A collector must return syntax; a lint generates nothing, so this returns an
+// empty `quote`, which is appended to no file.
+
+comptime macro LintRunner {
+    kind { collector }
+    expand(declarations: [Declaration]) -> Syntax {
+        // Only when a verb asked. A lint runs during expansion, so without
+        // this gate every `check`, `run` and `build` would pay for the whole
+        // pass and report findings nobody asked to see.
+        if !Build.linting() {
+            return quote { }
+        }
+        // The configuration, read from the `Lint` entries before anything is
+        // judged. A package with no `linter.kira` declares no entries, every
+        // lint stays off, and the run reports nothing — silence that means
+        // "nothing was asked for" rather than "nothing was found".
+        var qualifiedOn: Bool = false
+        var qualifiedSeverity: String = "warning"
+        var indexLoopOn: Bool = false
+        var fileLengthOn: Bool = false
+        var fileLengthSeverity: String = "warning"
+        // 700 is the ceiling every Kira repo here writes to, and a lint that
+        // needed the number spelled in every `linter.kira` would drift between
+        // packages. An entry's `limit` overrides it; leaving it out takes this.
+        var fileLengthLimit: Int = 700
+        for entry in declarations {
+            if entry.family == "Lint" {
+                if entry.name.asString() == "QualifiedVariant" {
+                    for member in entry.fields {
+                        // An initializer arrives as the text it was written
+                        // with, so a string's quotes are part of it.
+                        if member.name.asString() == "enabled" {
+                            if member.initializer == "true" {
+                                qualifiedOn = true
+                            }
+                        }
+                        if member.name.asString() == "severity" {
+                            if member.initializer.contains("error") {
+                                qualifiedSeverity = "error"
+                            }
+                            if member.initializer.contains("note") {
+                                qualifiedSeverity = "note"
+                            }
+                        }
+                    }
+                }
+                if entry.name.asString() == "ManualIndexLoop" {
+                    for member in entry.fields {
+                        if member.name.asString() == "enabled" {
+                            if member.initializer == "true" {
+                                indexLoopOn = true
+                            }
+                        }
+                    }
+                }
+                if entry.name.asString() == "FileLength" {
+                    for member in entry.fields {
+                        if member.name.asString() == "enabled" {
+                            if member.initializer == "true" {
+                                fileLengthOn = true
+                            }
+                        }
+                        if member.name.asString() == "severity" {
+                            if member.initializer.contains("error") {
+                                fileLengthSeverity = "error"
+                            }
+                            if member.initializer.contains("note") {
+                                fileLengthSeverity = "note"
+                            }
+                        }
+                        if member.name.asString() == "limit" {
+                            let written = Int(member.initializer)
+                            if written > 0 {
+                                fileLengthLimit = written
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // KLINT000 — the receipt. Always emitted, before any lint runs.
+        //
+        // Silence has two meanings and they are opposites: "every lint ran and
+        // found nothing" and "no lint ran at all". A reader cannot tell them
+        // apart, and the second one has already been mistaken for the first in
+        // this repo — a runner that failed to evaluate reported nothing, under a
+        // printed `ok`. So the runner says how many lints it ran, every time,
+        // and `kira lint` refuses to call a run clean without this. It is not a
+        // finding, so the verb consumes it rather than printing it.
+        var enabled: Int = 0
+        if qualifiedOn {
+            enabled = enabled + 1
+        }
+        if indexLoopOn {
+            enabled = enabled + 1
+        }
+        if fileLengthOn {
+            enabled = enabled + 1
+        }
+        Diagnostics.note("{\"lintsRan\":" + String(enabled) + "}", code: "KLINT000")
+
+        // KLINT001 — an enum variant written with the type it already belongs
+        // to.
+        //
+        // `material: FoundationMaterial.LiquidGlass` names the type twice: once
+        // in the parameter's declaration and again at the call. Kira resolves a
+        // leading dot against the expected type — `.LiquidGlass` — and compiles
+        // `c == .Red` to a tag compare with no throwaway enum, so the qualified
+        // spelling is longer and does more work.
+        //
+        // Found by searching a declaration's own text for `<EnumName>.`, where
+        // the enum names are the ones this very program declares — which is why
+        // this has to be a collector: no other macro form is handed the whole
+        // program, and without that the lint would not know which names are
+        // enums.
+        //
+        // The enum names are gathered in their own pass first. Asking "is this
+        // one an enum" inside the inner loop walked every declaration in the
+        // *program* — Foundation and every library included — once per
+        // declaration, and a real package has thousands: the run took minutes
+        // on a tree-walking evaluator. Gathering first makes the inner loop as
+        // long as the enum list rather than as long as the program.
+        var enumNames: [String] = []
+        if qualifiedOn {
+            for declared in declarations {
+                if declared.kind == "enum" {
+                    enumNames.append(declared.name.asString())
+                }
+            }
+        }
+        if qualifiedOn {
+            for target in declarations {
+                if target.family == "Lint" {
+                    continue
+                }
+                for name in enumNames {
+                    let qualified = name + "."
+                    // A declaration mentioning its own name is declaring it,
+                    // not qualifying a variant with it.
+                    if target.name.asString() == name {
+                        continue
+                    }
+                    if target.syntax.contains(qualified) {
+                        let message = "`" + qualified +
+                            "…` names the enum a leading dot already resolves to"
+                        if qualifiedSeverity == "error" {
+                            Diagnostics.error(message, at: target.syntax, code: "KLINT001")
+                        }
+                        if qualifiedSeverity == "note" {
+                            Diagnostics.note(message, at: target.syntax, code: "KLINT001")
+                        }
+                        if qualifiedSeverity == "warning" {
+                            Diagnostics.warning(message, at: target.syntax, code: "KLINT001")
+                        }
+                    }
+                }
+            }
+        }
+
+        // KLINT002 — a `while` counting an index by hand.
+        //
+        // `while i < xs.count { … i = i + 1 }` is a `for` written the long way,
+        // and the long way is where an off-by-one lives.
+        //
+        // Reported only when the rewrite is actually safe, which is three
+        // questions a text search cannot answer:
+        //
+        //   * does the body grow or shrink the collection? A `for` reads its
+        //     bound once and a `while` re-reads it, so those differ;
+        //   * does the body `continue`? That skips a manual step but not a
+        //     `for`'s, so converting changes behaviour;
+        //   * is the counter read after the loop? Then it cannot become the
+        //     loop's own binding.
+        //
+        // All three need the body's *shape* — which statement is last, what is
+        // nested, what comes after — so this lint is why declarations carry a
+        // structured body at all.
+        if indexLoopOn {
+            for target in declarations {
+                if target.family == "Lint" {
+                    continue
+                }
+                var seenLoop: Bool = false
+                var counter: String = ""
+                var bound: String = ""
+                var usedAfter: Bool = false
+                var reportAt: Syntax = quote { }
+                // Bound once: reading `target.body` re-parses the declaration,
+                // and this walk looks at every statement twice.
+                let body = target.body
+                for k in 0..body.count {
+                    let statement = body[k]
+                    if seenLoop {
+                        // After the loop: is the counter still named?
+                        if statement.syntax.contains(counter) {
+                            usedAfter = true
+                        }
+                    }
+                    if seenLoop == false {
+                        if statement.kind == "while" {
+                            // A compound condition is not a `for`: the extra
+                            // test is an early exit, and a range loop has none.
+                            var compound: Bool = false
+                            if statement.head.contains("&&") {
+                                compound = true
+                            }
+                            if statement.head.contains("||") {
+                                compound = true
+                            }
+                            if statement.head.contains(".count") && compound == false {
+                                var name: String = ""
+                                for piece in statement.head.split(" < ") {
+                                    if name == "" {
+                                        name = piece
+                                    }
+                                }
+                                for piece in statement.head.split(" < ") {
+                                    bound = piece
+                                }
+                                var last: String = ""
+                                var jumps: Bool = false
+                                var mutates: Bool = false
+                                for inner in statement.body {
+                                    last = inner.syntax
+                                    if inner.kind == "continue" {
+                                        jumps = true
+                                    }
+                                    if inner.syntax.contains(".append(") {
+                                        mutates = true
+                                    }
+                                    for deeper in inner.body {
+                                        if deeper.kind == "continue" {
+                                            jumps = true
+                                        }
+                                        if deeper.syntax.contains(".append(") {
+                                            mutates = true
+                                        }
+                                    }
+                                }
+                                if last.contains(" + 1") {
+                                    if jumps == false {
+                                        if mutates == false {
+                                            // The `var i = 0` sits directly
+                                            // above; span both so the fix can
+                                            // collapse them into one `for`.
+                                            if k > 0 {
+                                                let declaration = body[k - 1]
+                                                if declaration.syntax.contains("var " + name + " = 0") {
+                                                    seenLoop = true
+                                                    counter = name
+                                                    reportAt = declaration.through(statement)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if seenLoop {
+                    if usedAfter == false {
+                        Diagnostics.warning(
+                            "this `while` counts an index by hand; `for " + counter +
+                                " in 0.." + bound + "` does it for you, and the counter is not read after the loop",
+                            at: reportAt,
+                            code: "KLINT002",
+                            // The replacement is the run itself, edited: the
+                            // declaration and the `while` header collapse into
+                            // the `for`, and the hand-written step goes. Built
+                            // from the real source, so every line inside keeps
+                            // the indentation it was written with.
+                            fix: reportAt
+                                .replace("var " + counter + " = 0\n", "")
+                                .replace(
+                                    "while " + counter + " < " + bound + " {",
+                                    "for " + counter + " in 0.." + bound + " {"
+                                )
+                                .replace(counter + " = " + counter + " + 1\n", "")
+                        )
+                    }
+                }
+            }
+        }
+
+        // KLINT003 — a file past the line ceiling.
+        //
+        // Size is the one property of a file a lint can judge without reading
+        // any of it, and the one a reviewer notices last: nothing about a
+        // 1400-line file fails to compile, so it grows until somebody measures.
+        //
+        // Reported once per file, on the LAST declaration in it — the one the
+        // file grew past the ceiling to hold, and the natural place to cut. A
+        // declaration re-scanned from detached text belongs to no file and
+        // reports `0` for both numbers, so it is skipped rather than counted as
+        // a zero-line file.
+        //
+        // "Last in its file" is read off the order rather than searched for.
+        // Declarations arrive grouped by file, in file order, so the last one
+        // of a file is whichever sits immediately before the file changes —
+        // one pass, carrying the previous. Searching each declaration for a
+        // later sibling instead walked the whole program once per declaration,
+        // which is minutes on a real package.
+        //
+        // No `fix:`. Where to cut a long file is a judgement about what belongs
+        // together, and a lint that guessed would move code by line count.
+        //
+        // The report is written twice rather than through a helper: an `expand`
+        // body runs on the compile-time evaluator, which calls no ordinary Kira
+        // function.
+        if fileLengthOn {
+            var pendingFile: Int = -1
+            var pendingLines: Int = 0
+            var pendingAt: Syntax = quote { }
+            for target in declarations {
+                // Generated bindings are exempt, always. A `bindings/`
+                // directory holds machine-written code — a file per foreign
+                // API, as long as that API is — and measuring it says nothing
+                // about how the package is organized: nobody reads it, nobody
+                // splits it, and the generator would put it straight back.
+                // Exempt here rather than through a per-package setting because
+                // it is true of every package that has one.
+                if target.path.contains("/bindings/") {
+                    continue
+                }
+                if target.fileId != pendingFile {
+                    if pendingLines > fileLengthLimit {
+                        let message = "this file is " + String(pendingLines) +
+                            " lines, past the " + String(fileLengthLimit) +
+                            "-line ceiling; split it into cohesive modules"
+                        if fileLengthSeverity == "error" {
+                            Diagnostics.error(message, at: pendingAt, code: "KLINT003")
+                        }
+                        if fileLengthSeverity == "note" {
+                            Diagnostics.note(message, at: pendingAt, code: "KLINT003")
+                        }
+                        if fileLengthSeverity == "warning" {
+                            Diagnostics.warning(message, at: pendingAt, code: "KLINT003")
+                        }
+                    }
+                    pendingFile = target.fileId
+                }
+                pendingLines = target.fileLines
+                pendingAt = target.syntax
+            }
+            // The final file has no successor to notice the change.
+            if pendingLines > fileLengthLimit {
+                let message = "this file is " + String(pendingLines) +
+                    " lines, past the " + String(fileLengthLimit) +
+                    "-line ceiling; split it into cohesive modules"
+                if fileLengthSeverity == "error" {
+                    Diagnostics.error(message, at: pendingAt, code: "KLINT003")
+                }
+                if fileLengthSeverity == "note" {
+                    Diagnostics.note(message, at: pendingAt, code: "KLINT003")
+                }
+                if fileLengthSeverity == "warning" {
+                    Diagnostics.warning(message, at: pendingAt, code: "KLINT003")
+                }
+            }
+        }
+
+        return quote { }
+    }
+}

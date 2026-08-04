@@ -73,10 +73,13 @@ what the task touches — before writing code, never after a review.
   rule already stated here, fix it in the same session rather than asking
   whether to. Never narrow a rule to the reading that permits the least work.
 
-- **File size.** Respect the ladder for every Rust file: at **≥700 lines**,
-  split now into cohesive 300–500-line modules or state the one concrete reason
-  the file is still cohesive — silence is not a decision; **≥1000 lines** is
-  broken on sight, and no edit may leave a file above it. Preserve
+- **File size.** Treat **700 lines as a hard ceiling for every `.kira` and
+  `.ksl` file**, generated bindings excepted: split before the edit lands,
+  never after, and never state a reason to keep one above it — there isn't one.
+  Respect the ladder for every `.rs` file: at **≥600 lines**, look for the
+  split; at **≥700**, split now into cohesive 300–500-line modules or state the
+  one concrete reason the file is still cohesive — silence is not a decision;
+  **≥1000** is broken on sight, and no edit may leave a file above it. Preserve
   APIs/layering/behavior across a split, and never ask first.
 
 - **Root.** Keep scratch, repros, generated helpers, and one-off files out of

@@ -54,7 +54,8 @@ function describe(n: Int) -> Int {
     match find(n) {
         Ok(value) -> { return value }
         Error(why) -> {
-            if why == .NotFound { return 0 - 1 }
+            if why == .NotFound {
+                return 0 - 1 }
             return 0 - 2
         }
     }

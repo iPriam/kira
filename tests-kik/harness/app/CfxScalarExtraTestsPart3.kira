@@ -1,0 +1,406 @@
+import Foundation
+
+// CfxScalarExtraTests.kira
+// Deep scalar test suite: arithmetic identities, operator precedence, integer
+// div/mod edge cases, comparison matrices, boolean truth tables, ternary chains,
+// float checksums, and Gauss/triangular/square-number cross-checks.
+// All top-level names use prefix cfxs / CfxS.
+
+// ---------------------------------------------------------------------------
+// Large safe values
+// ---------------------------------------------------------------------------
+
+Test CfxSLargeSafe1 {
+    test { return 100000 * 100000 }
+    // 10^10 = 10000000000
+    expect { let e: Result<Int, TestFailure> = .Ok(10000000000); return e }
+}
+
+Test CfxSLargeSafe2 {
+    test { return 999999 * 999999 }
+    // 999998000001
+    expect { let e: Result<Int, TestFailure> = .Ok(999998000001); return e }
+}
+
+Test CfxSLargeSafe3 {
+    test {
+        let a = 123456789
+        let b = 9
+        return a * b
+    }
+    // 1111111101
+    expect { let e: Result<Int, TestFailure> = .Ok(1111111101); return e }
+}
+
+Test CfxSLargeDiv2 {
+    test {
+        let a = 1000000000000
+        let b = 1000000
+        return a / b
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1000000); return e }
+}
+
+// ---------------------------------------------------------------------------
+// GCD cross-checks
+// ---------------------------------------------------------------------------
+
+Test CfxSGcdIdentity {
+    test { return cfxsGcd(42, 42) }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+Test CfxSGcdWithOne {
+    test { return cfxsGcd(1, 999) }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+Test CfxSGcdSymmetric {
+    test {
+        let g1 = cfxsGcd(48, 18)
+        let g2 = cfxsGcd(18, 48)
+        return g1 == g2 ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+Test CfxSGcdChain {
+    test {
+        var g = cfxsGcd(360, 240)
+        g = cfxsGcd(g, 180)
+        g = cfxsGcd(g, 120)
+        return g
+    }
+    // gcd(360,240)=120, gcd(120,180)=60, gcd(60,120)=60
+    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+}
+
+Test CfxSGcdLcmProduct {
+    test {
+        let a = 12
+        let b = 18
+        let g = cfxsGcd(a, b)
+        let lcm = a * b / g
+        return lcm
+    }
+    // gcd(12,18)=6, lcm=36
+    expect { let e: Result<Int, TestFailure> = .Ok(36); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Min/Max helpers
+// ---------------------------------------------------------------------------
+
+Test CfxSMinBasic {
+    test { return cfxsMin(7, 13) }
+    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+}
+
+Test CfxSMaxBasic {
+    test { return cfxsMax(7, 13) }
+    expect { let e: Result<Int, TestFailure> = .Ok(13); return e }
+}
+
+Test CfxSMinEq {
+    test { return cfxsMin(5, 5) }
+    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+}
+
+Test CfxSAbsPos {
+    test { return cfxsAbs(42) }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+Test CfxSAbsNeg {
+    test { return cfxsAbs(0 - 42) }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+Test CfxSAbsZero {
+    test { return cfxsAbs(0) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+Test CfxSMinOverArray {
+    test {
+        var mn = 1000000
+        let xs: [Int] = [42, 7, 99, 3, 55, 1, 88]
+        for v in xs {
+            mn = cfxsMin(mn, v)
+        }
+        return mn
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+Test CfxSMaxOverArray {
+    test {
+        var mx = 0
+        let xs: [Int] = [42, 7, 99, 3, 55, 1, 88]
+        for v in xs {
+            mx = cfxsMax(mx, v)
+        }
+        return mx
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(99); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Mixed operator loop folds
+// ---------------------------------------------------------------------------
+
+Test CfxSMixedLoop1 {
+    test {
+        var acc = 0
+        var i = 1
+        while i <= 20 {
+            acc = acc + i * 2 - i / 3 + i % 5
+            i = i + 1
+        }
+        // sum: i*2=420, -sum(i/3)=sum(0,0,1,1,1,2,2,2,3,3,3,4,4,4,5,5,5,6,6,6)=63
+        // +sum(i%5)=sum(1,2,3,4,0,1,2,3,4,0,1,2,3,4,0,1,2,3,4,0)=40
+        // total = 420-63+40 = 397
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(397); return e }
+}
+
+Test CfxSMixedLoop2 {
+    test {
+        var acc = 0
+        var i = 0
+        while i < 30 {
+            acc = acc + (i % 2 == 0 ? i * i : (0 - i))
+            i = i + 1
+        }
+        // evens 0,2,...,28: sum(i^2) = 4*sum(k^2,k=0..14) = 4*(14*15*29/6) = 4*1015 = 4060
+        // odds 1,3,...,29 negated: -(1+3+...+29) = -(15^2) = -225
+        // total = 4060-225 = 3835
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(3835); return e }
+}
+
+Test CfxSMixedLoop3 {
+    test {
+        var acc = 0
+        var i = 1
+        while i <= 10 {
+            acc = acc + cfxsPow(2, i) - cfxsPow(i, 2)
+            i = i + 1
+        }
+        // 2^i: 2,4,8,16,32,64,128,256,512,1024 sum=2046
+        // i^2: 1,4,9,16,25,36,49,64,81,100 sum=385
+        // total = 2046-385 = 1661
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1661); return e }
+}
+
+// ---------------------------------------------------------------------------
+// String .count (no concat)
+// ---------------------------------------------------------------------------
+
+Test CfxSStringCountHello {
+    test {
+        let s = "hello"
+        return s.count
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+}
+
+Test CfxSStringCountEmpty {
+    test {
+        let s = ""
+        return s.count
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+Test CfxSStringCountLong {
+    test {
+        let s = "abcdefghij"
+        return s.count
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+}
+
+// ---------------------------------------------------------------------------
+// TRAP tests
+// ---------------------------------------------------------------------------
+
+Test CfxSTrapDivZero {
+    test {
+        let a = 7
+        let b = 0
+        return a / b
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test CfxSTrapModZero {
+    test {
+        let a = 100
+        let b = 0
+        return a % b
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test CfxSTrapArrayOOB {
+    test {
+        let xs: [Int] = [1, 2, 3]
+        let _ = xs[100]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test CfxSTrapDivZeroNeg {
+    test {
+        let a = 0 - 5
+        let b = 0
+        return a / b
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test CfxSTrapDivZeroLarge {
+    test {
+        let a = 9999999999
+        let b = 0
+        return a / b
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test CfxSTrapOOBSingleElem {
+    test {
+        let xs: [Int] = [99]
+        let _ = xs[1]
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test CfxSTrapModZeroLoop {
+    test {
+        var d = 3
+        var i = 0
+        while i < 5 {
+            if i == 3 {
+                d = 0 }
+            let _ = 10 % d
+            i = i + 1
+        }
+        return 0
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Negative `%` truncates toward zero (S8)
+//
+// `%` must truncate (sign follows the dividend) to match `/` (@divTrunc), the
+// LLVM backend's srem, and Rust — NOT floored (@mod). These previously failed
+// on the VM (floored gave 3 / -3) and disagreed with the LLVM backend.
+// ---------------------------------------------------------------------------
+
+Test CfxSModNegDividendPosDivisor {
+    test { return (0 - 17) % 5 }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 2); return e }
+}
+
+Test CfxSModPosDividendNegDivisor {
+    test { return 17 % (0 - 5) }
+    expect { let e: Result<Int, TestFailure> = .Ok(2); return e }
+}
+
+Test CfxSModNegDividendNegDivisor {
+    test { return (0 - 17) % (0 - 5) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 2); return e }
+}
+
+Test CfxSModNegExact {
+    test { return (0 - 20) % 5 }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+Test CfxSDivModIdentityNegDividend {
+    test {
+        let a = 0 - 17
+        let b = 5
+        return (a / b) * b + (a % b)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 17); return e }
+}
+
+Test CfxSDivModIdentityNegDivisor {
+    test {
+        let a = 17
+        let b = 0 - 5
+        return (a / b) * b + (a % b)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(17); return e }
+}
+
+Test CfxSDivModIdentityGridMixedSigns {
+    test {
+        // (a/b)*b + a%b == a over a grid of signed operands; count the holds.
+        var ok = 0
+        var a = 0 - 12
+        while a <= 12 {
+            var b = 0 - 4
+            while b <= 4 {
+                if b != 0 {
+                    if (a / b) * b + (a % b) == a {
+                        ok = ok + 1
+                    }
+                }
+                b = b + 1
+            }
+            a = a + 1
+        }
+        // a in [-12,12] = 25 values; b in [-4,4] \ {0} = 8 -> 200 holds.
+        return ok
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(200); return e }
+}
+
+Test CfxSFloatModNegTruncates {
+    test {
+        let r = (0.0 - 9.0) % 4.0
+        // truncated remainder: sign follows dividend -> -1.0 (floored would be 3.0)
+        return r == (0.0 - 1.0) ? 1 : 0
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+// ---------------------------------------------------------------------------
+// VM recursion-depth guard (S6)
+//
+// The bytecode interpreter recurses on the native stack once per Kira call.
+// Recursing past the guard now raises a clean runtime failure instead of
+// overflowing the native stack (previously SIGABRT with no diagnostic).
+// Shallow recursion is unaffected.
+// ---------------------------------------------------------------------------
+
+function cfxsDeepRec(d: Int) -> Int {
+    if d <= 0 {
+        return 0
+    }
+    return 1 + cfxsDeepRec(d - 1)
+}
+
+Test CfxSShallowRecursionOk {
+    test { return cfxsDeepRec(200) }
+    expect { let e: Result<Int, TestFailure> = .Ok(200); return e }
+}
+
+Test CfxSDeepRecursionTrapsCleanly {
+    test {
+        // 1000 nested calls exceeds the 256-frame VM guard -> clean RuntimeFailure.
+        return cfxsDeepRec(1000)
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("recursion")); return e }
+}

@@ -16,18 +16,19 @@ fn clean(text: &str) -> Parsed {
         parsed
             .diagnostics
             .iter()
-            .map(|d| (d.code, d.message.clone()))
+            .map(|d| (d.code.clone(), d.message.clone()))
             .collect::<Vec<_>>()
     );
     parsed
 }
 
 /// The codes `text` reported.
-fn codes(text: &str) -> Vec<&'static str> {
+fn codes(text: &str) -> Vec<String> {
     parse(SourceId::new(0), text)
         .diagnostics
-        .into_iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .iter()
+        .filter_map(kira_diagnostics::Diagnostic::code_text)
+        .map(str::to_owned)
         .collect()
 }
 
@@ -340,19 +341,26 @@ fn a_malformed_field_costs_its_own_line_and_nothing_after_it() {
 fn a_bad_access_mode_is_named_rather_than_guessed() {
     assert!(
         codes("shader S {\n    group G {\n        storage sideways x: [Float]\n    }\n}\n")
-            .contains(&"KSLP004")
+            .iter()
+            .any(|code| code == "KSLP004")
     );
 }
 
 #[test]
 fn an_unknown_annotation_is_reported_by_name() {
-    assert!(codes("type T {\n    @nonsense(x)\n    let a: Float\n}\n").contains(&"KSLP005"));
+    assert!(
+        codes("type T {\n    @nonsense(x)\n    let a: Float\n}\n")
+            .iter()
+            .any(|code| code == "KSLP005")
+    );
 }
 
 #[test]
 fn threads_needs_exactly_three_extents() {
     assert!(
-        codes("shader S {\n    compute {\n        threads(8, 1)\n    }\n}\n").contains(&"KSLP007")
+        codes("shader S {\n    compute {\n        threads(8, 1)\n    }\n}\n")
+            .iter()
+            .any(|code| code == "KSLP007")
     );
 }
 
@@ -361,7 +369,7 @@ fn junk_at_the_top_level_is_reported_once_and_the_parse_continues() {
     let text = "$$$\n\ntype T {\n    let a: Float\n}\n";
     let parsed = parse(SourceId::new(0), text);
     assert!(
-        parsed.diagnostics.iter().any(|d| d.code == Some("KSLP002")),
+        parsed.diagnostics.iter().any(|d| d.has_code("KSLP002")),
         "{:?}",
         parsed.diagnostics
     );
@@ -374,6 +382,64 @@ fn a_file_of_only_junk_terminates() {
     let parsed = parse(SourceId::new(0), "} } ) ] , . @ @ @");
     assert!(!parsed.diagnostics.is_empty());
     assert!(parsed.tree.items.is_empty());
+}
+
+#[test]
+fn a_const_parses_with_its_type_and_value() {
+    let parsed = clean("const GAMMA: Float = 2.2\n");
+    let [Item::Const(declared)] = parsed.tree.items.as_slice() else {
+        panic!("{:?}", parsed.tree.items);
+    };
+    assert_eq!(parsed.interner.resolve(declared.name), "GAMMA");
+    assert!(matches!(
+        parsed.tree.expr(declared.value),
+        Expr::Float { value, .. } if (*value - 2.2).abs() < f64::EPSILON
+    ));
+}
+
+#[test]
+fn an_enum_parses_every_variant_with_its_number() {
+    let parsed = clean("enum Ink {\n    Low = 1,\n    High = 2\n}\n");
+    let [Item::Enum(declared)] = parsed.tree.items.as_slice() else {
+        panic!("{:?}", parsed.tree.items);
+    };
+    let written: Vec<&str> = declared
+        .variants
+        .iter()
+        .map(|variant| parsed.interner.resolve(variant.name))
+        .collect();
+    assert_eq!(written, ["Low", "High"]);
+}
+
+#[test]
+fn a_trailing_comma_after_the_last_variant_is_accepted() {
+    let parsed = clean("enum Ink {\n    Low = 1,\n}\n");
+    let [Item::Enum(declared)] = parsed.tree.items.as_slice() else {
+        panic!("{:?}", parsed.tree.items);
+    };
+    assert_eq!(declared.variants.len(), 1);
+}
+
+#[test]
+fn a_variant_with_no_number_is_reported_and_the_parse_continues() {
+    // Every variant writes its own number — an enum here names an encoding
+    // that arrived from outside, so declaration order settles nothing.
+    let parsed = parse(
+        SourceId::new(0),
+        "enum Ink {\n    Low\n}\ntype T {\n    let a: Float\n}\n",
+    );
+    assert!(
+        !parsed.diagnostics.is_empty(),
+        "a bare variant was accepted"
+    );
+    assert!(
+        parsed
+            .tree
+            .items
+            .iter()
+            .any(|item| matches!(item, Item::Type(_))),
+        "the parse stopped at the bad variant"
+    );
 }
 
 #[test]

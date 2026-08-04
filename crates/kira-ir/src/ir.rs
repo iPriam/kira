@@ -165,6 +165,7 @@ impl IrProgram {
             | IrExpr::Compiler { ty, .. }
             | IrExpr::CellNew { ty, .. }
             | IrExpr::CellGet { ty, .. }
+            | IrExpr::StringOperation { ty, .. }
             | IrExpr::Index { ty, .. } => *ty,
             IrExpr::Select { ty, .. } => *ty,
             IrExpr::ArrayLen { .. }

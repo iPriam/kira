@@ -393,11 +393,12 @@ mod tests {
         fs::write(dir.join("package.kira"), manifest).expect("write package manifest");
     }
 
-    fn diagnostic_codes(graph: &ResolvedPackageGraph) -> Vec<&'static str> {
+    fn diagnostic_codes(graph: &ResolvedPackageGraph) -> Vec<&str> {
         graph
             .diagnostics
             .iter()
-            .filter_map(|diagnostic| diagnostic.code)
+            .filter_map(|diagnostic| diagnostic.code.as_ref())
+            .map(kira_diagnostics::Code::as_str)
             .collect()
     }
 

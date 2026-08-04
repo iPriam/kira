@@ -1,0 +1,83 @@
+// Foundation's `@Derive(Tagged)`: an enum's variants as numbers, and back.
+//
+//   @Derive(Tagged)
+//   enum Material {
+//       Flat
+//       Frosted
+//   }
+//
+// generates
+//
+//   function code_Material(v: borrow Material) -> Int
+//   function Material_fromCode(id: Int) -> Material
+//
+// The generated names are glued to the enum's exact name — `code_Material`,
+// `Material_fromCode` — and that is a fixed contract other tooling reads, the
+// same rule `Derive.kira`'s four follow.
+//
+// # Why this exists
+//
+// Kira enums have no ordinal. A program needing a variant as a number — to fold
+// it into a hash, to write it into a vertex attribute a shader reads, to send it
+// across a seam — writes the table by hand:
+//
+//   function materialCode(m: Material) -> Int {
+//       match m { Flat -> return 1; Frosted -> return 2; }
+//   }
+//
+// and then owns two sources of truth that no compiler checks against each other.
+// Inserting a variant renumbers one and not the other, silently. Generating the
+// table from the declaration makes that impossible: there is one list, and it is
+// the enum.
+//
+// # The numbers are declaration order
+//
+// A variant's code is its position, counting from zero. That is stable as long
+// as the enum is only appended to — which is the same discipline every wire
+// format here already keeps, and the reason a reorder is a breaking change
+// rather than a tidy-up.
+//
+// A payload-carrying variant gets a code like any other; the payload is not
+// part of it. `Material_fromCode` answers the *first* variant for a number
+// naming none, because a total function is what a decoder needs and there is no
+// variant to spell "unknown" with unless the enum declares one.
+
+comptime macro Tagged {
+    kind { derive }
+    appliesTo { enum }
+    expand(target: Declaration) -> Syntax {
+        var toCode: [Syntax] = []
+        var fromCode: [Syntax] = []
+        var index: Int = 0
+        var first: Syntax = quote { }
+        for variant in target.fields {
+            // A variant is reflected as a field whose name is the variant's.
+            // Matching it needs no payload binding: the code is the position,
+            // and a payload does not change it.
+            toCode.append(quote {
+                #{variant.name} -> return #{index};
+            })
+            fromCode.append(quote {
+                if id == #{index} {
+                    return .#{variant.name}
+                }
+            })
+            if index == 0 {
+                first = quote { .#{variant.name} }
+            }
+            index = index + 1
+        }
+        return quote {
+            function code_#{target.name}(value: borrow #{target.name}) -> Int {
+                match value {
+                    #{toCode}
+                }
+            }
+
+            function #{target.name}_fromCode(id: Int) -> #{target.name} {
+                #{fromCode}
+                return #{first}
+            }
+        }
+    }
+}

@@ -9,7 +9,7 @@ fn copy_refusal(text: &str) -> String {
     let items = diagnostics(text);
     let refusal = items
         .iter()
-        .find(|item| item.code == Some("KIR005"))
+        .find(|item| item.has_code("KIR005"))
         .unwrap_or_else(|| panic!("expected a KIR005, got {items:?}"));
     refusal.message.clone()
 }
@@ -88,8 +88,8 @@ fn the_derive_changes_nothing_about_an_eligible_type() {
          function take(p: Point) -> Int { return p.x }\n\
          @Main function main() {\n    let p = Point { x: 1 }\n    print(take(p))\n    print(p.x)\n    return\n}\n",
     );
-    let codes = |items: &[Diagnostic]| -> Vec<Option<&'static str>> {
-        items.iter().map(|item| item.code).collect()
-    };
+    fn codes(items: &[Diagnostic]) -> Vec<&str> {
+        items.iter().filter_map(Diagnostic::code_text).collect()
+    }
     assert_eq!(codes(&with), codes(&without), "{with:?} vs {without:?}");
 }

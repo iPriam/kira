@@ -253,7 +253,7 @@ mod tests {
     use kira_diagnostics::{Diagnostic, Severity};
 
     fn assert_package_diagnostic(diagnostic: &Diagnostic, code: &'static str, severity: Severity) {
-        assert_eq!(diagnostic.code, Some(code));
+        assert!(diagnostic.has_code(code));
         assert_eq!(diagnostic.severity, severity);
         assert_eq!(diagnostic.domain, Some(DiagnosticDomain::Package.tag()));
         assert_eq!(

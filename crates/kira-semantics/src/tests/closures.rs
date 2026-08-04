@@ -105,7 +105,7 @@ fn capturing_a_borrow_mut_parameter_is_refused() {
          @Main function main() { var v = 0 step(v) print(v) return }",
     );
     assert!(
-        reported.contains(&"KSEM117"),
+        reported.iter().any(|code| code == "KSEM117"),
         "a `borrow mut` parameter has no shared form, got {reported:?}"
     );
 }

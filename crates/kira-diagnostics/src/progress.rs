@@ -108,7 +108,26 @@ pub fn listening() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// Serializes the tests that install a sink.
+    ///
+    /// The sink is process-global, so two of these running at once trade
+    /// installs and reports: one test's `uninstall` silences another's, and one
+    /// test's phase lands in another's recorder. `cargo nextest` hides that by
+    /// giving each test its own process; plain `cargo test` threads them and
+    /// the race is real. Holding this for the duration is what makes both
+    /// runners agree.
+    fn exclusive() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        // A test that panicked while holding the lock poisoned it, and the
+        // global sink it left behind is exactly what `uninstall` below clears.
+        // Refusing to run after an unrelated failure would turn one red test
+        // into four.
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     /// A sink that remembers what it was told.
     #[derive(Default)]
@@ -130,6 +149,7 @@ mod tests {
 
     #[test]
     fn reporting_with_no_sink_installed_does_nothing() {
+        let _exclusive = exclusive();
         uninstall();
         assert!(!listening());
         report("a phase nobody hears");
@@ -137,6 +157,7 @@ mod tests {
 
     #[test]
     fn suspending_reaches_the_installed_sink() {
+        let _exclusive = exclusive();
         let recorder = Arc::new(Recorder::default());
         install(recorder.clone());
         let _guard = suspended();
@@ -147,12 +168,14 @@ mod tests {
 
     #[test]
     fn suspending_with_no_sink_installed_does_nothing() {
+        let _exclusive = exclusive();
         uninstall();
         let _guard = suspended();
     }
 
     #[test]
     fn an_installed_sink_receives_every_phase() {
+        let _exclusive = exclusive();
         let recorder = Arc::new(Recorder::default());
         install(recorder.clone());
         report("parsing");

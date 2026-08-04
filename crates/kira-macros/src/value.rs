@@ -6,7 +6,26 @@
 //! to a backend — a macro body runs here and its *output* is what a backend
 //! sees.
 
+use kira_source::FileSpan;
+
 use crate::decl;
+
+/// A piece of Kira syntax, and where it was written.
+///
+/// The text is what splices; the span is what a diagnostic points at. They are
+/// carried together because a macro that reports a problem with a declaration
+/// has only the declaration's syntax in hand — without the span travelling
+/// alongside, `Diagnostics.error(…, at: target.syntax)` has nothing to anchor to
+/// and the caret lands on the macro instead of on what it was complaining
+/// about.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SyntaxValue {
+    /// The syntax as source text.
+    pub(crate) text: String,
+    /// Where the text was written, or `None` when it was built rather than
+    /// read — a `quote`, a `Syntax.join`, anything assembled at compile time.
+    pub(crate) span: Option<FileSpan>,
+}
 
 /// One compile-time value.
 #[derive(Debug, Clone, PartialEq)]
@@ -20,7 +39,7 @@ pub(crate) enum Value {
     /// A string.
     Str(String),
     /// A piece of Kira syntax, as source text.
-    Syntax(String),
+    Syntax(SyntaxValue),
     /// An identifier obtained from reflection or from a quote.
     Identifier(String),
     /// A written type reference.
@@ -29,6 +48,8 @@ pub(crate) enum Value {
     Declaration(Box<DeclarationValue>),
     /// One field or enum variant of a declaration.
     Field(Box<FieldValue>),
+    /// One statement inside a declaration's body.
+    Statement(Box<StatementValue>),
     /// A named bag of members a compile-time namespace handed back.
     Record(Box<RecordValue>),
     /// An array of values.
@@ -59,10 +80,56 @@ pub(crate) struct DeclarationValue {
     pub(crate) fields: Vec<FieldValue>,
     /// Its exact source text.
     pub(crate) syntax: String,
+    /// Where it was written, or `None` when it was re-scanned from detached
+    /// text.
+    pub(crate) span: Option<FileSpan>,
     /// The `appliesTo` word for the form it wears.
     pub(crate) kind: &'static str,
     /// The construct family backing it, or `""` when it is not a form.
     pub(crate) family: String,
+    /// The path its file was read from, or `""` when that is not known.
+    pub(crate) path: std::sync::Arc<str>,
+    /// The 1-based line it starts on, or `0` when it was re-scanned.
+    pub(crate) line: u32,
+    /// How many lines its file holds, or `0` when it was re-scanned.
+    pub(crate) file_lines: u32,
+}
+
+/// A `Statement` as the reflection API exposes it.
+///
+/// A thin view over [`crate::body::Statement`]: the same words, as values a
+/// macro body compares and walks.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct StatementValue {
+    /// Which statement form it is.
+    pub(crate) kind: &'static str,
+    /// Its exact source text.
+    pub(crate) syntax: String,
+    /// Where it was written, when that is a real place in a real file.
+    pub(crate) span: Option<FileSpan>,
+    /// The same span as an offset into [`StatementValue::text`].
+    pub(crate) local: kira_source::Span,
+    /// The declaration's whole source, so a rewrite can read the run it spans.
+    pub(crate) text: std::sync::Arc<str>,
+    /// The expression it branches on, or `""`.
+    pub(crate) head: String,
+    /// The statements directly inside it.
+    pub(crate) body: Vec<StatementValue>,
+}
+
+impl StatementValue {
+    /// Builds the reflection view of a read statement.
+    pub(crate) fn of(statement: &crate::body::Statement) -> Self {
+        Self {
+            kind: statement.kind,
+            syntax: statement.syntax.clone(),
+            span: statement.span,
+            local: statement.local,
+            text: std::sync::Arc::clone(&statement.text),
+            head: statement.head.clone(),
+            body: statement.body.iter().map(StatementValue::of).collect(),
+        }
+    }
 }
 
 /// A `Field` as the reflection API exposes it.
@@ -76,6 +143,9 @@ pub(crate) struct FieldValue {
     pub(crate) initializer: String,
     /// The whole field declaration, annotations included.
     pub(crate) syntax: String,
+    /// Where it was written, or `None` when it was re-scanned from detached
+    /// text.
+    pub(crate) span: Option<FileSpan>,
     /// The names of the annotations written on it.
     pub(crate) annotations: Vec<String>,
 }
@@ -87,8 +157,12 @@ impl DeclarationValue {
             name: declaration.name.clone(),
             fields: declaration.fields.iter().map(FieldValue::of).collect(),
             syntax: declaration.syntax.clone(),
+            span: declaration.at(),
             kind: declaration.kind.word(),
             family: declaration.family.clone(),
+            path: declaration.path.clone(),
+            line: declaration.line,
+            file_lines: declaration.file_lines,
         }
     }
 }
@@ -106,6 +180,7 @@ impl FieldValue {
             type_text: field.type_text.clone(),
             initializer: field.initializer.clone(),
             syntax: field.syntax.clone(),
+            span: field.at(),
             annotations: field
                 .annotations
                 .iter()
@@ -116,6 +191,37 @@ impl FieldValue {
 }
 
 impl Value {
+    /// Syntax that was built rather than read, so it points nowhere.
+    pub(crate) fn built(text: impl Into<String>) -> Self {
+        Value::Syntax(SyntaxValue {
+            text: text.into(),
+            span: None,
+        })
+    }
+
+    /// Syntax read from `span`, which is where a diagnostic about it points.
+    pub(crate) fn read(text: impl Into<String>, span: Option<FileSpan>) -> Self {
+        Value::Syntax(SyntaxValue {
+            text: text.into(),
+            span,
+        })
+    }
+
+    /// Where a diagnostic naming this value should point, when it knows.
+    ///
+    /// Only the three reflection values answer: they are the ones that came
+    /// from somewhere. A string or an integer a macro computed has no place in
+    /// any file, and guessing one would be worse than pointing nowhere.
+    pub(crate) fn anchor(&self) -> Option<FileSpan> {
+        match self {
+            Value::Syntax(syntax) => syntax.span,
+            Value::Declaration(declaration) => declaration.span,
+            Value::Field(field) => field.span,
+            Value::Statement(statement) => statement.span,
+            _ => None,
+        }
+    }
+
     /// The type's user-facing name, for diagnostics.
     pub(crate) fn type_name(&self) -> &'static str {
         match self {
@@ -128,6 +234,7 @@ impl Value {
             Value::TypeRef(_) => "TypeRef",
             Value::Declaration(_) => "Declaration",
             Value::Field(_) => "Field",
+            Value::Statement(_) => "Statement",
             Value::Record(record) => record.name,
             Value::Array(_) => "[T]",
         }
@@ -141,7 +248,7 @@ impl Value {
     /// `target.name.asString()` always splices as a quoted literal.
     pub(crate) fn splice(&self) -> Option<String> {
         match self {
-            Value::Syntax(text) => Some(text.clone()),
+            Value::Syntax(syntax) => Some(syntax.text.clone()),
             Value::Identifier(name) => Some(name.clone()),
             Value::TypeRef(written) => Some(written.clone()),
             Value::Str(text) => Some(quote_string(text)),
@@ -163,7 +270,11 @@ impl Value {
             // A record has no splice rule for the same reason a `Declaration`
             // has none: there is no one Kira form it obviously becomes. Its
             // members splice; it does not.
-            Value::Void | Value::Declaration(_) | Value::Field(_) | Value::Record(_) => None,
+            Value::Void
+            | Value::Declaration(_)
+            | Value::Field(_)
+            | Value::Statement(_)
+            | Value::Record(_) => None,
         }
     }
 
@@ -197,6 +308,7 @@ pub(crate) fn quote_string(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kira_source::SourceId;
 
     #[test]
     fn each_type_splices_by_its_own_rule() {
@@ -210,18 +322,12 @@ mod tests {
         );
         assert_eq!(Value::Int(-4).splice().as_deref(), Some("-4"));
         assert_eq!(Value::Bool(true).splice().as_deref(), Some("true"));
-        assert_eq!(
-            Value::Syntax("a + b".to_owned()).splice().as_deref(),
-            Some("a + b")
-        );
+        assert_eq!(Value::built("a + b").splice().as_deref(), Some("a + b"));
     }
 
     #[test]
     fn an_array_splices_each_element() {
-        let array = Value::Array(vec![
-            Value::Syntax("one".to_owned()),
-            Value::Syntax("two".to_owned()),
-        ]);
+        let array = Value::Array(vec![Value::built("one"), Value::built("two")]);
         assert_eq!(array.splice().as_deref(), Some("one\ntwo"));
     }
 
@@ -231,10 +337,25 @@ mod tests {
             name: "S".to_owned(),
             fields: Vec::new(),
             syntax: String::new(),
+            span: None,
             kind: "struct",
             family: String::new(),
+            path: std::sync::Arc::from(""),
+            line: 0,
+            file_lines: 0,
         }));
         assert_eq!(declaration.splice(), None);
+    }
+
+    #[test]
+    fn only_a_value_that_came_from_somewhere_anchors_a_diagnostic() {
+        let at = FileSpan::new(SourceId::new(3), kira_source::Span::new(10, 4));
+        assert_eq!(Value::read("Point", Some(at)).anchor(), Some(at));
+        // Built syntax points nowhere: a `quote` was never written in a file.
+        assert_eq!(Value::built("Point").anchor(), None);
+        // Nor does a value a macro merely computed.
+        assert_eq!(Value::Str("Point".to_owned()).anchor(), None);
+        assert_eq!(Value::Int(1).anchor(), None);
     }
 
     #[test]

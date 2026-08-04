@@ -124,7 +124,7 @@ fn a_library_package_document_is_not_asked_for_an_entrypoint() {
         !analysis
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KSEM011")),
+            .any(|diagnostic| diagnostic.has_code("KSEM011")),
         "a library is not missing `@Main`: {:?}",
         analysis.diagnostics
     );
@@ -140,7 +140,7 @@ fn a_library_package_document_is_not_asked_for_an_entrypoint() {
         analysis
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KSEM011")),
+            .any(|diagnostic| diagnostic.has_code("KSEM011")),
         "a bare document is an application: {:?}",
         analysis.diagnostics
     );
@@ -169,7 +169,7 @@ fn a_session_analyzes_each_document_on_its_own_terms() {
         second
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KSEM061")),
+            .any(|diagnostic| diagnostic.has_code("KSEM061")),
         "the previous document's `f` must not still be in scope: {:?}",
         second.diagnostics
     );
@@ -199,7 +199,7 @@ fn loop_syntax_analyzes_the_way_the_compiler_does() {
     let diagnostic = stray
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == Some("KSEM041"))
+        .find(|diagnostic| diagnostic.has_code("KSEM041"))
         .expect("a `break` outside a loop is reported");
     assert_eq!(diagnostic.severity, Severity::Error);
     assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
@@ -231,7 +231,7 @@ fn class_syntax_analyzes_the_way_the_compiler_does() {
     let diagnostic = ambiguous
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == Some("KSEM068"))
+        .find(|diagnostic| diagnostic.has_code("KSEM068"))
         .expect("an ambiguous inherited field is reported");
     assert_eq!(diagnostic.severity, Severity::Error);
     assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
@@ -260,7 +260,7 @@ fn ownership_diagnostics_reach_the_editor() {
     let diagnostic = after_move
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == Some("KSEM107"))
+        .find(|diagnostic| diagnostic.has_code("KSEM107"))
         .expect("using a moved value is reported");
     assert_eq!(diagnostic.severity, Severity::Error);
     assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
@@ -286,7 +286,7 @@ fn array_syntax_analyzes_the_way_the_compiler_does() {
     let diagnostic = bad
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == Some("KSEM101"))
+        .find(|diagnostic| diagnostic.has_code("KSEM101"))
         .expect("an unsupported array method is reported");
     assert_eq!(diagnostic.severity, Severity::Error);
     assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
@@ -316,7 +316,7 @@ fn conditional_and_bitwise_syntax_analyze_the_way_the_compiler_does() {
     let diagnostic = mis_grouped
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == Some("KSEM071"))
+        .find(|diagnostic| diagnostic.has_code("KSEM071"))
         .expect("`&` against a `Bool` is reported");
     assert_eq!(diagnostic.severity, Severity::Error);
     assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
@@ -329,7 +329,7 @@ fn conditional_and_bitwise_syntax_analyze_the_way_the_compiler_does() {
         bad_condition
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KSEM131")),
+            .any(|diagnostic| diagnostic.has_code("KSEM131")),
         "a non-boolean condition is reported"
     );
 }
@@ -368,7 +368,7 @@ fn attempt_and_try_analyze_the_way_the_compiler_does() {
     let diagnostic = stray
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == Some("KSEM137"))
+        .find(|diagnostic| diagnostic.has_code("KSEM137"))
         .expect("`try` outside an `attempt` is reported");
     assert_eq!(diagnostic.severity, Severity::Error);
     assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
@@ -397,7 +397,7 @@ fn fixed_width_types_analyze_the_way_the_compiler_does() {
     let diagnostic = bad
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == Some("KSEM020"))
+        .find(|diagnostic| diagnostic.has_code("KSEM020"))
         .expect("a width mismatch is reported");
     assert_eq!(diagnostic.severity, Severity::Error);
     assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
@@ -429,7 +429,7 @@ fn enum_syntax_analyzes_the_way_the_compiler_does() {
     let diagnostic = bad
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == Some("KSEM120"))
+        .find(|diagnostic| diagnostic.has_code("KSEM120"))
         .expect("an unknown variant is reported");
     assert_eq!(diagnostic.severity, Severity::Error);
     assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
@@ -459,7 +459,7 @@ fn match_syntax_analyzes_the_way_the_compiler_does() {
     let diagnostic = bad
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == Some("KSEM129"))
+        .find(|diagnostic| diagnostic.has_code("KSEM129"))
         .expect("a non-exhaustive match is reported");
     assert_eq!(diagnostic.severity, Severity::Error);
     assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
@@ -502,7 +502,7 @@ fn imports_analyze_the_way_the_compiler_does() {
     let diagnostic = missing
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == Some("KSEM032"))
+        .find(|diagnostic| diagnostic.has_code("KSEM032"))
         .expect("an unresolved import is reported");
     assert_eq!(diagnostic.severity, Severity::Error);
     assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
@@ -546,7 +546,7 @@ fn an_unknown_name_is_reported_with_its_code() {
     let diagnostic = analysis
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == Some("KSEM060"))
+        .find(|diagnostic| diagnostic.has_code("KSEM060"))
         .expect("an unknown name is reported");
     assert_eq!(diagnostic.severity, Severity::Error);
     assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
@@ -559,7 +559,7 @@ fn a_program_without_main_is_reported() {
         analysis
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KSEM011")),
+            .any(|diagnostic| diagnostic.has_code("KSEM011")),
         "{:?}",
         analysis.diagnostics,
     );

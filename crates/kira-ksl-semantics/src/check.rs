@@ -14,12 +14,12 @@ use std::collections::HashMap;
 
 use kira_core::Interner;
 use kira_ksl_syntax_model::ast::{
-    Field, Function, Item, Resource, ResourceKind as SyntaxResourceKind, Shader, StageDecl,
-    StageWord, TypeDecl, TypeRef,
+    ConstDecl, EnumDecl, Field, Function, Group, Item, Resource,
+    ResourceKind as SyntaxResourceKind, Shader, StageDecl, StageWord, TypeDecl, TypeRef,
 };
 use kira_ksl_syntax_model::tree::{KslTree, TypeRefId};
 use kira_shader_model::{
-    AccessMode, ResourceKind, Stage, Type, builtin_allowed, classify_group_name,
+    AccessMode, ResourceKind, ScalarType, Stage, Type, builtin_allowed, classify_group_name,
 };
 use kira_source::{SourceId, Span};
 
@@ -66,6 +66,12 @@ pub(crate) struct Checker<'a> {
     pub(crate) resources: HashMap<String, ResourceBinding>,
     /// Every option in scope, by name.
     pub(crate) options: HashMap<String, (Type, ConstValue)>,
+    /// Every `const` and enum variant in scope, by emitted path.
+    ///
+    /// An enum variant is keyed `Enum_Variant`, which is what
+    /// [`Checker::qualified`] spells an imported name as, so a variant reached
+    /// through an import alias and one written locally find the same entry.
+    pub(crate) constants: HashMap<String, (Type, ConstValue)>,
     /// The local scopes of the body being checked, innermost last.
     pub(crate) scopes: Vec<HashMap<String, Type>>,
     /// What the body being checked must return.
@@ -92,6 +98,7 @@ impl<'a> Checker<'a> {
             signatures: HashMap::new(),
             resources: HashMap::new(),
             options: HashMap::new(),
+            constants: HashMap::new(),
             scopes: Vec::new(),
             result: Type::Void,
             module: CheckedModule::default(),
@@ -136,6 +143,8 @@ impl<'a> Checker<'a> {
             match item {
                 Item::Type(declared) => self.declare_struct(declared),
                 Item::Function(declared) => self.declare_function(declared),
+                Item::Const(declared) => self.declare_const(declared),
+                Item::Enum(declared) => self.declare_enum(declared),
                 Item::Import(_) | Item::Shader(_) => {}
             }
         }
@@ -178,7 +187,7 @@ impl<'a> Checker<'a> {
                     self.module.functions.push(checked);
                 }
                 Item::Shader(declared) => self.shader(declared),
-                Item::Import(_) | Item::Type(_) => {}
+                Item::Import(_) | Item::Type(_) | Item::Const(_) | Item::Enum(_) => {}
             }
         }
     }
@@ -203,6 +212,57 @@ impl<'a> Checker<'a> {
             .collect();
         self.structs.insert(name.clone(), fields.clone());
         self.module.structs.push(CheckedStruct { name, fields });
+    }
+
+    /// Folds one `const` to its value.
+    ///
+    /// A `const` never reaches a backend: every read of it becomes the value
+    /// it folded to, exactly as an `option` read does. That keeps a shared
+    /// number in one place in the source without asking four dialects to agree
+    /// on how a module-scope constant is spelled.
+    fn declare_const(&mut self, declared: &ConstDecl) {
+        let name = self.qualified(&self.name(declared.name));
+        let ty = self.resolve(declared.ty);
+        let Some(value) = self.constant(declared.value, &ty) else {
+            self.reporter.error(
+                declared.span,
+                diagnostics::BAD_CONSTANT,
+                format!("`{name}` needs a constant value of its own type"),
+            );
+            return;
+        };
+        self.bind_constant(name, ty, value, declared.span);
+    }
+
+    /// Folds every variant of one `enum` to its number.
+    fn declare_enum(&mut self, declared: &EnumDecl) {
+        let enum_name = self.name(declared.name);
+        let ty = Type::Scalar(ScalarType::Int);
+        for variant in &declared.variants {
+            let name = self.qualified(&format!("{enum_name}_{}", self.name(variant.name)));
+            let Some(value) = self.constant(variant.value, &ty) else {
+                self.reporter.error(
+                    variant.span,
+                    diagnostics::BAD_CONSTANT,
+                    format!("`{name}` needs a whole number of its own"),
+                );
+                continue;
+            };
+            self.bind_constant(name, ty.clone(), value, variant.span);
+        }
+    }
+
+    /// Binds one folded constant, reporting a name already taken.
+    fn bind_constant(&mut self, name: String, ty: Type, value: ConstValue, span: Span) {
+        if self.constants.contains_key(&name) {
+            self.reporter.error(
+                span,
+                diagnostics::DUPLICATE,
+                format!("`{name}` is declared more than once"),
+            );
+            return;
+        }
+        self.constants.insert(name, (ty, value));
     }
 
     /// Resolves one field of a struct.
@@ -372,6 +432,7 @@ impl<'a> Checker<'a> {
                     resources.push(checked);
                 }
             }
+            self.reject_slot_collisions(group, &name, &resources);
             checked.push(CheckedGroup {
                 name,
                 class,
@@ -379,6 +440,42 @@ impl<'a> Checker<'a> {
             });
         }
         checked
+    }
+
+    /// Rejects two resources in one group that would take the same slot.
+    ///
+    /// A slot is either written as `@binding(n)` or taken from the position of
+    /// the declaration, and the two mix in one group — the background
+    /// compositor writes its photo slots to match the groups the host already
+    /// fills while leaving its uniform positional. What must not happen is two
+    /// names on one slot: WGSL and SPIR-V address a resource as (set, binding),
+    /// so a collision there is one resource shadowing another, and the shader
+    /// would still compile on Metal, whose per-kind spaces would keep them
+    /// apart. That is a shader that works on one backend and silently reads the
+    /// wrong texture on the next.
+    fn reject_slot_collisions(&mut self, group: &Group, name: &str, resources: &[CheckedResource]) {
+        let mut taken: HashMap<u32, String> = HashMap::new();
+        for (position, resource) in resources.iter().enumerate() {
+            let slot = resource
+                .binding
+                .unwrap_or_else(|| u32::try_from(position).unwrap_or(u32::MAX));
+            let span = group
+                .resources
+                .get(position)
+                .map_or(group.span, |declared| declared.span);
+            if let Some(first) = taken.get(&slot) {
+                self.reporter.error(
+                    span,
+                    diagnostics::BAD_BINDING,
+                    format!(
+                        "`{}` and `{first}` both bind slot {slot} of group `{name}`",
+                        resource.name
+                    ),
+                );
+            } else {
+                taken.insert(slot, resource.name.clone());
+            }
+        }
     }
 
     /// Checks one resource, rejecting a type its kind cannot hold.
@@ -421,6 +518,7 @@ impl<'a> Checker<'a> {
         let access = declared.access.map(|access| match access {
             kira_ksl_syntax_model::ast::Access::Read => AccessMode::Read,
             kira_ksl_syntax_model::ast::Access::ReadWrite => AccessMode::ReadWrite,
+            kira_ksl_syntax_model::ast::Access::Write => AccessMode::Write,
         });
         self.resources.insert(
             name.clone(),
@@ -433,6 +531,7 @@ impl<'a> Checker<'a> {
             name,
             kind,
             access,
+            binding: declared.binding,
             ty,
         })
     }
@@ -567,7 +666,7 @@ impl<'a> Checker<'a> {
                 let mut extents = [0u32; 3];
                 for (slot, id) in extents.iter_mut().zip(written) {
                     let Some(value) = self
-                        .constant(id, &Type::Scalar(kira_shader_model::ScalarType::Uint))
+                        .constant(id, &Type::Scalar(ScalarType::Uint))
                         .and_then(ConstValue::as_extent)
                     else {
                         self.reporter.error(

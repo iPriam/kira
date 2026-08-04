@@ -8,7 +8,7 @@
 //   * floats use exact binary fractions only and fold to Int via comparisons.
 
 // ---------------------------------------------------------------------------
-// Enums used by the match / switch sub-sections.
+// Enums used by the match sub-sections.
 // ---------------------------------------------------------------------------
 
 enum cfDir {
@@ -74,37 +74,52 @@ function cfTriangular(n: Int) -> Int {
 }
 
 // ---------------------------------------------------------------------------
-// switch with many cases + default.
+// A long if/else chain: many comparisons against one subject, then a fallback.
 // ---------------------------------------------------------------------------
 
 function cfGrade(score: Int) -> Int {
-    // score is reduced into a 0..=10 bucket; switch covers many cases + default.
+    // score is reduced into a 0..=10 bucket, then compared against each.
     let bucket = score / 10
-    switch bucket {
-        case 10 { return 100 }
-        case 9 { return 90 }
-        case 8 { return 80 }
-        case 7 { return 70 }
-        case 6 { return 60 }
-        case 5 { return 50 }
-        case 4 { return 40 }
-        case 3 { return 30 }
-        case 2 { return 20 }
-        case 1 { return 10 }
-        case 0 { return 0 }
-        default { return -1 }
+    if bucket == 10 {
+        return 100
+    } else if bucket == 9 {
+        return 90
+    } else if bucket == 8 {
+        return 80
+    } else if bucket == 7 {
+        return 70
+    } else if bucket == 6 {
+        return 60
+    } else if bucket == 5 {
+        return 50
+    } else if bucket == 4 {
+        return 40
+    } else if bucket == 3 {
+        return 30
+    } else if bucket == 2 {
+        return 20
+    } else if bucket == 1 {
+        return 10
+    } else if bucket == 0 {
+        return 0
+    } else {
+        return -1
     }
 }
 
-// switch driving an enum selection, then folded.
+// An if/else chain driving an enum selection, then folded.
 function cfDirWeight(i: Int) -> Int {
     var d: cfDir = .North
-    switch i % 4 {
-        case 0 { d = .North }
-        case 1 { d = .East }
-        case 2 { d = .South }
-        case 3 { d = .West }
-        default { d = .North }
+    if (i % 4) == 0 {
+        d = .North
+    } else if (i % 4) == 1 {
+        d = .East
+    } else if (i % 4) == 2 {
+        d = .South
+    } else if (i % 4) == 3 {
+        d = .West
+    } else {
+        d = .North
     }
     return cfDirScore(d)
 }
@@ -369,14 +384,14 @@ function cfSection() -> Int {
     }
     checksum = checksum * 131 + forAcc
 
-    // --- Part 3: switch with many cases + default, over varied inputs ---
-    var switchAcc = 0
+    // --- Part 3: a long comparison chain with a fallback, over varied inputs ---
+    var gradeAcc = 0
     var s = 0
     while s <= 110 {
-        switchAcc = switchAcc + cfGrade(s)
+        gradeAcc = gradeAcc + cfGrade(s)
         s = s + 7
     }
-    checksum = checksum * 131 + switchAcc
+    checksum = checksum * 131 + gradeAcc
 
     // --- Part 4: match (statement position) over enum selection ---
     var matchAcc = 0

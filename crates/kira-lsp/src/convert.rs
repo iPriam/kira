@@ -64,7 +64,8 @@ pub fn diagnostic(diagnostic: &Diagnostic, file: &SourceFile, uri: &Uri) -> LspD
         severity: Some(severity(diagnostic.severity)),
         code: diagnostic
             .code
-            .map(|code| NumberOrString::String(code.to_owned())),
+            .as_ref()
+            .map(|code| NumberOrString::String(code.as_str().to_owned())),
         code_description: None,
         source: Some(SOURCE.to_owned()),
         message: message(diagnostic),

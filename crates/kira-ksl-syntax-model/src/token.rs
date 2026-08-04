@@ -26,6 +26,10 @@ pub enum TokenKind {
     As,
     /// `type`
     Type,
+    /// `const`
+    Const,
+    /// `enum`
+    Enum,
     /// `function`
     Function,
     /// `shader`
@@ -130,6 +134,8 @@ impl TokenKind {
             TokenKind::Import => "`import`",
             TokenKind::As => "`as`",
             TokenKind::Type => "`type`",
+            TokenKind::Const => "`const`",
+            TokenKind::Enum => "`enum`",
             TokenKind::Function => "`function`",
             TokenKind::Shader => "`shader`",
             TokenKind::Group => "`group`",
@@ -187,6 +193,8 @@ pub fn keyword(word: &str) -> Option<TokenKind> {
         "import" => TokenKind::Import,
         "as" => TokenKind::As,
         "type" => TokenKind::Type,
+        "const" => TokenKind::Const,
+        "enum" => TokenKind::Enum,
         "function" => TokenKind::Function,
         "shader" => TokenKind::Shader,
         "group" => TokenKind::Group,

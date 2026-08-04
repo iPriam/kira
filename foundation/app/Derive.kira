@@ -29,7 +29,9 @@
 //     reproduces its source text (`[Int]` gives `"Int"`, which is not `"[Int]"`).
 //   * `Deserializable` refuses a `Float` field: there is no lossless `Float`
 //     parsing primitive, so refusing beats shipping a lossy parser.
-//   * `appliesTo { struct }` only; enums are a follow-up.
+//   * `appliesTo { struct }` only. An enum derive is possible — see
+//     `DeriveTagged.kira`, which is one — but the four here fold *fields*, and
+//     an enum's variants are not fields with values to compare or clone.
 
 comptime macro Equatable {
     kind { derive }

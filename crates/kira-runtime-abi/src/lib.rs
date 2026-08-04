@@ -27,6 +27,7 @@ pub mod file_system;
 pub mod foreign;
 pub mod native_state;
 pub mod ownership;
+pub mod string_op;
 pub mod tasks;
 
 pub use aggregate::{
@@ -55,6 +56,7 @@ pub use native_state::{
     native_state_walk_mut,
 };
 pub use ownership::Ownership;
+pub use string_op::StringOp;
 pub use tasks::{TASK_SLOTS, TaskExecutor, TaskPrim, TaskTrap};
 
 /// The version of the `kira_rt_*` native runtime contract.

@@ -14,7 +14,8 @@
 use std::collections::HashMap;
 
 use kira_core::Names;
-use kira_source::SourceId;
+use kira_diagnostics::Severity;
+use kira_source::{FileSpan, SourceId};
 use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::{Block, Expr, ExprId, ForIterable, Item, Stmt, StmtId};
 
@@ -113,13 +114,49 @@ fn rewrite_type_member(text: &str) -> String {
     out
 }
 
+/// One problem a macro body raised about the code it was handed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Report {
+    /// How serious the body said it was.
+    ///
+    /// A macro that *refuses* reports an error and its expansion is discarded.
+    /// A macro that merely *observes* — a lint — reports a warning or a note,
+    /// and what it returned is still spliced, because nothing about the code
+    /// was wrong enough to drop.
+    pub(crate) severity: Severity,
+    /// What the body said.
+    pub(crate) message: String,
+    /// Where it said to point, from the `at:` argument — or `None` when it
+    /// named nothing, or named something that came from no file.
+    ///
+    /// A caller with `None` here falls back to the macro's own declaration,
+    /// which is the honest second-best: the macro is the only thing left that
+    /// is certainly written somewhere.
+    pub(crate) at: Option<FileSpan>,
+    /// The code it reported under, from the `code:` argument.
+    ///
+    /// A lint names itself — `KLINT014` — and that name is what a reader
+    /// suppresses by, so it has to reach the diagnostic rather than being
+    /// flattened into every macro sharing one code. `None` falls back to
+    /// [`MACRO_REPORTED`](crate::diagnostics::MACRO_REPORTED), which is the
+    /// honest answer for a macro that did not name one.
+    pub(crate) code: Option<String>,
+    /// The text to write over [`Report::at`], from a `fix:` argument.
+    ///
+    /// A lint that can say what is wrong and not what to write instead is half
+    /// a lint: the reader has to redo the analysis by hand. `Some` here is the
+    /// macro claiming the replacement preserves behaviour, which is what makes
+    /// it machine-applicable.
+    pub(crate) fix: Option<String>,
+}
+
 /// What running an `expand` body produced.
 #[derive(Debug, Default)]
 pub(crate) struct Outcome {
     /// The syntax the body returned, rendered to source.
     pub(crate) syntax: String,
-    /// Every message the body raised with `Diagnostics.error`.
-    pub(crate) reported: Vec<String>,
+    /// Every problem the body raised with `Diagnostics.error`.
+    pub(crate) reported: Vec<Report>,
 }
 
 /// Runs `body` with `arguments` bound to its `expand` parameters.
@@ -131,6 +168,7 @@ pub(crate) fn run(
     arguments: Vec<(String, Value)>,
     shaders: Option<&dyn ShaderCompiler>,
     platform: &str,
+    lint: bool,
 ) -> Result<Outcome, EvalError> {
     let mut evaluator = Evaluator {
         body,
@@ -138,6 +176,7 @@ pub(crate) fn run(
         reported: Vec::new(),
         shaders,
         platform: platform.to_owned(),
+        lint,
     };
     let value = match evaluator.block(&body.block)? {
         Flow::Return(value) => value,
@@ -174,11 +213,16 @@ enum Flow {
 struct Evaluator<'a> {
     body: &'a Body,
     scopes: Vec<HashMap<String, Value>>,
-    reported: Vec<String>,
+    reported: Vec<Report>,
     /// The KSL pipeline `Ksl.compile` reaches, when one was supplied.
     shaders: Option<&'a dyn ShaderCompiler>,
     /// The operating system this build targets, for `Build.platform`.
     platform: String,
+    /// Whether `kira lint` asked for this collection, for `Build.linting`.
+    ///
+    /// Only a collector is told: it is the one macro form a verb runs *for*,
+    /// and the only one that has any business asking which verb that was.
+    lint: bool,
 }
 
 impl Evaluator<'_> {
@@ -380,7 +424,9 @@ impl Evaluator<'_> {
                 }
             }
         }
-        Ok(Value::Syntax(out))
+        // A `quote` is assembled from a template and its splices, so it is
+        // written in the macro rather than in any file the macro is looking at.
+        Ok(Value::built(out))
     }
 }
 
@@ -404,7 +450,6 @@ fn shape(expr: &Expr) -> &'static str {
 /// A short name for a statement form, for the unsupported-construct message.
 fn statement_shape(stmt: &Stmt) -> &'static str {
     match stmt {
-        Stmt::Switch { .. } => "`switch`",
         Stmt::Match { .. } => "`match`",
         Stmt::Attempt { .. } => "`attempt`",
         _ => "that statement",
@@ -422,7 +467,7 @@ mod tests {
 
     fn run_body(text: &str, arguments: Vec<(String, Value)>) -> Result<Outcome, EvalError> {
         let body = compile(text).expect("a parseable expand body");
-        run(&body, arguments, None, "unknown")
+        run(&body, arguments, None, "unknown", false)
     }
 
     #[test]

@@ -62,6 +62,8 @@ pub enum SamplerKind {
 pub enum AccessMode {
     Read,
     ReadWrite,
+    /// Written but never read — a storage texture a compute stage renders into.
+    Write,
 }
 
 /// Varying interpolation qualifier.

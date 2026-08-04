@@ -48,6 +48,46 @@ impl Analyzer<'_> {
         self.program.types.admits(actual, expected)
     }
 
+    /// [`Analyzer::admits`], plus the subclass a *call argument* may be.
+    ///
+    /// Only an argument, because an argument is the only position whose callee
+    /// is specialized for the concrete class — see
+    /// `Analyzer::specialize_callables`. Everywhere else a subclass would widen
+    /// into a parent-typed binding and lose the type that picks the override:
+    ///
+    /// ```text
+    /// let a: Animal = Dog {}   // `a.speak()` would run Animal's
+    /// let pack: [Animal] = […] // every element would run Animal's
+    /// ```
+    ///
+    /// Both are refused rather than silently answered wrong, which is what
+    /// admitting them everywhere did. They become legal when a value can carry
+    /// its concrete class across the widening and dispatch on it.
+    pub(crate) fn admits_argument(&self, actual: Type, expected: Type) -> bool {
+        self.admits(actual, expected) || self.is_subclass_of(actual, expected)
+    }
+
+    /// Whether `actual` is a class that inherits from the class `expected`.
+    ///
+    /// The one crossing the type lattice cannot answer on its own, because a
+    /// class is a struct by the time it reaches the table and which struct
+    /// inherits which is analysis's own record.
+    ///
+    /// Needs no conversion node, unlike the other two crossings: a class's
+    /// fields are flattened with its parents' first, so a subclass already
+    /// *has* the parent's layout as a prefix and a position expecting the
+    /// parent reads exactly the slots it means to.
+    pub(crate) fn is_subclass_of(&self, actual: Type, expected: Type) -> bool {
+        let (Type::Struct(descendant), Type::Struct(ancestor)) = (actual, expected) else {
+            return false;
+        };
+        descendant != ancestor
+            && self
+                .classes
+                .get(&descendant)
+                .is_some_and(|info| info.ancestors.contains(&ancestor))
+    }
+
     /// Carries `expr` into `expected`, inserting the crossing when there is one.
     ///
     /// Returns `expr` unchanged for every destination it already has the machine

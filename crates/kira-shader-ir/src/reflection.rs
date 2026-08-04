@@ -568,9 +568,13 @@ words!(resource_kind_word, resource_kind_from, ResourceKind,
     "sampler" => ResourceKind::Sampler,
 );
 
+// Appended rather than inserted: this table is a text round-trip a reflection
+// string is written with, so a word already emitted keeps its meaning and an
+// older reader simply does not know this one.
 words!(access_word, access_from, AccessMode,
     "read" => AccessMode::Read,
     "read_write" => AccessMode::ReadWrite,
+    "write" => AccessMode::Write,
 );
 
 words!(interpolation_word, interpolation_from, Interpolation,
