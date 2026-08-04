@@ -25,7 +25,7 @@ fn build(text: &str) -> ShaderIr {
         checked
             .diagnostics
             .iter()
-            .map(|d| (d.code, d.message.clone()))
+            .map(|d| (d.code.clone(), d.message.clone()))
             .collect::<Vec<_>>()
     );
     lower(checked.module, BackendTarget::Msl)
@@ -343,4 +343,108 @@ shader Both {
         .expect("the fragment entry");
     assert!(vertex.contains("tint [[buffer(1)]]"), "{msl}");
     assert!(fragment.contains("tint [[buffer(0)]]"), "{msl}");
+}
+
+const STORAGE_TEXTURE: &str = r#"
+type Q {
+    @builtin(thread_id)
+    let gid: UInt3
+}
+
+shader Writer {
+    group Work {
+        texture source: Texture2d
+        sampler linear: Sampler
+        texture write result: Texture2d
+    }
+
+    compute {
+        input Q
+        threads(8, 8, 1)
+
+        function entry(q: Q) {
+            let colour = sample(source, linear, Float2(0.5, 0.5))
+            store(result, q.gid.xy, colour)
+            return
+        }
+    }
+}
+"#;
+
+/// Metal spells the access in the texture's *type*, so a written texture is a
+/// different type from a sampled one and cannot be used the wrong way.
+///
+/// The store's operand order is the other half: Metal takes the value first and
+/// the coordinate second, the opposite of every other dialect.
+#[test]
+fn a_write_texture_carries_its_access_in_its_type() {
+    let compute = emit(&build(STORAGE_TEXTURE));
+    assert!(
+        compute.contains("texture2d<float, access::write> result"),
+        "{compute}"
+    );
+    assert!(compute.contains("result.write(colour, uint2("), "{compute}");
+    assert!(compute.contains("texture2d<float> source"), "{compute}");
+}
+
+/// A group that writes its slots rather than taking them from declaration order.
+const PINNED: &str = r#"
+type VIn {
+    let position: Float3
+    let uv: Float2
+}
+
+type VOut {
+    @builtin(position)
+    let clip_position: Float4
+    let uv: Float2
+}
+
+type FOut {
+    let color: Float4
+}
+
+shader Pinned {
+    group Frame {
+        @binding(3) texture albedo: Texture2d
+        @binding(4) sampler linear: Sampler
+    }
+
+    vertex {
+        input VIn
+        output VOut
+
+        function entry(v: VIn) -> VOut {
+            let r: VOut
+            r.clip_position = Float4(v.position, 1.0)
+            r.uv = v.uv
+            return r
+        }
+    }
+
+    fragment {
+        input VOut
+        output FOut
+
+        function entry(f: VOut) -> FOut {
+            let r: FOut
+            r.color = sample(albedo, linear, f.uv)
+            return r
+        }
+    }
+}
+"#;
+
+#[test]
+fn a_written_binding_decides_the_slot_rather_than_declaration_order() {
+    // These two are the first resources in their group, so position would put
+    // them on 0 and 1. They land on 3 and 4 because the shader says so — which
+    // is how a specialization reads the bind groups a host already fills for
+    // some other shader, instead of the host having to fill them twice.
+    let msl = emit(&build(PINNED));
+    assert!(
+        msl.contains("texture2d<float> albedo [[texture(3)]]"),
+        "{msl}"
+    );
+    assert!(msl.contains("sampler linear [[sampler(4)]]"), "{msl}");
 }

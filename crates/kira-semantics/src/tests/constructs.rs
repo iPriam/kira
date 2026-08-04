@@ -99,7 +99,8 @@ Widget Composite(tag: Int) {
         )
         // The inherited default bridge then reads the absent `body`, so an
         // undefined-name diagnostic follows the missing-member refusal.
-        .contains(&"KSEM201")
+        .iter()
+        .any(|code| code == "KSEM201")
     );
 }
 
@@ -219,7 +220,8 @@ function main() {
         )
         // The unknown label leaves the `side` input unfilled, so a
         // missing-input diagnostic follows the label refusal.
-        .contains(&"KSEM204")
+        .iter()
+        .any(|code| code == "KSEM204")
     );
 }
 
@@ -302,7 +304,8 @@ extend Gadget {
 }
 "#,
         )
-        .contains(&"KSEM238")
+        .iter()
+        .any(|code| code == "KSEM238")
     );
 }
 
@@ -324,7 +327,8 @@ extend Widget {
 }
 "#,
         )
-        .contains(&"KSEM239")
+        .iter()
+        .any(|code| code == "KSEM239")
     );
 }
 
@@ -383,7 +387,8 @@ function main() {
 }
 "#,
         )
-        .contains(&"KSEM208")
+        .iter()
+        .any(|code| code == "KSEM208")
     );
 }
 
@@ -411,7 +416,8 @@ function main() {
 }
 "#,
         )
-        .contains(&"KSEM097")
+        .iter()
+        .any(|code| code == "KSEM097")
     );
 }
 
@@ -434,6 +440,7 @@ function main() {
 }
 "#,
         )
-        .contains(&"KSEM069")
+        .iter()
+        .any(|code| code == "KSEM069")
     );
 }

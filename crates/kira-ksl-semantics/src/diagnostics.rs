@@ -1,7 +1,7 @@
 //! The `KSLS` diagnostic family: every way a KSL file can parse and still be
 //! wrong.
 
-use kira_diagnostics::{Diagnostic, Label, Severity};
+use kira_diagnostics::{Code, Diagnostic, Label, Severity};
 use kira_source::{FileSpan, SourceId, Span};
 
 /// Collects what one check reported.
@@ -35,7 +35,7 @@ impl Reporter {
             message.clone(),
             Label::primary(file_span, message),
         );
-        diagnostic.code = Some(code);
+        diagnostic.code = Some(Code::known(code));
         diagnostic.phase = Some("ksl semantics");
         self.items.push(diagnostic);
     }
@@ -76,3 +76,12 @@ pub(crate) const SHADER_COUNT: &str = "KSLS013";
 pub(crate) const BAD_OPERATOR: &str = "KSLS014";
 /// KSLS015 — a function can finish without returning its result.
 pub(crate) const MISSING_RETURN: &str = "KSLS015";
+/// KSLS017 — a `const` or enum variant does not fold to a value of its type.
+///
+/// KSLS016 is taken: `kira-build`'s shader seam reports a target that produced
+/// nothing under it. The KSLS space is shared between checking and the build
+/// that drives it, so a new code here starts after the highest one in use
+/// anywhere rather than after the highest one in this file.
+pub(crate) const BAD_CONSTANT: &str = "KSLS017";
+/// KSLS018 — two resources in one group take the same slot.
+pub(crate) const BAD_BINDING: &str = "KSLS018";

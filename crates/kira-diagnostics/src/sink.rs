@@ -1,14 +1,14 @@
 //! Diagnostic collection: the sink every pipeline stage reports into.
 
-use crate::diagnostic::{Diagnostic, Severity, has_errors};
+use crate::diagnostic::{Code, Diagnostic, Severity, has_errors};
 use crate::label::Label;
 use kira_source::FileSpan;
 
 /// Everything needed to emit one error diagnostic.
 #[derive(Debug, Clone, Default)]
 pub struct ErrorSpec {
-    /// Stable diagnostic code, when cataloged.
-    pub code: Option<&'static str>,
+    /// Stable diagnostic code, when the message has one.
+    pub code: Option<Code>,
     /// Short one-line summary.
     pub title: String,
     /// Full explanatory message.

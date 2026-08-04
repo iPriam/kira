@@ -9,7 +9,7 @@
 //! rather than a node, and the annotations the real parser discards — the ones
 //! that summon macros — are preserved.
 
-use kira_source::{SourceId, Span};
+use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::TokenKind;
 
 use crate::tokens::Lexed;
@@ -74,8 +74,20 @@ pub(crate) struct Field {
     pub(crate) syntax: String,
     /// The bytes the whole field declaration covers, annotations included.
     pub(crate) span: Span,
+    /// The file [`Field::span`] points into, or `None` for a re-scan.
+    ///
+    /// See [`Declaration::source`] — the two are `None` together and for the
+    /// same reason.
+    pub(crate) source: Option<SourceId>,
     /// The annotations written above it.
     pub(crate) annotations: Vec<Annotation>,
+}
+
+impl Field {
+    /// Where the field was written, when that is a real place in a real file.
+    pub(crate) fn at(&self) -> Option<FileSpan> {
+        self.source.map(|source| FileSpan::new(source, self.span))
+    }
 }
 
 /// One declaration, as a macro sees it.
@@ -98,8 +110,39 @@ pub(crate) struct Declaration {
     pub(crate) syntax: String,
     /// The bytes the declaration covers, annotations excluded.
     pub(crate) span: Span,
+    /// The file [`Declaration::span`] points into, or `None` when the span
+    /// points nowhere a reader could open.
+    ///
+    /// [`scan`] fills this in; [`parse`] deliberately does not. A re-scan lexes
+    /// a *detached string* — syntax a macro built, or a declaration's own text
+    /// handed back — so its byte offsets are relative to that string and mean
+    /// nothing in any file. Anchoring a diagnostic there would underline
+    /// whatever bytes happen to sit at those offsets in whichever file the id
+    /// named, which is worse than declining to point at all.
+    pub(crate) source: Option<SourceId>,
+    /// The 1-based line [`Declaration::span`] starts on, or `0` for a re-scan.
+    pub(crate) line: u32,
+    /// The path the file was read from, or `""` when it is not known.
+    ///
+    /// Shared rather than copied: every declaration in a file names the same
+    /// one, and a program has far more declarations than files.
+    pub(crate) path: std::sync::Arc<str>,
+    /// How many lines the whole file holds, or `0` for a re-scan.
+    ///
+    /// Counted here rather than resolved later because this is the only place
+    /// that holds the file's text: a macro is handed declarations, never files,
+    /// so a lint about a file's *size* has nowhere else to read it from.
+    pub(crate) file_lines: u32,
     /// The annotations written above it.
     pub(crate) annotations: Vec<Annotation>,
+}
+
+impl Declaration {
+    /// Where the declaration was written, when that is a real place in a real
+    /// file.
+    pub(crate) fn at(&self) -> Option<FileSpan> {
+        self.source.map(|source| FileSpan::new(source, self.span))
+    }
 }
 
 /// Scans the declaration starting at token `start`, which must sit on the first
@@ -165,6 +208,10 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
             fields,
             syntax: file.slice(span).to_owned(),
             span,
+            source: Some(file.source),
+            path: file.path.clone(),
+            line: file.line_of(span.start),
+            file_lines: file.line_count(),
             annotations,
         },
         close + 1,
@@ -183,9 +230,19 @@ pub(crate) fn parse(text: &str) -> Option<Declaration> {
     while index < file.len() && file.kind(index) == TokenKind::Eof {
         index += 1;
     }
-    let (declaration, _) = scan(&file, 0)?;
+    let (mut declaration, _) = scan(&file, 0)?;
     if declaration.kind == DeclarationKind::Other {
         return None;
+    }
+    // Detached text: the spans are offsets into `text`, not into any file, so
+    // the file they came from is unknown rather than [`SourceId::new(0)`], which
+    // is a real id belonging to a real file. See [`Declaration::source`].
+    declaration.source = None;
+    declaration.path = std::sync::Arc::from("");
+    declaration.line = 0;
+    declaration.file_lines = 0;
+    for field in &mut declaration.fields {
+        field.source = None;
     }
     Some(declaration)
 }
@@ -264,6 +321,7 @@ fn scan_fields(file: &Lexed<'_>, open: usize, close: usize) -> Vec<Field> {
             initializer,
             syntax: file.slice(span).to_owned(),
             span,
+            source: Some(file.source),
             annotations,
         });
         index = end + 1;
@@ -299,6 +357,7 @@ fn scan_variants(file: &Lexed<'_>, open: usize, close: usize) -> Vec<Field> {
             initializer: String::new(),
             syntax: file.slice(span).to_owned(),
             span,
+            source: Some(file.source),
             annotations: Vec::new(),
         });
         index = last + 1;
@@ -392,9 +451,13 @@ fn split_annotation(file: &Lexed<'_>, from: usize, end: usize) -> (String, Strin
                 .to_owned(),
             file.slice(file.span_of(at + 1, end)).trim().to_owned(),
         ),
-        Some(_) => (
+        // `let x = 1`, with no written type: the `=` is the first token, so
+        // there is no type half and the initializer starts *after* it. Slicing
+        // from `from` here would hand back `= 1` and call it the initializer,
+        // which is what a reader comparing against `1` would never match.
+        Some(at) => (
             String::new(),
-            file.slice(file.span_of(from, end)).trim().to_owned(),
+            file.slice(file.span_of(at + 1, end)).trim().to_owned(),
         ),
         None if end >= type_start => (
             file.slice(file.span_of(type_start, end)).trim().to_owned(),
@@ -493,6 +556,18 @@ mod tests {
             .map(|field| field.name.as_str())
             .collect();
         assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn an_untyped_field_reports_its_initializer_without_the_equals() {
+        // `let enabled = true` has no written type, so the `=` is the first
+        // token after the name — and the initializer is what follows it, not
+        // the assignment itself.
+        let declaration =
+            scan_text("Lint Entry {\n    let enabled = true\n    let code = \"K1\"\n}\n");
+        assert_eq!(declaration.fields[0].type_text, "");
+        assert_eq!(declaration.fields[0].initializer, "true");
+        assert_eq!(declaration.fields[1].initializer, "\"K1\"");
     }
 
     #[test]

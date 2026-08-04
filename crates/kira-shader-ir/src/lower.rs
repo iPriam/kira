@@ -168,8 +168,14 @@ fn reflect_resources(module: &CheckedModule, shader: &CheckedShader) -> Vec<Refl
     let mut reflected = Vec::new();
     for (group_index, group) in shader.groups.iter().enumerate() {
         let group_index = u32::try_from(group_index).unwrap_or(u32::MAX);
-        for (within, resource) in group.resources.iter().enumerate() {
-            let within = u32::try_from(within).unwrap_or(u32::MAX);
+        for (position, resource) in group.resources.iter().enumerate() {
+            // A written `@binding(n)` decides the slot outright; position is
+            // only the default. The two mix freely within a group — the checker
+            // is what refuses two resources that would land on one slot, so by
+            // here every slot in the group is distinct.
+            let within = resource
+                .binding
+                .unwrap_or_else(|| u32::try_from(position).unwrap_or(u32::MAX));
             reflected.push(ReflectedResource {
                 group_name: group.name.clone(),
                 group_class: group.class,
@@ -308,6 +314,22 @@ impl Counters {
         group_index: u32,
         within: u32,
     ) -> BackendBinding {
+        // A written slot is written for one reason: to land where the host
+        // already binds. Honor it on every target rather than only where the
+        // default happens to be positional, so a shader cannot be right on
+        // Metal and silently wrong on WebGPU.
+        if let Some(slot) = resource.binding {
+            let glsl_name = match target {
+                BackendTarget::Glsl330 => Some(resource.name.clone()),
+                _ => None,
+            };
+            return BackendBinding {
+                target,
+                group_index,
+                binding_index: slot,
+                glsl_name,
+            };
+        }
         let (group, binding, glsl_name) = match target {
             // Metal's vertex buffer 0 is the vertex attribute stream, so the
             // resource buffers start at 1.

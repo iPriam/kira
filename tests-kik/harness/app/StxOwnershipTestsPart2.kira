@@ -1,0 +1,503 @@
+import Foundation
+
+// StxOwnershipTests: deep ownership tests — move into consuming functions,
+// owned aggregates, borrow (shared and mut) writeback, pipeline of moves,
+// copy vs. move semantics, and runtime traps.
+//
+// All top-level names use the Stxo/stxo prefix to avoid harness namespace
+// collisions. This file imports Foundation explicitly (imports are file-scoped).
+
+// ---------------------------------------------------------------------------
+// Group 4: Owned arrays build + move
+// ---------------------------------------------------------------------------
+
+Test StxoArrBuildMove {
+    // xs=[1..5], consume→15
+    test {
+        var xs: [Int] = []
+        var i = 0
+        while i < 5 {
+            xs.append(i + 1)
+            i = i + 1
+        }
+        return stxoConsumeArr(move xs)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+}
+
+Test StxoArrBuildMoveBag {
+    // stxoBuildBag(7): label=7, items=[1..7], consume=7+28=35
+    test { let b = stxoBuildBag(7); return stxoConsumeBag(move b) }
+    expect { let e: Result<Int, TestFailure> = .Ok(35); return e }
+}
+
+Test StxoArrBuildMoveLoop {
+    // n=1..5: xs=[1..n], consume→n*(n+1)/2; total=1+3+6+10+15=35
+    test {
+        var acc = 0
+        var n = 1
+        while n <= 5 {
+            var xs: [Int] = []
+            var i = 1
+            while i <= n {
+                xs.append(i)
+                i = i + 1
+            }
+            acc = acc + stxoConsumeArr(move xs)
+            n = n + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(35); return e }
+}
+
+Test StxoArrKeepBorrow {
+    // xs=[100,200], access xs[0]+xs[1]=300; keep array (no move)
+    test {
+        var xs: [Int] = []
+        xs.append(100)
+        xs.append(200)
+        return xs[0] + xs[1]
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(300); return e }
+}
+
+Test StxoArrCountAfterBuild {
+    // 8 appends → count=8
+    test {
+        var xs: [Int] = []
+        var i = 0
+        while i < 8 {
+            xs.append(0)
+            i = i + 1
+        }
+        return xs.count
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(8); return e }
+}
+
+Test StxoArrBorrowAndMove {
+    // xs=[10,20], count=2 (borrow), then consume=30; 2+30=32
+    test {
+        var xs: [Int] = []
+        xs.append(10)
+        xs.append(20)
+        let c = xs.count
+        return c + stxoConsumeArr(move xs)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(32); return e }
+}
+
+Test StxoBagBorrowItems {
+    // stxoBuildBag(5): items=[1,2,3,4,5]; [0]+[4]=1+5=6
+    test {
+        var b = stxoBuildBag(5)
+        return b.items[0] + b.items[4]
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+}
+
+Test StxoBagBorrowCount {
+    // stxoBuildBag(7): items.count=7
+    test {
+        var b = stxoBuildBag(7)
+        return b.items.count
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+}
+
+Test StxoBagBorrowLabel {
+    // stxoBuildBag(3): label=3
+    test {
+        var b = stxoBuildBag(3)
+        return b.label
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+}
+
+Test StxoArrAppendLoop {
+    // xs=[0,2,4,...,38] (20 elements of 2*i); consume=2*(0+1+..+19)=2*190=380
+    test {
+        var xs: [Int] = []
+        var i = 0
+        while i < 20 {
+            xs.append(i * 2)
+            i = i + 1
+        }
+        return stxoConsumeArr(move xs)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(380); return e }
+}
+
+Test StxoArrGrow {
+    // loop i=0..9: append, acc += xs.count; acc=1+2+..+10=55
+    test {
+        var xs: [Int] = []
+        var acc = 0
+        var i = 0
+        while i < 10 {
+            xs.append(i)
+            acc = acc + xs.count
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(55); return e }
+}
+
+Test StxoBagLoopBuildConsume {
+    // n=1..10: consumeBag=n+n*(n+1)/2; total=2+5+9+14+20+27+35+44+54+65=275
+    test {
+        var acc = 0
+        var n = 1
+        while n <= 10 {
+            let b = stxoBuildBag(n)
+            acc = acc + stxoConsumeBag(move b)
+            n = n + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(275); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Group 5: Move into struct fields
+// ---------------------------------------------------------------------------
+
+Test StxoWrapInnerX {
+    // v={3,4,5}, wrap(v,10), inner.x=3
+    test {
+        let v = StxoVec { x: 3, y: 4, z: 5 }
+        let c = stxoWrap(move v, 10)
+        return c.inner.x
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(3); return e }
+}
+
+Test StxoWrapWeight {
+    test {
+        let v = StxoVec { x: 3, y: 4, z: 5 }
+        let c = stxoWrap(move v, 10)
+        return c.weight
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+}
+
+Test StxoWrapUnwrap {
+    // v={3,4,5}, wrap(10), unwrap=3+4+5+10=22
+    test {
+        let v = StxoVec { x: 3, y: 4, z: 5 }
+        let c = stxoWrap(move v, 10)
+        return stxoUnwrap(move c)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(22); return e }
+}
+
+Test StxoWrapUnwrapLoop {
+    // i=0..4: v={i,i,i}, wrap(i), unwrap=i+i+i+i=4i; total=0+4+8+12+16=40
+    test {
+        var acc = 0
+        var i = 0
+        while i < 5 {
+            let v = StxoVec { x: i, y: i, z: i }
+            let c = stxoWrap(move v, i)
+            acc = acc + stxoUnwrap(move c)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(40); return e }
+}
+
+Test StxoWrapInnerSum {
+    // v={7,8,9}, wrap(0), inner.x+inner.y+inner.z=24
+    test {
+        let v = StxoVec { x: 7, y: 8, z: 9 }
+        let c = stxoWrap(move v, 0)
+        return c.inner.x + c.inner.y + c.inner.z
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+}
+
+Test StxoWrapNested {
+    // v={1,2,3}, wrap(100), inner.z + weight = 3+100=103
+    test {
+        let v = StxoVec { x: 1, y: 2, z: 3 }
+        let c = stxoWrap(move v, 100)
+        return c.inner.z + c.weight
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(103); return e }
+}
+
+Test StxoWrapChain {
+    // c1: v1={1,1,1}+w=5 → unwrap=8; c2: v2={2,2,2}+w=10 → unwrap=16; total=24
+    test {
+        let v1 = StxoVec { x: 1, y: 1, z: 1 }
+        let c1 = stxoWrap(move v1, 5)
+        let s1 = stxoUnwrap(move c1)
+        let v2 = StxoVec { x: 2, y: 2, z: 2 }
+        let c2 = stxoWrap(move v2, 10)
+        let s2 = stxoUnwrap(move c2)
+        return s1 + s2
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+}
+
+Test StxoWrapAndConsume {
+    // v={5,5,5}, wrap(15), unwrap=5+5+5+15=30
+    test {
+        let v = StxoVec { x: 5, y: 5, z: 5 }
+        let w = stxoWrap(move v, 15)
+        return stxoUnwrap(move w)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Group 6: Pipeline of moves
+// ---------------------------------------------------------------------------
+
+Test StxoPipeAddMul {
+    // v={2,3,4}, add10→{12,13,14}, mul2→{24,26,28}, consume→78
+    test {
+        let v = StxoVec { x: 2, y: 3, z: 4 }
+        let w = stxoPipeAdd(move v, 10)
+        let x = stxoPipeMul(move w, 2)
+        return stxoConsumeVec(move x)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(78); return e }
+}
+
+Test StxoPipeMulAdd {
+    // v={1,2,3}, mul5→{5,10,15}, add1→{6,11,16}, consume→33
+    test {
+        let v = StxoVec { x: 1, y: 2, z: 3 }
+        let w = stxoPipeMul(move v, 5)
+        let x = stxoPipeAdd(move w, 1)
+        return stxoConsumeVec(move x)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(33); return e }
+}
+
+Test StxoPipeAddAddMul {
+    // v={0,0,0}, add3→{3,3,3}, add2→{5,5,5}, mul4→{20,20,20}, consume→60
+    test {
+        let v = StxoVec { x: 0, y: 0, z: 0 }
+        let w = stxoPipeAdd(move v, 3)
+        let x = stxoPipeAdd(move w, 2)
+        let y = stxoPipeMul(move x, 4)
+        return stxoConsumeVec(move y)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+}
+
+Test StxoPipeNeg {
+    // v={5,3,2}, neg→{-5,-3,-2}, consume→-10 = 0-10
+    test {
+        let v = StxoVec { x: 5, y: 3, z: 2 }
+        let w = stxoPipeNeg(move v)
+        return stxoConsumeVec(move w)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 10); return e }
+}
+
+Test StxoPipeLong {
+    // v={1,1,1}, add1→{2,2,2}, add1→{3,3,3}, mul3→{9,9,9}, consume→27
+    test {
+        let v = StxoVec { x: 1, y: 1, z: 1 }
+        let w = stxoPipeAdd(move v, 1)
+        let x = stxoPipeAdd(move w, 1)
+        let y = stxoPipeMul(move x, 3)
+        return stxoConsumeVec(move y)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(27); return e }
+}
+
+Test StxoPipeAddLoop {
+    // i=0..4: v={i,i,i}, add(i)→{2i,2i,2i}, consume→6i; total=0+6+12+18+24=60
+    test {
+        var acc = 0
+        var i = 0
+        while i < 5 {
+            let v = StxoVec { x: i, y: i, z: i }
+            let w = stxoPipeAdd(move v, i)
+            acc = acc + stxoConsumeVec(move w)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+}
+
+Test StxoPipeMulLoop {
+    // i=1..5: v={1,1,1}, mul(i)→{i,i,i}, consume→3i; total=3+6+9+12+15=45
+    test {
+        var acc = 0
+        var i = 1
+        while i <= 5 {
+            let v = StxoVec { x: 1, y: 1, z: 1 }
+            let w = stxoPipeMul(move v, i)
+            acc = acc + stxoConsumeVec(move w)
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(45); return e }
+}
+
+Test StxoBumpConsume {
+    // v={1,2,3}, bump→{2,3,4}, consume→9
+    test {
+        var v = StxoVec { x: 1, y: 2, z: 3 }
+        stxoBumpVec(v)
+        return stxoConsumeVec(move v)
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(9); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Group 7: Copy semantics vs move semantics
+// ---------------------------------------------------------------------------
+
+Test StxoCopyIndepX {
+    // copy v; mutate copy.x; original unchanged
+    test {
+        let v = StxoVec { x: 5, y: 6, z: 7 }
+        var w = v
+        w.x = 100
+        return v.x
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(5); return e }
+}
+
+Test StxoCopyIndepY {
+    test {
+        let v = StxoVec { x: 5, y: 6, z: 7 }
+        var w = v
+        w.y = 200
+        return v.y
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(6); return e }
+}
+
+Test StxoCopyIndepZ {
+    test {
+        let v = StxoVec { x: 5, y: 6, z: 7 }
+        var w = v
+        w.z = 300
+        return v.z
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+}
+
+Test StxoCopyBothValues {
+    // copy.x=100, original.x=5; sum=105
+    test {
+        let v = StxoVec { x: 5, y: 6, z: 7 }
+        var w = v
+        w.x = 100
+        return w.x + v.x
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(105); return e }
+}
+
+Test StxoCopyLoopIndep {
+    // i=0..4: copy v={i,i,i}, zero copy.x, acc += v.x=i; sum=0+1+2+3+4=10
+    test {
+        var acc = 0
+        var i = 0
+        while i < 5 {
+            let v = StxoVec { x: i, y: i, z: i }
+            var w = v
+            w.x = 0
+            acc = acc + v.x
+            i = i + 1
+        }
+        return acc
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(10); return e }
+}
+
+Test StxoCopyBoxField {
+    // copy box, mutate copy.id, original unchanged
+    test {
+        let b = StxoBox {
+            min: StxoVec { x: 1, y: 2, z: 3 },
+            max: StxoVec { x: 4, y: 5, z: 6 },
+            id: 7
+        }
+        var b2 = b
+        b2.id = 99
+        return b.id
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+}
+
+Test StxoCopyThenMoveConsumer {
+    // v={3,4,5}; copy w=v; move w into consumer=12; access v.x=3; total=15
+    test {
+        let v = StxoVec { x: 3, y: 4, z: 5 }
+        let w = v
+        return stxoConsumeVec(move w) + v.x
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(15); return e }
+}
+
+Test StxoCopyMutateOrigKept {
+    // copy v, zero all copy fields, original sum unchanged=60
+    test {
+        var v = StxoVec { x: 10, y: 20, z: 30 }
+        var w = v
+        w.x = 0
+        w.y = 0
+        w.z = 0
+        return v.x + v.y + v.z
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+}
+
+// ---------------------------------------------------------------------------
+// Group 8: Trap tests
+// ---------------------------------------------------------------------------
+
+Test StxoTrapDivZero {
+    // consumer returns Int, divide by 0 → trap
+    test {
+        let v = StxoVec { x: 5, y: 0, z: 3 }
+        return stxoConsumeVec(move v) / 0
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test StxoTrapModZero {
+    test { return 5 % 0 }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test StxoTrapBagEmpty {
+    // stxoBuildBag(0).items is empty; items[5] → trap
+    test {
+        var b = stxoBuildBag(0)
+        return b.items[5]
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test StxoTrapBagOOB {
+    // stxoBuildBag(3).items has 3 elements; items[99] → trap
+    test {
+        var b = stxoBuildBag(3)
+        return b.items[99]
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}
+
+Test StxoTrapArrOOB {
+    // xs=[1], xs[99] → trap
+    test {
+        var xs: [Int] = []
+        xs.append(1)
+        return xs[99]
+    }
+    expect { let e: Result<Int, TestFailure> = .Error(.Runtime("")); return e }
+}

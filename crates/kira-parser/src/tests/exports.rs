@@ -4,6 +4,8 @@
 //! payload `@Export` does not take — and to let a class carry the marker.
 //! Deciding what any of it *means* is semantics'.
 
+use kira_diagnostics::Diagnostic;
+
 use super::*;
 use kira_syntax_model::ast::ClassDecl;
 
@@ -83,7 +85,7 @@ fn only_export_may_annotate_a_class() {
         let codes: Vec<_> = result
             .diagnostics
             .iter()
-            .filter_map(|diagnostic| diagnostic.code)
+            .filter_map(Diagnostic::code_text)
             .collect();
         assert_eq!(codes, vec!["KPAR041"], "{text}");
     }
@@ -103,7 +105,7 @@ fn only_export_may_annotate_a_struct() {
         let codes: Vec<_> = result
             .diagnostics
             .iter()
-            .filter_map(|diagnostic| diagnostic.code)
+            .filter_map(Diagnostic::code_text)
             .collect();
         assert_eq!(codes, vec!["KPAR041"], "{text}");
         assert!(
@@ -135,7 +137,7 @@ fn an_annotation_on_a_non_function_class_member_is_refused() {
     let codes: Vec<_> = result
         .diagnostics
         .iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .filter_map(Diagnostic::code_text)
         .collect();
     assert!(codes.contains(&"KPAR042"), "{codes:?}");
 }
@@ -159,7 +161,7 @@ fn a_struct_cannot_be_exported_and_is_still_registered() {
     let codes: Vec<_> = result
         .diagnostics
         .iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .filter_map(Diagnostic::code_text)
         .collect();
     assert_eq!(codes, vec!["KPAR043"], "{codes:?}");
     assert!(

@@ -1,0 +1,158 @@
+// Foundation's `@Derive(Hashable)`: a struct's fields folded into one number.
+//
+//   @Derive(Hashable)
+//   struct Point {
+//       var x: Int
+//       var y: Int
+//   }
+//
+// generates
+//
+//   function hash_Point(v: borrow Point) -> Int
+//
+// The generated name is glued to the type's exact name, the same rule the other
+// derives follow.
+//
+// # Why this exists
+//
+// A program that wants to know whether a value changed since last frame writes
+// the fold by hand:
+//
+//   function renderSignature(view: borrow View) -> Int {
+//       return kindCode(view.kind) * 100000 + view.key * 1013 + ...
+//   }
+//
+// Those primes are load-bearing and nothing checks them. Worse, adding a field
+// to the struct does not add it to the fold, so two values that now differ keep
+// hashing the same and the diff that reads the hash stops noticing. Generating
+// the fold from the declaration makes the omission impossible: the field list
+// *is* the declaration's.
+//
+// # What the fold is
+//
+// FNV-1a over each field's contribution, which is the standard cheap fold: a
+// 64-bit odd multiplier and an xor per field. It is not a cryptographic hash and
+// nothing here pretends otherwise — it exists to tell "changed" from "did not",
+// and a collision costs a redundant redraw rather than a wrong answer.
+//
+// # Limits, and why they are refusals rather than guesses
+//
+//   * A field whose type is not a bare identifier — `[Int]`, `Map<K, V>` — is
+//     refused. Hashing an array means choosing whether length, order and
+//     identity count, and guessing wrong is a hash that disagrees with the
+//     equality it is paired with.
+//   * A `Float` field is refused: two floats that compare equal can carry
+//     different bits (`0.0` and `-0.0`), so a bitwise fold would answer that
+//     equal values differ.
+//   * A field of another struct type is folded through *its* `hash_` function,
+//     so that type must derive `Hashable` too. A missing one surfaces as an
+//     ordinary unknown-call diagnostic, which is the right one: the fix is
+//     deriving it there.
+
+comptime macro Hashable {
+    kind { derive }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        var folds: [Syntax] = []
+        for field in target.fields {
+            var joined: String = ""
+            for id in field.type.asSyntax().identifiers() {
+                joined = joined + id.asString()
+            }
+            if joined != field.type.asSyntax() {
+                Diagnostics.error(
+                    "Derive(Hashable): a field whose type is an array or a generic has no one obvious fold; hash the parts you mean by hand",
+                    at: field.syntax
+                )
+            }
+            if field.type == "Float" {
+                Diagnostics.error(
+                    "Derive(Hashable): a `Float` field cannot be folded — equal values may carry different bits, so the hash would disagree with equality",
+                    at: field.syntax
+                )
+            }
+            if field.type == "F32" {
+                Diagnostics.error(
+                    "Derive(Hashable): a `F32` field cannot be folded — equal values may carry different bits, so the hash would disagree with equality",
+                    at: field.syntax
+                )
+            }
+            if field.type == "F64" {
+                Diagnostics.error(
+                    "Derive(Hashable): a `F64` field cannot be folded — equal values may carry different bits, so the hash would disagree with equality",
+                    at: field.syntax
+                )
+            }
+            var contribution: Syntax = quote { }
+            var known: Bool = false
+            if field.type == "Int" {
+                contribution = quote { v.#{field.name} }
+                known = true
+            }
+            for iname in ["I8", "U8", "I16", "U16", "I32", "U32", "I64", "U64"] {
+                if field.type == iname {
+                    contribution = quote { Int(v.#{field.name}) }
+                    known = true
+                }
+            }
+            if field.type == "Bool" {
+                // A bool is one bit; spelling it as a branch keeps the fold
+                // integer-only rather than relying on a conversion.
+                contribution = quote { boolHashPart(v.#{field.name}) }
+                known = true
+            }
+            if field.type == "String" {
+                contribution = quote { hashString(v.#{field.name}) }
+                known = true
+            }
+            if known == false {
+                // Anything left is another declared type, folded through its
+                // own derive.
+                contribution = quote { hash_#{field.type.asSyntax()}(v.#{field.name}) }
+            }
+            folds.append(quote {
+                acc = fnvStep(acc, #{contribution})
+            })
+        }
+        return quote {
+            function hash_#{target.name}(v: borrow #{target.name}) -> Int {
+                var acc: Int = fnvSeed()
+                #{folds}
+                return acc
+            }
+        }
+    }
+}
+
+// The FNV-1a seed, as the algorithm gives it.
+function fnvSeed() -> Int {
+    return 0 - 3750763034362895579
+}
+
+// One value folded into an accumulator: xor, then multiply by the FNV prime.
+//
+// Wrapping is the point — the fold is a mixing function, not arithmetic anyone
+// reads the magnitude of.
+function fnvStep(acc: Int, part: Int) -> Int {
+    return (acc ^ part) * 1099511628211
+}
+
+// A bool's contribution, as the two numbers FNV mixes best.
+function boolHashPart(value: Bool) -> Int {
+    if value {
+        return 1
+    }
+    return 0
+}
+
+// A string folded byte by byte, which is what makes two equal strings hash the
+// same however each was built.
+function hashString(text: borrow String) -> Int {
+    var acc: Int = fnvSeed()
+    var index: Int = 0
+    while index < text.count {
+        acc = fnvStep(acc, text.charAt(index))
+        index = index + 1
+    }
+    return acc
+}

@@ -4,13 +4,15 @@
 //! Everything a macro body can *ask* is here. The split from the statement
 //! walker is by size, not by principle: both halves are the same evaluator.
 
+use kira_diagnostics::Severity;
+use kira_runtime_abi::StringOp;
 use kira_syntax_model::ast::{BinaryOp, CallArg, Expr, ExprId, UnaryOp};
 
-use super::{EvalError, Evaluator, FIELD_TYPE};
+use super::{EvalError, Evaluator, FIELD_TYPE, Report};
 use crate::diagnostics;
 use crate::ksl;
 use crate::syntax_ops::{self, SyntaxError};
-use crate::value::{DeclarationValue, Value};
+use crate::value::{DeclarationValue, StatementValue, Value};
 
 impl Evaluator<'_> {
     /// Evaluates the expression at `id`.
@@ -123,6 +125,15 @@ impl Evaluator<'_> {
             ("String", [Value::Int(n)]) => Ok(Value::Str(n.to_string())),
             ("String", [Value::Bool(b)]) => Ok(Value::Str(b.to_string())),
             ("String", [Value::Str(text)]) => Ok(Value::Str(text.clone())),
+            // A configuration value that *is* a number — a threshold, a count —
+            // reaches a macro as the text it was written with. Without this, a
+            // macro could compare it to other text and nothing else.
+            //
+            // `Syntax` as well as `Str`, because a field's initializer is
+            // syntax: that is the value such a number actually arrives as.
+            ("Int", [Value::Int(n)]) => Ok(Value::Int(*n)),
+            ("Int", [Value::Str(text)]) => parse_int(text),
+            ("Int", [Value::Syntax(written)]) => parse_int(&written.text),
             _ => Err(EvalError::unsupported(format!(
                 "a call to `{callee}` with {} argument(s)",
                 values.len()
@@ -189,10 +200,50 @@ impl Evaluator<'_> {
                         )
                     })?);
                 }
-                Ok(Value::Syntax(parts.join(separator)))
+                // Joined syntax is assembled, not read: the pieces may come from
+                // anywhere, or from nowhere, so the join belongs to no one file.
+                Ok(Value::built(parts.join(separator)))
             }
-            ("Diagnostics", "error", [Value::Str(message), ..]) => {
-                self.reported.push(message.clone());
+            // `Diagnostics.error("…", at: something)`, and its two quieter
+            // siblings. The `at:` argument is whatever the macro is talking
+            // *about*, and its span is where the caret goes. A macro that names
+            // nothing, or names a value that came from no file, reports without
+            // an anchor and the caller falls back to the macro's own
+            // declaration.
+            //
+            // Severity is what separates a macro that refuses from a macro that
+            // observes: `error` discards the expansion, `warning` and `note`
+            // leave it in place. A lint is the second kind — it has an opinion
+            // about code that is otherwise perfectly good.
+            (
+                "Diagnostics",
+                method @ ("error" | "warning" | "note"),
+                [Value::Str(message), rest @ ..],
+            ) => {
+                let severity = match method {
+                    "warning" => Severity::Warning,
+                    "note" => Severity::Note,
+                    _ => Severity::Error,
+                };
+                // The remaining arguments are read by type rather than by
+                // position, because the evaluator drops argument labels: the
+                // value that came from somewhere is the anchor, and the string
+                // is the code. That leaves `at:` and `code:` independently
+                // omittable and order-insensitive, rather than one being
+                // silently misread as the other when the pair is incomplete.
+                let mut strings = rest.iter().filter_map(|value| match value {
+                    Value::Str(text) => Some(text.clone()),
+                    _ => None,
+                });
+                self.reported.push(Report {
+                    severity,
+                    message: message.clone(),
+                    at: rest.iter().find_map(Value::anchor),
+                    // `code:` then `fix:` — the evaluator drops labels, so the
+                    // order is the contract.
+                    code: strings.next(),
+                    fix: strings.next(),
+                });
                 Ok(Value::Void)
             }
             (ksl::NAMESPACE, "compile", values) => ksl::compile(self.shaders, values),
@@ -200,6 +251,9 @@ impl Evaluator<'_> {
             // asked a C library which platform it was on would be asking at run
             // time a question the compiler already answered.
             ("Build", "platform", []) => Ok(Value::Str(self.platform.clone())),
+            // Whether `kira lint` asked for this run. False under every other
+            // verb, which is what keeps a lint from running during `check`.
+            ("Build", "linting", []) => Ok(Value::Bool(self.lint)),
             _ => Err(EvalError::unsupported(format!(
                 "`{namespace}.{method}` with {} argument(s)",
                 values.len()
@@ -225,13 +279,82 @@ fn member(value: &Value, name: &str) -> Result<Value, EvalError> {
         // string, so a macro can select declarations by family without the
         // compiler knowing any family by name. Empty for every other form.
         (Value::Declaration(declaration), "family") => Ok(Value::Str(declaration.family.clone())),
-        (Value::Declaration(declaration), "syntax") => {
-            Ok(Value::Syntax(declaration.syntax.clone()))
+        // Which form the declaration wears, as the word `appliesTo` uses:
+        // `struct`, `class`, `enum`, `construct`, `form`, `function`. The value
+        // has carried this since reflection existed; without a way to read it, a
+        // lint that cares about one kind of declaration had to guess from text.
+        (Value::Declaration(declaration), "kind") => Ok(Value::Str(declaration.kind.to_owned())),
+        // Where it sits, and how big the file holding it is.
+        //
+        // A macro is handed declarations, never files, so without these a lint
+        // can say everything about what a file contains and nothing about how
+        // long it is. Both are `0` for a declaration re-scanned from detached
+        // text, which belongs to no file — a lint reading them must treat `0` as
+        // "not in a file" rather than as a small number.
+        (Value::Declaration(declaration), "line") => Ok(Value::Int(i64::from(declaration.line))),
+        (Value::Declaration(declaration), "fileLines") => {
+            Ok(Value::Int(i64::from(declaration.file_lines)))
         }
+        // Which file, as an opaque number: two declarations share a file when
+        // their `fileId` matches, and `-1` means detached text belonging to no
+        // file. Opaque rather than a path because that is the whole question a
+        // lint asks — a message that wants to *name* the file anchors at `at:`,
+        // and the renderer resolves the path from the span.
+        // Where the file came from, as written in the program's module list.
+        // `""` when the caller that scanned it did not locate it, so a lint
+        // matching on a path fragment must treat empty as "unplaceable" rather
+        // than as a path that happens to match nothing.
+        (Value::Declaration(declaration), "path") => {
+            Ok(Value::Str(declaration.path.as_ref().to_owned()))
+        }
+        (Value::Declaration(declaration), "fileId") => Ok(Value::Int(
+            declaration
+                .span
+                .map_or(-1, |span| i64::from(span.source.value())),
+        )),
+        // `target.syntax` is the declaration as written, so it points at the
+        // declaration — this is what `Diagnostics.error(…, at: target.syntax)`
+        // rides on.
+        (Value::Declaration(declaration), "syntax") => {
+            Ok(Value::read(declaration.syntax.clone(), declaration.span))
+        }
+        // The statements the declaration's body holds, parsed on demand.
+        //
+        // On demand because most declarations are not asked: a derive walking
+        // fields never needs a body, and parsing every declaration in a program
+        // to answer the few that do would be paid by every macro.
+        (Value::Declaration(declaration), "body") => Ok(Value::Array(
+            crate::body::statements_of(&declaration.syntax, declaration.span)
+                .iter()
+                .map(|statement| Value::Statement(Box::new(StatementValue::of(statement))))
+                .collect(),
+        )),
+        (Value::Statement(statement), "kind") => Ok(Value::Str(statement.kind.to_owned())),
+        (Value::Statement(statement), "syntax") => {
+            Ok(Value::read(statement.syntax.clone(), statement.span))
+        }
+        // What an `if` or `while` tests, what a `for` walks, what a `match`
+        // selects on. Empty for a statement that branches on nothing.
+        (Value::Statement(statement), "head") => {
+            Ok(Value::read(statement.head.clone(), statement.span))
+        }
+        (Value::Statement(statement), "body") => Ok(Value::Array(
+            statement
+                .body
+                .iter()
+                .map(|inner| Value::Statement(Box::new(inner.clone())))
+                .collect(),
+        )),
         (Value::Field(field), "name") => Ok(Value::Identifier(field.name.clone())),
         (Value::Field(field), FIELD_TYPE) => Ok(Value::TypeRef(field.type_text.clone())),
-        (Value::Field(field), "initializer") => Ok(Value::Syntax(field.initializer.clone())),
-        (Value::Field(field), "syntax") => Ok(Value::Syntax(field.syntax.clone())),
+        // The initializer has no span of its own — the scan records where the
+        // whole field sits, not where its `=` half starts. Pointing at the
+        // field it belongs to is coarse but lands on the right code, which is
+        // what a reader needs; pointing nowhere would not.
+        (Value::Field(field), "initializer") => {
+            Ok(Value::read(field.initializer.clone(), field.span))
+        }
+        (Value::Field(field), "syntax") => Ok(Value::read(field.syntax.clone(), field.span)),
         (Value::Array(items), "count") => Ok(Value::Int(items.len() as i64)),
         (Value::Str(text), "count") => Ok(Value::Int(text.chars().count() as i64)),
         (Value::Record(record), name) => record
@@ -256,38 +379,94 @@ fn member(value: &Value, name: &str) -> Result<Value, EvalError> {
 fn method_on(value: &Value, method: &str, args: &[Value]) -> Result<Value, EvalError> {
     match (value, method, args) {
         (Value::Identifier(name), "asString", []) => Ok(Value::Str(name.clone())),
-        (Value::TypeRef(written), "asSyntax", []) => Ok(Value::Syntax(written.clone())),
+        (Value::TypeRef(written), "asSyntax", []) => Ok(Value::built(written.clone())),
         (Value::Str(text), "asString", []) => Ok(Value::Str(text.clone())),
+        // The same string surface a program has, so a macro body and the code
+        // it generates agree on what text can do. Reached on every value that
+        // carries text — a `Syntax` is exactly as searchable as a `String`,
+        // which is what lets a lint look at a declaration it was handed.
+        (receiver, method, args) if StringOp::from_method_name(method).is_some() => {
+            let Some(text) = as_text(receiver) else {
+                return Err(EvalError::unsupported(format!(
+                    "`{method}` on a `{}`, which carries no text",
+                    receiver.type_name()
+                )));
+            };
+            let text = text.to_owned();
+            let op = StringOp::from_method_name(method).unwrap_or(StringOp::Contains);
+            if args.len() != op.argument_count() {
+                return Err(EvalError::unsupported(format!(
+                    "`{method}` with {} argument(s) rather than {}",
+                    args.len(),
+                    op.argument_count()
+                )));
+            }
+            let mut written = Vec::with_capacity(args.len());
+            for argument in args {
+                written.push(text_of(argument)?);
+            }
+            Ok(string_operation(op, &text, &written))
+        }
         (Value::Array(items), "count" | "len", []) => Ok(Value::Int(items.len() as i64)),
+        // The span from this statement's start through `other`'s end.
+        //
+        // A fix often replaces a *run* of statements — `var i = 0` and the
+        // `while` beneath it become one `for` — and a lint that could only name
+        // them one at a time could describe the problem but never write the
+        // repair. Two statements of the same body are all this joins; anything
+        // else has no single span to give.
+        (Value::Statement(statement), "through", [Value::Statement(other)]) => {
+            let from = statement.local;
+            let to = other.local;
+            if to.end() < from.start {
+                return Ok(Value::read(statement.syntax.clone(), statement.span));
+            }
+            let run = statement
+                .text
+                .get(from.start as usize..to.end() as usize)
+                .unwrap_or(&statement.syntax)
+                .to_owned();
+            let joined = statement.span.map(|at| {
+                kira_source::FileSpan::new(
+                    at.source,
+                    kira_source::Span::new(at.span.start, to.end() - from.start),
+                )
+            });
+            Ok(Value::read(run, joined))
+        }
         (Value::Field(field), "hasAnnotation", [Value::Str(name)]) => {
             Ok(Value::Bool(field.has_annotation(name)))
         }
-        (Value::Syntax(text), "identifiers", []) => Ok(Value::Array(
-            syntax_ops::identifiers(text)
+        (Value::Syntax(syntax), "identifiers", []) => Ok(Value::Array(
+            syntax_ops::identifiers(&syntax.text)
                 .into_iter()
                 .map(Value::Identifier)
                 .collect(),
         )),
-        (Value::Syntax(text), "dropField", [name]) => {
+        // The three edits below all return syntax that no longer matches the
+        // bytes it came from, so the result points nowhere: a span into the
+        // original text would underline the wrong run after an edit shifted
+        // everything past it.
+        (Value::Syntax(syntax), "dropField", [name]) => {
             let field = text_of(name)?;
-            syntax_ops::drop_field(text, &field)
-                .map(Value::Syntax)
+            syntax_ops::drop_field(&syntax.text, &field)
+                .map(Value::built)
                 .map_err(syntax_error)
         }
-        (Value::Syntax(text), "replaceIdentifier", [from, to]) => {
+        (Value::Syntax(syntax), "replaceIdentifier", [from, to]) => {
             let from = text_of(from)?;
             let to = text_of(to)?;
-            Ok(Value::Syntax(crate::rename::every(
-                text,
+            Ok(Value::built(crate::rename::every(
+                &syntax.text,
                 &std::iter::once((from, to)).collect(),
             )))
         }
-        (Value::Syntax(text), "rewriteProperty", [name, read, write]) => {
+        (Value::Syntax(syntax), "rewriteProperty", [name, read, write]) => {
             let name = text_of(name)?;
             let read = text_of(read)?;
             let write = text_of(write)?;
-            syntax_ops::rewrite_property(text, &name, &read, &write)
-                .map(Value::Syntax)
+            syntax_ops::rewrite_property(&syntax.text, &name, &read, &write)
+                .map(Value::built)
                 .map_err(syntax_error)
         }
         (other, method, args) => Err(EvalError::unsupported(format!(
@@ -298,12 +477,42 @@ fn method_on(value: &Value, method: &str, args: &[Value]) -> Result<Value, EvalE
     }
 }
 
+/// Performs one string operation at compile time.
+///
+/// The answers match `Vm::perform_string_op` case for case — an empty separator
+/// leaves the text whole, `trim` and the case pair follow characters rather than
+/// bytes — because a macro that reasons about text and a program that does must
+/// not disagree about what the text says.
+fn string_operation(op: StringOp, text: &str, arguments: &[String]) -> Value {
+    match (op, arguments) {
+        (StringOp::Contains, [needle]) => Value::Bool(text.contains(needle)),
+        (StringOp::StartsWith, [prefix]) => Value::Bool(text.starts_with(prefix)),
+        (StringOp::EndsWith, [suffix]) => Value::Bool(text.ends_with(suffix)),
+        (StringOp::Replace, [from, to]) => Value::Str(text.replace(from, to)),
+        (StringOp::Trim, []) => Value::Str(text.trim().to_owned()),
+        (StringOp::Lowercase, []) => Value::Str(text.to_lowercase()),
+        (StringOp::Uppercase, []) => Value::Str(text.to_uppercase()),
+        (StringOp::Split, [separator]) => {
+            let pieces: Vec<Value> = if separator.is_empty() {
+                vec![Value::Str(text.to_owned())]
+            } else {
+                text.split(separator.as_str())
+                    .map(|piece| Value::Str(piece.to_owned()))
+                    .collect()
+            };
+            Value::Array(pieces)
+        }
+        // The arity was checked by the caller, so this is unreachable in
+        // practice; answering `Void` beats a panic in a compiler.
+        _ => Value::Void,
+    }
+}
+
 /// The source text a `Syntax`, `Identifier`, `TypeRef`, or `String` carries.
 fn text_of(value: &Value) -> Result<String, EvalError> {
     match value {
-        Value::Syntax(text) | Value::Identifier(text) | Value::TypeRef(text) | Value::Str(text) => {
-            Ok(text.clone())
-        }
+        Value::Syntax(syntax) => Ok(syntax.text.clone()),
+        Value::Identifier(text) | Value::TypeRef(text) | Value::Str(text) => Ok(text.clone()),
         other => Err(EvalError::unsupported(format!(
             "a `{}` where syntax or a name is needed",
             other.type_name()
@@ -384,9 +593,11 @@ fn comparable(left: &Value, right: &Value) -> Result<bool, EvalError> {
 /// The text a value carries, for the types that carry one.
 fn as_text(value: &Value) -> Option<&str> {
     match value {
-        Value::Str(text) | Value::Syntax(text) | Value::Identifier(text) | Value::TypeRef(text) => {
-            Some(text)
-        }
+        // Compared by text alone: two pieces of syntax reading the same are
+        // equal however each one got here, which is what keeps `field.type ==
+        // "Int"` working whether the type was read or built.
+        Value::Syntax(syntax) => Some(&syntax.text),
+        Value::Str(text) | Value::Identifier(text) | Value::TypeRef(text) => Some(text),
         _ => None,
     }
 }
@@ -394,4 +605,16 @@ fn as_text(value: &Value) -> Option<&str> {
 /// Builds the reflection value a macro's `Declaration` parameter is bound to.
 pub(crate) fn declaration_value(declaration: &crate::decl::Declaration) -> Value {
     Value::Declaration(Box::new(DeclarationValue::of(declaration)))
+}
+
+/// Reads `text` as a whole number, for `Int("700")`.
+///
+/// A refusal rather than a zero: a threshold written `"7O0"` that quietly became
+/// 0 would turn a lint off, and silence is the one answer a reader cannot tell
+/// from "nothing was found".
+fn parse_int(text: &str) -> Result<Value, EvalError> {
+    text.trim()
+        .parse::<i64>()
+        .map(Value::Int)
+        .map_err(|_| EvalError::unsupported(format!("`Int(\"{text}\")`, which is not a number")))
 }

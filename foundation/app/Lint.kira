@@ -1,0 +1,78 @@
+// Foundation's lint vocabulary: the `Lint` construct family a `linter.kira`
+// configures a package's lints with.
+//
+// A lint entry names one check, how loudly it speaks, and whether it runs. It
+// goes in `linter.kira` at the package root, and every member carries a written
+// type because a construct-backed form requires them:
+//
+//     Lint QualifiedVariant {
+//         let code: String = "KLINT001"
+//         let severity: String = "warning"
+//         let enabled: Bool = true
+//     }
+//
+// The package root, beside `package.kira` — not under `app/`. What governs a
+// whole package belongs next to what the package is called and what it depends
+// on, where a reader looks for it. Assembly adds it to the package's modules
+// (`kira-program-graph`), so it is compiled with everything else and the
+// entries in it are declarations the collector reads like any other.
+//
+// `Lint` is an ordinary construct family declared here in Kira, exactly as
+// `Test` is. The compiler knows nothing about the name: `LintRunner` selects
+// entries with `d.family == "Lint"`, a string compare against the family a
+// declaration was written in, so a library could declare its own family and its
+// own runner and get the same treatment with no compiler change.
+//
+// # Why the entries are data and the checks are not
+//
+// A lint runs while the program is being *compiled*, and the only thing that
+// runs then is a `comptime macro`'s `expand` body. A `Lint` declaration is an
+// ordinary declaration — the runner can read it, but cannot call into it, so a
+// check written as a member here would never execute.
+//
+// So the split is: this file and a package's `linter.kira` say *which* lints
+// run and how, and `LintRunner.kira` holds what each one actually looks for.
+// Adding a lint is a branch in the runner plus an entry in a `linter.kira` —
+// both ordinary Kira, neither a compiler release.
+
+// How loudly a lint speaks, as the string an entry writes.
+//
+// Spelled as text rather than an enum because the runner reads it back through
+// reflection, where a field's value arrives as the source text it was written
+// with. `"error"` fails the build; `"warning"` and `"note"` do not.
+enum LintSeverity {
+    Error
+    Warning
+    Note
+}
+
+// The severity an entry's `severity` text names, defaulting to a warning.
+//
+// A lint that stops a build is the exception rather than the rule: a lint has
+// an opinion about code that already compiles, and a misspelled severity should
+// not be the thing that decides a build fails.
+function lintSeverityFromText(text: borrow String) -> LintSeverity {
+    if text == "error" {
+        return .Error
+    }
+    if text == "note" {
+        return .Note
+    }
+    return .Warning
+}
+
+// One lint's configuration, as a `linter.kira` writes it.
+//
+// Every member is required: an entry that left its code out would report under
+// no name, and one that left `enabled` out would leave a reader guessing
+// whether silence meant "clean" or "off".
+// `limit` is the exception, and it is optional because most lints have nothing
+// to measure: a lint that asks "is this over a threshold" needs the threshold,
+// and one that asks "is this written the long way" does not. Left out, it is 0,
+// which a lint reads as "use my own default" rather than as "allow nothing".
+construct Lint {
+    @Required let code: String
+    @Required let severity: String
+    @Required let enabled: Bool
+    let limit: Int = 0
+}

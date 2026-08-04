@@ -146,19 +146,25 @@ function enumsConstructAnyChurnSection() -> Int {
 // reassigned, then returned) miscompiles on the LLVM backend — see
 // FINDINGS.md (#1) and known-bugs/llvm_enum_var_local.
 function enShadeFor(i: Int) -> EnShade {
-    switch i % 3 {
-        case 0 { return .Light }
-        case 1 { return .Dark }
-        case 2 { return .Mid }
-        default { return .Light }
+    if (i % 3) == 0 {
+        return .Light
+    } else if (i % 3) == 1 {
+        return .Dark
+    } else if (i % 3) == 2 {
+        return .Mid
+    } else {
+        return .Light
     }
 }
 
 function enNodeFor(j: Int) -> EnNode {
-    switch j % 3 {
-        case 0 { return .Leaf(j) }
-        case 1 { return .Tagged(j) }
-        case 2 { return .Empty }
-        default { return .Empty }
+    if (j % 3) == 0 {
+        return .Leaf(j)
+    } else if (j % 3) == 1 {
+        return .Tagged(j)
+    } else if (j % 3) == 2 {
+        return .Empty
+    } else {
+        return .Empty
     }
 }

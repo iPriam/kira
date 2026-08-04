@@ -111,7 +111,8 @@ fn a_local_named_like_a_scalar_type_shadows_the_conversion() {
     // must step aside so the shadowing local is what gets diagnosed.
     let reported = codes(r#"@Main function main() { let Int = 5 print(Int(2.5)) return }"#);
     assert!(
-        !reported.contains(&"KSEM209") && !reported.contains(&"KSEM210"),
+        !reported.iter().any(|code| code == "KSEM209")
+            && !reported.iter().any(|code| code == "KSEM210"),
         "a shadowing local must not be analyzed as a conversion, got {reported:?}",
     );
 }

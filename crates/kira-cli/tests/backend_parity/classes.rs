@@ -455,3 +455,118 @@ function main() {
     );
     assert_eq!(output, "1\n92\n");
 }
+
+/// A class whose methods are declared in more than one place.
+///
+/// `extend <Class> { … }` is what lets a class outgrow one file without
+/// outgrowing the line ceiling. The methods it adds are ordinary methods —
+/// nothing about them is deferred to run time — so an extension method calling
+/// an inherited one, and an inherited one reached through the extension, both
+/// have to agree on every backend. That is what this pins: the extension is not
+/// a second dispatch mechanism sneaking in beside the per-class copy.
+#[test]
+fn methods_added_by_extend_agree_with_the_ones_in_the_body() {
+    let output = assert_parity(
+        r#"
+class ClsMeter {
+    var ticks: Int = 0
+
+    function bump() {
+        self.ticks = self.ticks + 1
+    }
+
+    function reading() -> Int {
+        return self.ticks
+    }
+}
+
+class ClsFastMeter extends ClsMeter {
+    override function bump() {
+        self.ticks = self.ticks + 10
+    }
+}
+
+extend ClsMeter {
+    function bumpTwice() {
+        self.bump()
+        self.bump()
+    }
+
+    function doubled() -> Int {
+        return self.reading() * 2
+    }
+}
+
+@Main
+function main() {
+    var slow = ClsMeter {}
+    slow.bumpTwice()
+    print(slow.reading())
+    print(slow.doubled())
+    // The override wins through the extension too: `bumpTwice` is one body, and
+    // the copy of it that belongs to `ClsFastMeter` calls that class's `bump`.
+    var fast = ClsFastMeter {}
+    fast.bumpTwice()
+    print(fast.reading())
+    print(fast.doubled())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "2\n4\n20\n40\n");
+}
+
+/// A subclass passed where a parent is declared, reaching the override.
+///
+/// The alternative — accepting the subclass but running the *parent's* method —
+/// is the shape this port exists to refuse. It is not caught by a type error, so
+/// it has to be caught by a value: `24` is Dog's `speak`, `14` is Animal's, and
+/// only one of them is a program that means what it says.
+///
+/// No vtable is involved. The call reaches a copy of `describe` whose parameter
+/// is typed `ClsDog`, so `a.speak()` inside it is statically the subclass's
+/// method on every backend.
+#[test]
+fn a_subclass_argument_reaches_the_override() {
+    let output = assert_parity(
+        r#"
+class ClsAnimal {
+    var legs: Int = 4
+
+    function speak() -> Int {
+        return 1
+    }
+}
+
+class ClsDog extends ClsAnimal {
+    override function speak() -> Int {
+        return 2
+    }
+}
+
+class ClsPuppy extends ClsDog {
+    override function speak() -> Int {
+        return 3
+    }
+}
+
+function describe(a: borrow ClsAnimal) -> Int {
+    return a.speak() * 10 + a.legs
+}
+
+@Main
+function main() {
+    let plain = ClsAnimal {}
+    let rex = ClsDog {}
+    // Two levels down: the copy is picked by the argument's own class, not by
+    // the nearest declared one.
+    let pup = ClsPuppy {}
+    print(describe(plain))
+    print(describe(rex))
+    print(describe(pup))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "14\n24\n34\n");
+}

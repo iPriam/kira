@@ -11,7 +11,7 @@
 //! unknown opcode is rejected rather than guessed at.
 
 use super::{
-    CompilerOp, FieldPath, FileSystemOp, Instruction, PathStep, PlacePath, TaskPrim,
+    CompilerOp, FieldPath, FileSystemOp, Instruction, PathStep, PlacePath, StringOp, TaskPrim,
     WritebackTarget, opcode as o, step_tag,
 };
 
@@ -175,6 +175,10 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         }
         Instruction::FileSystem(op) => {
             out.push(o::FILE_SYSTEM);
+            out.push(op.as_byte());
+        }
+        Instruction::StringOp(op) => {
+            out.push(o::STRING_OP);
             out.push(op.as_byte());
         }
         Instruction::Compiler(op) => {
@@ -385,6 +389,15 @@ impl Cursor<'_> {
                     offset: tag_offset,
                 })?;
                 Instruction::FileSystem(op)
+            }
+            o::STRING_OP => {
+                let tag_offset = self.offset;
+                let [tag] = self.take::<1>()?;
+                let op = StringOp::from_byte(tag).ok_or(DecodeError::UnknownOpcode {
+                    opcode: tag,
+                    offset: tag_offset,
+                })?;
+                Instruction::StringOp(op)
             }
             o::COMPILER => {
                 let tag_offset = self.offset;

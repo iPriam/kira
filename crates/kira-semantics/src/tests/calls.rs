@@ -160,7 +160,8 @@ fn a_default_still_type_checks_a_passed_argument() {
             "function add(base: Int, step: Int = 3) -> Int { return base + step }\n\
              @Main function main() { print(add(1, true)) return }"
         )
-        .contains(&"KSEM063")
+        .iter()
+        .any(|code| code == "KSEM063")
     );
 }
 
@@ -173,7 +174,8 @@ fn a_default_less_missing_argument_is_still_an_arity_error() {
             "function add(base: Int, step: Int) -> Int { return base + step }\n\
              @Main function main() { print(add(1)) return }"
         )
-        .contains(&"KSEM062")
+        .iter()
+        .any(|code| code == "KSEM062")
     );
 }
 
@@ -201,6 +203,7 @@ fn parameter_defaults_that_fill_each_other_are_refused() {
              function f(b: Int = g()) -> Int { return b }\n\
              @Main function main() { print(f()) return }"
         )
-        .contains(&"KSEM240")
+        .iter()
+        .any(|code| code == "KSEM240")
     );
 }

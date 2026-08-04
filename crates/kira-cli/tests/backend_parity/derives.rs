@@ -181,3 +181,86 @@ function main() {
     );
     assert_eq!(output, "true\n3\n2\n");
 }
+
+/// `@Derive(Tagged)` turns an enum's variants into numbers and back.
+///
+/// The codes are declaration order, so this pins them literally: a reorder that
+/// silently renumbered every artifact already written is exactly what the derive
+/// exists to prevent, and a test that only checked a round trip would not see
+/// one.
+#[test]
+fn a_tagged_enum_numbers_its_variants_identically_on_every_backend() {
+    let output = assert_parity(
+        r#"
+import Foundation
+
+@Derive(Tagged)
+enum Material {
+    Flat
+    Frosted
+    LiquidGlass
+}
+
+@Main
+function main() {
+    print(code_Material(.Flat))
+    print(code_Material(.Frosted))
+    print(code_Material(.LiquidGlass))
+    // A code names the variant it came from.
+    print(code_Material(Material_fromCode(1)))
+    // Decoding is total: a number naming no variant answers the first rather
+    // than trapping, because a decoder has to be able to survive bad input.
+    print(code_Material(Material_fromCode(99)))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "0\n1\n2\n1\n0\n");
+}
+
+/// `@Derive(Hashable)` folds a struct's fields into one number.
+///
+/// The fold must agree across engines *and* across field kinds — a string
+/// folded byte by byte, a bool as a branch, a nested struct through its own
+/// derive — because a hash that differs by backend would make a cache built on
+/// one wrong on the other.
+#[test]
+fn a_hashable_struct_folds_identically_on_every_backend() {
+    let output = assert_parity(
+        r#"
+import Foundation
+
+@Derive(Hashable)
+struct Inner {
+    var tag: Int
+}
+
+@Derive(Hashable)
+struct Point {
+    var x: Int
+    var y: Int
+    var name: String
+    var live: Bool
+    var inner: Inner
+}
+
+@Main
+function main() {
+    let a = Point { x: 1, y: 2, name: "p", live: true, inner: Inner { tag: 7 } }
+    let same = Point { x: 1, y: 2, name: "p", live: true, inner: Inner { tag: 7 } }
+    // Every field is in the fold, so changing any one of them changes it.
+    let other_int = Point { x: 1, y: 3, name: "p", live: true, inner: Inner { tag: 7 } }
+    let other_text = Point { x: 1, y: 2, name: "q", live: true, inner: Inner { tag: 7 } }
+    let other_bool = Point { x: 1, y: 2, name: "p", live: false, inner: Inner { tag: 7 } }
+    let other_nested = Point { x: 1, y: 2, name: "p", live: true, inner: Inner { tag: 8 } }
+    print(hash_Point(a) == hash_Point(same))
+    print(hash_Point(a) == hash_Point(other_int))
+    print(hash_Point(a) == hash_Point(other_text))
+    print(hash_Point(a) == hash_Point(other_bool))
+    print(hash_Point(a) == hash_Point(other_nested))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "true\nfalse\nfalse\nfalse\nfalse\n");
+}

@@ -239,6 +239,7 @@ pub fn compile_for(
         build_kind,
         shaders,
         kira_semantics::host_platform(),
+        lint_requested(),
     );
 
     // The SourceMap mirrors the salsa input file for file and in the same order,
@@ -369,13 +370,26 @@ fn sync_drifted_lockfile(
     match kira_package_manager::sync_lockfile(root_dir, packages) {
         Ok(_) => {
             diagnostics.retain(|diagnostic| {
-                diagnostic.code != Some(DiagnosticCode::Kpk024LockfileDrift.as_str())
+                !diagnostic.has_code(DiagnosticCode::Kpk024LockfileDrift.as_str())
             });
             diagnostics.push(lockfile_synced(&display));
         }
         Err(error) => diagnostics.push(lockfile_sync_failed(&display, &error.to_string())),
     }
 }
+
+/// Whether `kira lint` asked for this compilation.
+///
+/// Read from the environment here, before analysis begins, rather than inside a
+/// macro: the collector query is memoized, and an environment read inside it
+/// would fix lint mode to whatever the first compilation in the process saw.
+/// Read once, at the edge, it becomes an ordinary salsa input.
+fn lint_requested() -> bool {
+    std::env::var_os(LINT_MODE).is_some()
+}
+
+/// The variable `kira lint` sets on itself before compiling.
+pub const LINT_MODE: &str = "KIRA_LINT";
 
 #[cfg(test)]
 mod tests {
@@ -463,7 +477,7 @@ mod tests {
             compiled
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.code == Some("KPK026")),
+                .any(|diagnostic| diagnostic.has_code("KPK026")),
             "{:?}",
             compiled.diagnostics
         );
@@ -471,7 +485,7 @@ mod tests {
             !compiled
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.code == Some("KPK024")),
+                .any(|diagnostic| diagnostic.has_code("KPK024")),
             "the drift warning is replaced by the synced note: {:?}",
             compiled.diagnostics
         );
@@ -626,22 +640,24 @@ mod tests {
             !compiled
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.code == Some("KSEM032")),
+                .any(|diagnostic| diagnostic.has_code("KSEM032")),
             "{:?}",
             compiled.diagnostics
         );
         assert!(
             !compiled.diagnostics.iter().any(|diagnostic| {
-                diagnostic.code == Some("KSEM060") && diagnostic.message.contains("coreValue")
+                diagnostic.has_code("KSEM060") && diagnostic.message.contains("coreValue")
             }),
             "{:?}",
             compiled.diagnostics
         );
         assert!(
-            !compiled
-                .diagnostics
-                .iter()
-                .any(|diagnostic| { diagnostic.code.is_some_and(|code| code.starts_with("KPK")) }),
+            !compiled.diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .code
+                    .as_ref()
+                    .is_some_and(|code| code.as_str().starts_with("KPK"))
+            }),
             "{:?}",
             compiled.diagnostics
         );
@@ -650,7 +666,7 @@ mod tests {
             .diagnostics
             .iter()
             .find(|diagnostic| {
-                diagnostic.code == Some("KSEM060") && diagnostic.message.contains("missingFromCore")
+                diagnostic.has_code("KSEM060") && diagnostic.message.contains("missingFromCore")
             })
             .expect("the dependency module diagnostic");
         let rendered = kira_diagnostics::renderer::render(library_diagnostic, &compiled.sources);
@@ -681,7 +697,7 @@ mod tests {
         let diagnostic = compiled
             .diagnostics
             .iter()
-            .find(|diagnostic| diagnostic.code == Some("KPK020"))
+            .find(|diagnostic| diagnostic.has_code("KPK020"))
             .expect("the missing dependency package diagnostic");
         assert!(diagnostic.primary_label().is_none());
         let rendered = kira_diagnostics::renderer::render(diagnostic, &compiled.sources);
@@ -704,12 +720,7 @@ mod tests {
         );
         let compiled = compile(&path).expect("compile");
         assert!(compiled.has_errors());
-        assert!(
-            compiled
-                .diagnostics
-                .iter()
-                .any(|d| d.code == Some("KSEM060"))
-        );
+        assert!(compiled.diagnostics.iter().any(|d| d.has_code("KSEM060")));
     }
 
     /// The whole point of running autobind inside the frontend: a package that
@@ -768,10 +779,7 @@ mod tests {
 
         let compiled = compile(&entry).expect("compile");
         assert!(
-            compiled
-                .diagnostics
-                .iter()
-                .any(|d| d.code == Some("KPK025")),
+            compiled.diagnostics.iter().any(|d| d.has_code("KPK025")),
             "{:?}",
             compiled.diagnostics
         );
@@ -789,10 +797,7 @@ mod tests {
 
         let compiled = compile(&entry).expect("compile");
         assert!(
-            !compiled
-                .diagnostics
-                .iter()
-                .any(|d| d.code == Some("KPK025")),
+            !compiled.diagnostics.iter().any(|d| d.has_code("KPK025")),
             "{:?}",
             compiled.diagnostics
         );

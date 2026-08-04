@@ -8,6 +8,6 @@ pub mod progress;
 pub mod renderer;
 pub mod sink;
 
-pub use diagnostic::{Diagnostic, Severity, Suggestion, has_errors};
+pub use diagnostic::{Applicability, Code, Diagnostic, Severity, Suggestion, has_errors};
 pub use label::{Label, LabelKind};
 pub use sink::{DiagnosticSink, ErrorSpec};

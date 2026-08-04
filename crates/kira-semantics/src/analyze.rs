@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use kira_core::Names;
-use kira_diagnostics::{Diagnostic, Label, Severity};
+use kira_diagnostics::{Code, Diagnostic, Label, Severity};
 use kira_semantics_model::hir::{FuncId, HirExprId, HirFunction, HirProgram};
 use kira_semantics_model::{EnumId, OwnershipMode, StructId, Type};
 use kira_source::{FileSpan, SourceId, Span};
@@ -36,7 +36,7 @@ pub struct Analysis {
 }
 
 /// One declared function plus the struct it is a method of, if any.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct Callable<'a> {
     /// The struct whose method this is; `None` for a free function.
     pub(crate) receiver: Option<StructId>,
@@ -47,6 +47,16 @@ pub(crate) struct Callable<'a> {
     /// registered once per class that inherits it, each time with `receiver`
     /// set to *that* class, so `self` is statically the concrete type.
     pub(crate) origin: Option<StructId>,
+    /// Parameters whose declared class is replaced by a subclass, by index into
+    /// the *written* parameter list.
+    ///
+    /// This is subtyping without a vtable, and it is the same trick `origin`
+    /// plays for inheritance: a function taking `Animal` is registered again for
+    /// each class that inherits `Animal`, with that parameter typed as the
+    /// subclass. `a.speak()` inside the copy is therefore statically the
+    /// subclass's `speak`, so an override wins with nothing to dispatch at run
+    /// time. Empty for the function as written.
+    pub(crate) specialize: Vec<(usize, StructId)>,
     /// The declaration as written.
     pub(crate) function: &'a Function,
     /// The file the declaration was written in.
@@ -535,6 +545,7 @@ impl<'a> Analyzer<'a> {
                 Item::Function(function) => callables.push(Callable {
                     receiver: None,
                     origin: None,
+                    specialize: Vec::new(),
                     function,
                     source,
                 }),
@@ -552,6 +563,7 @@ impl<'a> Analyzer<'a> {
                         callables.push(Callable {
                             receiver: owner,
                             origin: None,
+                            specialize: Vec::new(),
                             function: method,
                             source,
                         });
@@ -574,7 +586,108 @@ impl<'a> Analyzer<'a> {
                 | Item::Unsupported(_) => {}
             }
         }
+        self.specialize_callables(&mut callables);
         callables
+    }
+
+    /// Adds one copy of every callable per subclass its parameters admit.
+    ///
+    /// This is what makes `feed(a: Animal)` accept a `Dog` *and* call `Dog`'s
+    /// override: the copy has that parameter typed as `Dog`, so `a.speak()`
+    /// inside it is statically the subclass's method. The same trick
+    /// `class_callables` plays for inheritance, applied to arguments.
+    ///
+    /// The cross product over several class-typed parameters is deliberate — a
+    /// function of two animals has to specialize on both or the second falls
+    /// back to the parent's method, which is the bug this exists to remove. It
+    /// is bounded by [`Self::SPECIALIZATION_LIMIT`], past which the function is
+    /// left as written rather than silently half-specialized.
+    fn specialize_callables(&self, callables: &mut Vec<Callable<'a>>) {
+        let mut added: Vec<Callable<'a>> = Vec::new();
+        for callable in callables.iter() {
+            let choices = self.parameter_subclasses(callable);
+            if choices.is_empty() {
+                continue;
+            }
+            let mut combinations: Vec<Vec<(usize, StructId)>> = vec![Vec::new()];
+            for (index, subclasses) in choices {
+                let mut grown = Vec::new();
+                for existing in &combinations {
+                    // The declared class itself is one of the choices, which is
+                    // how the copy for `feed(Animal)` stays reachable.
+                    grown.push(existing.clone());
+                    for subclass in &subclasses {
+                        let mut next = existing.clone();
+                        next.push((index, *subclass));
+                        grown.push(next);
+                    }
+                }
+                combinations = grown;
+                if combinations.len() > Self::SPECIALIZATION_LIMIT {
+                    break;
+                }
+            }
+            if combinations.len() > Self::SPECIALIZATION_LIMIT {
+                continue;
+            }
+            for specialize in combinations {
+                if specialize.is_empty() {
+                    continue;
+                }
+                added.push(Callable {
+                    specialize,
+                    ..callable.clone()
+                });
+            }
+        }
+        callables.extend(added);
+    }
+
+    /// How many copies of one callable specialization may produce.
+    ///
+    /// A function of three class-typed parameters in a program with a deep
+    /// hierarchy would otherwise mint a copy per combination. Past the limit the
+    /// function keeps only what was written — a call with a subclass argument
+    /// still compiles, it simply reaches the parent's method, which is the
+    /// behaviour to report rather than to hide.
+    const SPECIALIZATION_LIMIT: usize = 64;
+
+    /// The class a written type reference names, when it names one.
+    ///
+    /// Resolves without reporting: an unknown or non-class type is simply not a
+    /// candidate for specialization, and the diagnostic for a name that resolves
+    /// to nothing belongs to signature collection, which reports it once.
+    fn written_class(&self, written: kira_syntax_model::ast::TypeRefId) -> Option<StructId> {
+        let kira_syntax_model::ast::TypeRef::Named { name, .. } = self.tree.type_ref(written)
+        else {
+            return None;
+        };
+        let id = self.visible_struct(self.interner.resolve(*name))?;
+        self.classes.contains_key(&id).then_some(id)
+    }
+
+    /// Each written parameter that names a class, with the classes that inherit
+    /// it.
+    fn parameter_subclasses(&self, callable: &Callable<'_>) -> Vec<(usize, Vec<StructId>)> {
+        if !callable.specialize.is_empty() {
+            return Vec::new();
+        }
+        let mut found = Vec::new();
+        for (index, param) in callable.function.params.iter().enumerate() {
+            let Some(declared) = self.written_class(param.ty) else {
+                continue;
+            };
+            let subclasses: Vec<StructId> = self
+                .classes
+                .iter()
+                .filter(|(id, info)| **id != declared && info.ancestors.contains(&declared))
+                .map(|(id, _)| *id)
+                .collect();
+            if !subclasses.is_empty() {
+                found.push((index, subclasses));
+            }
+        }
+        found
     }
 
     /// The name a callable is known by.
@@ -583,8 +696,24 @@ impl<'a> Analyzer<'a> {
     /// two structs' methods of the same name apart and keeps a method from
     /// colliding with a free function — `.` cannot appear in an identifier, so
     /// no user name can collide with a qualified one.
-    pub(crate) fn callable_name(&self, callable: Callable<'_>) -> String {
+    pub(crate) fn callable_name(&self, callable: &Callable<'_>) -> String {
         let written = self.interner.resolve(callable.function.name);
+        // A specialization is a distinct callable, so it needs a distinct name.
+        // `$` is already the separator inheritance uses for the same reason and
+        // cannot appear in an identifier, so `feed$1$Dog` collides with nothing
+        // a user can write. The parameter index is part of it because two
+        // parameters may specialize on the same class.
+        let suffix: String = callable
+            .specialize
+            .iter()
+            .map(|(index, class)| {
+                format!(
+                    "${index}${}",
+                    self.program.types.type_name(Type::Struct(*class))
+                )
+            })
+            .collect();
+        let written = &format!("{written}{suffix}");
         let Some(id) = callable.receiver else {
             return written.to_owned();
         };
@@ -704,9 +833,18 @@ impl<'a> Analyzer<'a> {
         // than off the syntax again keeps the `borrow mut` refusal from being
         // reported a second time here.
         let param_modes = self.sigs[id.0 as usize].param_ownership.clone();
+        let param_types = self.sigs[id.0 as usize].params.clone();
         let receiver_slots = usize::from(callable.receiver.is_some());
         for (index, param) in function.params.iter().enumerate() {
-            let ty = self.resolve_type_ref(param.ty);
+            // The type comes off the signature for the same reason the mode
+            // does, and for one more: a specialized copy takes a subclass where
+            // the syntax wrote the parent, and re-resolving the syntax here
+            // would type the body's parameter as the parent again — which is
+            // exactly the override-not-taken bug specialization exists to fix.
+            let ty = param_types
+                .get(index + receiver_slots)
+                .copied()
+                .unwrap_or_else(|| self.resolve_type_ref(param.ty));
             let name = self.interner.resolve(param.name).to_owned();
             let mode = param_modes
                 .get(index + receiver_slots)
@@ -727,7 +865,7 @@ impl<'a> Analyzer<'a> {
             && sig_return != Type::Error
             && !self.body_definitely_returns(&body)
         {
-            let name = self.callable_name(*callable);
+            let name = self.callable_name(callable);
             self.emit(
                 function.name_span,
                 "KSEM033",
@@ -735,7 +873,7 @@ impl<'a> Analyzer<'a> {
             );
         }
         HirFunction {
-            name: self.callable_name(*callable),
+            name: self.callable_name(callable),
             param_count,
             return_type: sig_return,
             locals: ctx.locals,
@@ -833,7 +971,7 @@ impl<'a> Analyzer<'a> {
             message.clone(),
             Label::primary(file_span, message),
         );
-        diagnostic.code = Some(code);
+        diagnostic.code = Some(Code::known(code));
         diagnostic.phase = Some("semantics");
         self.diagnostics.push(diagnostic);
     }

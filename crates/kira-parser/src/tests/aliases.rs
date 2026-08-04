@@ -54,7 +54,7 @@ fn an_alias_without_a_name_is_reported_and_recovery_continues() {
     let codes: Vec<_> = result
         .diagnostics
         .iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .filter_map(kira_diagnostics::Diagnostic::code_text)
         .collect();
     assert!(codes.contains(&"KPAR032"), "{codes:?}");
     assert!(aliases(&result).is_empty(), "no alias node was built");
@@ -76,7 +76,7 @@ fn an_alias_without_an_equals_is_reported_and_recovery_continues() {
     let codes: Vec<_> = result
         .diagnostics
         .iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .filter_map(kira_diagnostics::Diagnostic::code_text)
         .collect();
     assert!(codes.contains(&"KPAR001"), "{codes:?}");
     assert!(

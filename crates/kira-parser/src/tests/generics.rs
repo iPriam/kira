@@ -106,7 +106,7 @@ fn a_generic_struct_class_and_function_are_refused_by_name() {
             result
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.code == Some("KPAR047")),
+                .any(|diagnostic| diagnostic.has_code("KPAR047")),
             "`{text}` must be refused by name, got {:?}",
             result.diagnostics,
         );
@@ -123,7 +123,7 @@ fn an_empty_parameter_list_is_reported_and_leaves_a_plain_enum() {
         result
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KPAR046")),
+            .any(|diagnostic| diagnostic.has_code("KPAR046")),
         "{:?}",
         result.diagnostics,
     );
@@ -137,7 +137,7 @@ fn a_non_name_in_a_parameter_list_is_reported() {
         result
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KPAR044")),
+            .any(|diagnostic| diagnostic.has_code("KPAR044")),
         "{:?}",
         result.diagnostics,
     );

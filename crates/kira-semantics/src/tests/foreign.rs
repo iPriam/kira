@@ -90,14 +90,22 @@ fn a_raw_ptr_round_trips_between_two_foreign_calls() {
 #[test]
 fn a_bodyless_ordinary_function_is_a_parse_error() {
     let text = "@Main function main() { return }\nfunction f() -> I32;";
-    assert!(codes(text).contains(&"KPAR055"), "{:?}", codes(text));
+    assert!(
+        codes(text).iter().any(|code| code == "KPAR055"),
+        "{:?}",
+        codes(text)
+    );
 }
 
 #[test]
 fn an_extern_with_a_body_is_a_parse_error() {
     let text = "@Main function main() { return }\n\
                 @FFI.Extern { library: l; symbol: s; abi: c; } function f() -> I32 { return 1 }";
-    assert!(codes(text).contains(&"KPAR054"), "{:?}", codes(text));
+    assert!(
+        codes(text).iter().any(|code| code == "KPAR054"),
+        "{:?}",
+        codes(text)
+    );
 }
 
 // ----- annotation block meaning -------------------------------------------
@@ -625,7 +633,11 @@ fn a_foreign_name_may_not_collide_with_a_user_function() {
     let text = "function dup() -> I32 { return 1 }\n\
                 @FFI.Extern { library: l; symbol: s; abi: c; } function dup() -> I32;\n\
                 @Main function main() { print(dup()) return }";
-    assert!(codes(text).contains(&"KSEM184"), "{:?}", codes(text));
+    assert!(
+        codes(text).iter().any(|code| code == "KSEM184"),
+        "{:?}",
+        codes(text)
+    );
 }
 
 #[test]
@@ -633,5 +645,9 @@ fn two_foreign_functions_may_not_share_a_name() {
     let text = "@FFI.Extern { library: l; symbol: s; abi: c; } function dup() -> I32;\n\
                 @FFI.Extern { library: l; symbol: t; abi: c; } function dup() -> I32;\n\
                 @Main function main() { return }";
-    assert!(codes(text).contains(&"KSEM185"), "{:?}", codes(text));
+    assert!(
+        codes(text).iter().any(|code| code == "KSEM185"),
+        "{:?}",
+        codes(text)
+    );
 }

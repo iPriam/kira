@@ -13,7 +13,9 @@
 
 struct KslArtifact {
     var shaderName: String = ""
-    // Entry-point names, in the KSL convention `{shader}__{stage}__main`.
+    // Entry-point names, as the backend emitted them. Read them from here
+    // rather than writing a name a pipeline descriptor looks up: a name that
+    // does not match leaves the descriptor with a nil function.
     var vertexEntry: String = ""
     var fragmentEntry: String = ""
     // The compute kernel's entry name; empty for a graphics shader.

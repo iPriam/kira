@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use kira_diagnostics::Diagnostic;
+use kira_diagnostics::{Diagnostic, Severity};
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
 
@@ -139,6 +139,7 @@ pub(crate) fn collect<'a>(
     declarations: impl Iterator<Item = &'a Declaration>,
     shaders: Option<&dyn ShaderCompiler>,
     platform: &str,
+    lint: bool,
 ) -> (Vec<String>, Vec<Diagnostic>) {
     let collectors = registry.of_kind(ProceduralKind::Collector);
     if collectors.is_empty() {
@@ -162,15 +163,39 @@ pub(crate) fn collect<'a>(
             );
             continue;
         };
-        match eval::run(&body, vec![(parameter, all.clone())], shaders, platform) {
+        match eval::run(
+            &body,
+            vec![(parameter, all.clone())],
+            shaders,
+            platform,
+            lint,
+        ) {
             Ok(outcome) => {
-                let failed = !outcome.reported.is_empty();
-                for message in outcome.reported {
-                    reporter.error(
-                        declared.source,
-                        declared.span,
-                        diagnostics::MACRO_REPORTED,
-                        message,
+                // Only an error discards what the collector built. A collector
+                // that warns — which is what a lint does — still gets its
+                // output appended, because nothing it said was fatal.
+                let failed = outcome
+                    .reported
+                    .iter()
+                    .any(|report| report.severity == Severity::Error);
+                for report in outcome.reported {
+                    // A collector runs over the whole program, so what it is
+                    // talking about is almost never itself. Point at the
+                    // declaration it named, and fall back to the collector only
+                    // when it named nothing that came from a file.
+                    let (source, span) = report
+                        .at
+                        .map_or((declared.source, declared.span), |at| (at.source, at.span));
+                    // A lint names itself and is suppressed by that name, so
+                    // its own code reaches the diagnostic; a macro that named
+                    // none reports under the shared one.
+                    reporter.coded(
+                        report.severity,
+                        source,
+                        span,
+                        report.code.as_deref(),
+                        report.fix.as_deref(),
+                        report.message,
                     );
                 }
                 if !failed && !outcome.syntax.trim().is_empty() {
@@ -577,11 +602,31 @@ pub(crate) fn run(
         );
         return None;
     };
-    match eval::run(&body, arguments, shaders, platform) {
+    // Not a collector, so not told: `Build.linting` answers which verb asked,
+    // and only the macro form a verb runs for has any business asking.
+    match eval::run(&body, arguments, shaders, platform, false) {
         Ok(outcome) => {
-            let failed = !outcome.reported.is_empty();
-            for message in outcome.reported {
-                reporter.error(file.source, span, diagnostics::MACRO_REPORTED, message);
+            // A warning leaves the expansion standing; only a refusal drops it.
+            let failed = outcome
+                .reported
+                .iter()
+                .any(|report| report.severity == Severity::Error);
+            for report in outcome.reported {
+                // `span` is the call or the annotation that summoned this macro,
+                // which is already the right place for a macro that names
+                // nothing — but a derive complaining about one field should
+                // underline that field, not the whole `@Derive`.
+                let (source, at) = report
+                    .at
+                    .map_or((file.source, span), |at| (at.source, at.span));
+                reporter.coded(
+                    report.severity,
+                    source,
+                    at,
+                    report.code.as_deref(),
+                    report.fix.as_deref(),
+                    report.message,
+                );
             }
             if failed { None } else { Some(outcome.syntax) }
         }
@@ -623,7 +668,7 @@ pub(crate) fn expand_call(
     let output = run(
         file,
         declared,
-        vec![(parameter(declared, 0), Value::Syntax(input))],
+        vec![(parameter(declared, 0), Value::built(input))],
         call.span,
         shaders,
         platform,

@@ -20,7 +20,7 @@ pub use codec::{DecodeError, decode, encode, encode_one};
 /// The deferred-task primitives, re-exported so an instruction names them from
 /// the one place the executor defines them.
 pub use kira_runtime_abi::TaskPrim;
-pub use kira_runtime_abi::{CompilerOp, FileSystemOp};
+pub use kira_runtime_abi::{CompilerOp, FileSystemOp, StringOp};
 
 /// One decoded VM instruction.
 #[derive(Debug, Clone, PartialEq)]
@@ -351,6 +351,20 @@ pub enum Instruction {
     /// world a question and hear no. The one failure is a host with no
     /// filesystem, which is a build-time mistake surfacing late.
     FileSystem(FileSystemOp),
+    /// Perform one string operation.
+    ///
+    /// The same shape as [`Instruction::FileSystem`]: the receiver and any
+    /// arguments are popped in reverse source order and dropped, the result is
+    /// pushed, and which operands there are follows from the [`StringOp`]
+    /// alone. Unlike a file-system request this reaches no host — text is the
+    /// VM's own, so the work happens here.
+    ///
+    /// Sharing one opcode is deliberate. The four string primitives that came
+    /// first each took a number of their own, and the opcode space is one byte
+    /// wide; a language that means to keep growing its string surface cannot
+    /// keep paying that. See [`StringOp`] for the numbering, which is
+    /// append-only.
+    StringOp(StringOp),
     /// Perform one compiler operation through the host.
     ///
     /// The same shape as [`Instruction::FileSystem`], for the same reason: the
@@ -761,6 +775,11 @@ mod opcode {
     // immediate. Appended after `NE_ANY`; adding an opcode is not an ABI
     // change.
     pub const ERASE: u8 = 0x65;
+    // Every string operation past the first four. Appended after `ERASE`;
+    // carries one `StringOp` byte, whose own numbering is append-only, so a
+    // new string operation costs neither an opcode nor a version — the same
+    // arrangement `FILE_SYSTEM`, `TASK_OP` and `COMPILER` use.
+    pub const STRING_OP: u8 = 0x66;
 }
 
 #[cfg(test)]

@@ -24,7 +24,10 @@ pub fn flatten(
     diagnostics
         .iter()
         .map(|diagnostic| CheckDiagnostic {
-            code: diagnostic.code.unwrap_or_default().to_owned(),
+            code: diagnostic
+                .code
+                .as_ref()
+                .map_or_else(String::new, |code| code.as_str().to_owned()),
             severity: severity_of(diagnostic.severity),
             file: file_of(diagnostic, modules, entry),
             title: diagnostic.title.clone(),
@@ -69,7 +72,7 @@ fn path_of(source: SourceId, modules: &[ModuleSource], entry: Option<&str>) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kira_diagnostics::Label;
+    use kira_diagnostics::{Code, Label};
     use kira_source::{FileSpan, Span};
 
     fn module(path: &str) -> ModuleSource {
@@ -92,7 +95,7 @@ mod tests {
                 "here",
             ),
         );
-        diagnostic.code = Some("KSEM061");
+        diagnostic.code = Some(Code::known("KSEM061"));
         diagnostic
     }
 

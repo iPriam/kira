@@ -38,7 +38,7 @@ fn two_engines_on_one_function_is_reported() {
         result
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KPAR005")),
+            .any(|diagnostic| diagnostic.has_code("KPAR005")),
         "a contradictory engine pair must be reported, not silently resolved",
     );
     // Parsing still yields a usable function: the parser never bails.
@@ -96,7 +96,7 @@ fn unsupported_constructs_do_not_crash() {
     assert_eq!(result.tree.items().len(), 2);
     assert!(matches!(result.tree.items()[0], Item::Unsupported(_)));
     assert!(matches!(result.tree.items()[1], Item::Function(_)));
-    assert!(result.diagnostics.iter().any(|d| d.code == Some("KSEM900")));
+    assert!(result.diagnostics.iter().any(|d| d.has_code("KSEM900")));
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn an_empty_struct_parses() {
 #[test]
 fn a_member_without_let_or_var_is_reported_and_recovers() {
     let result = parse_text("struct P { x: Int\n let y: Int }");
-    assert!(result.diagnostics.iter().any(|d| d.code == Some("KPAR009")));
+    assert!(result.diagnostics.iter().any(|d| d.has_code("KPAR009")));
     // Recovery keeps the well-formed member: the parser never bails.
     let declaration = only_struct(&result);
     assert!(

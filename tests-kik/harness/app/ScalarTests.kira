@@ -63,11 +63,14 @@ function sctSumTo(n: Int) -> Int {
 }
 
 function sctClassify(n: Int) -> Int {
-    switch n % 3 {
-        case 0 { return 100 }
-        case 1 { return 200 }
-        case 2 { return 300 }
-        default { return 0 }
+    if (n % 3) == 0 {
+        return 100
+    } else if (n % 3) == 1 {
+        return 200
+    } else if (n % 3) == 2 {
+        return 300
+    } else {
+        return 0
     }
 }
 

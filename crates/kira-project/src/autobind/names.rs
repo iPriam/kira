@@ -82,7 +82,10 @@ mod tests {
     #[test]
     fn a_keyword_is_refused_as_a_declared_name_and_renamed_as_a_local_one() {
         assert!(unbindable_name("type").is_some());
-        assert!(unbindable_name("default").is_some());
+        assert!(unbindable_name("match").is_some());
+        // `default` was a keyword only for `switch`; with that construct gone
+        // the word is an ordinary name a C header may bind.
+        assert!(unbindable_name("default").is_none());
         assert_eq!(parameter_name("type", 2), "type_value");
         assert_eq!(parameter_name("", 0), "arg0");
         assert_eq!(parameter_name("font_path", 0), "font_path");

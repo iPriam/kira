@@ -163,7 +163,7 @@ fn appending_to_a_temporary_is_refused() {
              @Main function main() { make().append(2) return }",
     );
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].code, Some("KSEM025"));
+    assert!(found[0].has_code("KSEM025"));
 }
 
 #[test]
@@ -312,11 +312,11 @@ fn a_move_in_an_append_receiver_does_not_phantom_move_the_binding() {
          (move b).xs.append(1) print(b.xs.count) return }",
     );
     assert!(
-        !reported.contains(&"KSEM107"),
+        !reported.iter().any(|code| code == "KSEM107"),
         "the rolled-back probe must not leave `b` phantom-moved: {reported:?}"
     );
     assert!(
-        reported.contains(&"KSEM025"),
+        reported.iter().any(|code| code == "KSEM025"),
         "the append to a temporary is still reported: {reported:?}"
     );
 }

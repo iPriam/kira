@@ -544,6 +544,19 @@ impl Vm<'_> {
                 let found = self.find_index_of(base, needle);
                 self.stack.push(Value::Int(found?));
             }
+            Instruction::StringOp(op) => {
+                // The arguments were pushed in source order, so they come off
+                // reversed; collecting and reversing restores the order the
+                // operation reads them in. The receiver sits under them.
+                let mut arguments = Vec::with_capacity(op.argument_count());
+                for _ in 0..op.argument_count() {
+                    arguments.push(self.pop()?);
+                }
+                arguments.reverse();
+                let base = self.pop()?;
+                let produced = self.perform_string_op(op, base, &arguments)?;
+                self.stack.push(produced);
+            }
             Instruction::StringOf => {
                 let value = self.pop()?;
                 let text = self

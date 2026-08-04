@@ -1,6 +1,8 @@
 //! Semantic-analysis tests: the diagnostics `kira check` reports, driven
 //! through the same salsa `analyzed` query the CLI and the LSP use.
 
+use kira_diagnostics::Diagnostic;
+
 mod aliases;
 mod any;
 mod arrays;
@@ -84,6 +86,8 @@ fn library_diagnostics(text: &str) -> Vec<Diagnostic> {
         BuildKind::Library,
         PrecompiledShaders::default(),
         host_platform(),
+        // Not a lint run.
+        false,
     );
     analyzed::accumulated::<DiagnosticAccumulator>(&db, source)
         .into_iter()
@@ -92,25 +96,28 @@ fn library_diagnostics(text: &str) -> Vec<Diagnostic> {
 }
 
 /// The diagnostic codes of a library, in order.
-fn library_codes(text: &str) -> Vec<&'static str> {
+fn library_codes(text: &str) -> Vec<String> {
     library_diagnostics(text)
-        .into_iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .iter()
+        .filter_map(Diagnostic::code_text)
+        .map(str::to_owned)
         .collect()
 }
 
 /// The diagnostic codes of a multi-module program, in order.
-fn module_codes(text: &str, modules: &[(&str, &str)]) -> Vec<&'static str> {
+fn module_codes(text: &str, modules: &[(&str, &str)]) -> Vec<String> {
     module_diagnostics(text, modules)
-        .into_iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .iter()
+        .filter_map(Diagnostic::code_text)
+        .map(str::to_owned)
         .collect()
 }
 
-fn codes(text: &str) -> Vec<&'static str> {
+fn codes(text: &str) -> Vec<String> {
     diagnostics(text)
-        .into_iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .iter()
+        .filter_map(Diagnostic::code_text)
+        .map(str::to_owned)
         .collect()
 }
 
@@ -155,101 +162,6 @@ fn a_for_body_may_declare_any_name_it_likes() {
             )
             .is_empty()
         );
-}
-
-#[test]
-fn a_switch_type_checks_each_label_against_its_subject() {
-    assert!(
-            diagnostics(
-                r#"@Main function main() { var s = "" switch 1 { case 0 { s = "z" } default { s = "d" } } print(s) return }"#
-            )
-            .is_empty()
-        );
-    // A label the subject cannot be compared to is reported per arm.
-    assert_eq!(
-        codes(r#"@Main function main() { switch 1 { case "x" { print(1) } } return }"#),
-        vec!["KSEM044"]
-    );
-}
-
-/// Strings and bools are legal subjects: what a `case` may match is
-/// whatever `==` accepts against the subject's type.
-#[test]
-fn a_switch_accepts_every_type_equality_does() {
-    for source in [
-        r#"@Main function main() { switch "a" { case "a" { print(1) } } return }"#,
-        r#"@Main function main() { switch true { case false { print(1) } } return }"#,
-        r#"@Main function main() { switch 1.5 { case 1.5 { print(1) } } return }"#,
-    ] {
-        assert!(diagnostics(source).is_empty(), "{source}");
-    }
-}
-
-/// A `break` in a switch arm acts on the enclosing loop; outside one it has
-/// nothing to break, because a switch is not a loop.
-#[test]
-fn break_in_a_switch_arm_belongs_to_the_enclosing_loop() {
-    assert!(
-        diagnostics(
-            "@Main function main() { for i in 0..3 { switch i { case 1 { break } } } return }"
-        )
-        .is_empty()
-    );
-    assert_eq!(
-        codes("@Main function main() { switch 1 { case 1 { break } } return }"),
-        vec!["KSEM041"],
-        "a switch is not a loop, so `break` in one outside a loop is an error"
-    );
-}
-
-/// A switch is not exhaustive-checked and duplicate labels are legal: the
-/// language has no such rule, and inventing one would reject a program the
-/// corpus accepts.
-#[test]
-fn a_switch_needs_no_default_and_may_repeat_a_label() {
-    assert!(
-        diagnostics("@Main function main() { switch 9 { case 1 { print(1) } } return }").is_empty()
-    );
-    assert!(
-        diagnostics(
-            "@Main function main() { switch 1 { case 1 { print(1) } case 1 { print(2) } } return }"
-        )
-        .is_empty()
-    );
-}
-
-/// A switch satisfies the definite-return check exactly when it has a
-/// `default` *and* every arm returns — with no `default` the chain can fall
-/// out of the bottom, so it proves nothing.
-///
-/// The desugar gets this rule rather than implementing it: a `default`
-/// becomes the final `else`, and an `if` counts only when both arms do.
-#[test]
-fn a_switch_returns_definitely_only_when_a_default_covers_it() {
-    assert!(
-        diagnostics(
-            "@Main function main() { return } \
-                 function f() -> Int { switch 1 { case 1 { return 1 } default { return 0 } } }"
-        )
-        .is_empty(),
-        "a default plus returning arms covers every path"
-    );
-    assert_eq!(
-        codes(
-            "@Main function main() { return } \
-                 function f() -> Int { switch 1 { case 1 { return 1 } } }"
-        ),
-        vec!["KSEM033"],
-        "without a default the switch can fall through"
-    );
-    assert_eq!(
-        codes(
-            "@Main function main() { return } \
-                 function f() -> Int { switch 1 { case 1 { print(1) } default { return 0 } } }"
-        ),
-        vec!["KSEM033"],
-        "an arm that does not return leaves a path open"
-    );
 }
 
 #[test]
@@ -299,38 +211,46 @@ fn a_clean_program_has_no_diagnostics() {
 
 #[test]
 fn missing_main_is_reported() {
-    assert!(codes("function f() { return }").contains(&"KSEM011"));
+    assert!(
+        codes("function f() { return }")
+            .iter()
+            .any(|code| code == "KSEM011")
+    );
 }
 
 #[test]
 fn duplicate_main_is_reported() {
     let text = "@Main function a() { return }\n@Main function b() { return }";
-    assert!(codes(text).contains(&"KSEM010"));
+    assert!(codes(text).iter().any(|code| code == "KSEM010"));
 }
 
 #[test]
 fn undefined_name_is_reported() {
-    assert!(codes("@Main function main() { print(x) return }").contains(&"KSEM060"));
+    assert!(
+        codes("@Main function main() { print(x) return }")
+            .iter()
+            .any(|code| code == "KSEM060")
+    );
 }
 
 #[test]
 fn wrong_argument_type_is_reported() {
     let text =
         "function f(n: Int) -> Int { return n }\n@Main function main() { print(f(true)) return }";
-    assert!(codes(text).contains(&"KSEM063"));
+    assert!(codes(text).iter().any(|code| code == "KSEM063"));
 }
 
 #[test]
 fn arity_mismatch_is_reported() {
     let text =
         "function f(n: Int) -> Int { return n }\n@Main function main() { print(f(1, 2)) return }";
-    assert!(codes(text).contains(&"KSEM062"));
+    assert!(codes(text).iter().any(|code| code == "KSEM062"));
 }
 
 #[test]
 fn assigning_to_let_is_reported() {
     let text = "@Main function main() { let x = 1 x = 2 return }";
-    assert!(codes(text).contains(&"KSEM021"));
+    assert!(codes(text).iter().any(|code| code == "KSEM021"));
 }
 
 #[test]
@@ -338,14 +258,14 @@ fn missing_return_on_some_paths_is_reported() {
     // The review's reproduced hole: only the `n > 100` path returns.
     let text = "function f(n: Int) -> Int { if n > 100 { return 1 } }\n\
                     @Main function main() { print(f(5)) return }";
-    assert!(codes(text).contains(&"KSEM033"));
+    assert!(codes(text).iter().any(|code| code == "KSEM033"));
 }
 
 #[test]
 fn if_else_where_both_arms_return_is_accepted() {
     let text = "function f(n: Int) -> Int { if n > 0 { return 1 } else { return 2 } }\n\
                     @Main function main() { print(f(5)) return }";
-    assert!(!codes(text).contains(&"KSEM033"));
+    assert!(!codes(text).iter().any(|code| code == "KSEM033"));
 }
 
 #[test]
@@ -354,7 +274,7 @@ fn else_if_chain_with_full_coverage_is_accepted() {
                         if n > 0 { return 1 } else if n < 0 { return 2 } else { return 3 }\n\
                     }\n\
                     @Main function main() { print(f(5)) return }";
-    assert!(!codes(text).contains(&"KSEM033"));
+    assert!(!codes(text).iter().any(|code| code == "KSEM033"));
 }
 
 #[test]
@@ -363,7 +283,7 @@ fn else_if_chain_missing_final_else_is_reported() {
                         if n > 0 { return 1 } else if n < 0 { return 2 }\n\
                     }\n\
                     @Main function main() { print(f(5)) return }";
-    assert!(codes(text).contains(&"KSEM033"));
+    assert!(codes(text).iter().any(|code| code == "KSEM033"));
 }
 
 #[test]
@@ -371,20 +291,20 @@ fn while_containing_return_does_not_count_as_definite() {
     // A while body may run zero times, so it can never satisfy the check.
     let text = "function f(n: Int) -> Int { while n > 0 { return n } }\n\
                     @Main function main() { print(f(5)) return }";
-    assert!(codes(text).contains(&"KSEM033"));
+    assert!(codes(text).iter().any(|code| code == "KSEM033"));
 }
 
 #[test]
 fn trailing_return_after_if_is_accepted() {
     let text = "function f(n: Int) -> Int { if n > 100 { return 1 } return 0 }\n\
                     @Main function main() { print(f(5)) return }";
-    assert!(!codes(text).contains(&"KSEM033"));
+    assert!(!codes(text).iter().any(|code| code == "KSEM033"));
 }
 
 #[test]
 fn void_functions_are_exempt_from_definite_return() {
     let text = "function f() { print(1) }\n@Main function main() { f() return }";
-    assert!(!codes(text).contains(&"KSEM033"));
+    assert!(!codes(text).iter().any(|code| code == "KSEM033"));
 }
 
 // ----- ownership ----------------------------------------------------
@@ -503,31 +423,6 @@ fn sibling_branches_may_each_move_the_same_local() {
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }
 
-/// The same rule for the two arms of an `if`, and for a `switch`'s cases.
-#[test]
-fn if_and_switch_arms_may_each_move_the_same_local() {
-    let if_else = "struct Mesh { let id: Int }\n\
-                       function consume(mesh: Mesh) -> Int { return mesh.id }\n\
-                       function pick(flag: Bool, mesh: Mesh) -> Int { \
-                       if flag { return consume(move mesh) } else { return consume(move mesh) } }\n\
-                       @Main function main() { print(pick(true, Mesh { id: 1 })) return }";
-    assert!(
-        diagnostics(if_else).is_empty(),
-        "{:?}",
-        diagnostics(if_else)
-    );
-
-    let switch = "struct Mesh { let id: Int }\n\
-                      function consume(mesh: Mesh) -> Int { return mesh.id }\n\
-                      function pick(n: Int, mesh: Mesh) -> Int { \
-                      switch n { case 0 { return consume(move mesh) } \
-                      default { return consume(move mesh) } } }\n\
-                      @Main function main() { print(pick(0, Mesh { id: 1 })) return }";
-    assert!(diagnostics(switch).is_empty(), "{:?}", diagnostics(switch));
-}
-
-/// A move inside a branch still reaches the code after it: the compiler does
-/// not know which arm ran, so a value one of them gave away may be gone.
 #[test]
 fn a_move_in_one_branch_still_poisons_a_later_read() {
     let text = "struct Mesh { let id: Int }\n\

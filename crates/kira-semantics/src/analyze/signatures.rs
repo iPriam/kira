@@ -38,16 +38,26 @@ impl<'a> Analyzer<'a> {
             // A signature's types are written in the file the function was, so
             // they resolve against that file's imports.
             self.source = callable.source;
-            let name = self.callable_name(*callable);
+            let name = self.callable_name(callable);
             // A method's receiver is parameter 0, so its signature carries the
             // struct type ahead of what was written.
             let mut params: Vec<Type> = callable.receiver.map(Type::Struct).into_iter().collect();
-            params.extend(
-                function
-                    .params
-                    .iter()
-                    .map(|param| self.resolve_type_ref(param.ty)),
-            );
+            // A specialized copy takes the subclass where the declaration wrote
+            // the parent. This is the whole of the substitution: everything
+            // downstream — the body, `self`-less method resolution inside it,
+            // lowering — reads the signature rather than the syntax.
+            let written: Vec<Type> = function
+                .params
+                .iter()
+                .enumerate()
+                .map(|(index, param)| {
+                    match callable.specialize.iter().find(|(slot, _)| *slot == index) {
+                        Some((_, class)) => Type::Struct(*class),
+                        None => self.resolve_type_ref(param.ty),
+                    }
+                })
+                .collect();
+            params.extend(written);
             // A receiver slot carries no written name, so a label can never
             // bind to it; the written parameters follow it in order.
             // A method's receiver borrows: `p.sum()` reads `p` and leaves it

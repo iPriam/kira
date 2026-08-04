@@ -71,7 +71,7 @@ fn a_malformed_import_still_leaves_the_rest_of_the_file_parsed() {
         result
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KPAR016")),
+            .any(|diagnostic| diagnostic.has_code("KPAR016")),
         "{:?}",
         result.diagnostics
     );
@@ -98,7 +98,7 @@ fn an_alias_with_no_name_is_reported() {
         result
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KPAR017")),
+            .any(|diagnostic| diagnostic.has_code("KPAR017")),
         "{:?}",
         result.diagnostics
     );

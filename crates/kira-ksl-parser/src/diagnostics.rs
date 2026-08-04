@@ -4,7 +4,7 @@
 //! by different grammars and a shared code would say "the parser rejected it"
 //! without saying which parser.
 
-use kira_diagnostics::{Diagnostic, Label, Severity};
+use kira_diagnostics::{Code, Diagnostic, Label, Severity};
 use kira_source::{FileSpan, SourceId, Span};
 
 /// Collects what one parse reported.
@@ -32,7 +32,7 @@ impl Reporter {
             message.clone(),
             Label::primary(file_span, message),
         );
-        diagnostic.code = Some(code);
+        diagnostic.code = Some(Code::known(code));
         diagnostic.phase = Some("ksl parser");
         self.items.push(diagnostic);
     }

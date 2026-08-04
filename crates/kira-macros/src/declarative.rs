@@ -323,7 +323,7 @@ mod tests {
              function f() -> Int {\n    var x = 1\n    var y = 2\n    return swap!(x, y)\n}\n",
         );
         assert!(
-            diagnostics.iter().any(|d| d.code == Some("KMAC005")),
+            diagnostics.iter().any(|d| d.has_code("KMAC005")),
             "{diagnostics:?}"
         );
     }
@@ -335,7 +335,7 @@ mod tests {
              function f() {\n    var y = 2\n    swap!(1, y)\n    return\n}\n",
         );
         assert!(
-            diagnostics.iter().any(|d| d.code == Some("KMAC004")),
+            diagnostics.iter().any(|d| d.has_code("KMAC004")),
             "{diagnostics:?}"
         );
     }
@@ -347,7 +347,7 @@ mod tests {
              function f() -> Int {\n    return square!(1, 2)\n}\n",
         );
         assert!(
-            diagnostics.iter().any(|d| d.code == Some("KMAC002")),
+            diagnostics.iter().any(|d| d.has_code("KMAC002")),
             "{diagnostics:?}"
         );
     }

@@ -25,18 +25,24 @@ function strBorrowLen(s: borrow String) -> Int {
 // Return a string selected by index. Returns directly from each branch.
 function strPick(i: Int) -> String {
     let m = i % 5
-    if m == 0 { return "alpha" }
-    if m == 1 { return "be" }
-    if m == 2 { return "gamma" }
-    if m == 3 { return "d" }
+    if m == 0 {
+        return "alpha" }
+    if m == 1 {
+        return "be" }
+    if m == 2 {
+        return "gamma" }
+    if m == 3 {
+        return "d" }
     return ""
 }
 
 // A second selector with different lengths to vary the fold.
 function strTagFor(i: Int) -> String {
     let m = i % 3
-    if m == 0 { return "lo" }
-    if m == 1 { return "high" }
+    if m == 0 {
+        return "lo" }
+    if m == 1 {
+        return "high" }
     return "mid"
 }
 
@@ -89,8 +95,10 @@ function strTokLen(t: borrow StrTok) -> Int {
 // Produce a token, returning the enum directly from each branch.
 function strTokFor(i: Int) -> StrTok {
     let m = i % 3
-    if m == 0 { return .Word("redred") }
-    if m == 1 { return .Blank }
+    if m == 0 {
+        return .Word("redred") }
+    if m == 1 {
+        return .Blank }
     return .Word("xy")
 }
 

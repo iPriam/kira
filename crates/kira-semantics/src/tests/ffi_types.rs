@@ -77,7 +77,11 @@ fn an_ffi_alias_may_chain_through_a_pointer() {
 #[test]
 fn an_ffi_alias_colliding_with_a_builtin_is_rejected() {
     let text = "@FFI.Alias { target: U64; }\nstruct Int {}";
-    assert!(codes(text).contains(&"KSEM130"), "{:?}", codes(text));
+    assert!(
+        codes(text).iter().any(|code| code == "KSEM130"),
+        "{:?}",
+        codes(text)
+    );
 }
 
 // ----- C-layout struct construction ---------------------------------------
@@ -132,7 +136,11 @@ fn a_c_layout_paren_call_refuses_positional_arguments() {
     let text = "@FFI.Struct { layout: c; }\n\
          struct V { var a: I32 }\n\
          @Main function main() { let v = V(3)\n return }";
-    assert!(codes(text).contains(&"KSEM189"), "{:?}", codes(text));
+    assert!(
+        codes(text).iter().any(|code| code == "KSEM189"),
+        "{:?}",
+        codes(text)
+    );
 }
 
 #[test]
@@ -163,7 +171,11 @@ fn a_c_layout_field_with_no_zero_is_refused_when_omitted() {
     // precisely rather than mis-initialized.
     let text = "@FFI.Struct { layout: c; }\nstruct V { var label: String }\n\
          @Main function main() { let v = V {}\n return }";
-    assert!(codes(text).contains(&"KSEM186"), "{:?}", codes(text));
+    assert!(
+        codes(text).iter().any(|code| code == "KSEM186"),
+        "{:?}",
+        codes(text)
+    );
 }
 
 #[test]
@@ -179,7 +191,11 @@ fn a_pointer_field_zero_fills_to_null() {
 fn a_c_layout_initializer_still_type_checks_its_value() {
     let text = "@FFI.Struct { layout: c; }\nstruct V { var a: I32 }\n\
          @Main function main() { let v = V { a: true }\n return }";
-    assert!(codes(text).contains(&"KSEM094"), "{:?}", codes(text));
+    assert!(
+        codes(text).iter().any(|code| code == "KSEM094"),
+        "{:?}",
+        codes(text)
+    );
 }
 
 // ----- deferred forms: array and callback ---------------------------------
@@ -199,7 +215,11 @@ fn indexing_an_ffi_array_points_at_the_field_holding_its_elements() {
     let text = "@FFI.Array { element: U8; count: 4; }\nstruct Bytes4 {}\n\
          @FFI.Struct { layout: c; }\nstruct Holder { var bytes: Bytes4 }\n\
          @Main function main() { let h = Holder {}\n print(h.bytes[0])\n return }";
-    assert!(codes(text).contains(&"KSEM244"), "{:?}", codes(text));
+    assert!(
+        codes(text).iter().any(|code| code == "KSEM244"),
+        "{:?}",
+        codes(text)
+    );
     // And the field it names does index.
     let through_field = "@FFI.Array { element: U8; count: 4; }\nstruct Bytes4 {}\n\
          @FFI.Struct { layout: c; }\nstruct Holder { var bytes: Bytes4 }\n\
@@ -267,7 +287,7 @@ fn a_foreign_type_described_two_different_ways_still_collides() {
     assert!(
         arrays
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KSEM004")),
+            .any(|diagnostic| diagnostic.has_code("KSEM004")),
         "a different element count is a different type: {arrays:?}"
     );
 
@@ -287,7 +307,7 @@ fn a_foreign_type_described_two_different_ways_still_collides() {
     assert!(
         pointers
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KSEM130")),
+            .any(|diagnostic| diagnostic.has_code("KSEM130")),
         "a different pointee is a different type: {pointers:?}"
     );
 }
@@ -401,7 +421,7 @@ fn two_plain_structs_of_one_name_still_collide() {
     assert!(
         diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KSEM004")),
+            .any(|diagnostic| diagnostic.has_code("KSEM004")),
         "{diagnostics:?}"
     );
 }

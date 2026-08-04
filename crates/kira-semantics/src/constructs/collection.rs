@@ -550,6 +550,7 @@ impl<'a> Analyzer<'a> {
             callables.push(Callable {
                 receiver: Some(id),
                 origin: None,
+                specialize: Vec::new(),
                 function: &method.function,
                 source,
             });
@@ -571,6 +572,7 @@ impl<'a> Analyzer<'a> {
                 callables.push(Callable {
                     receiver: Some(id),
                     origin: None,
+                    specialize: Vec::new(),
                     function: method.function,
                     source: method.source,
                 });

@@ -19,7 +19,7 @@ mod stmt;
 mod tests;
 
 use kira_core::{Interner, Names, Symbol};
-use kira_diagnostics::{Diagnostic, Label, Severity};
+use kira_diagnostics::{Code, Diagnostic, Label, Severity};
 use kira_source::{FileSpan, SourceId, Span};
 use kira_syntax_model::{FileNodes, FilePart, NodeBase, SyntaxTree, Token, TokenKind};
 use std::sync::Arc;
@@ -298,7 +298,7 @@ impl<'a> Parser<'a> {
             message.clone(),
             Label::primary(file_span, message),
         );
-        diagnostic.code = Some(code);
+        diagnostic.code = Some(Code::known(code));
         diagnostic.phase = Some("parser");
         self.diagnostics.push(diagnostic);
     }

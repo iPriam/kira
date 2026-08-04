@@ -70,7 +70,8 @@ function main() {
     var i = 0
     while i < 10 {
         var step: Shade = .Light
-        if i == 4 { step = .Dark }
+        if i == 4 {
+            step = .Dark }
         match step {
             Light -> { seen = seen + 1 }
             Mid -> { seen = seen + 100 }

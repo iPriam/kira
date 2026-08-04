@@ -23,14 +23,18 @@ fn an_application_without_main_is_still_ksem011() {
     // The exemption is conditional, not a removal: the same source analyzed as
     // a program is still rejected.
     let text = "function add(a: Int, b: Int) -> Int { return a + b }";
-    assert!(codes(text).contains(&"KSEM011"), "{:?}", codes(text));
+    assert!(
+        codes(text).iter().any(|code| code == "KSEM011"),
+        "{:?}",
+        codes(text)
+    );
 }
 
 #[test]
 fn a_library_declaring_main_is_refused_by_name() {
     let text = "@Main function main() { print(1) return }";
     assert!(
-        library_codes(text).contains(&"KSEM255"),
+        library_codes(text).iter().any(|code| code == "KSEM255"),
         "{:?}",
         library_codes(text)
     );
@@ -43,7 +47,10 @@ fn a_library_still_type_checks_its_bodies() {
     let text = "function bad() -> Int { return missing }";
     let reported = library_codes(text);
     assert!(!reported.is_empty(), "a library must still be checked");
-    assert!(!reported.contains(&"KSEM011"), "{reported:?}");
+    assert!(
+        !reported.iter().any(|code| code == "KSEM011"),
+        "{reported:?}"
+    );
 }
 
 #[test]
@@ -57,6 +64,8 @@ fn a_library_records_no_entrypoint() {
         BuildKind::Library,
         PrecompiledShaders::default(),
         host_platform(),
+        // Not a lint run.
+        false,
     );
     let program = analyzed(&db, source);
     assert!(program.main.is_none());

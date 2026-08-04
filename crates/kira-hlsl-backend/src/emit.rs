@@ -337,6 +337,9 @@ impl<'a> Emitter<'a> {
             // `Load` takes the mip level as the last coordinate component; KSL's
             // `load` names no level, so level 0 is implied.
             BuiltinFn::Load => format!("{}.Load(int3({}, 0))", at(0), at(1)),
+            // HLSL writes a storage texture by indexing it, so a store is an
+            // assignment rather than a call.
+            BuiltinFn::Store => format!("{}[{}] = {}", at(0), at(1), at(2)),
             // The one builtin that is a statement in HLSL: it answers the value
             // that was there through an `out` parameter rather than by
             // returning it, which is what the corpus's `let slot = atomicAdd(…)`
@@ -426,9 +429,16 @@ impl<'a> Emitter<'a> {
                     self.line(0, &declared);
                 }
                 ResourceKind::Texture => {
+                    // A storage texture is unordered access, which is its own
+                    // register space: `u`, not `t`. Emitting it as `t` would
+                    // bind a read-only view a write cannot use.
+                    let space = match resource.access {
+                        Some(AccessMode::Write | AccessMode::ReadWrite) => 'u',
+                        _ => 't',
+                    };
                     let declared = format!(
-                        "{} {name} : register(t{at});",
-                        texture_type(&resource.type_name)
+                        "{} {name} : register({space}{at});",
+                        texture_type(&resource.type_name, resource.access)
                     );
                     self.line(0, &declared);
                 }
@@ -469,7 +479,13 @@ pub fn hlsl_name(name: &str) -> String {
 }
 
 /// The HLSL texture type a reflected texture name spells.
-fn texture_type(name: &str) -> &'static str {
+fn texture_type(name: &str, access: Option<AccessMode>) -> &'static str {
+    if matches!(access, Some(AccessMode::Write | AccessMode::ReadWrite)) {
+        return match name {
+            "Texture2dUint" => "RWTexture2D<uint4>",
+            _ => "RWTexture2D<float4>",
+        };
+    }
     match name {
         "Texture2dUint" => "Texture2D<uint4>",
         "TextureCube" => "TextureCube<float4>",

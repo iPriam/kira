@@ -371,34 +371,6 @@ analysis, so every backend compiles one loop shape rather than two — and
 `continue` still advances the loop, because the rewrite steps the cursor before
 the body rather than after it.
 
-## Switch
-
-`switch` dispatches on a subject by comparing it to each `case` label with
-`==`, so a label may be any type `==` accepts against the subject: `Int`,
-`Float`, `Bool`, or `String`. Arm bodies are braced blocks, and the `:` after a
-label is optional.
-
-```kira
-switch i % 3 {
-    case 0 { print("zero") }
-    case 1 { print("one") }
-    default { print("many") }
-}
-```
-
-The subject is evaluated once. Labels are evaluated lazily in source order, so
-a label after the matching one never runs. There is **no fallthrough**: the
-first matching arm runs and control resumes after the switch.
-
-`default` is optional and need not come last. A `switch` that matches nothing
-and has no `default` simply does nothing — there is no exhaustiveness check,
-and a repeated label is legal, with the first match winning.
-
-A `switch` is a statement, not an expression: an arm that wants to produce a
-value assigns to a `var` or returns. **`break` inside an arm belongs to the
-enclosing loop, not to the switch** — a switch is not a loop, so a `break` in
-one that no loop encloses is reported.
-
 ## Match
 
 A `match` dispatches on an **enum's variant**. Arms are written with an arrow,
@@ -429,16 +401,17 @@ match note {
 }
 ```
 
-Unlike a `switch`, a `match` is **checked**: every variant must be covered
-(`KSEM129`), and a variant matched twice is reported (`KSEM127`). That is the
-whole reason the two constructs are separate — a `switch` label is an arbitrary
-expression, so there is no variant set to be exhaustive over. Neither check
-applies to `switch`, and a `match` subject that is not an enum is refused
-(`KSEM125`).
+A `match` is **checked**: every variant must be covered (`KSEM129`), and a
+variant matched twice is reported (`KSEM127`). That is what dispatching on a
+variant buys over comparing with `==` — a chain of comparisons has no variant
+set to be exhaustive over, so neither check could apply to one. A `match`
+subject that is not an enum is refused (`KSEM125`).
 
 Because coverage is checked, an exhaustive `match` whose arms all return is
 itself a **definite return** — which is why `rank` above needs no trailing
-`return`. As in a `switch`, `break` inside an arm belongs to the enclosing loop.
+`return`. `break` inside an arm belongs to the enclosing loop, not to the
+`match`: a `match` is not a loop, so a `break` in one that no loop encloses is
+reported.
 
 ## Attempt, try, and handle
 

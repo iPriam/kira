@@ -14,7 +14,7 @@ mod foreign;
 mod type_refs;
 
 use kira_core::Symbol;
-use kira_diagnostics::{Diagnostic, Label, Severity};
+use kira_diagnostics::{Code, Diagnostic, Label, Severity};
 use kira_runtime_abi::Execution;
 use kira_source::{FileSpan, Span};
 use kira_syntax_model::TokenKind;
@@ -563,7 +563,7 @@ impl Parser<'_> {
             format!("`{keyword}` is not supported yet"),
             Label::primary(file_span, "not yet supported in this compiler"),
         );
-        diagnostic.code = Some("KSEM900");
+        diagnostic.code = Some(Code::known("KSEM900"));
         diagnostic.phase = Some("parser");
         diagnostic.help = Some(
             "the v0 subset supports functions, structs, let/var, if/while, and arithmetic"

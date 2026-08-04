@@ -41,6 +41,13 @@ impl Checker<'_> {
                 self.name_expr(&name, span)
             }
             Expr::Field { base, field, span } => {
+                // `Ink.Low` reads as a member of a value named `Ink` right up
+                // until nothing is named `Ink` — an enum is a namespace, not a
+                // value, so its variants are found by the whole written path
+                // before the base is checked and reported unbound.
+                if let Some(id) = self.constant_path(id) {
+                    return id;
+                }
                 let base = self.expr(base);
                 let field = self.name(field);
                 self.member(base, &field, span)
@@ -100,6 +107,19 @@ impl Checker<'_> {
         }
         if let Some((ty, _)) = self.options.get(name).cloned() {
             return self.alloc(ty, CheckedExprKind::Option(name.to_owned()));
+        }
+        // Inside an imported module, an unqualified name reaches that module's
+        // own constant first — the same rule an unqualified *call* follows, and
+        // for the same reason: a `const` is keyed with the importing alias
+        // folded in, so its own file's bare reference has to look there too.
+        let own = self.qualified(name);
+        if let Some((ty, value)) = self
+            .constants
+            .get(&own)
+            .or_else(|| self.constants.get(name))
+            .cloned()
+        {
+            return self.alloc(ty, CheckedExprKind::Const(value));
         }
         self.reporter.error(
             span,
@@ -431,6 +451,9 @@ impl Checker<'_> {
                     width: 4,
                 })
             }
+            // Called for its effect: a store writes a texel and yields nothing,
+            // so using its result is a type error rather than a silent zero.
+            BuiltinFn::Store => Type::Void,
             BuiltinFn::AtomicAdd => Type::Scalar(ScalarType::Uint),
             // Everything else is component-wise: the result is the first
             // operand's shape.
@@ -591,6 +614,28 @@ impl Checker<'_> {
         id
     }
 
+    /// The dotted path `id` writes, flattened the way an emitted name is.
+    ///
+    /// `Ink.Low` becomes `Ink_Low` and `Shared.Ink.Low` becomes
+    /// `Shared_Ink_Low`, which is what an imported declaration is keyed as.
+    /// Anything that is not a chain of names has no path.
+    fn written_path(&self, id: ExprId) -> Option<String> {
+        match self.tree().expr(id).clone() {
+            Expr::Name { symbol, .. } => Some(self.name(symbol)),
+            Expr::Field { base, field, .. } => {
+                Some(format!("{}_{}", self.written_path(base)?, self.name(field)))
+            }
+            _ => None,
+        }
+    }
+
+    /// The constant `id`'s written path names, already checked.
+    fn constant_path(&mut self, id: ExprId) -> Option<CheckedExprId> {
+        let path = self.written_path(id)?;
+        let (ty, value) = self.constants.get(&path).cloned()?;
+        Some(self.alloc(ty, CheckedExprKind::Const(value)))
+    }
+
     /// Folds `id` to a constant of `expected`, when it is one.
     pub(crate) fn constant(&mut self, id: ExprId, expected: &Type) -> Option<ConstValue> {
         let node = self.tree().expr(id).clone();
@@ -605,8 +650,15 @@ impl Checker<'_> {
                 let name = self.name(symbol);
                 self.options
                     .get(&name)
+                    .or_else(|| self.constants.get(&self.qualified(&name)))
+                    .or_else(|| self.constants.get(&name))
                     .map(|(_, value)| *value)
                     .and_then(|value| retype(value, *scalar))
+            }
+            Expr::Field { .. } => {
+                let path = self.written_path(id)?;
+                let (_, value) = self.constants.get(&path)?;
+                retype(*value, *scalar)
             }
             _ => None,
         }

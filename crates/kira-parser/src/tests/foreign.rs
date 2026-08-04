@@ -6,6 +6,8 @@
 //! Deciding what the fields *mean* (required, duplicate, the `abi` value) is
 //! semantics', so those cases live in the semantics tests.
 
+use kira_diagnostics::Diagnostic;
+
 use super::*;
 use kira_syntax_model::ast::{FfiTypeKind, ForeignMark};
 
@@ -18,11 +20,11 @@ fn only_foreign(result: &ParseResult) -> &ForeignMark {
 }
 
 /// The diagnostic codes `text` produced, in order.
-fn codes(result: &ParseResult) -> Vec<&'static str> {
+fn codes(result: &ParseResult) -> Vec<&str> {
     result
         .diagnostics
         .iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .filter_map(Diagnostic::code_text)
         .collect()
 }
 
@@ -246,7 +248,7 @@ fn an_empty_block_field_span_points_at_the_offending_token() {
     let diagnostic = result
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == Some("KPAR052"))
+        .find(|diagnostic| diagnostic.has_code("KPAR052"))
         .expect("a missing-semicolon diagnostic");
     let span = diagnostic.labels[0].span.span;
     assert_eq!(span.slice("@FFI.Extern { library: ffimath }"), "}");

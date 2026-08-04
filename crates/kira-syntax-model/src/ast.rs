@@ -25,5 +25,5 @@ pub use item::{
     ForeignField, ForeignMark, Function, ImportDecl, Item, OverrideFieldDecl, Param, ParentRef,
     StructDecl, TypeAliasDecl, TypeParamDecl, TypeRef, UnsupportedItem, VariantDecl,
 };
-pub use stmt::{Block, ForIterable, MatchArm, MatchBinding, Stmt, SwitchCase};
+pub use stmt::{Block, ForIterable, MatchArm, MatchBinding, Stmt};
 pub use tree::{ExprId, FileNodes, FilePart, NodeBase, StmtId, SyntaxTree, TypeRefId};

@@ -214,6 +214,11 @@ pub(crate) struct Runtime {
     /// `kira_rt_str_index_of`: the first byte index of a needle, or `-1`,
     /// consuming both strings.
     pub(super) str_index_of: Callable,
+    /// The shared-opcode string operations, one callable each, in
+    /// [`StringOp`](kira_runtime_abi::StringOp) order. Indexed by the operand
+    /// byte rather than matched by name, so a new operation is a row here and
+    /// nothing in the lowering.
+    pub(super) string_ops: [Callable; kira_runtime_abi::StringOp::ALL.len()],
     /// `kira_rt_str_of_int` / `_float` / `_bool`: a scalar rendered as a fresh
     /// string, in exactly the spelling `print` gives it.
     pub(super) str_of_int: Callable,
@@ -527,6 +532,39 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 types.i64,
                 &mut [types.ptr, types.ptr],
             ),
+            // One per `StringOp`, in wire order. The three predicates answer
+            // `i1`, `split` answers an array pointer and the rest a string
+            // pointer; every argument is a string handle.
+            string_ops: [
+                declare(
+                    c"kira_rt_string_contains",
+                    types.i1,
+                    &mut [types.ptr, types.ptr],
+                ),
+                declare(
+                    c"kira_rt_string_starts_with",
+                    types.i1,
+                    &mut [types.ptr, types.ptr],
+                ),
+                declare(
+                    c"kira_rt_string_ends_with",
+                    types.i1,
+                    &mut [types.ptr, types.ptr],
+                ),
+                declare(
+                    c"kira_rt_string_split",
+                    types.ptr,
+                    &mut [types.ptr, types.ptr],
+                ),
+                declare(
+                    c"kira_rt_string_replace",
+                    types.ptr,
+                    &mut [types.ptr, types.ptr, types.ptr],
+                ),
+                declare(c"kira_rt_string_trim", types.ptr, &mut [types.ptr]),
+                declare(c"kira_rt_string_lowercase", types.ptr, &mut [types.ptr]),
+                declare(c"kira_rt_string_uppercase", types.ptr, &mut [types.ptr]),
+            ],
             str_of_int: declare(c"kira_rt_str_of_int", types.ptr, &mut [types.i64]),
             str_of_float: declare(c"kira_rt_str_of_float", types.ptr, &mut [types.f64]),
             str_of_bool: declare(c"kira_rt_str_of_bool", types.ptr, &mut [types.i1]),

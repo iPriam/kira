@@ -222,6 +222,29 @@ pub enum HirExpr {
         /// The string being searched for.
         needle: HirExprId,
     },
+    /// One of the string operations that share an opcode (`s.contains(n)`,
+    /// `s.trim()`, `s.split(sep)`, …).
+    ///
+    /// Which operation, how many arguments it takes and what it answers with
+    /// all follow from the [`StringOp`] — it is the whole expression, not a
+    /// hint. Grouped rather than given a variant each because the set is meant
+    /// to keep growing, and a variant per operation makes every layer below
+    /// grow with it.
+    StringOperation {
+        /// Which operation to perform.
+        op: kira_runtime_abi::StringOp,
+        /// The string it is performed on.
+        text: HirExprId,
+        /// Its arguments, in source order.
+        arguments: Vec<HirExprId>,
+        /// What it answers with.
+        ///
+        /// Carried rather than derived from `op`, because `split` answers
+        /// `[String]` and an array type is a row in the program's table —
+        /// interning one needs the program, which [`HirExpr::type_of`] does not
+        /// have.
+        ty: Type,
+    },
     /// A scalar rendered as text (`String(x)`).
     ///
     /// The rendering is the one `print` gives, so a value printed and a value
@@ -542,6 +565,7 @@ impl HirExpr {
             | HirExpr::TaskJoin { ty, .. }
             | HirExpr::CellNew { ty, .. }
             | HirExpr::CellGet { ty, .. }
+            | HirExpr::StringOperation { ty, .. }
             | HirExpr::Index { ty, .. } => *ty,
             HirExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
             HirExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),

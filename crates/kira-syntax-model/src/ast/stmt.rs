@@ -1,4 +1,4 @@
-//! Statements and the pieces that only appear inside them (blocks, `switch`
+//! Statements and the pieces that only appear inside them (blocks, `match`
 //! arms, and what a `for` iterates).
 
 use super::{ExprId, StmtId, TypeRefId};
@@ -6,25 +6,10 @@ use crate::ownership::OwnershipMode;
 use kira_core::Symbol;
 use kira_source::Span;
 
-/// One `case` arm of a [`Stmt::Switch`].
-///
-/// The label is an expression rather than a pattern: Kira compares it to the
-/// subject with `==`, so what may be written here is whatever `==` accepts
-/// against the subject's type.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SwitchCase {
-    /// The label compared against the subject.
-    pub label: ExprId,
-    /// The statements run when the label matches.
-    pub body: Block,
-    /// Span covering the whole arm.
-    pub span: Span,
-}
-
 /// One arm of a [`Stmt::Match`].
 ///
-/// Unlike a [`SwitchCase`], the head is a *pattern*, not an expression: a bare
-/// variant name with an optional binding for its payload. The name is
+/// The head is a *pattern*, not an expression: a bare variant name with an
+/// optional binding for its payload. The name is
 /// unqualified — a `match` already knows the subject's enum, so `Red` names
 /// that enum's variant and `EmxColor.Red` is not the spelling.
 #[derive(Debug, Clone, PartialEq)]
@@ -171,31 +156,14 @@ pub enum Stmt {
         /// Span covering the statement.
         span: Span,
     },
-    /// A `switch`: the first `case` whose label equals the subject runs.
-    ///
-    /// There is no fallthrough, and a `switch` is a statement rather than an
-    /// expression — an arm that wants to produce a value assigns or returns.
-    Switch {
-        /// The value being matched, evaluated once.
-        subject: ExprId,
-        /// The `case` arms, in source order.
-        cases: Vec<SwitchCase>,
-        /// The `default` arm, when one was written.
-        ///
-        /// A `switch` with no `default` and no matching case does nothing.
-        default_block: Option<Block>,
-        /// Span covering the whole statement.
-        span: Span,
-    },
     /// A `match`: the arm naming the subject's variant runs.
     ///
-    /// A different construct from [`Stmt::Switch`] despite the family
-    /// resemblance. A `match` selects on an enum's *variant* rather than on
-    /// `==`, which is what lets an arm bind the variant's payload — and what
-    /// makes coverage a question worth asking, so a `match` is checked
-    /// exhaustive and checked for a variant matched twice. A `switch` is
-    /// neither, and deliberately: its labels are arbitrary expressions, so
-    /// there is no set of them to be exhaustive over.
+    /// Selects on an enum's *variant* rather than on `==`, which is what lets
+    /// an arm bind the variant's payload — and what makes coverage a question
+    /// worth asking, so a `match` is checked exhaustive and checked for a
+    /// variant matched twice. A chain of `==` comparisons is neither, because
+    /// its labels are arbitrary expressions with no set to be exhaustive
+    /// over.
     Match {
         /// The value being matched, evaluated once.
         subject: ExprId,
@@ -247,7 +215,6 @@ impl Stmt {
             | Stmt::If { span, .. }
             | Stmt::While { span, .. }
             | Stmt::For { span, .. }
-            | Stmt::Switch { span, .. }
             | Stmt::Match { span, .. }
             | Stmt::Attempt { span, .. }
             | Stmt::Break { span }

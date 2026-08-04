@@ -26,6 +26,7 @@ mod pool;
 pub mod raw_memory;
 pub mod runtime;
 pub mod state_box;
+pub mod string_ops;
 pub mod tasks;
 pub mod values;
 

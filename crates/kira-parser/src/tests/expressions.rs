@@ -41,7 +41,7 @@ fn a_hex_literal_is_a_bit_pattern_and_a_decimal_one_is_a_number() {
         refused
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KPAR021")),
+            .any(|diagnostic| diagnostic.has_code("KPAR021")),
         "{:?}",
         refused.diagnostics
     );
@@ -51,7 +51,7 @@ fn a_hex_literal_is_a_bit_pattern_and_a_decimal_one_is_a_number() {
         too_wide
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == Some("KPAR021")),
+            .any(|diagnostic| diagnostic.has_code("KPAR021")),
         "{:?}",
         too_wide.diagnostics
     );
@@ -201,7 +201,7 @@ fn an_enum_payload_rejects_an_argument_label() {
     let codes: Vec<_> = result
         .diagnostics
         .iter()
-        .filter_map(|diagnostic| diagnostic.code)
+        .filter_map(kira_diagnostics::Diagnostic::code_text)
         .collect();
     assert_eq!(codes, vec!["KPAR056"]);
 }

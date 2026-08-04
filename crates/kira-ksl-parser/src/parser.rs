@@ -7,8 +7,8 @@
 
 use kira_core::{Interner, Symbol};
 use kira_ksl_syntax_model::ast::{
-    Access, Field, Function, Group, Import, Item, OptionDecl, Param, Resource, ResourceKind,
-    Shader, StageDecl, StageWord, TypeDecl, TypeRef,
+    Access, ConstDecl, EnumDecl, EnumVariant, Field, Function, Group, Import, Item, OptionDecl,
+    Param, Resource, ResourceKind, Shader, StageDecl, StageWord, TypeDecl, TypeRef,
 };
 use kira_ksl_syntax_model::token::{Token, TokenKind};
 use kira_ksl_syntax_model::tree::{KslTree, TypeRefId};
@@ -218,6 +218,8 @@ impl<'a> Parser<'a> {
         match self.current() {
             TokenKind::Import => self.import().map(Item::Import),
             TokenKind::Type => self.type_decl().map(Item::Type),
+            TokenKind::Const => self.const_decl().map(Item::Const),
+            TokenKind::Enum => self.enum_decl().map(Item::Enum),
             TokenKind::Function => self.function().map(Item::Function),
             TokenKind::Shader => self.shader().map(Item::Shader),
             _ => None,
@@ -264,6 +266,65 @@ impl<'a> Parser<'a> {
         Some(TypeDecl {
             name,
             fields,
+            span: self.since(start),
+        })
+    }
+
+    /// `const name: Type = <literal>`
+    fn const_decl(&mut self) -> Option<ConstDecl> {
+        let start = self.advance();
+        let (name, _) = self.expect_name()?;
+        self.expect(TokenKind::Colon)?;
+        let ty = self.type_ref()?;
+        self.expect(TokenKind::Equals)?;
+        let value = self.expr()?;
+        Some(ConstDecl {
+            name,
+            ty,
+            value,
+            span: self.since(start),
+        })
+    }
+
+    /// `enum Name { A = 0, B = 1 }`
+    ///
+    /// Every variant writes its number. A shader's enum names an encoding that
+    /// arrived from outside, so there is nothing for declaration order to be
+    /// right about.
+    fn enum_decl(&mut self) -> Option<EnumDecl> {
+        let start = self.advance();
+        let (name, _) = self.expect_name()?;
+        self.expect(TokenKind::LBrace)?;
+        let mut variants = Vec::new();
+        while !self.at_end() && self.current() != TokenKind::RBrace {
+            let before = self.at;
+            match self.enum_variant() {
+                Some(variant) => variants.push(variant),
+                None => {
+                    if self.at == before {
+                        self.advance();
+                    }
+                }
+            }
+            self.eat(TokenKind::Comma);
+        }
+        self.expect(TokenKind::RBrace);
+        Some(EnumDecl {
+            name,
+            variants,
+            span: self.since(start),
+        })
+    }
+
+    /// One `A = 0` inside an `enum` body.
+    fn enum_variant(&mut self) -> Option<EnumVariant> {
+        let start = self.span();
+        let (name, _) = self.expect_name()?;
+        self.expect(TokenKind::Equals)?;
+        let value = self.expr()?;
+        Some(EnumVariant {
+            name,
+            value,
             span: self.since(start),
         })
     }
@@ -483,6 +544,21 @@ impl<'a> Parser<'a> {
     /// One resource declaration inside a group.
     fn resource(&mut self) -> Option<Resource> {
         let start = self.span();
+        let mut binding = None;
+        while self.current() == TokenKind::At {
+            let (which, at) = self.annotation_name()?;
+            let word = self.interner.resolve(which).to_owned();
+            if word == "binding" {
+                binding = self.binding_index();
+            } else {
+                self.reporter.error(
+                    at,
+                    diagnostics::BAD_ANNOTATION,
+                    format!("`@{word}` is not an annotation a resource takes: expected `@binding`"),
+                );
+                return None;
+            }
+        }
         if self.current() != TokenKind::Identifier {
             self.reporter.error(
                 start,
@@ -512,7 +588,16 @@ impl<'a> Parser<'a> {
             }
         };
         self.advance();
-        let access = if kind == ResourceKind::Storage {
+        // Storage always writes its access; a texture may. A texture with
+        // none is the ordinary sampled kind, which is what every shader
+        // written before storage textures existed says.
+        // Storage always writes its access, and reports when it is missing; a
+        // texture's is optional, so it is read only when one is actually there.
+        // A texture with none is the ordinary sampled kind, which is what every
+        // shader written before storage textures existed says.
+        let writes_access = kind == ResourceKind::Storage
+            || (kind == ResourceKind::Texture && self.at_access_word());
+        let access = if writes_access {
             Some(self.access()?)
         } else {
             None
@@ -524,12 +609,63 @@ impl<'a> Parser<'a> {
             kind,
             access,
             name,
+            binding,
             ty,
             span: self.since(start),
         })
     }
 
-    /// The access mode written after `storage`.
+    /// `@name`, leaving the cursor on the `(`. The argument is read by whoever
+    /// knows what shape it takes — `@builtin(position)` a word, `@binding(3)` a
+    /// number — so this answers only the annotation's name and where it began.
+    fn annotation_name(&mut self) -> Option<(Symbol, Span)> {
+        let at = self.span();
+        self.advance();
+        let (which, _) = self.expect_name()?;
+        Some((which, at))
+    }
+
+    /// The `(3)` of `@binding(3)`.
+    fn binding_index(&mut self) -> Option<u32> {
+        self.expect(TokenKind::LParen)?;
+        let span = self.span();
+        if self.current() != TokenKind::IntLiteral {
+            self.reporter.error(
+                span,
+                diagnostics::BAD_ANNOTATION,
+                format!(
+                    "`@binding` takes a slot number, found {}",
+                    self.current().spelling()
+                ),
+            );
+            return None;
+        }
+        let written = self.slice().to_owned();
+        let Ok(index) = written.parse::<u32>() else {
+            self.reporter.error(
+                span,
+                diagnostics::BAD_ANNOTATION,
+                format!("`{written}` is not a slot number"),
+            );
+            return None;
+        };
+        self.advance();
+        self.expect(TokenKind::RParen)?;
+        Some(index)
+    }
+
+    /// Whether the cursor sits on an access word rather than on a name.
+    ///
+    /// A texture's access is optional, and `texture write out: …` and
+    /// `texture write: …` are told apart by the word alone — no resource is
+    /// named `read`, `read_write` or `write`, because those are exactly the
+    /// words this rejects as names.
+    fn at_access_word(&self) -> bool {
+        self.current() == TokenKind::Identifier
+            && matches!(self.slice(), "read" | "read_write" | "write")
+    }
+
+    /// The access mode written after `storage`, or after `texture`.
     fn access(&mut self) -> Option<Access> {
         let span = self.span();
         if self.current() != TokenKind::Identifier {
@@ -546,11 +682,15 @@ impl<'a> Parser<'a> {
         let mode = match self.slice() {
             "read" => Access::Read,
             "read_write" => Access::ReadWrite,
+            "write" => Access::Write,
             other => {
                 self.reporter.error(
                     span,
                     diagnostics::BAD_ACCESS,
-                    format!("`{other}` is not an access mode: expected `read` or `read_write`"),
+                    format!(
+                        "`{other}` is not an access mode: expected `read`, `read_write`, or \
+                         `write`"
+                    ),
                 );
                 return None;
             }

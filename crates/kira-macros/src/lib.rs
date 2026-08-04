@@ -29,6 +29,7 @@
 //! A program that declares no macros is returned byte-identical to its input
 //! after one lexing pass per file. Nothing downstream can tell this pass ran.
 
+mod body;
 mod decl;
 mod declarative;
 mod diagnostics;
@@ -47,7 +48,7 @@ mod value;
 
 use std::collections::{HashMap, HashSet};
 
-use kira_diagnostics::Diagnostic;
+use kira_diagnostics::{Code, Diagnostic};
 use kira_source::SourceId;
 
 use crate::diagnostics::Reporter;
@@ -164,7 +165,8 @@ pub fn expand_with(
     } else {
         files
             .iter()
-            .map(|&(source, text)| declarations(source, text))
+            // No path: this entry point is handed ids and text, not locations.
+            .map(|&(source, text)| declarations(source, text, ""))
             .filter(|file| file.carries_template_for(&wrappers))
             .collect()
     };
@@ -194,13 +196,16 @@ pub fn expand_with(
     let expanded: Vec<FileDeclarations> = files
         .iter()
         .enumerate()
-        .map(|(index, &(source, _))| declarations(source, &texts[index]))
+        .map(|(index, &(source, _))| declarations(source, &texts[index], ""))
         .collect();
     let (appended, reported) = procedural::collect(
         &environment.registry,
         expanded.iter().flat_map(|file| file.declarations.iter()),
         shaders,
         platform,
+        // `expand_with` is the id-and-text entry point: no verb asked, so no
+        // lint runs under it.
+        false,
     );
     collected.extend(reported);
 
@@ -225,19 +230,21 @@ pub fn expand_with(
 #[must_use]
 pub fn collect_program(
     environment: &MacroEnvironment,
-    texts: &[(SourceId, &str)],
+    texts: &[(SourceId, &str, &str)],
     shaders: Option<&dyn ShaderCompiler>,
     platform: &str,
+    lint: bool,
 ) -> (String, Vec<Diagnostic>) {
     let files: Vec<FileDeclarations> = texts
         .iter()
-        .map(|&(source, text)| declarations(source, text))
+        .map(|&(source, text, path)| declarations(source, text, path))
         .collect();
     let (appended, diagnostics) = procedural::collect(
         &environment.registry,
         files.iter().flat_map(|file| file.declarations.iter()),
         shaders,
         platform,
+        lint,
     );
     (appended.join("\n"), diagnostics)
 }
@@ -357,11 +364,15 @@ impl FileDeclarations {
 }
 
 /// Scans one file's top-level declarations.
+///
+/// `path` is where the file was read from, and `""` says the caller does not
+/// know — a lint reading it must treat the empty path as "unplaceable" rather
+/// than as a path that matches nothing.
 #[must_use]
-pub fn declarations(source: SourceId, text: &str) -> FileDeclarations {
+pub fn declarations(source: SourceId, text: &str, path: &str) -> FileDeclarations {
     FileDeclarations {
         source,
-        declarations: procedural::top_level(&Lexed::new(source, text)),
+        declarations: procedural::top_level(&Lexed::at(source, text, path)),
     }
 }
 
@@ -591,10 +602,10 @@ fn expand_file(
 /// Two genuinely distinct sites with the same code and the same message are the
 /// same problem stated twice, so collapsing them loses nothing.
 fn deduplicate(items: Vec<Diagnostic>) -> Vec<Diagnostic> {
-    let mut seen: HashSet<(Option<&'static str>, String)> = HashSet::new();
+    let mut seen: HashSet<(Option<Code>, String)> = HashSet::new();
     items
         .into_iter()
-        .filter(|item| seen.insert((item.code, item.message.clone())))
+        .filter(|item| seen.insert((item.code.clone(), item.message.clone())))
         .collect()
 }
 
@@ -638,10 +649,7 @@ mod tests {
              function f() -> Int {\n    return missing!(1)\n}\n",
         );
         assert!(
-            expansion
-                .diagnostics
-                .iter()
-                .any(|d| d.code == Some("KMAC001")),
+            expansion.diagnostics.iter().any(|d| d.has_code("KMAC001")),
             "{:?}",
             expansion.diagnostics
         );
@@ -671,10 +679,7 @@ mod tests {
              function f() -> Int {\n    return loopy!(1)\n}\n",
         );
         assert!(
-            expansion
-                .diagnostics
-                .iter()
-                .any(|d| d.code == Some("KMAC010")),
+            expansion.diagnostics.iter().any(|d| d.has_code("KMAC010")),
             "{:?}",
             expansion.diagnostics
         );
@@ -757,6 +762,308 @@ enum Color {
     }
 
     #[test]
+    fn a_reported_problem_points_at_what_the_macro_named() {
+        let program = r#"
+comptime macro Refuses {
+    kind { derive }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        Diagnostics.error("this type is not supported", at: target.syntax)
+        return quote { }
+    }
+}
+
+@Derive(Refuses)
+struct Point {
+    var x: Int
+}
+"#;
+        let expansion = expand_one(program);
+        let reported = expansion
+            .diagnostics
+            .iter()
+            .find(|d| d.has_code("KMAC021"))
+            .unwrap_or_else(|| panic!("a reported problem: {:?}", expansion.diagnostics));
+        let span = reported
+            .primary_span()
+            .unwrap_or_else(|| panic!("a span to point at"));
+        let underlined = &program[span.span.start as usize..][..span.span.len as usize];
+        // The caret lands on the struct the macro complained about, not on the
+        // `comptime macro` that did the complaining.
+        assert!(
+            underlined.starts_with("struct Point"),
+            "underlined `{underlined}`"
+        );
+    }
+
+    #[test]
+    fn a_lint_reports_under_its_own_code_at_the_code_it_judged() {
+        // The whole `kira lint` shape in miniature: a `Lint` entry configures a
+        // check, a collector finds both the entry and the code, and the report
+        // lands on the judged declaration under the lint's own code.
+        let program = r#"
+construct Lint {
+    @Required let enabled: Bool
+}
+
+comptime macro LintRunner {
+    kind { collector }
+    expand(declarations: [Declaration]) -> Syntax {
+        var on: Bool = false
+        for entry in declarations {
+            if entry.family == "Lint" {
+                for member in entry.fields {
+                    if member.initializer == "true" {
+                        on = true
+                    }
+                }
+            }
+        }
+        if on {
+            for target in declarations {
+                if target.syntax.contains("Colour.") {
+                    Diagnostics.warning("qualified variant", at: target.syntax, code: "KLINT001")
+                }
+            }
+        }
+        return quote { }
+    }
+}
+
+Lint QualifiedVariant {
+    let enabled = true
+}
+
+enum Colour {
+    Red
+}
+
+struct Holder {
+    var picked: Int = 0
+}
+
+function pick() -> Int {
+    let chosen = Colour.Red
+    return 1
+}
+"#;
+        let expansion = expand_one(program);
+        let reported = expansion
+            .diagnostics
+            .iter()
+            .find(|d| d.has_code("KLINT001"))
+            .unwrap_or_else(|| panic!("a lint report: {:?}", expansion.diagnostics));
+        assert_eq!(reported.severity, kira_diagnostics::Severity::Warning);
+        let span = reported
+            .primary_span()
+            .unwrap_or_else(|| panic!("a span to point at"));
+        let underlined = &program[span.span.start as usize..][..span.span.len as usize];
+        assert!(
+            underlined.starts_with("function pick()"),
+            "underlined `{underlined}`"
+        );
+    }
+
+    #[test]
+    fn a_lint_can_walk_a_body_and_point_at_one_statement() {
+        // `manual-index-loop`, the lint this surface exists for: a `while`
+        // comparing a counter, whose last statement steps that same counter by
+        // one. Before the body surface this was unwritable — a token scan can
+        // see the text but not which statement is last.
+        let program = r#"
+comptime macro LintRunner {
+    kind { collector }
+    expand(declarations: [Declaration]) -> Syntax {
+        for target in declarations {
+            for statement in target.body {
+                if statement.kind == "while" {
+                    if statement.head.contains(".count") {
+                        var last: String = ""
+                        for inner in statement.body {
+                            last = inner.syntax
+                        }
+                        if last.contains(" + 1") {
+                            Diagnostics.warning(
+                                "this `while` counts an index by hand; `for` does it for you",
+                                at: statement.syntax,
+                                code: "KLINT002"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        return quote { }
+    }
+}
+
+function total(xs: [Int]) -> Int {
+    var sum = 0
+    var index = 0
+    while index < xs.count {
+        sum = sum + xs[index]
+        index = index + 1
+    }
+    return sum
+}
+"#;
+        let expansion = expand_one(program);
+        let reported = expansion
+            .diagnostics
+            .iter()
+            .find(|d| d.has_code("KLINT002"))
+            .unwrap_or_else(|| panic!("a lint report: {:?}", expansion.diagnostics));
+        let span = reported
+            .primary_span()
+            .unwrap_or_else(|| panic!("a span to point at"));
+        let underlined = &program[span.span.start as usize..][..span.span.len as usize];
+        // The caret lands on the loop, not on the whole function — which is the
+        // whole point of walking the body rather than the declaration.
+        assert!(
+            underlined.starts_with("while index < xs.count"),
+            "underlined `{underlined}`"
+        );
+    }
+
+    #[test]
+    fn a_macro_body_searches_text_the_way_a_program_does() {
+        // The lint case this exists for: a macro looking at a declaration's own
+        // source and reporting what it finds there. Before the string surface
+        // landed, none of these calls existed and a text-pattern lint could not
+        // be written at all.
+        let expansion = expand_one(
+            r#"
+comptime macro Inspects {
+    kind { derive }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        var found: Int = 0
+        if target.syntax.contains("var count") {
+            found = found + 1
+        }
+        if target.syntax.startsWith("struct") {
+            found = found + 10
+        }
+        if "  padded  ".trim() == "padded" {
+            found = found + 100
+        }
+        if "A-B".lowercase() == "a-b" {
+            found = found + 1000
+        }
+        for piece in "a,b,c".split(",") {
+            found = found + 10000
+        }
+        return quote { function found() -> Int { return #{found} } }
+    }
+}
+
+@Derive(Inspects)
+struct Counter {
+    var count: Int
+}
+"#,
+        );
+        assert!(
+            expansion.diagnostics.is_empty(),
+            "{:?}",
+            expansion.diagnostics
+        );
+        assert!(
+            expansion.texts[0].contains("return 31111"),
+            "{}",
+            expansion.texts[0]
+        );
+    }
+
+    #[test]
+    fn a_warning_reports_without_discarding_what_the_macro_built() {
+        let program = r#"
+comptime macro Observes {
+    kind { derive }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        Diagnostics.warning("this type could be simpler", at: target.syntax)
+        return quote { function observed() -> Int { return 1 } }
+    }
+}
+
+@Derive(Observes)
+struct Point {
+    var x: Int
+}
+"#;
+        let expansion = expand_one(program);
+        let reported = expansion
+            .diagnostics
+            .iter()
+            .find(|d| d.has_code("KMAC021"))
+            .unwrap_or_else(|| panic!("a reported problem: {:?}", expansion.diagnostics));
+        assert_eq!(reported.severity, kira_diagnostics::Severity::Warning);
+        // The whole point of a warning: the macro had an opinion, not an
+        // objection, so what it generated is still there.
+        assert!(
+            expansion.texts[0].contains("function observed()"),
+            "{}",
+            expansion.texts[0]
+        );
+    }
+
+    #[test]
+    fn an_error_still_discards_what_the_macro_built() {
+        let program = r#"
+comptime macro Refuses {
+    kind { derive }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        Diagnostics.error("this type is not supported", at: target.syntax)
+        return quote { function generated() -> Int { return 1 } }
+    }
+}
+
+@Derive(Refuses)
+struct Point {
+    var x: Int
+}
+"#;
+        let expansion = expand_one(program);
+        assert!(
+            !expansion.texts[0].contains("function generated()"),
+            "{}",
+            expansion.texts[0]
+        );
+    }
+
+    #[test]
+    fn a_macro_that_names_nothing_still_points_at_itself() {
+        let program = r#"
+comptime macro Bare {
+    kind { derive }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        Diagnostics.error("no anchor given")
+        return quote { }
+    }
+}
+
+@Derive(Bare)
+struct Point {
+    var x: Int
+}
+"#;
+        let expansion = expand_one(program);
+        // Reported without an `at:`, so it falls back to the annotation that
+        // summoned the macro rather than losing the diagnostic altogether.
+        assert!(
+            expansion
+                .diagnostics
+                .iter()
+                .any(|d| d.has_code("KMAC021") && d.primary_span().is_some()),
+            "{:?}",
+            expansion.diagnostics
+        );
+    }
+
+    #[test]
     fn a_derive_on_the_wrong_declaration_kind_is_refused() {
         let expansion = expand_one(
             r#"
@@ -773,10 +1080,7 @@ enum Color {
 "#,
         );
         assert!(
-            expansion
-                .diagnostics
-                .iter()
-                .any(|d| d.code == Some("KMAC007")),
+            expansion.diagnostics.iter().any(|d| d.has_code("KMAC007")),
             "{:?}",
             expansion.diagnostics
         );
@@ -878,10 +1182,7 @@ struct Plain {
 "#,
         );
         assert!(
-            expansion
-                .diagnostics
-                .iter()
-                .any(|d| d.code == Some("KMAC021")),
+            expansion.diagnostics.iter().any(|d| d.has_code("KMAC021")),
             "{:?}",
             expansion.diagnostics
         );
@@ -960,10 +1261,7 @@ function load() -> KslArtifact {
              function f() {\n    let s = ksl!(\"Shaders/Tri.ksl\")\n}\n",
         );
         assert!(
-            expansion
-                .diagnostics
-                .iter()
-                .any(|d| d.code == Some("KMAC001")),
+            expansion.diagnostics.iter().any(|d| d.has_code("KMAC001")),
             "{:?}",
             expansion.diagnostics
         );
@@ -973,10 +1271,7 @@ function load() -> KslArtifact {
     fn with_no_pipeline_the_userland_macro_refuses_under_the_shader_code() {
         let expansion = expand_one(USERLAND_KSL);
         assert!(
-            expansion
-                .diagnostics
-                .iter()
-                .any(|d| d.code == Some("KMAC022")),
+            expansion.diagnostics.iter().any(|d| d.has_code("KMAC022")),
             "{:?}",
             expansion.diagnostics
         );

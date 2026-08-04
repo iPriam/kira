@@ -262,6 +262,10 @@ impl Emitter<'_> {
             BuiltinFn::Mul => format!("({} * {})", at(0), at(1)),
             BuiltinFn::Sample => format!("{}.sample({}, {})", at(0), at(1), at(2)),
             BuiltinFn::Load => format!("{}.read(uint2({}))", at(0), at(1)),
+            // Metal puts the value first and the coordinate second, the
+            // opposite of every other dialect — which is why a store is a
+            // builtin rather than something a shader spells itself.
+            BuiltinFn::Store => format!("{}.write({}, uint2({}))", at(0), at(2), at(1)),
             BuiltinFn::AtomicAdd => format!(
                 "atomic_fetch_add_explicit((device atomic_uint*)&{}[{}], {}, memory_order_relaxed)",
                 at(0),
@@ -356,7 +360,7 @@ impl Emitter<'_> {
             ResourceKind::Texture => {
                 vec![format!(
                     "{} {name} [[texture({at})]]",
-                    texture_name(&resource.type_name)
+                    texture_name(&resource.type_name, resource.access)
                 )]
             }
             ResourceKind::Sampler => vec![format!("sampler {name} [[sampler({at})]]")],
@@ -408,11 +412,30 @@ fn msl_scalar(name: &str) -> String {
 }
 
 /// The MSL texture type a reflected texture name spells.
-fn texture_name(name: &str) -> &'static str {
-    match name {
-        "Texture2dUint" => "texture2d<uint>",
-        "TextureCube" => "texturecube<float>",
-        "Depth2d" => "depth2d<float>",
+/// A texture's MSL type, including its access when it is a storage texture.
+///
+/// Metal spells the access in the type — `access::write` — rather than in a
+/// separate qualifier, so a written texture is a different type from a sampled
+/// one and the binding cannot be used the wrong way by accident.
+fn texture_name(name: &str, access: Option<kira_shader_model::AccessMode>) -> &'static str {
+    let texel = match name {
+        "Texture2dUint" => "uint",
+        _ => "float",
+    };
+    match (name, access) {
+        (_, Some(kira_shader_model::AccessMode::Write)) if texel == "uint" => {
+            "texture2d<uint, access::write>"
+        }
+        (_, Some(kira_shader_model::AccessMode::Write)) => "texture2d<float, access::write>",
+        (_, Some(kira_shader_model::AccessMode::ReadWrite)) if texel == "uint" => {
+            "texture2d<uint, access::read_write>"
+        }
+        (_, Some(kira_shader_model::AccessMode::ReadWrite)) => {
+            "texture2d<float, access::read_write>"
+        }
+        ("Texture2dUint", _) => "texture2d<uint>",
+        ("TextureCube", _) => "texturecube<float>",
+        ("Depth2d", _) => "depth2d<float>",
         _ => "texture2d<float>",
     }
 }

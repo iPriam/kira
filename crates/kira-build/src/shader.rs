@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use kira_diagnostics::{Diagnostic, Label, Severity};
+use kira_diagnostics::{Code, Diagnostic, Label, Severity};
 use kira_ksl_semantics::{Module, check};
 use kira_macros::{CompiledShader, PrecompiledShaders};
 use kira_shader_ir::{ShaderIr, lower};
@@ -178,7 +178,7 @@ fn unreadable(path: &str, reason: &str) -> Diagnostic {
         message.clone(),
         Label::primary(FileSpan::new(SourceId::new(0), Span::new(0, 0)), message),
     );
-    diagnostic.code = Some("KSLS011");
+    diagnostic.code = Some(Code::known("KSLS011"));
     diagnostic.phase = Some("ksl");
     diagnostic
 }
@@ -199,7 +199,7 @@ fn unsupported_target(path: &str, source: SourceId, target: &str, reason: &str) 
         // place entirely.
         Label::primary(FileSpan::new(source, Span::new(0, 0)), message),
     );
-    diagnostic.code = Some("KSLS016");
+    diagnostic.code = Some(Code::known("KSLS016"));
     diagnostic.phase = Some("ksl");
     diagnostic
 }
@@ -512,10 +512,10 @@ shader Tri {
             precompile(directory.path(), &[], &[(SourceId::new(0), program)], 4);
         let reported = diagnostics
             .iter()
-            .find(|d| d.code == Some("KSLS001"))
+            .find(|d| d.has_code("KSLS001"))
             .expect("the rejection");
         assert!(
-            diagnostics.iter().any(|d| d.code == Some("KSLS001")),
+            diagnostics.iter().any(|d| d.has_code("KSLS001")),
             "{diagnostics:?}"
         );
         // The span has to name the shader, not whatever Kira file shares id 0.
@@ -559,7 +559,7 @@ shader Step {
             precompile(directory.path(), &[], &[(SourceId::new(0), program)], 1);
         let note = diagnostics
             .iter()
-            .find(|d| d.code == Some("KSLS016"))
+            .find(|d| d.has_code("KSLS016"))
             .expect("the unsupported-target note");
         assert!(note.message.contains("glsl_330"), "{}", note.message);
         assert!(note.message.contains("Step.ksl"), "{}", note.message);

@@ -3,7 +3,7 @@
 use crate::compiler_phase::CompilerPhase;
 use crate::diagnostic_code::DiagnosticCode;
 use crate::diagnostic_domain::DiagnosticDomain;
-use kira_diagnostics::{Diagnostic, Label, Severity};
+use kira_diagnostics::{Code, Diagnostic, Label, Severity};
 use kira_source::FileSpan;
 
 /// Everything a cataloged message provides to [`build`].
@@ -42,7 +42,7 @@ pub fn build(args: MessageArgs) -> Diagnostic {
     };
     Diagnostic {
         severity: args.severity,
-        code: Some(args.code.text()),
+        code: Some(Code::known(args.code.text())),
         domain: Some(args.domain.tag()),
         phase: args.phase.map(CompilerPhase::tag),
         title: args.title,

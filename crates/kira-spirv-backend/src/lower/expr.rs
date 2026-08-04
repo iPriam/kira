@@ -115,6 +115,7 @@ impl Emitter<'_> {
             }
             BuiltinFn::Sample => self.sample(args, result),
             BuiltinFn::Load => self.fetch(args, result),
+            BuiltinFn::Store => self.image_write(args, result),
             BuiltinFn::AtomicAdd => self.atomic_add(args, result),
             other => self.extended(other, args, result),
         }
@@ -157,6 +158,28 @@ impl Emitter<'_> {
     }
 
     /// `load(texture, coordinate)`.
+    /// `store(texture, coord, value)` — `OpImageWrite`.
+    ///
+    /// Yields an undefined value of the (void) result type because the caller
+    /// expects an id back; nothing reads it, since a store is a statement.
+    fn image_write(&mut self, args: &[CheckedExprId], result: &Type) -> Id {
+        let (Some(&texture), Some(&coordinate), Some(&value)) =
+            (args.first(), args.get(1), args.get(2))
+        else {
+            return self.undefined(result);
+        };
+        let image = self.value(texture);
+        let coordinate = self.value(coordinate);
+        let texel = self.value(value);
+        // No result id and no image operands: the coordinate addresses a
+        // storage image directly, so there is no level to name.
+        self.builder.code(
+            op::IMAGE_WRITE,
+            &[image.word(), coordinate.word(), texel.word()],
+        );
+        self.undefined(result)
+    }
+
     fn fetch(&mut self, args: &[CheckedExprId], result: &Type) -> Id {
         let (Some(&texture), Some(&coordinate)) = (args.first(), args.get(1)) else {
             return self.undefined(result);

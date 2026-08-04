@@ -3,7 +3,7 @@ import Foundation
 // CtxTests.kira
 // Migrated from tests/pass/run/{if_basic_parity, if_condition_trailing_call,
 // for_basic_parity, for_binding_parity, for_empty_parity, for_stateful_parity,
-// switch_basic_parity, empty_control_flow_bodies}.
+// comparison_chain_parity, empty_control_flow_bodies}.
 // All top-level names use prefix ctx / Ctx.
 
 // ---------------------------------------------------------------------------
@@ -70,7 +70,8 @@ Test CtxIfConditionTrailingCall {
             out = out + "3"
         }
 
-        if ctxApply({ in return 5 }) == 5 {
+        if ctxApply({
+            in return 5 }) == 5 {
             out = out + "4"
         }
 
@@ -139,16 +140,12 @@ Test CtxForStateful {
         var out = ""
         for item in [1, 1, 1] {
             total = total + 1
-            switch total {
-                case 1 {
+            if total == 1 {
                     out = out + "one,"
-                }
-                case 2 {
+            } else if total == 2 {
                     out = out + "two,"
-                }
-                default {
+            } else {
                     out = out + "other,"
-                }
             }
         }
         if total == 3 {
@@ -163,22 +160,18 @@ Test CtxForStateful {
 }
 
 // ---------------------------------------------------------------------------
-// switch_basic_parity
+// comparison_chain_parity
 // ---------------------------------------------------------------------------
 
 Test CtxSwitchBasic {
     test {
         var out = ""
-        switch 2 {
-            case 1 {
+        if 2 == 1 {
                 out = "one"
-            }
-            case 2 {
+        } else if 2 == 2 {
                 out = "two"
-            }
-            default {
+        } else {
                 out = "other"
-            }
         }
         return out
     }
@@ -199,16 +192,16 @@ Test CtxEmptyControlFlowBodies {
         }
         for x in [1, 2, 3] {
         }
-        switch n {
-            case 0 { }
-            default { }
+        if n == 0 {
+        } else {
         }
         for p in [CtxEcfP { ok: true }, CtxEcfP { ok: false }] {
             if p.ok {
                 n = n + 1
             }
         }
-        if (CtxEcfP { ok: true }).ok {
+        if (CtxEcfP {
+            ok: true }).ok {
             n = n + 10
         }
         return n

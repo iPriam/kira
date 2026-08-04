@@ -27,11 +27,14 @@ function scalarGcd(a: Int, b: Int) -> Int {
 
 function scalarClassify(n: Int) -> Int {
     var r = 0
-    switch n % 3 {
-        case 0 { r = 100 }
-        case 1 { r = 200 }
-        case 2 { r = 300 }
-        default { r = 0 }
+    if (n % 3) == 0 {
+        r = 100
+    } else if (n % 3) == 1 {
+        r = 200
+    } else if (n % 3) == 2 {
+        r = 300
+    } else {
+        r = 0
     }
     return r
 }

@@ -20,6 +20,8 @@ fn exports(text: &str) -> Vec<(String, String)> {
         BuildKind::Library,
         PrecompiledShaders::default(),
         host_platform(),
+        // Not a lint run.
+        false,
     );
     analyzed(&db, source)
         .exports
@@ -61,6 +63,8 @@ fn an_export_indexes_the_function_it_names() {
         BuildKind::Library,
         PrecompiledShaders::default(),
         host_platform(),
+        // Not a lint run.
+        false,
     );
     let program = analyzed(&db, source);
     assert_eq!(program.exports.len(), 1);
@@ -89,6 +93,8 @@ fn an_export_records_the_signature_a_consumer_is_generated_against() {
         BuildKind::Library,
         PrecompiledShaders::default(),
         host_platform(),
+        // Not a lint run.
+        false,
     );
     let program = analyzed(&db, source);
     assert!(
@@ -262,11 +268,11 @@ fn an_unknown_type_on_an_exported_function_is_not_reported_an_extra_time() {
     let exported = "@Export\nfunction makeButton(title: Widget) -> String { return \"\" }";
     let plain_count = library_diagnostics(plain)
         .iter()
-        .filter(|diagnostic| diagnostic.code == Some("KSEM050"))
+        .filter(|diagnostic| diagnostic.has_code("KSEM050"))
         .count();
     let exported_count = library_diagnostics(exported)
         .iter()
-        .filter(|diagnostic| diagnostic.code == Some("KSEM050"))
+        .filter(|diagnostic| diagnostic.has_code("KSEM050"))
         .count();
     assert_eq!(
         exported_count,
@@ -294,8 +300,14 @@ fn a_refused_class_marker_does_not_make_the_class_crossable() {
     let text = "@Export { symbol: btn; }\nclass Button { var title: String = \"\" }\n\
                 @Export\nfunction widthOf(b: Button) -> Int { return 0 }";
     let reported = library_codes(text);
-    assert!(reported.contains(&"KSEM166"), "{reported:?}");
-    assert!(reported.contains(&"KSEM164"), "{reported:?}");
+    assert!(
+        reported.iter().any(|code| code == "KSEM166"),
+        "{reported:?}"
+    );
+    assert!(
+        reported.iter().any(|code| code == "KSEM164"),
+        "{reported:?}"
+    );
 }
 
 #[test]

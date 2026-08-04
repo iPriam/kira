@@ -84,7 +84,7 @@ fn a_cyclic_alias_is_reported_once_and_terminates() {
              @Main function main() { let x: A = 1 print(x) return }"
         )
         .first()
-        .copied(),
+        .map(String::as_str),
         Some("KSEM157")
     );
 }
@@ -95,7 +95,10 @@ fn a_self_referential_alias_through_an_array_terminates() {
         "type A = [A]
          @Main function main() { var xs: A = [] print(xs.count) return }",
     );
-    assert!(reported.contains(&"KSEM157"), "{reported:?}");
+    assert!(
+        reported.iter().any(|code| code == "KSEM157"),
+        "{reported:?}"
+    );
 }
 
 /// A name that already means something is rejected rather than shadowing: a

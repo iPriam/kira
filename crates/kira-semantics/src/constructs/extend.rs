@@ -32,10 +32,17 @@ impl<'a> Analyzer<'a> {
             self.source = source;
             let family_name = self.interner.resolve(declaration.name).to_owned();
             if !self.construct_families.contains_key(&family_name) {
+                // A class is the other thing `extend` may name, and it is
+                // handled where a class's methods are collected rather than
+                // here: classes have no ids yet at this point in analysis, and
+                // a class method is an ordinary method rather than a modifier.
+                if self.extends_a_class(&family_name) {
+                    continue;
+                }
                 self.emit(
                     declaration.name_span,
                     "KSEM238",
-                    format!("`extend` names unknown construct family `{family_name}`"),
+                    format!("`extend` names no construct family or class `{family_name}`"),
                 );
                 continue;
             }
@@ -257,6 +264,18 @@ impl<'a> Analyzer<'a> {
             mutates_self: false,
             name_span: kira_source::Span::new(0, 0),
         }
+    }
+
+    /// Whether `name` is a class this program declares.
+    ///
+    /// Asked of the tree rather than of the type table because classes have no
+    /// ids yet when `extend` blocks are read: the header pass runs later, and it
+    /// has to, since a class field may name a construct-backed type.
+    fn extends_a_class(&self, name: &str) -> bool {
+        self.tree.items_with_source().any(|(_, item)| {
+            matches!(item, Item::Class(declaration)
+                if self.interner.resolve(declaration.name) == name)
+        })
     }
 
     fn extend_declarations(&self) -> Vec<(SourceId, &'a ExtendDecl)> {

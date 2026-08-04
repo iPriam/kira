@@ -186,6 +186,10 @@ pub(crate) fn extended_instruction(which: BuiltinFn, scalar: ScalarType) -> Opti
         BuiltinFn::Atan2 => glsl::ATAN2,
         BuiltinFn::Exp => glsl::EXP,
         BuiltinFn::Log => glsl::LOG,
-        BuiltinFn::Mul | BuiltinFn::Sample | BuiltinFn::Load | BuiltinFn::AtomicAdd => return None,
+        BuiltinFn::Mul
+        | BuiltinFn::Sample
+        | BuiltinFn::Load
+        | BuiltinFn::Store
+        | BuiltinFn::AtomicAdd => return None,
     })
 }
