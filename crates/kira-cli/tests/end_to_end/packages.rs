@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::{LIBRARY_SOURCE, check_source, kira, write_package};
+use crate::{LIBRARY_SOURCE, check_source, kira, write_package, write_program};
 
 /// A unique package tree that removes all build artifacts with itself.
 struct PackageTree(PathBuf);
@@ -390,5 +390,42 @@ fn an_explicit_vm_backend_outranks_a_manifest_wasm32_target() {
     assert!(
         !web_artifact.exists(),
         "manifest wasm32 target overrode the explicit VM backend"
+    );
+}
+
+/// `kira build` on the default backend used to report success and write
+/// nothing: the match bound `Ok(_)`, so the compiled module was dropped and the
+/// build directory was left exactly as it was found. The claim in the output is
+/// what this pins — that a reported build put a real module on the disk.
+#[test]
+fn a_program_build_writes_the_bytecode_it_reports() {
+    let path = write_program(
+        "import Foundation\n@Main function main() { printLine(\"built\") return }\n",
+        &[],
+    );
+    let directory = path.parent().expect("program directory").to_path_buf();
+    let output = kira(&["build", "--backend", "vm", path.to_str().unwrap()]);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let bytecode = directory.join(".kira-build").join("main.kbc");
+    let written = std::fs::read(&bytecode);
+    let _ = std::fs::remove_dir_all(&directory);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The path is named rather than left for the reader to guess, the way every
+    // other backend's success line names one.
+    assert!(
+        stdout.contains("Successfully built") && stdout.contains("main.kbc"),
+        "{stdout:?}"
+    );
+    let written = written.expect("the reported bytecode is on disk");
+    // A real KBC1 module, not an empty file standing in for one.
+    assert!(
+        written.starts_with(b"KBC1"),
+        "the artifact is not a KBC1 module: {:?}",
+        &written[..written.len().min(8)]
     );
 }
