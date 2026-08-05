@@ -77,12 +77,24 @@ fn the_crate_is_made_of_the_three_files_a_crate_needs() {
     let table = uifoundation();
     let generated = generated(&table);
     assert_eq!(generated.name, "uifoundation");
-    let paths: Vec<String> = generated
+    // Compared as paths rather than as displayed strings: the generator builds
+    // `src/lib.rs` with `join`, so it renders with a backslash on Windows and a
+    // slash everywhere else. `Path` equality is by component, which is the
+    // thing actually being asserted — that these three files are emitted, in
+    // this order.
+    let paths: Vec<&Path> = generated
         .files
         .iter()
-        .map(|file| file.path.display().to_string())
+        .map(|file| file.path.as_path())
         .collect();
-    assert_eq!(paths, ["Cargo.toml", "README.md", "src/lib.rs"]);
+    assert_eq!(
+        paths,
+        [
+            Path::new("Cargo.toml"),
+            Path::new("README.md"),
+            Path::new("src/lib.rs"),
+        ]
+    );
 }
 
 #[test]

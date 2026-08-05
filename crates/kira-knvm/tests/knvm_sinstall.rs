@@ -261,14 +261,32 @@ mod user_environment {
 
     /// The user `Path` this test found, put back when the test ends — on a
     /// failing assert too, because `Drop` runs while the panic unwinds.
+    /// One test at a time may touch the user `Path`.
+    ///
+    /// It is one registry value shared by the whole machine, so two tests
+    /// editing it concurrently interleave: the second reads a `Path` the first
+    /// has already replaced, and both restore whichever value they happened to
+    /// read first. Holding this for the guard's life makes them run in turn.
+    static USER_PATH: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     struct UserPathGuard {
         original: Option<String>,
+        /// Held for the guard's life; released when the `Path` is restored.
+        ///
+        /// Poison is ignored: a test that panicked mid-edit leaves the value
+        /// its own guard restores, and refusing the lock afterwards would turn
+        /// one failure into every later one.
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl UserPathGuard {
         fn take() -> Self {
+            let lock = USER_PATH
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
             Self {
                 original: read_user_path(),
+                _lock: lock,
             }
         }
     }

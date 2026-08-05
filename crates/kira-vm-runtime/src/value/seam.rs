@@ -2,9 +2,26 @@
 
 use kira_runtime_abi::{
     ForeignArg, ForeignResult, ForeignType, ForeignTypeSpec, NativeArg, NativeResult,
+    NativeStateValue,
 };
 
-use super::{Heap, Value};
+use super::{EnumId, Heap, Value};
+
+impl Heap {
+    /// A payload-less enum's variant tag, or `None` when it carries something.
+    ///
+    /// The one place the seam's enum rule is written down, so the two callers
+    /// that need it — lifting a result and lowering an argument — cannot come
+    /// to different answers. Asked of the *value* rather than the declaration:
+    /// this side holds a heap object, not a type, and a variant carrying
+    /// something owned has no one-word form to cross as.
+    pub fn enum_seam_tag(&self, id: EnumId) -> Option<i64> {
+        match (self.enum_tag(id), self.enum_payload_ref(id)) {
+            (Some(tag), None) => Some(i64::from(tag)),
+            _ => None,
+        }
+    }
+}
 
 impl Heap {
     /// Renders a value as the text `print` emits, consuming what it owns, or
@@ -71,10 +88,23 @@ impl Heap {
             NativeArg::Float(value) => Value::Float(value),
             NativeArg::Bool(value) => Value::Bool(value),
             NativeArg::Str(text) => Value::Str(self.alloc(text.to_owned())),
+            // A struct, an array, or a payload-carrying enum arrives as a value
+            // tree and is rebuilt in this heap. The tree belongs to the caller;
+            // what lands here is this heap's own copy, dropped like any other.
+            NativeArg::Aggregate(tree) => self.from_native_state(tree),
             // A raw pointer is an opaque word at both seams. Callback userdata
             // needs exactly this crossing: the runtime half mints or receives the
             // token and a native callback hands it back unchanged.
             NativeArg::RawPtr(value) => Value::RawPtr(value),
+            // A payload-less enum arrives as its variant tag and is rebuilt
+            // here: nothing was borrowed and nothing was moved, because the
+            // whole value is the number. A tag too large for the VM's own
+            // representation is refused rather than truncated — a wrong tag is
+            // a wrong *variant*, which is a silently different program.
+            NativeArg::Enum(tag) => match u32::try_from(tag) {
+                Ok(tag) => Value::Enum(self.alloc_enum(tag, None)),
+                Err(_) => return None,
+            },
             NativeArg::Handle(_) => return None,
         })
     }
@@ -93,8 +123,17 @@ impl Heap {
             NativeResult::Float(value) => Value::Float(value),
             NativeResult::Bool(value) => Value::Bool(value),
             NativeResult::Str(text) => Value::Str(self.alloc(text)),
+            // The tree was decoded out of what native code handed over, so it
+            // is already this side's; rebuilding it moves nothing further.
+            NativeResult::Aggregate(tree) => self.from_native_state(&tree),
             // Callback userdata remains one opaque word across the native seam.
             NativeResult::RawPtr(value) => Value::RawPtr(value),
+            // Rebuilt from the tag, exactly as in `lower`: there is no owned
+            // storage to move in, which is the whole difference from `Str`.
+            NativeResult::Enum(tag) => match u32::try_from(tag) {
+                Ok(tag) => Value::Enum(self.alloc_enum(tag, None)),
+                Err(_) => return None,
+            },
             NativeResult::Handle(_) => return None,
         })
     }
@@ -111,7 +150,7 @@ impl Heap {
     /// about *ownership*, which is a double free or a leak at the boundary, not
     /// a bad print. The signature split is checked before a hybrid program is
     /// ever built, so a rejected value should never reach here.
-    pub fn lift(&self, value: Value) -> Option<NativeResult> {
+    pub fn lift(&mut self, value: Value) -> Option<NativeResult> {
         Some(match value {
             Value::Void => NativeResult::Void,
             Value::Int(value) => NativeResult::Int(value),
@@ -121,15 +160,39 @@ impl Heap {
             // Callback userdata leaves through the native seam as the same
             // opaque word; neither side dereferences or frees it.
             Value::RawPtr(value) => NativeResult::RawPtr(value),
-            Value::Struct(_)
-            | Value::Array(_)
-            | Value::Enum(_)
-            | Value::Erased(_)
+            // A payload-less enum leaves as its tag alone. Checked on the
+            // *value* rather than trusted from the type: this routine sees a
+            // heap object, not a declaration, and a variant holding something
+            // owned has no one-word form to leave as. The backend already
+            // refuses to build such a crossing, so this is the backstop that
+            // makes a mistake a refusal instead of a lost payload.
+            Value::Enum(id) => match self.enum_seam_tag(id) {
+                Some(tag) => NativeResult::Enum(tag),
+                // One carrying a payload leaves as a tree instead, like a
+                // struct: the tag alone would drop what the variant holds.
+                None => NativeResult::Aggregate(self.seam_tree(value)?),
+            },
+            // A struct and an array leave as a tree of their contents. This is
+            // a copy, not a move: the caller still owns `value` and drops it
+            // itself, exactly as it does for the string case above.
+            Value::Struct(_) | Value::Array(_) => NativeResult::Aggregate(self.seam_tree(value)?),
+            Value::Erased(_)
             | Value::NativeState(_)
             | Value::Cell(_)
             | Value::NativeView { .. }
             | Value::NativeSnapshot(_) => return None,
         })
+    }
+
+    /// Copies `value` into a seam tree, leaving the original owned by its heap.
+    ///
+    /// Copied first because [`Heap::into_native_state`] *consumes* what it
+    /// converts — it was built for a value being moved into callback state —
+    /// and the seam's rule for a result is that the caller keeps its own. A
+    /// shape with no tree form answers `None` rather than a partial tree.
+    pub(crate) fn seam_tree(&mut self, value: Value) -> Option<NativeStateValue> {
+        let copy = self.copy_value(value);
+        self.into_native_state(copy).ok()
     }
 
     /// Borrows a runtime value as a foreign-call argument of the expected

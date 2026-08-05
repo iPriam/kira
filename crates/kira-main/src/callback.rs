@@ -368,7 +368,13 @@ fn scalar_result(result: NativeResult) -> BridgeValue {
         NativeResult::Float(value) => BridgeValue::encode(BridgeData::Float(value)),
         NativeResult::Bool(value) => BridgeValue::encode(BridgeData::Bool(value)),
         NativeResult::RawPtr(value) => BridgeValue::encode(BridgeData::RawPtr(value)),
-        NativeResult::Str(_) | NativeResult::Handle(_) => {
+        // An enum crosses the *hybrid* seam, where both sides are Kira and the
+        // receiver can rebuild one from a tag. A C callback's caller is C,
+        // which has nothing to rebuild it into, so this seam still refuses it.
+        NativeResult::Str(_)
+        | NativeResult::Handle(_)
+        | NativeResult::Enum(_)
+        | NativeResult::Aggregate(_) => {
             fatal("a Kira callback returned a value this seam does not carry")
         }
     }

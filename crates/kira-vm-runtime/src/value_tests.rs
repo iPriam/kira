@@ -3,6 +3,7 @@
 //! `#[cfg(test)]` submodule beside the code they test.
 
 use super::*;
+use kira_runtime_abi::NativeResult;
 
 #[test]
 fn alloc_free_balances_and_reuses_slots() {
@@ -54,12 +55,13 @@ fn float_formatting_drops_trailing_zero() {
 }
 
 #[test]
-fn a_struct_has_no_invented_rendering_or_seam_shape() {
+fn a_struct_has_no_invented_rendering_and_crosses_as_a_tree() {
     let mut heap = Heap::new();
     let value = Value::Struct(heap.alloc_struct(vec![Value::Int(1)]));
-    assert_eq!(heap.lift(value), None);
-    // Formatting still consumes what it was handed, so refusing to render
-    // a struct does not leak it.
+    // A struct crosses the seam as a copy of its contents; `lift` leaves the
+    // original for its owner to drop.
+    assert!(matches!(heap.lift(value), Some(NativeResult::Aggregate(_))));
+    // It still has no rendering, and refusing to render it consumes it.
     assert_eq!(heap.format_and_consume(value), None);
     assert_eq!(heap.stats().current, 0);
 }
@@ -271,10 +273,10 @@ fn appending_grows_the_array_in_place() {
 }
 
 #[test]
-fn an_array_has_no_invented_rendering_or_seam_shape() {
+fn an_array_has_no_invented_rendering_and_crosses_as_a_tree() {
     let mut heap = Heap::new();
     let value = Value::Array(heap.alloc_array(vec![Value::Int(1)]));
-    assert_eq!(heap.lift(value), None);
+    assert!(matches!(heap.lift(value), Some(NativeResult::Aggregate(_))));
     // Refusing to render one still consumes it, so it does not leak.
     assert_eq!(heap.format_and_consume(value), None);
     assert_eq!(heap.stats().current, 0);
@@ -320,8 +322,10 @@ fn a_payload_less_enum_balances_and_carries_its_tag() {
     let mut heap = Heap::new();
     let value = Value::Enum(heap.alloc_enum(1, None));
     assert_eq!(heap.stats().current, 1);
-    // An enum has no pinned rendering or seam shape, like a struct.
-    assert_eq!(heap.lift(value), None);
+    // A payload-less enum crosses as its variant tag alone: no tree, nothing
+    // allocated on either side.
+    assert_eq!(heap.lift(value), Some(NativeResult::Enum(1)));
+    // It still has no pinned rendering, like a struct.
     assert_eq!(heap.format_and_consume(value), None);
     assert_eq!(heap.stats().current, 0);
 }

@@ -250,11 +250,25 @@ fn callee_type(index: usize) -> String {
 /// import reaches its C symbol directly, exactly as before. Returns `None` when
 /// no import needs one, which is every program that does not pass a struct by
 /// value — those never invoke clang at all.
-pub fn generate(imports: &[ForeignImport], table: &ForeignAggregates) -> Option<String> {
+///
+/// An import listed in `unavailable` is skipped. Codegen already replaces such
+/// an import's adapter with a trap, because the library it names has no
+/// artifact on this target — but a shim is C, compiled separately, and one
+/// written for a missing library calls the very symbol nothing defines. That is
+/// how a Windows build of a package with a Metal backend failed on
+/// `objc_msgSend`: the adapter was correctly a trap, and the shim beside it
+/// still named Apple's runtime.
+pub fn generate(
+    imports: &[ForeignImport],
+    table: &ForeignAggregates,
+    unavailable: &[usize],
+) -> Option<String> {
     let needed: Vec<(usize, &ForeignImport)> = imports
         .iter()
         .enumerate()
-        .filter(|(_, import)| import.signature().has_aggregate())
+        .filter(|(index, import)| {
+            import.signature().has_aggregate() && !unavailable.contains(index)
+        })
         .collect();
     if needed.is_empty() {
         return None;
@@ -300,7 +314,46 @@ mod tests {
             "plain",
             ForeignSignature::scalars([ForeignType::I32], ForeignType::I32),
         )];
-        assert_eq!(generate(&imports, &ForeignAggregates::new()), None);
+        assert_eq!(generate(&imports, &ForeignAggregates::new(), &[]), None);
+    }
+
+    /// An import whose library this target does not have gets no shim.
+    ///
+    /// Codegen already turns such an import's adapter into a trap. The shim is
+    /// separate C, and one written for a missing library declares and calls the
+    /// symbol nothing defines — which is how a Windows build of a package
+    /// carrying a Metal backend failed to link on `objc_msgSend`, with the
+    /// adapter beside it correctly trapping.
+    #[test]
+    fn an_unavailable_import_is_left_out_of_the_shim() {
+        let (table, id) = point_table();
+        let imports = [
+            import(
+                "rect_sum",
+                ForeignSignature::new(
+                    vec![ForeignTypeSpec::Aggregate(id)],
+                    ForeignTypeSpec::Scalar(ForeignType::F64),
+                ),
+            ),
+            import(
+                "objc_msgSend",
+                ForeignSignature::new(
+                    vec![ForeignTypeSpec::Aggregate(id)],
+                    ForeignTypeSpec::Scalar(ForeignType::F64),
+                ),
+            ),
+        ];
+
+        let text = generate(&imports, &table, &[1]).expect("the available import still needs one");
+        assert!(text.contains("rect_sum"), "{text}");
+        assert!(
+            !text.contains("objc_msgSend"),
+            "a symbol this target does not have must not be declared or called: {text}"
+        );
+
+        // And when every aggregate-passing import is unavailable there is no
+        // shim at all, so no clang subprocess runs for a file of nothing.
+        assert_eq!(generate(&imports, &table, &[0, 1]), None);
     }
 
     #[test]
@@ -313,7 +366,7 @@ mod tests {
                 ForeignTypeSpec::Scalar(ForeignType::F64),
             ),
         )];
-        let text = generate(&imports, &table).expect("a shim");
+        let text = generate(&imports, &table, &[]).expect("a shim");
         assert!(
             text.contains("struct kira_ffi_agg_0 { double f0; double f1; };"),
             "{text}"
@@ -344,7 +397,7 @@ mod tests {
                 ForeignTypeSpec::Aggregate(id),
             ),
         )];
-        let text = generate(&imports, &table).expect("a shim");
+        let text = generate(&imports, &table, &[]).expect("a shim");
         assert!(
             text.contains("extern struct kira_ffi_agg_0 make_point(double);"),
             "{text}"
@@ -384,7 +437,7 @@ mod tests {
                 ),
             ),
         ];
-        let text = generate(&imports, &table).expect("a shim");
+        let text = generate(&imports, &table, &[]).expect("a shim");
         assert_eq!(
             text.matches("extern struct kira_ffi_agg_0 objc_msgSend(")
                 .count(),
@@ -411,7 +464,7 @@ mod tests {
                 ForeignTypeSpec::Scalar(ForeignType::Void),
             ),
         )];
-        let text = generate(&imports, &table).expect("a shim");
+        let text = generate(&imports, &table, &[]).expect("a shim");
         assert!(
             text.contains("void kira_ffi_shim_0(const struct kira_ffi_agg_0 *p0) {"),
             "{text}"
@@ -445,7 +498,7 @@ mod tests {
                 ForeignTypeSpec::Scalar(ForeignType::F64),
             ),
         )];
-        let text = generate(&imports, &table).expect("a shim");
+        let text = generate(&imports, &table, &[]).expect("a shim");
         let inner_at = text.find("struct kira_ffi_agg_0 {").expect("inner");
         let outer_at = text.find("struct kira_ffi_agg_1 {").expect("outer");
         assert!(
@@ -474,7 +527,7 @@ mod tests {
                 ),
             ),
         ];
-        let text = generate(&imports, &table).expect("a shim");
+        let text = generate(&imports, &table, &[]).expect("a shim");
         // The shim is named for the import's index, so the scalar-only import at
         // 0 is skipped and the aggregate one keeps its own index.
         assert!(text.contains("kira_ffi_shim_1("), "{text}");
@@ -495,7 +548,7 @@ mod tests {
                 ForeignTypeSpec::Scalar(ForeignType::Void),
             ),
         )];
-        let text = generate(&imports, &table).expect("a shim");
+        let text = generate(&imports, &table, &[]).expect("a shim");
         assert!(
             text.contains("struct kira_ffi_agg_0 { char kira_empty; };"),
             "{text}"
@@ -587,7 +640,7 @@ mod tests {
                 ),
             ),
         ];
-        let text = generate(&imports, &table).expect("a shim");
+        let text = generate(&imports, &table, &[]).expect("a shim");
         if let Err(stderr) = compiles(&text) {
             panic!("the generated unit is not valid C:\n{stderr}\n--- unit ---\n{text}");
         }
@@ -657,7 +710,7 @@ mod tests {
         // pointer width the parity suite covers on its own target.
         let width = kira_runtime_abi::ForeignPointerWidth::Bits64;
         let layouts = table.layouts(width).expect("layouts");
-        let mut text = generate(&imports, &table).expect("a shim");
+        let mut text = generate(&imports, &table, &[]).expect("a shim");
         for (index, layout) in layouts.iter().enumerate() {
             let name = aggregate_name(ForeignAggregateId(index as u32));
             text.push_str(&format!(
@@ -731,7 +784,7 @@ mod tests {
                 ForeignTypeSpec::Scalar(ForeignType::Void),
             ),
         )];
-        let text = generate(&imports, &table).expect("a shim");
+        let text = generate(&imports, &table, &[]).expect("a shim");
         // Inline storage, so the extent rides on the member name — a pointer
         // member would be a different type with different ownership.
         assert!(
@@ -756,7 +809,7 @@ mod tests {
                 ForeignTypeSpec::Scalar(ForeignType::RawPtr),
             ),
         )];
-        let text = generate(&imports, &table).expect("a shim");
+        let text = generate(&imports, &table, &[]).expect("a shim");
         // A pointer type already carries its trailing space, so the out-slot is
         // `void **kira_out` rather than `void * *kira_out`.
         assert!(

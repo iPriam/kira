@@ -100,7 +100,11 @@ impl<H: HostCapabilities> HostCapabilities for SeamHost<H> {
         // same contract the application-side session marshals under, read out
         // of the same module, because it is the same generated code being
         // called.
-        let lowered = kira_hybrid_runtime::marshal::lower_args(&self.library, args);
+        // Building an aggregate's node tree allocates in the native half and
+        // can fail, so a bad argument is reported here rather than reaching a
+        // trampoline with a half-built list.
+        let lowered = kira_hybrid_runtime::marshal::lower_args(&self.library, args)
+            .map_err(|_| NativeCallError::MalformedResult(function_id))?;
         // SAFETY: the trampoline came from this library, and the VM calls with
         // the module's own arity — which bundle validation proved equals the
         // manifest's, which is the signature the trampoline was emitted for.

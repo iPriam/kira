@@ -135,6 +135,7 @@ pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
     "kira_rt_str_data",
     "kira_rt_str_len",
     "kira_hybrid_install_runtime_invoker",
+    "kira_rt_heap_report",
     "kira_rt_native_value_int",
     "kira_rt_native_value_raw_ptr",
     "kira_rt_native_value_float",
@@ -176,6 +177,19 @@ pub enum NativeArg<'a> {
     Bool(bool),
     /// A borrowed string, valid for this call only.
     Str(&'a str),
+    /// A payload-less enum, as its variant tag.
+    ///
+    /// Copies like a scalar and owns nothing — the whole value is the number —
+    /// so it needs no borrow lifetime for the same reason a handle does not.
+    /// Each side keeps its enums in its own representation; only the tag
+    /// crosses. See [`BridgeValueTag::ENUM`].
+    Enum(i64),
+    /// A struct, an array, or an enum carrying a payload, as a value tree.
+    ///
+    /// Borrowed for the call, exactly as a string is: the tree is copied into
+    /// the other side's own representation before the callee runs, and this
+    /// side keeps its own. See [`BridgeValueTag::NODE`].
+    Aggregate(&'a NativeStateValue),
     /// An opaque handle to an object the *caller's* side owns.
     ///
     /// The safe mirror of [`BridgeValueTag::HANDLE`]: one word whose meaning
@@ -211,6 +225,16 @@ pub enum NativeResult {
     Bool(bool),
     /// An owned string.
     Str(String),
+    /// A payload-less enum, as its variant tag.
+    ///
+    /// Unlike [`NativeResult::Str`] this moves no storage: there is none to
+    /// move. The receiver builds its own value from the number.
+    Enum(i64),
+    /// A struct, an array, or an enum carrying a payload, as a value tree.
+    ///
+    /// Owned, like [`NativeResult::Str`]: the tree was decoded out of what the
+    /// other side handed over, and that copy is now this side's.
+    Aggregate(NativeStateValue),
     /// An opaque handle to an object the *producing* side owns.
     ///
     /// Unlike [`NativeResult::Str`], this is not a move of storage: the object

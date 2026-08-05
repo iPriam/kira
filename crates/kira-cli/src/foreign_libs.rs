@@ -145,6 +145,22 @@ pub fn resolve(
         match row {
             Some(row) => inputs.push_row(row),
             None if catalog.is_excluded(symbol, &target) => inputs.mark_unavailable(index),
+            // An *optional* library whose row names no artifact is a driver the
+            // runtime opens, and its symbols stay undefined in whatever links
+            // the adapters. Mach-O and ELF bind those when the library loads;
+            // PE has no such step, so on Windows the same declaration is a link
+            // error naming every entry point at once. Trapping by name instead
+            // says which call was not available, and leaves the program able to
+            // reach the driver through explicit symbol lookup — the only way
+            // that works there anyway.
+            //
+            // Optional is what separates a driver from `kira_runtime`, which is
+            // declared the same way and whose symbols are already on every link
+            // line because they live in the runtime archive. Treating that one
+            // as unavailable trapped the dynamic-FFI surface itself.
+            None if !target.resolves_symbols_at_load() && catalog.is_optional(symbol) => {
+                inputs.mark_unavailable(index)
+            }
             None => {}
         }
     }

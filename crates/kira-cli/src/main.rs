@@ -2,6 +2,7 @@
 //!
 //! Layer 9 of the Kira package graph.
 
+mod build_lock;
 mod command;
 mod compiler_host;
 mod dispatch;

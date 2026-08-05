@@ -137,6 +137,8 @@ pub fn describe_result(result: &NativeResult) -> &'static str {
         NativeResult::Str(_) => "a string",
         NativeResult::Handle(_) => "a handle",
         NativeResult::RawPtr(_) => "a raw pointer",
+        NativeResult::Enum(_) => "an enum variant",
+        NativeResult::Aggregate(_) => "a struct, array or enum value",
     }
 }
 

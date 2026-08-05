@@ -79,6 +79,99 @@ impl FixtureToolchain {
 /// `bin/kira` is an executable shell script that prints a marker naming its own
 /// version, so a dispatch test can prove *which* installed toolchain ran rather
 /// than that something ran.
+/// A static runtime archive.s file name on the host this test runs on.
+///
+/// Distinct from `kira_knvm::archive_file_name`, which names a release
+/// tarball.
+///
+/// MSVC names one `<name>.lib`; everything else `lib<name>.a`. The installer
+/// looks for the host's spelling, so a fixture that only ever wrote the Unix
+/// one is refused on Windows for a file it did ship.
+fn runtime_archive_name(name: &str) -> String {
+    match cfg!(target_env = "msvc") {
+        true => format!("{name}.lib"),
+        false => format!("lib{name}.a"),
+    }
+}
+
+/// Writes a fixture tool that prints `<name> <version> argv: <args>` when run.
+///
+/// A shell script serves on Unix. Windows runs no such thing: an installer
+/// looks for `<name>.exe`, and a `#!/bin/sh` file under that name is not a
+/// program, so a dispatch test sees empty output rather than a marker. So the
+/// Windows build compiles a real executable, once per process, and stamps the
+/// marker in through `rustc --cfg`-free means: the marker is read from a file
+/// beside the binary, so one compiled helper serves every version.
+fn write_fixture_tool(bin: &Path, name: &str, version: &str) {
+    let path = bin.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    if cfg!(windows) {
+        std::fs::write(
+            bin.join(format!("{name}.marker")),
+            format!("{name} {version}"),
+        )
+        .expect("write fixture marker");
+        std::fs::copy(fixture_helper(), &path).expect("copy fixture tool");
+        return;
+    }
+    std::fs::write(
+        &path,
+        format!("#!/bin/sh\necho \"{name} {version} argv: $*\"\nexit 0\n"),
+    )
+    .expect("write fixture tool");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("mark fixture tool executable");
+    }
+}
+
+/// The compiled helper every Windows fixture tool is a copy of.
+///
+/// Built once per test process: `rustc` is not cheap enough to run per publish,
+/// and the marker file beside each copy is what makes one binary answer for
+/// every tool and version.
+#[cfg(windows)]
+fn fixture_helper() -> PathBuf {
+    use std::sync::OnceLock;
+    static HELPER: OnceLock<PathBuf> = OnceLock::new();
+    HELPER
+        .get_or_init(|| {
+            let dir =
+                std::env::temp_dir().join(format!("knvm_fixture_tool_{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("fixture tool dir");
+            let source = dir.join("tool.rs");
+            std::fs::write(
+                &source,
+                r#"fn main() {
+    let exe = std::env::current_exe().expect("own path");
+    let marker = exe.with_extension("marker");
+    let text = std::fs::read_to_string(&marker).unwrap_or_default();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    println!("{} argv: {}", text.trim(), args.join(" "));
+}
+"#,
+            )
+            .expect("write fixture tool source");
+            let out = dir.join("tool.exe");
+            let status = std::process::Command::new("rustc")
+                .args(["-O", "--edition", "2021"])
+                .arg(&source)
+                .arg("-o")
+                .arg(&out)
+                .status()
+                .expect("run rustc for the fixture tool");
+            assert!(status.success(), "the fixture tool must compile");
+            out
+        })
+        .clone()
+}
+
+#[cfg(not(windows))]
+fn fixture_helper() -> PathBuf {
+    unreachable!("only the Windows path copies a compiled helper")
+}
+
 pub fn publish(releases: &Path, channel: Channel, version: &str, shape: &FixtureToolchain) {
     let staging = releases.join(".build").join(version);
     let _ = std::fs::remove_dir_all(&staging);
@@ -87,18 +180,7 @@ pub fn publish(releases: &Path, channel: Channel, version: &str, shape: &Fixture
     if shape.with_primary_binary {
         let bin = payload.join("bin");
         std::fs::create_dir_all(&bin).expect("create bin");
-        let script = bin.join("kira");
-        std::fs::write(
-            &script,
-            format!("#!/bin/sh\necho \"kira {version} argv: $*\"\nexit 0\n"),
-        )
-        .expect("write fixture kira");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
-                .expect("mark fixture kira executable");
-        }
+        write_fixture_tool(&bin, "kira", version);
     } else {
         // A release with no binary at all still has a tree, so the failure under
         // test is the validation refusal and not an unpack failure.
@@ -108,7 +190,10 @@ pub fn publish(releases: &Path, channel: Channel, version: &str, shape: &Fixture
     if shape.with_language_server {
         let bin = payload.join("bin");
         std::fs::create_dir_all(&bin).expect("create bin");
-        let server = bin.join("kira-language-server");
+        let server = bin.join(format!(
+            "kira-language-server{}",
+            std::env::consts::EXE_SUFFIX
+        ));
         std::fs::write(
             &server,
             format!("#!/bin/sh\necho \"kira-language-server {version} argv: $*\"\nexit 0\n"),
@@ -125,15 +210,17 @@ pub fn publish(releases: &Path, channel: Channel, version: &str, shape: &Fixture
     let bin = payload.join("bin");
     std::fs::create_dir_all(&bin).expect("create bin for runtime archives");
     for archive in [
-        "libkira_native_bridge.a",
-        "libkira_native_bridge-wasm32-emscripten.a",
+        runtime_archive_name("kira_native_bridge"),
+        // The wasm archive is built for emscripten whatever the host is, so it
+        // keeps the `lib….a` spelling everywhere.
+        "libkira_native_bridge-wasm32-emscripten.a".to_owned(),
     ] {
         std::fs::write(bin.join(archive), "fixture runtime archive")
             .expect("write fixture runtime archive");
     }
     if shape.with_compiler_bridge {
         std::fs::write(
-            bin.join("libkira_compiler_bridge.a"),
+            bin.join(runtime_archive_name("kira_compiler_bridge")),
             "fixture compiler runtime archive",
         )
         .expect("write fixture compiler runtime archive");

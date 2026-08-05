@@ -24,10 +24,35 @@ enum PayloadForm {
     Widen,
     /// A pointer as an integer.
     PointerBits,
+    /// A payload-less enum's variant tag, shifted out of its inline handle.
+    ///
+    /// Such an enum is never allocated: its handle carries the tag directly as
+    /// `(tag << 1) | 1`, which the runtime recognizes by the low bit. So the
+    /// payload is neither the value's bits nor something loaded from it — the
+    /// handle is decoded on the way out and re-encoded on the way in, and the
+    /// far side, which keeps its enums somewhere else entirely, sees only a
+    /// variant number.
+    EnumTag,
+    /// An aggregate as a pointer to a native-value node tree.
+    ///
+    /// What a struct, an array, and an enum carrying a payload all cross as.
+    /// The tree is built here and transferred; the reader frees it. See
+    /// [`kira_runtime_abi::BridgeValueTag::NODE`].
+    Node,
+}
+
+impl Codegen<'_> {
+    /// The bridge tag for `ty`, and how its payload is encoded.
+    fn bridge_tag_of(&self, ty: Type) -> Result<(u8, Option<PayloadForm>), LlvmError> {
+        bridge_tag_of(ty, self.program.types.enums())
+    }
 }
 
 /// The bridge tag for `ty`, and how its payload is encoded.
-fn bridge_tag_of(ty: Type) -> Result<(u8, Option<PayloadForm>), LlvmError> {
+fn bridge_tag_of(
+    ty: Type,
+    enums: &kira_semantics_model::EnumTable,
+) -> Result<(u8, Option<PayloadForm>), LlvmError> {
     Ok(match ty {
         Type::Void => (BridgeValueTag::VOID.0, None),
         Type::Int(_) => (BridgeValueTag::INT.0, Some(PayloadForm::AsIs)),
@@ -35,21 +60,25 @@ fn bridge_tag_of(ty: Type) -> Result<(u8, Option<PayloadForm>), LlvmError> {
         Type::Bool => (BridgeValueTag::BOOL.0, Some(PayloadForm::Widen)),
         Type::String => (BridgeValueTag::STRING.0, Some(PayloadForm::PointerBits)),
         Type::RawPtr => (BridgeValueTag::RAW_PTR.0, Some(PayloadForm::AsIs)),
-        // A `BridgeValue` is 16 bytes with a one-word payload; a struct does
-        // not fit and has no tag. Crossing the seam with one needs an ABI
-        // decision (by value? by pointer? who frees the strings inside?) that
-        // has not been made, so the boundary says no rather than guessing.
-        Type::Struct(_) => return Err(LlvmError::StructAtSeam),
-        // An array does not fit either, but the reason is different: the
-        // language does let one cross, and what is missing is the ownership
-        // answer at the boundary — who frees the elements, and what a native
-        // callee growing the array means for the other half. See
-        // `BridgeValueTag::ARRAY`.
-        Type::Array(_) => return Err(LlvmError::ArrayAtSeam),
-        // An enum does not fit either, and on the same grounds as a struct: it
-        // is a tagged value with no one-word form, and how it would cross is
-        // undecided. See `BridgeValueTag::ENUM`.
-        Type::Enum(_) => return Err(LlvmError::EnumAtSeam),
+        // A struct and an array both cross as a node tree. Neither fits one
+        // word, and neither side's storage means anything to the other — the VM
+        // holds an index into its heap, native a pointer to a box — so what
+        // crosses is a copy in the `kira_rt_native_value_*` form both can build
+        // and read, transferred to the reader, who frees it as it decodes.
+        // That is the answer to who frees the strings inside: the side that
+        // reads them, exactly once. See `BridgeValueTag::NODE`.
+        Type::Struct(_) | Type::Array(_) => (BridgeValueTag::NODE.0, Some(PayloadForm::Node)),
+        // A payload-less enum *is* its tag, so the tag crosses and the far side
+        // rebuilds its own value from it: nothing is owned, nothing is freed,
+        // and neither side's representation travels. One carrying a payload is
+        // a tag plus something owned, which does not fit one word and whose
+        // ownership across the seam is undecided. See `BridgeValueTag::ENUM`.
+        Type::Enum(id) if enums.is_fieldless(id) => {
+            (BridgeValueTag::ENUM.0, Some(PayloadForm::EnumTag))
+        }
+        // One carrying a payload takes the node tree instead: the tag alone
+        // would lose whatever the variant holds, and a tree carries both.
+        Type::Enum(_) => (BridgeValueTag::NODE.0, Some(PayloadForm::Node)),
         // `RawPtr` crosses this seam for opaque callback userdata. `CString`
         // remains foreign-parameter-only, and a state handle itself stays in the
         // engine that owns the intrinsic; only its raw token crosses.
@@ -73,7 +102,7 @@ impl Codegen<'_> {
     /// and what the other side encoded from. The tag exists so a *reader* that
     /// does not know the signature can still refuse an unknown value.
     pub(super) fn read_bridge_payload(
-        &self,
+        &mut self,
         slot: LLVMValueRef,
         ty: Type,
     ) -> Result<LLVMValueRef, LlvmError> {
@@ -103,9 +132,31 @@ impl Codegen<'_> {
                 Type::String => {
                     LLVMBuildIntToPtr(self.builder, payload, types.ptr, c"arg.str".as_ptr())
                 }
-                Type::Struct(_) => return Err(LlvmError::StructAtSeam),
-                Type::Array(_) => return Err(LlvmError::ArrayAtSeam),
-                Type::Enum(_) => return Err(LlvmError::EnumAtSeam),
+                // The payload is a node tree the other side built and handed
+                // over. Decoding consumes it: `decode_native_state_value`
+                // frees each node as it reads it, which is what makes the
+                // transfer exactly one free rather than two or none.
+                Type::Struct(_) | Type::Array(_) => {
+                    let node =
+                        LLVMBuildIntToPtr(self.builder, payload, types.ptr, c"arg.node".as_ptr());
+                    self.decode_native_state_value(node, ty)?
+                }
+                // A payload-less enum is never allocated here: its handle *is*
+                // the tag, inline as `(tag << 1) | 1`, which the runtime
+                // recognizes by the low bit and treats as clone-is-identity,
+                // free-is-nothing. So the arriving tag is re-encoded rather
+                // than boxed — the same word `lower_enum_new` builds for a
+                // constant, built for a value that is only known now.
+                Type::Enum(id) if self.program.types.enums().is_fieldless(id) => {
+                    self.inline_enum_value(payload)
+                }
+                // A payload-carrying enum arrives as a tree, for the same
+                // reason a struct does: the tag alone would drop the payload.
+                Type::Enum(_) => {
+                    let node =
+                        LLVMBuildIntToPtr(self.builder, payload, types.ptr, c"arg.node".as_ptr());
+                    self.decode_native_state_value(node, ty)?
+                }
                 Type::Any => return Err(LlvmError::AnyAtSeam),
                 Type::RawPtr => payload,
                 Type::CString | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
@@ -128,19 +179,57 @@ impl Codegen<'_> {
     /// reserved invariant. This routine's only added job is turning a typed
     /// `value` into the one payload word `ty` encodes into.
     pub(super) fn write_bridge_value(
-        &self,
+        &mut self,
         slot: LLVMValueRef,
         value: LLVMValueRef,
         ty: Type,
     ) -> Result<(), LlvmError> {
         let types = self.types;
-        let (tag, payload) = bridge_tag_of(ty)?;
+        let (tag, payload) = self.bridge_tag_of(ty)?;
+        // Built before the `unsafe` block below because encoding a tree emits
+        // calls and needs `&mut self`, which the raw builder sequence does not
+        // give up. The result is one pointer, which that sequence then widens
+        // exactly as it widens any other.
+        let node = match payload {
+            Some(PayloadForm::Node) => Some(self.encode_native_state_value(value, ty)?),
+            _ => None,
+        };
+        // Read through the runtime's own accessor, which is the one place that
+        // knows how an enum handle is shaped: it tests the low bit and answers
+        // from the handle when the value is inline, or from the box when it is
+        // not. Every `match` reads a tag the same way.
+        //
+        // Shifting the handle by hand would work for the inline case and answer
+        // *garbage* for a boxed one — a wrong tag is a wrong variant, which is a
+        // different program rather than a crash. An earlier version did the
+        // opposite, loading through the handle as if it were always a box, and
+        // segfaulted on address 3.
+        let enum_tag = match payload {
+            Some(PayloadForm::EnumTag) => {
+                self.call(self.runtime.enum_tag, &mut [value], c"ret.enum.tag")
+            }
+            _ => std::ptr::null_mut(),
+        };
         // SAFETY: `value` has `ty`'s LLVM type and the builder is on a live block.
         let payload = unsafe {
             match payload {
+                // The tree is transferred: nothing is freed here, and the
+                // reader's decode is the one free.
+                Some(PayloadForm::Node) => match node {
+                    Some(node) => {
+                        LLVMBuildPtrToInt(self.builder, node, types.i64, c"ret.node".as_ptr())
+                    }
+                    None => LLVMConstInt(types.i64, 0, 0),
+                },
                 // Void carries no payload; an explicit zero word keeps it defined.
                 None => LLVMConstInt(types.i64, 0, 0),
                 Some(PayloadForm::AsIs) => value,
+                // The handle *is* the tag, inline as `(tag << 1) | 1`, so the
+                // tag comes back out by shifting rather than by loading: a
+                // payload-less enum is never allocated, and dereferencing the
+                // handle would read address `(tag << 1) | 1` — which is how
+                // this first crashed, on address 3.
+                Some(PayloadForm::EnumTag) => enum_tag,
                 Some(PayloadForm::FloatBits) => {
                     LLVMBuildBitCast(self.builder, value, types.i64, c"ret.bits".as_ptr())
                 }

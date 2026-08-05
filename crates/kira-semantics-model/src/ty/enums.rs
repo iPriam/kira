@@ -182,6 +182,22 @@ impl EnumTable {
         self.defs.is_empty()
     }
 
+    /// Whether every variant is payload-less, so the value is its tag alone.
+    ///
+    /// This is the enum a `match` compiles to a tag compare and nothing else:
+    /// `GraphicsBackend`, `Color`, a state machine's states. It owns nothing,
+    /// so it needs no clone, no free, and no layout beyond one integer — which
+    /// is what lets it cross the `@Native`/`@Runtime` boundary where an enum
+    /// carrying a payload cannot.
+    ///
+    /// An enum with no variants at all answers `true`: it has no variant that
+    /// carries anything. No value of it can exist to cross, so the answer is
+    /// unreachable rather than wrong.
+    pub fn is_fieldless(&self, id: EnumId) -> bool {
+        self.get(id)
+            .is_some_and(|def| def.variants.iter().all(|variant| variant.payload.is_none()))
+    }
+
     /// Whether any variant carries a payload represented by owned heap storage.
     ///
     /// Strings and nested enums are handles, and a struct payload gets its own
@@ -222,6 +238,42 @@ mod tests {
             })
             .expect("a fresh name declares");
         (table, id)
+    }
+
+    /// A payload on any one variant is what makes the whole enum carry one.
+    ///
+    /// The distinction the hybrid seam turns on: a tag-only enum is an integer
+    /// and crosses, and one variant with a payload makes the value a tag plus
+    /// something owned, which does not fit one word.
+    #[test]
+    fn an_enum_is_fieldless_only_when_no_variant_carries_a_payload() {
+        let (mixed, mixed_id) = table_with_color();
+        assert!(
+            !mixed.is_fieldless(mixed_id),
+            "one payload-carrying variant is enough"
+        );
+
+        let mut table = EnumTable::new();
+        let id = table
+            .declare(EnumDef {
+                name: "Backend".to_owned(),
+                variants: vec![
+                    VariantDef {
+                        name: "Vm".to_owned(),
+                        payload: None,
+                    },
+                    VariantDef {
+                        name: "Native".to_owned(),
+                        payload: None,
+                    },
+                ],
+            })
+            .expect("a fresh name declares");
+        assert!(table.is_fieldless(id));
+        assert!(
+            !table.owns_heap_payload(id),
+            "a fieldless enum owns nothing either"
+        );
     }
 
     #[test]

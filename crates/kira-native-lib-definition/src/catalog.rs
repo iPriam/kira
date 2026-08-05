@@ -116,6 +116,18 @@ impl ResolvedNativeLibraries {
             .is_some_and(|resolved| resolved.is_excluded_on(target))
     }
 
+    /// Whether `library` is one the program declared it can run without.
+    ///
+    /// Separate from [`Catalog::is_excluded`], which also asks whether this
+    /// particular target has a row. A library may declare a row for every
+    /// target and still be optional — a driver that is present or not
+    /// independently of the platform it was built for.
+    pub fn is_optional(&self, library: Symbol) -> bool {
+        self.libraries
+            .get(&library)
+            .is_some_and(|resolved| resolved.availability() == crate::Availability::Optional)
+    }
+
     /// Number of libraries in the catalog.
     pub fn len(&self) -> usize {
         self.libraries.len()

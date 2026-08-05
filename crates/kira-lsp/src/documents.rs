@@ -79,7 +79,23 @@ pub fn file_path(uri: &Uri) -> Option<String> {
         Some(0) => rest,
         _ => return None,
     };
-    Some(percent_decode(path))
+    Some(local_path(&percent_decode(path)))
+}
+
+/// Turns a URI path back into a path the local filesystem accepts.
+///
+/// A `file:` URI always has an absolute, slash-separated path, so a Windows
+/// drive arrives as `/C:/Users/...`: the leading slash belongs to the URI
+/// grammar, not to the path, and every filesystem call fails with it still on.
+/// Elsewhere the URI path is already the local path.
+fn local_path(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let drive_letter =
+        bytes.get(1).is_some_and(|byte| byte.is_ascii_alphabetic()) && bytes.get(2) == Some(&b':');
+    if bytes.first() == Some(&b'/') && drive_letter {
+        return path[1..].replace('/', "\\");
+    }
+    path.to_owned()
 }
 
 /// Decodes `%XX` escapes, leaving malformed ones as written.
@@ -112,8 +128,19 @@ pub fn path_uri(path: &str) -> Option<Uri> {
     use std::fmt::Write as _;
     use std::str::FromStr as _;
 
-    let mut encoded = String::with_capacity(path.len());
-    for byte in path.bytes() {
+    // A `file:` URI path is absolute and slash-separated. A Windows path is
+    // neither: `C:\Users\x` has no leading slash and uses backslashes, and
+    // percent-encoding those verbatim produces `file://C%3A%5C...`, which
+    // `file_path` reads as a non-empty authority and refuses. Every document
+    // then has a URI whose path cannot be recovered, which is every jump on
+    // Windows answering with nothing.
+    let normalized = path.replace('\\', "/");
+    let normalized = match normalized.starts_with('/') {
+        true => normalized,
+        false => format!("/{normalized}"),
+    };
+    let mut encoded = String::with_capacity(normalized.len());
+    for byte in normalized.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' => encoded.push(byte as char),
             b'/' | b'-' | b'.' | b'_' | b'~' => encoded.push(byte as char),

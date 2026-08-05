@@ -297,6 +297,7 @@ mod ffi_types;
 mod file_system;
 mod foundation;
 mod generics;
+mod heap_balance;
 mod imports;
 mod libraries;
 mod logic;

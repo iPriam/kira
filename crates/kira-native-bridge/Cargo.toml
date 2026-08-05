@@ -7,6 +7,10 @@ repository.workspace = true
 
 [dependencies]
 kira-runtime-abi.workspace = true
+# Shared-library loading for the dynamic-FFI surface (`dynamic_library`).
+# Reused rather than reached for directly so `DynamicLibrary` stays the one
+# definition of what opening a native library means in this workspace.
+kira-dynamic-ffi.workspace = true
 
 # `staticlib` produces `libkira_native_bridge.a`, the native runtime archive the
 # LLVM backend links into every native executable; `rlib` lets Rust consumers

@@ -65,6 +65,7 @@ type StrNewFn = unsafe extern "C" fn(data: *const u8, len: usize) -> *mut c_void
 type StrFreeFn = unsafe extern "C" fn(value: *mut c_void);
 type StrDataFn = unsafe extern "C" fn(value: *mut c_void) -> *const u8;
 type StrLenFn = unsafe extern "C" fn(value: *mut c_void) -> usize;
+type HeapReportFn = unsafe extern "C" fn();
 type InstallInvokerFn = unsafe extern "C" fn(invoker: Option<RuntimeInvoker>);
 type StateNode = *mut c_void;
 type StateIntFn = unsafe extern "C" fn(i64) -> StateNode;
@@ -99,6 +100,8 @@ const STR_FREE: &[u8] = b"kira_rt_str_free\0";
 const STR_DATA: &[u8] = b"kira_rt_str_data\0";
 const STR_LEN: &[u8] = b"kira_rt_str_len\0";
 const INSTALL_INVOKER: &[u8] = b"kira_hybrid_install_runtime_invoker\0";
+/// Optional, unlike the rest: an older library simply has no accounting.
+const HEAP_REPORT: &[u8] = b"kira_rt_heap_report\0";
 const STATE_VALUE_INT: &[u8] = b"kira_rt_native_value_int\0";
 const STATE_VALUE_RAW_PTR: &[u8] = b"kira_rt_native_value_raw_ptr\0";
 const STATE_VALUE_FLOAT: &[u8] = b"kira_rt_native_value_float\0";
@@ -140,6 +143,8 @@ pub struct NativeLibrary {
     /// The address of each generated callback entry thunk, by callback id.
     callbacks: Vec<u64>,
     str_new: StrNewFn,
+    /// Reports the native half.s heap balance; absent in an older library.
+    heap_report: Option<HeapReportFn>,
     str_free: StrFreeFn,
     str_data: StrDataFn,
     str_len: StrLenFn,
@@ -205,6 +210,9 @@ impl NativeLibrary {
         let str_data = bind(&library, path, STR_DATA)?;
         let str_len = bind(&library, path, STR_LEN)?;
         let install_invoker = bind(&library, path, INSTALL_INVOKER)?;
+        // Optional: a library built before heap accounting existed simply has
+        // no such symbol, and that is not a reason to refuse to load it.
+        let heap_report: Option<HeapReportFn> = bind(&library, path, HEAP_REPORT).ok();
         let state_value_int = bind(&library, path, STATE_VALUE_INT)?;
         let state_value_raw_ptr = bind(&library, path, STATE_VALUE_RAW_PTR)?;
         let state_value_float = bind(&library, path, STATE_VALUE_FLOAT)?;
@@ -279,6 +287,7 @@ impl NativeLibrary {
             adapters,
             callbacks: callback_entries,
             str_new,
+            heap_report,
             str_free,
             str_data,
             str_len,
@@ -306,6 +315,21 @@ impl NativeLibrary {
             state_free,
             _library: library,
         })
+    }
+
+    /// Asks the native half to report its heap balance, if it can.
+    ///
+    /// A hybrid program's native half is a shared library with no `main`, so
+    /// nothing in it runs at exit — the host has to ask. Silent unless
+    /// `KIRA_HEAP_REPORT` is set, and a no-op for a library built before
+    /// accounting existed.
+    pub fn report_heap(&self) {
+        let Some(report) = self.heap_report else {
+            return;
+        };
+        // SAFETY: the symbol was bound from this library, which is still
+        // loaded, and it takes and returns nothing.
+        unsafe { report() };
     }
 
     /// Where this library was loaded from.
@@ -472,7 +496,7 @@ impl NativeLibrary {
     ///
     /// Read rather than consumed: an aggregate's children are shared, so taking
     /// ownership of one would mean copying the whole subtree just to walk it.
-    unsafe fn encode_state_value(
+    pub(crate) unsafe fn encode_state_value(
         &self,
         value: &NativeStateValue,
     ) -> Result<StateNode, NativeStateError> {
@@ -528,7 +552,7 @@ impl NativeLibrary {
         Ok(node)
     }
 
-    unsafe fn decode_state_value(
+    pub(crate) unsafe fn decode_state_value(
         &self,
         node: StateNode,
     ) -> Result<NativeStateValue, NativeStateError> {

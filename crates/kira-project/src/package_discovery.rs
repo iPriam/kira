@@ -528,7 +528,10 @@ mod tests {
             "Package Core {\n let kind = .Library\n let moduleRoot = \"Core\"\n}",
         )
         .unwrap();
-        let source = dir.path().join("app/Core.kira");
+        // Joined component by component: `join` keeps an embedded `/` verbatim
+        // on Windows, so the path would carry a separator discovery never
+        // produces and the comparison below would fail there only.
+        let source = dir.path().join("app").join("Core.kira");
         std::fs::create_dir_all(source.parent().expect("source parent")).unwrap();
         std::fs::write(&source, "function value() -> Int { return 1 }").unwrap();
         let nested = dir.path().join("app/Detail/Value.kira");

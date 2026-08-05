@@ -72,6 +72,7 @@ pub unsafe extern "C" fn kira_rt_box_new(size: usize) -> *mut u8 {
     let Some(layout) = layout_of(size) else {
         return std::ptr::null_mut();
     };
+    crate::accounting::record_alloc();
     // SAFETY: `layout` has a non-zero size — `layout_of` rounds zero up to one —
     // which is what `alloc_zeroed` requires.
     unsafe { alloc::alloc_zeroed(layout) }
@@ -94,6 +95,7 @@ pub unsafe extern "C" fn kira_rt_box_free(handle: *mut u8, size: usize) {
     let Some(layout) = layout_of(size) else {
         return;
     };
+    crate::accounting::record_free();
     // SAFETY: the caller promises `handle` came from `kira_rt_box_new` with this
     // `size`, so `layout` is the layout it was allocated under.
     unsafe { alloc::dealloc(handle, layout) }

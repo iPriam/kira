@@ -19,7 +19,11 @@
 //!   caller frees as an ordinary expression value. So [`lower_result`] allocates
 //!   one out of the library's own allocator.
 
-use kira_runtime_abi::{BridgeData, BridgeValue, NativeArg, NativeResult};
+use std::ffi::c_void;
+
+use kira_runtime_abi::{
+    BridgeData, BridgeValue, NativeArg, NativeResult, NativeStateError, NativeStateValue,
+};
 
 use crate::library::NativeLibrary;
 
@@ -40,15 +44,32 @@ pub enum MarshalError {
         /// Which value, by position.
         index: usize,
     },
+    /// A struct, array or enum value could not be built as a node tree.
+    ///
+    /// The tree is allocated out of the loaded native half, so this is that
+    /// side refusing — a shape it has no node for, or an allocation it could
+    /// not make. Reported by position, because a call with several aggregates
+    /// otherwise says only that one of them failed.
+    #[error("value {index} could not cross as a value tree: {reason}")]
+    Aggregate {
+        /// Which value, by position.
+        index: usize,
+        /// What the native half said.
+        reason: NativeStateError,
+    },
 }
 
 /// Lowers borrowed VM arguments into the array a trampoline reads.
 ///
 /// Every string becomes a fresh handle out of the library's allocator. The
 /// caller must **not** free them: the callee does, at its return.
-pub fn lower_args(library: &NativeLibrary, args: &[NativeArg<'_>]) -> Vec<BridgeValue> {
+pub fn lower_args(
+    library: &NativeLibrary,
+    args: &[NativeArg<'_>],
+) -> Result<Vec<BridgeValue>, MarshalError> {
     args.iter()
-        .map(|argument| {
+        .enumerate()
+        .map(|(index, argument)| {
             let data = match *argument {
                 NativeArg::Void => BridgeData::Void,
                 NativeArg::Int(value) => BridgeData::Int(value),
@@ -61,8 +82,23 @@ pub fn lower_args(library: &NativeLibrary, args: &[NativeArg<'_>]) -> Vec<Bridge
                 // A raw pointer is likewise one opaque word that copies like a
                 // scalar; Kira never dereferences or frees it.
                 NativeArg::RawPtr(pointer) => BridgeData::RawPtr(pointer),
+                // A payload-less enum is its variant tag: one word that copies
+                // like a scalar, with nothing allocated here and nothing for
+                // the callee to free.
+                NativeArg::Enum(tag) => BridgeData::Enum(tag),
+                // The tree is built in the native half's own allocator and
+                // handed over; the callee's decode is what frees it. The VM
+                // keeps the value this was copied from, exactly as it keeps
+                // the string behind a `Str` argument.
+                NativeArg::Aggregate(tree) => {
+                    // SAFETY: every node is allocated by this library and
+                    // consumed by the trampoline it is handed to.
+                    let node = unsafe { library.encode_state_value(tree) }
+                        .map_err(|reason| MarshalError::Aggregate { index, reason })?;
+                    BridgeData::Node(node as u64)
+                }
             };
-            BridgeValue::encode(data)
+            Ok(BridgeValue::encode(data))
         })
         .collect()
 }
@@ -98,6 +134,18 @@ pub unsafe fn lift_result(
         BridgeData::Handle(handle) => NativeResult::Handle(handle),
         // An opaque pointer word, carried through with no allocation or free.
         BridgeData::RawPtr(pointer) => NativeResult::RawPtr(pointer),
+        // Nothing was allocated for it, so nothing is freed: the tag is the
+        // whole value and the VM rebuilds its own enum from it.
+        BridgeData::Enum(tag) => NativeResult::Enum(tag),
+        // The tree is the host's now: decoding copies it out and frees every
+        // node, which is the one free the transfer owes.
+        BridgeData::Node(node) => {
+            // SAFETY: the caller vouches the node came from this library and
+            // has not been freed; decoding consumes it exactly once.
+            let tree = unsafe { library.decode_state_value(node as *mut c_void) }
+                .map_err(|reason| MarshalError::Aggregate { index: 0, reason })?;
+            NativeResult::Aggregate(tree)
+        }
     })
 }
 
@@ -121,6 +169,16 @@ pub enum OwnedArg {
     Handle(u64),
     /// An opaque target-width pointer word, copied like a scalar.
     RawPtr(u64),
+    /// A payload-less enum's variant tag, copied like a scalar.
+    ///
+    /// Owns nothing, so unlike [`OwnedArg::Str`] there was never a handle to
+    /// take: the tag is the whole value.
+    Enum(i64),
+    /// A struct, array or payload-carrying enum, as an owned value tree.
+    ///
+    /// Owned like [`OwnedArg::Str`]: the tree was decoded out of the nodes
+    /// native code transferred, and that copy is the invoker's.
+    Aggregate(NativeStateValue),
 }
 
 impl OwnedArg {
@@ -134,6 +192,8 @@ impl OwnedArg {
             OwnedArg::Str(text) => NativeArg::Str(text),
             OwnedArg::Handle(handle) => NativeArg::Handle(*handle),
             OwnedArg::RawPtr(pointer) => NativeArg::RawPtr(*pointer),
+            OwnedArg::Enum(tag) => NativeArg::Enum(*tag),
+            OwnedArg::Aggregate(tree) => NativeArg::Aggregate(tree),
         }
     }
 }
@@ -181,6 +241,20 @@ pub unsafe fn take_args(
             BridgeData::Handle(handle) => OwnedArg::Handle(handle),
             // An opaque pointer word: nothing to take ownership of.
             BridgeData::RawPtr(pointer) => OwnedArg::RawPtr(pointer),
+            // Nothing to take: the tag is the whole value.
+            BridgeData::Enum(tag) => OwnedArg::Enum(tag),
+            // Taken like a string handle: decoding consumes the tree.
+            BridgeData::Node(node) => {
+                // SAFETY: the caller vouches every node is live and
+                // transferred; each is consumed exactly once, here.
+                match unsafe { library.decode_state_value(node as *mut c_void) } {
+                    Ok(tree) => OwnedArg::Aggregate(tree),
+                    Err(reason) => {
+                        failure.get_or_insert(MarshalError::Aggregate { index, reason });
+                        continue;
+                    }
+                }
+            }
         };
         owned.push(argument);
     }
@@ -204,6 +278,18 @@ pub fn lower_result(library: &NativeLibrary, result: NativeResult) -> BridgeValu
         NativeResult::Str(text) => BridgeData::String(library.new_string(&text)),
         NativeResult::Handle(handle) => BridgeData::Handle(handle),
         NativeResult::RawPtr(pointer) => BridgeData::RawPtr(pointer),
+        NativeResult::Enum(tag) => BridgeData::Enum(tag),
+        NativeResult::Aggregate(tree) => {
+            // SAFETY: the node is allocated by this library and consumed by
+            // the native caller that receives the result.
+            match unsafe { library.encode_state_value(&tree) } {
+                Ok(node) => BridgeData::Node(node as u64),
+                // A tree the native half cannot build is reported as the unit
+                // value: this path has no error channel, and a wrong value
+                // would be worse than an empty one.
+                Err(_) => BridgeData::Void,
+            }
+        }
     };
     BridgeValue::encode(data)
 }

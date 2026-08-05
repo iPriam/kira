@@ -136,6 +136,7 @@ pub struct KiraArray {
 
 /// Takes a header from the free list and fills it in.
 fn new_header(len: usize, cap: usize, items: *mut u8) -> KArray {
+    crate::accounting::record_alloc();
     let header = HEADERS.alloc().cast::<KiraArray>();
     // SAFETY: the pool hands back a block of exactly this layout, and every
     // field is written before anything reads one.
@@ -464,6 +465,7 @@ pub unsafe extern "C" fn kira_rt_array_free(
         return;
     }
     let (items, len, cap) = (header.items, header.len, header.cap);
+    crate::accounting::record_free();
     // SAFETY: this was the last hold, so nothing reads the header again.
     unsafe { HEADERS.free(array.cast::<u8>()) };
     if items.is_null() {

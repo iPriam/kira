@@ -154,6 +154,24 @@ impl<'a> Codegen<'a> {
         unsafe { LLVMConstIntToPtr(LLVMConstInt(self.types.i64, word, 0), self.types.ptr) }
     }
 
+    /// The same handle, for a tag that is only known at run time.
+    ///
+    /// The seam builds one of these: a variant tag arrives as a value, not as a
+    /// constant, so [`Codegen::inline_enum`] cannot make the handle. Kept
+    /// beside it, and deliberately not open-coded at the call site — the
+    /// encoding is a contract with `kira_native_bridge::enums::is_inline`, and a
+    /// second copy of it is a second thing to keep in step.
+    pub(in crate::codegen) fn inline_enum_value(&self, tag: LLVMValueRef) -> LLVMValueRef {
+        // SAFETY: `tag` is an `i64` and the builder is on a live block; both
+        // types belong to this module's live context.
+        unsafe {
+            let one = LLVMConstInt(self.types.i64, 1, 0);
+            let shifted = LLVMBuildShl(self.builder, tag, one, c"enum.inline.shl".as_ptr());
+            let word = LLVMBuildOr(self.builder, shifted, one, c"enum.inline.word".as_ptr());
+            LLVMBuildIntToPtr(self.builder, word, self.types.ptr, c"enum.inline".as_ptr())
+        }
+    }
+
     /// A `usize` constant at the **target**'s pointer width.
     ///
     /// The runtime helpers that take a length take a `usize`, and on wasm32

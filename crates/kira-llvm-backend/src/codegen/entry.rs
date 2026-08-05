@@ -65,6 +65,12 @@ impl Codegen<'_> {
             if main_function.return_type == Type::String {
                 self.call_runtime(self.runtime.str_free, &mut [result], c"");
             }
+            // The native counterpart of the VM's `current == 0`: after the
+            // program's last value is released and before the process is gone,
+            // ask the runtime whether everything it allocated came back. Silent
+            // unless `KIRA_HEAP_REPORT` is set, so an ordinary run pays one
+            // `getenv` here and nothing else.
+            self.call_runtime(self.runtime.heap_report, &mut [], c"");
             LLVMBuildRet(self.builder, LLVMConstInt(self.types.i32, 0, 0));
         }
         Ok(())

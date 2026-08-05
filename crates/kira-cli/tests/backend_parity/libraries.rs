@@ -113,11 +113,17 @@ fn a_library_artifact_is_not_an_executable() {
     let directory = path.parent().expect("package directory").to_path_buf();
     let build = build_on(&path, "llvm");
     let artifacts = directory.join(".kira-build");
-    let executable = artifacts.join("program");
+    // Named with the host's own suffix: looking for an extensionless `program`
+    // on Windows would find nothing whether or not a build emitted one, so the
+    // absence this test asserts would pass without proving anything.
+    let executable = artifacts.join(format!("program{}", std::env::consts::EXE_SUFFIX));
     let is_executable = executable.is_file();
     // What a Rust consumer links: one self-contained static archive under
-    // `lib/`, beside where the VM engine writes its `.kbc`.
-    let archive = artifacts.join("lib").join("libparity.a");
+    // `lib/`, beside where the VM engine writes its `.kbc`. Named through the
+    // toolchain's own function, since MSVC spells it `parity.lib`.
+    let archive = artifacts
+        .join("lib")
+        .join(kira_build::archive_file_name("parity"));
     let archive_exists = archive.is_file();
     let _ = std::fs::remove_dir_all(&directory);
 

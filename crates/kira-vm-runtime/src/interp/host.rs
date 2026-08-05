@@ -1,7 +1,9 @@
 //! Host-capability calls made by bytecode instructions.
 
 use kira_bytecode::module::Module;
-use kira_runtime_abi::{ForeignArg, ForeignPointerWidth, ForeignResult, NativeArg};
+use kira_runtime_abi::{
+    ForeignArg, ForeignPointerWidth, ForeignResult, NativeArg, NativeStateValue,
+};
 
 use super::Vm;
 use crate::error::VmError;
@@ -37,19 +39,62 @@ impl Vm<'_> {
         // an aggregate arriving here is refused by the shape it actually has
         // rather than as an opaque handle.
         self.own_arguments(first);
-        let arguments = &self.stack[first..];
+        // Copied off the stack so the borrow ends here: building an aggregate's
+        // tree needs the heap mutably, and the borrowed arguments below cannot
+        // be holding it at the same time. A `Value` is `Copy`, so this costs a
+        // memcpy of the argument words and nothing else — the stack still owns
+        // every one of them, and the drop loop below is still what releases
+        // them.
+        let arguments: Vec<Value> = self.stack[first..].to_vec();
+
+        // Every aggregate becomes an owned tree first. `NativeArg::Aggregate`
+        // borrows, so the trees have to outlive the argument list built from
+        // them; this is where they live for the duration of the call.
+        let mut trees: Vec<Option<NativeStateValue>> = Vec::with_capacity(count);
+        for value in &arguments {
+            let tree = match *value {
+                Value::Struct(_) | Value::Array(_) => Some(
+                    self.heap
+                        .seam_tree(*value)
+                        .ok_or(VmError::StructAtSeam { function: id })?,
+                ),
+                // Only the payload-carrying ones: a payload-less enum crosses
+                // as its tag, with no tree and no allocation.
+                Value::Enum(enum_id) if self.heap.enum_seam_tag(enum_id).is_none() => Some(
+                    self.heap
+                        .seam_tree(*value)
+                        .ok_or(VmError::EnumAtSeam { function: id })?,
+                ),
+                _ => None,
+            };
+            trees.push(tree);
+        }
 
         let mut lowered = Vec::with_capacity(count);
-        for value in arguments {
+        for (index, value) in arguments.iter().enumerate() {
             lowered.push(match *value {
                 Value::Int(value) => NativeArg::Int(value),
                 Value::Float(value) => NativeArg::Float(value),
                 Value::Bool(value) => NativeArg::Bool(value),
                 Value::Str(id) => NativeArg::Str(self.heap.get(id)),
                 Value::Void => NativeArg::Void,
-                Value::Struct(_) => return Err(VmError::StructAtSeam { function: id }),
-                Value::Array(_) => return Err(VmError::ArrayAtSeam { function: id }),
-                Value::Enum(_) => return Err(VmError::EnumAtSeam { function: id }),
+                // A struct, an array, and a payload-carrying enum all cross as
+                // the tree built above. The tree is this side's copy; the
+                // original stays on the stack and the drop loop releases it.
+                Value::Struct(_) | Value::Array(_) => match &trees[index] {
+                    Some(tree) => NativeArg::Aggregate(tree),
+                    None => return Err(VmError::StructAtSeam { function: id }),
+                },
+                // A payload-less enum crosses as its variant tag alone; one
+                // carrying something takes the tree, and the two are told apart
+                // by the value rather than by the signature.
+                Value::Enum(enum_id) => match self.heap.enum_seam_tag(enum_id) {
+                    Some(tag) => NativeArg::Enum(tag),
+                    None => match &trees[index] {
+                        Some(tree) => NativeArg::Aggregate(tree),
+                        None => return Err(VmError::EnumAtSeam { function: id }),
+                    },
+                },
                 Value::RawPtr(value) => NativeArg::RawPtr(value),
                 // A cell is refused with the handles, and for the strongest
                 // reason among them: it is shared mutable storage this heap

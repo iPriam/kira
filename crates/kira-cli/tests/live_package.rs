@@ -258,8 +258,14 @@ fn a_watched_package_session_reloads_on_a_save_to_a_module() {
             std::fs::write(&module, "function answer() -> Int { return 9 }\n")
                 .expect("edit the module");
         },
+        // Both, because neither implies the other has arrived: the app's print
+        // and the server's milestone come from two processes over one pipe, in
+        // either order. Stopping on the first closes the connection before the
+        // second, which is a failure about timing rather than about reloading.
         |stdout| {
-            stdout.contains("live.reload.applied") || stdout.contains("live.runner.relaunched")
+            stdout.contains("\n9\n")
+                && (stdout.contains("live.reload.applied")
+                    || stdout.contains("live.runner.relaunched"))
         },
     );
 

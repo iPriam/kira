@@ -283,6 +283,255 @@ function main() {
     );
 }
 
+// ----- aggregates ------------------------------------------------------
+//
+// Enums, structs and arrays cross by two different mechanisms, and which one a
+// value takes is not visible in the program that uses it — so both are tested
+// through ordinary programs rather than by asserting on the encoding.
+//
+// A payload-less enum crosses as a bare variant tag, with nothing allocated on
+// either side. Everything else — a struct, an array, an enum carrying a payload
+// — crosses as a node tree that is built, transferred, and freed by the reader.
+// The seam that picks between them is the thing under test.
+
+/// A payload-less enum crosses in both directions, on every backend.
+///
+/// The value is its variant tag and nothing else, so neither side's
+/// representation travels — the VM holds an index into its heap and native
+/// holds `(tag << 1) | 1` inline, and only the number between them crosses.
+#[test]
+fn a_payload_less_enum_crosses_the_boundary_in_both_directions() {
+    let output = assert_parity(
+        r#"
+enum Engine {
+    Vm
+    Native
+    Hybrid
+}
+
+@Native
+function pick_engine(index: Int) -> Engine {
+    if index == 0 {
+        return Engine.Vm
+    }
+    if index == 1 {
+        return Engine.Native
+    }
+    return Engine.Hybrid
+}
+
+@Runtime
+function name_engine(engine: Engine) -> String {
+    if engine == .Vm {
+        return "vm"
+    }
+    if engine == .Native {
+        return "native"
+    }
+    return "hybrid"
+}
+
+@Native
+function round_trip_engine(engine: Engine) -> Engine {
+    return engine
+}
+
+@Main
+function main() {
+    print(name_engine(pick_engine(0)))
+    print(name_engine(pick_engine(1)))
+    print(name_engine(pick_engine(2)))
+    print(name_engine(round_trip_engine(pick_engine(2))))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "vm\nnative\nhybrid\nhybrid\n");
+}
+
+/// The last variant's tag survives, which a truncating encode would lose.
+///
+/// The tag rides in a signed 64-bit payload and is rebuilt as an unsigned
+/// index. A wrong tag is a wrong *variant* — a silently different program, not
+/// a crash — so the highest tag in the enum is the one worth pinning.
+#[test]
+fn the_highest_variant_tag_survives_the_crossing() {
+    let output = assert_parity(
+        r#"
+enum Step {
+    A
+    B
+    C
+    D
+    E
+}
+
+@Native
+function last_step() -> Step {
+    return Step.E
+}
+
+@Main
+function main() {
+    let step = last_step()
+    if step == .E {
+        print("E")
+    }
+    if step == .A {
+        print("A")
+    }
+    return
+}
+"#,
+    );
+    assert_eq!(output, "E\n");
+}
+
+/// A struct, an array, and a payload-carrying enum all cross, both ways.
+///
+/// All three take the same route — a node tree, transferred to the reader,
+/// which frees it as it decodes — so they are tested together: what would break
+/// one would break all three, and a single case would not say which.
+///
+/// The string inside the struct and the string inside the enum payload are the
+/// point. A tree of scalars proves the shape crosses; a tree with owned storage
+/// in it proves the ownership answer, which is the thing that was undecided.
+#[test]
+fn structs_arrays_and_payload_enums_cross_the_boundary() {
+    let output = assert_parity(
+        r#"
+struct Point {
+    var x: Int = 0
+    var label: String = ""
+}
+
+enum Outcome {
+    Ok
+    Failed(String)
+}
+
+@Native
+function make_point(x: Int) -> Point {
+    return Point { x: x, label: "made" }
+}
+
+@Native
+function point_x(point: borrow Point) -> Int {
+    return point.x
+}
+
+@Native
+function point_label(point: borrow Point) -> String {
+    return point.label
+}
+
+@Native
+function make_numbers() -> [Int] {
+    return [10, 20, 30]
+}
+
+@Native
+function sum_numbers(values: borrow [Int]) -> Int {
+    var total = 0
+    for value in values {
+        total = total + value
+    }
+    return total
+}
+
+@Native
+function classify(code: Int) -> Outcome {
+    if code == 0 {
+        return Outcome.Ok
+    }
+    return Outcome.Failed("not zero")
+}
+
+@Native
+function describe(outcome: borrow Outcome) -> String {
+    match outcome {
+        Ok -> return "ok";
+        Failed(reason) -> return reason;
+    }
+    return "?"
+}
+
+@Main
+function main() {
+    let point = make_point(7)
+    print(point_x(point))
+    print(point_label(point))
+
+    let numbers = make_numbers()
+    print(sum_numbers(numbers))
+    print(sum_numbers([1, 2, 3, 4]))
+
+    print(describe(classify(0)))
+    print(describe(classify(1)))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "7\nmade\n60\n10\nok\nnot zero\n");
+}
+
+/// A tree survives nesting, which a one-level copy would flatten or lose.
+///
+/// A struct holding an array of structs is the shape that catches an encoder
+/// that only recurses once — and the empty array is the case that catches a
+/// length written before it is known.
+#[test]
+fn a_nested_aggregate_crosses_whole() {
+    let output = assert_parity(
+        r#"
+struct Tag {
+    var name: String = ""
+}
+
+struct Bag {
+    var tags: [Tag] = []
+    var count: Int = 0
+}
+
+@Native
+function make_bag() -> Bag {
+    return Bag { tags: [Tag { name: "a" }, Tag { name: "b" }], count: 2 }
+}
+
+@Native
+function empty_bag() -> Bag {
+    return Bag { tags: [], count: 0 }
+}
+
+@Native
+function first_tag(bag: borrow Bag) -> String {
+    for tag in bag.tags {
+        return tag.name
+    }
+    return "none"
+}
+
+@Native
+function bag_count(bag: borrow Bag) -> Int {
+    return bag.count
+}
+
+@Main
+function main() {
+    let bag = make_bag()
+    print(first_tag(bag))
+    print(bag_count(bag))
+
+    let empty = empty_bag()
+    print(first_tag(empty))
+    print(bag_count(empty))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "a\n2\nnone\n0\n");
+}
+
 // ----- structs ---------------------------------------------------------
 //
 // A struct is a value, and these cases are about what that costs each backend

@@ -23,13 +23,26 @@ const EXPECTED: &str = "42\n-5\n200\n-9\n40000\n4000000000\n1975\n5000000000\nfa
 /// Every backend the FFI program must behave identically on.
 const BACKENDS: [&str; 3] = ["vm", "llvm", "hybrid"];
 
+/// A system library every host has, spelled the way that host spells it.
+///
+/// `m` is the Unix math library. Windows has no `m.lib` — its math lives in the
+/// UCRT, which every link already gets — so naming `m` there fails the link with
+/// `LNK1181` rather than proving anything about declared system libraries.
+const HOST_SYSTEM_LIB: &str = if cfg!(target_env = "msvc") {
+    "kernel32"
+} else {
+    "m"
+};
+
 /// The host triples a declaration lists, all pointing at the one built archive
 /// so the exact host this test runs on selects its own row.
-const HOST_TRIPLES: [&str; 4] = [
+const HOST_TRIPLES: [&str; 6] = [
     "aarch64-macos-none",
     "x86_64-macos-none",
     "x86_64-linux-gnu",
     "aarch64-linux-gnu",
+    "x86_64-windows-msvc",
+    "aarch64-windows-msvc",
 ];
 
 /// Compiles the checked-in C fixture into `NativeLibs/lib/libffifixture.a` under
@@ -105,6 +118,12 @@ triple = "x86_64-linux-gnu"
 staticLib = "lib/libffifixture.a"
 [[target]]
 triple = "aarch64-linux-gnu"
+staticLib = "lib/libffifixture.a"
+[[target]]
+triple = "x86_64-windows-msvc"
+staticLib = "lib/libffifixture.a"
+[[target]]
+triple = "aarch64-windows-msvc"
 staticLib = "lib/libffifixture.a"
 "#,
     )
@@ -225,7 +244,7 @@ fn every_backend_agrees_on_the_ffi_fixture_and_shares_one_counter() {
 fn a_library_declared_inline_in_the_package_links_on_every_backend() {
     let entry = write_inline_ffi_package(
         include_str!("../fixtures/ffi/ffi_program.kira"),
-        ", systemLibs: [\"m\"]",
+        &format!(", systemLibs: [\"{HOST_SYSTEM_LIB}\"]"),
     );
 
     for backend in BACKENDS {
