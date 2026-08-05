@@ -22,6 +22,7 @@ fn module(code: Vec<I>, locals: u16) -> Module {
             local_count: locals,
             execution: Execution::Runtime,
             code,
+            releases: kira_bytecode::FrameRelease::EveryLocal,
         }],
         main: Some(0),
         strings: Vec::new(),

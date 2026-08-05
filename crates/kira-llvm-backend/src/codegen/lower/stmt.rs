@@ -273,27 +273,20 @@ impl FunctionLowering<'_, '_> {
     /// a local read clones, a returned string is never one of the slots being
     /// freed here.
     pub(super) fn emit_return(&mut self, value: Option<LLVMValueRef>) -> Result<(), LlvmError> {
-        for slot in 0..self.function.locals.len() as u32 {
-            // A parameter that arrived as a pointer is the caller's storage,
-            // borrowed; freeing it here would release a value the caller still
-            // owns and will free itself. True of a written-through parameter and
-            // of a lent read-only borrow alike — neither was ever this
-            // function's to reclaim.
-            if self.codegen.param_is_pointer(self.function, slot)
-                || self
-                    .function
-                    .native_state_locals
-                    .get(slot as usize)
-                    .copied()
-                    .flatten()
-                    .is_some()
-            {
-                continue;
-            }
+        // Which slots to release is not decided here. `kira_ir::mid` decides it
+        // once, for both engines, from the same function this backend is
+        // lowering — the skip conditions that used to sit inline (a pointer
+        // parameter is the caller's storage, a callback-state local belongs to
+        // a store outside the call, a scalar owns nothing) live there now, in
+        // one place, rather than being re-derived per backend.
+        let plan = kira_ir::mid::plan_function(
+            self.function,
+            &self.codegen.program.types,
+            self.codegen.lending(),
+        )
+        .map_err(|error| LlvmError::Unsupported(mid_error_detail(error)))?;
+        for &slot in plan.slots() {
             let ty = self.local_type(slot)?;
-            if !self.owns_heap(ty) {
-                continue;
-            }
             let pointer = self.local_pointer(slot)?;
             let llvm_type = self.codegen.llvm_type(ty)?;
             // SAFETY: `pointer` is a live alloca holding a value of `llvm_type`.
@@ -374,5 +367,24 @@ impl FunctionLowering<'_, '_> {
         }
         self.position_at(exit_block);
         Ok(())
+    }
+}
+
+/// Renders a mid-stage failure as the detail an [`LlvmError::Unsupported`]
+/// carries.
+///
+/// A release plan fails only on a contradiction inside one function — two
+/// facts about a slot that cannot both hold — which is a compiler bug rather
+/// than a program error. It is surfaced rather than swallowed because a
+/// function whose plan could not be built would otherwise be lowered with no
+/// releases at all, and leak silently.
+fn mid_error_detail(error: kira_ir::mid::MidError) -> &'static str {
+    match error {
+        kira_ir::mid::MidError::ConflictingSlotRole { .. } => {
+            "a local that is both a by-reference parameter and callback state"
+        }
+        kira_ir::mid::MidError::UnknownParameter { .. } => {
+            "a by-reference parameter that names no local"
+        }
     }
 }

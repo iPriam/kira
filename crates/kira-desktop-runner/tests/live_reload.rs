@@ -16,7 +16,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
-use kira_bytecode::{FuncProto, Instruction, Module};
+use kira_bytecode::{FrameRelease, FuncProto, Instruction, Module};
 use kira_live::{
     Bundle, ContentHash, LiveEvent, LiveServer, NamedPayload, PayloadKind, ReloadOutcome,
 };
@@ -42,6 +42,7 @@ fn printing_module(text: &str) -> Module {
                 Instruction::Print,
                 Instruction::ReturnVoid,
             ],
+            releases: FrameRelease::EveryLocal,
         }],
     }
 }
