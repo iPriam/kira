@@ -411,7 +411,15 @@ mod tests {
         }
 
         fn write(&self, name: &str, text: &str) -> PathBuf {
-            let path = self.0.join(name);
+            // Pushed component by component rather than joined whole: `join`
+            // keeps an embedded `/` verbatim on Windows, so `app/Core.kira`
+            // would produce a path spelled with a separator the rest of the
+            // toolchain never emits, and comparing it against one `kira-project`
+            // built would fail on Windows only.
+            let mut path = self.0.clone();
+            for component in name.split('/') {
+                path.push(component);
+            }
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).expect("create fixture directories");
             }

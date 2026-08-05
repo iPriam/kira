@@ -64,6 +64,7 @@ pub struct KiraString {
 
 /// Boxes `bytes` into a fresh handle held by one value.
 fn into_handle(bytes: Box<[u8]>) -> KStr {
+    crate::accounting::record_alloc();
     Box::into_raw(Box::new(KiraString { bytes, shares: 1 }))
 }
 
@@ -95,6 +96,7 @@ pub(crate) unsafe fn drop_handle(handle: KStr) {
         *shares -= 1;
         return;
     }
+    crate::accounting::record_free();
     // SAFETY: the handle came from `Box::into_raw` in `into_handle`, this was
     // the last hold on it, and the caller's release-once contract makes this
     // the only reclaim of it.

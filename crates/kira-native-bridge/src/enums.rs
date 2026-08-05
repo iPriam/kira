@@ -243,6 +243,10 @@ pub(crate) unsafe fn move_aggregate(
         // allocation of exactly that size.
         unsafe { std::ptr::copy_nonoverlapping(source, data, size) };
     }
+    // One count for the whole erased payload: the box and its bytes are
+    // allocated together and reclaimed together in `free_aggregate`, so
+    // counting them once keeps the pair one-to-one.
+    crate::accounting::record_alloc();
     Box::into_raw(Box::new(AggregatePayload {
         data,
         size,
@@ -282,6 +286,7 @@ pub(crate) unsafe fn free_aggregate(value: *mut AggregatePayload) {
     if value.is_null() {
         return;
     }
+    crate::accounting::record_free();
     // SAFETY: caller's free-once contract makes this the only reclaim.
     let value = unsafe { Box::from_raw(value) };
     if !value.data.is_null() {
@@ -305,6 +310,7 @@ pub(crate) unsafe fn free_aggregate(value: *mut AggregatePayload) {
 /// direction for a word this code cannot interpret.
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_rt_enum_new(tag: i64, payload_kind: i64, payload: u64) -> KEnum {
+    crate::accounting::record_alloc();
     let boxed = BOXES.alloc().cast::<KiraEnum>();
     // SAFETY: the pool hands back a block of exactly this layout, and every
     // field is written before anything reads one.
@@ -605,6 +611,7 @@ pub unsafe extern "C" fn kira_rt_enum_free(value: KEnum) {
     // SAFETY: this was the last hold on the box, and the caller's release-once
     // contract makes this the only reclaim of it.
     let (payload_kind, payload) = unsafe { ((*value).payload_kind, (*value).payload) };
+    crate::accounting::record_free();
     // SAFETY: the box is finished with and nothing reads it again; it owns
     // nothing itself — its payload is released below.
     unsafe { BOXES.free(value.cast::<u8>()) };

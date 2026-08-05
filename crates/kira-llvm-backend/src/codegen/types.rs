@@ -196,6 +196,8 @@ pub(crate) struct Runtime {
     /// The version marker every emitted program references; see
     /// [`kira_runtime_abi::RUNTIME_ABI_MARKER`].
     pub(super) abi_marker: Callable,
+    /// Reports the native heap balance at exit; silent unless asked.
+    pub(super) heap_report: Callable,
     /// The foreign-adapter version marker every generated adapter references, so
     /// a stale sidecar fails to link by name; see
     /// [`kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER`].
@@ -505,6 +507,7 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 &mut [types.i64, types.i64],
             ),
             abi_marker: declare(&abi_marker_symbol(), types.void, &mut []),
+            heap_report: declare(c"kira_rt_heap_report", types.void, &mut []),
             // Appended after the runtime marker; the foreign helpers are an
             // append-only addition to the `kira_rt_*` surface. An adapter
             // references the marker so a stale sidecar fails to link by name.

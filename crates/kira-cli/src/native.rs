@@ -14,12 +14,21 @@ use kira_llvm_backend::{
 /// Where a program's build artifacts live: `<source-dir>/.kira-build/`.
 ///
 /// Artifacts stay beside the program they came from rather than in a shared
-/// location, so two programs can never race for one output path.
+/// location, so two *programs* can never race for one output path. Two builds
+/// of the **same** program still can — the names are the program's, not the
+/// builder's — which is what the lock below is for: holding it for the life of
+/// this value makes a second builder wait rather than relink an executable the
+/// first one is still writing.
 pub struct Artifacts {
     /// The `.kira-build` directory itself.
     directory: PathBuf,
     /// The source file's stem, which every artifact is named after.
     stem: String,
+    /// Held for as long as these artifacts are being written.
+    ///
+    /// Never read. It exists to be dropped at the end of the build, which is
+    /// when the directory becomes another builder's to use.
+    _lock: crate::build_lock::BuildLock,
 }
 
 impl Artifacts {
@@ -29,12 +38,18 @@ impl Artifacts {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join(".kira-build");
-        std::fs::create_dir_all(&directory)?;
+        // Creates the directory as well as locking it, so a caller never has
+        // one without the other.
+        let lock = crate::build_lock::BuildLock::acquire(&directory)?;
         let stem = source
             .file_stem()
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_else(|| "program".to_owned());
-        Ok(Artifacts { directory, stem })
+        Ok(Artifacts {
+            directory,
+            stem,
+            _lock: lock,
+        })
     }
 
     /// The object file path.

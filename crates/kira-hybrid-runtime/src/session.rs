@@ -118,6 +118,10 @@ impl Session {
     /// rather than assuming the bytecode half starts every program.
     pub fn run(&self) -> Result<(), HybridError> {
         let _active = ActiveSession::install(self);
+        // The native half of a hybrid program is a shared library, so it has no
+        // emitted `main` to report its heap balance from. The host asks on its
+        // behalf once the run is over — see `HeapReportAtExit`.
+        let _heap_report = HeapReportAtExit::new(&self.library);
         let entry = self
             .manifest
             .entry_function()
@@ -167,7 +171,12 @@ impl Session {
             .ok_or(NativeCallError::UnboundFunction(function_id))?;
 
         // The callee frees every string among these; this side must not.
-        let lowered = marshal::lower_args(&self.library, args);
+        //
+        // Building an aggregate's node tree can fail — it allocates in the
+        // native half — so this is where a bad argument is reported, before
+        // any trampoline runs on a half-built list.
+        let lowered = marshal::lower_args(&self.library, args)
+            .map_err(|_| NativeCallError::MalformedResult(function_id))?;
         // SAFETY: the trampoline is this library's, and the VM calls with the
         // module's own arity, which validation proved equals the manifest's —
         // which is the signature the trampoline was emitted for.
@@ -408,6 +417,27 @@ fn resolve(base: &Path, recorded: &str) -> PathBuf {
         path.to_path_buf()
     } else {
         base.join(path)
+    }
+}
+
+/// Asks the native half for its heap balance when a run ends, however it ends.
+///
+/// A guard rather than a call at the end of `run`, because a run that traps
+/// leaves through `?` and a leak is exactly as interesting on that path — more
+/// so, since an early return is where a release is most often skipped.
+struct HeapReportAtExit<'a> {
+    library: &'a NativeLibrary,
+}
+
+impl<'a> HeapReportAtExit<'a> {
+    fn new(library: &'a NativeLibrary) -> Self {
+        HeapReportAtExit { library }
+    }
+}
+
+impl Drop for HeapReportAtExit<'_> {
+    fn drop(&mut self) {
+        self.library.report_heap();
     }
 }
 

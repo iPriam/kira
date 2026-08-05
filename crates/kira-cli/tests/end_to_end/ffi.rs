@@ -89,6 +89,12 @@ staticLib = "lib/libffifixture.a"
 [[target]]
 triple = "aarch64-linux-gnu"
 staticLib = "lib/libffifixture.a"
+[[target]]
+triple = "x86_64-windows-msvc"
+staticLib = "lib/libffifixture.a"
+[[target]]
+triple = "aarch64-windows-msvc"
+staticLib = "lib/libffifixture.a"
 "#;
 
 /// Runs `kira run` with `args` and returns its output.

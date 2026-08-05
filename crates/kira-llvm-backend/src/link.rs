@@ -325,6 +325,14 @@ pub fn link_adapter_sidecar(
         "-shared"
     };
     let mut arguments = vec![shared_flag.to_owned()];
+    // The host symbols as well as the adapters': the sidecar carries its own
+    // copy of the runtime archive, so the invoker slot a callback runs through
+    // is the *sidecar's*, and the host installs into it by name through
+    // `kira_hybrid_install_runtime_invoker`. On Mach-O and ELF that symbol is
+    // exported the moment it is linked in; on PE it is not, and a C function
+    // calling back into Kira reported `native code called runtime function 0
+    // before a host installed a runtime invoker`.
+    arguments.extend(force_host_symbols());
     arguments.extend(force_foreign_symbols(adapter_symbols));
     link_with(
         llvm,
@@ -399,16 +407,7 @@ fn force_foreign_symbols(adapter_symbols: &[String]) -> Vec<String> {
         .map(str::to_owned),
     );
     names.extend(adapter_symbols.iter().cloned());
-    names
-        .into_iter()
-        .map(|symbol| {
-            if cfg!(target_os = "macos") {
-                format!("-Wl,-u,_{symbol}")
-            } else {
-                format!("-Wl,--undefined={symbol}")
-            }
-        })
-        .collect()
+    force_symbols(names)
 }
 
 /// Linker flags that pull the host-facing runtime symbols into a shared library.
@@ -438,8 +437,24 @@ fn force_foreign_symbols(adapter_symbols: &[String]) -> Vec<String> {
 /// by name — which is exactly what the host reported: `app.dll` "does not
 /// export `kira_rt_str_new`".
 fn force_host_symbols() -> Vec<String> {
-    kira_runtime_abi::HYBRID_HOST_SYMBOLS
-        .iter()
+    force_symbols(
+        kira_runtime_abi::HYBRID_HOST_SYMBOLS
+            .iter()
+            .map(|s| (*s).to_owned()),
+    )
+}
+
+/// Spells "pull this symbol's definition in, and let the host find it by name"
+/// for the host platform's linker.
+///
+/// One definition rather than one per caller: the hybrid library and the VM's
+/// adapter sidecar have the same requirement — a shared library whose symbols
+/// are resolved by `dlsym`/`GetProcAddress` and referenced from nowhere inside
+/// it — and when only one of them knew the PE/COFF spelling, the sidecar linked
+/// clean on Windows and then failed to produce its ABI marker.
+fn force_symbols(names: impl IntoIterator<Item = String>) -> Vec<String> {
+    names
+        .into_iter()
         .flat_map(|symbol| {
             if cfg!(target_os = "macos") {
                 // Mach-O prefixes C symbols with an underscore; ELF does not.
@@ -480,10 +495,139 @@ mod force_host_symbol_tests {
             }
         }
     }
+
+    /// A Windows path survives the response file's own escaping.
+    ///
+    /// This is the whole reason arguments are quoted rather than written
+    /// verbatim: clang eats a lone backslash, so `C:\Users\x` would reach the
+    /// linker as `C:Usersx` and fail on a file that is plainly there.
+    #[test]
+    fn a_response_argument_keeps_its_backslashes() {
+        assert_eq!(
+            quote_response_argument(r"C:\Users\x\main.o"),
+            r#""C:\\Users\\x\\main.o""#
+        );
+        assert_eq!(
+            quote_response_argument(r"C:\Program Files\lib.a"),
+            r#""C:\\Program Files\\lib.a""#
+        );
+        assert_eq!(
+            quote_response_argument(r"\\?\C:\a\sokol.lib"),
+            r#""C:\\a\\sokol.lib""#,
+            "the verbatim prefix is dropped: link.exe opens no archive named with one"
+        );
+        assert_eq!(
+            quote_response_argument("-Wl,/EXPORT:sym"),
+            "\"-Wl,/EXPORT:sym\""
+        );
+    }
+
+    /// A short link is left exactly as it was — no file, no indirection.
+    #[test]
+    fn a_short_command_line_needs_no_response_file() {
+        let arguments = vec![std::ffi::OsString::from("main.o")];
+        let response = response_file_for(&arguments, Path::new("out"))
+            .expect("a short line is never an error");
+        assert!(response.is_none());
+    }
+
+    /// The sidecar's symbols get the same treatment as the hybrid library's.
+    ///
+    /// They did not once: this function spelled only the Mach-O and ELF forms,
+    /// so on Windows the VM's sidecar linked clean and then reported `missing
+    /// ABI marker kira_foreign_adapter_abi_version_2` — the marker was in the
+    /// DLL but not in its export table.
+    #[test]
+    fn every_foreign_symbol_is_forced_in_this_platforms_spelling() {
+        let adapters = ["kira_foreign_adapter_0".to_owned()];
+        let flags = force_foreign_symbols(&adapters);
+        for symbol in [
+            kira_runtime_abi::FOREIGN_ADAPTER_ABI_MARKER,
+            kira_runtime_abi::FOREIGN_STRING_NEW_SYMBOL,
+            "kira_foreign_adapter_0",
+        ] {
+            assert!(
+                flags.iter().any(|flag| flag.contains(symbol)),
+                "`{symbol}` is never forced into the sidecar link"
+            );
+            if cfg!(target_env = "msvc") {
+                assert!(
+                    flags.contains(&format!("-Wl,/EXPORT:{symbol}")),
+                    "`{symbol}` is pulled into the sidecar but never exported, \
+                     so the loader cannot resolve it"
+                );
+            }
+        }
+    }
 }
 
 /// Runs the linker driver over `object` plus the runtime archive and any
 /// selected foreign C archives.
+/// The longest command line this platform will accept, with room to spare.
+///
+/// Windows caps a process's whole command line at 32,767 characters, and the
+/// driver's own path counts against it. A package binding a large C API is not
+/// an exotic case: kira-graphics declares roughly eight hundred foreign imports
+/// across Vulkan and Direct3D, each of which is forced into the link by name —
+/// and on PE by *two* names, since a symbol must be kept and then exported. That
+/// is well past the cap, and the failure is `os error 206`, which names the
+/// length and nothing about linking.
+const MAX_COMMAND_LINE: usize = 30_000;
+
+/// Writes `arguments` to a response file when they are too long to pass directly.
+///
+/// Returns `None` when the command line fits, which is the common case and
+/// leaves the invocation exactly as it was.
+///
+/// The file sits beside the artifact being linked, so a failed link leaves the
+/// exact argument list behind to read.
+fn response_file_for(
+    arguments: &[std::ffi::OsString],
+    output: &Path,
+) -> Result<Option<PathBuf>, LinkError> {
+    let length: usize = arguments.iter().map(|a| a.len() + 1).sum();
+    if length <= MAX_COMMAND_LINE {
+        return Ok(None);
+    }
+
+    let path = output.with_extension("rsp");
+    let body: String = arguments
+        .iter()
+        .map(|argument| quote_response_argument(&argument.to_string_lossy()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&path, body).map_err(|source| LinkError::ArchiveUnwritable {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(Some(path))
+}
+
+/// Quotes one argument for a clang response file.
+///
+/// clang tokenizes a response file the GNU way even on Windows, where a
+/// backslash escapes the character after it. A Windows path written verbatim
+/// therefore arrives with its separators eaten — `C:\Users\x` reaches the
+/// linker as `C:Usersx`, and the verbatim `\\?\C:\...` prefix canonicalization
+/// produces becomes `?C:...`. So every backslash is doubled, and every argument
+/// is quoted besides, which covers the spaces `C:\Program Files` guarantees.
+fn quote_response_argument(argument: &str) -> String {
+    let plain = strip_verbatim_prefix(argument);
+    let escaped = plain.replace('\\', r"\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+/// Drops Windows' `\\?\` verbatim prefix from a path.
+///
+/// Canonicalizing a path on Windows returns one, and `link.exe` does not accept
+/// it for an input library: the archive is handed over, opened by nobody, and
+/// every symbol it defines comes back undefined — 1,062 of them for a package
+/// binding sokol, with no diagnostic naming the file. Everything downstream
+/// takes the ordinary form, so the prefix is dropped rather than carried.
+fn strip_verbatim_prefix(path: &str) -> &str {
+    path.strip_prefix(r"\\?\").unwrap_or(path)
+}
+
 fn link_with(
     llvm: &LlvmInstallation,
     object: &Path,
@@ -519,39 +663,54 @@ fn link_with(
         });
     }
 
-    let mut command = Command::new(&driver);
-    command.arg(object);
+    let mut arguments: Vec<std::ffi::OsString> = Vec::new();
+    arguments.push(object.into());
     // The shim object sits between the program and the archives: the adapters in
     // `object` call into it, and it calls the real C symbols the archives define.
     if let Some(shim) = shim {
-        command.arg(shim);
+        arguments.push(shim.into());
     }
     // The foreign archives precede the runtime archive so an adapter's reference
     // to a C symbol is satisfied by the archive that defines it.
     for archive in foreign_link.archives() {
-        command.arg(archive);
+        arguments.push(archive.into());
     }
-    command.arg(runtime_archive).arg("-o").arg(executable);
+    arguments.push(runtime_archive.into());
+    arguments.push("-o".into());
+    arguments.push(executable.into());
     // The frameworks, system libraries, and linker flags the selected rows
     // declared. They follow the archives for the same reason the archives
     // precede the runtime: a system library resolves symbols left of it.
     for argument in foreign_link.driver_arguments() {
-        command.arg(argument);
+        arguments.push(argument.into());
     }
     for argument in extra {
-        command.arg(argument);
+        arguments.push(argument.into());
     }
     for argument in platform_link_arguments() {
-        command.arg(argument);
+        arguments.push(argument.into());
     }
     for argument in reproducible_link_arguments() {
-        command.arg(argument);
+        arguments.push(argument.into());
     }
     // The managed clang is not Apple's, so it has no built-in knowledge of
     // where the platform libraries live; without an explicit sysroot the link
     // fails on `library 'System' not found`.
     if let Some(sysroot) = macos_sysroot() {
-        command.arg("-isysroot").arg(sysroot);
+        arguments.push("-isysroot".into());
+        arguments.push(sysroot.into());
+    }
+
+    let mut command = Command::new(&driver);
+    match response_file_for(&arguments, executable)? {
+        Some(response) => {
+            let mut flag = std::ffi::OsString::from("@");
+            flag.push(&response);
+            command.arg(flag);
+        }
+        None => {
+            command.args(&arguments);
+        }
     }
 
     let output = command

@@ -41,10 +41,16 @@ pub fn build(
         ));
     };
 
+    let directory = build_directory(source);
+    // Held until this build finishes: a hybrid library writes a `.kbc`, a
+    // manifest and a shared library under one name, and a second builder would
+    // replace one of the three while the first was still writing another.
+    let _lock = crate::build_lock::BuildLock::acquire(&directory)
+        .map_err(|source| LibraryError::BuildDirectory { source })?;
     let options = HybridLibraryOptions {
         name,
         version,
-        build_directory: build_directory(source),
+        build_directory: directory,
         toolchain_root: kira_build::toolchain_root(),
         runtime_archive: crate::native::runtime_archive(&compiled.ir)?,
         emit_llvm_ir,
