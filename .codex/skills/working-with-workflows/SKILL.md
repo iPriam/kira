@@ -11,9 +11,9 @@ Staff Sol for preparation, implementation, and focused testing. Do not add a
 verifier for small or medium work: tests and direct behavioral checks belong
 inside the Sol implementation call.
 
-Skip preparation when the work-list and interfaces are already known. When
+Skip preparation when the work-list and interfaces are known; when
 decomposition itself is the risk, use one Sol preparation call. Never fan out
-multiple planners or ask several agents to reconcile competing plans.
+multiple planners.
 
 Use `pipeline()` when work items can move independently. Give every concurrent
 item a disjoint substrate: no file, resource, or record may belong to two
@@ -32,15 +32,13 @@ shared contract, or depends on integration behavior no single substrate can
 verify. After every Sol implementation finishes, run exactly one read-only
 Fable agent over the integrated change. Never run one Fable per implementer.
 
-Require Fable to return only verified findings with file and line, concrete
-evidence, impact, owning substrate, and a specific fix. Fable reviews; Fable
-does not edit.
+Require Fable to return only verified findings with file and line, evidence,
+impact, owning substrate, and a specific fix. Fable reviews; Fable does not
+edit.
 
-When findings survive, group them by disjoint substrate and send each group to
-Sol for repair. Do not run another verifier unless the user explicitly asks.
-If Fable returns no findings, stop.
-
-For local or single-area work, omit Fable entirely.
+Group surviving findings by disjoint substrate and send each to Sol for repair.
+Run no second verifier unless the user asks. Omit Fable entirely for local or
+single-area work.
 
 ## Pick models and effort
 
