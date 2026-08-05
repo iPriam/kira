@@ -9,6 +9,14 @@
 /// An error raised while lowering IR to bytecode.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CompileError {
+    /// The mid stage could not decide what a function releases.
+    ///
+    /// A contradiction inside one function rather than anything the source
+    /// said, so it surfaces as a compiler fault. Reported rather than defaulted
+    /// to "release nothing": a function compiled with an empty plan links and
+    /// runs and leaks every value it holds.
+    #[error("cannot plan releases: {0}")]
+    ReleasePlan(#[from] kira_ir::mid::MidError),
     /// A function needs more local slots than the format's `u16` can address.
     #[error("function `{function}` needs {count} local slots; the bytecode format allows 65535")]
     TooManyLocals {

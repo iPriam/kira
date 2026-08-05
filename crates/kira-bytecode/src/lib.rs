@@ -13,12 +13,13 @@ pub mod compile;
 pub mod exports;
 pub mod module;
 mod module_foreign;
+mod module_release;
 pub mod op;
 pub mod validate;
 
 pub use compile::{CompileError, compile, compile_hybrid};
 pub use exports::{ExportTable, ExportType, ModuleExport};
-pub use module::{FuncProto, MAGIC, Module, ModuleDecodeError};
+pub use module::{FrameRelease, FuncProto, MAGIC, Module, ModuleDecodeError};
 pub use op::{DecodeError, Instruction, decode, encode};
 pub use validate::ModuleValidateError;
 
@@ -219,6 +220,43 @@ mod tests {
             Module::from_bytes(&module.to_bytes()).unwrap().exports,
             module.exports
         );
+    }
+
+    /// The module carries the mid stage's plan rather than a second opinion
+    /// about it, and carries it all the way through the bytes.
+    #[test]
+    fn a_compiled_function_releases_what_the_mid_stage_planned() {
+        use kira_semantics_model::Type;
+        let mut program = single_main(
+            vec![IrStmt::Return { value: None }],
+            la_arena::Arena::new(),
+            0,
+        );
+        let function = &mut program.functions[0];
+        function.param_count = 1;
+        function.locals = vec![Type::String, Type::INT, Type::String];
+        function.native_state_locals = vec![None; 3];
+        function.by_reference_params = vec![0];
+
+        // Slot 1 is an `Int` and owns nothing. Slot 0 is a `borrow mut`, which
+        // the VM hands the callee as a copy of its own — so unlike on the
+        // native side it is the callee's to release.
+        let planned = FrameRelease::Planned(vec![0, 2]);
+        let module = compile(&program).expect("compiles");
+        assert_eq!(module.functions[0].releases, planned);
+        assert_eq!(module.validate(), Ok(()));
+        assert_eq!(
+            Module::from_bytes(&module.to_bytes()).unwrap().functions[0].releases,
+            planned
+        );
+
+        let plan = kira_ir::mid::plan_function(
+            &program.functions[0],
+            &program.types,
+            kira_ir::mid::Lending::BY_VALUE,
+        )
+        .expect("a plan");
+        assert_eq!(plan.slots(), &[0, 2]);
     }
 
     #[test]

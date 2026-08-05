@@ -14,7 +14,7 @@
 //!   names a listed class, and no consumer-facing name is claimed twice.
 
 use crate::exports::ExportType;
-use crate::module::Module;
+use crate::module::{FrameRelease, Module};
 use crate::op::Instruction;
 
 /// A structural fault found by [`Module::validate`].
@@ -46,6 +46,24 @@ pub enum ModuleValidateError {
     NotReturnTerminated {
         /// The offending function's name.
         function: String,
+    },
+    /// A release plan names a slot the function does not have.
+    #[error("function `{function}` releases slot {slot}, which is not a local")]
+    ReleaseSlotOutOfRange {
+        /// The offending function's name.
+        function: String,
+        /// The slot the plan named.
+        slot: u16,
+    },
+    /// A release plan repeats a slot or lists one out of order.
+    ///
+    /// The plan is a set written ascending; a repeat would free one slot twice.
+    #[error("function `{function}` releases slot {slot} out of order or twice")]
+    ReleasePlanUnordered {
+        /// The offending function's name.
+        function: String,
+        /// The slot that broke the order.
+        slot: u16,
     },
     /// A function claims more parameters than local slots.
     #[error("function `{function}` declares more parameters than local slots")]
@@ -123,6 +141,30 @@ impl Module {
             });
         }
         for function in &self.functions {
+            // The release plan is checked before anything else about the body,
+            // because it is the one operand set the runtime walks *after* the
+            // body has finished: a slot out of range there is not caught by any
+            // instruction check.
+            if let FrameRelease::Planned(slots) = &function.releases {
+                let mut previous = None;
+                for &slot in slots {
+                    if slot >= function.local_count {
+                        return Err(ModuleValidateError::ReleaseSlotOutOfRange {
+                            function: function.name.clone(),
+                            slot,
+                        });
+                    }
+                    // Ascending and distinct: the plan is a set, and a repeat
+                    // is a double free rather than a redundant release.
+                    if previous.is_some_and(|last| slot <= last) {
+                        return Err(ModuleValidateError::ReleasePlanUnordered {
+                            function: function.name.clone(),
+                            slot,
+                        });
+                    }
+                    previous = Some(slot);
+                }
+            }
             // A native function's body lives in the other half of a hybrid
             // program, so it is the one kind that legitimately carries no code.
             // It still has to be well-formed: a signature to marshal against,
@@ -298,6 +340,7 @@ mod tests {
             local_count: locals,
             execution: kira_runtime_abi::Execution::Runtime,
             code,
+            releases: FrameRelease::EveryLocal,
         }
     }
 

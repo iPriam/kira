@@ -15,6 +15,7 @@ workspace = true
 kira-runtime-abi.workspace = true
 kira-semantics-model.workspace = true
 la-arena.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 kira-source.workspace = true

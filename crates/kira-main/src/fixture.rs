@@ -12,7 +12,7 @@
 //! fixture proves the embedding surface, not the compiler.
 
 use kira_bytecode::exports::{ExportTable, ExportType, ModuleExport};
-use kira_bytecode::module::{FuncProto, Module};
+use kira_bytecode::module::{FrameRelease, FuncProto, Module};
 use kira_bytecode::op::{FieldPath, Instruction as I};
 use kira_runtime_abi::Execution;
 
@@ -24,6 +24,7 @@ fn func(name: &str, params: u16, locals: u16, code: Vec<I>) -> FuncProto {
         local_count: locals,
         execution: Execution::Runtime,
         code,
+        releases: FrameRelease::EveryLocal,
     }
 }
 

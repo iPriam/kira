@@ -1,5 +1,5 @@
 use super::*;
-use kira_bytecode::{FuncProto, Instruction};
+use kira_bytecode::{FrameRelease, FuncProto, Instruction};
 use kira_live::{NamedPayload, PayloadKind};
 use kira_manifest::{BuildProfile, RunnerId};
 use kira_runtime_abi::Execution;
@@ -42,6 +42,7 @@ fn printing_module() -> Module {
                 Instruction::Print,
                 Instruction::ReturnVoid,
             ],
+            releases: FrameRelease::EveryLocal,
         }],
     }
 }
@@ -389,6 +390,7 @@ fn an_invalid_module_fails_at_link() {
             // A call to a function that does not exist: the VM's validator
             // is what catches this, and it runs at link.
             code: vec![Instruction::Call(99), Instruction::ReturnVoid],
+            releases: FrameRelease::EveryLocal,
         }],
     };
 

@@ -13,7 +13,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use kira_bytecode::{FuncProto, Instruction, Module};
+use kira_bytecode::{FrameRelease, FuncProto, Instruction, Module};
 use kira_desktop_runner::DesktopHost;
 use kira_live::{
     Bundle, LiveEvent, LiveServer, NamedPayload, PayloadKind, RunnerClient, SessionPhase,
@@ -44,6 +44,7 @@ fn printing_module() -> Module {
                 Instruction::Print,
                 Instruction::ReturnVoid,
             ],
+            releases: FrameRelease::EveryLocal,
         }],
     }
 }
@@ -281,6 +282,7 @@ fn a_session_whose_app_never_starts_is_not_ready() {
             local_count: 0,
             execution: Execution::Runtime,
             code: vec![Instruction::Call(99), Instruction::ReturnVoid],
+            releases: FrameRelease::EveryLocal,
         }],
     };
     let bundle = Bundle::build(

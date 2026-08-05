@@ -16,6 +16,7 @@
 mod borrow_alias;
 pub mod ir;
 pub mod lower;
+pub mod mid;
 mod tasks;
 
 pub use ir::{

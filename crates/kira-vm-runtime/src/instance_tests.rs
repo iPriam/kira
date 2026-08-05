@@ -2,7 +2,7 @@
 //! what "balanced" means once a heap outlives a call.
 
 use super::*;
-use kira_bytecode::module::{FuncProto, Module};
+use kira_bytecode::module::{FrameRelease, FuncProto, Module};
 use kira_bytecode::op::Instruction as I;
 use kira_runtime_abi::CapturingHost;
 
@@ -13,6 +13,7 @@ fn func(name: &str, params: u16, locals: u16, code: Vec<I>) -> FuncProto {
         local_count: locals,
         execution: kira_runtime_abi::Execution::Runtime,
         code,
+        releases: FrameRelease::EveryLocal,
     }
 }
 

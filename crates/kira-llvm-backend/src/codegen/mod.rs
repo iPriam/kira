@@ -568,6 +568,25 @@ impl<'a> Codegen<'a> {
     }
 
     /// The LLVM type a Kira value type lowers to.
+    /// How a borrowed parameter reaches a callee in this module.
+    ///
+    /// The read-only half is the same whole-program decision
+    /// [`Codegen::param_is_pointer`] describes, said in the vocabulary
+    /// `kira_ir::mid` plans releases with — so the stage that decides what a
+    /// function releases is told the one thing about this module it cannot read
+    /// off the function itself. The write-through half needs no such decision:
+    /// a `borrow mut` is a pointer into the caller's frame in every native
+    /// module, whatever shape it is.
+    fn lending(&self) -> kira_ir::mid::Lending {
+        kira_ir::mid::Lending {
+            read_only: match self.kind {
+                ModuleKind::Executable => kira_ir::mid::BorrowLending::ByPointer,
+                _ => kira_ir::mid::BorrowLending::ByValue,
+            },
+            write_through: kira_ir::mid::BorrowLending::ByPointer,
+        }
+    }
+
     /// Whether parameter `slot` of `function` arrives as a pointer here.
     ///
     /// Lending a read-only borrow is a whole-program decision: every call to the

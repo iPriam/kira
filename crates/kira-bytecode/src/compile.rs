@@ -21,9 +21,22 @@ mod widen;
 pub use error::CompileError;
 
 use crate::exports::build_export_table;
-use crate::module::{FuncProto, Module};
+use crate::module::{FrameRelease, FuncProto, Module};
 use crate::op::Instruction;
 use kira_runtime_abi::Execution;
+
+/// How the VM lends a borrowed parameter, told to `kira_ir::mid` so it plans
+/// releases for the engine that will run this module.
+///
+/// By value, both kinds, because the VM has no other option: its values live in
+/// a frame's slot vector, not at addresses a callee could hold. A `borrow mut`
+/// therefore reaches a callee as a copy the callee owns and returns to the
+/// caller by writeback, which leaves the slot `Void` — so a plan that releases
+/// it frees the copy on the paths with no writeback and does nothing on the
+/// paths with one. The native backend answers the same question differently
+/// because its calling convention is different, not because it decided
+/// separately.
+const VM_LENDING: kira_ir::mid::Lending = kira_ir::mid::Lending::BY_VALUE;
 
 /// Compiles a lowered program into a runnable module for the VM.
 ///
@@ -64,6 +77,7 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
             count: program.functions.len(),
         })?;
     let mut widens = widen::WidenHelpers::new(function_count);
+    let plans = kira_ir::mid::plan(program, VM_LENDING)?;
     for (index, function) in program.functions.iter().enumerate() {
         let execution = engines.get(index).copied().unwrap_or(Execution::Runtime);
         let param_count =
@@ -97,12 +111,17 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
             compiler.code.push(Instruction::ReturnVoid);
             compiler.code
         };
+        let releases = match plans.get(index) {
+            Some(plan) => frame_release(plan, &function.name)?,
+            None => FrameRelease::EveryLocal,
+        };
         functions.push(FuncProto {
             name: function.name.clone(),
             param_count,
             local_count,
             execution,
             code,
+            releases,
         });
     }
     // The helpers go last, keeping every index a call site was compiled with.
@@ -120,6 +139,11 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
             // of a hybrid build has its own leaf and never calls this one.
             execution: Execution::Runtime,
             code,
+            // A helper is synthesized here and has no IR function behind it,
+            // so there is nothing for the mid stage to plan from. It gets the
+            // frame discipline every module had before plans existed, which is
+            // also the one its emitter was written against.
+            releases: FrameRelease::EveryLocal,
         });
     }
 
@@ -136,6 +160,27 @@ fn compile_with(program: &IrProgram, engines: &[Execution]) -> Result<Module, Co
         foreign_aggregates: program.foreign_aggregates.clone(),
         foreign_callbacks: program.foreign_callbacks.clone(),
     })
+}
+
+/// Narrows a mid-stage plan to the slot width the bytecode format addresses.
+///
+/// A slot beyond `u16` cannot be encoded, and a function with that many locals
+/// is refused earlier for the same reason; this reports it in the same
+/// vocabulary rather than truncating a plan into one that silently leaks.
+fn frame_release(
+    plan: &kira_ir::mid::ReleasePlan,
+    function: &str,
+) -> Result<FrameRelease, CompileError> {
+    let mut slots = Vec::with_capacity(plan.len());
+    for &slot in plan.slots() {
+        slots.push(
+            u16::try_from(slot).map_err(|_| CompileError::LocalSlotOutOfRange {
+                function: function.to_owned(),
+                slot,
+            })?,
+        );
+    }
+    Ok(FrameRelease::Planned(slots))
 }
 
 /// Deduplicating string constant pool.

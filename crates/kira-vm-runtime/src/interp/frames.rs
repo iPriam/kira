@@ -12,7 +12,7 @@
 //! place — are the ones where a leak or a double free would hide. Keeping them
 //! together is what makes that reviewable.
 
-use kira_bytecode::module::Module;
+use kira_bytecode::module::{FrameRelease, Module};
 use kira_runtime_abi::{HostCapabilities, NativeArg, TaskExecutor};
 
 use crate::error::VmError;
@@ -175,6 +175,73 @@ impl<'h> Vm<'h> {
             frame.locals[slot] = self.pop()?;
         }
         Ok(())
+    }
+
+    /// Tears down the frame that just returned, and answers with the run's
+    /// value when it was the last one.
+    ///
+    /// Two steps in this order and no other: the written-through parameters
+    /// move into their caller's places, then the slots the function's release
+    /// plan names are freed. A parameter that moved out left `Value::Void`
+    /// behind, so a plan naming it frees nothing the caller now holds.
+    ///
+    /// **What is released is not decided here.** `kira_ir::mid` decides it, for
+    /// this engine and the native one alike, and the compiler writes its answer
+    /// into the module as [`FrameRelease::Planned`]. This walks that answer. A
+    /// module carrying no plan — one built by hand, or written before the
+    /// section existed — asks for [`FrameRelease::EveryLocal`] instead, which is
+    /// the discipline the VM had before plans existed: safe on any module,
+    /// because a slot the function does not own holds a scalar or an opaque
+    /// token and freeing either does nothing.
+    pub(super) fn finish_frame(
+        &mut self,
+        module: &Module,
+        frames: &mut Vec<Frame>,
+        result: Value,
+    ) -> Result<Option<Value>, VmError> {
+        let Some(mut finished) = frames.pop() else {
+            return Err(VmError::FrameUnderflow);
+        };
+        // Every target names a distinct parameter, so taking each in turn
+        // leaves the rest intact.
+        let writebacks = std::mem::take(&mut finished.writebacks);
+        for writeback in writebacks {
+            let Some(value) = finished
+                .locals
+                .get_mut(writeback.param as usize)
+                .map(|slot| std::mem::replace(slot, Value::Void))
+            else {
+                continue;
+            };
+            if let Err(error) = self.write_back(frames, &writeback, value) {
+                self.discard(finished.locals);
+                self.heap.drop_value(result);
+                return Err(error);
+            }
+        }
+        match &module.functions[finished.func as usize].releases {
+            FrameRelease::EveryLocal => self.discard(finished.locals),
+            FrameRelease::Planned(slots) => {
+                for &slot in slots {
+                    // A slot past the frame is refused by `Module::validate`
+                    // before a module runs; skipping it here is what makes the
+                    // unreachable case a leak rather than a panic.
+                    let Some(held) = finished
+                        .locals
+                        .get_mut(slot as usize)
+                        .map(|slot| std::mem::replace(slot, Value::Void))
+                    else {
+                        continue;
+                    };
+                    self.heap.drop_value(held);
+                }
+            }
+        }
+        if frames.is_empty() {
+            return Ok(Some(result));
+        }
+        self.stack.push(result);
+        Ok(None)
     }
 
     /// Writes one of a returning frame's final parameter slots back into the
