@@ -212,6 +212,7 @@ mod tests {
                     local_count: 0,
                     execution: Execution::Runtime,
                     code: vec![Instruction::ReturnVoid],
+                    releases: kira_bytecode::FrameRelease::EveryLocal,
                 },
                 FuncProto {
                     name: "hot".to_owned(),
@@ -219,6 +220,7 @@ mod tests {
                     local_count: 1,
                     execution: Execution::Native,
                     code: Vec::new(),
+                    releases: kira_bytecode::FrameRelease::EveryLocal,
                 },
             ],
             main: Some(0),

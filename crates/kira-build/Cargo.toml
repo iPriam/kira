@@ -64,3 +64,8 @@ workspace = true
 # expression arena is part of the IR's public shape, so a test that constructs
 # one names the arena crate the same way `kira-ir` does.
 la-arena.workspace = true
+# Running a compiled program on the VM, to ask its heap accounting whether the
+# release plan the module carries is complete. This crate is the lowest one
+# that can compile source the whole way down, and the balance is only
+# observable from the engine that runs it.
+kira-vm-runtime.workspace = true

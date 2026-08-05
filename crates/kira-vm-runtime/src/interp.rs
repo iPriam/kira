@@ -13,6 +13,7 @@ use kira_runtime_abi::{HostCapabilities, NativeStatePathStep, TaskExecutor};
 use crate::error::{NativeStateOperation, VmError};
 use crate::value::{Heap, Value};
 
+mod arrays;
 mod cells;
 mod compiler;
 mod env;
@@ -29,7 +30,7 @@ pub(crate) use self::program::check_signature;
 pub use self::program::{Program, RunOutcome, execute};
 
 use self::frames::{Frame, Writeback, new_frame};
-use self::place::{ResolvedStep, check_index};
+use self::place::ResolvedStep;
 
 /// Guards against unbounded recursion turning into unbounded memory use.
 const MAX_CALL_DEPTH: usize = 1 << 20;
@@ -107,36 +108,9 @@ impl Vm<'_> {
                     } else {
                         Value::Void
                     };
-                    let Some(mut finished) = frames.pop() else {
-                        return Err(VmError::FrameUnderflow);
-                    };
-                    // A written-through parameter moves into the caller's place
-                    // before this frame's locals are dropped, so its value lands
-                    // in the place rather than being freed with the frame. Every
-                    // target names a distinct parameter, so taking each in turn
-                    // leaves the rest intact.
-                    let writebacks = std::mem::take(&mut finished.writebacks);
-                    for writeback in writebacks {
-                        let Some(value) = finished
-                            .locals
-                            .get_mut(writeback.param as usize)
-                            .map(|slot| std::mem::replace(slot, Value::Void))
-                        else {
-                            continue;
-                        };
-                        if let Err(error) = self.write_back(frames, &writeback, value) {
-                            self.discard(finished.locals);
-                            self.heap.drop_value(result);
-                            return Err(error);
-                        }
+                    if let Some(value) = self.finish_frame(module, frames, result)? {
+                        return Ok(value);
                     }
-                    for local in finished.locals {
-                        self.heap.drop_value(local);
-                    }
-                    if frames.is_empty() {
-                        return Ok(result);
-                    }
-                    self.stack.push(result);
                 }
                 Instruction::Call(index) => {
                     if frames.len() >= MAX_CALL_DEPTH {
@@ -375,70 +349,9 @@ impl Vm<'_> {
                     return Err(error);
                 }
             }
-            Instruction::ArrayAppend { slot, path } => {
-                let value = self.pop()?;
-                let appended = self.with_steps(|vm, steps| {
-                    vm.fill_steps(&path, steps)?;
-                    vm.append_through(frame, slot, steps, value)
-                });
-                if let Err(error) = appended {
-                    self.heap.drop_value(value);
-                    return Err(error);
-                }
-            }
-            Instruction::NewArray(count) => {
-                let first = self
-                    .stack
-                    .len()
-                    .checked_sub(count as usize)
-                    .ok_or(VmError::StackUnderflow)?;
-                // The elements were pushed in written order, so splitting them
-                // off preserves that order — and moves them, so nothing is
-                // copied and nothing is left on the stack to double-free.
-                let elements = self.stack.split_off(first);
-                let id = self.heap.alloc_array(elements);
-                self.stack.push(Value::Array(id));
-            }
-            Instruction::ArrayGet => {
-                let index = self.pop_int()?;
-                let base = self.pop()?;
-                if let Value::NativeSnapshot(id) = base {
-                    let Ok(index) = u64::try_from(index) else {
-                        self.heap.free_snapshot(id);
-                        return Err(VmError::NegativeIndex);
-                    };
-                    let element = self.read_snapshot_child(
-                        id,
-                        NativeStatePathStep::Index(index),
-                        VmError::IndexOutOfBounds,
-                    )?;
-                    self.stack.push(element);
-                    return Ok(());
-                }
-                let Value::Array(id) = base else {
-                    self.heap.drop_value(base);
-                    return Err(VmError::NotAnArray);
-                };
-                let read = check_index(index, self.heap.array_len(id)).and_then(|index| {
-                    self.heap
-                        .element(id, index)
-                        .ok_or(VmError::IndexOutOfBounds)
-                });
-                let element = match read {
-                    Ok(element) => element,
-                    Err(error) => {
-                        // The array was ours; a failed read frees it.
-                        self.heap.drop_value(base);
-                        return Err(error);
-                    }
-                };
-                // The element is copied out before the array is dropped: the
-                // array owns its elements, so handing one out without copying
-                // would hand out storage this drop is about to free.
-                let copy = self.heap.copy_value(element);
-                self.heap.drop_value(base);
-                self.stack.push(copy);
-            }
+            Instruction::ArrayAppend { slot, path } => self.array_append(frame, slot, &path)?,
+            Instruction::NewArray(count) => self.new_array(count)?,
+            Instruction::ArrayGet => self.array_get()?,
             Instruction::TaskOp(prim) => {
                 // Popped in reverse: the compiler pushed the three operands
                 // deepest-first, so the last pushed is the third.
@@ -448,65 +361,8 @@ impl Vm<'_> {
                 let answer = self.tasks.perform(prim, first, second, third)?;
                 self.stack.push(Value::Int(answer));
             }
-            Instruction::ArrayGetLocal(slot) => {
-                let index = self.pop_int()?;
-                // The local is *borrowed*: its handle is read without copying
-                // the array, and nothing is dropped here because this
-                // instruction does not own it. Only the element is copied out,
-                // which is what keeps a handed-out element unshared.
-                if let Value::NativeSnapshot(id) = frame.locals[slot as usize] {
-                    // Borrowed here too: the read stays in the local, so this
-                    // takes a hold of its own rather than consuming it.
-                    let Value::NativeSnapshot(borrowed) =
-                        self.heap.copy_value(Value::NativeSnapshot(id))
-                    else {
-                        return Err(VmError::NotAnArray);
-                    };
-                    let Ok(index) = u64::try_from(index) else {
-                        self.heap.free_snapshot(borrowed);
-                        return Err(VmError::NegativeIndex);
-                    };
-                    let element = self.read_snapshot_child(
-                        borrowed,
-                        NativeStatePathStep::Index(index),
-                        VmError::IndexOutOfBounds,
-                    )?;
-                    self.stack.push(element);
-                    return Ok(());
-                }
-                let Value::Array(id) = frame.locals[slot as usize] else {
-                    return Err(VmError::NotAnArray);
-                };
-                let index = check_index(index, self.heap.array_len(id))?;
-                let element = self
-                    .heap
-                    .element(id, index)
-                    .ok_or(VmError::IndexOutOfBounds)?;
-                let copy = self.heap.copy_value(element);
-                self.stack.push(copy);
-            }
-            Instruction::ArrayLen => {
-                let base = self.pop()?;
-                if let Value::NativeSnapshot(id) = base {
-                    let len = self.snapshot_array_len(id)?;
-                    let counted = i64::try_from(len).map_err(|_| VmError::ArrayTooLong)?;
-                    self.stack.push(Value::Int(counted));
-                    return Ok(());
-                }
-                let Value::Array(id) = base else {
-                    self.heap.drop_value(base);
-                    return Err(VmError::NotAnArray);
-                };
-                let counted = self
-                    .heap
-                    .array_len(id)
-                    .ok_or(VmError::NotAnArray)
-                    .and_then(|len| i64::try_from(len).map_err(|_| VmError::ArrayTooLong));
-                // The array is freed on every path out, not just the one that
-                // produced a count.
-                self.heap.drop_value(base);
-                self.stack.push(Value::Int(counted?));
-            }
+            Instruction::ArrayGetLocal(slot) => self.array_get_local(frame, slot)?,
+            Instruction::ArrayLen => self.array_len()?,
             Instruction::StringLen => {
                 let base = self.pop()?;
                 let Value::Str(id) = base else {

@@ -43,6 +43,10 @@ mod foreign_tests;
 mod native_state_tests;
 
 #[cfg(test)]
+#[path = "release_tests.rs"]
+mod release_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use kira_bytecode::module::{FuncProto, Module};
@@ -62,6 +66,7 @@ mod tests {
             local_count: locals,
             execution: kira_runtime_abi::Execution::Runtime,
             code,
+            releases: kira_bytecode::FrameRelease::EveryLocal,
         }
     }
 

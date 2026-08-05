@@ -99,6 +99,7 @@ fn module(code: Vec<I>, strings: Vec<String>) -> Module {
             local_count: 0,
             execution: Execution::Runtime,
             code,
+            releases: kira_bytecode::FrameRelease::EveryLocal,
         }],
         main: Some(0),
         strings,

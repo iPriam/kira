@@ -295,6 +295,7 @@ mod tests {
                 local_count: 0,
                 execution: Execution::Runtime,
                 code: vec![Instruction::CallForeign(0), Instruction::ReturnVoid],
+                releases: crate::module::FrameRelease::EveryLocal,
             }],
             main: Some(0),
             strings: Vec::new(),

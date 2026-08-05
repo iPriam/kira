@@ -74,3 +74,7 @@ pub use wrapper::{
 /// Re-exported from the frontend, which derives it once, so a test or a build
 /// script never spells the snake_case mapping a second time.
 pub use kira_semantics::exported_name as wrapper_export_name;
+
+#[cfg(test)]
+#[path = "release_tests.rs"]
+mod release_tests;
