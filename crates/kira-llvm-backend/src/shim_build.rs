@@ -46,10 +46,11 @@ pub struct ShimObject {
 pub fn build(
     imports: &[ForeignImport],
     table: &ForeignAggregates,
+    unavailable: &[usize],
     object_path: &Path,
     llvm: &LlvmInstallation,
 ) -> Result<Option<ShimObject>, LlvmError> {
-    let Some(text) = shim::generate(imports, table) else {
+    let Some(text) = shim::generate(imports, table, unavailable) else {
         return Ok(None);
     };
 
@@ -122,6 +123,7 @@ mod tests {
             let built = build(
                 imports,
                 &ForeignAggregates::new(),
+                &[],
                 Path::new("/tmp/kira-shim-none.o"),
                 &llvm,
             )

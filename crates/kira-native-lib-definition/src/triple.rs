@@ -63,6 +63,22 @@ impl TargetTriple {
     pub fn abi(&self) -> &str {
         &self.abi
     }
+
+    /// Whether a shared library here may be linked with symbols left undefined.
+    ///
+    /// Mach-O and ELF both allow it: a library that calls into a driver it
+    /// never linked against gets those symbols bound when it is loaded, which
+    /// is what makes a `LinkMode.Runtime` declaration work with no artifact at
+    /// all. PE does not — every symbol in a DLL resolves at link time or the
+    /// link fails — so a library the runtime is supposed to open must be
+    /// reached through explicit symbol lookup on Windows rather than by
+    /// declaring it and calling it.
+    ///
+    /// This is why 770 declared Vulkan entry points link on Linux and cannot on
+    /// Windows: the difference is the object format, not the declaration.
+    pub fn resolves_symbols_at_load(&self) -> bool {
+        self.os != "windows"
+    }
 }
 
 impl fmt::Display for TargetTriple {

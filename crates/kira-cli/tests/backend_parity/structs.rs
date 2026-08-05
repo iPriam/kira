@@ -1,6 +1,6 @@
 //! Parity for struct construction, copying, fields, and methods.
 
-use crate::{assert_module_parity, assert_parity, run_on, write_source};
+use crate::{assert_module_parity, assert_parity};
 
 #[test]
 fn struct_fields_and_defaults_agree() {
@@ -250,41 +250,38 @@ function main() {
     assert_eq!(output, "xy\n2\n");
 }
 
+/// A struct crossing the `@Native` seam builds and runs, on every backend.
+///
+/// This case used to assert the opposite — that the build failed with "cannot
+/// cross" — because the seam had no way to carry a struct and refusing beat
+/// marshalling the wrong shape. It carries one now, as a node tree that is
+/// transferred and freed by the reader, so what is pinned here is the value
+/// arriving intact rather than the refusal.
+///
+/// The deeper coverage lives in `seam.rs`, which exercises the same mechanism
+/// for arrays and payload-carrying enums; this is the struct-shaped entry into
+/// it, kept beside the other struct behaviour.
 #[test]
-fn a_struct_at_the_native_seam_is_refused_with_a_reason() {
-    // Structs work on both engines; only the crossing between them is unbuilt.
-    // A build that would need one to cross must say so, in terms a user can
-    // act on, rather than emit a crossing that marshals the wrong shape.
-    let path = write_source(
+fn a_struct_crosses_the_native_seam() {
+    let output = assert_parity(
         r#"
 struct Point {
-    var x: Int
+    var x: Int = 0
 }
 
 @Native
-function takes(p: Point) -> Int {
+function takes(p: borrow Point) -> Int {
     return p.x
 }
 
 @Main
 function main() {
-    print(takes(Point { x = 1 }))
+    print(takes(Point { x: 1 }))
     return
 }
 "#,
     );
-    let run = run_on(&path, "hybrid");
-    assert_eq!(
-        run.status.code(),
-        Some(1),
-        "a struct crossing the seam must fail the build",
-    );
-    let stderr = String::from_utf8_lossy(&run.stderr);
-    assert!(
-        stderr.contains("cannot cross"),
-        "the failure must name what went wrong, got: {stderr}",
-    );
-    let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
+    assert_eq!(output, "1\n");
 }
 
 #[test]

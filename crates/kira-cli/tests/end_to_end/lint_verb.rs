@@ -60,9 +60,31 @@ fn kira_lint(root: &Path) -> std::process::Output {
 /// A file of `count` trivial functions, which is `count * 2 + 2` lines.
 fn filler(count: usize) -> String {
     let mut text = String::from("import Foundation\n\n@Main function main() {\n    return\n}\n");
+    text.push_str(&filler_functions(count, "filler"));
+    text
+}
+
+/// The same padding with no entry point, for a second file in one package.
+///
+/// A package has exactly one `@Main`, so the file that is not the entry point
+/// cannot carry one — two copies of [`filler`] in one package is two `main`s,
+/// and the run fails on `KSEM010` before any lint gets to measure anything.
+fn filler_without_main(count: usize) -> String {
+    // A distinct prefix as well as no `@Main`: the two files share one package
+    // namespace, so `filler0` in both is a redefinition and the run never
+    // reaches the lint this fixture exists to check.
+    let mut text = String::from("import Foundation\n");
+    text.push_str(&filler_functions(count, "bound"));
+    text
+}
+
+/// `count` distinct functions named from `prefix`, which is what makes a file
+/// long.
+fn filler_functions(count: usize, prefix: &str) -> String {
+    let mut text = String::new();
     for index in 0..count {
         text.push_str(&format!(
-            "\nfunction filler{index}() -> Int {{ return {index} }}\n"
+            "\nfunction {prefix}{index}() -> Int {{ return {index} }}\n"
         ));
     }
     text
@@ -142,7 +164,7 @@ fn generated_bindings_are_never_measured() {
         &[
             ("linter.kira", FILE_LENGTH_AT_40),
             ("app/main.kira", &filler(2)),
-            ("app/bindings/foreign.kira", &filler(30)),
+            ("app/bindings/foreign.kira", &filler_without_main(30)),
         ],
     );
     let output = kira_lint(&root);

@@ -23,6 +23,13 @@ use kira_build::{Compiled, LibraryArtifacts, LibraryBuildError, LibraryBuildOpti
 /// Why a library build could not be started or finished.
 #[derive(Debug, thiserror::Error)]
 pub enum LibraryError {
+    /// The build directory could not be created or locked.
+    #[error("cannot prepare the build directory: {source}")]
+    BuildDirectory {
+        /// The underlying I/O failure.
+        #[source]
+        source: std::io::Error,
+    },
     /// The package the source belongs to has no name to give the artifact.
     #[error(
         "cannot build a library from `{path}`: it is not inside a package, so there is no \
@@ -67,10 +74,16 @@ pub fn build(compiled: &Compiled, source: &Path) -> Result<LibraryArtifacts, Lib
             name,
         });
     };
+    let directory = build_directory(source);
+    // Held until this build finishes: a library writes the same `.kbc` and the
+    // same generated crate every time, so two builders in one package would
+    // overwrite each other's artifacts mid-write.
+    let _lock = crate::build_lock::BuildLock::acquire(&directory)
+        .map_err(|source| LibraryError::BuildDirectory { source })?;
     let options = LibraryBuildOptions {
         name,
         version,
-        build_directory: build_directory(source),
+        build_directory: directory,
         toolchain_root: kira_build::toolchain_root(),
     };
     Ok(kira_build::build_library(&compiled.ir, &options)?)

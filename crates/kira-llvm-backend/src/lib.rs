@@ -91,42 +91,17 @@ pub enum LlvmError {
     /// The program uses something the native backend cannot lower yet.
     #[error("the LLVM backend cannot lower {0} yet")]
     Unsupported(&'static str),
-    /// A struct reached the `@Native`/`@Runtime` boundary, which has no layout
-    /// for one.
-    ///
-    /// `BridgeValue` is a tag plus a one-word payload: a struct neither fits it
-    /// nor has a tag, and passing one would need an ABI decision — by value or
-    /// by pointer, and who frees the strings inside — that has not been made.
-    /// Native code and VM code each handle structs perfectly well; only the
-    /// crossing between them is unbuilt.
-    #[error(
-        "a struct cannot cross the `@Native`/`@Runtime` boundary yet; \
-         pass its fields individually, or keep both sides on one engine"
-    )]
-    StructAtSeam,
-    /// An array reached the `@Native`/`@Runtime` seam, which cannot carry one
-    /// yet.
-    ///
-    /// A gap rather than a decision, and that is the difference from
-    /// [`LlvmError::StructAtSeam`]: the language *does* let an array cross. It
-    /// does not here because the ownership question at the boundary is
-    /// unanswered — who frees the elements, and what it means for the VM's heap
-    /// accounting if a native callee grows the array it was handed. A wrong
-    /// answer is a double free or a leak at the boundary, so the crossing is
-    /// refused until the answer is designed.
-    #[error(
-        "an array cannot cross the `@Native`/`@Runtime` boundary yet; \
-         keep both sides on one engine, or pass its elements individually"
-    )]
-    ArrayAtSeam,
-    /// An enum reached the `@Native`/`@Runtime` seam, which has no layout for
-    /// one — like a struct, it is a tagged value that does not fit one tag and
-    /// one word, and how it would cross is a language decision nobody has made.
-    #[error(
-        "an enum cannot cross the `@Native`/`@Runtime` boundary; \
-         keep both sides on one engine"
-    )]
-    EnumAtSeam,
+    // Struct, array and enum crossings were refused here until the seam grew a
+    // way to carry them. A struct and an array now cross as a node tree, and an
+    // enum crosses either as its bare variant tag (payload-less) or as a tree
+    // (carrying one) — so the three errors that named those refusals are gone
+    // rather than left unreachable. The ownership question they each cited has
+    // one answer now: the tree is transferred, and the reader frees it as it
+    // decodes. See `BridgeValueTag::NODE`.
+    //
+    // The VM keeps its own `StructAtSeam`/`ArrayAtSeam`/`EnumAtSeam`, which are
+    // still reachable: they are the backstop for a *value* with no tree form,
+    // which is a different question from a *type* with no crossing.
     /// A value of the top type reached the hybrid seam.
     ///
     /// Not a size problem — an erased value is one word — but a reading one: the
@@ -253,6 +228,7 @@ pub struct NativeArtifacts {
 /// that has always worked — those never invoke clang for a shim.
 fn build_foreign_shim(
     program: &IrProgram,
+    unavailable: &[usize],
     object_path: &std::path::Path,
     llvm: &kira_toolchain::LlvmInstallation,
 ) -> Result<Option<ShimObject>, LlvmError> {
@@ -261,7 +237,13 @@ fn build_foreign_shim(
         .iter()
         .map(|entry| entry.import.clone())
         .collect();
-    shim_build::build(&imports, &program.foreign_aggregates, object_path, llvm)
+    shim_build::build(
+        &imports,
+        &program.foreign_aggregates,
+        unavailable,
+        object_path,
+        llvm,
+    )
 }
 
 /// Compiles `program` to a native object, and links an executable when
@@ -287,7 +269,12 @@ pub fn build_native(
         Some(path) => {
             let llvm = kira_toolchain::discover(None)?;
             kira_diagnostics::progress!("compiling the foreign shim");
-            let shim = build_foreign_shim(program, &options.object_path, &llvm)?;
+            let shim = build_foreign_shim(
+                program,
+                &options.unavailable_imports,
+                &options.object_path,
+                &llvm,
+            )?;
             kira_diagnostics::progress!("linking {}", path.display());
             link::link_executable(
                 &llvm,
@@ -365,7 +352,12 @@ pub fn build_adapter_sidecar(
         .map(adapter_name)
         .chain((0..program.foreign_callbacks.len()).map(callback_name))
         .collect();
-    let shim = build_foreign_shim(program, &options.object_path, &llvm)?;
+    let shim = build_foreign_shim(
+        program,
+        &options.unavailable_imports,
+        &options.object_path,
+        &llvm,
+    )?;
     link::link_adapter_sidecar(
         &llvm,
         &options.object_path,
@@ -497,7 +489,12 @@ pub fn build_hybrid_library(
         .map(adapter_name)
         .chain((0..program.foreign_callbacks.len()).map(callback_name))
         .collect();
-    let shim = build_foreign_shim(program, &options.object_path, &llvm)?;
+    let shim = build_foreign_shim(
+        program,
+        &options.unavailable_imports,
+        &options.object_path,
+        &llvm,
+    )?;
     link::link_hybrid_library(
         &llvm,
         &options.object_path,

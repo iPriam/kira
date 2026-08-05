@@ -28,6 +28,31 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// How to install SPIRV-Tools, on the platform the reader is on.
+const SPIRV_TOOLS_HINT: &str = if cfg!(windows) {
+    "download install.zip from https://storage.googleapis.com/spirv-tools/badges/build_link_windows_vs2019_release.html and put spirv-val.exe on PATH"
+} else {
+    "brew install spirv-tools"
+};
+
+/// How to install glslang. The binary is `glslang` in current releases;
+/// `glslangValidator` is the name this test invokes and the one a release zip
+/// has to be copied to.
+const GLSLANG_HINT: &str = if cfg!(windows) {
+    "download glslang-main-windows-x86_64-release.zip from the KhronosGroup/glslang main-tot release and copy bin/glslang.exe to glslangValidator.exe on PATH"
+} else {
+    "brew install glslang"
+};
+
+/// The path a compiler can write its output to and have it discarded.
+///
+/// `/dev/null` does not exist on Windows, where the equivalent device is `NUL`.
+/// A validator told to write to a path it cannot open fails on the *output*,
+/// which reads exactly like the shader being rejected.
+fn null_sink() -> &'static str {
+    if cfg!(windows) { "NUL" } else { "/dev/null" }
+}
+
 /// A graphics shader reaching for what every backend has to get right: a
 /// uniform matrix, a texture and its sampler, a varying, and a builtin that is
 /// written by one stage and read by the next.
@@ -288,7 +313,7 @@ fn decode_spirv(hex: &Path) -> Option<PathBuf> {
 
 #[test]
 fn every_spirv_module_passes_the_khronos_validator() {
-    let tool = validator("spirv-val", "brew install spirv-tools");
+    let tool = validator("spirv-val", SPIRV_TOOLS_HINT);
     let directory = emitted("spirv");
     let mut checked = 0;
     for name in [
@@ -321,7 +346,7 @@ fn every_wgsl_module_passes_naga() {
 
 #[test]
 fn every_glsl_module_compiles_under_glslang() {
-    let tool = validator("glslangValidator", "brew install glslang");
+    let tool = validator("glslangValidator", GLSLANG_HINT);
     let directory = emitted("glsl");
     accepts(&tool, &["-S", "vert"], &directory.join("Tri.vert.glsl"));
     accepts(&tool, &["-S", "frag"], &directory.join("Tri.frag.glsl"));
@@ -330,7 +355,7 @@ fn every_glsl_module_compiles_under_glslang() {
 
 #[test]
 fn every_hlsl_module_compiles_under_glslangs_hlsl_front_end() {
-    let tool = validator("glslangValidator", "brew install glslang");
+    let tool = validator("glslangValidator", GLSLANG_HINT);
     let directory = emitted("hlsl");
     for (stage, entry, file) in [
         ("vert", "vertex_main", "Tri.vert.hlsl"),
@@ -341,7 +366,7 @@ fn every_hlsl_module_compiles_under_glslangs_hlsl_front_end() {
         // and `-o` keeps the module it then writes out of the tree.
         accepts(
             &tool,
-            &["-D", "-S", stage, "-e", entry, "-V", "-o", "/dev/null"],
+            &["-D", "-S", stage, "-e", entry, "-V", "-o", null_sink()],
             &directory.join(file),
         );
     }
@@ -373,7 +398,7 @@ fn every_metal_module_compiles_under_apples_compiler() {
         let run = Command::new("xcrun")
             .args(["-sdk", "macosx", "metal", "-std=metal3.0", "-c"])
             .arg(&file)
-            .args(["-o", "/dev/null"])
+            .args(["-o", null_sink()])
             .output()
             .expect("run metal");
         assert!(

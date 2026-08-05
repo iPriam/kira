@@ -37,53 +37,48 @@ impl BridgeValueTag {
     pub const BOOL: BridgeValueTag = BridgeValueTag(3);
     /// A string, payload as an owned native string handle.
     pub const STRING: BridgeValueTag = BridgeValueTag(4);
-    /// A struct: a type a manifest can *describe* but the seam cannot carry.
+    /// A struct: a type a manifest can *describe*, carried as a node tree.
     ///
-    /// A struct does not fit a [`BridgeValue`] — one tag and one word of
-    /// payload — and passing one would need an ABI decision (by value or by
-    /// pointer, and who frees the strings inside) that has not been made. The
-    /// tag exists anyway because a manifest describes every function in the
+    /// This tag names a type and does not travel — but that is now a statement
+    /// about *this tag*, not about structs. A struct crossing the seam carries
+    /// [`BridgeValueTag::NODE`]: it does not fit one word, so what crosses is a
+    /// tree both sides can build and read, transferred to the reader.
+    ///
+    /// The tag still exists because a manifest describes every function in the
     /// program, including the many that never cross: a `@Runtime` function
     /// taking a struct and called only from other `@Runtime` code is an
     /// ordinary program, and its row has to say what its parameters are.
-    ///
-    /// So this tag names a type, and never travels: no [`BridgeValue`] is ever
-    /// built with it, and every marshalling path rejects it. What enforces that
-    /// is the backend, which refuses to emit a crossing whose signature
-    /// mentions a struct.
     pub const STRUCT: BridgeValueTag = BridgeValueTag(5);
 
-    /// An array: a type a manifest can *describe* but this seam cannot carry
-    /// yet.
+    /// An array: a type a manifest can *describe*, carried as a node tree.
     ///
-    /// The tag exists for the same reason [`BridgeValueTag::STRUCT`] does — a
-    /// manifest has a row for every function in the program, including the many
-    /// that never cross — but the reason it does not travel is different, and
-    /// the difference is worth stating.
+    /// Names a type and does not travel, exactly as [`BridgeValueTag::STRUCT`]
+    /// does, and for the same reason: a manifest has a row for every function
+    /// in the program, including the many that never cross. An array crossing
+    /// the seam carries [`BridgeValueTag::NODE`].
     ///
-    /// A struct **may not** cross: it does not fit one tag and one word, and
-    /// deciding how it would is a language decision nobody has made.
-    ///
-    /// An array **should** cross — the language allows it — and does not yet
-    /// only because the ownership question at the boundary is unanswered: who
-    /// frees the elements, and what it means for the VM's heap accounting if a
-    /// native function grows the array it was handed. A wrong answer there is a
-    /// double free or a leak at the boundary, not a bad print, so it is refused
-    /// until the answer is designed rather than guessed at.
-    ///
-    /// So: this tag names a type and never travels. Every marshalling path
-    /// rejects it, and the backend refuses to emit a crossing whose signature
-    /// mentions one.
+    /// The ownership question this once cited — who frees the elements, and
+    /// what a native callee growing the array would mean for the VM's heap
+    /// accounting — is answered by the tree being a *copy*: each side ends up
+    /// with its own array, and growing one says nothing about the other.
     pub const ARRAY: BridgeValueTag = BridgeValueTag(6);
 
-    /// An enum: a type a manifest can *describe* but this seam cannot carry.
+    /// An enum, carried as its variant tag.
     ///
-    /// Exists for the same reason [`BridgeValueTag::STRUCT`] does — a manifest
-    /// has a row for every function, and a `@Runtime` one may merely mention an
-    /// enum in its signature — and it does not travel on the same grounds: an
-    /// enum is a tagged value plus a payload, which does not fit one tag and one
-    /// word, and how it would is a language decision nobody has made. Every
-    /// marshalling path rejects it; this tag only names the type in a manifest.
+    /// This tag **travels, but only for a payload-less enum** — one whose every
+    /// variant carries nothing, so the value *is* its discriminant and the
+    /// payload word holds that number. Such an enum owns no heap storage, needs
+    /// no clone or free, and raises none of the ownership questions that keep
+    /// [`BridgeValueTag::STRUCT`] and [`BridgeValueTag::ARRAY`] from moving.
+    ///
+    /// An enum with a payload does not carry *this* tag: it is a tag plus
+    /// something owned, which does not fit one word, so it crosses as
+    /// [`BridgeValueTag::NODE`] instead. A value carrying this tag is therefore
+    /// always a bare discriminant, and a reader may rely on that.
+    ///
+    /// The receiver rebuilds its own enum value from the number. Nothing about
+    /// one side's representation crosses — the VM holds an index into its heap
+    /// and native holds a pointer to a box, and neither travels.
     pub const ENUM: BridgeValueTag = BridgeValueTag(7);
 
     /// An opaque handle to an object one side owns and the other only names.
@@ -147,6 +142,33 @@ impl BridgeValueTag {
     /// all. An actual crossing is refused where one is emitted — see
     /// `kira-llvm-backend`'s `AnyAtSeam`.
     pub const ANY: BridgeValueTag = BridgeValueTag(11);
+
+    /// An aggregate carried as a native-value node tree.
+    ///
+    /// This tag **travels**, and it is what lets a struct, an array, and an
+    /// enum with a payload cross a seam whose payload is one word: the word is
+    /// a pointer to a tree of nodes — the same `kira_rt_native_value_*` protocol
+    /// callback state already crosses as — and the tree carries the whole value,
+    /// however deeply nested.
+    ///
+    /// # Why a tree rather than the value
+    ///
+    /// Because the two sides do not share a heap and never will. The VM holds
+    /// an index into its own storage; native holds a pointer to a box. Neither
+    /// means anything to the other, so what crosses is a copy in a third form
+    /// that both can build and read.
+    ///
+    /// # Ownership
+    ///
+    /// The tree is **transferred**: whoever builds it hands it over, and the
+    /// reader frees it as it decodes. That is the answer to "who frees the
+    /// strings inside a struct" — the same side that reads them, exactly once,
+    /// and neither side's own heap is touched by the other.
+    ///
+    /// One tag for all three shapes rather than three, because the receiver
+    /// decodes against the static type its signature already promised; the tag
+    /// only has to say "this payload is a node pointer, not a value".
+    pub const NODE: BridgeValueTag = BridgeValueTag(12);
 }
 
 /// One Kira value crossing the runtime/native boundary.
@@ -198,6 +220,18 @@ pub enum BridgeData {
     /// Every bit pattern, including null, is data. The receiving side never
     /// dereferences or frees it.
     RawPtr(u64),
+    /// A payload-less enum's variant tag.
+    ///
+    /// The number is the variant's declaration index, which is what `==`
+    /// compares on both engines. The receiver builds its own representation
+    /// from it; nothing owned crosses, so neither side frees anything.
+    Enum(i64),
+    /// An aggregate as a pointer to a native-value node tree.
+    ///
+    /// Opaque here: this crate is in the VM's portable cone and never
+    /// dereferences it. The tree is transferred to whoever receives the value,
+    /// and freed as it is read. See [`BridgeValueTag::NODE`].
+    Node(u64),
 }
 
 impl BridgeValue {
@@ -237,6 +271,8 @@ impl BridgeValue {
             BridgeData::String(handle) => (BridgeValueTag::STRING, handle),
             BridgeData::Handle(handle) => (BridgeValueTag::HANDLE, handle),
             BridgeData::RawPtr(pointer) => (BridgeValueTag::RAW_PTR, pointer),
+            BridgeData::Enum(tag) => (BridgeValueTag::ENUM, tag as u64),
+            BridgeData::Node(node) => (BridgeValueTag::NODE, node),
         };
         BridgeValue {
             tag,
@@ -265,6 +301,8 @@ impl BridgeValue {
             // Pointer bits are opaque and null is valid. Width checking belongs
             // to the native caller, which knows the target pointer width.
             BridgeValueTag::RAW_PTR => BridgeData::RawPtr(self.payload),
+            BridgeValueTag::ENUM => BridgeData::Enum(self.payload as i64),
+            BridgeValueTag::NODE => BridgeData::Node(self.payload),
             _ => return None,
         })
     }
@@ -310,6 +348,14 @@ mod tests {
             BridgeData::Handle(u64::MAX),
             BridgeData::RawPtr(0),
             BridgeData::RawPtr(0x0123_4567_89ab_cdef),
+            // A variant tag is a declaration index, so zero is the common case
+            // and never a sentinel. The wide values are here because the
+            // payload is signed on the way out and unsigned on the wire.
+            BridgeData::Enum(0),
+            BridgeData::Enum(1),
+            BridgeData::Enum(i64::MAX),
+            BridgeData::Node(0),
+            BridgeData::Node(0x0123_4567_89ab_cdef),
         ] {
             let encoded = BridgeValue::encode(data);
             assert_eq!(

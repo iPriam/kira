@@ -175,7 +175,7 @@ pub fn build(
     // A program passing a struct by value needs its C shim compiled for wasm
     // too, and by emcc rather than the host clang: the shim is what applies the
     // by-value ABI, and wasm32's is emscripten's to define.
-    let shim = build_wasm_shim(ir, &artifacts)?;
+    let shim = build_wasm_shim(ir, foreign_link, &artifacts)?;
 
     let runtime = wasm_runtime_archive().ok_or(WebError::RuntimeArchiveMissing)?;
     let mut command = Command::new("emcc");
@@ -219,13 +219,21 @@ pub fn build(
 /// does not need. The generated source is the same text the host build compiles;
 /// only the compiler differs, which is the point: each target's own C compiler
 /// decides that target's by-value ABI.
-fn build_wasm_shim(ir: &IrProgram, artifacts: &WebArtifacts) -> Result<Option<PathBuf>, WebError> {
+fn build_wasm_shim(
+    ir: &IrProgram,
+    foreign_link: &NativeLinkInputs,
+    artifacts: &WebArtifacts,
+) -> Result<Option<PathBuf>, WebError> {
     let imports: Vec<_> = ir
         .foreign_imports
         .iter()
         .map(|entry| entry.import.clone())
         .collect();
-    let Some(text) = kira_llvm_backend::shim::generate(&imports, &ir.foreign_aggregates) else {
+    let Some(text) = kira_llvm_backend::shim::generate(
+        &imports,
+        &ir.foreign_aggregates,
+        foreign_link.unavailable_imports(),
+    ) else {
         return Ok(None);
     };
 

@@ -7,6 +7,8 @@
 //! with no LLVM — the crate it generates is compiled and called for real by
 //! `kira-export-consumer`.
 
+use std::path::Path;
+
 use crate::{kira, write_package};
 
 /// A library that exports the shapes v1 supports: a handle-eligible class, a
@@ -191,8 +193,12 @@ fn switching_engines_in_one_package_leaves_nothing_of_the_other_behind() {
         .find_map(|line| line.split_once("cargo:rustc-link-search=native="))
         .map(|(_, rest)| rest.trim_end_matches("\");").to_owned())
         .unwrap_or_default();
+    // Asked of the path rather than of its first character: an absolute path
+    // starts with `/` only on Unix, and `C:\...` — or the `\\?\C:\...` verbatim
+    // form the toolchain hands back on Windows — would read as relative and
+    // fail a check that is really about where a consumer's `cargo` resolves it.
     assert!(
-        search.starts_with('/'),
+        Path::new(&search).is_absolute(),
         "the generated build script's link search path is relative: {search}"
     );
 

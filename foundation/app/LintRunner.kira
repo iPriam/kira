@@ -347,7 +347,13 @@ comptime macro LintRunner {
                 // splits it, and the generator would put it straight back.
                 // Exempt here rather than through a per-package setting because
                 // it is true of every package that has one.
-                if target.path.contains("/bindings/") {
+                //
+                // Matched on a separator-normalized copy: Windows hands these
+                // paths over as `app\bindings\foreign.kira`, so testing for
+                // "/bindings/" alone exempted nothing there and every generated
+                // binding was measured — a 27,000-line Vulkan binding reported
+                // as a file to split.
+                if target.path.replace("\\", "/").contains("/bindings/") {
                     continue
                 }
                 if target.fileId != pendingFile {

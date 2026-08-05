@@ -13,9 +13,12 @@
 //! (trampolines, the installed runtime invoker) is designed fresh alongside the
 //! hybrid runtime and will live beside it here.
 
+pub mod accounting;
 pub mod array;
 pub mod boxes;
 pub mod cells;
+pub mod dynamic_call;
+pub mod dynamic_library;
 pub mod enums;
 pub mod env;
 pub mod file_system;
