@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "kira-toolchain-developer": {
+      "command": "cargo",
+      "args": ["run", "--quiet", "--package", "kira-mcp", "--bin", "kira-mcp"],
+      "env": {
+        "CARGO_TERM_COLOR": "never"
+      }
+    }
+  }
+}
