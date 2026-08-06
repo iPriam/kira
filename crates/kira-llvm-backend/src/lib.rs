@@ -32,7 +32,7 @@
 //! - `unsafe` is fenced to this crate's binding layer, with a `// SAFETY:`
 //!   comment on every block.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use kira_ir::IrProgram;
 use kira_toolchain::LlvmDiscoveryError;
@@ -232,7 +232,7 @@ pub struct NativeArtifacts {
 fn build_foreign_shim(
     program: &IrProgram,
     unavailable: &[usize],
-    object_path: &std::path::Path,
+    object_path: &Path,
     llvm: &kira_toolchain::LlvmInstallation,
 ) -> Result<Option<ShimObject>, LlvmError> {
     let imports: Vec<_> = program
@@ -249,24 +249,120 @@ fn build_foreign_shim(
     )
 }
 
+/// The smallest number of functions worth giving a codegen unit of its own.
+///
+/// Every unit re-declares the program's types and runtime and re-emits the
+/// internal leaves it happens to need, and every unit is one more object on the
+/// link line. Below this the split costs more than the thread saves.
+const FUNCTIONS_PER_UNIT: usize = 96;
+
+/// The most codegen units one program is split into.
+///
+/// A ceiling on the duplicated scaffold and the link line, not on the machine:
+/// the units are also capped by the parallelism available, and a host with more
+/// cores than this has stopped being the bottleneck.
+const MAX_CODEGEN_UNITS: usize = 16;
+
+/// How many codegen units this program is emitted in.
+///
+/// One unit for a program small enough that the split would not pay for itself,
+/// and one whenever a textual IR dump was asked for — `--emit-llvm-ir` is a
+/// request to read the program's module, and handing back eight of them
+/// answers a different question.
+fn codegen_units(program: &IrProgram, options: &NativeBuildOptions) -> usize {
+    if options.ir_path.is_some() {
+        return 1;
+    }
+    let parallelism = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let affordable = (program.functions.len() / FUNCTIONS_PER_UNIT).min(MAX_CODEGEN_UNITS);
+    affordable.clamp(1, parallelism.max(1))
+}
+
+/// Where unit `index`'s object is written, given the build's object path.
+///
+/// The first unit keeps the path the build named, because that path is what
+/// names the foreign shim beside it and what a caller reports as *the* object.
+fn unit_object_path(object_path: &Path, index: usize) -> PathBuf {
+    if index == 0 {
+        return object_path.to_path_buf();
+    }
+    let extension = object_path.extension().map_or_else(
+        || "o".to_owned(),
+        |extension| extension.to_string_lossy().into_owned(),
+    );
+    object_path.with_extension(format!("{index}.{extension}"))
+}
+
+/// Lowers and emits the program's objects, one per codegen unit, in parallel.
+///
+/// Returns them in unit order, first unit first.
+fn emit_codegen_units(
+    program: &IrProgram,
+    options: &NativeBuildOptions,
+) -> Result<Vec<PathBuf>, LlvmError> {
+    let count = codegen_units(program, options);
+    let paths: Vec<PathBuf> = (0..count)
+        .map(|index| unit_object_path(&options.object_path, index))
+        .collect();
+
+    if count == 1 {
+        kira_diagnostics::progress!("generating native code for {}", options.module_name);
+        let module = codegen::Module::build(
+            program,
+            &options.module_name,
+            kira_runtime_abi::ForeignPointerWidth::HOST,
+            &options.unavailable_imports,
+            codegen::CodegenUnit::WHOLE,
+        )?;
+        if let Some(path) = &options.ir_path {
+            module.write_ir(path)?;
+        }
+        kira_diagnostics::progress!("emitting object");
+        module.emit_object(&options.object_path, options.optimize)?;
+        return Ok(paths);
+    }
+
+    kira_diagnostics::progress!(
+        "generating native code for {} in {count} units",
+        options.module_name
+    );
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                scope.spawn(move || {
+                    let module = codegen::Module::build(
+                        program,
+                        &format!("{}.{index}", options.module_name),
+                        kira_runtime_abi::ForeignPointerWidth::HOST,
+                        &options.unavailable_imports,
+                        codegen::CodegenUnit::new(index, count),
+                    )?;
+                    module.emit_object(path, options.optimize)
+                })
+            })
+            .collect();
+        for worker in workers {
+            // A worker that panicked took its LLVM context down with it, and
+            // the module it was building is gone; there is nothing to report
+            // but that the emission did not finish.
+            worker.join().map_err(|_| {
+                LlvmError::Emit("a codegen unit failed while emitting its object".to_owned())
+            })??;
+        }
+        Ok::<(), LlvmError>(())
+    })?;
+    Ok(paths)
+}
+
 /// Compiles `program` to a native object, and links an executable when
 /// [`NativeBuildOptions::executable_path`] asks for one.
 pub fn build_native(
     program: &IrProgram,
     options: &NativeBuildOptions,
 ) -> Result<NativeArtifacts, LlvmError> {
-    kira_diagnostics::progress!("generating native code for {}", options.module_name);
-    let module = codegen::Module::build(
-        program,
-        &options.module_name,
-        kira_runtime_abi::ForeignPointerWidth::HOST,
-        &options.unavailable_imports,
-    )?;
-    if let Some(path) = &options.ir_path {
-        module.write_ir(path)?;
-    }
-    kira_diagnostics::progress!("emitting object");
-    module.emit_object(&options.object_path, options.optimize)?;
+    let objects = emit_codegen_units(program, options)?;
 
     let executable = match &options.executable_path {
         Some(path) => {
@@ -281,7 +377,7 @@ pub fn build_native(
             kira_diagnostics::progress!("linking {}", path.display());
             link::link_executable(
                 &llvm,
-                &options.object_path,
+                &objects,
                 &options.runtime_archive,
                 &options.foreign_link,
                 shim.as_ref().map(|shim| shim.object.as_path()),
@@ -382,7 +478,7 @@ pub fn build_adapter_sidecar(
 pub fn build_wasm_object(
     program: &IrProgram,
     module_name: &str,
-    object_path: &std::path::Path,
+    object_path: &Path,
     device: kira_backend_api::WasmDevice,
 ) -> Result<(), LlvmError> {
     // A wasm module lays out a pointer in four bytes whatever host builds it,
@@ -391,7 +487,13 @@ pub fn build_wasm_object(
         kira_backend_api::WasmDevice::Wasm32 => kira_runtime_abi::ForeignPointerWidth::Bits32,
         kira_backend_api::WasmDevice::Wasm64 => kira_runtime_abi::ForeignPointerWidth::Bits64,
     };
-    let module = codegen::Module::build(program, module_name, width, &[])?;
+    let module = codegen::Module::build(
+        program,
+        module_name,
+        width,
+        &[],
+        codegen::CodegenUnit::WHOLE,
+    )?;
     module.emit_wasm_object(object_path, device)
 }
 

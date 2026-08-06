@@ -7,7 +7,9 @@
 //! Split by what a case drives rather than by size: `programs` runs single-file
 //! source, `modules` spreads one program over several files, `packages` puts a
 //! `package.kira` above it, `exports` builds the `@Export` surface a Rust
-//! consumer depends on, and `natives` pins what `@Native` does inside a library.
+//! consumer depends on, `natives` pins what `@Native` does inside a library, and
+//! `codegen_units` builds a program big enough for the native backend to split
+//! across several of them.
 //! Everything shared — writing a temp source, invoking the binary, building a
 //! package directory — lives here so a module owns only its own subject.
 
@@ -15,6 +17,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+mod codegen_units;
 mod exports;
 mod ffi;
 mod ffi_wasm;
