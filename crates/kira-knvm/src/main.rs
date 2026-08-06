@@ -108,6 +108,9 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
                     // No checksum line: a build from the working tree has no
                     // publisher, so there is nothing to have verified it
                     // against.
+                    report_code_generator_shortfall(&kira_knvm::missing_code_generators_for_build(
+                        &start,
+                    ));
                     EXIT_OK
                 }
                 Err(error) => {
@@ -180,6 +183,7 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
                         );
                         report_verification(installed.verified.as_ref(), false);
                     }
+                    report_code_generator_shortfall(&installed.missing_code_generators);
                     EXIT_OK
                 }
                 Err(error) => {
@@ -445,6 +449,21 @@ fn report_verification(verified: Option<&kira_knvm::Sha256>, already_installed: 
             "knvm: warning: no checksum is published for this artifact; \
              it was installed unverified"
         ),
+    }
+}
+
+/// Reports the pinned code generators a provisioned bundle does not carry.
+///
+/// Silent when it carries them all. A bundle short of one is still installed —
+/// it is a real LLVM and every other device builds with it — so this is the
+/// only place the shortfall is stated before a build asks for the device that
+/// is gone.
+fn report_code_generator_shortfall(missing: &[String]) {
+    let Ok(pin) = kira_toolchain::pinned() else {
+        return;
+    };
+    for line in kira_knvm::code_generator_shortfall(missing, &pin.llvm.release_tag) {
+        eprintln!("knvm: warning: {line}");
     }
 }
 

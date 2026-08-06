@@ -112,10 +112,13 @@ pub enum LlvmError {
          has no type for the far side to read it back as"
     )]
     AnyAtSeam,
-    /// The managed LLVM was built without the WebAssembly code generator.
+    /// This compiler was built against a managed LLVM carrying no WebAssembly
+    /// code generator, so it can emit for every device except the Web.
     #[error(
-        "the managed LLVM has no WebAssembly code generator; re-provision the \
-         bundle (`llvm-metadata.toml` now pins `host;WebAssembly` targets)"
+        "this compiler was built against a managed LLVM without the WebAssembly \
+         code generator, so it cannot emit for the Web; install a bundle built \
+         with the targets `llvm-metadata.toml` pins (`knvm install-llvm --force`) \
+         and rebuild the compiler against it"
     )]
     WasmTargetMissing,
     /// The managed clang refused the generated C shim — always a backend bug,
