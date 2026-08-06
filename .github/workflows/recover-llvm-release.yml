@@ -51,3 +51,5 @@ jobs:
           fi
 
           gh release upload "$RELEASE_TAG" dist/* --clobber
+
+# This workflow is temporary and will be removed after the recovered release succeeds.
