@@ -415,10 +415,10 @@ recorded so nobody re-derives them, and none blocks v1.
 - **Foreign calls on wasm** — refused by name at build time (§ 3); no wasm
   linker exists and a JS shim contract is undesigned. The import-section
   yes-path is real and deferred, not denied.
-- **Arrays, structs, and enums across the seam** — the existing never-travels
-  refusal stands; the array ownership hazard is documented in `bridge.rs` and
-  stays unanswered rather than guessed. Rust-side aggregate types are refused
-  at bind time.
+- **Arrays, structs, and enums across the seam** — these cross the Kira/Kira
+  seam as node trees, ownership answered by the tree being a copy. What stays
+  refused here is the *Rust bind* boundary: Rust-side aggregate types are
+  refused at bind time.
 - **`@FFI.Struct` / `@FFI.Array`** — deferred whole to phase 2 with their
   oracle-pinned rules recorded; v1 refuses the annotations with a typed
   "not supported yet" so no partial surface ships.

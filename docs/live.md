@@ -106,7 +106,7 @@ means the swapped-in code has run once without incident. A swap that commits and
 then traps on its first call is not a reload that worked.
 
 `live.app.exited` is the app's entrypoint returning, which is not the runner
-ending — the runner outlives it, holding the cache and the loaded library that
+ending. The runner outlives it, holding the cache and the loaded library that
 make the next reload cheap. An unwatched session ends there because it has
 nothing else to do; a watched one reports it and keeps watching, and the next
 save starts the app again.
@@ -171,8 +171,8 @@ diagnostics and leaves the running app alone: killing a working app over a
 half-typed line would make watching worse than not watching.
 
 A running app is the common case of that refusal, not an exotic one. An app's
-entrypoint does not return — it opens a window and its run loop owns the thread
-until the window closes — so a swap would be replacing the very code the process
+entrypoint does not return: it opens a window and its run loop owns the thread
+until the window closes, so a swap would be replacing the very code the process
 has a call stack in. Every reload of a running app therefore relaunches, and
 says which of the two it was. A swap point *inside* a live app is a frame
 boundary the runner does not have yet; when it does, this is the reason that
@@ -224,13 +224,13 @@ path be real rather than deferred.
 
 **The app gets the main thread; the protocol gets another.** A Kira app is not a
 function that returns, and a runner that started one on the thread holding the
-socket would never hear another word from the server — `entrypoint started`
+socket would never hear another word from the server, so `entrypoint started`
 could only ever be reported by an app that had already exited, which is to say
 never by an app. So the app keeps the main thread, which is also what macOS
 requires of a window's run loop, and the protocol runs beside it. Load, link,
 start, and swap all still happen on that one thread, in order: the protocol
 thread asks and the app's thread answers. The only call whose meaning changes is
-`start`, which is answered when the entrypoint is *running* — and answered a
+`start`, which is answered when the entrypoint is *running*, and answered a
 second time, for the reload path, when it returns.
 
 Every runner id parses. One this build has no client for (`ios`, `android`, and
