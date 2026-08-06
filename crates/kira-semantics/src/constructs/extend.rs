@@ -61,6 +61,7 @@ impl<'a> Analyzer<'a> {
         source: SourceId,
     ) {
         let method_name = self.interner.resolve(method.name).to_owned();
+        self.refuse_annotations_a_modifier_cannot_carry(method);
         let taken = self
             .construct_families
             .get(family_name)
@@ -92,6 +93,47 @@ impl<'a> Analyzer<'a> {
                     dispatcher: None,
                     defaults: Vec::new(),
                 },
+            );
+        }
+    }
+
+    /// Refuses the annotations a modifier has nowhere to carry.
+    ///
+    /// `@Runtime` and `@Native` reach the synthesized body and decide which half
+    /// of a hybrid build it lands in. The rest have no answer here — a modifier
+    /// is reached through the family, not through an entrypoint or an export
+    /// boundary — and an annotation that reaches a body which ignores it is a
+    /// silent lie about what was compiled, so each is named where it was
+    /// written.
+    fn refuse_annotations_a_modifier_cannot_carry(&mut self, method: &Function) {
+        if method.is_main {
+            self.emit(
+                method.name_span,
+                "KSEM258",
+                "`@Main` cannot annotate an `extend` modifier: a modifier is \
+                 called on a family value, so there is nothing for the operating \
+                 system to start"
+                    .to_owned(),
+            );
+        }
+        if let Some(mark) = method.export {
+            self.emit(
+                mark.span,
+                "KSEM259",
+                "`@Export` cannot annotate an `extend` modifier: a library \
+                 exports free functions, and a modifier's receiver is the family \
+                 value. Wrap it in an exported function."
+                    .to_owned(),
+            );
+        }
+        if let Some(mark) = &method.foreign {
+            self.emit(
+                mark.span,
+                "KSEM260",
+                "`@FFI.Extern` cannot annotate an `extend` modifier: a foreign \
+                 function is a C symbol with no Kira body, and a modifier is the \
+                 body it was written as"
+                    .to_owned(),
             );
         }
     }
@@ -180,6 +222,9 @@ impl<'a> Analyzer<'a> {
             })
             .collect();
         for (enum_id, family, method, body) in rows {
+            if !self.synth_needs_body(body) {
+                continue;
+            }
             let function = self.build_extend_body(enum_id, &family, &method);
             self.fill_synth(body, function);
         }
@@ -245,7 +290,12 @@ impl<'a> Analyzer<'a> {
             body,
             is_main: false,
             is_async: false,
-            execution: kira_semantics_model::Execution::Inherited,
+            // The engine the modifier was written to run on. A modifier's body
+            // is synthesized, but it is the body the author wrote, so `@Native`
+            // on it means what it means anywhere else: a hybrid build puts this
+            // function in the native half. Hardcoding `Inherited` here is what
+            // made the annotation vanish between the source and the split.
+            execution: function.execution,
             mutates_self: false,
             name_span: function.name_span,
         }

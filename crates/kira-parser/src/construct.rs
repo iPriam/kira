@@ -62,12 +62,14 @@ impl Parser<'_> {
             && self.peek(2).kind == TokenKind::LBrace
     }
 
-    /// Parses `extend Family { function ... }`, with `extend` at the cursor.
+    /// Parses `extend Family { [@Native] function ... }`, with `extend` at the
+    /// cursor.
     ///
-    /// The block holds only `function` modifiers; any other member is refused
-    /// with a typed diagnostic and skipped, so one malformed member does not
-    /// cascade. The family name and modifier bodies are what semantics needs —
-    /// each modifier lowers to a function whose receiver is the family value.
+    /// The block holds only `function` modifiers, annotated or not; any other
+    /// member is refused with a typed diagnostic and skipped, so one malformed
+    /// member does not cascade. The family name and modifier bodies are what
+    /// semantics needs — each modifier lowers to a function whose receiver is
+    /// the family value.
     pub(crate) fn parse_extend(&mut self) -> Option<ExtendDecl> {
         let start = self.current().span;
         self.bump(); // `extend`
@@ -97,6 +99,29 @@ impl Parser<'_> {
                     if let Some(function) = self.parse_function(false, Execution::Inherited, false)
                     {
                         methods.push(function);
+                    }
+                }
+                // An annotated modifier. `@Native` and `@Runtime` select the
+                // engine a modifier's body runs on, exactly as they do for a
+                // free function or a class method — a modifier is a function,
+                // and the block it is written in does not change that. Every
+                // other annotation is recorded and refused by name where the
+                // modifier is registered, rather than as a syntax error about
+                // the wrong thing.
+                TokenKind::At => {
+                    let annotations = self.parse_annotations();
+                    if self.at(TokenKind::Function) {
+                        if let Some(function) = self.parse_function_annotated(&annotations) {
+                            methods.push(function);
+                        }
+                    } else {
+                        let span = self.current().span;
+                        self.error(
+                            span,
+                            "KPAR064",
+                            "expected `function` after an annotation in an `extend` block",
+                        );
+                        self.recover_to_next_construct_member();
                     }
                 }
                 kind => {

@@ -105,6 +105,25 @@ impl Analyzer<'_> {
         id
     }
 
+    /// How many synthesized ids have been reserved so far.
+    ///
+    /// What the fill passes watch to know whether building a body reserved
+    /// another one.
+    pub(crate) fn reserved_synth(&self) -> usize {
+        self.synth.len()
+    }
+
+    /// Whether a reserved id is still waiting for its body.
+    ///
+    /// The fill passes run more than once, because a body may reserve an id
+    /// while it is being built; asking this is what keeps the second run from
+    /// analyzing an already-filled body again and reporting its diagnostics
+    /// twice.
+    pub(crate) fn synth_needs_body(&self, id: FuncId) -> bool {
+        let index = (id.0 - self.synth_base) as usize;
+        self.synth.get(index).is_some_and(Option::is_none)
+    }
+
     /// Records a synthesized function's body against its reserved id.
     pub(crate) fn fill_synth(&mut self, id: FuncId, function: HirFunction) {
         let index = (id.0 - self.synth_base) as usize;

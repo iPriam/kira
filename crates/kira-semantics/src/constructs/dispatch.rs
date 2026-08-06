@@ -348,6 +348,7 @@ impl Analyzer<'_> {
             })
             .collect();
         rows.sort_by_key(|(dispatcher, _, _)| dispatcher.0);
+        rows.retain(|(dispatcher, _, _)| self.synth_needs_body(*dispatcher));
         for (dispatcher, family, method) in rows {
             let function = self.construct_dispatcher_body(&family, &method);
             self.fill_synth(dispatcher, function);

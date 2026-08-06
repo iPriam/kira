@@ -505,6 +505,52 @@ extend Widget {
     );
 }
 
+/// A modifier is a function, so the annotations that select how a function runs
+/// reach it. They used to be a syntax error about a missing `function`.
+#[test]
+fn an_extend_modifier_carries_the_engine_its_annotation_selected() {
+    let result = parse_text(
+        r#"
+extend Widget {
+    @Native function padding(amount: Int) -> Widget {
+        return self
+    }
+    function plain(amount: Int) -> Widget {
+        return self
+    }
+}
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let [Item::Extend(declaration)] = result.tree.items() else {
+        panic!("expected one extend block: {:?}", result.tree.items());
+    };
+    assert_eq!(
+        declaration.methods[0].execution,
+        kira_runtime_abi::Execution::Native
+    );
+    assert_eq!(
+        declaration.methods[1].execution,
+        kira_runtime_abi::Execution::Inherited
+    );
+}
+
+#[test]
+fn an_annotation_in_an_extend_block_with_no_function_after_it_is_refused() {
+    let result = parse_text(
+        r#"
+extend Widget {
+    @Native let stray: Int = 0
+}
+"#,
+    );
+    assert!(
+        result.diagnostics.iter().any(|d| d.has_code("KPAR064")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
 /// The written type each single-item source puts in its one type position.
 fn sole_written_type(result: &ParseResult) -> String {
     let id = match result.tree.items() {
