@@ -399,6 +399,12 @@ impl FnCompiler<'_> {
         {
             return Err(CompileError::MutCallAcrossSeam {
                 function: self.function_name.to_owned(),
+                callee: self
+                    .program
+                    .functions
+                    .get(index as usize)
+                    .map(|target| target.name.clone())
+                    .unwrap_or_else(|| format!("#{index}")),
             });
         }
         for &arg in args {
