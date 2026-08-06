@@ -5,6 +5,7 @@
 mod build_lock;
 mod command;
 mod compiler_host;
+mod diagnostics;
 mod dispatch;
 mod foreign_libs;
 mod hybrid;
@@ -19,6 +20,7 @@ mod progress;
 mod serve;
 mod supervisor;
 mod sync;
+mod timings;
 mod wasm;
 
 use command::Command;

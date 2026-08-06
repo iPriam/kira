@@ -7,6 +7,7 @@ pub mod label;
 pub mod progress;
 pub mod renderer;
 pub mod sink;
+pub mod timeline;
 
 pub use diagnostic::{Applicability, Code, Diagnostic, Severity, Suggestion, has_errors};
 pub use label::{Label, LabelKind};

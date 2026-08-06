@@ -45,7 +45,9 @@ use kira_source::SourceMap;
 /// package's [`BuildKind`].
 #[salsa::tracked(returns(clone))]
 fn lowered(db: &dyn salsa::Database, source: SourceProgram) -> IrProgram {
+    kira_diagnostics::progress!("analyzing");
     let program = kira_semantics::analyzed(db, source);
+    kira_diagnostics::progress!("lowering to IR");
     kira_ir::lower(program)
 }
 
@@ -162,6 +164,7 @@ pub fn compile_for(
     // Discovery, dependency resolution, module loading, and package-member
     // aggregation are one step shared with the language server: an editor and
     // `kira check` must assemble the same program from the same tree.
+    kira_diagnostics::progress!("loading modules");
     let assembled = kira_program_graph::load_program(path, &text)?;
     let package = assembled.package;
     let modules = assembled.modules;
@@ -229,6 +232,7 @@ pub fn compile_for(
     diagnostics.extend(shader_diagnostics);
     drop(shader_files);
 
+    kira_diagnostics::progress!("indexing sources");
     let db = salsa::DatabaseImpl::new();
     let module_paths: Vec<String> = modules.iter().map(|module| module.path.clone()).collect();
     let source = SourceProgram::new(
@@ -278,8 +282,8 @@ pub fn compile_for(
             })?;
     }
 
-    kira_diagnostics::progress!("analyzing and lowering");
     let ir = lowered(&db, source);
+    kira_diagnostics::progress!("collecting diagnostics");
     diagnostics.extend(
         lowered::accumulated::<DiagnosticAccumulator>(&db, source)
             .into_iter()
