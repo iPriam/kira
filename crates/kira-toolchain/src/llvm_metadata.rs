@@ -62,6 +62,15 @@ pub struct TargetBundle {
     pub archive: String,
     /// The exact published asset filename. The workflow must match this.
     pub asset: String,
+    /// The MSVC toolset the bundle is compiled with, for hosts that have one.
+    ///
+    /// MSVC's compatibility guarantee runs forward — a library built by an
+    /// older toolset links into a newer one, never the reverse — so this is the
+    /// oldest Visual Studio that can consume the published bundle. Left to the
+    /// runner image it is not a decision at all: the image updates its toolset
+    /// in place, and the floor rises under everyone who already installed a
+    /// Visual Studio. `None` on platforms with no MSVC.
+    pub toolset: Option<String>,
 }
 
 /// The compiled-in `llvm-metadata.toml` could not be parsed.
@@ -150,6 +159,30 @@ mod tests {
                 .expect("the pin parses")
                 .is_none()
         );
+    }
+
+    /// MSVC compatibility runs forward only, so the toolset that builds the
+    /// Windows bundle is the oldest Visual Studio that can link it. Leaving it
+    /// to the runner image makes that floor rise whenever the image updates,
+    /// which is how a published bundle came to name STL symbols no released
+    /// Visual Studio defined. Every MSVC host records it; nothing else needs to.
+    #[test]
+    fn every_msvc_host_pins_the_toolset_that_sets_its_compatibility_floor() {
+        let metadata = pinned().expect("the pin parses");
+        for (key, bundle) in &metadata.target {
+            if bundle.platform == "windows" {
+                let toolset = bundle
+                    .toolset
+                    .as_deref()
+                    .unwrap_or_else(|| panic!("`{key}` is an MSVC host and pins no toolset"));
+                assert!(!toolset.is_empty(), "`{key}` pins an empty toolset");
+            } else {
+                assert!(
+                    bundle.toolset.is_none(),
+                    "`{key}` is not an MSVC host and has no use for a toolset"
+                );
+            }
+        }
     }
 
     /// The pinned LLVM and the `llvm-sys` bindings must never drift apart: the
