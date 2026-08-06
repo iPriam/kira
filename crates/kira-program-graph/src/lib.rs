@@ -36,9 +36,11 @@
 pub mod assembly;
 pub mod bundled;
 pub mod package_roots;
+mod sources;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use bundled::BundledRoot;
 use kira_semantics::ModuleSource;
@@ -47,6 +49,8 @@ use kira_syntax_model::ast::Item;
 
 pub use assembly::{AssemblyError, ProgramSources, load_program, load_program_with};
 pub use package_roots::PackageRoot;
+
+pub(crate) use sources::Sources;
 
 /// The maximum number of modules one program may be built from.
 ///
@@ -68,12 +72,19 @@ enum ModuleKey {
 }
 
 /// One source unit selected for the walk, including a package namespace marker.
-struct ReadModule {
+///
+/// Selected, not read: resolution decides *which* file answers an import from
+/// the shape of the tree, and the bytes are wanted only for a module the walk
+/// has not already seen. Reading here instead is what made `import <package>`
+/// read the whole package once per file that imported it.
+struct Selected {
     module: String,
     path: PathBuf,
-    text: String,
     key: ModuleKey,
     package: Option<PackageRoot>,
+    /// The text, for the one selection that has no file: the empty namespace
+    /// marker a package with no root file contributes.
+    given: Option<String>,
 }
 
 /// One unit of the iterative depth-first post-order walk.
@@ -84,7 +95,7 @@ enum Step {
         package: Option<PackageRoot>,
     },
     /// Visit one already-resolved source file.
-    Visit(Box<ReadModule>),
+    Visit(Box<Selected>),
     /// Record this module after everything it imports.
     Emit(Box<ModuleSource>),
 }
@@ -140,10 +151,60 @@ pub fn load_modules_with_packages(
     bundles: &[BundledRoot],
     packages: &[PackageRoot],
 ) -> Vec<ModuleSource> {
-    // The module root is the entry file's directory. A module path is a
-    // sequence of identifiers, so it can name nothing above the root.
-    let root = entry_path.parent().unwrap_or_else(|| Path::new("."));
-    walk(Some(root), imports_of(entry_text), bundles, packages)
+    ModuleWalk::new(bundles, packages).modules_for(entry_path, entry_text)
+}
+
+/// A module walk that keeps what it learned about the tree between entries.
+///
+/// One assembly walks from many entry files — the program's, and then every
+/// other source its package owns — and each walk asks the same questions of the
+/// same directories. Driving them through one of these answers each question
+/// once. Every walk still gets its own visited set and its own module list, so
+/// what [`ModuleWalk::modules_for`] returns for a file is exactly what a walk
+/// begun from nothing would return for it.
+pub struct ModuleWalk<'a> {
+    bundles: &'a [BundledRoot],
+    packages: &'a [PackageRoot],
+    sources: Sources,
+}
+
+impl<'a> ModuleWalk<'a> {
+    /// A walk that resolves against `bundles` and `packages`.
+    #[must_use]
+    pub fn new(bundles: &'a [BundledRoot], packages: &'a [PackageRoot]) -> Self {
+        Self {
+            bundles,
+            packages,
+            sources: Sources::default(),
+        }
+    }
+
+    /// Every module the file at `entry_path` imports, transitively.
+    ///
+    /// `entry_text` is supplied rather than read for the same reason
+    /// [`assembly::load_program`] takes it: an editor's unsaved buffer is the
+    /// truth for the document it holds.
+    #[must_use]
+    pub fn modules_for(&mut self, entry_path: &Path, entry_text: &str) -> Vec<ModuleSource> {
+        // The module root is the entry file's directory. A module path is a
+        // sequence of identifiers, so it can name nothing above the root.
+        let root = entry_path.parent().unwrap_or_else(|| Path::new("."));
+        walk(
+            Some(root),
+            imports_of(entry_text),
+            self.bundles,
+            self.packages,
+            &mut self.sources,
+        )
+    }
+
+    /// The text of a source file, read once however often it is asked for.
+    ///
+    /// What lets package aggregation hand a file's bytes to the frontend
+    /// without reading a file the walk already read.
+    pub fn read(&mut self, path: &Path) -> std::io::Result<Rc<str>> {
+        self.sources.read(path)
+    }
 }
 
 /// Reads every module `imports` names, and their closure, from bundles alone.
@@ -155,7 +216,13 @@ pub fn load_modules_with_packages(
 /// hermetic rather than dependent on the caller's working directory.
 #[must_use]
 pub fn load_bundled_modules(imports: &[String], bundles: &[BundledRoot]) -> Vec<ModuleSource> {
-    walk(None, imports.to_vec(), bundles, &[])
+    walk(
+        None,
+        imports.to_vec(),
+        bundles,
+        &[],
+        &mut Sources::default(),
+    )
 }
 
 /// The transitive module walk, from a seed of import names.
@@ -168,6 +235,7 @@ fn walk(
     seed: Vec<String>,
     bundles: &[BundledRoot],
     packages: &[PackageRoot],
+    sources: &mut Sources,
 ) -> Vec<ModuleSource> {
     let mut loaded: Vec<ModuleSource> = Vec::new();
     let mut seen: HashSet<ModuleKey> = HashSet::new();
@@ -178,16 +246,17 @@ fn walk(
         match step {
             Step::Emit(source) => loaded.push(*source),
             Step::Resolve { module, package } => {
-                let sources = read_module(root, &module, package.as_ref(), bundles, packages);
-                push_modules(&mut stack, sources);
+                let selected =
+                    select_module(root, &module, package.as_ref(), bundles, packages, sources);
+                push_modules(&mut stack, selected);
             }
             Step::Visit(source) => {
-                let ReadModule {
+                let Selected {
                     module,
                     path,
-                    text,
                     key,
                     package,
+                    given,
                 } = *source;
                 if !seen.insert(key) {
                     continue;
@@ -195,7 +264,24 @@ fn walk(
                 if seen.len() > MAX_MODULES {
                     break;
                 }
-                let nested = imports_of(&text);
+                // The bytes are wanted here and nowhere earlier: a module
+                // already seen costs a set lookup rather than a file read.
+                let (text, nested) = match given {
+                    Some(text) => {
+                        let nested = imports_of(&text);
+                        (text, nested)
+                    }
+                    None => {
+                        // A file that resolution selected and that cannot be
+                        // read now answers nothing, and the frontend reports
+                        // the import against its own span.
+                        let Some(text) = sources.text(&path) else {
+                            continue;
+                        };
+                        let nested = sources.imports(&path, &text).to_vec();
+                        (text.to_string(), nested)
+                    }
+                };
                 stack.push(Step::Emit(Box::new(ModuleSource {
                     module,
                     path: path.to_string_lossy().into_owned(),
@@ -218,7 +304,7 @@ fn push_resolves(stack: &mut Vec<Step>, modules: Vec<String>, package: Option<Pa
 }
 
 /// Schedules resolved source files in deterministic order, first one first.
-fn push_modules(stack: &mut Vec<Step>, modules: Vec<ReadModule>) {
+fn push_modules(stack: &mut Vec<Step>, modules: Vec<Selected>) {
     stack.extend(
         modules
             .into_iter()
@@ -262,30 +348,34 @@ pub fn imports_of(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Reads every source file selected by `module` in resolution-tier order.
+/// Selects every source file `module` names, in resolution-tier order.
 ///
 /// `root` is the project's own directory, or `None` when the program has none.
-fn read_module(
+/// A tier answers when it *holds* the file; the bytes are read later, by the
+/// walk, and only for a module it has not already visited.
+fn select_module(
     root: Option<&Path>,
     module: &str,
     package: Option<&PackageRoot>,
     bundles: &[BundledRoot],
     packages: &[PackageRoot],
-) -> Vec<ReadModule> {
+    sources: &mut Sources,
+) -> Vec<Selected> {
     // A dependency source resolves inside its own package before it may see a
     // same-named file in the consumer project.
     if let Some(package) = package {
         let relative = package.relative_module(module).unwrap_or(module);
         let sibling = module_path(&package.source_dir, relative);
-        if let Some(source) = read_package_module(relative.to_owned(), sibling, package) {
+        if let Some(source) = select_package_module(relative.to_owned(), sibling, package, sources)
+        {
             return vec![source];
         }
     }
 
     if let Some(root) = root {
         let own = module_path(root, module);
-        if let Some(source) = read_named_module(module, own) {
-            return vec![source];
+        if own.is_file() {
+            return vec![named_module(module, own)];
         }
     }
 
@@ -300,10 +390,10 @@ fn read_module(
             // `<name>.kira` root file, if present, is just one of the aggregated
             // files — it is never loaded alone, which is what let a sibling
             // holding `ComponentStore` go unread.
-            return read_aggregate_modules(package);
+            return select_aggregate_modules(package, sources);
         }
         let path = module_path(&package.source_dir, relative);
-        if let Some(source) = read_package_module(relative.to_owned(), path, package) {
+        if let Some(source) = select_package_module(relative.to_owned(), path, package, sources) {
             return vec![source];
         }
     }
@@ -319,93 +409,88 @@ fn read_module(
             // it grew a filesystem, and reading only `Foundation.kira` would
             // have made that file unreachable by any spelling.
             let package = PackageRoot::new(bundle.module_root(), bundle.source_dir());
-            let aggregate = read_aggregate_modules(&package);
+            let aggregate = select_aggregate_modules(&package, sources);
             if !aggregate.is_empty() {
                 return aggregate;
             }
         }
         let path = module_path(bundle.source_dir(), module);
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            return vec![ReadModule {
-                module: module.to_owned(),
-                path,
-                text,
-                key: ModuleKey::Name(module.to_owned()),
-                package: None,
-            }];
+        if path.is_file() {
+            return vec![named_module(module, path)];
         }
     }
     Vec::new()
 }
 
-/// Reads a project-owned module, which retains name-based cycle identity.
-fn read_named_module(module: &str, path: PathBuf) -> Option<ReadModule> {
-    let text = std::fs::read_to_string(&path).ok()?;
-    Some(ReadModule {
+/// A project-owned or bundled module, which retains name-based cycle identity.
+fn named_module(module: &str, path: PathBuf) -> Selected {
+    Selected {
         module: module.to_owned(),
         path,
-        text,
         key: ModuleKey::Name(module.to_owned()),
         package: None,
-    })
+        given: None,
+    }
 }
 
-/// Reads a dependency-package module with absolute-path cycle identity.
-fn read_package_module(module: String, path: PathBuf, package: &PackageRoot) -> Option<ReadModule> {
-    let text = std::fs::read_to_string(&path).ok()?;
-    let absolute = std::fs::canonicalize(&path)
-        .or_else(|_| std::path::absolute(&path))
-        .ok()?;
-    Some(ReadModule {
+/// Selects a dependency-package module, with absolute-path cycle identity.
+fn select_package_module(
+    module: String,
+    path: PathBuf,
+    package: &PackageRoot,
+    sources: &mut Sources,
+) -> Option<Selected> {
+    if !path.is_file() {
+        return None;
+    }
+    let absolute = sources.identity(&path)?;
+    Some(Selected {
         module: kira_semantics::ImportTable::package_module_identity(&package.name, &module),
         path,
-        text,
         key: ModuleKey::PackagePath(absolute),
         package: Some(package.clone()),
+        given: None,
     })
 }
 
-/// Reads every source file of a package and, when it has no `<name>.kira` root
-/// file, adds its import namespace.
+/// Selects every source file of a package and, when it has no `<name>.kira`
+/// root file, adds its import namespace.
 ///
 /// Every `.kira` file below the package's source directory is one flat module
-/// scope, so all of them are read. The bare `import <name>` needs one module to
-/// bind to: a `<name>.kira` root file already provides it — its identity is the
-/// package-name module — so the empty namespace alias is emitted only when the
-/// package has no such file, and never duplicates the root's identity.
-fn read_aggregate_modules(package: &PackageRoot) -> Vec<ReadModule> {
-    let mut modules: Vec<ReadModule> = Vec::new();
+/// scope, so all of them are selected. The bare `import <name>` needs one module
+/// to bind to: a `<name>.kira` root file already provides it — its identity is
+/// the package-name module — so the empty namespace alias is emitted only when
+/// the package has no such file, and never duplicates the root's identity.
+fn select_aggregate_modules(package: &PackageRoot, sources: &mut Sources) -> Vec<Selected> {
+    let mut modules: Vec<Selected> = Vec::new();
     let mut has_root = false;
-    for path in package.source_files() {
-        let Some(module) = package_module_name(&package.source_dir, &path) else {
+    for path in sources.listing(&package.source_dir).iter() {
+        let Some(module) = package_module_name(&package.source_dir, path) else {
             continue;
         };
         let is_root = module == package.name;
-        let Some(read) = read_package_module(module, path, package) else {
+        let Some(selected) = select_package_module(module, path.clone(), package, sources) else {
             continue;
         };
         if is_root {
             has_root = true;
         }
-        modules.push(read);
+        modules.push(selected);
     }
     if modules.is_empty() || has_root {
         return modules;
     }
-    let Some(absolute) = std::fs::canonicalize(&package.source_dir)
-        .or_else(|_| std::path::absolute(&package.source_dir))
-        .ok()
-    else {
+    let Some(absolute) = sources.identity(&package.source_dir) else {
         return modules;
     };
     // The namespace has no root file. Emit its empty semantic alias after the
     // real files so package declarations retain dependency-first order.
-    modules.push(ReadModule {
+    modules.push(Selected {
         module: kira_semantics::ImportTable::package_module_identity(&package.name, &package.name),
         path: package.source_dir.clone(),
-        text: String::new(),
         key: ModuleKey::PackageNamespace(package.name.clone(), absolute),
         package: Some(package.clone()),
+        given: Some(String::new()),
     });
     modules
 }

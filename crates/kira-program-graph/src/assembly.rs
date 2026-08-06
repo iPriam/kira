@@ -132,12 +132,16 @@ pub fn load_program_with(
     let resolved = resolve_packages(package.as_ref())?;
     let package_roots = resolved.roots;
 
+    // One walk for the whole assembly. Every source below is walked from in
+    // turn, and each of those walks resolves the same imports against the same
+    // directories — so the tree is read once here rather than once per file.
+    let mut walk = crate::ModuleWalk::new(bundles, &package_roots);
+
     // Everything the entry file imports, transitively, dependencies first. An
     // import that names no readable file comes back as nothing here and is
     // reported by the frontend, which has the span to point at. Resolved
     // package roots sit between project-local modules and toolchain bundles.
-    let mut modules =
-        crate::load_modules_with_packages(entry_path, entry_text, bundles, &package_roots);
+    let mut modules = walk.modules_for(entry_path, entry_text);
 
     // Every `.kira` file under a package's source root is a member of that
     // package — app or library. What a package *produces* does not decide which
@@ -152,13 +156,7 @@ pub fn load_program_with(
     if let Some(found) = package.as_ref()
         && let Some(library_sources) = kira_project::library_sources_for_entry(found, entry_path)?
     {
-        aggregate_package_modules(
-            entry_path,
-            &library_sources,
-            bundles,
-            &package_roots,
-            &mut modules,
-        )?;
+        aggregate_package_modules(entry_path, &library_sources, &mut walk, &mut modules)?;
     }
 
     // A package's `linter.kira` sits beside its manifest rather than under
@@ -232,8 +230,7 @@ fn package_root_dir(package: &Manifest) -> PathBuf {
 fn aggregate_package_modules(
     entry_path: &Path,
     library_sources: &kira_project::LibrarySources,
-    bundles: &[BundledRoot],
-    package_roots: &[PackageRoot],
+    walk: &mut crate::ModuleWalk<'_>,
     modules: &mut Vec<ModuleSource>,
 ) -> Result<(), AssemblyError> {
     let entry_identity = source_identity(entry_path);
@@ -250,13 +247,13 @@ fn aggregate_package_modules(
         }
 
         let display = source.path().display().to_string();
-        let text =
-            std::fs::read_to_string(source.path()).map_err(|read_error| AssemblyError::Read {
+        let text = walk
+            .read(source.path())
+            .map_err(|read_error| AssemblyError::Read {
                 path: display.clone(),
                 source: read_error,
             })?;
-        let imported =
-            crate::load_modules_with_packages(source.path(), &text, bundles, package_roots);
+        let imported = walk.modules_for(source.path(), &text);
         for module in imported {
             if seen.insert(source_identity(Path::new(&module.path))) {
                 modules.push(module);
@@ -266,7 +263,7 @@ fn aggregate_package_modules(
             modules.push(ModuleSource {
                 module: source.module().to_owned(),
                 path: display,
-                text,
+                text: text.to_string(),
             });
         }
     }
