@@ -88,6 +88,7 @@ impl Analyzer<'_> {
             })
             .collect();
         field_rows.sort_by_key(|(dispatcher, _, _)| dispatcher.0);
+        field_rows.retain(|(dispatcher, _, _)| self.synth_needs_body(*dispatcher));
         for (dispatcher, family, member) in field_rows {
             let function = self.construct_field_dispatcher_body(&family, &member);
             self.fill_synth(dispatcher, function);

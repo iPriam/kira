@@ -511,12 +511,23 @@ impl<'a> Analyzer<'a> {
             let hir_function = self.analyze_function(FuncId(index as u32), callable);
             self.program.functions.push(hir_function);
         }
-        // Dynamic construct dispatchers and closure dispatchers share the same
-        // synthesized-function id space and are all filled before it is appended.
-        self.build_construct_dispatchers();
-        // Modifier bodies share the synthesized-function id space with the
-        // dispatchers and are filled before it is appended by the closures pass.
-        self.build_extend_methods();
+        // Dynamic construct dispatchers, family value-member dispatchers, and
+        // `extend` modifier bodies share one synthesized-function id space, and
+        // building one of them can reserve another: a modifier that reads a
+        // family member reserves that member's dispatcher *while* the modifier
+        // is being built, and a dispatcher arm can do the same. So the fill
+        // passes run until a round reserves nothing new — which is what makes
+        // "a reserved id is always filled" true rather than a hope. A hole left
+        // here reached the backends as a call to a zero-argument `Void`
+        // placeholder and was rejected by the LLVM verifier.
+        loop {
+            let reserved = self.reserved_synth();
+            self.build_extend_methods();
+            self.build_construct_dispatchers();
+            if self.reserved_synth() == reserved {
+                break;
+            }
+        }
         self.finalize_closures();
         Analysis {
             program: self.program,

@@ -24,6 +24,44 @@ function main() {
     assert_eq!(output, "42\n-2\n");
 }
 
+/// An `extend` modifier is a synthesized body, and `@Native` on it puts that
+/// body in the native half exactly as it does for a written function. A hybrid
+/// run is what proves it: the modifier is called from the VM half, so a
+/// modifier that stayed on the VM and one that crossed print the same number
+/// only if the crossing works.
+#[test]
+fn a_native_extend_modifier_crosses_the_seam() {
+    let output = assert_parity(
+        r#"
+construct Widget {
+    let tag: Int { 0 }
+}
+
+Widget Leaf(id: Int) {
+    let tag: Int { id }
+}
+
+extend Widget {
+    @Native function doubled() -> Int {
+        return self.tag * 2
+    }
+    @Runtime function tripled() -> Int {
+        return self.tag * 3
+    }
+}
+
+@Main
+function main() {
+    let base = Leaf(id: 7)
+    print(base.doubled())
+    print(base.tripled())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "14\n21\n");
+}
+
 /// The other direction: native code calls back into the VM through the invoker
 /// the host installs.
 #[test]
