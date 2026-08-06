@@ -9,7 +9,7 @@
 mod requirements;
 mod slots;
 
-use super::{codes, library_codes};
+use super::{analyze_text, codes, library_codes};
 
 /// A family, a conforming backed declaration, its construction, and a bridge
 /// read all type-check cleanly.
@@ -306,6 +306,81 @@ extend Gadget {
         )
         .iter()
         .any(|code| code == "KSEM238")
+    );
+}
+
+/// A modifier's body is synthesized, but it is the body the author wrote, so
+/// `@Native` on it decides which half of a hybrid build the modifier lands in.
+/// It used to be dropped between the source and the split.
+#[test]
+fn an_extend_modifier_keeps_the_engine_it_was_annotated_with() {
+    let program = analyze_text(
+        r#"
+construct Widget {
+    let tag: Int { 0 }
+}
+
+Widget Leaf(id: Int) {
+    let tag: Int { id }
+}
+
+extend Widget {
+    @Native function tagged() -> Int {
+        return 7
+    }
+    function plain() -> Int {
+        return 8
+    }
+}
+
+@Main
+function main() {
+    let base = Leaf(id: 1)
+    print(base.tagged())
+    print(base.plain())
+    return
+}
+"#,
+    );
+    let engine = |suffix: &str| {
+        program
+            .functions
+            .iter()
+            .find(|function| function.name.ends_with(suffix))
+            .unwrap_or_else(|| panic!("no synthesized modifier `{suffix}`"))
+            .execution
+    };
+    assert_eq!(engine(".tagged"), kira_runtime_abi::Execution::Native);
+    assert_eq!(engine(".plain"), kira_runtime_abi::Execution::Inherited);
+}
+
+/// Annotations a modifier has nowhere to carry are named where they were
+/// written rather than reaching a synthesized body that ignores them.
+#[test]
+fn annotations_a_modifier_cannot_carry_are_refused() {
+    let reported = codes(
+        r#"
+construct Widget {
+    let tag: Int { 0 }
+}
+
+extend Widget {
+    @Main function started() -> Int {
+        return 0
+    }
+    @Export function exported() -> Int {
+        return 0
+    }
+}
+"#,
+    );
+    assert!(
+        reported.iter().any(|code| code == "KSEM258"),
+        "{reported:?}"
+    );
+    assert!(
+        reported.iter().any(|code| code == "KSEM259"),
+        "{reported:?}"
     );
 }
 
