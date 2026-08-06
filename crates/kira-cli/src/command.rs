@@ -110,8 +110,11 @@ impl Command {
     /// means the package directory you are standing in.
     pub fn arguments(self) -> &'static str {
         match self {
-            Self::Run | Self::Build => " [file|dir] [--backend vm|llvm|hybrid] [--device]",
-            Self::Check | Self::Lint | Self::Sync => " [file|dir]",
+            Self::Run | Self::Build => {
+                " [file|dir] [--backend vm|llvm|hybrid] [--device] [--timings] [--show-notes]"
+            }
+            Self::Check => " [file|dir] [--timings] [--show-notes]",
+            Self::Lint | Self::Sync => " [file|dir]",
             Self::Live => " [runner] <file> [--backend vm|hybrid] [--watch]",
             Self::Help => " [all]",
             _ => "",

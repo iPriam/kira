@@ -72,6 +72,7 @@ pub(super) fn run_on_vm(
     source: &std::path::Path,
     foreign_link: &NativeLinkInputs,
 ) -> i32 {
+    kira_diagnostics::progress!("compiling bytecode");
     let module = match kira_bytecode::compile(ir) {
         Ok(module) => module,
         Err(error) => {
@@ -84,6 +85,7 @@ pub(super) fn run_on_vm(
     // function to C needs the same sidecar an import does, because the entry
     // thunk C calls lives in it.
     if ir.foreign_imports.is_empty() && ir.foreign_callbacks.is_empty() {
+        kira_diagnostics::progress!("running the program");
         let mut host = NativeStateHost::new(StdoutHost);
         return match kira_vm_runtime::execute(&module, &mut host) {
             Ok(_) => EXIT_OK,
@@ -124,6 +126,7 @@ pub(super) fn run_on_vm(
             return EXIT_FAILURE;
         }
     };
+    kira_diagnostics::progress!("running the program");
     match session.run() {
         Ok(_) => EXIT_OK,
         Err(trap) => {
@@ -164,6 +167,7 @@ pub(super) fn run_native(
         err!("kira run: the native build produced no executable");
         return EXIT_FAILURE;
     };
+    kira_diagnostics::progress!("running the program");
     match native::execute(&executable) {
         Ok(code) => code,
         Err(error) => {

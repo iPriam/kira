@@ -30,7 +30,7 @@
 
 use kira_backend_api::BackendMode;
 use kira_build::{Compiled, FrontendError};
-use kira_diagnostics::{Diagnostic, Suggestion, renderer};
+use kira_diagnostics::{Diagnostic, Suggestion};
 use kira_ir::IrProgram;
 use kira_llvm_backend::NativeLinkInputs;
 use kira_source::{SourceId, SourceMap};
@@ -64,10 +64,16 @@ pub const EXIT_USAGE: i32 = 2;
 pub fn check(args: &[String]) -> i32 {
     let surface = crate::progress::Surface::install("Checking");
     let _guard = crate::progress::Finish(surface);
-    let path = args
-        .first()
-        .map(String::as_str)
-        .unwrap_or(crate::options::DEFAULT_PATH);
+    // Parsed like every other compiling verb, so a flag they share means the
+    // same thing here — `--timings` above all, which is asked of an analysis
+    // more often than of a build.
+    let options = match parse_options("check", args) {
+        Ok(options) => options,
+        Err(code) => return code,
+    };
+    crate::diagnostics::show_notes(options.show_notes);
+    let _timings = crate::timings::Timings::install(options.timings);
+    let path = options.path.as_str();
     match compile(path, &compile_target(path, None)) {
         Ok(compiled) => {
             emit_diagnostics(&compiled.diagnostics, &compiled.sources);
@@ -146,7 +152,7 @@ pub fn lint(args: &[String]) -> i32 {
                 .into_iter()
                 .filter(|diagnostic| !diagnostic.has_code(RECEIPT))
                 .collect();
-            emit_diagnostics(&owned, &compiled.sources);
+            crate::diagnostics::emit_every(&owned, &compiled.sources);
             if kira_diagnostics::has_errors(&owned) {
                 return EXIT_FAILURE;
             }
@@ -308,6 +314,8 @@ pub fn run(args: &[String]) -> i32 {
         Ok(options) => options,
         Err(code) => return code,
     };
+    crate::diagnostics::show_notes(options.show_notes);
+    let _timings = crate::timings::Timings::install(options.timings);
     options.path = match resolve_path(&options.path) {
         Ok(path) => path,
         Err(code) => return code,
@@ -361,6 +369,8 @@ pub fn test(args: &[String]) -> i32 {
         Ok(options) => options,
         Err(code) => return code,
     };
+    crate::diagnostics::show_notes(options.show_notes);
+    let _timings = crate::timings::Timings::install(options.timings);
     options.path = match resolve_path(&options.path) {
         Ok(path) => path,
         Err(code) => return code,
@@ -593,6 +603,8 @@ pub fn build(args: &[String]) -> i32 {
         Ok(options) => options,
         Err(code) => return code,
     };
+    crate::diagnostics::show_notes(options.show_notes);
+    let _timings = crate::timings::Timings::install(options.timings);
     options.path = match resolve_path(&options.path) {
         Ok(path) => path,
         Err(code) => return code,
@@ -662,6 +674,7 @@ pub fn build(args: &[String]) -> i32 {
             // it is the whole build. A program with foreign imports also emits
             // the adapter sidecar a VM run loads, so `build` and `run` produce
             // the same artifacts.
+            kira_diagnostics::progress!("compiling bytecode");
             match kira_bytecode::compile(ir) {
                 Ok(module) => {
                     if !ir.foreign_imports.is_empty()
@@ -982,15 +995,7 @@ fn compile(path: &str, target: &kira_native_lib_definition::TargetTriple) -> Res
 
 /// Renders every diagnostic to stderr in source order.
 fn emit_diagnostics(diagnostics: &[Diagnostic], sources: &SourceMap) {
-    // The status surface redraws in place; a diagnostic printed underneath it
-    // would interleave into half a status block, a note, and a block that
-    // scrolled. It stands aside and redraws on the next phase. Suspended once
-    // for the whole run rather than per line, which `err!` would also do
-    // correctly but at one erase check per diagnostic.
-    let _surface = kira_diagnostics::progress::suspended();
-    for diagnostic in diagnostics {
-        eprint!("{}", renderer::render(diagnostic, sources));
-    }
+    crate::diagnostics::emit(diagnostics, sources);
 }
 
 #[cfg(test)]
