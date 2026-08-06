@@ -29,6 +29,13 @@ $configureArgs = @(
     "-DCMAKE_INSTALL_LIBDIR=lib",
     "-DBUILD_SHARED_LIBS=OFF",
     "-DLLVM_ENABLE_PROJECTS=clang",
+    # clang is here for `libclang`, which `kira-clang` opens to read C headers.
+    # The static analyzer and the ARC migrator are a large share of the clang
+    # build and nothing reaches them through that API; upstream guards both
+    # behind these switches, and refuses the migrator without the analyzer, so
+    # they move together.
+    "-DCLANG_ENABLE_STATIC_ANALYZER=OFF",
+    "-DCLANG_ENABLE_ARCMT=OFF",
     "-DLLVM_ENABLE_BINDINGS=OFF",
     "-DLLVM_ENABLE_LIBXML2=OFF",
     "-DLLVM_ENABLE_ZLIB=OFF",
