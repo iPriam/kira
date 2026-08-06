@@ -142,12 +142,18 @@ pub enum CompileError {
     /// method cannot cross the seam, so a mutating call is always same-engine;
     /// reaching this means the split placed one across it.
     #[error(
-        "function `{function}` calls a mutating method on the native engine, which structs cannot \
-         cross"
+        "function `{function}` calls `{callee}`, a mutating method on the native engine, which \
+         structs cannot cross"
     )]
     MutCallAcrossSeam {
         /// The offending function's name.
         function: String,
+        /// The mutating method that was placed across the seam.
+        ///
+        /// Named because the caller is often a closure with a synthesized name,
+        /// and the fix is always at the callee: it is the one carrying the
+        /// annotation that put a struct receiver on the far side.
+        callee: String,
     },
     /// Internal invariant: an export's signature names a type that cannot cross
     /// the export boundary, which the frontend refuses before this runs.
