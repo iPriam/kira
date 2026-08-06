@@ -13,7 +13,8 @@
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
-use crate::event::{LiveEvent, ProgressError, SessionProgress};
+use crate::event::LiveEvent;
+use crate::progress::{ProgressError, SessionProgress};
 use crate::protocol::ProtocolError;
 use crate::session::LiveSession;
 use crate::store::Bundle;

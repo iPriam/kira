@@ -121,8 +121,13 @@ pub fn run(options: &LiveOptions, source: &Path, rebuild: Rebuild<'_>) -> Result
 
     if options.watch {
         watch(options, source, &server, &mut session, &mut runner, rebuild)?;
-    } else if let Some(quit_after) = options.quit_after {
-        std::thread::sleep(quit_after);
+    } else {
+        // An unwatched session is the app's, for as long as the app lasts. A
+        // program that prints and returns ends it in milliseconds and an app
+        // ends it when its window closes, and neither is a wait this end gets
+        // to cut short — shutting down at `ready` would have killed the app on
+        // its first frame.
+        run_until_the_app_ends(&mut session, options.quit_after)?;
     }
 
     emit(&LiveEvent::ShutdownStarted);
@@ -132,6 +137,31 @@ pub fn run(options: &LiveOptions, source: &Path, rebuild: Rebuild<'_>) -> Result
         .shutdown(SHUTDOWN_GRACE)
         .map_err(|source| LiveError::Shutdown { source })?;
     emit(&LiveEvent::ShutdownFinished);
+    Ok(())
+}
+
+/// Keeps an unwatched session up until the app ends, or until the deadline.
+///
+/// With no deadline the wait is a blocking one, because there is nothing else
+/// this session will ever do. With one it is polled, so that a `--quit-after`
+/// bound holds over an app that would otherwise outlast it.
+fn run_until_the_app_ends(
+    session: &mut LiveSession,
+    quit_after: Option<Duration>,
+) -> Result<(), LiveError> {
+    let Some(quit_after) = quit_after else {
+        session.wait_for_app_exit(&mut |event| emit(&event))?;
+        return Ok(());
+    };
+
+    let deadline = Instant::now() + quit_after;
+    while Instant::now() < deadline {
+        session.poll_runner(&mut |event| emit(&event))?;
+        if session.app_exited() {
+            return Ok(());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
     Ok(())
 }
 
@@ -163,6 +193,12 @@ fn watch(
         {
             return Ok(());
         }
+
+        // A watched session does not end when its app does: the runner is still
+        // up, holding the cache and the loaded library, and the next save starts
+        // the app again. The fact is reported where it happens rather than
+        // discovered later, at whatever moment the session next reads.
+        session.poll_runner(&mut |event| emit(&event))?;
 
         let changes = watcher.poll();
         if changes.is_empty() {

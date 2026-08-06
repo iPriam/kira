@@ -33,15 +33,15 @@
 //! that happens to be serializable.
 //!
 //! **Only real milestones emit events.** A [`LiveEvent`] is emitted where the
-//! thing it names actually happened — `EntrypointStarted` after the entrypoint
-//! returns control, not after the bundle was sent in the hope that it will. A
-//! session that cannot reach a milestone reports why instead of reporting the
-//! milestone.
+//! thing it names actually happened — `EntrypointStarted` once the entrypoint is
+//! running, not after the bundle was sent in the hope that it will be. A session
+//! that cannot reach a milestone reports why instead of reporting the milestone.
 
 pub mod bundle;
 pub mod client;
 pub mod event;
 pub mod hash;
+pub mod progress;
 pub mod protocol;
 pub mod reload;
 pub mod server;
@@ -52,14 +52,17 @@ pub mod watch;
 pub use bundle::{
     BundleDecodeError, BundleManifest, MANIFEST_FILE, PAYLOAD_DIR, PayloadEntry, PayloadKind,
 };
-pub use client::{ClientError, RunnerClient, RunnerHost};
-pub use event::{LiveEvent, ProgressError, ReloadMode, SessionPhase, SessionProgress};
+pub use client::{AppOutcome, ClientError, RunnerClient, RunnerHost};
+pub use event::{LiveEvent, ReloadMode};
 pub use hash::{ContentHash, HASH_LEN};
+pub use progress::{ProgressError, SessionPhase, SessionProgress};
 pub use protocol::{
     ClientMessage, Message, PROTOCOL_VERSION, ProtocolError, ServerMessage, read_message,
     write_message,
 };
-pub use reload::{RelaunchReason, ReloadDecision, decide, hotpatch_disabled_by_env};
+pub use reload::{
+    RelaunchReason, ReloadDecision, decide, hotpatch_disabled_by_env, hotpatch_kill_switch_reason,
+};
 pub use server::{LiveServer, ServerError};
 pub use session::{LiveSession, ReloadOutcome};
 pub use store::{Bundle, BundleError, NamedPayload};

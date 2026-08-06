@@ -14,9 +14,12 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use kira_desktop_runner::DesktopHost;
-use kira_live::RunnerClient;
+use kira_desktop_runner::relay::{self, RelayHost};
+use kira_live::{ClientError, RunnerClient};
 use kira_manifest::RunnerId;
 
 /// Exit code for a session that ran.
@@ -46,22 +49,84 @@ fn main() -> ExitCode {
     }
 }
 
-/// Connects, runs the session, takes reloads, and says goodbye.
-fn run(options: &Options) -> Result<(), kira_live::ClientError> {
-    let mut client = RunnerClient::connect(options.server, RunnerId::Desktop)?;
-    let mut host = DesktopHost::new(options.cache.clone());
-    client.run_session(&mut host)?;
+/// Why the runner stopped.
+#[derive(Debug, thiserror::Error)]
+enum RunError {
+    /// The session itself failed.
+    #[error("{0}")]
+    Session(#[from] ClientError),
+    /// The protocol thread could not be started.
+    #[error("could not start the live protocol thread: {0}")]
+    Thread(#[source] std::io::Error),
+    /// The protocol thread panicked.
+    #[error("the live protocol thread panicked")]
+    ProtocolPanicked,
+}
 
-    // The entrypoint returned, and the runner stays up. This is what makes a
-    // reload possible at all: the process, its cache, and its loaded native
-    // library are still here, waiting to be handed new code.
+/// Connects, hosts the app, takes reloads, and says goodbye.
+///
+/// The app gets this thread and the protocol gets another. That split is what
+/// lets a runner host an app rather than only a program: an app's run loop owns
+/// the thread that starts it for as long as the window is open, and on macOS
+/// that thread has to be this one.
+fn run(options: &Options) -> Result<(), RunError> {
+    let client = RunnerClient::connect(options.server, RunnerId::Desktop)?;
+    let mut host = DesktopHost::new(options.cache.clone());
+    let (relay, app) = relay::pair(host.hotpatch_disabled());
+    let running = app.running();
+
+    let protocol = std::thread::Builder::new()
+        .name("kira-live-protocol".to_owned())
+        .spawn(move || serve_session(client, relay, &running))
+        .map_err(RunError::Thread)?;
+
+    // Every host call happens here, in order, on the one thread that is allowed
+    // to run the app — the protocol thread only ever asks. It returns when the
+    // session is over, which for an app is after its window has closed.
+    app.serve(&mut host);
+
+    protocol.join().map_err(|_| RunError::ProtocolPanicked)??;
+    Ok(())
+}
+
+/// The protocol half of the session, on its own thread.
+///
+/// Ends the process itself when the app is still running, because then nothing
+/// else can: the main thread is inside a run loop that returns when the window
+/// closes, and the session has just been told to shut down.
+fn serve_session(
+    mut client: RunnerClient,
+    mut relay: RelayHost,
+    running: &Arc<AtomicBool>,
+) -> Result<(), ClientError> {
+    let outcome = session(&mut client, &mut relay);
+    if running.load(Ordering::SeqCst) {
+        let code = match &outcome {
+            Ok(()) => EXIT_OK,
+            Err(error) => {
+                eprintln!("kira-desktop-runner: {error}");
+                EXIT_FAILURE
+            }
+        };
+        std::process::exit(i32::from(code));
+    }
+    outcome
+}
+
+/// One session: bring the app up, then stay up for it.
+fn session(client: &mut RunnerClient, relay: &mut RelayHost) -> Result<(), ClientError> {
+    client.run_session(relay)?;
+
+    // The app is running and the runner stays up. This is what makes a reload
+    // possible at all: the process, its cache, and its loaded native library are
+    // still here, waiting to be handed new code.
     //
     // It is also where this runner's swap point is. The specification applies a
-    // swap "at a frame boundary when the VM is idle" — a headless runner has no
-    // frames, but it has the other half, and the other half is the one that
-    // matters: the VM is not executing, so nothing holds a pointer into the
-    // module about to be replaced.
-    client.serve_reloads(&mut host)?;
+    // swap "at a frame boundary when the VM is idle", and idle is the word that
+    // does the work: a swap is offered to the host, and a host whose entrypoint
+    // is still running refuses it rather than pulling a module out from under a
+    // live call stack. The session relaunches instead, and says so.
+    client.serve_reloads(relay)?;
     client.goodbye()?;
     Ok(())
 }
