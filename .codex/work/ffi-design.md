@@ -9,9 +9,10 @@ building the wrong thing.
 FFI works the same on VM, hybrid, and LLVM, with no `@Native` ceremony: an
 extern is callable from any function, and a user never annotates to reach C.
 
-`@Native`/`@Runtime` are orthogonal and stay what they are — a choice about
-where *Kira* code runs, not about calling C. The struct-at-the-seam refusal is
-about the Kira/Kira boundary and does not touch this.
+`@Native`/`@Runtime` are orthogonal and stay what they are: a choice about
+where *Kira* code runs, not about calling C. How an aggregate crosses the
+Kira/Kira seam is a separate mechanism (a node tree) and does not touch this,
+which marshals C layout.
 
 ## Who performs the call
 

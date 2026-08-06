@@ -54,28 +54,28 @@ may name a member bare, so `self.step` and `step` are the same read.
 A struct crosses the `@Native`/`@Runtime` boundary as a **copy**, in either
 direction, by value or by `borrow mut`.
 
-A `BridgeValue` is one tag and one word of payload, and a struct fits neither —
-so what crosses is not the struct. The payload is a pointer to a tree of nodes
-(`BridgeValueTag::NODE`, the same `kira_rt_native_value_*` shape callback state
-already uses), and the tree carries the whole value however deeply nested. That
-is the ABI decision the crossing was once waiting on, and it answers both halves
-of it: **by value**, and **the side that reads the strings frees them**, exactly
-once, as it decodes. Neither engine touches the other's heap, which is the only
-arrangement available — the VM holds an index into its own storage and native
-holds a pointer to a box, and neither means anything to the other.
+A `BridgeValue` is one tag and one word of payload, which a struct fits neither
+of, so what crosses is not the struct. The payload is a pointer to a tree of
+nodes (`BridgeValueTag::NODE`, the shape callback state already crosses as), and
+the tree carries the whole value however deeply nested. That answers both halves
+of the ABI question the crossing once waited on: **by value**, and **the side
+that reads the strings frees them**, exactly once, as it decodes. Neither engine
+touches the other's heap, which is the only arrangement available: the VM holds
+an index into its own storage, native holds a pointer to a box, and neither
+means anything to the other.
 
-`borrow mut` is the same copy, made twice. There is no pointer to lend: the
-caller's storage is in the other engine. So the value goes over as a tree, and
-the callee's final value comes back in the slot the argument arrived in — the
-argument array is written as well as read, in both directions. The caller stores
+`borrow mut` is that copy made twice. There is no pointer to lend, because the
+caller's storage belongs to the other engine. The value goes over as a tree, and
+the callee's final value comes back in the slot the argument arrived in, so the
+argument array is written as well as read in both directions. The caller stores
 what comes back into the place its own signature names, dropping what was there,
-which is exactly what an assignment does. From the program's side a `borrow mut`
-parameter therefore behaves the same across the seam as within one engine, which
-is what the parity tests compare.
+which is what an assignment does. A `borrow mut` parameter therefore behaves the
+same across the seam as within one engine, which is what the parity tests
+compare.
 
-The manifest carries the mode per parameter (`Ownership::BorrowMut`), because
-that is what tells each side which slots to write and which to read back. It is
-generated from the same IR the two halves are compiled from, so the trampoline's
+The manifest carries the mode per parameter (`Ownership::BorrowMut`), which is
+what tells each side which slots to write and which to read back. It is
+generated from the same IR both halves are compiled from, so the trampoline's
 idea of which parameters are written through and the host's cannot disagree.
 
 The **VM** still traps (`VmError::StructAtSeam`) if a struct reaches a
@@ -84,9 +84,11 @@ The **VM** still traps (`VmError::StructAtSeam`) if a struct reaches a
 back. Both mean a module and a manifest that disagree, never a program that
 merely type-checked.
 
-What still cannot cross is narrower than a struct: `Any` (`AnyAtSeam`), a C
-string, a task handle, a capture cell, and a callback-state handle — each for a
-reason of its own rather than for want of a layout.
+Narrower things still cannot cross, each for a reason of its own rather than for
+want of a layout: `Any` (`AnyAtSeam`), a C string, a task handle, a capture
+cell, and a callback-state handle. A read-only `borrow` of a `String` is refused
+too, because the callee frees every string it owns and a lent one would be freed
+twice.
 
 ## Representation
 

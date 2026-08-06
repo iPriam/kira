@@ -30,16 +30,17 @@ b.origin.x = 100             // a nested write lands in place
 mixed in one literal. A struct is a **value**: `var copy = b` copies it deeply,
 strings included, so writing to the copy never disturbs the original.
 
-Two edges are deliberate rather than pending:
+One edge is deliberate rather than pending, and one question that used to be
+open is now answered:
 
 - **`print(someStruct)` is rejected.** What `print` renders for a struct is not
   pinned anywhere in the language corpus, and inventing a format here would be
   inventing language surface. Print a struct's fields until it is settled.
 - **A struct crosses the `@Native`/`@Runtime` boundary as a copy.** It does not
   fit a `BridgeValue`, so what crosses is a node tree carrying the whole value,
-  transferred to the reader — which is also who frees the strings inside it. A
-  `borrow mut` parameter is that copy made twice: over, and back into the slot
-  it came from. See [docs/structs.md](docs/structs.md).
+  transferred to the reader, who is also the one that frees the strings inside
+  it. A `borrow mut` parameter is that copy made twice: over, and back into the
+  slot it came from. See [docs/structs.md](docs/structs.md).
 
 A struct may declare **methods** alongside its members. A method is an ordinary
 function that happens to have a receiver, so it takes a slot in the same
@@ -138,16 +139,16 @@ clone: `copy xs` is `KSEM116`. Independent arrays come from building with
 `append`, or from copying a struct that owns one — which deep-copies the array
 field rather than sharing the handle, the question the whole design turned on.
 
-Two edges match the struct ones, one for the same reason and one not:
+The same pair as a struct's, and for the same reasons:
 
 - **`print(someArray)` is rejected (`KSEM081`).** Same as a struct: no corpus
   call site pins a separator or a bracket, so a format here would be invented
   surface.
-- **An array cannot cross the `@Native`/`@Runtime` boundary yet.** Unlike a
-  struct, this is a *gap, not a decision* — the language does let an array
-  cross; what is missing is the ownership answer at the seam (who frees the
-  elements, what a native callee growing the array means for the other half). A
-  build that would need the crossing says so rather than guessing.
+- **An array crosses the `@Native`/`@Runtime` boundary as a copy**, the same
+  node tree a struct crosses as. That answers the ownership question the
+  crossing was once waiting on: each side ends up with its own array, so a
+  native callee growing one says nothing about the other half's, and the
+  elements are freed by the side that reads them.
 
 See [.codex/work/arrays.md](.codex/work/arrays.md) for the design, and
 [examples/arrays/arrays.kira](examples/arrays/arrays.kira) for a tour.
@@ -187,13 +188,15 @@ function rank(c: Color) -> Int {
 
 Like an array, an enum is a heap value that **moves on binding** (`let b = a`
 consumes `a`) and is **not** trivially copyable (a named enum needs `move` into
-an owned parameter; a fresh `.Variant` needs nothing). Three edges match the
-struct/array ones:
+an owned parameter; a fresh `.Variant` needs nothing). Two edges of its own,
+and the crossing the struct and array sections describe:
 
 - **`print(someEnum)` is rejected (`KSEM081`).** No corpus site pins a
   rendering, so a format here would be invented surface.
-- **An enum cannot cross the `@Native`/`@Runtime` boundary.** Like a struct, it
-  is a tagged value with no one-word form, and how it would cross is undecided.
+- **An enum crosses the `@Native`/`@Runtime` boundary.** A payload-less one
+  *is* its variant number, so the number crosses and the far side rebuilds its
+  own value from it, with nothing owned travelling. One carrying a payload does
+  not fit a word, so it crosses as the node tree a struct does.
 - **A payload may be `Int`, `Float`, `Bool`, `String`, or another enum.** A
   struct or array payload is refused (`KSEM118`): the runtime box carries one
   type-erased word, which an aggregate has no form in yet. A nested enum is a
