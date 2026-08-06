@@ -156,7 +156,7 @@ pub fn link_shared_library(
     arguments.extend(force_host_symbols());
     link_with(
         llvm,
-        object,
+        &[object.to_path_buf()],
         runtime_archive,
         &NativeLinkInputs::default(),
         None,
@@ -283,9 +283,12 @@ fn mri_script(object: &Path, runtime_archive: &Path, archive: &Path) -> String {
 /// `shim` is the compiled C shim object, present only for a program that passes
 /// a struct by value. Each adapter calls `kira_ffi_shim_<i>` instead of the real
 /// symbol in that case, so without it the link fails on an undefined shim.
+/// `objects` are the program's codegen units, in unit order. A program emitted
+/// in one unit has one; a program split across several has one per unit, and
+/// every cross-unit call is an ordinary undefined symbol the linker resolves.
 pub fn link_executable(
     llvm: &LlvmInstallation,
-    object: &Path,
+    objects: &[PathBuf],
     runtime_archive: &Path,
     foreign_link: &NativeLinkInputs,
     shim: Option<&Path>,
@@ -293,7 +296,7 @@ pub fn link_executable(
 ) -> Result<(), LinkError> {
     link_with(
         llvm,
-        object,
+        objects,
         runtime_archive,
         foreign_link,
         shim,
@@ -336,7 +339,7 @@ pub fn link_adapter_sidecar(
     arguments.extend(force_foreign_symbols(adapter_symbols));
     link_with(
         llvm,
-        object,
+        &[object.to_path_buf()],
         runtime_archive,
         foreign_link,
         shim,
@@ -379,7 +382,7 @@ pub fn link_hybrid_library(
     }
     link_with(
         llvm,
-        object,
+        &[object.to_path_buf()],
         runtime_archive,
         foreign_link,
         shim,
@@ -630,7 +633,7 @@ fn strip_verbatim_prefix(path: &str) -> &str {
 
 fn link_with(
     llvm: &LlvmInstallation,
-    object: &Path,
+    objects: &[PathBuf],
     runtime_archive: &Path,
     foreign_link: &NativeLinkInputs,
     shim: Option<&Path>,
@@ -664,7 +667,9 @@ fn link_with(
     }
 
     let mut arguments: Vec<std::ffi::OsString> = Vec::new();
-    arguments.push(object.into());
+    for object in objects {
+        arguments.push(object.into());
+    }
     // The shim object sits between the program and the archives: the adapters in
     // `object` call into it, and it calls the real C symbols the archives define.
     if let Some(shim) = shim {

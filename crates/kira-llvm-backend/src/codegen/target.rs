@@ -29,11 +29,31 @@ pub(super) struct TargetMachine {
 /// published before the pin grew `WebAssembly` therefore links, and says so on
 /// the Web path instead of failing four symbols into a link.
 ///
+/// Registration runs once per process. The initializers are idempotent when
+/// called in sequence, but they write LLVM's global target registry, and a
+/// program emitted in parallel codegen units builds a target machine on every
+/// worker at once — two threads registering the same target concurrently is a
+/// data race, not a repeated call.
+///
 /// # Safety
 ///
 /// The initializers are idempotent and safe to call repeatedly.
 unsafe fn initialize_targets() {
-    // SAFETY: per the function contract — idempotent registration calls.
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| {
+        // SAFETY: `Once` runs this body exactly once per process, which is the
+        // whole of what `register_targets` requires.
+        unsafe { register_targets() }
+    });
+}
+
+/// The registration itself, run under [`initialize_targets`]'s `Once`.
+///
+/// # Safety
+///
+/// Must be called exactly once per process.
+unsafe fn register_targets() {
+    // SAFETY: per the function contract — one registration per process.
     unsafe {
         #[cfg(target_arch = "aarch64")]
         {

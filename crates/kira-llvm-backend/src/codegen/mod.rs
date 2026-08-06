@@ -31,6 +31,7 @@ mod library;
 mod lower;
 mod native_state;
 mod native_state_enums;
+mod plan;
 mod symbols;
 mod target;
 mod types;
@@ -60,35 +61,11 @@ use self::types::{Runtime, Types, declare_runtime};
 use crate::LlvmError;
 use crate::exports::NativeExportSurface;
 
+use self::plan::{ModuleKind, Plan};
+
+pub(crate) use self::plan::CodegenUnit;
 pub(crate) use self::symbols::trampoline_name;
 pub(crate) use self::types::Callable;
-
-/// What this module is being built as.
-///
-/// The two modes differ only in which functions have bodies here and how the
-/// program is entered, so they share one lowering with an engine plan rather
-/// than duplicating it.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ModuleKind {
-    /// A whole program: every function is native and a C `main` starts it.
-    Executable,
-    /// The native half of a hybrid program: only `@Native` functions have
-    /// bodies, each also gets a trampoline the host can call, and there is no
-    /// `main` — the host is the program.
-    HybridLibrary,
-    /// A whole Kira library: every function is native, exactly as in an
-    /// [`ModuleKind::Executable`], and no C `main` is emitted because a library
-    /// is entered by its consumer rather than started by the operating system.
-    ///
-    /// What it is entered *through* is its `@Export` surface: one stable
-    /// trampoline per export, one synthesized destructor per exported class, and
-    /// the per-library ABI marker. See [`library`].
-    Library,
-    /// The VM's foreign-adapter sidecar: only the generated adapters, exported
-    /// for a host to `dlsym`. No Kira function body and no entry point — the VM
-    /// runs the bytecode and reaches C only through these adapters.
-    AdapterSidecar,
-}
 
 /// An LLVM module holding a lowered Kira program.
 ///
@@ -108,21 +85,27 @@ impl Module {
     /// does not have. That is the mirror of the VM-only build compiling every
     /// function to bytecode, and it is what keeps the two backends agreeing on
     /// any program.
+    ///
+    /// `unit` selects which function bodies land here; [`CodegenUnit::WHOLE`]
+    /// is every one of them.
     pub(crate) fn build(
         program: &IrProgram,
         module_name: &str,
         pointer_width: ForeignPointerWidth,
         unavailable: &[usize],
+        unit: CodegenUnit,
     ) -> Result<Self, LlvmError> {
-        let engines = vec![Execution::Native; program.functions.len()];
         Self::lower(
             program,
             module_name,
-            ModuleKind::Executable,
-            engines,
-            &NativeExportSurface::default(),
-            pointer_width,
-            unavailable,
+            Plan {
+                kind: ModuleKind::Executable,
+                engines: vec![Execution::Native; program.functions.len()],
+                exports: &NativeExportSurface::default(),
+                pointer_width,
+                unavailable,
+                unit,
+            },
         )
     }
 
@@ -136,15 +119,17 @@ impl Module {
         module_name: &str,
         exports: &NativeExportSurface,
     ) -> Result<Self, LlvmError> {
-        let engines = vec![Execution::Native; program.functions.len()];
         Self::lower(
             program,
             module_name,
-            ModuleKind::Library,
-            engines,
-            exports,
-            ForeignPointerWidth::HOST,
-            &[],
+            Plan {
+                kind: ModuleKind::Library,
+                engines: vec![Execution::Native; program.functions.len()],
+                exports,
+                pointer_width: ForeignPointerWidth::HOST,
+                unavailable: &[],
+                unit: CodegenUnit::WHOLE,
+            },
         )
     }
 
@@ -159,15 +144,17 @@ impl Module {
         module_name: &str,
         unavailable: &[usize],
     ) -> Result<Self, LlvmError> {
-        let engines = vec![Execution::Runtime; program.functions.len()];
         Self::lower(
             program,
             module_name,
-            ModuleKind::AdapterSidecar,
-            engines,
-            &NativeExportSurface::default(),
-            ForeignPointerWidth::HOST,
-            unavailable,
+            Plan {
+                kind: ModuleKind::AdapterSidecar,
+                engines: vec![Execution::Runtime; program.functions.len()],
+                exports: &NativeExportSurface::default(),
+                pointer_width: ForeignPointerWidth::HOST,
+                unavailable,
+                unit: CodegenUnit::WHOLE,
+            },
         )
     }
 
@@ -177,32 +164,26 @@ impl Module {
         module_name: &str,
         unavailable: &[usize],
     ) -> Result<Self, LlvmError> {
-        let engines = program
-            .functions
-            .iter()
-            .map(|function| function.execution.resolve(Execution::Runtime))
-            .collect();
         Self::lower(
             program,
             module_name,
-            ModuleKind::HybridLibrary,
-            engines,
-            &NativeExportSurface::default(),
-            ForeignPointerWidth::HOST,
-            unavailable,
+            Plan {
+                kind: ModuleKind::HybridLibrary,
+                engines: program
+                    .functions
+                    .iter()
+                    .map(|function| function.execution.resolve(Execution::Runtime))
+                    .collect(),
+                exports: &NativeExportSurface::default(),
+                pointer_width: ForeignPointerWidth::HOST,
+                unavailable,
+                unit: CodegenUnit::WHOLE,
+            },
         )
     }
 
     /// Builds the module.
-    fn lower(
-        program: &IrProgram,
-        module_name: &str,
-        kind: ModuleKind,
-        engines: Vec<Execution>,
-        exports: &NativeExportSurface,
-        pointer_width: ForeignPointerWidth,
-        unavailable: &[usize],
-    ) -> Result<Self, LlvmError> {
+    fn lower(program: &IrProgram, module_name: &str, plan: Plan<'_>) -> Result<Self, LlvmError> {
         let name = c_string(module_name);
         // SAFETY: the context, module, and builder are created together and
         // owned by the returned `Module`, which disposes of them on drop; each
@@ -218,15 +199,7 @@ impl Module {
             }
         };
 
-        let mut codegen = Codegen::new(
-            &owned,
-            program,
-            kind,
-            engines,
-            exports,
-            pointer_width,
-            unavailable,
-        )?;
+        let mut codegen = Codegen::new(&owned, program, plan)?;
         codegen.lower_program()?;
         owned.verify()?;
         Ok(owned)
@@ -323,6 +296,8 @@ pub(crate) struct Codegen<'a> {
     runtime: Runtime,
     /// What this module is being built as.
     kind: ModuleKind,
+    /// Which of the program's function bodies this module carries.
+    unit: CodegenUnit,
     /// What this library exports, empty for anything that is not one.
     exports: NativeExportSurface,
     /// Which engine owns each function, in [`IrProgram::functions`] order.
@@ -373,15 +348,15 @@ pub(crate) struct Codegen<'a> {
 impl<'a> Codegen<'a> {
     /// Prepares the module scaffold: types, runtime declarations, and one
     /// declaration per Kira function.
-    fn new(
-        owned: &Module,
-        program: &'a IrProgram,
-        kind: ModuleKind,
-        engines: Vec<Execution>,
-        exports: &NativeExportSurface,
-        pointer_width: ForeignPointerWidth,
-        unavailable: &[usize],
-    ) -> Result<Self, LlvmError> {
+    fn new(owned: &Module, program: &'a IrProgram, plan: Plan<'_>) -> Result<Self, LlvmError> {
+        let Plan {
+            kind,
+            engines,
+            exports,
+            pointer_width,
+            unavailable,
+            unit,
+        } = plan;
         let types = Types::new(owned.context, pointer_width);
         let runtime = declare_runtime(owned.module, &types);
 
@@ -402,6 +377,7 @@ impl<'a> Codegen<'a> {
             types,
             runtime,
             kind,
+            unit,
             exports: exports.clone(),
             engines,
             functions: Vec::with_capacity(program.functions.len()),
@@ -531,18 +507,26 @@ impl<'a> Codegen<'a> {
     fn lower_program(&mut self) -> Result<(), LlvmError> {
         let program = self.program;
         for (index, function) in program.functions.iter().enumerate() {
-            if self.engine_of(index) != Execution::Native {
+            if self.engine_of(index) != Execution::Native || !self.unit.owns(index) {
                 continue;
             }
             self.lower_function(index, function)?;
         }
         // Every module that declares adapters also defines them: an executable
         // and a hybrid half so their call sites resolve, a sidecar so a host can
-        // load them.
-        self.emit_foreign_adapters()?;
-        // And one entry thunk per callback, for the same reason: whatever holds
-        // the adapters is what a C library reaches Kira through.
-        self.emit_foreign_callbacks()?;
+        // load them. A program has one set of them however many units it is
+        // emitted in, so a later unit keeps the declarations and defines
+        // nothing — the same arrangement its call into another unit's Kira
+        // function relies on.
+        if self.unit.is_first() {
+            self.emit_foreign_adapters()?;
+            // And one entry thunk per callback, for the same reason: whatever
+            // holds the adapters is what a C library reaches Kira through.
+            self.emit_foreign_callbacks()?;
+        }
+        if !self.unit.is_first() {
+            return Ok(());
+        }
         match self.kind {
             // A whole program is entered through C `main`.
             ModuleKind::Executable => self.lower_entry_point(),
