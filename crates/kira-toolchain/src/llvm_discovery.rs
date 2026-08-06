@@ -98,10 +98,15 @@ pub enum LlvmDiscoveryError {
     #[error(transparent)]
     Metadata(#[from] crate::llvm_metadata::MalformedMetadata),
     /// Nothing was found anywhere in the discovery order.
+    // Read at the one moment there is no LLVM, which is also the moment `kira`
+    // cannot be built — it links the backend this discovery feeds. So the route
+    // named here is knvm's: it links no LLVM, so it builds from a bare checkout
+    // and is the only one of the two that exists before the bundle does.
     #[error(
         "no LLVM {version} install found; checked:\n{}\n\
-         set KIRA_LLVM_HOME to an LLVM install root, or run `kira fetch-llvm` \
-         to install the pinned bundle",
+         install the pinned bundle with `knvm install-llvm`, or from a checkout \
+         with `cargo run -p kira-knvm -- install-llvm`; or set KIRA_LLVM_HOME to \
+         an LLVM {version} install root",
         .checked.iter().map(|path| format!("  {}", path.display())).collect::<Vec<_>>().join("\n")
     )]
     NotFound {
@@ -242,6 +247,13 @@ mod tests {
         };
         let text = error.to_string();
         assert!(text.contains("/a/one") && text.contains("/b/two"));
-        assert!(text.contains("KIRA_LLVM_HOME") && text.contains("fetch-llvm"));
+        assert!(text.contains("KIRA_LLVM_HOME"), "{text}");
+        // The remedy has to be buildable on a machine with no LLVM, which
+        // `kira` is not: it links the backend that this discovery resolves.
+        assert!(text.contains("knvm install-llvm"), "{text}");
+        assert!(
+            !text.contains("kira fetch-llvm"),
+            "the remedy must not be a `kira` that cannot be built yet: {text}"
+        );
     }
 }
