@@ -1,5 +1,8 @@
 # The pinned LLVM toolchain: the contract between this repo, CI, and the
-# downloader (`kira fetch-llvm`).
+# downloader (`knvm install-llvm`). The downloader is knvm rather than kira
+# because kira links the LLVM backend: a kira that provisioned LLVM would have
+# to be built before the bundle it installs. knvm links none, so it builds from
+# a bare checkout with `cargo run -p kira-knvm -- install-llvm`.
 #
 # This file is the single source of truth for which LLVM Kira expects, which
 # release owns the published bundles, and the exact archive name per supported
@@ -30,6 +33,12 @@ targets_to_build = "host;WebAssembly"
 
 [target.x86_64-windows-msvc]
 runner = "windows-2022"
+# The oldest Visual Studio that can link the published bundle. MSVC guarantees
+# compatibility forward only, so whatever toolset builds this bundle is the
+# floor for every developer consuming it — left implicit, the runner image
+# raises that floor whenever it updates and the bundle stops linking on the
+# Visual Studio people already have.
+toolset = "14.44"
 platform = "windows"
 archive = "zip"
 asset = "llvm-22.1.4-x86_64-windows-msvc.zip"

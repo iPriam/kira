@@ -67,12 +67,22 @@ jobs:
             platform="$(block platform)"
             archive="$(block archive)"
             asset="$(block asset)"
-            for pair in "platform=$platform" "archive=$archive" "asset=$asset"; do
+            runner="$(block runner)"
+            for pair in "platform=$platform" "archive=$archive" "asset=$asset" \
+                        "runner=$runner"; do
               [ -n "${pair#*=}" ] || { echo "[target.$key] is missing ${pair%%=*}" >&2; exit 1; }
             done
+            # Only MSVC hosts pin a toolset, and it is what decides the oldest
+            # Visual Studio that can link the bundle, so a windows target
+            # without one is an unrecorded floor rather than a default.
+            toolset="$(block toolset)"
+            if [ "$platform" = windows ] && [ -z "$toolset" ]; then
+              echo "[target.$key] is a windows target and is missing toolset" >&2
+              exit 1
+            fi
             [ $first = 1 ] || matrix="$matrix,"
             first=0
-            matrix="$matrix{\"target_key\":\"$key\",\"platform\":\"$platform\",\"archive\":\"$archive\",\"asset\":\"$asset\"}"
+            matrix="$matrix{\"target_key\":\"$key\",\"platform\":\"$platform\",\"archive\":\"$archive\",\"asset\":\"$asset\",\"runner\":\"$runner\",\"toolset\":\"$toolset\"}"
           done
           matrix="$matrix]}"
 
@@ -98,7 +108,12 @@ jobs:
     name: Build ${{ matrix.target_key }}
     needs: validate
     if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
-    runs-on: ${{ matrix.platform == 'windows' && 'windows-2025' || matrix.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
+    # `llvm-metadata.toml` names the runner per target and is the source of
+    # truth for it: an image chosen here instead is an image nothing records,
+    # and the bundle inherits that image's system libraries. Building the
+    # Windows bundle on a newer image than the pin declares is what shipped an
+    # LLVM referencing STL internals no released Visual Studio could resolve.
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 300
     strategy:
       fail-fast: false
@@ -115,9 +130,16 @@ jobs:
           path: llvm-project
           fetch-depth: 1
 
+      # The toolset comes from the pin rather than from the image, so the
+      # oldest Visual Studio that can link the bundle is a recorded decision.
+      # An image that drops the pinned toolset fails here, which is the point:
+      # the alternative is a bundle that quietly stops linking for everyone
+      # below whatever the image moved to.
       - name: Set up MSVC
         if: ${{ matrix.platform == 'windows' }}
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          toolset: ${{ matrix.toolset }}
 
       - name: Build LLVM install tree (Unix)
         if: ${{ matrix.platform != 'windows' }}
