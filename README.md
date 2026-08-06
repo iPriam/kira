@@ -79,6 +79,17 @@ The LLVM backend is a hard dependency of the build: its build script discovers a
 managed LLVM bundle under `~/.kira/toolchains/llvm/<version>/<host>/`, or wherever
 `KIRA_LLVM_HOME` points. Without one, nothing builds.
 
+Provisioning it is knvm's job, and knvm links no LLVM — so it builds from a bare
+checkout, before the bundle exists. That is the whole bootstrap:
+
+```bash
+cargo run -p kira-knvm -- install-llvm   # downloads the pinned bundle
+cargo build --workspace                  # now the backend has an LLVM to link
+```
+
+`kira` itself never provisions LLVM: it links the backend, so a `kira` that could
+fetch LLVM would have to be built before the bundle it installs.
+
 ## Examples
 
 Twenty-one runnable packages live in `examples/`, each exercising one part of the

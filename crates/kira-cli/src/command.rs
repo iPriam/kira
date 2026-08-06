@@ -7,7 +7,6 @@
 pub enum Command {
     Run,
     Debug,
-    FetchLlvm,
     Tokens,
     Ast,
     Check,
@@ -31,10 +30,14 @@ pub enum Command {
 }
 
 /// All verbs, in the order they appear in help output.
-pub const ALL: [Command; 22] = [
+///
+/// Provisioning the managed LLVM is deliberately not among them. `kira` links
+/// the LLVM backend, so a `kira` that could fetch LLVM would be a binary that
+/// had to exist before the thing it installs — `knvm install-llvm` does it,
+/// and `knvm` links no LLVM at all.
+pub const ALL: [Command; 21] = [
     Command::Run,
     Command::Debug,
-    Command::FetchLlvm,
     Command::Tokens,
     Command::Ast,
     Command::Check,
@@ -73,7 +76,6 @@ impl Command {
         match self {
             Self::Run => "run",
             Self::Debug => "debug",
-            Self::FetchLlvm => "fetch-llvm",
             Self::Tokens => "tokens",
             Self::Ast => "ast",
             Self::Check => "check",
@@ -121,7 +123,6 @@ impl Command {
         match self {
             Self::Run => "compile and run a program on the VM",
             Self::Debug => "run a program under the debugger",
-            Self::FetchLlvm => "provision the managed LLVM toolchain",
             Self::Tokens => "print a file's tokens",
             Self::Ast => "print a file's syntax tree",
             Self::Check => "analyze a program without running it",
