@@ -17,6 +17,7 @@
 //! server -> Payload { name, bytes }
 //! client -> Progress { phase }             milestones, as they actually occur
 //! client -> Failed { reason }              or why one did not
+//! client -> AppExited { reason }           the app is over; the runner is not
 //! client -> Goodbye / server -> Shutdown   either end may end it
 //! ```
 //!
@@ -30,7 +31,8 @@ pub mod frame;
 
 use kira_manifest::RunnerId;
 
-use crate::event::{ReloadMode, SessionPhase};
+use crate::event::ReloadMode;
+use crate::progress::SessionPhase;
 
 pub use frame::{MAX_FRAME_LEN, read_message, write_message};
 
@@ -94,6 +96,18 @@ pub enum ClientMessage {
     RestartRequired {
         /// Why, in the runner's words.
         reason: String,
+    },
+    /// The app's entrypoint returned, and the runner is still here.
+    ///
+    /// Distinct from [`ClientMessage::Goodbye`], which is the *runner* ending.
+    /// The two come apart the moment a session hosts something with a run loop:
+    /// an app that closes its window has ended while its runner is still up,
+    /// holding the cache and the loaded library that make the next reload cheap.
+    /// Which of the two ends the session is the supervisor's decision, not the
+    /// runner's, so the runner reports the fact and stays.
+    AppExited {
+        /// Why it stopped, or `None` if it simply finished.
+        reason: Option<String>,
     },
 }
 
@@ -199,6 +213,7 @@ mod client_tag {
     pub const RELOAD_COMPLETED: u8 = 8;
     pub const RELOAD_REJECTED: u8 = 9;
     pub const RESTART_REQUIRED: u8 = 10;
+    pub const APP_EXITED: u8 = 11;
 }
 
 /// The wire tags for server messages; append-only for the same reason.
@@ -259,6 +274,14 @@ impl Message for ClientMessage {
                 out.push(client_tag::RESTART_REQUIRED);
                 write_bytes(&mut out, reason.as_bytes());
             }
+            Self::AppExited { reason } => {
+                out.push(client_tag::APP_EXITED);
+                // A flag rather than an empty string: an app that failed with
+                // nothing to say and one that finished cleanly are different
+                // outcomes, and a session reports which.
+                out.push(u8::from(reason.is_some()));
+                write_bytes(&mut out, reason.as_deref().unwrap_or_default().as_bytes());
+            }
         }
         out
     }
@@ -302,6 +325,13 @@ impl Message for ClientMessage {
             client_tag::RESTART_REQUIRED => Ok(Self::RestartRequired {
                 reason: reader.read_string()?,
             }),
+            client_tag::APP_EXITED => {
+                let failed = reader.take(1)?[0] != 0;
+                let reason = reader.read_string()?;
+                Ok(Self::AppExited {
+                    reason: failed.then_some(reason),
+                })
+            }
             other => Err(ProtocolError::UnknownTag(other)),
         }
     }
@@ -393,6 +423,15 @@ mod tests {
             },
             ClientMessage::RestartRequired {
                 reason: "the native library changed".to_owned(),
+            },
+            // Both outcomes: an app that failed with nothing to say and one
+            // that simply finished must not decode as each other.
+            ClientMessage::AppExited { reason: None },
+            ClientMessage::AppExited {
+                reason: Some(String::new()),
+            },
+            ClientMessage::AppExited {
+                reason: Some("vm: divide by zero".to_owned()),
             },
         ];
         for runner in RunnerId::all() {

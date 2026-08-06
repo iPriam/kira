@@ -16,7 +16,8 @@
 use std::io::{BufReader, BufWriter};
 use std::net::{SocketAddr, TcpStream};
 
-use crate::event::{LiveEvent, ReloadMode, SessionPhase, SessionProgress};
+use crate::event::{LiveEvent, ReloadMode};
+use crate::progress::{SessionPhase, SessionProgress};
 use crate::protocol::{
     ClientMessage, PROTOCOL_VERSION, ProtocolError, ServerMessage, read_message, write_message,
 };
@@ -51,6 +52,12 @@ pub struct LiveSession {
     progress: SessionProgress,
     headless: bool,
     peer: SocketAddr,
+    /// Whether the app's own entrypoint has returned.
+    ///
+    /// The runner outlives its app, so this is not the session ending — it is
+    /// the fact an unwatched session ends *on*, and a watched one keeps
+    /// watching past.
+    app_exited: bool,
 }
 
 impl LiveSession {
@@ -73,6 +80,7 @@ impl LiveSession {
             progress: SessionProgress::new(),
             headless,
             peer,
+            app_exited: false,
         };
         session.handshake()?;
         on_event(LiveEvent::ClientConnected {
@@ -86,6 +94,112 @@ impl LiveSession {
     /// How far the session got.
     pub fn progress(&self) -> SessionProgress {
         self.progress
+    }
+
+    /// Whether the app's entrypoint has returned.
+    pub fn app_exited(&self) -> bool {
+        self.app_exited
+    }
+
+    /// Waits until the app's entrypoint returns.
+    ///
+    /// What an unwatched session does with the rest of its life. `kira live` on
+    /// a program that prints and returns ends when it has printed; on an app it
+    /// ends when the window closes. Both are the same wait, because both are the
+    /// same fact — and neither is a timeout, which is why there is none here.
+    ///
+    /// Returns early, and successfully, if the runner disconnects: a runner that
+    /// went away took its app with it, and reporting that as a session failure
+    /// would turn every closed window into an error.
+    pub fn wait_for_app_exit(
+        &mut self,
+        on_event: &mut dyn FnMut(LiveEvent),
+    ) -> Result<(), ServerError> {
+        // Unbounded on purpose, and the read timeout is what would otherwise
+        // make it thirty seconds: an app is watched for as long as someone
+        // leaves it open.
+        self.reader.get_ref().set_read_timeout(None)?;
+        let outcome = self.read_until_app_exits(on_event);
+        self.reader
+            .get_ref()
+            .set_read_timeout(Some(crate::server::READ_TIMEOUT))?;
+        outcome
+    }
+
+    /// Reads runner messages until the app exits or the runner goes away.
+    fn read_until_app_exits(
+        &mut self,
+        on_event: &mut dyn FnMut(LiveEvent),
+    ) -> Result<(), ServerError> {
+        while !self.app_exited {
+            match read_message(&mut self.reader) {
+                Ok(message) => self.observe(message, on_event)?,
+                Err(ProtocolError::Disconnected) => return Ok(()),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Takes anything the runner has already said, without waiting for it to
+    /// say something.
+    ///
+    /// What a watched session calls between polls of the watcher. A watched
+    /// session does not end when its app does — the runner is still up and the
+    /// next save still reloads — but the fact is reported when it happens rather
+    /// than at whatever later moment the session next reads.
+    pub fn poll_runner(&mut self, on_event: &mut dyn FnMut(LiveEvent)) -> Result<(), ServerError> {
+        while self.runner_has_spoken()? {
+            match read_message(&mut self.reader) {
+                Ok(message) => self.observe(message, on_event)?,
+                Err(ProtocolError::Disconnected) => return Ok(()),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the runner has a message waiting, without taking any of it.
+    ///
+    /// Peeked rather than read with a short timeout: a timeout firing between a
+    /// frame's length prefix and its body would leave the stream desynchronized.
+    fn runner_has_spoken(&mut self) -> Result<bool, ServerError> {
+        if !self.reader.buffer().is_empty() {
+            return Ok(true);
+        }
+        let socket = self.reader.get_ref();
+        socket.set_nonblocking(true)?;
+        let mut byte = [0u8; 1];
+        let spoken = match socket.peek(&mut byte) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
+            Err(error) => Err(ServerError::Io(error)),
+        };
+        socket.set_nonblocking(false)?;
+        spoken
+    }
+
+    /// Records something the runner said while no exchange was in flight.
+    fn observe(
+        &mut self,
+        message: ClientMessage,
+        on_event: &mut dyn FnMut(LiveEvent),
+    ) -> Result<(), ServerError> {
+        match message {
+            ClientMessage::AppExited { reason } => {
+                self.app_exited = true;
+                on_event(LiveEvent::AppExited { reason });
+                Ok(())
+            }
+            ClientMessage::Failed { reason } => Err(ServerError::RunnerFailed(reason)),
+            // A runner saying goodbye has ended, and so has its app. Recorded as
+            // an exit so a session waiting on one is not left waiting forever.
+            ClientMessage::Goodbye => {
+                self.app_exited = true;
+                Ok(())
+            }
+            other => Err(ServerError::UnexpectedReloadReport(report_name(&other))),
+        }
     }
 
     /// The bundle the runner is currently running.
@@ -103,7 +217,7 @@ impl LiveSession {
                 Err(ProtocolError::Disconnected) => {
                     return Err(match self.progress.ready(self.headless) {
                         Ok(()) => {
-                            ServerError::Incomplete(crate::event::ProgressError::NeverStarted)
+                            ServerError::Incomplete(crate::progress::ProgressError::NeverStarted)
                         }
                         Err(error) => ServerError::Incomplete(error),
                     });
@@ -127,12 +241,20 @@ impl LiveSession {
                         return Ok(());
                     }
                 }
+                // A session whose bar is above the entrypoint can watch the app
+                // it is waiting on end. Reported rather than refused: the app
+                // really did run, and the milestone it never reached is what the
+                // session fails on if nothing else arrives.
+                ClientMessage::AppExited { reason } => {
+                    self.app_exited = true;
+                    on_event(LiveEvent::AppExited { reason });
+                }
                 ClientMessage::Failed { reason } => return Err(ServerError::RunnerFailed(reason)),
                 ClientMessage::Goodbye => {
                     return Err(match self.progress.ready(self.headless) {
                         // Goodbye before ready is a runner that gave up quietly.
                         Ok(()) => {
-                            ServerError::Incomplete(crate::event::ProgressError::NeverStarted)
+                            ServerError::Incomplete(crate::progress::ProgressError::NeverStarted)
                         }
                         Err(error) => ServerError::Incomplete(error),
                     });
@@ -253,6 +375,13 @@ impl LiveSession {
                         reason: reason.clone(),
                     });
                     return Ok(self.fall_back(RelaunchReason::RunnerRefused { reason }, on_event));
+                }
+                // The app can end at any moment, including in the middle of the
+                // reload it is about to be replaced by. It is the runner's news
+                // to deliver whenever it has it, not an answer to this exchange.
+                ClientMessage::AppExited { reason } => {
+                    self.app_exited = true;
+                    on_event(LiveEvent::AppExited { reason });
                 }
                 ClientMessage::Failed { reason } => return Err(ServerError::RunnerFailed(reason)),
                 ClientMessage::Hello { .. } => return Err(ServerError::NoHello),
@@ -379,6 +508,7 @@ fn report_name(message: &ClientMessage) -> &'static str {
         ClientMessage::Progress { .. } => "progress",
         ClientMessage::Failed { .. } => "failed",
         ClientMessage::Goodbye => "goodbye",
+        ClientMessage::AppExited { .. } => "app exited",
     }
 }
 
