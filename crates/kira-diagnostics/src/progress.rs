@@ -73,10 +73,13 @@ pub fn uninstall() {
 
 /// Reports that `phase` has started.
 ///
-/// Cheap and total when nothing is installed: one uncontended read lock and a
-/// `None`. A poisoned lock is treated as no sink rather than a panic — losing a
-/// progress line is never worth failing a build over.
+/// Two listeners, installed independently: the display, which draws it, and the
+/// [`timeline`](crate::timeline), which times it. A build watched by neither
+/// pays one uncontended read lock and a `None`. A poisoned lock is treated as no
+/// listener rather than a panic — losing a progress line is never worth failing
+/// a build over.
 pub fn report(phase: &str) {
+    crate::timeline::mark(phase);
     let Ok(slot) = SINK.read() else {
         return;
     };
@@ -93,7 +96,7 @@ pub fn report(phase: &str) {
 #[macro_export]
 macro_rules! progress {
     ($($arg:tt)*) => {
-        if $crate::progress::listening() {
+        if $crate::progress::watched() {
             $crate::progress::report(&format!($($arg)*));
         }
     };
@@ -103,6 +106,17 @@ macro_rules! progress {
 #[must_use]
 pub fn listening() -> bool {
     SINK.read().is_ok_and(|slot| slot.is_some())
+}
+
+/// Whether anything at all consumes phases — a display, a recording, or both.
+///
+/// What [`progress!`](crate::progress) gates its formatting on. Asking about
+/// the display alone would leave `--timings` measuring only the phases whose
+/// lines are constants, which is most of the cheap ones and none of the ones
+/// that name a file.
+#[must_use]
+pub fn watched() -> bool {
+    listening() || crate::timeline::recording()
 }
 
 #[cfg(test)]

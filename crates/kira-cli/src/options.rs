@@ -52,6 +52,14 @@ pub struct CompileOptions {
     /// program, so there is no unoptimized level to fall back to. `--release`
     /// asks for the level above the default.
     pub release: bool,
+    /// Whether to report where the build spent its time when it finishes.
+    pub timings: bool,
+    /// Whether to print the informational notes a compilation reports.
+    ///
+    /// Off by default: a note says what the compiler decided rather than what
+    /// the program got wrong, and it says it again on every build. The count is
+    /// still reported, so nothing is dropped silently.
+    pub show_notes: bool,
 }
 
 /// The path a `run`/`build`/`check` uses when the invocation names none: the
@@ -99,6 +107,8 @@ impl CompileOptions {
         let mut device_explicit = false;
         let mut emit_llvm_ir = false;
         let mut release = false;
+        let mut timings = false;
+        let mut show_notes = false;
 
         let mut index = 0;
         while index < args.len() {
@@ -121,6 +131,8 @@ impl CompileOptions {
                 }
                 "--emit-llvm-ir" => emit_llvm_ir = true,
                 "--release" => release = true,
+                "--timings" => timings = true,
+                "--show-notes" => show_notes = true,
                 other if other.starts_with('-') => {
                     return Err(OptionsError::UnknownFlag(other.to_owned()));
                 }
@@ -174,6 +186,8 @@ impl CompileOptions {
             device_explicit,
             emit_llvm_ir,
             release,
+            timings,
+            show_notes,
         })
     }
 }
@@ -341,6 +355,32 @@ mod tests {
                 second: "b.kira".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn parses_the_timings_flag_before_or_after_the_path() {
+        assert!(
+            !CompileOptions::parse(&args(&["m.kira"]))
+                .expect("parses")
+                .timings
+        );
+        for order in [["--timings", "m.kira"], ["m.kira", "--timings"]] {
+            let options = CompileOptions::parse(&args(&order)).expect("parses");
+            assert!(options.timings);
+            assert_eq!(options.path, "m.kira");
+        }
+    }
+
+    #[test]
+    fn notes_are_hidden_unless_the_invocation_asks_for_them() {
+        assert!(
+            !CompileOptions::parse(&args(&["m.kira"]))
+                .expect("parses")
+                .show_notes
+        );
+        let asked = CompileOptions::parse(&args(&["--show-notes", "m.kira"])).expect("parses");
+        assert!(asked.show_notes);
+        assert_eq!(asked.path, "m.kira");
     }
 
     #[test]
