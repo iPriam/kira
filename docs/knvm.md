@@ -191,6 +191,16 @@ repair route for a tree interrupted mid-extraction. The test for "usable" is
 nothing can be installed that discovery would then fail to find. The bundle
 lands under `llvm/` and touches no toolchain.
 
+The pin also names the code generators a bundle must carry
+(`build.targets_to_build`), and a release owns its assets for good - so a pin
+that grows one after its release was cut installs a real LLVM that is short of
+it. `install-llvm` and `binstall` read what the bundle was built with from its
+own `llvm-config` and say which pinned generator is absent and what a compiler
+built against it will refuse, because the alternative is finding out from a
+build that wanted that device. The backend links accordingly: the missing code
+generator's initializers are not compiled in, the rest of the compiler is, and
+the device reports itself unavailable by name.
+
 ## `self-update`: the tools themselves, from a release
 
 `sinstall` builds the tools from a checkout; `self-update` fetches them from a

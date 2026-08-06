@@ -56,6 +56,56 @@ fn main() {
         // MSVC links its C++ runtime through the object files themselves.
         _ => {}
     }
+
+    declare_code_generators(&installation.home, &llvm_config);
+}
+
+/// Tells the crate which code generators the bundle it is linking defines.
+///
+/// The per-target initializers are real LLVM symbols living in that target's
+/// archive, so naming one the bundle was not built with is a link failure —
+/// four unresolved `LLVMInitializeWebAssembly*` symbols, at the end of a full
+/// workspace build, naming nothing that could be acted on. What the bundle
+/// carries is knowable before a single symbol is emitted: its own
+/// `llvm-config` reports it, and `kira_llvm_webassembly` carries the answer
+/// into the source. A bundle without the host's own generator is refused
+/// outright — it can emit for nothing at all.
+fn declare_code_generators(home: &Path, llvm_config: &Path) {
+    println!("cargo::rustc-check-cfg=cfg(kira_llvm_webassembly)");
+
+    let built = match kira_toolchain::llvm_code_generators::built(llvm_config) {
+        Ok(built) => built,
+        Err(error) => fail(&error.to_string()),
+    };
+    let host = kira_toolchain::llvm_code_generators::host_code_generator().unwrap_or_else(|| {
+        fail(&format!(
+            "Kira has no LLVM code generator for {} hosts",
+            std::env::consts::ARCH
+        ))
+    });
+    if !built.iter().any(|name| name == host) {
+        fail(&format!(
+            "the managed LLVM at `{}` was built without the {host} code generator \
+             (it carries: {}), so it cannot emit for this host",
+            home.display(),
+            built.join(", "),
+        ));
+    }
+
+    if built
+        .iter()
+        .any(|name| name == kira_toolchain::WEB_CODE_GENERATOR)
+    {
+        println!("cargo:rustc-cfg=kira_llvm_webassembly");
+    } else {
+        println!(
+            "cargo:warning=the managed LLVM at {} was built without the {} code \
+             generator, so this compiler will refuse `--device wasm32`; the bundle \
+             predates the targets `llvm-metadata.toml` pins",
+            home.display(),
+            kira_toolchain::WEB_CODE_GENERATOR,
+        );
+    }
 }
 
 /// The workspace root, two levels above this crate's manifest.

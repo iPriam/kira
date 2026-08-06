@@ -18,13 +18,16 @@ pub(super) struct TargetMachine {
 }
 
 /// Registers the code generators this backend emits with: the compiling
-/// host's and WebAssembly's.
+/// host's, and WebAssembly's when the managed LLVM carries it.
 ///
 /// Explicit per-target calls rather than `LLVM_InitializeAll*`: those are C
 /// wrapper functions `llvm-sys` only compiles when it owns the LLVM linking,
 /// which this backend does itself (see `build.rs`). The explicit initializers
-/// are real LLVM symbols, and naming the targets keeps the backend linkable
-/// against a bundle that was built with exactly these code generators.
+/// are real LLVM symbols living in their target's archive, so the set named
+/// here is the set the linked bundle defines — `build.rs` reads it from that
+/// bundle's own `llvm-config` and sets `kira_llvm_webassembly`. A bundle
+/// published before the pin grew `WebAssembly` therefore links, and says so on
+/// the Web path instead of failing four symbols into a link.
 ///
 /// # Safety
 ///
@@ -54,14 +57,17 @@ unsafe fn initialize_targets() {
             LLVMInitializeX86TargetMC();
             LLVMInitializeX86AsmPrinter();
         }
-        use llvm_sys::target::{
-            LLVMInitializeWebAssemblyAsmPrinter, LLVMInitializeWebAssemblyTarget,
-            LLVMInitializeWebAssemblyTargetInfo, LLVMInitializeWebAssemblyTargetMC,
-        };
-        LLVMInitializeWebAssemblyTargetInfo();
-        LLVMInitializeWebAssemblyTarget();
-        LLVMInitializeWebAssemblyTargetMC();
-        LLVMInitializeWebAssemblyAsmPrinter();
+        #[cfg(kira_llvm_webassembly)]
+        {
+            use llvm_sys::target::{
+                LLVMInitializeWebAssemblyAsmPrinter, LLVMInitializeWebAssemblyTarget,
+                LLVMInitializeWebAssemblyTargetInfo, LLVMInitializeWebAssemblyTargetMC,
+            };
+            LLVMInitializeWebAssemblyTargetInfo();
+            LLVMInitializeWebAssemblyTarget();
+            LLVMInitializeWebAssemblyTargetMC();
+            LLVMInitializeWebAssemblyAsmPrinter();
+        }
     }
 }
 
@@ -132,8 +138,14 @@ impl TargetMachine {
     /// Emission is in-process through the same C API as the host's — never a
     /// textual-IR round trip — so it needs the WebAssembly code generator
     /// compiled into the managed LLVM. A bundle built before the pin included
-    /// `WebAssembly` reports [`LlvmError::WasmTargetMissing`] by name.
+    /// `WebAssembly` reports [`LlvmError::WasmTargetMissing`] by name: once
+    /// because the generator was never linked in, and once — for a bundle
+    /// swapped underneath a compiler that did link it — because LLVM knows no
+    /// such triple.
     pub(super) fn wasm(device: WasmDevice) -> Result<Self, LlvmError> {
+        if !cfg!(kira_llvm_webassembly) {
+            return Err(LlvmError::WasmTargetMissing);
+        }
         let requested = match device {
             WasmDevice::Wasm32 => "wasm32-unknown-emscripten",
             WasmDevice::Wasm64 => "wasm64-unknown-emscripten",
