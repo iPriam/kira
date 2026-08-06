@@ -38,6 +38,14 @@ pub fn hotpatch_disabled_by_env() -> bool {
     std::env::var(NO_HOTPATCH_VAR).is_ok_and(|value| value == "1")
 }
 
+/// What a runner says when the kill switch is why it will not swap.
+///
+/// Written once here so the runner's refusal and the supervisor's own decision
+/// name the same switch rather than two paraphrases of it.
+pub fn hotpatch_kill_switch_reason() -> String {
+    format!("hot patching is disabled for this runner ({NO_HOTPATCH_VAR}=1)")
+}
+
 /// Why a rebuilt bundle cannot be swapped into the running process.
 ///
 /// Each variant is a fact about the two bundles, not a guess. The message a user

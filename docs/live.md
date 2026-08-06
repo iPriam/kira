@@ -9,6 +9,11 @@ It is a server and a client, not a rebuild loop. The app is hosted somewhere
 that outlives the compiler and can take a new bundle later — which is the whole
 reason reload is possible at all.
 
+An unwatched session lasts as long as the app does. A program that prints and
+returns ends it in milliseconds; an app ends it when its window closes. The two
+are the same wait, which is what makes `kira live` a way to run an app and not
+only a way to start one.
+
 ```sh
 kira live                                      # the package you are standing in
 kira live app.kira                             # the VM half
@@ -91,13 +96,20 @@ live.bundle.received     live.reload.completed       mode=hotpatch
 live.bundle.loaded       live.reload.rejected        reason=…
 live.bundle.linked       live.reload.restart_required reason=…
 live.entrypoint.started  live.runner.relaunched
-live.session.ready       live.shutdown.started / live.shutdown.finished
+live.session.ready       live.app.exited             [reason=…]
+live.watch.started       live.shutdown.started / live.shutdown.finished
 ```
 
 The four reload events are deliberately distinct: `notified` is the supervisor
 asking, `staged` is loaded-but-not-live, `applied` is committed, and `completed`
 means the swapped-in code has run once without incident. A swap that commits and
 then traps on its first call is not a reload that worked.
+
+`live.app.exited` is the app's entrypoint returning, which is not the runner
+ending — the runner outlives it, holding the cache and the loaded library that
+make the next reload cheap. An unwatched session ends there because it has
+nothing else to do; a watched one reports it and keeps watching, and the next
+save starts the app again.
 
 **Each milestone belongs to the end that can know it.** The server observes that
 a runner connected and that bytes went out; only the runner can report that they
@@ -141,6 +153,7 @@ holding pointers into it.
 | the entrypoint moved / is not swappable | a different program shape |
 | the bundle is for a different runner or profile | not the same app |
 | hot patching is disabled | `KIRA_LIVE_NO_HOTPATCH=1` |
+| the app's entrypoint is still running | a run loop has a call stack in the code the swap would replace |
 | the runner refused | only it knows what its live values depend on |
 
 Nothing degrades quietly. A bundle that cannot be hot-patched says so and says
@@ -156,6 +169,14 @@ possible to tell whether a bug belongs to it.
 A save that changes nothing does nothing. A save that does not compile prints its
 diagnostics and leaves the running app alone: killing a working app over a
 half-typed line would make watching worse than not watching.
+
+A running app is the common case of that refusal, not an exotic one. An app's
+entrypoint does not return — it opens a window and its run loop owns the thread
+until the window closes — so a swap would be replacing the very code the process
+has a call stack in. Every reload of a running app therefore relaunches, and
+says which of the two it was. A swap point *inside* a live app is a frame
+boundary the runner does not have yet; when it does, this is the reason that
+stops being reported.
 
 ### What survives
 
@@ -201,6 +222,17 @@ entrypoint and a hybrid one, `dlopen`ing the native half for the latter. Running
 a bundle needs no LLVM — only building one does — which is what lets the native
 path be real rather than deferred.
 
+**The app gets the main thread; the protocol gets another.** A Kira app is not a
+function that returns, and a runner that started one on the thread holding the
+socket would never hear another word from the server — `entrypoint started`
+could only ever be reported by an app that had already exited, which is to say
+never by an app. So the app keeps the main thread, which is also what macOS
+requires of a window's run loop, and the protocol runs beside it. Load, link,
+start, and swap all still happen on that one thread, in order: the protocol
+thread asks and the app's thread answers. The only call whose meaning changes is
+`start`, which is answered when the entrypoint is *running* — and answered a
+second time, for the reload path, when it returns.
+
 Every runner id parses. One this build has no client for (`ios`, `android`, and
 the rest) reports precisely that rather than failing as an unknown command: the
 runner is modeled, the command is valid, and the diagnostic names what is
@@ -217,9 +249,11 @@ session that cannot find its runner says so, and names both routes.
 
 ## Limits
 
-- **Headless.** Sessions stop at `live.entrypoint.started` and never claim
-  `live.frame.presented`. Presenting a frame needs a window and a swapchain, and
-  kira-graphics owns those, not this repo.
+- **A session's own bar is the entrypoint.** It stops at
+  `live.entrypoint.started` and never claims `live.frame.presented`. An app
+  hosted here does present frames — it brings its own window and swapchain from
+  kira-graphics — but the milestone belongs to the end that can observe it, and
+  this repo owns neither.
 - **The session socket is unauthenticated.** It is loopback and first-come, so
   any local process that wins the accept gets the bundle.
 - **`--quit-after` bounds the session, not a rebuild.** A save landing near the

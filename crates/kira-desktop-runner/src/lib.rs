@@ -22,8 +22,10 @@
 //! frame it never drew.
 
 pub mod host;
+pub mod relay;
 pub mod stage;
 pub mod staged;
 
 pub use host::{DesktopHost, DesktopRunnerError};
+pub use relay::{AppThread, RelayError, RelayHost};
 pub use staged::Staged;

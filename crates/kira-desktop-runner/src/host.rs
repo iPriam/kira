@@ -140,6 +140,35 @@ impl DesktopHost {
     pub fn cache(&self) -> &Path {
         &self.cache
     }
+
+    /// Whether this host refuses hot patching outright.
+    pub fn hotpatch_disabled(&self) -> bool {
+        self.hotpatch_disabled
+    }
+
+    /// Why the entrypoint could not start, or `Ok(())` if it can.
+    ///
+    /// The same answer [`RunnerHost::start`] would give without running
+    /// anything, which is what a runner needs when the app it is about to start
+    /// will outlive the call: whether the app started is reported the moment it
+    /// does, so it has to be knowable the moment before.
+    pub fn startable(&self) -> Result<(), DesktopRunnerError> {
+        if self.staged.is_linked() {
+            return Ok(());
+        }
+        Err(DesktopRunnerError::OutOfOrder {
+            step: "start",
+            required: required_before_start(&self.staged),
+        })
+    }
+}
+
+/// What has to have happened before the entrypoint can start.
+fn required_before_start(staged: &Staged) -> &'static str {
+    match staged {
+        Staged::Empty => "loaded a bundle",
+        _ => "linked the bundle",
+    }
 }
 
 impl RunnerHost for DesktopHost {
@@ -261,8 +290,9 @@ impl RunnerHost for DesktopHost {
         Ok(())
     }
 
-    fn hotpatch_disabled(&self) -> bool {
+    fn hot_patch_refusal(&self) -> Option<String> {
         self.hotpatch_disabled
+            .then(kira_live::hotpatch_kill_switch_reason)
     }
 
     fn start(&mut self) -> Result<(), DesktopRunnerError> {
@@ -281,15 +311,9 @@ impl RunnerHost for DesktopHost {
                 session.run()?;
                 Ok(())
             }
-            Staged::VmLoaded { .. } | Staged::HybridLoaded { .. } => {
-                Err(DesktopRunnerError::OutOfOrder {
-                    step: "start",
-                    required: "linked the bundle",
-                })
-            }
-            Staged::Empty => Err(DesktopRunnerError::OutOfOrder {
+            not_linked => Err(DesktopRunnerError::OutOfOrder {
                 step: "start",
-                required: "loaded a bundle",
+                required: required_before_start(not_linked),
             }),
         }
     }

@@ -19,7 +19,8 @@ use std::time::Duration;
 use kira_manifest::RunnerId;
 
 use crate::bundle::BundleManifest;
-use crate::event::{ReloadMode, SessionPhase};
+use crate::event::ReloadMode;
+use crate::progress::SessionPhase;
 use crate::protocol::{
     ClientMessage, PROTOCOL_VERSION, ProtocolError, ServerMessage, read_message, write_message,
 };
@@ -27,6 +28,12 @@ use crate::store::{Bundle, BundleError};
 
 /// How long a runner waits on a server that has gone quiet.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How often an idle runner looks at the socket and at its app.
+///
+/// Small enough that a save feels immediate and an app's exit is reported at
+/// once, large enough that a runner left up for hours costs nothing.
+const IDLE_POLL: Duration = Duration::from_millis(20);
 
 /// How long a runner waits for the server to accept bytes.
 ///
@@ -59,9 +66,28 @@ pub trait RunnerHost {
 
     /// Starts the app's entrypoint.
     ///
-    /// Returns when the entrypoint has started — which for a windowed runner is
-    /// not when it has finished.
+    /// Returns when the entrypoint is *running*, which for an app with a run
+    /// loop is not when it has finished. A host whose entrypoint outlives this
+    /// call keeps it running somewhere the protocol is not: the milestone this
+    /// return value feeds is `entrypoint started`, and a session that could only
+    /// report it after the app exited could never report it for an app.
     fn start(&mut self) -> Result<(), Self::Error>;
+
+    /// Runs a just-swapped entrypoint to completion.
+    ///
+    /// The proof behind `reload.completed`: a swap that commits and then traps
+    /// on its first call is not a reload that worked, and only running the code
+    /// tells the two apart. Asked exclusively after a swap, which means
+    /// exclusively of a host that answered [`RunnerHost::hot_patch_refusal`] with
+    /// `None` — an idle one. That is what makes waiting for the run to finish
+    /// safe here and not at [`RunnerHost::start`].
+    ///
+    /// Defaults to [`RunnerHost::start`], which is right for any host that runs
+    /// its entrypoint on the calling thread: for such a host the two are the same
+    /// call.
+    fn run_once(&mut self) -> Result<(), Self::Error> {
+        self.start()
+    }
 
     /// Swaps `bundle` into the running process, in place.
     ///
@@ -75,14 +101,34 @@ pub trait RunnerHost {
     /// available: only the host knows what its own live values depend on.
     fn swap(&mut self, bundle: &Bundle) -> Result<(), Self::Error>;
 
-    /// Whether this host refuses hot patching outright.
+    /// How the app's run ended, if it has ended since this was last asked.
     ///
-    /// A host with the kill switch set answers `true` and every reload
-    /// relaunches, which is what makes it possible to tell whether a bug belongs
-    /// to the hot-patch path or was always there. Defaults to `false`: a host
-    /// that does not care need not say so.
-    fn hotpatch_disabled(&self) -> bool {
-        false
+    /// Taken rather than read: the fact is reported to the server once, and a
+    /// host that kept answering would report the same exit on every poll.
+    ///
+    /// This is the second thing a runner waits on. The server arrives over the
+    /// socket and the app arrives here, and a host that never answers anything
+    /// but `None` — one whose entrypoint runs on the calling thread, so its
+    /// return is already an event the caller saw — is the default.
+    fn take_app_exit(&mut self) -> Option<AppOutcome> {
+        None
+    }
+
+    /// Why this host cannot take a hot patch, or `None` if it can.
+    ///
+    /// Asked before a rebuilt bundle is downloaded, so a host that was never
+    /// going to swap does not pay for the payloads first. The reason crosses the
+    /// wire as the session's relaunch reason, so it is written for whoever is
+    /// watching the terminal.
+    ///
+    /// Two kinds of answer live here. The kill switch is one: a host that has it
+    /// set relaunches every reload, which is what makes it possible to tell
+    /// whether a bug belongs to the hot-patch path or was always there. The other
+    /// is a host that is simply busy — an app still inside its run loop has a
+    /// call stack in the code a swap would replace, and no runner gets to pull a
+    /// module out from under one.
+    fn hot_patch_refusal(&self) -> Option<String> {
+        None
     }
 }
 
@@ -135,6 +181,25 @@ pub enum ClientError {
         /// What the host said about it.
         reason: String,
     },
+}
+
+/// How an app's own run ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppOutcome {
+    /// The entrypoint returned.
+    Finished,
+    /// The entrypoint stopped because it failed.
+    Failed(String),
+}
+
+impl AppOutcome {
+    /// The reason to report, or `None` for an app that simply finished.
+    fn reason(self) -> Option<String> {
+        match self {
+            Self::Finished => None,
+            Self::Failed(reason) => Some(reason),
+        }
+    }
 }
 
 /// A runner's connection to a live server.
@@ -214,6 +279,20 @@ impl RunnerClient {
         Ok(())
     }
 
+    /// Reports that the app's entrypoint returned, and why if it did not finish.
+    ///
+    /// The runner stays connected across this: the app is over, the runner is
+    /// not, and which of those ends the session is the server's to decide.
+    pub fn report_app_exited(&mut self, outcome: AppOutcome) -> Result<(), ClientError> {
+        write_message(
+            &mut self.writer,
+            &ClientMessage::AppExited {
+                reason: outcome.reason(),
+            },
+        )?;
+        Ok(())
+    }
+
     /// Reports that this runner could not continue, and why.
     pub fn fail(&mut self, reason: &str) -> Result<(), ClientError> {
         write_message(
@@ -238,6 +317,19 @@ impl RunnerClient {
     /// server's session ends with the runner's reason rather than with a bare
     /// disconnect it would have to guess about.
     pub fn run_session<H: RunnerHost>(&mut self, host: &mut H) -> Result<Bundle, ClientError> {
+        let bundle = self.prepare_session(host)?;
+        self.start_entrypoint(host)?;
+        Ok(bundle)
+    }
+
+    /// Downloads the bundle and gets `host` as far as linked, reporting each
+    /// milestone the host actually reaches.
+    ///
+    /// Split from the start so a runner can put the entrypoint on a different
+    /// thread from the protocol. An app with a run loop owns whichever thread
+    /// starts it for as long as it lives, and a runner that started one on the
+    /// thread holding the socket would have no way left to hear a reload.
+    pub fn prepare_session<H: RunnerHost>(&mut self, host: &mut H) -> Result<Bundle, ClientError> {
         let bundle = self.fetch_bundle()?;
         self.report(SessionPhase::BundleReceived)?;
 
@@ -247,10 +339,14 @@ impl RunnerClient {
         self.step("link", host.link())?;
         self.report(SessionPhase::BundleLinked)?;
 
+        Ok(bundle)
+    }
+
+    /// Starts the linked bundle's entrypoint and reports that it is running.
+    pub fn start_entrypoint<H: RunnerHost>(&mut self, host: &mut H) -> Result<(), ClientError> {
         self.step("start", host.start())?;
         self.report(SessionPhase::EntrypointStarted)?;
-
-        Ok(bundle)
+        Ok(())
     }
 
     /// Stays connected, taking reloads until the server ends the session.
@@ -266,6 +362,8 @@ impl RunnerClient {
     /// the session must be able to tell the difference.
     pub fn serve_reloads<H: RunnerHost>(&mut self, host: &mut H) -> Result<(), ClientError> {
         loop {
+            self.wait_for_the_server_or_the_app(host)?;
+
             // Waiting for a save is unbounded, and must be. A read timeout here
             // would make the runner kill itself for the crime of the developer
             // thinking for half a minute — the app would be gone by the time they
@@ -301,6 +399,54 @@ impl RunnerClient {
         }
     }
 
+    /// Waits until the server has said something, reporting the app's own exit
+    /// if that is what happens first.
+    ///
+    /// An idle runner is waiting on two things at once and only one of them
+    /// arrives on the socket. So the wait is a poll rather than a block: the
+    /// socket is checked without consuming anything, and between checks the host
+    /// is asked whether the app has ended. Both waits stay unbounded — this
+    /// returns when the server speaks, and everything else it notices on the way
+    /// is reported and waited past.
+    fn wait_for_the_server_or_the_app<H: RunnerHost>(
+        &mut self,
+        host: &mut H,
+    ) -> Result<(), ClientError> {
+        while !self.server_has_spoken()? {
+            if let Some(outcome) = host.take_app_exit() {
+                self.report_app_exited(outcome)?;
+            }
+            std::thread::sleep(IDLE_POLL);
+        }
+        Ok(())
+    }
+
+    /// Whether a message is waiting, without taking any of it off the socket.
+    ///
+    /// Peeked rather than read with a short timeout, because a timeout that
+    /// fired between a frame's length prefix and its body would leave the stream
+    /// desynchronized — and a runner that guessed at the rest of a message is
+    /// worse than one that waits.
+    fn server_has_spoken(&mut self) -> Result<bool, ClientError> {
+        // Buffered bytes never come back to the socket, so a peek that looked
+        // only at the socket could sit forever on a message already in hand.
+        if !self.reader.buffer().is_empty() {
+            return Ok(true);
+        }
+        let socket = self.reader.get_ref();
+        socket.set_nonblocking(true)?;
+        let mut byte = [0u8; 1];
+        let spoken = match socket.peek(&mut byte) {
+            // Zero bytes is the peer having closed, which the read that follows
+            // reports as a disconnect — this only has to say that waiting is over.
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
+            Err(error) => Err(ClientError::Io(error)),
+        };
+        socket.set_nonblocking(false)?;
+        spoken
+    }
+
     /// Sets how long a read waits, or `None` to wait indefinitely.
     fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<(), ClientError> {
         self.reader.get_ref().set_read_timeout(timeout)?;
@@ -322,11 +468,8 @@ impl RunnerClient {
             self.restart_required("a runner cannot relaunch itself in place")?;
             return Ok(());
         }
-        if host.hotpatch_disabled() {
-            self.restart_required(&format!(
-                "hot patching is disabled for this runner ({}=1)",
-                crate::reload::NO_HOTPATCH_VAR
-            ))?;
+        if let Some(reason) = host.hot_patch_refusal() {
+            self.restart_required(&reason)?;
             return Ok(());
         }
 
@@ -358,7 +501,7 @@ impl RunnerClient {
         // The swap is committed; now prove it runs. A trap here is a rejection
         // of the reload rather than a failure of the session: the supervisor
         // relaunches, and the developer sees the trap.
-        if let Err(error) = host.start() {
+        if let Err(error) = host.run_once() {
             let reason = format!("the swapped-in code did not run: {error}");
             write_message(&mut self.writer, &ClientMessage::ReloadRejected { reason })?;
             return Ok(());
