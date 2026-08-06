@@ -59,6 +59,10 @@ fi
 
 mkdir -p "$build_dir" "$install_dir"
 
+# clang is here for `libclang`, which `kira-clang` opens to read C headers.
+# The static analyzer and the ARC migrator are a large share of the clang build
+# and nothing reaches them through that API; upstream refuses the migrator
+# without the analyzer, so they move together.
 cmake -S "$source_dir/llvm" -B "$build_dir" -G "$cmake_generator" \
     -DCMAKE_BUILD_TYPE="$build_type" \
     -DCMAKE_INSTALL_PREFIX="$install_dir" \
@@ -66,6 +70,8 @@ cmake -S "$source_dir/llvm" -B "$build_dir" -G "$cmake_generator" \
     -DBUILD_SHARED_LIBS=OFF \
     -DLLVM_LINK_LLVM_DYLIB=ON \
     -DLLVM_ENABLE_PROJECTS=clang \
+    -DCLANG_ENABLE_STATIC_ANALYZER=OFF \
+    -DCLANG_ENABLE_ARCMT=OFF \
     -DLLVM_ENABLE_BINDINGS=OFF \
     -DLLVM_ENABLE_LIBXML2=OFF \
     -DLLVM_ENABLE_ZLIB=OFF \

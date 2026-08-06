@@ -107,7 +107,11 @@ jobs:
     # floats, because the toolset it carries no longer decides anything the
     # portability check does not verify.
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 300
+    # Six hours is what a GitHub-hosted job gets before the runner kills it, so
+    # there is no higher number to ask for. A full LLVM plus clang Release
+    # build on four vCPUs has come within an hour of it, which is why the build
+    # scripts drop the clang components nothing in the bundle's contract uses.
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.validate.outputs.matrix) }}

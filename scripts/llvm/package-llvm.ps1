@@ -18,13 +18,20 @@ if (Test-Path $archivePath) {
     Remove-Item $archivePath -Force
 }
 
+# `bsdtar` writes both formats and streams the tree once. `Compress-Archive`
+# also writes zip, but reads the whole install tree into the pipeline first,
+# which on a multi-gigabyte LLVM costs more than the build can spare against
+# the runner's six-hour ceiling.
 switch ($ArchiveFormat) {
     "zip" {
-        Compress-Archive -Path (Join-Path $InstallDir "*") -DestinationPath $archivePath -Force
+        & tar.exe -a -c -f $archivePath -C $InstallDir .
     }
     "tar.xz" {
         & tar.exe -cJf $archivePath -C $InstallDir .
     }
+}
+if ($LASTEXITCODE -ne 0) {
+    throw "packaging $AssetName failed"
 }
 
 Write-Output $archivePath
