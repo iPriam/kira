@@ -38,7 +38,24 @@ $configureArgs = @(
     "-DLLVM_INCLUDE_EXAMPLES=OFF",
     "-DLLVM_INCLUDE_TESTS=OFF",
     "-DLLVM_BUILD_TOOLS=ON",
-    "-DLLVM_TARGETS_TO_BUILD=$TargetsToBuild"
+    "-DLLVM_TARGETS_TO_BUILD=$TargetsToBuild",
+    # Both link shapes ship, because both are used: the backend links the
+    # component archives into `kira`, and `kira-clang` opens `libclang` out of
+    # the same tree at runtime. MSVC has no `libLLVM` dylib, so the Unix
+    # script's `LLVM_LINK_LLVM_DYLIB` has no counterpart here and the C API
+    # ships as `LLVM-C.dll` instead. Named rather than left to the upstream
+    # defaults they currently match, because the bundle's contents are a
+    # contract with `kira_clang::libclang_candidates` and not an incidental.
+    "-DLLVM_BUILD_LLVM_C_DYLIB=ON",
+    "-DLIBCLANG_BUILD_STATIC=OFF",
+    # The MSVC STL routes several algorithms through helpers (`__std_rotate`
+    # and friends) that live in the toolset's own library, so a bundle built
+    # against a newer STL than the consumer's fails to link naming symbols no
+    # released Visual Studio defines. This bundle is redistributable: it is
+    # linked on developer machines whose toolset nobody controls, and pinning
+    # the runner alone only fixes it until the image moves again. Opting out
+    # keeps the generic templates, which resolve entirely within the headers.
+    "-DCMAKE_CXX_FLAGS=/D_USE_STD_VECTOR_ALGORITHMS=0"
 )
 
 & cmake @configureArgs
