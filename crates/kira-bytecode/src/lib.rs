@@ -105,6 +105,56 @@ mod tests {
         vm.validate().expect("a vm module is well-formed");
     }
 
+    /// A written-through parameter has no seam representation, so a call to one
+    /// placed on the native half is refused — and the refusal names the callee,
+    /// not just the caller. The caller is routinely a closure whose name is
+    /// synthesized (`(borrow mut Frame) -> Void#2`), which tells whoever hit
+    /// this nothing about where the annotation to change is.
+    #[test]
+    fn a_mutating_call_across_the_seam_names_the_callee() {
+        use kira_ir::ir::IrWriteback;
+        use kira_ir::{IrPlace, ir::IrExpr as Expr};
+        use kira_runtime_abi::Execution;
+
+        let mut exprs = la_arena::Arena::new();
+        let receiver = exprs.alloc(Expr::Local(0));
+        let call = exprs.alloc(Expr::Call {
+            callee: IrCallee::User(1),
+            args: vec![receiver],
+            result: kira_semantics_model::Type::Void,
+            writebacks: vec![IrWriteback {
+                param: 0,
+                place: IrPlace {
+                    local: 0,
+                    path: Vec::new(),
+                },
+            }],
+        });
+        let mut program = single_main(vec![IrStmt::Eval { expr: call }], exprs, 1);
+        program.functions.push(IrFunction {
+            name: "uiBatchPresent".to_owned(),
+            param_count: 1,
+            locals: vec![kira_semantics_model::Type::INT],
+            native_state_locals: vec![None],
+            return_type: kira_semantics_model::Type::Void,
+            execution: Execution::Native,
+            by_reference_params: Vec::new(),
+            by_pointer_params: Vec::new(),
+            body: Vec::new(),
+        });
+
+        let error = compile_hybrid(&program).expect_err("a struct receiver cannot cross the seam");
+        let message = error.to_string();
+        assert!(
+            message.contains("uiBatchPresent"),
+            "the refusal must name the callee carrying the annotation, got `{message}`"
+        );
+
+        // The same program is an ordinary one on the VM: there is no seam for
+        // the receiver to fail to cross.
+        compile(&program).expect("a vm build has no boundary to honour");
+    }
+
     #[test]
     fn compiles_print_of_a_constant() {
         let mut exprs = la_arena::Arena::new();
