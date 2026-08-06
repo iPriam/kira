@@ -111,27 +111,54 @@ fn well_formed(id: &str) -> bool {
 
 /// Removes all but the most recent [`KEEP`] saved runs.
 ///
-/// Identifiers begin with a fixed-width millisecond stamp, so sorting by name
-/// sorts by age.
+/// Ordered by the stamp inside each identifier, not by the identifier. A name
+/// begins with its *kind*, so sorting by name sorts alphabetically by kind
+/// first: a run saved a second ago as `build-…` would rank below one saved
+/// yesterday as `validate-…` and be the one deleted — which is a caller handed
+/// an identifier that no longer resolves, immediately, for no reason it could
+/// see.
+///
+/// A file this server did not issue is left alone rather than counted or
+/// deleted. The directory is shared with whatever else uses the system
+/// temporary directory, and pruning is not a licence to remove someone else's
+/// file.
 fn prune() {
     let Ok(entries) = std::fs::read_dir(directory()) else {
         return;
     };
-    let mut files: Vec<PathBuf> = entries
+    let mut saved: Vec<(u128, u64, PathBuf)> = entries
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
             path.extension()
                 .is_some_and(|extension| extension == "json")
         })
+        .filter_map(|path| {
+            let (stamp, ordinal) = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(issued_at)?;
+            Some((stamp, ordinal, path))
+        })
         .collect();
-    if files.len() <= KEEP {
+    if saved.len() <= KEEP {
         return;
     }
-    files.sort();
-    for path in &files[..files.len() - KEEP] {
+    saved.sort_by_key(|(stamp, ordinal, _)| (*stamp, *ordinal));
+    for (_, _, path) in &saved[..saved.len() - KEEP] {
         let _ = std::fs::remove_file(path);
     }
+}
+
+/// When an identifier this server issued was issued: its stamp and its ordinal.
+///
+/// `None` for anything else, which is what keeps a foreign file out of the
+/// pruning entirely. Read from the right because a kind is free to contain a
+/// dash and the two trailing fields never do.
+fn issued_at(stem: &str) -> Option<(u128, u64)> {
+    let (head, ordinal) = stem.rsplit_once('-')?;
+    let (_kind, stamp) = head.rsplit_once('-')?;
+    Some((stamp.parse().ok()?, ordinal.parse().ok()?))
 }
 
 #[cfg(test)]
@@ -161,6 +188,38 @@ mod tests {
     fn an_unsaved_identifier_is_reported_as_unknown() {
         let error = load("test-0000000000000-9999").expect_err("nothing is saved under it");
         assert!(matches!(error, SessionError::Unknown(_)));
+    }
+
+    /// Age is the stamp, not the name. A `build-` run saved now is newer than a
+    /// `validate-` run saved yesterday, and sorting by identifier says the
+    /// opposite — which is how a just-saved run came to be the one pruned.
+    #[test]
+    fn a_runs_age_is_its_stamp_and_not_its_name() {
+        let fresh = "build-1786041435682-0000";
+        let stale = "validate-1786000000000-0000";
+        assert!(
+            fresh < stale,
+            "by name the fresh run sorts first, which is what made it the one pruned"
+        );
+        assert!(
+            issued_at(fresh) > issued_at(stale),
+            "a newer run must outrank an older one whatever its kind is called"
+        );
+        // Two runs in the same millisecond are ordered by the ordinal that
+        // separates them, so pruning never has to pick between them arbitrarily.
+        assert!(issued_at("test-1786041435682-0001") > issued_at("test-1786041435682-0000"));
+    }
+
+    /// A file this server did not write is not this server's to delete.
+    #[test]
+    fn a_foreign_file_is_not_a_saved_run() {
+        for stem in ["notes", "test-nonsense-0000", "test-1786041435682-x"] {
+            assert_eq!(
+                issued_at(stem),
+                None,
+                "`{stem}` is not an issued identifier"
+            );
+        }
     }
 
     /// Two runs saved in the same millisecond get different identifiers.
