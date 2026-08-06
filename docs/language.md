@@ -35,11 +35,11 @@ Two edges are deliberate rather than pending:
 - **`print(someStruct)` is rejected.** What `print` renders for a struct is not
   pinned anywhere in the language corpus, and inventing a format here would be
   inventing language surface. Print a struct's fields until it is settled.
-- **A struct cannot cross the `@Native`/`@Runtime` boundary.** It does not fit
-  a `BridgeValue`, and passing one needs an ABI decision — by value or by
-  pointer, and who frees the strings inside — that has not been made. Structs
-  work on both engines; only the crossing is unbuilt, and a build that would
-  need one says so. See [docs/structs.md](docs/structs.md).
+- **A struct crosses the `@Native`/`@Runtime` boundary as a copy.** It does not
+  fit a `BridgeValue`, so what crosses is a node tree carrying the whole value,
+  transferred to the reader — which is also who frees the strings inside it. A
+  `borrow mut` parameter is that copy made twice: over, and back into the slot
+  it came from. See [docs/structs.md](docs/structs.md).
 
 A struct may declare **methods** alongside its members. A method is an ordinary
 function that happens to have a receiver, so it takes a slot in the same

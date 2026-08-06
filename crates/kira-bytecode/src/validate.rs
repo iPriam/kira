@@ -238,6 +238,15 @@ impl Module {
                     // an index into this module's table, so there is nothing
                     // here to bound it against.
                     Instruction::CallNative(_) => true,
+                    // Its native mirror is bounded only where this module can
+                    // bound it: each target's caller slot roots a place in
+                    // *this* frame. The `param` is not checked against a callee
+                    // slot count, because the callee has no frame here — its
+                    // parameters live in the manifest the host resolves the id
+                    // against, and that is where the two are matched.
+                    Instruction::CallNativeWriteback { targets, .. } => targets
+                        .iter()
+                        .all(|target| target.slot < function.local_count),
                     // A `CallForeign` id indexes this module's foreign-import
                     // table, so unlike a native id it is bounded here: an id
                     // past the table would have no signature to marshal against.

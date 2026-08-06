@@ -32,7 +32,7 @@ use kira_runtime_abi::BridgeValue;
 /// `count` is 0), and `out` must point at one writable [`BridgeValue`].
 pub type RuntimeInvoker = unsafe extern "C" fn(
     function_id: u32,
-    args: *const BridgeValue,
+    args: *mut BridgeValue,
     count: u32,
     out: *mut BridgeValue,
 );
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn kira_hybrid_install_runtime_invoker(invoker: Option<Run
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kira_hybrid_call_runtime(
     function_id: u32,
-    args: *const BridgeValue,
+    args: *mut BridgeValue,
     count: u32,
     out: *mut BridgeValue,
 ) {
@@ -114,7 +114,7 @@ mod tests {
 
     unsafe extern "C" fn test_invoker(
         function_id: u32,
-        args: *const BridgeValue,
+        args: *mut BridgeValue,
         count: u32,
         out: *mut BridgeValue,
     ) {
@@ -137,9 +137,9 @@ mod tests {
             kira_hybrid_install_runtime_invoker(Some(test_invoker));
             assert!(runtime_invoker_installed());
 
-            let args = [BridgeValue::encode(BridgeData::Int(21))];
+            let mut args = [BridgeValue::encode(BridgeData::Int(21))];
             let mut out = BridgeValue::VOID;
-            kira_hybrid_call_runtime(7, args.as_ptr(), 1, &mut out);
+            kira_hybrid_call_runtime(7, args.as_mut_ptr(), 1, &mut out);
 
             assert_eq!(LAST_CALLED.load(TestOrdering::Acquire), 7);
             assert_eq!(out.decode(), Some(BridgeData::Int(42)));
