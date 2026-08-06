@@ -14,9 +14,6 @@ use crate::exec::{self, Run};
 use crate::schema::{Diagnostic, Failure, FailureKind};
 use crate::session;
 
-/// This server's own crate, which the gate compiles but cannot relink.
-const SELF_CRATE: &str = "kira-mcp";
-
 /// One check the gate runs.
 struct Check {
     name: &'static str,
@@ -250,22 +247,17 @@ fn planned_checks(fix: bool) -> Vec<Check> {
                 "warnings",
             ]),
         },
-        // Everything but this server, which is running: Windows will not let
-        // cargo replace an executable that is executing, and this gate is
-        // served from `target/debug/kira-mcp.exe`. Excluding it is not a gap,
-        // because `self_compilation` below compiles it — `cargo check` never
-        // links, so it never needs to replace the file. Splitting the two is
-        // what keeps the gate honest about its own crate rather than reporting
-        // a failure that means only "the server is up".
+        // The whole workspace, this server included. It can be included because
+        // `scripts/mcp-server.sh` runs the server from a copy of the executable
+        // rather than from `target/debug/`, so the file cargo has to replace is
+        // not the one being executed. Before that it could not be: Windows
+        // refuses to replace a running image, and the gate excluded its own
+        // crate and type-checked it separately — which meant a link error in
+        // the tool doing the checking was the one error the gate could not see.
         Check {
             name: "workspace_compilation",
             program: "cargo",
-            args: exec::argv(&["build", "--workspace", "--exclude", SELF_CRATE]),
-        },
-        Check {
-            name: "self_compilation",
-            program: "cargo",
-            args: exec::argv(&["check", "-p", SELF_CRATE, "--all-targets"]),
+            args: exec::argv(&["build", "--workspace"]),
         },
         Check {
             name: "portable_core",
@@ -397,29 +389,25 @@ mod tests {
         assert_eq!(properties["test"]["type"], json!("boolean"));
     }
 
-    /// The workspace build skips this crate, so something else has to compile
-    /// it. A gate that excluded its own server and left it at that would stop
-    /// noticing a break in the tool doing the checking.
+    /// The gate builds its own server like any other crate.
+    ///
+    /// It excluded itself for as long as it ran out of `target/debug/`, which
+    /// left a link error in the tool doing the checking as the one break the
+    /// gate could not report. The launcher runs a copy, so the exclusion is
+    /// gone — and this is what keeps it gone.
     #[test]
-    fn the_crate_excluded_from_the_build_is_compiled_by_its_own_check() {
+    fn the_workspace_build_excludes_nothing() {
         let planned = planned_checks(false);
         let build = planned
             .iter()
             .find(|check| check.name == "workspace_compilation")
             .expect("the workspace build");
         assert!(
-            build
-                .args
-                .windows(2)
-                .any(|pair| pair == ["--exclude", SELF_CRATE]),
-            "the running server cannot be relinked, so the build must exclude it"
+            !build.args.iter().any(|argument| argument == "--exclude"),
+            "the server runs from a copy, so nothing needs excluding: {:?}",
+            build.args
         );
-        let own = planned
-            .iter()
-            .find(|check| check.name == "self_compilation")
-            .expect("the server's own check");
-        assert!(own.args.contains(&"check".to_owned()), "check never links");
-        assert!(own.args.windows(2).any(|pair| pair == ["-p", SELF_CRATE]));
+        assert!(build.args.contains(&"--workspace".to_owned()));
     }
 
     /// Omitting the flag runs the tests. The default is what an agent gets by
