@@ -55,6 +55,17 @@ pub(crate) struct Vm<'h> {
     /// mutation of native state, and allocating its path each time would put an
     /// allocation on that path.
     native_path: Vec<NativeStatePathStep>,
+    /// Slots the next entered frame should hand back.
+    ///
+    /// Set immediately before entering and taken by the frame that starts, so
+    /// it names the outermost frame and no other.
+    pending_capture: Vec<u16>,
+    /// The final values of the parameters an embedder asked to have back.
+    ///
+    /// Filled by the outermost frame as it returns, and only when the embedder
+    /// named slots to capture — the native half calling a `@Runtime` function
+    /// that writes through a parameter. Empty for every other run.
+    captured: Vec<(u32, Value)>,
     /// The deferred tasks this run spawned.
     ///
     /// One table per run, because a handle is an index into it: two runs
@@ -126,7 +137,7 @@ impl Vm<'_> {
                     }
                     frames.push(callee);
                 }
-                Instruction::CallNative(id) => self.call_native(module, id)?,
+                Instruction::CallNative(id) => self.call_native(module, id, &[], frames)?,
                 Instruction::CallForeign(id) => self.call_foreign(module, id)?,
                 Instruction::CallMut { func, slot, path } => {
                     if frames.len() >= MAX_CALL_DEPTH {
@@ -188,6 +199,25 @@ impl Vm<'_> {
                     }
                     callee.writebacks = writebacks;
                     frames.push(callee);
+                }
+                Instruction::CallNativeWriteback { func, targets } => {
+                    // The same stack protocol as `CallWriteback` — arguments,
+                    // then each target's place indices, resolved back to front.
+                    // What differs is where the final values come from: there is
+                    // no callee frame to move them out of, so the call returns
+                    // them and `call_native` stores them.
+                    let mut writebacks = Vec::with_capacity(targets.len());
+                    for target in targets.iter().rev() {
+                        let mut steps = Vec::new();
+                        self.fill_steps(&target.path, &mut steps)?;
+                        writebacks.push(Writeback {
+                            param: target.param,
+                            slot: target.slot,
+                            steps,
+                        });
+                    }
+                    writebacks.reverse();
+                    self.call_native(module, func, &writebacks, frames)?;
                 }
                 other => self.step(module, &mut frames[depth], other)?,
             }

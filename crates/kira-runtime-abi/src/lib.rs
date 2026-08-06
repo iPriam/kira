@@ -247,6 +247,37 @@ pub enum NativeResult {
     RawPtr(u64),
 }
 
+/// What a native call produced: its result, and any parameter it wrote through.
+///
+/// The two travel together because they are the same crossing. A `borrow mut`
+/// parameter is the one place a callee's effect is not its return value, and the
+/// two engines do not share a heap — so the caller cannot see the write, and the
+/// final value has to come back the way the result does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeReturn {
+    /// What the function returned.
+    pub result: NativeResult,
+    /// The final value of each parameter the callee was allowed to write
+    /// through, by parameter slot, ascending.
+    ///
+    /// Empty for the overwhelming majority of calls: only a `borrow mut`
+    /// parameter appears here, and only a signature that declares one can have
+    /// any. A caller matches these against the writebacks its own call site
+    /// recorded — the two come from one IR, and a disagreement is a broken
+    /// artifact rather than something to reconcile at runtime.
+    pub writebacks: Vec<(u32, NativeResult)>,
+}
+
+impl NativeReturn {
+    /// A call that returned `result` and wrote through nothing.
+    pub fn plain(result: NativeResult) -> NativeReturn {
+        NativeReturn {
+            result,
+            writebacks: Vec::new(),
+        }
+    }
+}
+
 /// Why a call into native code could not be made.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeCallError {
@@ -305,7 +336,7 @@ pub trait HostCapabilities {
         &mut self,
         function_id: u32,
         args: &[NativeArg<'_>],
-    ) -> Result<NativeResult, NativeCallError> {
+    ) -> Result<NativeReturn, NativeCallError> {
         let _ = (function_id, args);
         Err(NativeCallError::NoNativeHalf)
     }

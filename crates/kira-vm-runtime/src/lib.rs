@@ -87,13 +87,13 @@ mod tests {
             &mut self,
             function_id: u32,
             args: &[kira_runtime_abi::NativeArg<'_>],
-        ) -> Result<kira_runtime_abi::NativeResult, kira_runtime_abi::NativeCallError> {
-            use kira_runtime_abi::{NativeArg, NativeResult};
+        ) -> Result<kira_runtime_abi::NativeReturn, kira_runtime_abi::NativeCallError> {
+            use kira_runtime_abi::{NativeArg, NativeResult, NativeReturn};
             self.seen.push(format!("{function_id}{args:?}"));
             match args {
-                [NativeArg::Int(count), NativeArg::Str(text)] => {
-                    Ok(NativeResult::Str(text.repeat(*count as usize)))
-                }
+                [NativeArg::Int(count), NativeArg::Str(text)] => Ok(NativeReturn::plain(
+                    NativeResult::Str(text.repeat(*count as usize)),
+                )),
                 _ => Err(kira_runtime_abi::NativeCallError::UnboundFunction(
                     function_id,
                 )),

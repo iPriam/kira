@@ -7,7 +7,7 @@
 //! right number of arguments — is [`check_signature`].
 
 use kira_bytecode::module::Module;
-use kira_runtime_abi::{HostCapabilities, NativeArg, NativeResult};
+use kira_runtime_abi::{HostCapabilities, NativeArg, NativeResult, NativeReturn};
 
 use crate::error::VmError;
 use crate::interp::Vm;
@@ -106,14 +106,45 @@ impl Program {
         function_id: u32,
         args: &[NativeArg<'_>],
     ) -> Result<NativeResult, VmError> {
+        Ok(self.call_capturing(host, function_id, args, &[])?.result)
+    }
+
+    /// [`Program::call`], also handing back the final value of each parameter
+    /// slot in `capture`.
+    ///
+    /// What the native half calls when the `@Runtime` function it is reaching
+    /// writes through a parameter. The caller is the other engine, so there is
+    /// no place for the VM to write into — the values come back instead, and
+    /// the caller stores them where its own signature says they belong.
+    pub fn call_capturing(
+        &self,
+        host: &mut dyn HostCapabilities,
+        function_id: u32,
+        args: &[NativeArg<'_>],
+        capture: &[u16],
+    ) -> Result<NativeReturn, VmError> {
         check_signature(&self.module, function_id, args.len())?;
 
         let mut vm = Vm::new(host, Heap::new());
-        let result = vm.enter(&self.module, function_id, args)?;
+        let (result, captured) = vm.enter_capturing(&self.module, function_id, args, capture)?;
+        let mut writebacks = Vec::with_capacity(captured.len());
+        for (slot, value) in captured {
+            let lifted = vm.heap.lift(value);
+            vm.heap.drop_value(value);
+            writebacks.push((
+                slot,
+                lifted.ok_or(VmError::StructAtSeam {
+                    function: function_id,
+                })?,
+            ));
+        }
         let lifted = vm.heap.lift(result);
         vm.heap.drop_value(result);
-        lifted.ok_or(VmError::StructAtSeam {
-            function: function_id,
+        Ok(NativeReturn {
+            result: lifted.ok_or(VmError::StructAtSeam {
+                function: function_id,
+            })?,
+            writebacks,
         })
     }
 }

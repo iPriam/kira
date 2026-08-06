@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     FileRequest, FileResponse, FileSystemError, ForeignArg, ForeignCallError, ForeignResult,
-    HostCapabilities, NativeArg, NativeCallError, NativeResult,
+    HostCapabilities, NativeArg, NativeCallError, NativeReturn,
 };
 
 /// The program-stable identity of a type stored in native callback state.
@@ -516,7 +516,7 @@ impl<H: HostCapabilities> HostCapabilities for NativeStateHost<H> {
         &mut self,
         function_id: u32,
         args: &[NativeArg<'_>],
-    ) -> Result<NativeResult, NativeCallError> {
+    ) -> Result<NativeReturn, NativeCallError> {
         self.inner.call_native(function_id, args)
     }
 

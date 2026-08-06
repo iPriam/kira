@@ -35,6 +35,14 @@ pub(super) struct Frame {
     /// caller place before the callee's locals are dropped, which is the whole
     /// of value-semantics writeback. Empty for every ordinary call.
     pub(super) writebacks: Vec<Writeback>,
+    /// Which parameter slots this frame hands back when it is the outermost.
+    ///
+    /// Non-empty only for a frame an embedder entered directly and asked to
+    /// report written-through parameters — the native half calling a `@Runtime`
+    /// function that takes a `borrow mut`. There is no caller frame to write
+    /// into: the caller is the other engine, so the values are moved out here
+    /// and handed to whoever started the call.
+    pub(super) capture: Vec<u16>,
 }
 
 /// A resolved writeback target on a callee frame.
@@ -59,6 +67,7 @@ pub(super) fn new_frame(module: &Module, index: u32) -> Result<Frame, VmError> {
         pc: 0,
         locals: vec![Value::Void; function.local_count as usize],
         writebacks: Vec::new(),
+        capture: Vec::new(),
     })
 }
 
@@ -75,6 +84,8 @@ impl<'h> Vm<'h> {
             stack: Vec::new(),
             steps: Vec::new(),
             native_path: Vec::new(),
+            pending_capture: Vec::new(),
+            captured: Vec::new(),
             tasks: TaskExecutor::new(),
         }
     }
@@ -88,6 +99,31 @@ impl<'h> Vm<'h> {
     ///
     /// Arguments are lowered into this run's own heap, so the caller's storage
     /// is only read: a `&str` argument is copied in rather than aliased.
+    /// [`Vm::enter`], also handing back the final value of each slot in
+    /// `capture`.
+    ///
+    /// The written-through parameters of a call that came from the other
+    /// engine. They are moved out of the entry frame as it returns, so what
+    /// comes back is owned by this heap exactly as the result is.
+    pub(super) fn enter_capturing(
+        &mut self,
+        module: &Module,
+        function_id: u32,
+        args: &[NativeArg<'_>],
+        capture: &[u16],
+    ) -> Result<(Value, Vec<(u32, Value)>), VmError> {
+        self.pending_capture = capture.to_vec();
+        let result = self.enter(module, function_id, args);
+        let captured = std::mem::take(&mut self.captured);
+        match result {
+            Ok(value) => Ok((value, captured)),
+            Err(error) => {
+                self.discard(captured.into_iter().map(|(_, value)| value));
+                Err(error)
+            }
+        }
+    }
+
     pub(super) fn enter(
         &mut self,
         module: &Module,
@@ -147,6 +183,10 @@ impl<'h> Vm<'h> {
         for (slot, value) in args.into_iter().enumerate() {
             frame.locals[slot] = value;
         }
+        // Only the frame the embedder entered captures: a nested call's
+        // writebacks go to its caller's places, which is a different mechanism
+        // and already handled. Taking it here is what keeps it to one frame.
+        frame.capture = std::mem::take(&mut self.pending_capture);
         self.run(module, frame)
     }
 
@@ -218,6 +258,20 @@ impl<'h> Vm<'h> {
                 self.heap.drop_value(result);
                 return Err(error);
             }
+        }
+        // Taken before the release walk, for the same reason a writeback is:
+        // a captured slot has moved out, so the plan that names it frees the
+        // `Void` left behind rather than the value now in the embedder's hands.
+        let capture = std::mem::take(&mut finished.capture);
+        for slot in capture {
+            let Some(value) = finished
+                .locals
+                .get_mut(slot as usize)
+                .map(|held| std::mem::replace(held, Value::Void))
+            else {
+                continue;
+            };
+            self.captured.push((u32::from(slot), value));
         }
         match &module.functions[finished.func as usize].releases {
             FrameRelease::EveryLocal => self.discard(finished.locals),

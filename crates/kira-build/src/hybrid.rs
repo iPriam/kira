@@ -58,7 +58,7 @@ use std::path::{Path, PathBuf};
 
 use kira_hybrid_definition::{HybridFunction, HybridManifest, HybridParam};
 use kira_ir::IrProgram;
-use kira_runtime_abi::{BridgeValueTag, Execution};
+use kira_runtime_abi::{BridgeValueTag, Execution, Ownership};
 use kira_semantics_model::Type;
 
 use crate::wrapper::{self, WrapperSpec};
@@ -289,9 +289,21 @@ pub fn manifest(
                 .locals
                 .iter()
                 .take(function.param_count as usize)
-                // The IR carries no per-parameter mode and the codegen frees
-                // every string parameter at return. `Owned` is what that is.
-                .map(|ty| tag(*ty, &function.name).map(HybridParam::owned))
+                .enumerate()
+                .map(|(slot, ty)| {
+                    // A written-through parameter is the one mode a crossing has
+                    // to know about: its final value comes back in the slot it
+                    // went out in, and this row is what tells the host which
+                    // slots to read. Everything else is `Owned` — the codegen
+                    // frees every string parameter at return, and a read-only
+                    // borrow crosses as a copy the callee owns just the same.
+                    let ownership = if function.param_by_reference(slot as u32) {
+                        Ownership::BorrowMut
+                    } else {
+                        Ownership::Owned
+                    };
+                    tag(*ty, &function.name).map(|ty| HybridParam { ty, ownership })
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(HybridFunction {
                 id,

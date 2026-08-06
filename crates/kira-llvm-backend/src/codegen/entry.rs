@@ -9,6 +9,7 @@
 use kira_ir::IrFunction;
 use kira_semantics_model::Type;
 use llvm_sys::core::*;
+use llvm_sys::prelude::LLVMValueRef;
 
 use super::Codegen;
 use super::ffi::c_string;
@@ -76,11 +77,38 @@ impl Codegen<'_> {
         Ok(())
     }
 
+    /// The address of `args[slot]`, one `BridgeValue` into the argument array.
+    ///
+    /// # Safety
+    ///
+    /// `args` must point at an array of at least `slot + 1` `BridgeValue`s, and
+    /// the builder must be positioned on a live block.
+    unsafe fn bridge_slot(&self, args: LLVMValueRef, slot: u32) -> LLVMValueRef {
+        // SAFETY: the type belongs to this live module's context.
+        let mut offset = [unsafe { LLVMConstInt(self.types.i32, u64::from(slot), 0) }];
+        // SAFETY: the caller vouches for `args`' extent and for the builder
+        // being positioned, which is the whole of this function's contract.
+        unsafe {
+            LLVMBuildInBoundsGEP2(
+                self.builder,
+                self.types.bridge_value,
+                args,
+                offset.as_mut_ptr(),
+                1,
+                c"arg.slot".as_ptr(),
+            )
+        }
+    }
+
     /// Emits the trampoline the host calls to reach native function `index`.
     ///
     /// ```text
-    /// void kira_native_fn_<id>(const BridgeValue *args, u32 count, BridgeValue *out)
+    /// void kira_native_fn_<id>(BridgeValue *args, u32 count, BridgeValue *out)
     /// ```
+    ///
+    /// `args` is written as well as read: a parameter the callee writes through
+    /// has its final value packed back into the slot it arrived in, which is how
+    /// a `borrow mut` crosses a seam whose two sides share no heap.
     ///
     /// One C-ABI shape for every Kira signature, so the host can call any native
     /// function through one function-pointer type rather than needing a
@@ -134,20 +162,35 @@ impl Codegen<'_> {
             let out = LLVMGetParam(trampoline, 2);
 
             let mut lowered = Vec::with_capacity(function.param_count as usize);
+            // The parameters the callee writes through, and the storage it
+            // writes into. Collected on the way in so the way out does not have
+            // to ask the signature a second time.
+            let mut written_through = Vec::new();
             for slot in 0..function.param_count {
                 let ty = function
                     .param_type(slot)
                     .ok_or(LlvmError::Unsupported("a parameter with no type"))?;
-                let mut offset = [LLVMConstInt(types.i32, u64::from(slot), 0)];
-                let element = LLVMBuildInBoundsGEP2(
-                    self.builder,
-                    types.bridge_value,
-                    args,
-                    offset.as_mut_ptr(),
-                    1,
-                    c"arg.slot".as_ptr(),
-                );
-                lowered.push(self.read_bridge_payload(element, ty)?);
+                let element = self.bridge_slot(args, slot);
+                let value = self.read_bridge_payload(element, ty)?;
+                // A written-through parameter arrives as a value like any
+                // other — the two engines share no heap, so what crossed is a
+                // copy — but the callee's signature takes a pointer, because
+                // within this half a write through one lands in the caller's
+                // storage. Here the caller is the other engine, so the storage
+                // is this frame's: the callee mutates it, and the final value
+                // goes back the way the result does.
+                if self.param_is_pointer(function, slot) {
+                    let storage = LLVMBuildAlloca(
+                        self.builder,
+                        self.llvm_type(ty)?,
+                        c"arg.mut.storage".as_ptr(),
+                    );
+                    LLVMBuildStore(self.builder, value, storage);
+                    lowered.push(storage);
+                    written_through.push((slot, storage, ty));
+                } else {
+                    lowered.push(value);
+                }
             }
 
             let returns_value = function.return_type != Type::Void;
@@ -160,6 +203,21 @@ impl Codegen<'_> {
                 lowered.len() as u32,
                 name.as_ptr(),
             );
+            // Each written-through parameter's final value replaces the argument
+            // that arrived in its slot. That argument's own tree was consumed by
+            // the decode above, so the slot holds nothing to free — writing a
+            // fresh tree into it transfers the new value to the caller, exactly
+            // as the result is transferred.
+            for (slot, storage, ty) in written_through {
+                let final_value = LLVMBuildLoad2(
+                    self.builder,
+                    self.llvm_type(ty)?,
+                    storage,
+                    c"arg.mut.final".as_ptr(),
+                );
+                let element = self.bridge_slot(args, slot);
+                self.write_bridge_value(element, final_value, ty)?;
+            }
             self.write_bridge_value(out, result, function.return_type)?;
             LLVMBuildRetVoid(self.builder);
         }

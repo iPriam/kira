@@ -114,17 +114,23 @@ fn foreign(manifest: &HybridManifest, module: &Module) -> Result<(), HybridError
 
 /// Rejects a parameter mode no code path implements.
 ///
-/// v0's IR carries no per-parameter mode — there is no borrow syntax yet — so
-/// the codegen frees every `String` parameter at return, unconditionally.
-/// Honouring a borrowed `String` parameter would mean the callee *not* freeing
-/// it, which nothing emits: accepting one here would be a double free at the
-/// first crossing. Reject it instead of implementing half of it.
+/// A read-only borrow of a `String` is the one left. The codegen frees every
+/// `String` parameter it owns at return, so honouring a lent one would mean the
+/// callee *not* freeing it — which nothing emits, and accepting it here would
+/// be a double free at the first crossing.
+///
+/// `BorrowMut` is a different case and is implemented: the release plan already
+/// skips a written-through parameter, because within one engine it is a pointer
+/// into the caller's storage and never the callee's to free. Across the seam it
+/// is a copy whose final value goes back in the slot it arrived in, and the
+/// side that reads it there frees it — exactly once, like any other value that
+/// crosses.
 ///
 /// Ownership is immaterial for `Int`/`Float`/`Bool`, which are `Copy` and have
 /// nothing to free, so those pass in any mode.
 fn ownership(function: &HybridFunction) -> Result<(), HybridError> {
     for (index, param) in function.params.iter().enumerate() {
-        if param.ty == BridgeValueTag::STRING && param.ownership != Ownership::Owned {
+        if param.ty == BridgeValueTag::STRING && param.ownership == Ownership::Borrow {
             return Err(HybridError::UnsupportedOwnership {
                 function: function.name.clone(),
                 index,
@@ -276,6 +282,15 @@ mod tests {
             ),
             "{error:?}",
         );
+    }
+
+    /// The written-through mode *is* implemented, and refusing it would refuse
+    /// every app whose native half writes through a parameter.
+    #[test]
+    fn a_written_through_string_parameter_is_accepted() {
+        let mut manifest = manifest();
+        manifest.functions[1].params[0].ownership = Ownership::BorrowMut;
+        bundle(&manifest, &module()).expect("a borrow mut crosses as a copy each way");
     }
 
     /// A borrow of a `Copy` type frees nothing either way, so it is not the

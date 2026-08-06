@@ -105,13 +105,15 @@ mod tests {
         vm.validate().expect("a vm module is well-formed");
     }
 
-    /// A written-through parameter has no seam representation, so a call to one
-    /// placed on the native half is refused — and the refusal names the callee,
-    /// not just the caller. The caller is routinely a closure whose name is
-    /// synthesized (`(borrow mut Frame) -> Void#2`), which tells whoever hit
-    /// this nothing about where the annotation to change is.
+    /// A writeback call whose callee is native compiles to the native form of
+    /// the instruction, not the same-engine one.
+    ///
+    /// The two protocols differ in where the final value comes from — a callee
+    /// frame's slot on this side, the call's own return on the other — so
+    /// emitting the same-engine instruction for a native callee would push a
+    /// frame over an empty body and write back whatever was in it.
     #[test]
-    fn a_mutating_call_across_the_seam_names_the_callee() {
+    fn a_writeback_call_to_the_native_half_takes_the_native_instruction() {
         use kira_ir::ir::IrWriteback;
         use kira_ir::{IrPlace, ir::IrExpr as Expr};
         use kira_runtime_abi::Execution;
@@ -143,16 +145,29 @@ mod tests {
             body: Vec::new(),
         });
 
-        let error = compile_hybrid(&program).expect_err("a struct receiver cannot cross the seam");
-        let message = error.to_string();
+        let hybrid = compile_hybrid(&program).expect("a borrow mut crosses the seam");
         assert!(
-            message.contains("uiBatchPresent"),
-            "the refusal must name the callee carrying the annotation, got `{message}`"
+            hybrid.functions[0].code.iter().any(|instruction| matches!(
+                instruction,
+                Instruction::CallNativeWriteback { func: 1, .. }
+            )),
+            "a native callee takes the seam form, got {:?}",
+            hybrid.functions[0].code
         );
+        hybrid.validate().expect("a hybrid module is well-formed");
 
-        // The same program is an ordinary one on the VM: there is no seam for
-        // the receiver to fail to cross.
-        compile(&program).expect("a vm build has no boundary to honour");
+        // The same program built for the VM has no seam: the callee has a body
+        // here, and its frame is what the writeback moves out of.
+        let vm = compile(&program).expect("compiles");
+        assert!(
+            vm.functions[0]
+                .code
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::CallMut { func: 1, .. })),
+            "a same-engine callee keeps the compact form, got {:?}",
+            vm.functions[0].code
+        );
+        vm.validate().expect("a vm module is well-formed");
     }
 
     #[test]

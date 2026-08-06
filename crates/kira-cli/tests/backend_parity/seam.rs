@@ -539,3 +539,129 @@ function main() {
 // copies an LLVM struct field by field. Those are different mechanisms for one
 // rule, which is exactly the kind of pair that drifts silently — so the rule is
 // tested rather than assumed.
+
+/// A `borrow mut` struct parameter crossing into the native half.
+///
+/// The write lands in the caller's storage, which within one engine is a
+/// pointer and across the seam cannot be: the VM's value lives in a heap
+/// machine code has no address in. So the value goes over as a copy and the
+/// callee's final value comes back in the slot it arrived in. What the program
+/// observes has to be identical either way, which is what this compares.
+#[test]
+fn a_native_callee_writing_through_a_struct_parameter_agrees() {
+    let output = assert_parity(
+        r#"
+struct Point {
+    var x: Int
+    var label: String
+}
+
+@Native
+function shift(p: borrow mut Point, by: Int) -> Int {
+    p.x = p.x + by
+    p.label = p.label + "!"
+    return p.x
+}
+
+@Main
+function main() {
+    var q = Point { x = 3, label = "q" }
+    let answer = shift(q, 10)
+    print(q.x)
+    print(q.label)
+    print(answer)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "13\nq!\n13\n");
+}
+
+/// The same crossing in the other direction: machine code writing through a
+/// parameter of a `@Runtime` callee.
+#[test]
+fn a_runtime_callee_writing_through_a_struct_parameter_agrees() {
+    let output = assert_parity(
+        r#"
+struct Point {
+    var x: Int
+    var label: String
+}
+
+@Runtime
+function shift(p: borrow mut Point, by: Int) -> Int {
+    p.x = p.x + by
+    p.label = p.label + "!"
+    return p.x
+}
+
+@Native
+function drive() -> Int {
+    var q = Point { x = 3, label = "q" }
+    let answer = shift(q, 10)
+    print(q.x)
+    print(q.label)
+    return answer
+}
+
+@Main
+function main() {
+    print(drive())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "13\nq!\n13\n");
+}
+
+/// Everything a written-through struct can hold, at once: a nested struct, a
+/// string, an array grown by the callee, and two mutable parameters in one
+/// call. A tree that dropped a level or an ownership slip inside one shows up
+/// here as a divergence rather than as a leak nobody looks for.
+#[test]
+fn a_deep_written_through_struct_agrees() {
+    let output = assert_parity(
+        r#"
+struct Inner {
+    var tag: String
+    var n: Int
+}
+
+struct Outer {
+    var inner: Inner
+    var items: [Int]
+    var name: String
+}
+
+@Native
+function rework(o: borrow mut Outer, extra: borrow mut Inner, by: Int) -> Int {
+    o.inner.n = o.inner.n + by
+    o.name = o.name + "!"
+    o.items.append(by)
+    extra.tag = extra.tag + "?"
+    extra.n = extra.n * 2
+    return o.inner.n + extra.n
+}
+
+@Main
+function main() {
+    var o = Outer {
+        inner = Inner { tag = "i", n = 1 },
+        items = [7],
+        name = "o"
+    }
+    var e = Inner { tag = "e", n = 5 }
+    let answer = rework(o, e, 10)
+    print(o.name)
+    print(o.inner.n)
+    print(o.items.count)
+    print(o.items[1])
+    print(e.tag)
+    print(e.n)
+    print(answer)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "o!\n11\n2\n10\ne?\n10\n21\n");
+}

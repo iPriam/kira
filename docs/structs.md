@@ -51,29 +51,42 @@ may name a member bare, so `self.step` and `step` are the same read.
 
 ## The native seam
 
-A struct cannot cross the `@Native`/`@Runtime` boundary. A `BridgeValue` is one
-tag and one word of payload: a struct neither fits it nor has a shape for it,
-and passing one needs an ABI decision — by value or by pointer, and who frees
-the strings inside — that has not been made. Structs work fully on both engines;
-only the crossing between them is unbuilt.
+A struct crosses the `@Native`/`@Runtime` boundary as a **copy**, in either
+direction, by value or by `borrow mut`.
 
-Three things enforce that, at descending distance from the user:
+A `BridgeValue` is one tag and one word of payload, and a struct fits neither —
+so what crosses is not the struct. The payload is a pointer to a tree of nodes
+(`BridgeValueTag::NODE`, the same `kira_rt_native_value_*` shape callback state
+already uses), and the tree carries the whole value however deeply nested. That
+is the ABI decision the crossing was once waiting on, and it answers both halves
+of it: **by value**, and **the side that reads the strings frees them**, exactly
+once, as it decodes. Neither engine touches the other's heap, which is the only
+arrangement available — the VM holds an index into its own storage and native
+holds a pointer to a box, and neither means anything to the other.
 
-The **LLVM backend** refuses to emit any crossing whose signature mentions a
-struct (`LlvmError::StructAtSeam`), which is what a user actually hits, at build
-time, with the function named.
+`borrow mut` is the same copy, made twice. There is no pointer to lend: the
+caller's storage is in the other engine. So the value goes over as a tree, and
+the callee's final value comes back in the slot the argument arrived in — the
+argument array is written as well as read, in both directions. The caller stores
+what comes back into the place its own signature names, dropping what was there,
+which is exactly what an assignment does. From the program's side a `borrow mut`
+parameter therefore behaves the same across the seam as within one engine, which
+is what the parity tests compare.
 
-The **manifest** carries `BridgeValueTag::STRUCT`, which describes a type and
-never travels. It exists because a manifest has a row for every function in the
-program, and most never cross: a `@Runtime` function taking a struct and called
-only from other `@Runtime` code is an ordinary program, and its row has to say
-what its parameters are. No `BridgeValue` is built with this tag, and
-`BridgeValue::decode` returns `None` for it — so one appearing on the wire is
-rejected rather than guessed at.
+The manifest carries the mode per parameter (`Ownership::BorrowMut`), because
+that is what tells each side which slots to write and which to read back. It is
+generated from the same IR the two halves are compiled from, so the trampoline's
+idea of which parameters are written through and the host's cannot disagree.
 
-The **VM** traps (`VmError::StructAtSeam`) if a struct reaches a `CallNative`
-anyway. That means a module and a manifest that disagree, never a program that
+The **VM** still traps (`VmError::StructAtSeam`) if a struct reaches a
+`CallNative` with no tree built for it, and reports
+`VmError::MissingSeamWriteback` if a written-through parameter does not come
+back. Both mean a module and a manifest that disagree, never a program that
 merely type-checked.
+
+What still cannot cross is narrower than a struct: `Any` (`AnyAtSeam`), a C
+string, a task handle, a capture cell, and a callback-state handle — each for a
+reason of its own rather than for want of a layout.
 
 ## Representation
 

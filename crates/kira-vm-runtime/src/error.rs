@@ -176,6 +176,21 @@ pub enum VmError {
         /// The function at the boundary.
         function: u32,
     },
+    /// A native call was asked to write a parameter back and did not return it.
+    ///
+    /// The call site's writeback targets and the callee's mutable parameters
+    /// come from one IR and are written into the module and the manifest
+    /// together, so this is those two artifacts disagreeing — never a program
+    /// that merely type-checked. Reported rather than skipped: a writeback that
+    /// quietly did not happen is a caller still holding the value it passed in,
+    /// believing it was updated.
+    #[error("native function {function} did not return parameter {param}, which it writes through")]
+    MissingSeamWriteback {
+        /// The function at the boundary.
+        function: u32,
+        /// The parameter slot whose final value never arrived.
+        param: u16,
+    },
     /// `print` was handed a value with no pinned rendering (a struct).
     ///
     /// Analysis rejects this before a program runs; it is a trap rather than

@@ -86,8 +86,15 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.extend_from_slice(&func.to_le_bytes());
             encode_place(*slot, path, out);
         }
-        Instruction::CallWriteback { func, targets } => {
-            out.push(o::CALL_WRITEBACK);
+        Instruction::CallWriteback { func, targets }
+        | Instruction::CallNativeWriteback { func, targets } => {
+            out.push(
+                if matches!(instruction, Instruction::CallWriteback { .. }) {
+                    o::CALL_WRITEBACK
+                } else {
+                    o::CALL_NATIVE_WRITEBACK
+                },
+            );
             out.extend_from_slice(&func.to_le_bytes());
             // The count is a `u16`, and the compiler cannot build more targets
             // than a function has parameters — itself a `u16` slot count — so
@@ -368,7 +375,7 @@ impl Cursor<'_> {
                 let (slot, path) = self.next_place(opcode_offset)?;
                 Instruction::CallMut { func, slot, path }
             }
-            o::CALL_WRITEBACK => {
+            o::CALL_WRITEBACK | o::CALL_NATIVE_WRITEBACK => {
                 let func = u32::from_le_bytes(self.take()?);
                 let count = u16::from_le_bytes(self.take()?);
                 let mut targets = Vec::with_capacity(count as usize);
@@ -377,7 +384,11 @@ impl Cursor<'_> {
                     let (slot, path) = self.next_place(opcode_offset)?;
                     targets.push(WritebackTarget { param, slot, path });
                 }
-                Instruction::CallWriteback { func, targets }
+                if op == o::CALL_WRITEBACK {
+                    Instruction::CallWriteback { func, targets }
+                } else {
+                    Instruction::CallNativeWriteback { func, targets }
+                }
             }
             o::NEW_ENUM => {
                 let tag = u16::from_le_bytes(self.take()?);

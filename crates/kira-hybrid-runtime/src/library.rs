@@ -31,11 +31,17 @@ use crate::error::HybridError;
 /// signature, so the host marshals into one shape instead of building a call
 /// per signature.
 ///
+/// `args` is written as well as read. A parameter the callee writes through has
+/// its final value packed back into the slot it arrived in — the two engines
+/// share no heap, so a `borrow mut` crosses as a copy out and a copy back, and
+/// the argument array is where the return trip lands.
+///
 /// # Safety
-/// `args` must point at `count` readable [`BridgeValue`]s (or be null when
-/// `count` is 0), and `out` must point at one writable [`BridgeValue`].
+/// `args` must point at `count` readable *and writable* [`BridgeValue`]s (or be
+/// null when `count` is 0), and `out` must point at one writable
+/// [`BridgeValue`].
 pub type TrampolineFn =
-    unsafe extern "C" fn(args: *const BridgeValue, count: u32, out: *mut BridgeValue);
+    unsafe extern "C" fn(args: *mut BridgeValue, count: u32, out: *mut BridgeValue);
 
 /// The host callback the library calls to run a `@Runtime` function.
 ///
@@ -48,7 +54,7 @@ pub type TrampolineFn =
 /// `@Runtime` function.
 pub type RuntimeInvoker = unsafe extern "C" fn(
     function_id: u32,
-    args: *const BridgeValue,
+    args: *mut BridgeValue,
     count: u32,
     out: *mut BridgeValue,
 );
@@ -133,6 +139,15 @@ pub struct NativeLibrary {
     /// Indexed by id rather than searched, so reaching a trampoline is a total
     /// function of the id the VM hands over.
     trampolines: Vec<Option<TrampolineFn>>,
+    /// Which parameters each function writes through, by function id.
+    ///
+    /// Read off the manifest at load, beside the trampoline it belongs to,
+    /// because the two answer one question together: a trampoline packs a
+    /// written-through parameter's final value back into the slot it arrived
+    /// in, and this is which slots those are. Every host that calls a
+    /// trampoline needs it, so it lives with the trampoline rather than being
+    /// looked up again from a manifest each host would have to hold.
+    mutable_params: Vec<Vec<bool>>,
     /// Each foreign import's generated adapter by import id.
     ///
     /// Bound out of this same library — never a second `dlopen` of the C library
@@ -236,7 +251,15 @@ impl NativeLibrary {
         let state_free = bind(&library, path, STATE_FREE)?;
 
         let mut trampolines = vec![None; functions.len()];
+        let mut mutable_params = vec![Vec::new(); functions.len()];
         for function in functions {
+            if let Some(slot) = mutable_params.get_mut(function.id as usize) {
+                *slot = function
+                    .params
+                    .iter()
+                    .map(|param| param.ownership.is_mutable())
+                    .collect();
+            }
             let Some(symbol) = &function.exported_name else {
                 continue;
             };
@@ -284,6 +307,7 @@ impl NativeLibrary {
         Ok(NativeLibrary {
             path: path.to_path_buf(),
             trampolines,
+            mutable_params,
             adapters,
             callbacks: callback_entries,
             str_new,
@@ -346,6 +370,17 @@ impl NativeLibrary {
             .flatten()
     }
 
+    /// Which of `function_id`'s parameters the callee writes through.
+    ///
+    /// Empty for a function the manifest has no row for — which a call cannot
+    /// reach, because [`NativeLibrary::trampoline`] answers `None` first.
+    pub fn mutable_params(&self, function_id: u32) -> &[bool] {
+        self.mutable_params
+            .get(function_id as usize)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
     /// The generated adapter for foreign import `foreign_id`, or `None` when the
     /// id names no import this library bound.
     pub fn adapter(&self, foreign_id: u32) -> Option<ForeignAdapterFn> {
@@ -374,15 +409,15 @@ impl NativeLibrary {
     /// `trampoline` must be one of this library's, and `args` must match the
     /// signature the manifest records for it — the callee is machine code that
     /// reads them by position and cannot check.
-    pub unsafe fn call(&self, trampoline: TrampolineFn, args: &[BridgeValue]) -> BridgeValue {
+    pub unsafe fn call(&self, trampoline: TrampolineFn, args: &mut [BridgeValue]) -> BridgeValue {
         let mut out = BridgeValue::VOID;
         let count = args.len() as u32;
         // A zero-length `Vec`'s pointer is dangling-but-aligned rather than
         // null; the ABI permits null when the count is 0, so say null.
         let pointer = if args.is_empty() {
-            std::ptr::null()
+            std::ptr::null_mut()
         } else {
-            args.as_ptr()
+            args.as_mut_ptr()
         };
         // SAFETY: `pointer` covers `count` readable values (or is null when
         // there are none) and `out` is one writable value on this stack frame.
