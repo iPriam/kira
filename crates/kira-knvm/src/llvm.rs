@@ -64,12 +64,15 @@ pub enum LlvmInstallError {
         /// What the pin said.
         format: String,
     },
-    /// The unpacking tool is not on this host.
-    #[error("`{tool}` was not found on PATH; knvm unpacks `{format}` bundles with it")]
+    /// No unpacking tool for the format is on this host.
+    #[error(
+        "none of {} were found on PATH; knvm unpacks `{format}` bundles with one of them",
+        .tools.join(", ")
+    )]
     UnpackerUnavailable {
-        /// The tool that was looked for.
-        tool: &'static str,
-        /// The format it would have unpacked.
+        /// The tools that were looked for, in the order they were tried.
+        tools: &'static [&'static str],
+        /// The format they would have unpacked.
         format: String,
     },
     /// The unpacking tool ran and refused the archive.
@@ -127,6 +130,15 @@ pub struct LlvmInstalled {
     pub already_installed: bool,
     /// The digest that was verified, when the release published one.
     pub verified: Option<Sha256>,
+    /// The pinned code generators this bundle does not carry.
+    ///
+    /// Empty for a bundle that matches the pin. A release owns its assets for
+    /// good, so a pin that grows a code generator after its release was cut
+    /// installs a real LLVM that is nonetheless short of one — and a compiler
+    /// built against it refuses that device by name. Reporting it here is what
+    /// makes that visible while the bundle is being installed, rather than at
+    /// the first build that wanted the device.
+    pub missing_code_generators: Vec<String>,
 }
 
 /// `<toolchains-root>/llvm/<version>/<host-key>`.
@@ -166,12 +178,14 @@ pub fn install_llvm(
     let home = llvm_home(toolchains_root, &pin.llvm.version, host_key);
     if is_llvm_home(&home) {
         if !force {
+            let missing_code_generators = missing_code_generators(&home);
             return Ok(LlvmInstalled {
                 version: pin.llvm.version.clone(),
                 host_key,
                 home,
                 already_installed: true,
                 verified: None,
+                missing_code_generators,
             });
         }
         std::fs::remove_dir_all(&home)
@@ -193,13 +207,66 @@ pub fn install_llvm(
     std::fs::rename(&payload, &home)
         .map_err(|error| InstallError::io("move the unpacked bundle into", &home, error))?;
 
+    let missing_code_generators = missing_code_generators(&home);
     Ok(LlvmInstalled {
         version: pin.llvm.version.clone(),
         host_key,
         home,
         already_installed: false,
         verified,
+        missing_code_generators,
     })
+}
+
+/// The pinned code generators the bundle at `home` does not carry.
+///
+/// A bundle that cannot be asked — no `llvm-config`, or one that refuses to
+/// run — reports nothing missing rather than everything: this is a report on
+/// an install that otherwise succeeded, and the backend's build script asks the
+/// same question again and fails the build there when the answer is unreadable.
+fn missing_code_generators(home: &Path) -> Vec<String> {
+    kira_toolchain::llvm_code_generators::missing_from(home)
+        .unwrap_or_default()
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The pinned code generators the LLVM a build in `directory` would link does
+/// not carry.
+///
+/// Discovery is the one the backend's build script runs, so the answer is
+/// about the exact bundle that build links — a `KIRA_LLVM_HOME` override
+/// included. A machine with no discoverable LLVM reports nothing missing: it
+/// is short of the whole bundle, which the build refuses by itself.
+#[must_use]
+pub fn missing_code_generators_for_build(directory: &Path) -> Vec<String> {
+    match kira_toolchain::llvm_discovery::discover(Some(directory)) {
+        Ok(installation) => missing_code_generators(&installation.home),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// What a bundle missing `missing` means for the compiler built against it.
+///
+/// One line per generator, because "the Web device is unavailable" is the part
+/// that matters and the generator's LLVM name alone does not say it.
+#[must_use]
+pub fn code_generator_shortfall(missing: &[String], release_tag: &str) -> Vec<String> {
+    missing
+        .iter()
+        .map(|name| {
+            let consequence = if name == kira_toolchain::WEB_CODE_GENERATOR {
+                "a kira built against it refuses `--device wasm32`"
+            } else {
+                "a kira built against it cannot emit for that architecture"
+            };
+            format!(
+                "the bundle published under `{release_tag}` carries no {name} code \
+                 generator, which `llvm-metadata.toml` pins: {consequence}"
+            )
+        })
+        .collect()
 }
 
 /// Downloads the bundle and its sidecar, returning the archive and what was
@@ -248,61 +315,90 @@ fn fetch_bundle(
     Ok((archive, verified))
 }
 
+/// The tools that can unpack `format`, in the order they are tried.
+///
+/// The only zip the pin names is the Windows bundle, and no single tool
+/// unpacks it on every Windows shell. `unzip` is the format's own tool and is
+/// what a git-for-Windows or MSYS environment has; a stock `cmd` or PowerShell
+/// has none, but does have a `tar` that is bsdtar and reads zip. The `tar` on
+/// those same MSYS shells is GNU tar, which refuses a zip outright — so the
+/// fallthrough below is on failure and not only on a missing tool, or the
+/// first environment would never reach the second's tool.
+fn unpackers(format: &str) -> Option<&'static [&'static str]> {
+    match format {
+        "tar.xz" | "tar.gz" => Some(&["tar"]),
+        "zip" => Some(&["unzip", "tar"]),
+        _ => None,
+    }
+}
+
+/// How `tool` is asked to unpack `archive` into `destination`.
+fn unpack_arguments<'a>(
+    tool: &str,
+    archive: &'a Path,
+    destination: &'a Path,
+) -> Vec<&'a std::ffi::OsStr> {
+    match tool {
+        "unzip" => vec![
+            "-q".as_ref(),
+            archive.as_os_str(),
+            "-d".as_ref(),
+            destination.as_os_str(),
+        ],
+        _ => vec![
+            "-xf".as_ref(),
+            archive.as_os_str(),
+            "-C".as_ref(),
+            destination.as_os_str(),
+        ],
+    }
+}
+
 /// Unpacks a bundle archive into `destination`.
 ///
-/// `tar` reads `.tar.xz` without being told the compression; `.zip` needs
-/// `unzip`, which is what the Windows bundle is packaged as.
+/// `tar` reads `.tar.xz` without being told the compression. Each tool
+/// [`unpackers`] names is tried until one succeeds; a tool that is absent or
+/// that refuses the archive hands over to the next, and the last refusal is
+/// what gets reported when none of them worked.
 fn extract(archive: &Path, destination: &Path, format: &str) -> Result<(), LlvmInstallError> {
+    let Some(tools) = unpackers(format) else {
+        return Err(LlvmInstallError::UnsupportedArchiveFormat {
+            format: format.to_string(),
+        });
+    };
     std::fs::create_dir_all(destination)
         .map_err(|error| InstallError::io("create", destination, error))?;
 
-    let (tool, arguments): (&'static str, Vec<&std::ffi::OsStr>) = match format {
-        "tar.xz" | "tar.gz" => (
-            "tar",
-            vec![
-                "-xf".as_ref(),
-                archive.as_os_str(),
-                "-C".as_ref(),
-                destination.as_os_str(),
-            ],
-        ),
-        "zip" => (
-            "unzip",
-            vec![
-                "-q".as_ref(),
-                archive.as_os_str(),
-                "-d".as_ref(),
-                destination.as_os_str(),
-            ],
-        ),
-        other => {
-            return Err(LlvmInstallError::UnsupportedArchiveFormat {
-                format: other.to_string(),
-            });
+    let mut refused: Option<String> = None;
+    for tool in tools {
+        let arguments = unpack_arguments(tool, archive, destination);
+        let output = match std::process::Command::new(tool).args(&arguments).output() {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(InstallError::io("run the unpacker on", archive, error).into());
+            }
+        };
+        if output.status.success() {
+            return Ok(());
         }
-    };
-
-    let output = match std::process::Command::new(tool).args(&arguments).output() {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(LlvmInstallError::UnpackerUnavailable {
-                tool,
-                format: format.to_string(),
-            });
-        }
-        Err(error) => return Err(InstallError::io("run the unpacker on", archive, error).into()),
-    };
-    if !output.status.success() {
-        return Err(LlvmInstallError::ExtractFailed {
-            archive: archive.to_path_buf(),
-            detail: format!(
-                "{tool} exited with {}: {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-        });
+        refused = Some(format!(
+            "{tool} exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
-    Ok(())
+
+    match refused {
+        Some(detail) => Err(LlvmInstallError::ExtractFailed {
+            archive: archive.to_path_buf(),
+            detail,
+        }),
+        None => Err(LlvmInstallError::UnpackerUnavailable {
+            tools,
+            format: format.to_string(),
+        }),
+    }
 }
 
 /// Finds the LLVM tree inside an unpacked bundle.
@@ -406,5 +502,89 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// The Windows bundle is the only zip the pin names, and no one tool
+    /// unpacks it on every Windows shell: a stock PowerShell has no `unzip`,
+    /// and an MSYS shell's `tar` refuses a zip. Naming only one of them makes
+    /// `install-llvm` unusable on one of the two.
+    #[test]
+    fn a_zip_names_both_windows_unpackers() {
+        let tools = unpackers("zip").expect("the pin may name `zip`");
+        assert!(tools.contains(&"unzip"), "{tools:?}");
+        assert!(tools.contains(&"tar"), "{tools:?}");
+    }
+
+    #[test]
+    fn a_tarball_is_unpacked_by_tar_and_an_unknown_format_by_nothing() {
+        assert_eq!(unpackers("tar.xz"), Some(&["tar"][..]));
+        assert!(unpackers("7z").is_none());
+    }
+
+    /// `unzip` names its destination with `-d`; everything else here is `tar`,
+    /// which names it with `-C`. Handing one the other's flag unpacks nothing.
+    #[test]
+    fn each_unpacker_is_given_its_own_destination_flag() {
+        let archive = Path::new("/bundle.zip");
+        let destination = Path::new("/dest");
+        assert!(
+            unpack_arguments("unzip", archive, destination).contains(&std::ffi::OsStr::new("-d"))
+        );
+        assert!(
+            unpack_arguments("tar", archive, destination).contains(&std::ffi::OsStr::new("-C"))
+        );
+    }
+
+    /// A bundle that carries the pin reports nothing, so the common install
+    /// says nothing about code generators at all.
+    #[test]
+    fn a_bundle_matching_the_pin_has_nothing_to_report() {
+        assert!(code_generator_shortfall(&[], "llvm-v22.1.4-kira.1").is_empty());
+    }
+
+    /// The Web generator's absence is reported as the device it costs, because
+    /// `WebAssembly` is an LLVM target name and `--device wasm32` is the thing
+    /// the reader loses.
+    #[test]
+    fn the_web_generators_absence_names_the_device_it_costs() {
+        let lines = code_generator_shortfall(
+            &[kira_toolchain::WEB_CODE_GENERATOR.to_owned()],
+            "llvm-v22.1.4-kira.1",
+        );
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("llvm-v22.1.4-kira.1"), "{lines:?}");
+        assert!(
+            lines[0].contains(kira_toolchain::WEB_CODE_GENERATOR),
+            "{lines:?}"
+        );
+        assert!(lines[0].contains("--device wasm32"), "{lines:?}");
+    }
+
+    /// An architecture generator is not the Web one, so it gets the consequence
+    /// that fits it rather than a line about a device it has nothing to do with.
+    #[test]
+    fn an_architecture_generator_reports_the_emission_it_costs() {
+        let lines = code_generator_shortfall(&["AArch64".to_owned()], "llvm-v22.1.4-kira.1");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("AArch64"), "{lines:?}");
+        assert!(!lines[0].contains("wasm32"), "{lines:?}");
+        assert!(
+            lines[0].contains("cannot emit for that architecture"),
+            "{lines:?}"
+        );
+    }
+
+    /// One line per generator: a bundle short of two is short of two things,
+    /// and a reader fixing it needs both named.
+    #[test]
+    fn every_missing_generator_gets_its_own_line() {
+        let lines = code_generator_shortfall(
+            &[
+                kira_toolchain::WEB_CODE_GENERATOR.to_owned(),
+                "AArch64".to_owned(),
+            ],
+            "llvm-v22.1.4-kira.1",
+        );
+        assert_eq!(lines.len(), 2);
     }
 }

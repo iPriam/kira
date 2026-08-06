@@ -47,7 +47,10 @@ pub use install::{
     InstallError, Installed, PRIMARY_BINARY, current_toolchain_path, install, read_current,
     toolchain_root, write_current,
 };
-pub use llvm::{LlvmInstallError, LlvmInstalled, install_llvm, llvm_home};
+pub use llvm::{
+    LlvmInstallError, LlvmInstalled, code_generator_shortfall, install_llvm, llvm_home,
+    missing_code_generators_for_build,
+};
 pub use manage::{InstalledToolchain, ManageError, Selected, Uninstalled, list, select, uninstall};
 pub use path_setup::{PathConfigured, user_path_with};
 pub use selfupdate::{

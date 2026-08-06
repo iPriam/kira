@@ -5,6 +5,7 @@
 //! Layer 0 of the Kira package graph.
 
 pub mod bundled_discovery;
+pub mod llvm_code_generators;
 pub mod llvm_discovery;
 pub mod llvm_layout;
 pub mod llvm_metadata;
@@ -16,6 +17,7 @@ pub use bundled_discovery::{
     BundledDiscoveryError, BundledPackage, BundledSource, discover_foundation,
     discover_foundation_from,
 };
+pub use llvm_code_generators::{CodeGeneratorError, WEB_CODE_GENERATOR};
 pub use llvm_discovery::{
     DiscoverySource, LlvmDiscoveryError, LlvmInstallation, discover, is_llvm_home,
 };

@@ -72,6 +72,38 @@ jobs:
                 --pattern "$asset" --output - | tar -xJ -C "$home"
               ;;
           esac
+          # The pin names the code generators every bundle must carry, and a
+          # release owns its assets for good: an asset published before the pin
+          # grew one is a real LLVM that cannot emit for the device that
+          # generator serves. A run against it proves the wrong toolchain, so
+          # it stops here, where one message names the bundle and the fix,
+          # rather than in whichever suite reached that device first.
+          case "${{ matrix.host_key }}" in
+            x86_64-*) host_generator=X86 ;;
+            aarch64-*) host_generator=AArch64 ;;
+            *)
+              echo "no LLVM code generator is known for ${{ matrix.host_key }}" >&2
+              exit 1
+              ;;
+          esac
+          targets="$(sed -n 's/^targets_to_build = "\(.*\)"/\1/p' llvm-metadata.toml | head -1)"
+          config="$home/bin/llvm-config"
+          [ -x "$config" ] || config="$config.exe"
+          built="$("$config" --targets-built)"
+          missing=""
+          for generator in $(printf '%s' "$targets" | tr ';' ' '); do
+            [ "$generator" = host ] && generator="$host_generator"
+            case " $built " in
+              *" $generator "*) ;;
+              *) missing="$missing $generator" ;;
+            esac
+          done
+          if [ -n "$missing" ]; then
+            echo "the bundles published under $release carry no$missing code generator;" >&2
+            echo "llvm-metadata.toml pins \"$targets\" and this one was built with: $built." >&2
+            echo "Re-run the LLVM toolchains workflow with publish enabled to replace the assets." >&2
+            exit 1
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
 
