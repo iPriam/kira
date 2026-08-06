@@ -1,0 +1,53 @@
+name: Recover LLVM 22.1.8 Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/recover-llvm-release.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    name: Publish recovered LLVM release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download completed LLVM bundles
+        uses: actions/download-artifact@v4
+        with:
+          pattern: llvm-bundle-*
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 31099805881
+
+      - name: Publish LLVM release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: llvm-v22.1.8-kira.1
+        shell: bash
+        run: |
+          cat > release-notes.txt <<'EOF'
+          Pinned LLVM 22.1.8 toolchain bundles for Kira contributors.
+
+          Source of truth: llvm-metadata.toml in the tagged Kira commit.
+          Each archive name matches the metadata exactly.
+          EOF
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --notes-file release-notes.txt
+          else
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --title "$RELEASE_TAG" \
+              --notes-file release-notes.txt
+          fi
+
+          gh release upload "$RELEASE_TAG" dist/* --clobber
