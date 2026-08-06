@@ -101,12 +101,19 @@ impl FunctionLowering<'_, '_> {
                 if !writebacks.is_empty() {
                     return match target {
                         Some(_) => self.lower_writeback_call(index, writebacks, args),
-                        // A written-through value cannot cross the seam, so such
-                        // a call is never to the VM half; the frontend and the
-                        // bytecode compiler refuse it before here.
-                        None => Err(LlvmError::Unsupported(
-                            "a mutating method call across the hybrid seam",
-                        )),
+                        // The callee is on the VM, where a pointer into this
+                        // half's storage means nothing. So the value crosses as
+                        // a copy and comes back as one.
+                        None => {
+                            // Arguments evaluate left to right, as the VM pushes
+                            // them; a written-through position is lowered like
+                            // any other, because what crosses is its value.
+                            let mut values = Vec::with_capacity(args.len());
+                            for &argument in args {
+                                values.push(self.lower_expr(argument)?);
+                            }
+                            self.lower_runtime_call_writing_back(index, args, &values, writebacks)
+                        }
                     };
                 }
                 match target {
@@ -337,6 +344,24 @@ impl FunctionLowering<'_, '_> {
         args: &[IrExprId],
         values: &[LLVMValueRef],
     ) -> Result<LLVMValueRef, LlvmError> {
+        self.lower_runtime_call_writing_back(index, args, values, &[])
+    }
+
+    /// [`Self::lower_runtime_call`], storing each written-through parameter's
+    /// final value back into the caller's place.
+    ///
+    /// A pointer cannot cross: the VM half holds its values in a heap this side
+    /// has no address in. So a `borrow mut` goes over as a copy like any other
+    /// argument, the invoker packs the callee's final value back into the slot
+    /// it arrived in, and this reads it out and stores it — dropping what the
+    /// place held, exactly as an assignment does.
+    fn lower_runtime_call_writing_back(
+        &mut self,
+        index: u32,
+        args: &[IrExprId],
+        values: &[LLVMValueRef],
+        writebacks: &[IrWriteback],
+    ) -> Result<LLVMValueRef, LlvmError> {
         let builder = self.codegen.builder;
         let types = self.codegen.types;
         let result_type = self.codegen.program.functions[index as usize].return_type;
@@ -375,8 +400,39 @@ impl FunctionLowering<'_, '_> {
             ];
             self.codegen
                 .call_runtime(self.codegen.runtime.call_runtime, &mut call_args, c"");
-            out
+            (out, argv)
         };
+        let (out, argv) = out;
+        // Read the written-through slots before the stack goes back, for the
+        // same reason the result is read here: `argv` is on it.
+        for writeback in writebacks {
+            let param_ty = self
+                .codegen
+                .program
+                .functions
+                .get(index as usize)
+                .and_then(|callee| callee.param_type(writeback.param))
+                .ok_or(LlvmError::Unsupported(
+                    "a writeback naming a parameter the callee does not have",
+                ))?;
+            // SAFETY: `argv` holds `values.len()` slots, and a writeback's
+            // parameter is one of the callee's — which is that many.
+            let element = unsafe {
+                let mut offset = [LLVMConstInt(types.i32, u64::from(writeback.param), 0)];
+                LLVMBuildInBoundsGEP2(
+                    builder,
+                    types.bridge_value,
+                    argv,
+                    offset.as_mut_ptr(),
+                    1,
+                    c"bridge.writeback".as_ptr(),
+                )
+            };
+            let returned = self.codegen.read_bridge_payload(element, param_ty)?;
+            let place = &writeback.place;
+            let (pointer, pointee) = self.walk_place(place.local, &place.path)?;
+            self.store_through(pointer, pointee, returned)?;
+        }
         // Read the payload before giving the stack back: `out` is on it.
         let value = self
             .codegen

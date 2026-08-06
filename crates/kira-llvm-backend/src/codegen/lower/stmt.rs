@@ -245,7 +245,7 @@ impl FunctionLowering<'_, '_> {
     /// The new value is computed *before* the old one is freed, matching the
     /// VM's evaluate-then-store order — which is what makes `s = s + "x"` work:
     /// the read clones `s` before the store frees the original.
-    fn store_through(
+    pub(super) fn store_through(
         &mut self,
         pointer: LLVMValueRef,
         ty: Type,

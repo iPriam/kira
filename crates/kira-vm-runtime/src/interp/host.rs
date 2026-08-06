@@ -6,6 +6,7 @@ use kira_runtime_abi::{
 };
 
 use super::Vm;
+use super::frames::{Frame, Writeback};
 use crate::error::VmError;
 use crate::value::{AggregateMismatch, Value};
 
@@ -24,7 +25,19 @@ impl Vm<'_> {
     }
 
     /// Calls into the native half through the embedder.
-    pub(super) fn call_native(&mut self, module: &Module, id: u32) -> Result<(), VmError> {
+    ///
+    /// `writebacks` is empty for an ordinary crossing. When it is not, the
+    /// callee was declared to write through those parameters, and their final
+    /// values come back with the result rather than being moved out of a callee
+    /// frame — there is no callee frame, and the two engines share no heap, so
+    /// what crossed was a copy and what returns is another one.
+    pub(super) fn call_native(
+        &mut self,
+        module: &Module,
+        id: u32,
+        writebacks: &[Writeback],
+        frames: &mut [Frame],
+    ) -> Result<(), VmError> {
         let proto = module
             .functions
             .get(id as usize)
@@ -127,9 +140,31 @@ impl Vm<'_> {
             self.heap.drop_value(value);
         }
 
+        let returned = returned?;
+        // The writebacks land before the result is pushed, so a failure among
+        // them leaves nothing half-pushed on the operand stack. Each is stored
+        // into the caller's place exactly as a returning frame's would be —
+        // same walk, same drop of what was there.
+        for writeback in writebacks {
+            let value = returned
+                .writebacks
+                .iter()
+                .find(|(param, _)| *param == u32::from(writeback.param))
+                .map(|(_, value)| value.clone())
+                .ok_or(VmError::MissingSeamWriteback {
+                    function: id,
+                    param: writeback.param,
+                })?;
+            let value = self
+                .heap
+                .absorb(value)
+                .ok_or(VmError::HandleAtSeam { function: id })?;
+            self.write_back(frames, writeback, value)?;
+        }
+
         let result = self
             .heap
-            .absorb(returned?)
+            .absorb(returned.result)
             .ok_or(VmError::HandleAtSeam { function: id })?;
         self.stack.push(result);
         Ok(())

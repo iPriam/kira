@@ -208,6 +208,26 @@ pub enum Instruction {
         /// Where each written-through parameter lands, in parameter order.
         targets: Vec<WritebackTarget>,
     },
+    /// [`Instruction::CallWriteback`], but the callee is on the native engine.
+    ///
+    /// The engine is in the instruction rather than looked up from the callee,
+    /// exactly as [`Instruction::CallNative`] is distinct from
+    /// [`Instruction::Call`]: what a call site emits is decided once, at compile
+    /// time, by the split — and a runtime that had to consult a table to know
+    /// which of two very different call protocols it was about to run would be
+    /// deciding it again, from a second source that could disagree.
+    ///
+    /// The protocol differs from the same-engine form in what "writing back"
+    /// means. There is no callee frame whose slots can be moved out of: the two
+    /// engines share no heap, so a written-through parameter crosses as a copy
+    /// and its final value comes back the way the result does. The runtime
+    /// stores that returned value into the caller's place.
+    CallNativeWriteback {
+        /// The function index to call.
+        func: u32,
+        /// Where each written-through parameter lands, in parameter order.
+        targets: Vec<WritebackTarget>,
+    },
     /// Pop a value, box it as opaque callback state, and push its state handle.
     NativeState(u64),
     /// Pop a callback-state handle and push its stable raw userdata token.
@@ -789,6 +809,10 @@ mod opcode {
     // arrangement every other operation family uses: the opcode says which
     // family and the byte after it says which operation.
     pub const ENV_OP: u8 = 0x67;
+    // A writeback call whose callee is native. Appended after `ENV_OP` rather
+    // than placed beside `CALL_WRITEBACK`, because the table is append-only and
+    // where an opcode reads well is not a reason to move one.
+    pub const CALL_NATIVE_WRITEBACK: u8 = 0x68;
 }
 
 #[cfg(test)]

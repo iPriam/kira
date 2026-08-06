@@ -22,7 +22,8 @@
 use std::ffi::c_void;
 
 use kira_runtime_abi::{
-    BridgeData, BridgeValue, NativeArg, NativeResult, NativeStateError, NativeStateValue,
+    BridgeData, BridgeValue, BridgeValueTag, NativeArg, NativeResult, NativeStateError,
+    NativeStateValue,
 };
 
 use crate::library::NativeLibrary;
@@ -101,6 +102,38 @@ pub fn lower_args(
             Ok(BridgeValue::encode(data))
         })
         .collect()
+}
+
+/// Lifts the final value of every parameter the callee wrote through.
+///
+/// A trampoline packs those back into the slots they arrived in, so this reads
+/// the argument array *after* the call rather than anything the call returned.
+/// Which slots to read comes from the library's own record of the manifest, so
+/// the reader and the generated writer are working from one signature.
+///
+/// # Safety
+/// `args` must be the array one of `library`'s trampolines was just called
+/// with, and the values in the written-through slots must not have been lifted
+/// or freed already.
+pub unsafe fn lift_writebacks(
+    library: &NativeLibrary,
+    function_id: u32,
+    args: &[BridgeValue],
+) -> Result<Vec<(u32, NativeResult)>, MarshalError> {
+    let mut writebacks = Vec::new();
+    for (slot, mutable) in library.mutable_params(function_id).iter().enumerate() {
+        if !mutable {
+            continue;
+        }
+        let value = args.get(slot).copied().ok_or(MarshalError::UnknownTag {
+            index: slot,
+            tag: BridgeValueTag::VOID.0,
+        })?;
+        // SAFETY: the caller vouches that this is the array the trampoline
+        // wrote and that the slot has not been lifted yet.
+        writebacks.push((slot as u32, unsafe { lift_result(library, value) }?));
+    }
+    Ok(writebacks)
 }
 
 /// Lifts what a trampoline wrote into an owned result, freeing its string.

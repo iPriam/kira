@@ -32,7 +32,7 @@ use kira_bytecode::module::Module;
 use kira_hybrid_definition::HybridManifest;
 use kira_runtime_abi::{
     BridgeValue, Execution, FileRequest, FileResponse, FileSystemError, ForeignArg,
-    ForeignCallError, ForeignResult, HostCapabilities, NativeArg, NativeCallError, NativeResult,
+    ForeignCallError, ForeignResult, HostCapabilities, NativeArg, NativeCallError, NativeReturn,
     NativeStateError, NativeStateToken, NativeStateTypeId, NativeStateValue, file_system,
 };
 use kira_vm_runtime::Program;
@@ -138,7 +138,7 @@ impl Session {
                 // SAFETY: the trampoline is this library's, and validation
                 // proved the entrypoint takes no parameters, so an empty
                 // argument array is its signature.
-                let out = unsafe { self.library.call(trampoline, &[]) };
+                let out = unsafe { self.library.call(trampoline, &mut []) };
                 // SAFETY: `out` is what the trampoline just wrote, and its
                 // string handle (if any) is unfreed.
                 unsafe { marshal::lift_result(&self.library, out) }.map_err(|error| {
@@ -164,7 +164,7 @@ impl Session {
         &self,
         function_id: u32,
         args: &[NativeArg<'_>],
-    ) -> Result<NativeResult, NativeCallError> {
+    ) -> Result<NativeReturn, NativeCallError> {
         let trampoline = self
             .library
             .trampoline(function_id)
@@ -175,16 +175,22 @@ impl Session {
         // Building an aggregate's node tree can fail — it allocates in the
         // native half — so this is where a bad argument is reported, before
         // any trampoline runs on a half-built list.
-        let lowered = marshal::lower_args(&self.library, args)
+        let mut lowered = marshal::lower_args(&self.library, args)
             .map_err(|_| NativeCallError::MalformedResult(function_id))?;
         // SAFETY: the trampoline is this library's, and the VM calls with the
         // module's own arity, which validation proved equals the manifest's —
         // which is the signature the trampoline was emitted for.
-        let out = unsafe { self.library.call(trampoline, &lowered) };
+        let out = unsafe { self.library.call(trampoline, &mut lowered) };
         // SAFETY: `out` is what the trampoline just wrote, and its string
         // handle (if any) is unfreed.
-        unsafe { marshal::lift_result(&self.library, out) }
-            .map_err(|_| NativeCallError::MalformedResult(function_id))
+        let result = unsafe { marshal::lift_result(&self.library, out) }
+            .map_err(|_| NativeCallError::MalformedResult(function_id))?;
+
+        // SAFETY: `lowered` is the array that call just wrote through, and no
+        // written-through slot has been lifted yet.
+        let writebacks = unsafe { marshal::lift_writebacks(&self.library, function_id, &lowered) }
+            .map_err(|_| NativeCallError::MalformedResult(function_id))?;
+        Ok(NativeReturn { result, writebacks })
     }
 
     /// Calls one foreign adapter: the runtime-half `CALL_FOREIGN` direction.
@@ -242,7 +248,7 @@ impl HostCapabilities for Host<'_> {
         &mut self,
         function_id: u32,
         args: &[NativeArg<'_>],
-    ) -> Result<NativeResult, NativeCallError> {
+    ) -> Result<NativeReturn, NativeCallError> {
         self.session.call_native(function_id, args)
     }
 
@@ -337,7 +343,7 @@ impl Drop for ActiveSession<'_> {
 /// call, and `out` must point at one writable [`BridgeValue`].
 unsafe extern "C" fn invoke_runtime(
     function_id: u32,
-    args: *const BridgeValue,
+    args: *mut BridgeValue,
     count: u32,
     out: *mut BridgeValue,
 ) {
@@ -376,11 +382,42 @@ unsafe extern "C" fn invoke_runtime(
     };
     let borrowed: Vec<NativeArg<'_>> = owned.iter().map(OwnedArg::borrow).collect();
 
+    // The parameters this function writes through, read off the manifest — the
+    // same row the native caller's own signature was generated from.
+    let capture: Vec<u16> = session
+        .manifest
+        .functions
+        .get(function_id as usize)
+        .map(|function| function.params.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .filter(|(_, param)| param.ownership.is_mutable())
+        .map(|(slot, _)| slot as u16)
+        .collect();
+
     let mut host = Host { session };
-    match session.program.call(&mut host, function_id, &borrowed) {
-        Ok(result) => {
+    match session
+        .program
+        .call_capturing(&mut host, function_id, &borrowed, &capture)
+    {
+        Ok(returned) => {
+            // Each written-through parameter's final value replaces the argument
+            // that arrived in its slot, exactly as a trampoline does going the
+            // other way. The argument's own handle was consumed by `take_args`,
+            // so the slot holds nothing to free.
+            for (slot, value) in returned.writebacks {
+                let replacement = marshal::lower_result(&session.library, value);
+                if (slot as usize) < values.len() {
+                    // SAFETY: the slot is within `count`, which the caller
+                    // guarantees is writable — the manifest's parameter list
+                    // and the call's arity are proven equal by bundle
+                    // validation, and the bound is re-checked above regardless.
+                    unsafe { *args.add(slot as usize) = replacement };
+                }
+            }
             // A returned string is a fresh handle the native caller frees.
-            let value = marshal::lower_result(&session.library, result);
+            let value = marshal::lower_result(&session.library, returned.result);
             // SAFETY: the caller guarantees `out` is one writable value.
             unsafe { *out = value };
         }

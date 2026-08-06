@@ -11,7 +11,7 @@ use std::io::{Read, Seek, SeekFrom};
 use super::{FileRequest, FileResponse, FileSystemError};
 use crate::{
     ForeignArg, ForeignCallError, ForeignResult, HostCapabilities, NativeArg, NativeCallError,
-    NativeResult, NativeStateError, NativeStateToken, NativeStateTypeId, NativeStateValue,
+    NativeReturn, NativeStateError, NativeStateToken, NativeStateTypeId, NativeStateValue,
 };
 
 /// Runs one request against the process's real filesystem.
@@ -181,7 +181,7 @@ impl<H: HostCapabilities> HostCapabilities for FileSystemHost<H> {
         &mut self,
         function_id: u32,
         args: &[NativeArg<'_>],
-    ) -> Result<NativeResult, NativeCallError> {
+    ) -> Result<NativeReturn, NativeCallError> {
         self.inner.call_native(function_id, args)
     }
 

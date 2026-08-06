@@ -16,7 +16,7 @@ use std::path::Path;
 use kira_dynamic_ffi::{ForeignAdapterError, ForeignAdapterLibrary};
 use kira_runtime_abi::{
     ForeignAggregates, ForeignArg, ForeignCallError, ForeignResult, ForeignSignature,
-    HostCapabilities, NativeArg, NativeCallError, NativeResult, NativeStateError, NativeStateToken,
+    HostCapabilities, NativeArg, NativeCallError, NativeReturn, NativeStateError, NativeStateToken,
     NativeStateTypeId, NativeStateValue,
 };
 
@@ -111,7 +111,7 @@ impl<H: HostCapabilities> HostCapabilities for ForeignHost<H> {
         &mut self,
         function_id: u32,
         args: &[NativeArg<'_>],
-    ) -> Result<NativeResult, NativeCallError> {
+    ) -> Result<NativeReturn, NativeCallError> {
         // A VM-plus-sidecar host has no `@Native` half; only the foreign seam.
         self.inner.call_native(function_id, args)
     }

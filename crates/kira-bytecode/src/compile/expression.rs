@@ -389,24 +389,10 @@ impl FnCompiler<'_> {
                 function: self.function_name.to_owned(),
             });
         };
-        // A written-through parameter holds a value with no seam representation,
-        // so such a call is always same-engine; a native callee here means the
-        // split misplaced one.
-        if self
+        let native = self
             .engines
             .get(index as usize)
-            .is_some_and(|engine| *engine == Execution::Native)
-        {
-            return Err(CompileError::MutCallAcrossSeam {
-                function: self.function_name.to_owned(),
-                callee: self
-                    .program
-                    .functions
-                    .get(index as usize)
-                    .map(|target| target.name.clone())
-                    .unwrap_or_else(|| format!("#{index}")),
-            });
-        }
+            .is_some_and(|engine| *engine == Execution::Native);
         for &arg in args {
             self.compile_expr(arg)?;
         }
@@ -420,6 +406,17 @@ impl FnCompiler<'_> {
                     slot: writeback.param,
                 })?;
             targets.push(WritebackTarget { param, slot, path });
+        }
+        // A seam crossing takes the general form even for a single slot-0
+        // target: `CallMut`'s compactness buys nothing against a call that is
+        // already marshalling a value into another engine's representation, and
+        // one shape means one protocol to keep in step with the trampoline.
+        if native {
+            self.code.push(Instruction::CallNativeWriteback {
+                func: index,
+                targets,
+            });
+            return Ok(());
         }
         match targets.as_slice() {
             [target] if target.param == 0 => self.code.push(Instruction::CallMut {
