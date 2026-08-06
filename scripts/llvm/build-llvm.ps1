@@ -52,9 +52,10 @@ $configureArgs = @(
     # and friends) that live in the toolset's own library, so a bundle built
     # against a newer STL than the consumer's fails to link naming symbols no
     # released Visual Studio defines. This bundle is redistributable: it is
-    # linked on developer machines whose toolset nobody controls, and pinning
-    # the runner alone only fixes it until the image moves again. Opting out
-    # keeps the generic templates, which resolve entirely within the headers.
+    # linked on developer machines whose toolset nobody controls. Opting out
+    # keeps the generic templates, which resolve entirely within the headers,
+    # and `check-msvc-portability.ps1` fails the build if the STL ever routes
+    # something new through a helper this flag does not cover.
     "-DCMAKE_CXX_FLAGS=/D_USE_STD_VECTOR_ALGORITHMS=0"
 )
 
