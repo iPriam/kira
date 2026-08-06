@@ -10,6 +10,8 @@ Stop only when the request is complete or a concrete external blocker leaves no 
 
 All the work that you do, the commits, prs... will be public and seen therefore stay professional. All the work that is uncommited is yours in other sessions, treat it as yours because it is.
 
+Every issue that was pre existing is yours to fix, do not try to avoid it because it is pre existing or to separate new issues from pre exising ones.
+
 ## Git
 
 Before running or suggesting any Git command except `git diff` or `git status`, read `working-with-git`.
