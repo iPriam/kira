@@ -23,7 +23,7 @@ function nameLen(name: CString) -> U64;
 function origin() -> RawPtr;
 
 @FFI.Extern { library: ffimath; symbol: ffi_ptr_word; abi: c; }
-function ptrWord(p: RawPtr) -> I64;
+function ptrWord(p: RawPtr) -> Int;
 
 @Main function main() {
     print(add(20, 22))

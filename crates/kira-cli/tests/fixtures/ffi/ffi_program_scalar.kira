@@ -23,7 +23,7 @@ function idU16(x: U16) -> U16;
 function idU32(x: U32) -> U32;
 
 @FFI.Extern { library: ffifixture; symbol: ffi_add_i64; abi: c; }
-function addI64(a: I64, b: I64) -> I64;
+function addI64(a: Int, b: Int) -> Int;
 
 @FFI.Extern { library: ffifixture; symbol: ffi_id_u64; abi: c; }
 function idU64(x: U64) -> U64;
@@ -35,7 +35,7 @@ function notBool(b: Bool) -> Bool;
 function addF32(a: F32, b: F32) -> F32;
 
 @FFI.Extern { library: ffifixture; symbol: ffi_add_f64; abi: c; }
-function addF64(a: F64, b: F64) -> F64;
+function addF64(a: Float, b: Float) -> Float;
 
 @FFI.Extern { library: ffifixture; symbol: ffi_make_ptr; abi: c; }
 function makePtr() -> RawPtr;
@@ -44,7 +44,7 @@ function makePtr() -> RawPtr;
 function nullPtr() -> RawPtr;
 
 @FFI.Extern { library: ffifixture; symbol: ffi_ptr_word; abi: c; }
-function ptrWord(p: RawPtr) -> I64;
+function ptrWord(p: RawPtr) -> Int;
 
 @FFI.Extern { library: ffifixture; symbol: ffi_store; abi: c; }
 function storeCell(v: I32);

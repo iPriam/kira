@@ -163,11 +163,11 @@ struct KslArtifact {
 comptime macro ksl {
     kind { function }
     expand(input: Syntax) -> Syntax {
-        let msl = Ksl.compile(input, "msl")
-        let wgsl = Ksl.compile(input, "wgsl")
-        let glsl = Ksl.compile(input, "glsl_330")
-        let hlsl = Ksl.compile(input, "hlsl")
-        let spirv = Ksl.compile(input, "spirv")
+        let msl = Ksl.compile(input, ShaderBackend.Msl)
+        let wgsl = Ksl.compile(input, ShaderBackend.Wgsl)
+        let glsl = Ksl.compile(input, ShaderBackend.Glsl)
+        let hlsl = Ksl.compile(input, ShaderBackend.Hlsl)
+        let spirv = Ksl.compile(input, ShaderBackend.Spirv)
         return quote {
             KslArtifact(
                 combinedMsl: #{msl.combinedSource},

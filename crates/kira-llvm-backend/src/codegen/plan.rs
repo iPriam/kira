@@ -93,6 +93,8 @@ pub(super) struct Plan<'a> {
     pub(super) kind: ModuleKind,
     /// Which engine owns each function, in `IrProgram::functions` order.
     pub(super) engines: Vec<Execution>,
+    /// Whether each function can be reached by this native module.
+    pub(super) reachable: Vec<bool>,
     /// What this library exports, empty for anything that is not one.
     pub(super) exports: &'a NativeExportSurface,
     /// The pointer width of the target this module is emitted for.

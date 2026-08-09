@@ -14,9 +14,9 @@ import Foundation
 // ---------------------------------------------------------------------------
 
 struct NuxResultCodes {
-    let success: I64 = 0
-    let outOfHostMemory: I64 = -1
-    let initializationFailed: I64 = -3
+    let success: Int = 0
+    let outOfHostMemory: Int = -1
+    let initializationFailed: Int = -3
 }
 
 // ---------------------------------------------------------------------------
@@ -40,9 +40,9 @@ function nuxTrueBool() -> Bool {
 // ---------------------------------------------------------------------------
 
 struct NuxVec3 {
-    let x: F64
-    let y: F64
-    let z: F64
+    let x: Float
+    let y: Float
+    let z: Float
 }
 
 function nuxVecAdd(a: NuxVec3, b: NuxVec3) -> NuxVec3 {
@@ -144,7 +144,7 @@ Test NuxModTruncationSum {
 Test NuxNegLiteralIntSum {
     test {
         let codes = NuxResultCodes {}
-        let direct: I64 = -42
+        let direct: Int = -42
         var out = 0
         out = out + codes.success
         out = out + codes.outOfHostMemory
@@ -158,7 +158,7 @@ Test NuxNegLiteralIntSum {
 
 Test NuxNegLiteralFloat {
     test {
-        let scale: F64 = -1.5
+        let scale: Float = -1.5
         return scale == -1.5 ? 1 : 0
     }
     expect { let e: Result<Int, TestFailure> = .Ok(1); return e }

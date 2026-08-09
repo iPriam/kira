@@ -126,7 +126,7 @@ impl Analyzer<'_> {
             if initializers[index as usize].is_some() {
                 continue;
             }
-            match self.resolve_field_default(id, index) {
+            match self.resolve_field_default_at(ctx, id, index) {
                 Some(default) => initializers[index as usize] = Some(default),
                 None => {
                     missing.push(slots[index as usize].0.clone());

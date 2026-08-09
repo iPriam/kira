@@ -96,14 +96,14 @@ fn int_to_int_is_identity_across_widths() {
 
 #[test]
 fn float_to_float_is_identity_and_math_runs_at_full_width() {
-    // `F32`/`F64` share one representation; the cast copies the value, and all
+    // `F32`/`Float` share one representation; the cast copies the value, and all
     // float arithmetic runs at `f64`, so no precision is lost at the cast site.
     let output = assert_parity(
         r#"@Main function main() {
-            let d: F64 = 2.25
+            let d: Float = 2.25
             print(F32(d))
             print(F32(d) + 1.0)
-            print(F64(F32(0.5)))
+            print(Float(F32(0.5)))
             return
         }"#,
     );

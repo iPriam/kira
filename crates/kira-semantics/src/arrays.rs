@@ -155,6 +155,13 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         }
 
+        // A pointer into C storage indexes the way C does: the address that many
+        // elements along. This is what `event.touches[2]` means once the array
+        // member has become the pointer to its first element.
+        if let Type::ForeignPtr(pointer) = base_ty {
+            return self.analyze_foreign_element(base_hir, pointer, index_hir, span);
+        }
+
         let Some(element) = self.program.types.element_of(base_ty) else {
             // An error base already spoke; do not pile on.
             if base_ty != Type::Error {

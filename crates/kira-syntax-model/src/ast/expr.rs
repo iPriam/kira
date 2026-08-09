@@ -85,6 +85,13 @@ pub enum Expr {
         callee: Symbol,
         /// Span of the callee name.
         callee_span: Span,
+        /// Whether the call used a bare braced construction form (`Name { … }`).
+        ///
+        /// Empty braces and `let field = value` overrides are ambiguous with
+        /// struct literals at parse time. Keeping this bit lets semantics
+        /// choose a construct-backed value or a plain struct literal once it
+        /// knows the declaration and local scopes.
+        braced: bool,
         /// Generic type arguments written between the name and value arguments.
         type_args: Vec<TypeRefId>,
         /// The arguments, in written order, each optionally labeled with the

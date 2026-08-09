@@ -149,8 +149,11 @@ Widget Wrap() {
     assert!(declaration.fields[1].slot);
     assert_eq!(result.interner.resolve(declaration.fields[1].name), "items");
     // The list slot's stored type is the array `[Leaf]`.
+    let Some(type_ref) = declaration.fields[1].ty else {
+        panic!("a typed slot should retain its type reference");
+    };
     assert!(matches!(
-        result.tree.type_ref(declaration.fields[1].ty),
+        result.tree.type_ref(type_ref),
         kira_syntax_model::ast::TypeRef::Array { .. }
     ));
 }
@@ -247,19 +250,26 @@ fn the_compat_any_construct_spelling_parses_as_the_existential() {
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
 }
 
+/// An `extends` clause names its parents and leaves the body alone.
 #[test]
-fn an_extends_clause_on_a_family_is_recorded_as_deferred() {
+fn an_extends_clause_on_a_family_names_its_parents() {
     let result = parse_text(
         r#"
-construct Surface extends WebElement {
+construct Surface extends WebElement, Drawable {
     let node: Int { 0 }
 }
 "#,
     );
     let declaration = only_construct(&result);
-    assert_eq!(declaration.deferred.len(), 1);
-    assert_eq!(declaration.deferred[0].label, "`extends` inheritance");
+    let parents: Vec<&str> = declaration
+        .extends
+        .iter()
+        .map(|parent| result.interner.resolve(parent.name))
+        .collect();
+    assert_eq!(parents, ["WebElement", "Drawable"]);
+    assert!(declaration.deferred.is_empty());
     assert_eq!(declaration.methods.len(), 1);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
 }
 
 #[test]
@@ -267,13 +277,13 @@ fn an_extend_block_parses_its_modifier_functions() {
     let result = parse_text(
         r#"
 extend Widget {
-    function padding(length: Float) -> Widget {
+    function padding(length: Float) -> Any Widget {
         return Padding(length: length) {
             self
         }
     }
 
-    function opacity(value: Float) -> Widget {
+    function opacity(value: Float) -> Any Widget {
         return OpacityLayer(value: value) {
             self
         }
@@ -512,10 +522,10 @@ fn an_extend_modifier_carries_the_engine_its_annotation_selected() {
     let result = parse_text(
         r#"
 extend Widget {
-    @Native function padding(amount: Int) -> Widget {
+    @Native function padding(amount: Int) -> Any Widget {
         return self
     }
-    function plain(amount: Int) -> Widget {
+    function plain(amount: Int) -> Any Widget {
         return self
     }
 }
@@ -602,9 +612,8 @@ fn some_without_a_following_name_is_an_ordinary_identifier() {
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
 }
 
-/// A local's type annotation may be the statement's last token, so the compat
-/// `Any Family` spelling is not read there: `Any` is the top type, and the name
-/// on the next line starts the next statement.
+/// A local's type annotation may be the statement's last token, so `Any` alone
+/// must not swallow the name that starts the next statement.
 #[test]
 fn a_bare_any_annotation_does_not_swallow_the_next_statement() {
     let result = parse_text(
@@ -612,6 +621,26 @@ fn a_bare_any_annotation_does_not_swallow_the_next_statement() {
 function f() -> Int {
     let a: Any = 1
     let b: Any = 2
+    return 0
+}
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+/// A binding may still be annotated `Any Family`.
+///
+/// `Any` is the top type, so `let a: Any` followed by a call could read as one
+/// statement or two. A binding always carries an `=`, and requiring one after
+/// the family name is what settles it without giving up the spelling.
+#[test]
+fn a_binding_may_be_annotated_with_a_family_existential() {
+    let result = parse_text(
+        r#"
+function f() -> Int {
+    let widget: Any Widget = Text()
+    let boxed: Any = 1
+    render()
     return 0
 }
 "#,

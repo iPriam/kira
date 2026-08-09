@@ -502,6 +502,69 @@ pub extern "C" fn kira_rt_trap_index_negative() -> ! {
     std::process::exit(1);
 }
 
+/// Writes an array's elements into C storage as `tag`, and answers its address.
+///
+/// The native half of `HirExpr::ArrayElements`. Two widths are in play and they
+/// are not the same: `stride` is what Kira holds an element in — a `[F32]` holds
+/// `double`s — and `tag` is what C reads, which is four bytes for that array.
+/// Converting is the whole job.
+///
+/// The storage is never reclaimed, for the reason [`kira_runtime_abi::c_storage`]
+/// gives: a C API handed a buffer may keep it, and nothing on this side knows
+/// which kind of callee it has.
+///
+/// # Safety
+/// `array` must be null or a live handle from this runtime, and `stride` must be
+/// the element size it was built with.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_array_elements(array: KArray, tag: u32, stride: i64) -> u64 {
+    let Some(element) = kira_runtime_abi::ForeignType::from_tag(tag as u8) else {
+        return 0;
+    };
+    if array.is_null() || stride <= 0 {
+        return 0;
+    }
+    // SAFETY: the caller guarantees a live handle.
+    let header = unsafe { &*array };
+    let stride = stride as usize;
+    let mut bytes = Vec::with_capacity(header.len * 8);
+    for index in 0..header.len {
+        // SAFETY: `index < len <= cap`, so the offset lands inside the block,
+        // and a scalar element is eight bytes or fewer of it.
+        let slot = unsafe { header.items.add(index * stride) };
+        let mut word = [0u8; 8];
+        let take = stride.min(8);
+        // SAFETY: `slot` addresses at least `stride` readable bytes.
+        unsafe { std::ptr::copy_nonoverlapping(slot, word.as_mut_ptr(), take) };
+        write_seam_scalar(&mut bytes, element, word);
+    }
+    kira_runtime_abi::c_storage::retain_bytes(&bytes)
+}
+
+/// Writes one element's Kira bytes out as the seam type `ty`.
+///
+/// Kira holds every scalar in eight bytes — an `i64` or an `f64` — so the
+/// conversion is a narrowing, and `Bool` is the one that arrives as a single
+/// byte already.
+fn write_seam_scalar(out: &mut Vec<u8>, ty: kira_runtime_abi::ForeignType, word: [u8; 8]) {
+    use kira_runtime_abi::ForeignType;
+    let bits = u64::from_le_bytes(word);
+    match ty {
+        ForeignType::I8 | ForeignType::U8 => out.push(bits as u8),
+        ForeignType::Bool => out.push(u8::from(bits != 0)),
+        ForeignType::I16 | ForeignType::U16 => out.extend_from_slice(&(bits as u16).to_le_bytes()),
+        ForeignType::I32 | ForeignType::U32 => out.extend_from_slice(&(bits as u32).to_le_bytes()),
+        ForeignType::I64 | ForeignType::U64 | ForeignType::RawPtr | ForeignType::CString => {
+            out.extend_from_slice(&bits.to_le_bytes());
+        }
+        ForeignType::F32 => {
+            out.extend_from_slice(&(f64::from_bits(bits) as f32).to_le_bytes());
+        }
+        ForeignType::F64 => out.extend_from_slice(&bits.to_le_bytes()),
+        ForeignType::Void => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

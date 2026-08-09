@@ -1,0 +1,87 @@
+// Decoded image data, and the two ways to ask for it.
+//
+// An image file is bytes in a container — PNG's compressed scanlines, JPEG's
+// frequency coefficients — and every consumer of one wants the same thing out:
+// a rectangle of RGBA8 pixels it can hand to a texture, a compositor, or a
+// blitter. Decoding is that translation and nothing else, which is why it is
+// Foundation's and not a graphics package's: it reaches no device, names no
+// backend, and a program with no window can still read a PNG.
+//
+// The decoders here read:
+//
+// - **PNG** — every colour type and bit depth the format defines, palettes,
+//   transparency, and Adam7 interlacing.
+// - **JPEG** — sequential Huffman frames (the `SOF0` and `SOF1` a camera or an
+//   exporter writes), greyscale or three-component, at any sampling factors.
+//
+// Bytes that carry anything else — a GIF, a progressive JPEG, an arithmetic
+// coded one — are `UnknownFormat`. That is the honest answer for a file whose
+// encoding this does not read, and it is distinct from `Malformed`, which is
+// reserved for bytes that claim an encoding here and then contradict it.
+
+// A decoded image: RGBA8, one byte per channel, row-major from the top-left
+// corner, four bytes per pixel and no padding between rows.
+//
+// Top-left is the origin because that is where every one of these formats puts
+// its first pixel. A consumer whose own convention differs flips on the way in;
+// a decoder that flipped for it would be answering a question about the
+// consumer's coordinate system that it cannot see.
+struct Image {
+    var width: Int = 0
+    var height: Int = 0
+    var pixels: [U8] = []
+}
+
+enum ImageFailure {
+    // There was nothing at the path, or nothing came back from reading it.
+    FileUnreadable
+    // The bytes carry no encoding this decoder reads.
+    UnknownFormat
+    // The encoding was recognised and the bytes then contradicted it.
+    Malformed
+}
+
+// The image a file holds.
+//
+// The path is read whole before anything is decoded, because every one of these
+// formats reaches backwards through its own bytes — a PNG's back references, a
+// JPEG's restart markers — so streaming would buy a buffer that is already
+// there.
+function decodeImageFile(path: borrow String) -> Result<Image, ImageFailure> {
+    let size = Int(fileSize(path))
+    if !fileExists(path) || size <= 0 {
+        return .Error(.FileUnreadable)
+    }
+    var bytes = readFileRange(path, 0, size)
+    if bytes.count == 0 {
+        return .Error(.FileUnreadable)
+    }
+    return decodeImage(move bytes)
+}
+
+// The image a block of bytes holds, whichever of the formats it is in.
+//
+// The container is named by the bytes themselves rather than by a path's
+// extension: a `.png` holding a JPEG is a file someone renamed, and decoding
+// what is there is more useful than refusing it for its name.
+function decodeImage(bytes: [U8]) -> Result<Image, ImageFailure> {
+    if bytes.count >= 8 && bytes[0] == 137 && bytes[1] == 80 && bytes[2] == 78 && bytes[3] == 71 {
+        return decodePng(move bytes)
+    }
+    if bytes.count >= 3 && bytes[0] == 255 && bytes[1] == 216 && bytes[2] == 255 {
+        return decodeJpeg(move bytes)
+    }
+    return .Error(.UnknownFormat)
+}
+
+// A whole number held to 0..=255, which is what every one of these formats'
+// arithmetic overshoots and has to be brought back to.
+function clampByte(value: Int) -> Int {
+    if value < 0 {
+        return 0
+    }
+    if value > 255 {
+        return 255
+    }
+    return value
+}

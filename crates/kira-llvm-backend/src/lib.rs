@@ -50,6 +50,7 @@ mod link;
 // Not gated: the platform link list is data about a host rather than something
 // LLVM answers, and a consumer's build script reads it on a machine with none.
 mod platform;
+mod reachability;
 pub mod shim;
 mod shim_build;
 
@@ -85,6 +86,14 @@ pub enum LlvmError {
         "a `break`/`continue` reached the LLVM backend outside a loop (this is a compiler bug)"
     )]
     JumpOutsideLoop,
+    /// A read through an `@FFI.Pointer` named a member the target's C layout
+    /// does not describe as a loadable scalar, which analysis is supposed to
+    /// have rejected.
+    #[error("a read of C-layout member {member} reached the LLVM backend (this is a compiler bug)")]
+    ForeignMemberMissing {
+        /// The member index the read asked for.
+        member: u32,
+    },
     /// No usable LLVM installation was found.
     #[error(transparent)]
     Discovery(#[from] LlvmDiscoveryError),
@@ -269,12 +278,13 @@ const MAX_CODEGEN_UNITS: usize = 16;
 /// and one whenever a textual IR dump was asked for — `--emit-llvm-ir` is a
 /// request to read the program's module, and handing back eight of them
 /// answers a different question.
-fn codegen_units(program: &IrProgram, options: &NativeBuildOptions) -> usize {
+fn codegen_units(options: &NativeBuildOptions, reachable: &[bool]) -> usize {
     if options.ir_path.is_some() {
         return 1;
     }
     let parallelism = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    let affordable = (program.functions.len() / FUNCTIONS_PER_UNIT).min(MAX_CODEGEN_UNITS);
+    let function_count = reachable.iter().filter(|reachable| **reachable).count();
+    let affordable = (function_count / FUNCTIONS_PER_UNIT).min(MAX_CODEGEN_UNITS);
     affordable.clamp(1, parallelism.max(1))
 }
 
@@ -300,7 +310,8 @@ fn emit_codegen_units(
     program: &IrProgram,
     options: &NativeBuildOptions,
 ) -> Result<Vec<PathBuf>, LlvmError> {
-    let count = codegen_units(program, options);
+    let reachable = reachability::native_functions(program);
+    let count = codegen_units(options, &reachable);
     let paths: Vec<PathBuf> = (0..count)
         .map(|index| unit_object_path(&options.object_path, index))
         .collect();

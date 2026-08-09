@@ -8,8 +8,8 @@ use kira_source::{SourceId, Span};
 use kira_syntax_model::ast::{ConstructDecl, ConstructKind, Function, Item};
 
 use super::{
-    ConstructFamilyField, ConstructFamilyInfo, ConstructFamilyMethod, ConstructInfo,
-    ConstructVariant, ContentSlot,
+    ConstructFamilyField, ConstructFamilyInfo, ConstructFamilyMethod, ConstructFamilyStoredField,
+    ConstructInfo, ContentSlot,
 };
 use crate::analyze::{Analyzer, Callable, FieldDefault};
 
@@ -78,10 +78,18 @@ impl<'a> Analyzer<'a> {
             // is what makes the shorthand fall back to the family type.
             let mut member_types = std::collections::BTreeMap::new();
             for field in &declaration.fields {
-                member_types.insert(
-                    self.interner.resolve(field.name).to_owned(),
-                    (field.ty, source),
-                );
+                if let Some(ty) = field.ty {
+                    member_types.insert(self.interner.resolve(field.name).to_owned(), (ty, source));
+                } else if field.required {
+                    self.emit(
+                        field.name_span,
+                        "KSEM261",
+                        format!(
+                            "required construct-family member `{}` must declare its type",
+                            self.interner.resolve(field.name)
+                        ),
+                    );
+                }
             }
             for method in &declaration.methods {
                 if let Some(result) = method.function.return_type {
@@ -119,6 +127,18 @@ impl<'a> Analyzer<'a> {
                     },
                 );
             }
+            let stored_fields = declaration
+                .fields
+                .iter()
+                .filter(|field| !field.required)
+                .map(|field| ConstructFamilyStoredField {
+                    name: self.interner.resolve(field.name).to_owned(),
+                    ty: field.ty,
+                    default: field.default,
+                    source,
+                    slot: field.slot,
+                })
+                .collect();
             self.construct_family_names.insert(enum_id, name.clone());
             self.construct_families.insert(
                 name,
@@ -127,7 +147,9 @@ impl<'a> Analyzer<'a> {
                     required,
                     methods,
                     field_members,
+                    stored_fields,
                     variants: Vec::new(),
+                    parents: Vec::new(),
                     member_types,
                 },
             );
@@ -171,6 +193,7 @@ impl<'a> Analyzer<'a> {
         self.finish_family_variants();
         self.resolve_family_method_signatures();
         self.resolve_family_field_members();
+        self.check_family_overrides();
 
         // Family templates have no runtime struct, but structural clauses still
         // receive their precise refusal.
@@ -191,6 +214,7 @@ impl<'a> Analyzer<'a> {
         };
         let name = self.interner.resolve(declaration.name).to_owned();
         let family_name = self.interner.resolve(*family).to_owned();
+        let source = self.source;
 
         let mut fields = Vec::new();
         let mut defaults = Vec::new();
@@ -203,7 +227,11 @@ impl<'a> Analyzer<'a> {
                 ty: self.resolve_type_ref(param.ty),
                 mutable: false,
             });
-            defaults.push(None);
+            defaults.push(
+                param
+                    .default
+                    .map(|syntax| FieldDefault::new(syntax, self.source)),
+            );
         }
         let mut slots = Vec::new();
         for field in &declaration.fields {
@@ -213,7 +241,7 @@ impl<'a> Analyzer<'a> {
             let ty = if field.slot {
                 self.resolve_slot_field(field, field_index, &field_name, &mut slots)
             } else {
-                self.resolve_type_ref(field.ty)
+                field.ty.map_or(Type::Error, |ty| self.resolve_type_ref(ty))
             };
             fields.push(FieldDef {
                 name: field_name,
@@ -267,16 +295,15 @@ impl<'a> Analyzer<'a> {
                 .filter(|(_, method)| !method.uniform)
                 .map(|(name, method)| (name.clone(), method.computed))
                 .collect::<Vec<_>>();
-            (info.enum_id, info.required.clone(), methods)
+            (info.required.clone(), methods, info.stored_fields.clone())
         });
-        let mut family = None;
         match family_surface {
             None => self.emit(
                 *family_span,
                 "KSEM200",
                 format!("`{name}` is backed by unknown construct family `{family_name}`"),
             ),
-            Some((enum_id, required, methods)) => {
+            Some((required, methods, stored_fields)) => {
                 for (method, is_computed) in &methods {
                     if !own_methods.contains(method) && *is_computed {
                         computed.insert(method.clone());
@@ -301,13 +328,42 @@ impl<'a> Analyzer<'a> {
                         }
                     }
                 }
-                if let Some(info) = self.construct_families.get_mut(&family_name) {
-                    let tag = info.variants.len() as u32;
-                    info.variants.push(ConstructVariant { struct_id: id, tag });
-                    family = Some((enum_id, tag));
+                // Family stored members are real fields of every concrete
+                // backed struct. A declaration's own field wins when it
+                // overrides a family member; otherwise the family default is
+                // copied into this struct's default row below.
+                for family_field in stored_fields {
+                    if seen.contains(&family_field.name) {
+                        continue;
+                    }
+                    self.source = family_field.source;
+                    let ty = family_field
+                        .ty
+                        .map(|written| self.resolve_type_ref(written))
+                        .unwrap_or(Type::Error);
+                    fields.push(FieldDef {
+                        name: family_field.name.clone(),
+                        ty,
+                        mutable: false,
+                    });
+                    defaults.push(
+                        family_field
+                            .default
+                            .map(|syntax| FieldDefault::new(syntax, family_field.source)),
+                    );
+                    seen.insert(family_field.name);
+                    if family_field.slot {
+                        self.emit(
+                            *family_span,
+                            "KSEM261",
+                            "inherited family child slots are not executable yet",
+                        );
+                    }
                 }
+                self.source = source;
             }
         }
+        let families = self.register_family_variant(&family_name, id);
 
         self.program.types.structs_mut().set_fields(id, fields);
         self.struct_defaults.push(defaults);
@@ -316,7 +372,7 @@ impl<'a> Analyzer<'a> {
             ConstructInfo {
                 computed,
                 slots,
-                family,
+                families,
             },
         );
         self.refuse_deferred(declaration);
@@ -329,9 +385,17 @@ impl<'a> Analyzer<'a> {
         field_name: &str,
         slots: &mut Vec<ContentSlot>,
     ) -> Type {
-        let (element_ref, list) = match self.tree.type_ref(field.ty) {
+        let Some(type_ref) = field.ty else {
+            self.emit(
+                field.name_span,
+                "KSEM261",
+                format!("child slot `{field_name}` must declare its element type"),
+            );
+            return Type::Error;
+        };
+        let (element_ref, list) = match self.tree.type_ref(type_ref) {
             kira_syntax_model::ast::TypeRef::Array { element, .. } => (*element, true),
-            _ => (field.ty, false),
+            _ => (type_ref, false),
         };
         let element_ty = self.resolve_type_ref(element_ref);
         let field_ty = if list {
@@ -376,7 +440,7 @@ impl<'a> Analyzer<'a> {
     /// Resolves the written type of every `@Required let` family member.
     ///
     /// Runs with the method signatures, after the family enums exist, because a
-    /// requirement may name its own family — `@Required let body: Widget` on
+    /// requirement may name its own family — `@Required let body: Any Widget` on
     /// `construct Widget` is the ordinary case, not the exotic one.
     fn resolve_family_field_members(&mut self) {
         let rows: Vec<_> = self
@@ -490,7 +554,7 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn backed_declarations(&self) -> Vec<(SourceId, &'a ConstructDecl)> {
+    pub(crate) fn backed_declarations(&self) -> Vec<(SourceId, &'a ConstructDecl)> {
         let tree: &'a kira_syntax_model::SyntaxTree = self.tree;
         tree.items_with_source()
             .filter_map(|(source, item)| match item {
@@ -504,7 +568,7 @@ impl<'a> Analyzer<'a> {
             .collect()
     }
 
-    fn family_declarations(&self) -> Vec<(SourceId, &'a ConstructDecl)> {
+    pub(crate) fn family_declarations(&self) -> Vec<(SourceId, &'a ConstructDecl)> {
         let tree: &'a kira_syntax_model::SyntaxTree = self.tree;
         tree.items_with_source()
             .filter_map(|(source, item)| match item {

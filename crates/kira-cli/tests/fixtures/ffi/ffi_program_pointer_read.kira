@@ -1,0 +1,97 @@
+// Reading members through an `@FFI.Pointer`.
+//
+// C hands over `const struct ffi_event *` and Kira reads the members behind it.
+// Without this, every member needs a C accessor compiled into a shim, which is
+// the shape a binding exists to remove.
+//
+// The members are of mixed width and signedness with padding between them, so a
+// read at the wrong offset gives a wrong answer rather than a crash — which is
+// exactly the failure a backend can have silently.
+
+@FFI.Struct { layout: c; }
+struct ffi_touch {
+    let identifier: U64 = 0
+    let pos_x: F32 = 0.0
+    let pos_y: F32 = 0.0
+}
+
+@FFI.Array { element: ffi_touch; count: 4; }
+struct ffi_touch_array_4 {}
+
+@FFI.Struct { layout: c; }
+struct ffi_event {
+    let kind: U8 = 0
+    let code: I32 = 0
+    let weight: F32 = 0.0
+    let delta: I8 = 0
+    let touches: ffi_touch_array_4
+    let next: ffi_event_ptr
+}
+
+@FFI.Pointer { target: ffi_event; ownership: borrowed; }
+struct ffi_event_ptr {}
+
+@FFI.Extern { library: ffifixture; symbol: ffi_event_current; abi: c; }
+function ffiEventCurrent(): ffi_event_ptr;
+@FFI.Extern { library: ffifixture; symbol: ffi_event_none; abi: c; }
+function ffiEventNone(): ffi_event_ptr;
+
+@Native
+function readKind() -> Int {
+    let event = ffiEventCurrent()
+    return event.kind
+}
+
+// Signed and unsigned members of the same struct, so a read that zero-extends
+// where it should sign-extend is caught rather than averaged away.
+@Native
+function readCode() -> Int {
+    let event = ffiEventCurrent()
+    return event.code
+}
+
+@Native
+function readDelta() -> Int {
+    let event = ffiEventCurrent()
+    return event.delta
+}
+
+// A `float` member widens to Kira's `Float` on the way out, the same widening a
+// `float` result of a C function gets.
+@Native
+function readWeight() -> Float {
+    let event = ffiEventCurrent()
+    return event.weight
+}
+
+// A pointer member read *through* a pointer, then read through again: the
+// member is another `ffi_event*`, which is how a linked C structure is walked.
+// It also proves the member's own offset is right — `next` sits after padding
+// that a leaf-index read would step over.
+@Native
+function readNextKind() -> Int {
+    let event = ffiEventCurrent()
+    let next = event.next
+    return next.kind
+}
+
+// An inline array member names storage inside the event, so reading it gives
+// the address of element zero — C's array-to-pointer decay — and indexing walks
+// from there. Nothing is copied out; each step is an address until the load.
+@Native
+function readTouch(index: Int) -> Float {
+    let event = ffiEventCurrent()
+    return event.touches[index].pos_y
+}
+
+@Main
+function main() {
+    print(readKind())
+    print(readCode())
+    print(readDelta())
+    print(readWeight())
+    print(readNextKind())
+    print(readTouch(0))
+    print(readTouch(3))
+    return
+}

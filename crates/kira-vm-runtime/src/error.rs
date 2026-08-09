@@ -215,6 +215,19 @@ pub enum VmError {
     /// A string instruction found something other than a string.
     #[error("measured a value that is not a string")]
     NotAString,
+    /// `toInt` was asked for a number the text does not hold.
+    ///
+    /// A real program error rather than an invariant guard: `isInt` is what a
+    /// program asks first, and reaching here means it did not.
+    #[error("converted text that does not read as a whole number")]
+    NotAWholeNumber,
+    /// A member was read through a null `@FFI.Pointer`.
+    ///
+    /// A real program error rather than an invariant guard: `nullPointer()` is
+    /// spellable, and a C callback may hand over a null for an optional
+    /// argument, so the read has to check rather than trust.
+    #[error("read a member through a null pointer")]
+    NullForeignRead,
     /// An array index was at or past the end.
     ///
     /// A real program error, not an invariant guard: an index is generally not

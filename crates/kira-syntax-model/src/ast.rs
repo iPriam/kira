@@ -21,9 +21,9 @@ mod tree;
 pub use expr::{BinaryOp, CallArg, ClosureParam, Expr, FieldInit, UnaryOp};
 pub use item::{
     ClassDecl, ClassMethod, ConstructDecl, ConstructField, ConstructKind, ConstructMethod,
-    DeferredConstruct, EnumDecl, ExportMark, ExtendDecl, FfiTypeKind, FfiTypeMark, FieldDecl,
-    ForeignField, ForeignMark, Function, ImportDecl, Item, OverrideFieldDecl, Param, ParentRef,
-    StructDecl, TypeAliasDecl, TypeParamDecl, TypeRef, UnsupportedItem, VariantDecl,
+    ConstructParent, DeferredConstruct, EnumDecl, ExportMark, ExtendDecl, FfiTypeKind, FfiTypeMark,
+    FieldDecl, ForeignField, ForeignMark, Function, ImportDecl, Item, OverrideFieldDecl, Param,
+    ParentRef, StructDecl, TypeAliasDecl, TypeParamDecl, TypeRef, UnsupportedItem, VariantDecl,
 };
 pub use stmt::{Block, ForIterable, MatchArm, MatchBinding, Stmt};
 pub use tree::{ExprId, FileNodes, FilePart, NodeBase, StmtId, SyntaxTree, TypeRefId};

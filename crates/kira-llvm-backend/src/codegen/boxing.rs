@@ -90,14 +90,14 @@ impl Codegen<'_> {
         value: LLVMValueRef,
     ) -> Result<LLVMValueRef, LlvmError> {
         let llvm_type = self.llvm_type(ty)?;
+        let size = self.abi_size(ty)?;
         // SAFETY: `llvm_type` belongs to this context, `value` has that type, and
         // the builder is positioned on a live block.
-        let slot = unsafe {
-            let slot = LLVMBuildAlloca(self.builder, llvm_type, c"enum.aggregate.source".as_ptr());
-            LLVMBuildStore(self.builder, value, slot);
-            slot
-        };
-        let size = self.abi_size(ty)?;
+        let slot = self.dynamic_alloca(llvm_type, c"enum.aggregate.source");
+        self.lifetime_start(slot);
+        // SAFETY: `slot` was allocated with `llvm_type` and `value` has that
+        // same type.
+        unsafe { LLVMBuildStore(self.builder, value, slot) };
         let clone = self.element_clone(ty)?;
         let free = self.element_free(ty)?;
         // The equality leaf travels with the other two so an erased aggregate
@@ -105,11 +105,13 @@ impl Codegen<'_> {
         // original rather than through a changed signature, which is what keeps
         // this additive at the ABI.
         let eq = self.element_eq(ty)?;
-        Ok(self.call(
+        let result = self.call(
             self.runtime.enum_new_aggregate_eq,
             &mut [tag, slot, size, clone, free, eq],
             c"enum.aggregate",
-        ))
+        );
+        self.lifetime_end(slot);
+        Ok(result)
     }
 
     /// Reads a box's payload as an owned value of type `ty`.
@@ -129,18 +131,20 @@ impl Codegen<'_> {
         let llvm_type = self.llvm_type(ty)?;
         // SAFETY: `llvm_type` belongs to this context and the runtime writes
         // one owned value of exactly that type into `out`.
-        let out =
-            unsafe { LLVMBuildAlloca(self.builder, llvm_type, c"enum.aggregate.payload".as_ptr()) };
+        let out = self.dynamic_alloca(llvm_type, c"enum.aggregate.payload");
+        self.lifetime_start(out);
         self.call(self.runtime.enum_payload_aggregate, &mut [boxed, out], c"");
         // SAFETY: the helper initialized `out` with a value of `llvm_type`.
-        Ok(unsafe {
+        let value = unsafe {
             LLVMBuildLoad2(
                 self.builder,
                 llvm_type,
                 out,
                 c"enum.aggregate.value".as_ptr(),
             )
-        })
+        };
+        self.lifetime_end(out);
+        Ok(value)
     }
 
     /// Encodes a payload value into `(payload_kind, payload_word)` for the box.

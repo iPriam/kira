@@ -150,7 +150,7 @@ comptime macro LintRunner {
         var enumNames: [String] = []
         if qualifiedOn {
             for declared in declarations {
-                if declared.kind == "enum" {
+                if declared.kind == .Enum {
                     enumNames.append(declared.name.asString())
                 }
             }

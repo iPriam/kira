@@ -17,13 +17,14 @@ use kira_shader_model::{
 };
 
 use crate::ShaderIr;
+use crate::glsl_names::glsl_safe_name;
 use crate::layout;
 
 /// Every target a shader is reflected for.
 const TARGETS: [BackendTarget; 5] = [
     BackendTarget::Msl,
     BackendTarget::Wgsl,
-    BackendTarget::Glsl330,
+    BackendTarget::Glsl430,
     BackendTarget::Hlsl,
     BackendTarget::Spirv,
 ];
@@ -190,6 +191,11 @@ fn reflect_resources(module: &CheckedModule, shader: &CheckedShader) -> Vec<Refl
                     .map(|&target| counters.assign(target, resource, group_index, within))
                     .collect(),
                 length_bindings: Vec::new(),
+                paired_sampler: match resource.kind {
+                    ResourceKind::Texture => paired_sampler(module, shader, &resource.name)
+                        .or_else(|| declared_sampler(group, position)),
+                    ResourceKind::Uniform | ResourceKind::Storage | ResourceKind::Sampler => None,
+                },
             });
             if matches!(resource.ty, Type::RuntimeArray(_)) {
                 counters.msl_length.push(resource.name.clone());
@@ -210,6 +216,116 @@ fn reflect_resources(module: &CheckedModule, shader: &CheckedShader) -> Vec<Refl
         }
     }
     reflected
+}
+
+/// The sampler declared nearest after `position` in the same group.
+///
+/// The fallback for a texture no stage samples. A shader may declare a resource
+/// its bodies do not read — a group is an interface, and a host binds every slot
+/// in it — and GLSL still needs a sampler paired with the texture unit, because
+/// the pair is how a `sampler2D` uniform is named at all. Declaration order is
+/// the only signal left once no `sample` call names one, and a KSL group writes a
+/// texture immediately before the sampler that belongs to it.
+fn declared_sampler(
+    group: &kira_ksl_semantics::model::CheckedGroup,
+    position: usize,
+) -> Option<String> {
+    group
+        .resources
+        .iter()
+        .skip(position + 1)
+        .find(|candidate| candidate.kind == ResourceKind::Sampler)
+        .or_else(|| {
+            group
+                .resources
+                .iter()
+                .find(|candidate| candidate.kind == ResourceKind::Sampler)
+        })
+        .map(|candidate| candidate.name.clone())
+}
+
+/// The sampler `texture` is sampled with, when a body samples it.
+///
+/// GLSL collapses a texture and its sampler into one `sampler2D`, so a GL host
+/// needs to know which sampler object belongs on the texture's unit — and the
+/// declarations do not say. The `sample` call does, so that is what is read.
+/// Declaration adjacency would usually give the same answer and is a convention
+/// rather than a rule.
+fn paired_sampler(module: &CheckedModule, shader: &CheckedShader, texture: &str) -> Option<String> {
+    shader.stages.iter().find_map(|stage| {
+        std::iter::once(&stage.entry)
+            .chain(&stage.helpers)
+            .find_map(|function| sampler_in_body(module, &function.body, texture))
+    })
+}
+
+/// The sampler `texture` is sampled with anywhere in `body`.
+fn sampler_in_body(
+    module: &CheckedModule,
+    body: &[CheckedStmtId],
+    texture: &str,
+) -> Option<String> {
+    body.iter().find_map(|&id| match module.stmt(id) {
+        CheckedStmt::Let { init, .. } => {
+            init.and_then(|value| sampler_in_expr(module, value, texture))
+        }
+        CheckedStmt::Assign { target, value } => sampler_in_expr(module, *target, texture)
+            .or_else(|| sampler_in_expr(module, *value, texture)),
+        CheckedStmt::If {
+            cond,
+            then,
+            otherwise,
+        } => sampler_in_expr(module, *cond, texture)
+            .or_else(|| sampler_in_body(module, then, texture))
+            .or_else(|| {
+                otherwise
+                    .as_ref()
+                    .and_then(|body| sampler_in_body(module, body, texture))
+            }),
+        CheckedStmt::While { cond, body } => sampler_in_expr(module, *cond, texture)
+            .or_else(|| sampler_in_body(module, body, texture)),
+        CheckedStmt::Return(value) => {
+            value.and_then(|value| sampler_in_expr(module, value, texture))
+        }
+        CheckedStmt::Expr(value) => sampler_in_expr(module, *value, texture),
+    })
+}
+
+/// The sampler `texture` is sampled with at `id` or anywhere under it.
+fn sampler_in_expr(module: &CheckedModule, id: CheckedExprId, texture: &str) -> Option<String> {
+    let node = module.expr(id);
+    if let CheckedExprKind::Builtin {
+        which: kira_ksl_semantics::model::BuiltinFn::Sample,
+        args,
+    } = &node.kind
+        && let [image, sampler, ..] = args.as_slice()
+        && matches!(&module.expr(*image).kind, CheckedExprKind::Resource(name) if name == texture)
+        && let CheckedExprKind::Resource(name) = &module.expr(*sampler).kind
+    {
+        return Some(name.clone());
+    }
+    match &node.kind {
+        CheckedExprKind::Field { base, .. }
+        | CheckedExprKind::Swizzle { base, .. }
+        | CheckedExprKind::ArrayLength { base } => sampler_in_expr(module, *base, texture),
+        CheckedExprKind::Index { base, index } => sampler_in_expr(module, *base, texture)
+            .or_else(|| sampler_in_expr(module, *index, texture)),
+        CheckedExprKind::Construct { args }
+        | CheckedExprKind::Call { args, .. }
+        | CheckedExprKind::Builtin { args, .. } => args
+            .iter()
+            .find_map(|&arg| sampler_in_expr(module, arg, texture)),
+        CheckedExprKind::Cast { value } | CheckedExprKind::Unary { operand: value, .. } => {
+            sampler_in_expr(module, *value, texture)
+        }
+        CheckedExprKind::Binary { lhs, rhs, .. } => sampler_in_expr(module, *lhs, texture)
+            .or_else(|| sampler_in_expr(module, *rhs, texture)),
+        CheckedExprKind::Const(_)
+        | CheckedExprKind::Local(_)
+        | CheckedExprKind::Option(_)
+        | CheckedExprKind::Resource(_)
+        | CheckedExprKind::Invalid => None,
+    }
 }
 
 /// The stages whose bodies actually read `name`.
@@ -320,7 +436,7 @@ impl Counters {
         // Metal and silently wrong on WebGPU.
         if let Some(slot) = resource.binding {
             let glsl_name = match target {
-                BackendTarget::Glsl330 => Some(resource.name.clone()),
+                BackendTarget::Glsl430 => Some(glsl_safe_name(&resource.name)),
                 _ => None,
             };
             return BackendBinding {
@@ -373,18 +489,18 @@ impl Counters {
             // sampler that reads it collapse into one `sampler2D` uniform, so
             // a sampler takes no unit of its own and the name is what the host
             // looks the binding up by.
-            BackendTarget::Glsl330 => match resource.kind {
+            BackendTarget::Glsl430 => match resource.kind {
                 ResourceKind::Uniform | ResourceKind::Storage => {
                     let at = self.glsl_block;
                     self.glsl_block += 1;
-                    (0, at, Some(resource.name.clone()))
+                    (0, at, Some(glsl_safe_name(&resource.name)))
                 }
                 ResourceKind::Texture => {
                     let at = self.glsl_texture;
                     self.glsl_texture += 1;
-                    (0, at, Some(resource.name.clone()))
+                    (0, at, Some(glsl_safe_name(&resource.name)))
                 }
-                ResourceKind::Sampler => (0, 0, Some(resource.name.clone())),
+                ResourceKind::Sampler => (0, 0, Some(glsl_safe_name(&resource.name))),
             },
         };
         BackendBinding {

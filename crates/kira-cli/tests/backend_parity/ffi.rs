@@ -522,3 +522,204 @@ fn every_backend_agrees_on_a_c_string_member_and_a_struct_by_address() {
 
     let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
 }
+
+/// Members read *through* an `@FFI.Pointer`, on every backend.
+///
+/// C owns the struct and hands over its address; Kira reads the members behind
+/// it with no accessor compiled into a shim. That is what the twenty
+/// `kg_event_*` accessors in kira-graphics existed to work around.
+///
+/// The members are of mixed width and signedness with padding between them, so
+/// a read at the wrong offset gives a wrong *answer* rather than a crash — the
+/// failure a backend can have silently. `next` is read through and then read
+/// through again, which is both the linked-structure shape and the proof that a
+/// member's offset is its own rather than its first leaf's.
+#[test]
+fn every_backend_agrees_on_members_read_through_a_pointer() {
+    let entry = write_ffi_package(include_str!(
+        "../fixtures/ffi/ffi_program_pointer_read.kira"
+    ));
+
+    // `kind` is 200, which is only positive read as unsigned; `code` is -1234,
+    // which is only negative read as signed; `delta` is -7 from a `signed char`;
+    // `weight` is 1.5 widened from `float`; the tail's `kind` is 9; and the
+    // first and last touches' `pos_y` are 20.5 and 80.5, which come out right
+    // only if the array member's own offset and the element stride are both
+    // right.
+    const EXPECTED_POINTER_READ: &str = "200
+-1234
+-7
+1.5
+9
+20.5
+80.5
+";
+
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            EXPECTED_POINTER_READ,
+            "the {backend} backend disagreed on a member read through a pointer
+stderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "the {backend} backend did not exit cleanly
+stderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+}
+
+/// A Kira array handed to C as a pointer and a count, on every backend.
+///
+/// This is the shape every graphics API takes, and without it a caller streams
+/// values into a C-side buffer one at a time through a shim — which is what
+/// kira-graphics did before this.
+///
+/// The widths differ on purpose. Kira holds a `[F32]` as `double`s and C reads
+/// four bytes each, so a seam that handed over the array's own storage would
+/// give C wrong *numbers* rather than a wrong pointer — the kind of failure that
+/// looks like a rendering bug rather than a crash.
+#[test]
+fn every_backend_agrees_on_an_array_handed_to_c() {
+    let entry = write_ffi_package(include_str!(
+        "../fixtures/ffi/ffi_program_array_argument.kira"
+    ));
+
+    // 1.5 + 2.25 + 3.0, then 10 + 20 + 30 + 40, then an empty array — which is
+    // a null pointer and a zero count rather than a trap.
+    const EXPECTED_ARRAY_ARGUMENT: &str = "6.75\n100\n0\n";
+
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            EXPECTED_ARRAY_ARGUMENT,
+            "the {backend} backend disagreed on an array handed to C\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "the {backend} backend did not exit cleanly\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+}
+
+/// The same array, named as a C-layout struct's data pointer, on every backend.
+///
+/// A graphics API rarely takes a pointer and a count as two arguments: it takes
+/// a descriptor holding both. `sg_range` is the one every sokol upload goes
+/// through, and while an array could only cross at an argument, that descriptor
+/// had to be built in a C helper whose whole job was naming the address of an
+/// array — two of them survived in kira-graphics for exactly that reason.
+///
+/// The last line is the one that matters most: C keeps the pointer and reads it
+/// after the call returns, so it fails if the elements got storage that dies
+/// with the descriptor naming them.
+#[test]
+fn every_backend_agrees_on_an_array_named_in_a_c_layout_member() {
+    let entry = write_ffi_package(include_str!(
+        "../fixtures/ffi/ffi_program_array_member.kira"
+    ));
+
+    // 1.5 + 2.25 + 3.0 by address, 10 + 20 + 30 + 40 by value, an empty array —
+    // which is a null pointer the fixture answers -1 for — then 7 + 8 + 9 read
+    // back out of a pointer C kept.
+    const EXPECTED_ARRAY_MEMBER: &str = "6.75\n100\n-1\n24\n";
+
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            EXPECTED_ARRAY_MEMBER,
+            "the {backend} backend disagreed on an array named in a C-layout member\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "the {backend} backend did not exit cleanly\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+}
+
+/// A Kira enum and an array named directly in a foreign signature.
+///
+/// Both were refused before, and both refusals told the author to write
+/// something that threw a name away: an integer for the enum, a `RawPtr` and a
+/// length for the array. A graphics binding paid for that twice — sixteen enums
+/// each with a hand-written `*Code()` mapper, and a six-function shim whose only
+/// job was streaming an array into C.
+///
+/// The enum crosses as its case's number, which is what a C enum is; the array
+/// crosses as a pointer to elements the seam writes out in C's widths.
+#[test]
+fn every_backend_agrees_on_enums_and_arrays_named_in_a_signature() {
+    let entry = write_ffi_package(include_str!(
+        "../fixtures/ffi/ffi_program_named_shapes.kira"
+    ));
+
+    // The three strides the C enum switches on, the float sum, and the struct.
+    const EXPECTED_NAMED_SHAPES: &str = "24\n4\n16\n6.75\n42\n";
+
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            EXPECTED_NAMED_SHAPES,
+            "the {backend} backend disagreed on a named shape\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "the {backend} backend did not exit cleanly\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+}
+
+/// An array argument travels *out* only: C reads a copy, and writes to it are
+/// not visible afterwards.
+///
+/// The seam writes the elements into its own buffer in C's widths, because Kira
+/// holds them in Kira's. Handing over the array's own storage is not an option,
+/// so a write through the pointer lands somewhere Kira does not read — which is
+/// worth pinning, because a caller reaching for the out-parameter shape a C API
+/// often uses would otherwise find it silently doing nothing.
+#[test]
+fn an_array_argument_is_a_copy_out_not_a_shared_buffer() {
+    let entry = write_ffi_package(
+        r#"
+@FFI.Extern { library: ffifixture; symbol: ffi_fill_floats; abi: c; }
+function ffiFillFloats(values: [F32], count: I32): Void;
+
+@Main
+function main() {
+    var values: [F32] = [1.0, 2.0]
+    ffiFillFloats(values, 2)
+    print(values[0])
+    print(values[1])
+    return
+}
+"#,
+    );
+
+    // 1 and 2, not the 99s C wrote into the buffer it was handed.
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "1\n2\n",
+            "the {backend} backend disagreed on an array argument's direction\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+}

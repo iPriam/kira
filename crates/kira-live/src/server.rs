@@ -34,6 +34,14 @@ pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// that says nothing fails the session, not hangs the build") actually hold.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long the server waits for a runner to acknowledge a shutdown.
+///
+/// Shorter than a read, because this is the one wait with nothing left to gain:
+/// the session has already got everything it was going to get, and the runner is
+/// only being given the chance to leave through the front door. A runner that
+/// does not take it is closed on.
+pub const GOODBYE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// How long the server waits for a runner to connect at all.
 ///
 /// The runner is a child process the session just started. If it dies before
@@ -133,7 +141,8 @@ impl LiveServer {
     /// Accepts one runner and runs its session to completion.
     ///
     /// Returns what the runner actually reported reaching, then ends the
-    /// session. For a session that stays open — which is what reload needs — use
+    /// session — told to the runner and waited on, not dropped underneath it.
+    /// For a session that stays open — which is what reload needs — use
     /// [`LiveServer::accept_session`].
     pub fn serve_once(
         &self,
@@ -155,9 +164,16 @@ impl LiveServer {
         accept_timeout: Duration,
         on_event: &mut dyn FnMut(LiveEvent),
     ) -> Result<SessionProgress, ServerError> {
-        let session =
+        let mut session =
             self.accept_session_within(self.bundle.clone(), headless, accept_timeout, on_event)?;
-        Ok(session.progress())
+        let progress = session.progress();
+        // The runner is still up, and this is the end of the session it is up
+        // for. Ending it in the protocol rather than by closing the socket is
+        // what lets the runner finish: a runner whose socket vanishes mid-report
+        // has to guess whether it was shut down or broken, and one whose last
+        // message is answered by a reset does not exit cleanly.
+        session.end(on_event)?;
+        Ok(progress)
     }
 
     /// Accepts one runner, serves it `bundle`, and hands back the open session.

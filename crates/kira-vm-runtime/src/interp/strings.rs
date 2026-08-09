@@ -153,6 +153,16 @@ impl Vm<'_> {
                 let replaced = text.replace(from, to);
                 Ok(Value::Str(self.heap.alloc(replaced)))
             }
+            (StringOp::IsInt, []) => Ok(Value::Bool(text.trim().parse::<i64>().is_ok())),
+            (StringOp::ToInt, []) => match text.trim().parse::<i64>() {
+                Ok(value) => Ok(Value::Int(value)),
+                Err(_) => Err(VmError::NotAWholeNumber),
+            },
+            (StringOp::DropLastScalar, []) => {
+                let mut dropped = text.to_owned();
+                dropped.pop();
+                Ok(Value::Str(self.heap.alloc(dropped)))
+            }
             (StringOp::Trim, []) => {
                 let trimmed = text.trim().to_owned();
                 Ok(Value::Str(self.heap.alloc(trimmed)))

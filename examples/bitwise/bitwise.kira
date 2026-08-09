@@ -62,7 +62,7 @@ function packing() {
     print(1024 >> 3)
 
     // Signed: the sign bit is copied into the vacated positions.
-    let signed: I64 = -1
+    let signed: Int = -1
     print(signed >> 60)
 
     // Unsigned: zeros are. `unsigned` holds the same 64 bits as `signed` — all

@@ -557,6 +557,86 @@ impl Vm<'_> {
                 self.heap.drop_value(value);
                 self.stack.push(Value::RawPtr(word));
             }
+            Instruction::ArrayElements(element) => {
+                let value = self.pop()?;
+                let Value::Array(id) = value else {
+                    self.heap.drop_value(value);
+                    return Err(VmError::NotAnArray);
+                };
+                let mut bytes = Vec::new();
+                for &item in self.heap.elements(id) {
+                    write_seam_scalar(&mut bytes, element, item)?;
+                }
+                self.heap.drop_value(value);
+                self.stack
+                    .push(Value::RawPtr(kira_runtime_abi::c_storage::retain_bytes(
+                        &bytes,
+                    )));
+            }
+            Instruction::ScalarText => {
+                let value = self.pop()?;
+                let Value::Int(code) = value else {
+                    self.heap.drop_value(value);
+                    return Err(VmError::TypeMismatch {
+                        expected: "a code point to render as text",
+                    });
+                };
+                // A code point outside Unicode, or a surrogate half, has no
+                // scalar and so no text; the empty string is what it renders
+                // as rather than a trap, matching what the native runtime does.
+                let text = u32::try_from(code)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .map(String::from)
+                    .unwrap_or_default();
+                let id = self.heap.alloc(text);
+                self.stack.push(Value::Str(id));
+            }
+            Instruction::MathOp(op) => {
+                let value = self.pop()?;
+                let Value::Float(value) = value else {
+                    self.heap.drop_value(value);
+                    return Err(VmError::TypeMismatch {
+                        expected: "a float to take a maths operation of",
+                    });
+                };
+                self.stack.push(Value::Float(op.apply(value)));
+            }
+            Instruction::ForeignOffset(offset) => {
+                let address = self.pop_foreign_pointer()?;
+                self.stack
+                    .push(Value::RawPtr(address.wrapping_add(u64::from(offset))));
+            }
+            Instruction::ForeignIndex(stride) => {
+                let index = self.pop()?;
+                let Value::Int(index) = index else {
+                    self.heap.drop_value(index);
+                    return Err(VmError::TypeMismatch {
+                        expected: "an integer index into C storage",
+                    });
+                };
+                let address = self.pop_foreign_pointer()?;
+                let step = (index as u64).wrapping_mul(u64::from(stride));
+                self.stack.push(Value::RawPtr(address.wrapping_add(step)));
+            }
+            Instruction::ForeignLoad { offset, ty } => {
+                let address = self.pop_foreign_pointer()?;
+                let size = kira_runtime_abi::scalar_layout(
+                    ty,
+                    kira_runtime_abi::ForeignPointerWidth::HOST,
+                )
+                .size;
+                // SAFETY: the pointer came from the foreign seam, Kira has no
+                // arithmetic to alter one, and the offset and size are the
+                // target's own C layout. A null base is the one case a program
+                // can produce and is refused rather than read.
+                let Some(word) =
+                    (unsafe { kira_runtime_abi::c_storage::read_bytes(address, offset, size) })
+                else {
+                    return Err(VmError::NullForeignRead);
+                };
+                self.stack.push(foreign_scalar_value(ty, word));
+            }
             Instruction::CLayoutAddress(aggregate) => {
                 let value = self.pop()?;
                 let id = kira_runtime_abi::ForeignAggregateId(aggregate);
@@ -626,6 +706,18 @@ impl Vm<'_> {
 
     // ----- operand-stack helpers ---------------------------------------
 
+    /// Pops a pointer word addressing C storage.
+    fn pop_foreign_pointer(&mut self) -> Result<u64, VmError> {
+        let value = self.pop()?;
+        let Value::RawPtr(address) = value else {
+            self.heap.drop_value(value);
+            return Err(VmError::TypeMismatch {
+                expected: "a pointer into C storage",
+            });
+        };
+        Ok(address)
+    }
+
     fn pop(&mut self) -> Result<Value, VmError> {
         self.stack.pop().ok_or(VmError::StackUnderflow)
     }
@@ -686,4 +778,70 @@ impl Vm<'_> {
             }
         }
     }
+}
+
+/// The Kira value a seam scalar's bytes read back as.
+///
+/// The little-endian byte order is the seam's everywhere Kira builds; the eight
+/// byte word is zero-padded above the scalar's own size by [`read_bytes`].
+///
+/// [`read_bytes`]: kira_runtime_abi::c_storage::read_bytes
+fn foreign_scalar_value(ty: kira_runtime_abi::ForeignType, word: [u8; 8]) -> Value {
+    use kira_runtime_abi::ForeignType;
+    let raw = u64::from_le_bytes(word);
+    match ty {
+        // Signed types sign-extend from their own width; the zero padding above
+        // the scalar is not part of the value.
+        ForeignType::I8 => Value::Int(i64::from(raw as u8 as i8)),
+        ForeignType::I16 => Value::Int(i64::from(raw as u16 as i16)),
+        ForeignType::I32 => Value::Int(i64::from(raw as u32 as i32)),
+        ForeignType::I64 => Value::Int(raw as i64),
+        ForeignType::U8 => Value::Int(i64::from(raw as u8)),
+        ForeignType::U16 => Value::Int(i64::from(raw as u16)),
+        ForeignType::U32 => Value::Int(i64::from(raw as u32)),
+        ForeignType::U64 => Value::Int(raw as i64),
+        ForeignType::Bool => Value::Bool(raw != 0),
+        ForeignType::F32 => Value::Float(f64::from(f32::from_bits(raw as u32))),
+        ForeignType::F64 => Value::Float(f64::from_bits(raw)),
+        ForeignType::RawPtr | ForeignType::CString => Value::RawPtr(raw),
+        // Refused where the read is analyzed: a `Void` member has no bytes.
+        ForeignType::Void => Value::Int(0),
+    }
+}
+
+/// Writes one Kira value into a C buffer as `ty`.
+///
+/// The widths are the seam's, not Kira's: a `[F32]` holds `Value::Float`, which
+/// is an `f64`, and what C reads is four bytes. Little-endian because that is
+/// the byte order every target Kira builds for uses.
+fn write_seam_scalar(
+    out: &mut Vec<u8>,
+    ty: kira_runtime_abi::ForeignType,
+    value: Value,
+) -> Result<(), VmError> {
+    use kira_runtime_abi::ForeignType;
+    let mismatch = VmError::TypeMismatch {
+        expected: "an array element the C seam can carry",
+    };
+    match (ty, value) {
+        (ForeignType::I8, Value::Int(n)) => out.push(n as u8),
+        (ForeignType::U8 | ForeignType::Bool, Value::Int(n)) => out.push(n as u8),
+        (ForeignType::Bool, Value::Bool(flag)) => out.push(u8::from(flag)),
+        (ForeignType::I16 | ForeignType::U16, Value::Int(n)) => {
+            out.extend_from_slice(&(n as u16).to_le_bytes());
+        }
+        (ForeignType::I32 | ForeignType::U32, Value::Int(n)) => {
+            out.extend_from_slice(&(n as u32).to_le_bytes());
+        }
+        (ForeignType::I64 | ForeignType::U64, Value::Int(n)) => {
+            out.extend_from_slice(&n.to_le_bytes());
+        }
+        (ForeignType::F32, Value::Float(x)) => out.extend_from_slice(&(x as f32).to_le_bytes()),
+        (ForeignType::F64, Value::Float(x)) => out.extend_from_slice(&x.to_le_bytes()),
+        (ForeignType::RawPtr, Value::RawPtr(word)) => {
+            out.extend_from_slice(&word.to_le_bytes());
+        }
+        _ => return Err(mismatch),
+    }
+    Ok(())
 }

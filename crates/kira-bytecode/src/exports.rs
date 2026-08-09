@@ -228,6 +228,7 @@ fn export_type(
         Type::Array(_)
         | Type::Enum(_)
         | Type::RawPtr
+        | Type::ForeignPtr(_)
         | Type::CString
         | Type::Any
         | Type::NativeState(_)

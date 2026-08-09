@@ -167,7 +167,7 @@ fn integer_width_is_read_from_the_target_rather_than_the_keyword() {
 
     let long_spelling = match std::env::consts::OS {
         "windows" => "I32",
-        _ => "I64",
+        _ => "Int",
     };
     assert!(
         text.contains(&format!(

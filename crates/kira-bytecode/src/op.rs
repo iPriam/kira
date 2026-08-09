@@ -17,10 +17,12 @@
 mod codec;
 
 pub use codec::{DecodeError, decode, encode, encode_one};
+
+use kira_runtime_abi::ForeignType;
 /// The deferred-task primitives, re-exported so an instruction names them from
 /// the one place the executor defines them.
 pub use kira_runtime_abi::TaskPrim;
-pub use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, StringOp};
+pub use kira_runtime_abi::{CompilerOp, EnvOp, FileSystemOp, MathOp, StringOp};
 
 /// One decoded VM instruction.
 #[derive(Debug, Clone, PartialEq)]
@@ -255,6 +257,27 @@ pub enum Instruction {
     NewStruct(u16),
     /// Pop a struct, push a copy of field `n`, and drop the struct.
     GetField(u16),
+    /// Pop a pointer word and push the value `offset` bytes into it, read as
+    /// `ty`.
+    ///
+    /// The one instruction that reads memory Kira does not own. It exists so a
+    /// C callback's `const T*` argument can be used without a C accessor per
+    /// field; the offset is resolved from the target's C layout at compile time,
+    /// and the pointer comes from the foreign seam, never from Kira arithmetic.
+    /// Pop a pointer word and push it advanced by `offset` bytes.
+    ///
+    /// A member whose bytes live inside the container names a place, so what a
+    /// read of it produces is an address rather than a value.
+    ForeignOffset(u32),
+    /// Pop an index and a pointer word, and push the pointer advanced by
+    /// `index * stride` bytes — C's `pointer[index]` as an address.
+    ForeignIndex(u32),
+    ForeignLoad {
+        /// Byte offset of the member within the pointed-to struct.
+        offset: u32,
+        /// The seam type to read the bytes as.
+        ty: ForeignType,
+    },
     /// Pop a value and store it into local `slot`, walking `path` field by
     /// field from the slot's struct. The overwritten value is dropped.
     ///
@@ -385,6 +408,20 @@ pub enum Instruction {
     /// keep paying that. See [`StringOp`] for the numbering, which is
     /// append-only.
     StringOp(StringOp),
+    /// Pop an array, push the address of a C buffer holding its elements as
+    /// `ty`.
+    ///
+    /// The storage outlives the call, for the reason a `CString` member's does:
+    /// nothing on this side knows whether the callee kept the pointer.
+    ArrayElements(ForeignType),
+    /// Pop a code point, push the text of that one Unicode scalar.
+    ScalarText,
+    /// Pop a float, push the result of one floating-point operation on it.
+    ///
+    /// One opcode for every operation, told apart by the operand byte, for the
+    /// reason [`StringOp`] gives: the opcode space is one byte and the maths
+    /// surface will keep growing.
+    MathOp(MathOp),
     /// Perform one compiler operation through the host.
     ///
     /// The same shape as [`Instruction::FileSystem`], for the same reason: the
@@ -813,6 +850,18 @@ mod opcode {
     // than placed beside `CALL_WRITEBACK`, because the table is append-only and
     // where an opcode reads well is not a reason to move one.
     pub const CALL_NATIVE_WRITEBACK: u8 = 0x68;
+    /// See [`super::Instruction::MathOp`].
+    pub const MATH_OP: u8 = 0x6c;
+    /// See [`super::Instruction::ScalarText`].
+    pub const SCALAR_TEXT: u8 = 0x6d;
+    /// See [`super::Instruction::ArrayElements`].
+    pub const ARRAY_ELEMENTS: u8 = 0x6e;
+    /// See [`super::Instruction::ForeignLoad`].
+    pub const FOREIGN_LOAD: u8 = 0x69;
+    /// See [`super::Instruction::ForeignOffset`].
+    pub const FOREIGN_OFFSET: u8 = 0x6a;
+    /// See [`super::Instruction::ForeignIndex`].
+    pub const FOREIGN_INDEX: u8 = 0x6b;
 }
 
 #[cfg(test)]

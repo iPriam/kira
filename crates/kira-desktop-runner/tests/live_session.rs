@@ -192,7 +192,111 @@ fn the_runner_binary_runs_the_app_it_is_served() {
         .expect("the server reports a clean session");
     assert_eq!(progress.ready(true), Ok(()));
 
-    let mut child = guard.take();
+    let (stdout, stderr, status) = finish(guard.take());
+    assert!(
+        stdout.contains(APP_OUTPUT),
+        "the app's own output must appear on the runner's stdout.\n\
+         stdout: {stdout:?}\nstderr: {stderr:?}"
+    );
+    assert!(
+        status.success(),
+        "the runner must exit 0 for a session that ran. stderr: {stderr:?}"
+    );
+}
+
+/// The server ending a session it has already been served by must not make the
+/// runner report a failure.
+///
+/// This is the abrupt end — no shutdown, the socket simply gone, which is what a
+/// supervisor that died looks like from the runner's side. The app is up and its
+/// work is done, so the runner's remaining goodbye has nobody to reach; a runner
+/// that called that a protocol failure would exit non-zero for a session that
+/// ran, and would do it only under the timing that lost the race.
+#[test]
+fn a_server_that_vanishes_after_the_app_is_up_leaves_the_runner_clean() {
+    let dir = TempDir::new("vanishing-server");
+    let server = LiveServer::bind(loopback(), vm_bundle()).expect("bind");
+    let address = server.local_addr().expect("addr");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_kira-desktop-runner"))
+        .arg("--server")
+        .arg(address.to_string())
+        .arg("--cache")
+        .arg(&dir.0)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the runner binary spawns");
+    let mut guard = ChildGuard::new(child);
+
+    let session = server
+        .accept_session(vm_bundle(), true, &mut |_| {})
+        .expect("the session reaches ready");
+    assert_eq!(session.progress().ready(true), Ok(()));
+    // No shutdown, no goodbye: the session is dropped where it stands.
+    drop(session);
+
+    let (stdout, stderr, status) = finish(guard.take());
+    assert!(
+        stdout.contains(APP_OUTPUT),
+        "the app must have run. stdout: {stdout:?}\nstderr: {stderr:?}"
+    );
+    assert!(
+        status.success(),
+        "a server that goes away after the app is up is the session ending, not a failure. \
+         stderr: {stderr:?}"
+    );
+}
+
+/// A server that goes away *before* the runner has what it needs is still a
+/// failure the runner reports.
+///
+/// The counterweight to the test above: a disconnect stops being a failure only
+/// once the session has delivered what it was for. Here it never does, and the
+/// runner must say so rather than exit as if it had run something.
+#[test]
+fn a_server_that_leaves_before_serving_fails_the_runner() {
+    let listener = std::net::TcpListener::bind(loopback()).expect("bind");
+    let address = listener.local_addr().expect("addr");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_kira-desktop-runner"))
+        .arg("--server")
+        .arg(address.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the runner binary spawns");
+    let mut guard = ChildGuard::new(child);
+
+    // Welcomed, and then abandoned: the runner is connected and has nothing.
+    let (stream, _) = listener.accept().expect("accept");
+    let mut reader = std::io::BufReader::new(stream.try_clone().expect("clone"));
+    let mut writer = std::io::BufWriter::new(stream);
+    let hello: kira_live::ClientMessage = kira_live::read_message(&mut reader).expect("hello");
+    assert!(matches!(hello, kira_live::ClientMessage::Hello { .. }));
+    kira_live::write_message(
+        &mut writer,
+        &kira_live::ServerMessage::Welcome {
+            protocol: kira_live::PROTOCOL_VERSION,
+        },
+    )
+    .expect("welcome");
+    drop(writer);
+    drop(reader);
+
+    let (stdout, stderr, status) = finish(guard.take());
+    assert!(
+        !status.success(),
+        "a runner that was never served must not exit 0. stdout: {stdout:?}\nstderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("disconnected"),
+        "the runner must say the server left, got {stderr:?}"
+    );
+}
+
+/// Reads a finished runner's output and waits for it.
+fn finish(mut child: Child) -> (String, String, std::process::ExitStatus) {
     let mut stdout = String::new();
     child
         .stdout
@@ -208,16 +312,7 @@ fn the_runner_binary_runs_the_app_it_is_served() {
         .read_to_string(&mut stderr)
         .expect("read stderr");
     let status = child.wait().expect("the runner exits");
-
-    assert!(
-        stdout.contains(APP_OUTPUT),
-        "the app's own output must appear on the runner's stdout.\n\
-         stdout: {stdout:?}\nstderr: {stderr:?}"
-    );
-    assert!(
-        status.success(),
-        "the runner must exit 0 for a session that ran. stderr: {stderr:?}"
-    );
+    (stdout, stderr, status)
 }
 
 /// A runner that connects for a different platform's bundle is refused, and told
@@ -417,6 +512,7 @@ fn every_wait_in_a_session_is_bounded() {
     assert!(kira_live::server::READ_TIMEOUT <= ceiling);
     assert!(kira_live::server::WRITE_TIMEOUT <= ceiling);
     assert!(kira_live::server::ACCEPT_TIMEOUT <= ceiling);
+    assert!(kira_live::server::GOODBYE_TIMEOUT <= ceiling);
     assert!(kira_live::client::READ_TIMEOUT <= ceiling);
     assert!(kira_live::client::WRITE_TIMEOUT <= ceiling);
 }

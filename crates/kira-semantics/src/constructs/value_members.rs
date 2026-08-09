@@ -189,10 +189,13 @@ impl Analyzer<'_> {
         // duplicate member is `KSEM202`).
         let owner = self.program.types.type_name(concrete_ty);
         let value = match self.lookup_function(&format!("{owner}.{member}")) {
-            Some((target, _, _)) => self.program.exprs.alloc(HirExpr::Call {
+            // Typed with what the member actually presents, which a child family
+            // may have made more specific than this family promised; the arm
+            // carries it up to the declared result below.
+            Some((target, _, presented)) => self.program.exprs.alloc(HirExpr::Call {
                 callee: Callee::User(target),
                 args: vec![concrete],
-                ty: result,
+                ty: presented,
                 writebacks: Vec::new(),
             }),
             None => match self
@@ -212,6 +215,7 @@ impl Analyzer<'_> {
             },
         };
         let value = self.coerce_construct_value(value, Some(result));
+        let value = self.coerce_into(value, result);
         vec![
             self.program
                 .stmts

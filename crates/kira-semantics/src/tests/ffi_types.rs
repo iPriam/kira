@@ -89,7 +89,7 @@ fn an_ffi_alias_colliding_with_a_builtin_is_rejected() {
 #[test]
 fn a_c_layout_struct_zero_fills_an_empty_literal() {
     let text = "@FFI.Struct { layout: c; }\n\
-         struct V { var a: I32\n var b: Bool\n var c: F64 }\n\
+         struct V { var a: I32\n var b: Bool\n var c: Float }\n\
          @Main function main() { let v = V {}\n return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
     let fields = last_struct_new(&program(text));
@@ -242,7 +242,7 @@ fn an_ffi_callback_as_an_extern_param_crosses_as_the_pointer_it_is() {
 
 #[test]
 fn an_ffi_callback_declaration_alone_type_checks() {
-    let text = "@FFI.Callback { abi: c; params: [I32, RawPtr]; result: I64; }\nstruct Cb {}\n\
+    let text = "@FFI.Callback { abi: c; params: [I32, RawPtr]; result: Int; }\nstruct Cb {}\n\
          @Main function main() { return }";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
 }

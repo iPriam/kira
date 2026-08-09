@@ -11,6 +11,8 @@ and every one of them works in **bytes**.
 | `s.substring(a, b)` | `String` | the half-open byte range `a ..< b` |
 | `s.indexOf(needle)` | `Int` | the first byte index of `needle`, or `-1` |
 | `String(x)` | `String` | a scalar rendered as text |
+| `s.dropLastScalar()` | `String` | `s` without its last Unicode scalar |
+| `scalarText(c)` | `String` | the text of the Unicode scalar at code point `c` |
 
 Bytes rather than characters is the choice these four make together. A program
 that carves text at a delimiter it located itself hands the index it got back to
@@ -23,6 +25,19 @@ converted never disagree: `String(2.0)` is `"2"`, `String(1.0 / 3.0)` is
 `"0.3333333333333333"`, `String(true)` is `"true"`.
 
 An empty needle matches at the front, so `s.indexOf("")` is `0`.
+
+## The two operations that count scalars, not bytes
+
+`dropLastScalar` and `scalarText` are the exceptions, and they exist because
+backspace is not a byte operation. `"kirä".substring(0, 3)` cuts the `ä` in half
+and leaves bytes that are no longer UTF-8; `"kirä".dropLastScalar()` is `"kir"`,
+and `"A😀".dropLastScalar()` is `"A"` though the emoji is four bytes.
+
+`scalarText` is the inverse, and the reason a text field needs no C helper: a key
+press arrives as a code point, and `base + scalarText(code)` appends it. A code
+point outside Unicode, or a surrogate half, names no scalar and renders as the
+empty string rather than trapping — there is no wrong answer to give, and a trap
+would make a keyboard event able to end a program.
 
 ## Out of range is a trap
 

@@ -61,6 +61,7 @@ mod ffi_types;
 mod foreign;
 mod foreign_aggregate;
 mod foreign_callback;
+mod foreign_field;
 mod generics;
 mod imports;
 mod mutation;

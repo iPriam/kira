@@ -27,8 +27,10 @@ function main() {
 `Point`, `Size`, `Rect`, `Vec3`, and `Mat4` are data structs, matched to the
 reference implementation on field names and types so a construction written
 against it means the same thing here. `Mat4` defaults to the identity; the free
-function `mat4Identity()` returns it. `sqrtApprox`, `sinApprox`, and `cosApprox`
-are the series approximations the corpus's own math builds on.
+function `mat4Identity()` returns it. The trigonometry and roots the corpus's
+own math builds on are compiler primitives — `sqrt`, `sin`, `cos`, `tan`,
+`floor`, `ceil`, `abs` — not library functions, and `docs/language.md` covers
+them.
 
 A data struct is constructed by naming it, its implicit memberwise constructor:
 `Point(1.0, 2.0)` fills the fields in declaration order and `Point(x: 1.0, y:
@@ -61,6 +63,49 @@ implementation in `kira-runtime-abi`, which is what makes the three backends
 agree byte for byte, and it is why the portable VM core still builds for
 `wasm32-unknown-unknown` — a host that grants no filesystem simply refuses, and
 the web has no files to grant.
+
+## Images
+
+`Image/` decodes PNG and JPEG into RGBA8:
+
+```kira
+match decodeImageFile("assets/backdrop.png") {
+    Ok(image) -> { printLine(String(image.width) + "x" + String(image.height)) }
+    Error(reason) -> { printLine("no picture there") }
+}
+```
+
+`Image` is `width`, `height`, and `pixels` — four bytes per pixel, row-major,
+**first row at the top**, no padding between rows. `decodeImage` takes the bytes
+directly for a caller that already has them, and names the format from the bytes
+rather than from a path's extension.
+
+What is read: every PNG colour type and bit depth the format defines, palettes,
+both kinds of transparency, and Adam7 interlacing; and JPEG's sequential Huffman
+frames — `SOF0` and `SOF1`, greyscale or three-component, at any sampling
+factors and any restart interval, which is what a camera or an exporter writes.
+
+`ImageFailure` names three answers. `FileUnreadable` is a path with nothing
+behind it. `UnknownFormat` is bytes carrying an encoding this does not read — a
+GIF, but equally a progressive or arithmetic-coded JPEG, which are different
+encodings sharing a container. `Malformed` is reserved for bytes that claim one
+of the encodings here and then contradict it, so a caller retrying a download
+can tell damage from a file it was never going to read.
+
+Checksums are not verified — neither a PNG chunk's CRC nor a zlib stream's
+Adler-32. A checksum answers whether bytes travelled intact, which is a
+different question from whether they decode, and refusing a file that decodes
+would throw away a picture the caller can use. Structure is checked, because
+nothing can be decoded past a length that overruns its input.
+
+`Compression/` holds what PNG needs and nothing else needs to duplicate:
+`inflateZlib` and `inflateRaw` read DEFLATE (RFC 1951) and its zlib wrapper
+(RFC 1950), answering `InflateFailure.Truncated` or `.Malformed`. A compressed
+stream is not a graphics concept, which is why it is here rather than inside the
+decoder that first wanted one.
+
+All of it is Kira. There is no bundled decoder and no C to link, so a program
+reads a PNG on the VM, on native code, and anywhere else the language runs.
 
 ## The compiler
 

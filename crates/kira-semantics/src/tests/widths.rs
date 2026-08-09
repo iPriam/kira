@@ -5,7 +5,7 @@
 //! *named* width must match exactly, while bare `Int`/`Float` is a wildcard
 //! matching any width in its kind. These tests pin both halves, because
 //! dropping either one breaks a different set of programs — losing the
-//! exactness lets `U8` flow into an `I64`, and losing the wildcard makes
+//! exactness lets `U8` flow into an `Int`, and losing the wildcard makes
 //! `let x: U8 = 5` fail to check.
 
 use super::{codes, diagnostics};
@@ -18,13 +18,13 @@ fn every_fixed_width_name_resolves_as_a_type() {
                  let a: I8 = 1
                  let b: I16 = 2
                  let c: I32 = 3
-                 let d: I64 = 4
+                 let d: Int = 4
                  let e: U8 = 5
                  let f: U16 = 6
                  let g: U32 = 7
                  let h: U64 = 8
                  let i: F32 = 1.5
-                 let j: F64 = 2.5
+                 let j: Float = 2.5
                  print(a + 1)
                  print(b + 1)
                  print(c + 1)
@@ -51,7 +51,7 @@ fn an_integer_literal_checks_at_every_width() {
         diagnostics(
             "@Main function main() {
                  let a: U8 = 5
-                 let b: I64 = 5
+                 let b: Int = 5
                  print(a + 1)
                  print(b - 1)
                  print(a > 0)
@@ -70,8 +70,8 @@ fn two_different_widths_do_not_mix() {
         codes(
             "@Main function main() {
                  let a: U8 = 1
-                 let b: I64 = 2
-                 let c: I64 = a
+                 let b: U32 = 2
+                 let c: U32 = a
                  print(c + b)
                  return
              }"
@@ -86,7 +86,7 @@ fn arithmetic_on_two_different_widths_is_rejected() {
         codes(
             "@Main function main() {
                  let a: U8 = 1
-                 let b: I64 = 2
+                 let b: U32 = 2
                  print(a + b)
                  return
              }"
@@ -113,17 +113,20 @@ fn an_integer_width_and_a_float_width_do_not_mix() {
 }
 
 #[test]
-fn two_float_widths_do_not_mix() {
-    assert_eq!(
-        codes(
+fn the_one_float_width_mixes_with_the_wildcard() {
+    // There is only one written float width left: `F32`. `Float` is the 64-bit
+    // float *and* the wildcard, so the pair agrees rather than colliding —
+    // there is no second width to mismatch against now that `F64` is gone.
+    assert!(
+        diagnostics(
             "@Main function main() {
                  let a: F32 = 1.0
-                 let b: F64 = 2.0
+                 let b: Float = 2.0
                  print(a + b)
                  return
              }"
-        ),
-        vec!["KSEM071"]
+        )
+        .is_empty()
     );
 }
 
@@ -133,7 +136,7 @@ fn a_width_is_checked_at_a_call_and_at_a_return() {
         codes(
             "function take(value: U8) -> U8 { return value }
              @Main function main() {
-                 let wide: I64 = 1
+                 let wide: U32 = 1
                  print(take(wide))
                  return
              }"
@@ -148,7 +151,7 @@ fn a_width_is_checked_on_a_struct_field() {
         codes(
             "struct Holder { var value: U32 }
              @Main function main() {
-                 let wide: I64 = 1
+                 let wide: I32 = 1
                  let h = Holder { value: wide }
                  print(h.value)
                  return
@@ -161,11 +164,11 @@ fn a_width_is_checked_on_a_struct_field() {
 #[test]
 fn a_bare_int_accepts_and_is_accepted_by_any_width() {
     // The wildcard is symmetric, and deliberately makes assignability
-    // non-transitive: `U8` -> `Int` and `Int` -> `I64` both hold while
-    // `U8` -> `I64` does not. That is the language's rule, not an artifact.
+    // non-transitive: `U8` -> `Int` and `Int` -> `U32` both hold while
+    // `U8` -> `U32` does not. That is the language's rule, not an artifact.
     assert!(
         diagnostics(
-            "function widen(value: Int) -> Int { return value }
+            "function widen(value: Int) -> U32 { return value }
              @Main function main() {
                  let small: U8 = 5
                  let plain: Int = 6
@@ -182,7 +185,7 @@ fn a_bare_int_accepts_and_is_accepted_by_any_width() {
 #[test]
 fn a_mixed_operation_takes_its_type_from_the_left_operand() {
     // The left operand decides, and this is *asymmetric*: `1 + i32Value` is a
-    // plain `Int` (wildcard-assignable to `I64`), while `i32Value + 1` is an
+    // plain `Int` (wildcard-assignable to `Int`), while `i32Value + 1` is an
     // `I32` (which is not). Verified against the oracle in both directions —
     // a symmetric "the written width wins" rule accepts the second and passes
     // every backend-parity test while still being wrong.
@@ -190,7 +193,7 @@ fn a_mixed_operation_takes_its_type_from_the_left_operand() {
         diagnostics(
             "@Main function main() {
                  let narrow: I32 = 3
-                 let wide: I64 = 1 + narrow
+                 let wide: Int = 1 + narrow
                  print(wide)
                  return
              }"
@@ -201,7 +204,7 @@ fn a_mixed_operation_takes_its_type_from_the_left_operand() {
         codes(
             "@Main function main() {
                  let narrow: I32 = 3
-                 let wide: I64 = narrow + 1
+                 let wide: U32 = narrow + 1
                  print(wide)
                  return
              }"

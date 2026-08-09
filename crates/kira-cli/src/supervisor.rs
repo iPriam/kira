@@ -131,8 +131,10 @@ pub fn run(options: &LiveOptions, source: &Path, rebuild: Rebuild<'_>) -> Result
     }
 
     emit(&LiveEvent::ShutdownStarted);
-    // The event below says the runner is gone, so this is where it goes.
-    let _ = session.shutdown();
+    // The event below says the runner is gone, so this is where it goes. The
+    // session is ended rather than dropped: the runner's goodbye is read, so it
+    // leaves through the protocol instead of finding its socket gone.
+    let _ = session.end(&mut |event| emit(&event));
     runner
         .shutdown(SHUTDOWN_GRACE)
         .map_err(|source| LiveError::Shutdown { source })?;
@@ -243,7 +245,7 @@ fn relaunch(
     // has no reason to exit on its own, so without this it sits out the whole
     // grace period and gets killed — turning every relaunch into a five-second
     // stall followed by a runner that never got to shut down cleanly.
-    let _ = session.shutdown();
+    let _ = session.end(&mut |event| emit(&event));
     runner
         .shutdown(SHUTDOWN_GRACE)
         .map_err(|source| LiveError::Shutdown { source })?;

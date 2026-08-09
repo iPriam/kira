@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 
 use kira_diagnostics::{Code, Diagnostic, Label, Severity};
 use kira_ksl_semantics::{Module, check};
-use kira_macros::{CompiledShader, PrecompiledShaders};
+pub use kira_macros::CompiledShader;
+use kira_macros::PrecompiledShaders;
 use kira_shader_ir::{ShaderIr, lower};
 use kira_shader_model::{BackendTarget, Stage};
 use kira_source::{FileSpan, SourceId, Span};
@@ -24,13 +25,7 @@ use kira_source::{FileSpan, SourceId, Span};
 ///
 /// All of them, every time: a shader that compiled for Metal but silently not
 /// for WebGPU would fail on the platform nobody built on.
-const TARGETS: [BackendTarget; 5] = [
-    BackendTarget::Msl,
-    BackendTarget::Wgsl,
-    BackendTarget::Glsl330,
-    BackendTarget::Hlsl,
-    BackendTarget::Spirv,
-];
+const TARGETS: [BackendTarget; 5] = BackendTarget::ALL;
 
 /// Every KSL file one compilation read, in the order it was given an id.
 pub(crate) type ShaderSources = Vec<(String, String)>;
@@ -90,12 +85,63 @@ pub(crate) fn precompile(
             };
             entries.push((
                 path.clone(),
-                target.label().to_owned(),
+                // Keyed by the case a program writes, not by the versioned
+                // label: a bump from 330 to 430 must not invalidate every
+                // `ksl!` call site.
+                target.case_name().to_lowercase(),
                 emit(&ir, target, &path, source, &mut diagnostics),
             ));
         }
     }
     (PrecompiledShaders::new(entries), diagnostics, sources)
+}
+
+/// One shader compiled for one target.
+pub struct ShaderEmission {
+    /// The shader file, as given.
+    pub path: PathBuf,
+    /// The target's label, as `kira shader` prints it.
+    pub target: &'static str,
+    /// What that target emitted.
+    pub compiled: CompiledShader,
+}
+
+/// Compiles each `.ksl` file for every target, for `kira shader`.
+///
+/// Reports what each target *emitted*, which is the thing a build cannot tell
+/// you: a target that cannot express a shader leaves empty sources and a note
+/// rather than failing, so a shader can build clean and still hand a driver
+/// nothing.
+pub fn compile_files(paths: &[PathBuf]) -> (Vec<ShaderEmission>, Vec<Diagnostic>, ShaderSources) {
+    let mut emissions = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut sources: ShaderSources = Vec::new();
+    for path in paths {
+        let Some(ir) = compile_one(path, 0, &mut diagnostics, &mut sources) else {
+            continue;
+        };
+        let display = path.display().to_string();
+        let source = sources
+            .iter()
+            .position(|(known, _)| *known == display)
+            .map_or(SourceId::new(0), |at| {
+                SourceId::new(u32::try_from(at).unwrap_or(0))
+            });
+        let written = path.display().to_string();
+        for target in TARGETS {
+            let ir = if ir.reflection.as_ref().is_some_and(|r| r.backend == target) {
+                ir.clone()
+            } else {
+                lower(ir.module.clone(), target)
+            };
+            emissions.push(ShaderEmission {
+                path: path.clone(),
+                target: target.label(),
+                compiled: emit(&ir, target, &written, source, &mut diagnostics),
+            });
+        }
+    }
+    (emissions, diagnostics, sources)
 }
 
 /// Parses, resolves imports for, and checks one `.ksl` file.
@@ -288,7 +334,7 @@ fn emit(
         vertex_entry: entry(Stage::Vertex),
         fragment_entry: entry(Stage::Fragment),
         compute_entry: entry(Stage::Compute),
-        uniform_reflection: ir.uniform_digest(),
+        resource_reflection: ir.resource_digest(),
         ..CompiledShader::default()
     };
     match target {
@@ -298,34 +344,10 @@ fn emit(
             compiled.fragment_source = kira_wgsl_backend::emit(ir, Stage::Fragment);
             compiled.compute_source = kira_wgsl_backend::emit(ir, Stage::Compute);
         }
-        // GLSL 330 cannot express every shader — compute and storage arrived in
-        // 430 — and it says so rather than emitting something that will not
-        // link. A shader it refuses still compiles for the other targets, so
-        // the refusal leaves empty sources rather than failing the build.
-        BackendTarget::Glsl330 => {
-            for (stage, slot) in [(Stage::Vertex, 0usize), (Stage::Fragment, 1usize)] {
-                match kira_glsl_backend::emit(ir, stage) {
-                    Ok(source) => {
-                        if slot == 0 {
-                            compiled.vertex_source = source;
-                        } else {
-                            compiled.fragment_source = source;
-                        }
-                    }
-                    // Reported once, not once per stage: a shader GLSL cannot
-                    // express fails the same way for both.
-                    Err(refusal) => {
-                        if slot == 0 {
-                            diagnostics.push(unsupported_target(
-                                path,
-                                source,
-                                "glsl_330",
-                                &refusal.to_string(),
-                            ));
-                        }
-                    }
-                }
-            }
+        BackendTarget::Glsl430 => {
+            compiled.vertex_source = kira_glsl_backend::emit(ir, Stage::Vertex);
+            compiled.fragment_source = kira_glsl_backend::emit(ir, Stage::Fragment);
+            compiled.compute_source = kira_glsl_backend::emit(ir, Stage::Compute);
         }
         // HLSL refuses the same way GLSL does and for the same reason: a
         // shader it cannot express arrives with empty sources and a note,
@@ -476,16 +498,16 @@ shader Tri {
         // different consumers, and handing the host the wrong one leaves every
         // shader running with its uniforms unbound.
         assert_eq!(
-            msl.uniform_reflection,
-            "camera:0:64:1:1:view_projection@0#64;"
+            msl.resource_reflection,
+            "u|camera:0:64:1:1:view_projection@0#64:f;"
         );
 
         let wgsl = table.compile("Shaders/Tri.ksl", "wgsl").expect("wgsl");
         assert!(wgsl.vertex_source.contains("@vertex"));
         assert!(wgsl.fragment_source.contains("@fragment"));
 
-        let glsl = table.compile("Shaders/Tri.ksl", "glsl_330").expect("glsl");
-        assert!(glsl.vertex_source.contains("#version 330 core"));
+        let glsl = table.compile("Shaders/Tri.ksl", "glsl").expect("glsl");
+        assert!(glsl.vertex_source.contains("#version 430 core"));
 
         let hlsl = table.compile("Shaders/Tri.ksl", "hlsl").expect("hlsl");
         assert!(hlsl.vertex_source.contains("vs_VOut_out vertex_main("));
@@ -524,13 +546,14 @@ shader Tri {
         assert!(table.is_empty(), "a rejected shader must not be usable");
     }
 
+    /// A compute shader over storage reaches GLSL too.
+    ///
+    /// It did not at 330 — compute and storage arrived in 430 — and what a
+    /// target could not express left empty sources plus a note. Nothing does
+    /// that any more, so the assertion is that every target carries it.
     #[test]
-    fn a_target_that_cannot_express_the_shader_says_so() {
-        // GLSL 330 has no compute stage. The shader still compiles for Metal
-        // and WebGPU, so the build succeeds — but it succeeds having produced
-        // one fewer backend, and an artifact with silently empty GLSL fields
-        // looks exactly like one whose GLSL compiled.
-        let directory = Scratch::new("unsupported-target");
+    fn a_compute_shader_over_storage_reaches_every_target() {
+        let directory = Scratch::new("compute-target");
         std::fs::write(
             directory.path().join("Step.ksl"),
             r#"
@@ -554,23 +577,37 @@ shader Step {
 "#,
         )
         .expect("the shader");
-        let program = "@Main function main() {\n    let art = ksl!(\"Step.ksl\")\n    return\n}\n";
+        let program = "@Main function main() {
+    let art = ksl!(\"Step.ksl\")
+    return
+}
+";
         let (table, diagnostics, _) =
             precompile(directory.path(), &[], &[(SourceId::new(0), program)], 1);
-        let note = diagnostics
-            .iter()
-            .find(|d| d.has_code("KSLS016"))
-            .expect("the unsupported-target note");
-        assert!(note.message.contains("glsl_330"), "{}", note.message);
-        assert!(note.message.contains("Step.ksl"), "{}", note.message);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
-        // Metal still has it: one target refusing costs only that target.
         use kira_macros::ShaderCompiler;
         let msl = table.compile("Step.ksl", "msl").expect("msl");
         assert!(
             msl.combined_source.contains("kernel"),
             "{}",
             msl.combined_source
+        );
+        let glsl = table.compile("Step.ksl", "glsl").expect("glsl");
+        assert!(
+            glsl.compute_source
+                .contains("layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;"),
+            "{}",
+            glsl.compute_source
+        );
+        // `ksl_out_block`, not `out_block`: the shader calls its storage buffer
+        // `out`, which GLSL reads as a storage qualifier, so the emitted name is
+        // prefixed — and the reflection reports the same prefixed name, because
+        // that is what a GL host binds by.
+        assert!(
+            glsl.compute_source.contains("buffer ksl_out_block {"),
+            "{}",
+            glsl.compute_source
         );
     }
 

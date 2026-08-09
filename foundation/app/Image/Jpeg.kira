@@ -1,0 +1,394 @@
+// JPEG.
+//
+// A JPEG is a list of segments — quantisation tables, Huffman tables, a frame
+// header, then one or more scans — and the scans hold the picture as 8x8 blocks
+// of frequency coefficients rather than pixels. Reading one is four stages, and
+// this file is the first: walking the segments and remembering what they say.
+// `JpegScan.kira` reads the entropy-coded blocks, and `JpegPixels.kira` turns
+// coefficients into samples and samples into RGBA.
+//
+// What is read: sequential Huffman frames, `SOF0` and `SOF1`, at eight bits per
+// sample, one component or three, with any sampling factors and any restart
+// interval. That is what every camera, phone and exporter writes by default.
+// A progressive frame, an arithmetic-coded one, a lossless one, or twelve-bit
+// samples are `UnknownFormat`: those are different encodings that happen to
+// share a container, not damage.
+
+// One colour channel of the frame, at its own resolution.
+//
+// A JPEG subsamples: the two chroma channels are usually stored at half width
+// and half height, because vision resolves colour more coarsely than
+// brightness. So a component carries both the size it was stored at (`width`,
+// `height`) and the size its storage was rounded up to (`stride`, `rows`), and
+// the last stage stretches it back to the frame's size.
+struct JpegComponent {
+    var identifier: Int = 0
+    var horizontal: Int = 1
+    var vertical: Int = 1
+    var quantTable: Int = 0
+    // Absolute places in the decoder's one table array: DC tables occupy 0..3
+    // and AC tables 4..7, so a decode step needs no second array to pick from.
+    var dcTable: Int = 0
+    var acTable: Int = 4
+    var width: Int = 0
+    var height: Int = 0
+    var stride: Int = 0
+    var rows: Int = 0
+    var samples: [U8] = []
+    // The DC coefficient is stored as a difference from the previous block's,
+    // so decoding is stateful across a whole scan.
+    var predictor: Int = 0
+    // How much wider and taller the frame is than this component, and where the
+    // stretch has got to. `line0` and `line1` are the two source rows the
+    // current output row is a blend of, `step` how far between them it lies,
+    // and `sourceRow` how many source rows have been passed.
+    var horizontalScale: Int = 1
+    var verticalScale: Int = 1
+    var loresWidth: Int = 0
+    var step: Int = 0
+    var sourceRow: Int = 0
+    var line0: Int = 0
+    var line1: Int = 0
+}
+
+class JpegDecoder {
+    var data: [U8] = []
+    var pos: Int = 0
+    var width: Int = 0
+    var height: Int = 0
+    var components: [JpegComponent] = []
+    // Four tables of 64 entries each, held in natural order rather than the
+    // zigzag order they arrive in, so a coefficient and its divisor are found
+    // by the same index.
+    var quantTables: [[Int]] = []
+    // DC tables at 0..3, AC tables at 4..7.
+    var huffmanTables: [HuffmanCode] = []
+    var zigzag: [Int] = []
+    var restartInterval: Int = 0
+    var todo: Int = 0
+    // The entropy reader: bits taken most significant first, and what stopped
+    // it. A marker inside the scan ends the data, and everything after it reads
+    // as zero bits.
+    var bitBuffer: Int = 0
+    var bitCount: Int = 0
+    var pendingMarker: Int = 0
+    var noMoreData: Bool = false
+    // One block's coefficients and one block's intermediate transform, held on
+    // the decoder so that decoding a block allocates nothing.
+    var block: [Int] = []
+    var workspace: [Int] = []
+    var scanComponents: [Int] = []
+    var maxHorizontal: Int = 1
+    var maxVertical: Int = 1
+    var mcusX: Int = 0
+    var mcusY: Int = 0
+    // Three components named R, G and B rather than 1, 2 and 3 are already
+    // colour, and converting them as if they were luma and chroma would be
+    // wrong twice.
+    var directRgb: Bool = false
+    // One stretched row per component, reused for every output row, and the
+    // RGBA the rows are folded into.
+    var lineBuffers: [[U8]] = []
+    var output: [U8] = []
+    var stopped: Bool = false
+    var failure: ImageFailure = .Malformed
+
+    function fail(reason: ImageFailure) {
+        self.stopped = true
+        self.failure = reason
+        return
+    }
+
+    function bigEndian16(at: Int) -> Int {
+        return (Int(self.data[at]) << 8) | Int(self.data[at + 1])
+    }
+
+    // The next segment marker, skipping any fill bytes before it. Zero means
+    // the bytes ran out.
+    function nextMarker() -> Int {
+        while self.pos < self.data.count && Int(self.data[self.pos]) != 255 {
+            self.pos = self.pos + 1
+        }
+        while self.pos < self.data.count && Int(self.data[self.pos]) == 255 {
+            self.pos = self.pos + 1
+        }
+        if self.pos >= self.data.count {
+            return 0
+        }
+        let marker = Int(self.data[self.pos])
+        self.pos = self.pos + 1
+        return marker
+    }
+
+    // A frame header this decoder does not read: progressive, lossless,
+    // hierarchical, or arithmetic-coded.
+    function namesAnotherEncoding(marker: Int) -> Bool {
+        if marker == 194 || marker == 195 || marker == 204 {
+            return true
+        }
+        if marker >= 197 && marker <= 199 {
+            return true
+        }
+        if marker >= 201 && marker <= 203 {
+            return true
+        }
+        return marker >= 205 && marker <= 207
+    }
+
+    function prepare() {
+        var table = 0
+        while table < 4 {
+            self.quantTables.append(filledInts(64, 0))
+            table = table + 1
+        }
+        var slot = 0
+        while slot < 8 {
+            self.huffmanTables.append(HuffmanCode {
+                counts: filledInts(16, 0)
+                symbols: []
+            })
+            slot = slot + 1
+        }
+        self.zigzag = jpegZigzagOrder()
+        self.block = filledInts(64, 0)
+        self.workspace = filledInts(64, 0)
+        return
+    }
+
+    // The segment list, from the start-of-image to the end of the last scan.
+    function readSegments() {
+        if self.data.count < 2 || Int(self.data[0]) != 255 || Int(self.data[1]) != 216 {
+            self.fail(.UnknownFormat)
+            return
+        }
+        self.prepare()
+        self.pos = 2
+        while !self.stopped {
+            let marker = self.nextMarker()
+            if marker == 0 || marker == 217 {
+                return
+            }
+            if marker == 216 || marker == 1 || (marker >= 208 && marker <= 215) {
+                continue
+            }
+            if self.namesAnotherEncoding(marker) {
+                self.fail(.UnknownFormat)
+                return
+            }
+            if self.pos + 2 > self.data.count {
+                self.fail(.Malformed)
+                return
+            }
+            let length = self.bigEndian16(self.pos) - 2
+            let body = self.pos + 2
+            if length < 0 || body + length > self.data.count {
+                self.fail(.Malformed)
+                return
+            }
+            self.pos = body + length
+            if marker == 219 {
+                self.readQuantTables(body, length)
+            } else if marker == 196 {
+                self.readHuffmanTables(body, length)
+            } else if marker == 192 || marker == 193 {
+                self.readFrame(body, length)
+            } else if marker == 221 {
+                if length >= 2 {
+                    self.restartInterval = self.bigEndian16(body)
+                }
+            } else if marker == 218 {
+                self.readScan(body, length)
+            }
+        }
+        return
+    }
+
+    function readQuantTables(body: Int, length: Int) {
+        var at = body
+        let end = body + length
+        while at < end {
+            let specifier = Int(self.data[at])
+            at = at + 1
+            let wide = (specifier >> 4) != 0
+            let slot = specifier & 15
+            let needed = wide ? 128 : 64
+            if slot > 3 || at + needed > end {
+                self.fail(.Malformed)
+                return
+            }
+            var index = 0
+            while index < 64 {
+                var value = 0
+                if wide {
+                    value = self.bigEndian16(at)
+                    at = at + 2
+                } else {
+                    value = Int(self.data[at])
+                    at = at + 1
+                }
+                self.quantTables[slot][self.zigzag[index]] = value
+                index = index + 1
+            }
+        }
+        return
+    }
+
+    function readHuffmanTables(body: Int, length: Int) {
+        var at = body
+        let end = body + length
+        while at < end {
+            let specifier = Int(self.data[at])
+            at = at + 1
+            let alternating = (specifier >> 4) != 0
+            let slot = specifier & 15
+            if slot > 3 || at + 16 > end {
+                self.fail(.Malformed)
+                return
+            }
+            var counts = filledInts(16, 0)
+            var total = 0
+            var index = 0
+            while index < 16 {
+                counts[index] = Int(self.data[at + index])
+                total = total + counts[index]
+                index = index + 1
+            }
+            at = at + 16
+            if at + total > end {
+                self.fail(.Malformed)
+                return
+            }
+            var symbols = filledInts(total, 0)
+            index = 0
+            while index < total {
+                symbols[index] = Int(self.data[at + index])
+                index = index + 1
+            }
+            at = at + total
+            let place = alternating ? slot + 4 : slot
+            self.huffmanTables[place] = HuffmanCode {
+                counts: move counts
+                symbols: move symbols
+            }
+        }
+        return
+    }
+
+    // The frame header: the picture's size, and one entry per colour channel
+    // saying how finely that channel was sampled.
+    function readFrame(body: Int, length: Int) {
+        if length < 6 {
+            self.fail(.Malformed)
+            return
+        }
+        if Int(self.data[body]) != 8 {
+            self.fail(.UnknownFormat)
+            return
+        }
+        self.height = self.bigEndian16(body + 1)
+        self.width = self.bigEndian16(body + 3)
+        let count = Int(self.data[body + 5])
+        if self.width <= 0 || self.height <= 0 {
+            self.fail(.Malformed)
+            return
+        }
+        if count != 1 && count != 3 {
+            self.fail(.UnknownFormat)
+            return
+        }
+        if length < 6 + (count * 3) {
+            self.fail(.Malformed)
+            return
+        }
+        self.components = []
+        var index = 0
+        while index < count {
+            let at = body + 6 + (index * 3)
+            let sampling = Int(self.data[at + 1])
+            let horizontal = sampling >> 4
+            let vertical = sampling & 15
+            let quantTable = Int(self.data[at + 2])
+            if horizontal < 1 || horizontal > 4 || vertical < 1 || vertical > 4 || quantTable > 3 {
+                self.fail(.Malformed)
+                return
+            }
+            self.components.append(JpegComponent {
+                identifier: Int(self.data[at])
+                horizontal: horizontal
+                vertical: vertical
+                quantTable: quantTable
+            })
+            index = index + 1
+        }
+        self.directRgb = count == 3
+            && self.components[0].identifier == 82
+            && self.components[1].identifier == 71
+            && self.components[2].identifier == 66
+        self.allocatePlanes()
+        return
+    }
+
+    // How big each component's storage has to be: the frame in whole minimum
+    // coded units, at the component's own sampling.
+    function allocatePlanes() {
+        self.maxHorizontal = 1
+        self.maxVertical = 1
+        for component in self.components {
+            if component.horizontal > self.maxHorizontal {
+                self.maxHorizontal = component.horizontal
+            }
+            if component.vertical > self.maxVertical {
+                self.maxVertical = component.vertical
+            }
+        }
+        self.mcusX = (self.width + (8 * self.maxHorizontal) - 1) / (8 * self.maxHorizontal)
+        self.mcusY = (self.height + (8 * self.maxVertical) - 1) / (8 * self.maxVertical)
+        var index = 0
+        while index < self.components.count {
+            let horizontal = self.components[index].horizontal
+            let vertical = self.components[index].vertical
+            self.components[index].width =
+                ((self.width * horizontal) + self.maxHorizontal - 1) / self.maxHorizontal
+            self.components[index].height =
+                ((self.height * vertical) + self.maxVertical - 1) / self.maxVertical
+            self.components[index].stride = self.mcusX * horizontal * 8
+            self.components[index].rows = self.mcusY * vertical * 8
+            self.components[index].samples = filledBytes(
+                self.components[index].stride * self.components[index].rows,
+                0
+            )
+            index = index + 1
+        }
+        return
+    }
+}
+
+// The order a block's 64 coefficients are written in: out from the top-left
+// corner along diagonals, so that the coefficients most often zero come last
+// and a run of them can be ended with one symbol.
+function jpegZigzagOrder() -> [Int] {
+    return [
+        0, 1, 8, 16, 9, 2, 3, 10,
+        17, 24, 32, 25, 18, 11, 4, 5,
+        12, 19, 26, 33, 40, 48, 41, 34,
+        27, 20, 13, 6, 7, 14, 21, 28,
+        35, 42, 49, 56, 57, 50, 43, 36,
+        29, 22, 15, 23, 30, 37, 44, 51,
+        58, 59, 52, 45, 38, 31, 39, 46,
+        53, 60, 61, 54, 47, 55, 62, 63,
+    ]
+}
+
+// The image a JPEG's bytes hold.
+function decodeJpeg(bytes: [U8]) -> Result<Image, ImageFailure> {
+    var decoder = JpegDecoder()
+    decoder.data = move bytes
+    decoder.readSegments()
+    if decoder.stopped {
+        return .Error(decoder.failure)
+    }
+    if decoder.width <= 0 || decoder.components.count == 0 {
+        return .Error(.Malformed)
+    }
+    return .Ok(decoder.assemble())
+}

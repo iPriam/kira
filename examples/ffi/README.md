@@ -34,15 +34,17 @@ kira build --device wasm32 main.kira
 
 ## Supported surface
 
-- Parameters and results: `Void`, `I8`/`I16`/`I32`/`I64`, `U8`/`U16`/`U32`/`U64`,
-  `Bool`, `F32`/`F64`, `RawPtr`.
+- Parameters and results: `Void`, `Int` and the narrower `I8`/`I16`/`I32` and
+  `U8`/`U16`/`U32`/`U64`, `Bool`, `Float` and `F32`, `RawPtr`.
 - `CString` **parameters**, which accept a Kira `String` by a transient
   NUL-terminated copy — the caller keeps its `String`, and an interior NUL is a
   typed trap.
 - `RawPtr` is an opaque target-width word: Kira stores it, returns it, and passes
   it back, but never dereferences or frees it.
-- Fixed-width integer names are mandatory, because the C width is part of the
-  contract. Bare `Int`/`Float` and a Kira `String` in a signature are refused.
+- A narrower C type names its width, because that width is part of the contract.
+  `Int` crosses as `int64_t` and `Float` as `double` — they *are* the 64-bit
+  types, so nothing is left unsaid by writing them, and there is no `I64` or
+  `F64` to write instead. A Kira `String` in a signature is refused.
 
 ## Deferred to later milestones
 

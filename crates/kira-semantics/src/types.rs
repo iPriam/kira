@@ -305,9 +305,18 @@ impl Analyzer<'_> {
             self.link_type_name(&text, span);
             return ty;
         }
-        if let Some(id) = self.construct_family_type(&text) {
-            self.link_type_name(&text, span);
-            return Type::Enum(id);
+        // A family's *name* is not one of its values. Naming the type takes
+        // `Any Widget` or `some Widget`, which say that the value is one of the
+        // declarations backing the family rather than the family itself.
+        if self.construct_family_type(&text).is_some() {
+            self.emit(
+                span,
+                "KSEM207",
+                format!(
+                    "`{text}` is a construct family, so it names no value on its own; write `Any {text}` for a value of some declaration backing it"
+                ),
+            );
+            return Type::Error;
         }
         if let Some(id) = self.visible_struct_qualified(&qualified) {
             self.link_type_name(&text, span);

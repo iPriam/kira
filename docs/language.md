@@ -108,6 +108,98 @@ One edge is deliberate rather than pending:
 See [.codex/work/classes.md](.codex/work/classes.md) for the design, and
 [examples/classes/classes.kira](examples/classes/classes.kira) for a tour.
 
+## Construct families
+
+A construct family is a typed template. It states what every declaration backed
+by it must provide, and each backed declaration is an ordinary struct that
+provides it:
+
+```kira
+construct Widget {
+    @Required function render() -> String
+    function announce() -> String { return "<" + render() + ">" }
+}
+
+Widget Text(content: String) {
+    render { return content }
+}
+
+Widget Divider() {
+    render { return "---" }
+}
+```
+
+`@Required` states an obligation; a member with a body is inherited by every
+declaration that does not write its own. A declaration that leaves a requirement
+unimplemented is `KSEM234`.
+
+**A family's name is not a type.** A family is not one of its own values, so
+naming the type takes `Any Widget` or `some Widget` — both say "a value of some
+declaration backing `Widget`", and they resolve to the same type. The bare name
+is `KSEM207`: left accepted it reads like a concrete type and hides that the
+value is heterogeneous.
+
+```kira
+let items: [Any Widget] = [Text(content: "hi"), Divider()]
+for item in items { print(item.announce()) }
+```
+
+A family becomes a synthesized enum whose variants carry the backed structs, and
+a call through a family value becomes a tag dispatcher. Every backend runs
+ordinary enum projection, branching, and direct calls, so nothing here is a
+backend feature.
+
+### `extends`
+
+A family may extend others. It takes on their requirements and members, and
+every declaration backed by it also becomes a value of each parent's type:
+
+```kira
+construct Runnable {
+    @Required function label() -> String
+    function announce() -> String { return "run " + label() }
+}
+
+construct Task extends Runnable {}
+
+Task Fetch { label { return "fetch" } }
+
+function drive(items: borrow [Any Runnable]) {
+    for item in items { print(item.announce()) }
+}
+```
+
+`drive` never names `Task`. That is what the clause buys: a runtime holds
+`[Any Runnable]`, keeps instances, and drives declarations written against
+families it has never heard of — including ones a macro added a `lifecycle`
+section to.
+
+Inheritance is transitive, a cycle is `KSEM205`, and a parent that is not a
+family is `KSEM200`.
+
+**A child may make a promise more specific, never different.** A result and a
+`@Required let` member may narrow — anything narrows `Any`, and a family type
+narrows to a family extending it or to a declaration backing one. A *parameter*
+may not: everything holding an `Any Runnable` passes whatever the parent's
+signature accepts, and a child asking for less would refuse a value the parent
+promised to take. Either way it is `KSEM206`.
+
+```kira
+construct Parent {
+    @Required function render() -> Any
+    @Required function accept(value: Any) -> Bool
+}
+
+construct Child extends Parent {
+    @Required function render() -> String        // narrows a result — allowed
+    @Required function accept(value: String) -> Bool  // KSEM206
+}
+```
+
+A dispatcher carries a narrowed answer up to the result the family it belongs to
+declared, so reading `render()` through `Any Parent` yields the erased `Any` and
+reading it through `Any Child` yields the `String`.
+
 ## Arrays
 
 An array is a shared, growable, heap-backed sequence, written `[T]`. Its whole
@@ -467,18 +559,41 @@ trailing `return`: the failure test's two branches both return.
 
 See [.codex/work/attempt.md](.codex/work/attempt.md) for the desugar.
 
+## Floating-point primitives
+
+`sqrt`, `sin`, `cos`, `tan`, `floor`, `ceil`, and `abs` are free functions the
+compiler answers directly. Each takes a `Float` and answers one.
+
+```kira
+let hypotenuse = sqrt(a * a + b * b)
+let wave = sin(phase) * amplitude
+```
+
+They are primitives rather than library code because every target already has
+them — an `sqrtsd` on x86, an LLVM intrinsic, a libm call — and a language whose
+users reach a square root through eight Newton iterations has an approximation
+where it should have an answer. `sqrt(2.0)` is exact to the last bit.
+
+A program may still define its own `sqrt`: the primitive answers only when
+nothing else does, so adding these shadowed no existing code.
+
 ## Fixed-width scalars
 
-`I8`, `I16`, `I32`, `I64`, `U8`, `U16`, `U32`, `U64`, `F32`, and `F64` name
-integer and float types alongside bare `Int` and `Float`. They are **spellings,
-not representations**: every integer type is one 64-bit two's-complement value
-at run time and every float type one 64-bit IEEE-754 value, so `I32` does not
+`I8`, `I16`, `I32`, `U8`, `U16`, `U32`, `U64`, and `F32` name narrower integer
+and float types alongside bare `Int` and `Float`. They are **spellings, not
+representations**: every integer type is one 64-bit two's-complement value at
+run time and every float type one 64-bit IEEE-754 value, so `I32` does not
 allocate a narrower box.
+
+There is no `I64` and no `F64`. `Int` *is* the 64-bit signed integer and `Float`
+the 64-bit float, so a second spelling for either would be one type wearing two
+names — and a reader deciding which to write every time. `U64` has no bare
+counterpart to collapse into, so it stays.
 
 A spelling decides exactly two things.
 
 **Distinctness.** Two *written* widths must match exactly — a `U8` does not flow
-into an `I64`, and `u8Value + i64Value` is `KSEM071` — because the language has
+into a `U32`, and `u8Value + u32Value` is `KSEM071` — because the language has
 no implicit widening. Bare `Int` and `Float` are the exception: each is a
 wildcard matching any width in its kind, which is what lets an integer literal
 be written at any width with no conversion rule.
@@ -490,7 +605,7 @@ let back: U8 = plain   // and back out of it
 ```
 
 That makes assignability deliberately **non-transitive**: `U8` → `Int` and
-`Int` → `I64` both hold while `U8` → `I64` does not. The wildcard is what a
+`Int` → `U32` both hold while `U8` → `U32` does not. The wildcard is what a
 literal needs and the exactness is what a width means.
 
 **Signedness of `/`, `%`, and the four orderings.** A `U` spelling selects the
@@ -516,7 +631,7 @@ print(neg / three)   // -3    — LHS is plain `Int`, so this is a signed divide
 print(three / neg)   // 0     — LHS is `U8`, so this one is unsigned
 ```
 
-Two *different* written widths agree on nothing: `u8Value + i64Value` is a type
+Two *different* written widths agree on nothing: `u8Value + u32Value` is a type
 error, because the language has no widening.
 
 What a width does **not** do is narrow arithmetic. A `U8` sum of `250` and `10`
@@ -566,7 +681,7 @@ from the **left** operand's spelling: signed propagates the sign bit, unsigned
 fills with zeros.
 
 ```kira
-let signed: I64 = -1
+let signed: Int = -1
 var unsigned: U64 = 0
 unsigned = unsigned - 1   // the same 64 bits
 print(signed >> 60)       // -1

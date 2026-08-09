@@ -16,6 +16,7 @@
 //! to the next step. A session that reports `bundle linked` here linked.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use kira_bytecode::{Module, ModuleDecodeError};
 use kira_live::{Bundle, BundleError, PayloadKind, RunnerHost};
@@ -23,6 +24,7 @@ use kira_runtime_abi::{HostCapabilities, NativeStateHost};
 use kira_vm_runtime::{Program, VmError};
 
 use crate::staged::Staged;
+use crate::VmHotPatch;
 
 /// Why the desktop runner could not load, link, or start a bundle.
 #[derive(Debug, thiserror::Error)]
@@ -107,6 +109,7 @@ pub struct DesktopHost {
     cache: PathBuf,
     staged: Staged,
     hotpatch_disabled: bool,
+    hotpatch: VmHotPatch,
 }
 
 impl DesktopHost {
@@ -121,6 +124,7 @@ impl DesktopHost {
     /// that behaves two ways for one invocation.
     pub fn new(cache: PathBuf) -> DesktopHost {
         DesktopHost {
+            hotpatch: VmHotPatch::new(cache.clone()),
             cache,
             staged: Staged::Empty,
             hotpatch_disabled: kira_live::hotpatch_disabled_by_env(),
@@ -130,6 +134,7 @@ impl DesktopHost {
     /// A host with hot patching explicitly on or off, ignoring the environment.
     pub fn with_hotpatch_disabled(cache: PathBuf, disabled: bool) -> DesktopHost {
         DesktopHost {
+            hotpatch: VmHotPatch::new(cache.clone()),
             cache,
             staged: Staged::Empty,
             hotpatch_disabled: disabled,
@@ -144,6 +149,11 @@ impl DesktopHost {
     /// Whether this host refuses hot patching outright.
     pub fn hotpatch_disabled(&self) -> bool {
         self.hotpatch_disabled
+    }
+
+    /// The VM reload control shared with the protocol thread.
+    pub fn hotpatch(&self) -> VmHotPatch {
+        self.hotpatch.clone()
     }
 
     /// Why the entrypoint could not start, or `Ok(())` if it can.
@@ -175,6 +185,7 @@ impl RunnerHost for DesktopHost {
     type Error = DesktopRunnerError;
 
     fn load(&mut self, bundle: &Bundle) -> Result<(), DesktopRunnerError> {
+        self.hotpatch.clear();
         // Staged fresh each time: a leftover payload from a previous bundle must
         // never be what a later `dlopen` resolves against.
         crate::stage::stage_fresh(&self.cache, bundle)?;
@@ -210,13 +221,17 @@ impl RunnerHost for DesktopHost {
                 // Validation is the VM's link step: it is where an out-of-range
                 // jump or an unbound call becomes an error instead of a trap
                 // halfway through a frame.
-                program: Box::new(Program::load(module)?),
+                program: Arc::new(Program::load(module)?),
             },
             Staged::HybridLoaded { manifest } => Staged::HybridLinked {
                 // Loading a hybrid session dlopens the native half and binds
                 // every symbol the manifest names, so a missing symbol fails
                 // here rather than at the first call.
-                session: Box::new(kira_hybrid_runtime::Session::load(&manifest)?),
+                session: {
+                    let session = Arc::new(kira_hybrid_runtime::Session::load(&manifest)?);
+                    self.hotpatch.activate(Arc::clone(&session));
+                    session
+                },
             },
             already @ (Staged::VmLinked { .. } | Staged::HybridLinked { .. }) => already,
             Staged::Empty => {
@@ -230,6 +245,10 @@ impl RunnerHost for DesktopHost {
     }
 
     fn swap(&mut self, bundle: &Bundle) -> Result<(), DesktopRunnerError> {
+        if self.hotpatch.has_active_vm() {
+            self.hotpatch.swap(bundle)?;
+            return Ok(());
+        }
         // A hot patch is an edit to something live. There has to be something
         // live: `swap` replaces a linked bundle, and a merely-loaded one has
         // nothing mapped that could survive.
@@ -269,12 +288,12 @@ impl RunnerHost for DesktopHost {
         // the image is never unmapped and the addresses stay put.
         let replacement = match entry.kind {
             PayloadKind::VmBytecode => Staged::VmLinked {
-                program: Box::new(Program::load(Module::from_bytes(bundle.entry_bytes())?)?),
+                program: Arc::new(Program::load(Module::from_bytes(bundle.entry_bytes())?)?),
             },
             PayloadKind::HybridManifest => {
                 let manifest = self.cache.join(kira_live::PAYLOAD_DIR).join(&entry.name);
                 Staged::HybridLinked {
-                    session: Box::new(kira_hybrid_runtime::Session::load(&manifest)?),
+                    session: Arc::new(kira_hybrid_runtime::Session::load(&manifest)?),
                 }
             }
             kind @ (PayloadKind::NativeLibrary | PayloadKind::Asset) => {

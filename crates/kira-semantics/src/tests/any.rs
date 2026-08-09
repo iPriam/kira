@@ -267,7 +267,7 @@ fn a_shorthand_the_family_never_declared_still_yields_the_family_type() {
         codes(
             r#"
 construct Node {
-    @Required let tree: Node
+    @Required let tree: Any Node
     function depth() -> Int {
         return tree.depth() + 1
     }
