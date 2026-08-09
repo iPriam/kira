@@ -221,6 +221,10 @@ pub(crate) struct Runtime {
     /// byte rather than matched by name, so a new operation is a row here and
     /// nothing in the lowering.
     pub(super) string_ops: [Callable; kira_runtime_abi::StringOp::ALL.len()],
+    /// `kira_rt_scalar_text`: one Unicode scalar's text, from its code point.
+    pub(super) scalar_text: Callable,
+    /// `kira_rt_array_elements`: an array's elements written out in C's widths.
+    pub(super) array_elements: Callable,
     /// `kira_rt_str_of_int` / `_float` / `_bool`: a scalar rendered as a fresh
     /// string, in exactly the spelling `print` gives it.
     pub(super) str_of_int: Callable,
@@ -569,7 +573,20 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 declare(c"kira_rt_string_trim", types.ptr, &mut [types.ptr]),
                 declare(c"kira_rt_string_lowercase", types.ptr, &mut [types.ptr]),
                 declare(c"kira_rt_string_uppercase", types.ptr, &mut [types.ptr]),
+                declare(
+                    c"kira_rt_string_drop_last_scalar",
+                    types.ptr,
+                    &mut [types.ptr],
+                ),
+                declare(c"kira_rt_string_is_int", types.i1, &mut [types.ptr]),
+                declare(c"kira_rt_string_to_int", types.i64, &mut [types.ptr]),
             ],
+            scalar_text: declare(c"kira_rt_scalar_text", types.ptr, &mut [types.i64]),
+            array_elements: declare(
+                c"kira_rt_array_elements",
+                types.i64,
+                &mut [types.ptr, types.i32, types.i64],
+            ),
             str_of_int: declare(c"kira_rt_str_of_int", types.ptr, &mut [types.i64]),
             str_of_float: declare(c"kira_rt_str_of_float", types.ptr, &mut [types.f64]),
             str_of_bool: declare(c"kira_rt_str_of_bool", types.ptr, &mut [types.i1]),

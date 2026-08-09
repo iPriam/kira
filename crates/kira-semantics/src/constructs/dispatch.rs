@@ -28,11 +28,35 @@ struct FamilyMethodShape {
 /// The pieces one dispatcher branch forwards to a concrete method.
 struct DispatchArm<'locals> {
     target: FuncId,
+    /// What the concrete method returns, which a child family may have made
+    /// more specific than the dispatcher's own result.
+    target_result: Type,
     receiver: LocalId,
     family: EnumId,
     variant: ConstructVariant,
     param_locals: &'locals [LocalId],
     params: &'locals [Type],
+    result: Type,
+}
+
+/// The family method a dispatcher is being generated for.
+///
+/// Every generated function — the selector tree's nodes and each concrete arm —
+/// carries the same family, method name, erased receiver type and signature.
+/// Threading them as one value keeps each generator's own parameters to what
+/// actually varies between its calls.
+#[derive(Clone, Copy)]
+struct DispatchMethod<'family> {
+    /// The construct family's declared name, as the generated function names
+    /// spell it.
+    family: &'family str,
+    /// The family method's name.
+    method: &'family str,
+    /// The synthesized enum a receiver is erased to.
+    family_id: EnumId,
+    /// The method's parameter types, excluding the receiver.
+    params: &'family [Type],
+    /// The result every generated function presents.
     result: Type,
 }
 
@@ -63,13 +87,20 @@ impl Analyzer<'_> {
         let Type::Struct(struct_id) = self.program.expr(value).type_of() else {
             return value;
         };
-        let Some((family, tag)) = self.constructs.get(&struct_id).and_then(|info| info.family)
+        // A declaration backed by a family that extends others is a variant of
+        // each, so the tag is chosen by which family the position asked for.
+        let Some((family, tag)) = self
+            .constructs
+            .get(&struct_id)
+            .and_then(|info| {
+                info.families
+                    .iter()
+                    .find(|(enum_id, _)| *enum_id == expected_family)
+            })
+            .copied()
         else {
             return value;
         };
-        if family != expected_family {
-            return value;
-        }
         self.program.exprs.alloc(HirExpr::EnumNew {
             enum_id: family,
             tag,
@@ -278,6 +309,7 @@ impl Analyzer<'_> {
                     .flat_map(move |(method_name, method)| {
                         info.variants.iter().map(move |variant| {
                             (
+                                info.enum_id,
                                 family.clone(),
                                 method_name.clone(),
                                 method.function.name_span,
@@ -292,7 +324,22 @@ impl Analyzer<'_> {
                     })
             })
             .collect();
-        for (family, method, span, source, expected_params, expected_result, variant) in rows {
+        for (enum_id, family, method, span, source, expected_params, expected_result, variant) in
+            rows
+        {
+            // A variant this family only reached through `extends` was checked
+            // against the family it was written for, and `check_family_overrides`
+            // is what guarantees that surface still satisfies this one. Checking
+            // it again here would compare it against the parent's un-narrowed
+            // signature and report a conformance failure that is not one.
+            let declared_here = self
+                .constructs
+                .get(&variant.struct_id)
+                .and_then(|info| info.families.first())
+                .is_some_and(|(declaring, _)| *declaring == enum_id);
+            if !declared_here {
+                continue;
+            }
             self.source = source;
             let owner = self
                 .program
@@ -372,34 +419,108 @@ impl Analyzer<'_> {
         else {
             return self.empty_construct_dispatcher();
         };
-        let mut ctx = FnCtx::new(result);
-        let receiver = ctx.declare_hidden(Type::Enum(enum_id), false);
-        let mut param_locals = Vec::with_capacity(params.len());
-        for &ty in &params {
-            param_locals.push(ctx.declare_hidden(ty, false));
-        }
-
-        let mut body = Vec::with_capacity(variants.len().max(1));
-        for (index, variant) in variants.iter().enumerate() {
-            let Some(target) = self.construct_method_target(*variant, method) else {
+        // Give each concrete implementation its own body first.  Keeping the
+        // payload extraction and call out of the selector is what prevents one
+        // large aggregate-returning function from collecting every arm's
+        // spills into one native frame.
+        let dispatch = DispatchMethod {
+            family,
+            method,
+            family_id: enum_id,
+            params: &params,
+            result,
+        };
+        let mut arms = Vec::with_capacity(variants.len());
+        for variant in variants.iter().copied() {
+            let Some((target, target_result)) = self.construct_method_target(variant, method)
+            else {
                 continue;
             };
-            let arm = self.construct_dispatch_arm(DispatchArm {
-                target,
-                receiver,
-                family: enum_id,
-                variant: *variant,
-                param_locals: &param_locals,
-                params: &params,
-                result,
-            });
-            if index + 1 == variants.len() {
-                body.extend(arm);
-                break;
-            }
+            let arm_id = self.reserve_synth();
+            let arm_function =
+                self.construct_dispatch_arm_function(dispatch, variant, target, target_result);
+            self.fill_synth(arm_id, arm_function);
+            arms.push((variant, arm_id));
+        }
+
+        if arms.is_empty() {
+            let ctx = FnCtx::new(result);
+            let body = if result == Type::Void {
+                vec![self.program.stmts.alloc(HirStmt::Return { value: None })]
+            } else {
+                let value = self.default_value(result);
+                vec![
+                    self.program
+                        .stmts
+                        .alloc(HirStmt::Return { value: Some(value) }),
+                ]
+            };
+            return HirFunction {
+                name: format!("Any {family}.{method}$dispatch"),
+                param_count: 1 + params.len() as u32,
+                return_type: result,
+                locals: ctx.locals,
+                body,
+                is_main: false,
+                is_async: false,
+                execution: kira_semantics_model::Execution::Inherited,
+                mutates_self: false,
+                name_span: Span::new(0, 0),
+            };
+        }
+
+        // A linear selector avoids the giant aggregate-returning frame, but
+        // its call depth is still proportional to the number of variants.  A
+        // balanced tag tree keeps both the native frame and the runtime depth
+        // bounded, while the original final arm remains the unknown-tag
+        // fallback.
+        let Some((_, fallback)) = arms.last().copied() else {
+            unreachable!("an empty family dispatcher was handled above");
+        };
+        arms.sort_by_key(|(variant, _)| variant.tag);
+        let mut tree_number = 0;
+        self.construct_dispatch_tree_function(
+            dispatch,
+            &arms,
+            fallback,
+            format!("Any {family}.{method}$dispatch"),
+            &mut tree_number,
+        )
+    }
+
+    /// Builds one node in a balanced tag selector tree.
+    fn construct_dispatch_tree_function(
+        &mut self,
+        dispatch: DispatchMethod<'_>,
+        arms: &[(ConstructVariant, FuncId)],
+        fallback: FuncId,
+        name: String,
+        tree_number: &mut u32,
+    ) -> HirFunction {
+        let DispatchMethod {
+            family,
+            method,
+            family_id,
+            params,
+            result,
+        } = dispatch;
+        let mut ctx = FnCtx::new(result);
+        // Dispatch only inspects the erased value and forwards the call.  Keep
+        // the caller's value borrowed so every node can lend the same storage;
+        // making this an owned parameter would clone/drop the full enum at
+        // every branch in a native executable.
+        let receiver =
+            ctx.declare_hidden_as(Type::Enum(family_id), false, OwnershipMode::BorrowRead);
+        let param_locals: Vec<_> = params
+            .iter()
+            .map(|&ty| ctx.declare_hidden_as(ty, false, OwnershipMode::BorrowRead))
+            .collect();
+
+        let body = if arms.len() == 1 {
+            let (variant, arm) = arms[0];
             let value = self.program.exprs.alloc(HirExpr::Local {
                 local: receiver,
-                ty: Type::Enum(enum_id),
+                ty: Type::Enum(family_id),
             });
             let tag = self.program.exprs.alloc(HirExpr::EnumTag { value });
             let wanted = self
@@ -412,23 +533,93 @@ impl Analyzer<'_> {
                 rhs: wanted,
                 ty: Type::Bool,
             });
-            body.push(self.program.stmts.alloc(HirStmt::If {
-                cond,
-                then_body: arm,
-                else_body: Vec::new(),
-            }));
-        }
-        if body.is_empty() {
-            let tail = if result == Type::Void {
-                HirStmt::Return { value: None }
+            let then_body = self.construct_dispatch_function_call(
+                arm,
+                receiver,
+                family_id,
+                &param_locals,
+                params,
+                result,
+            );
+            let else_body = if arm == fallback {
+                then_body.clone()
             } else {
-                let value = self.default_value(result);
-                HirStmt::Return { value: Some(value) }
+                self.construct_dispatch_function_call(
+                    fallback,
+                    receiver,
+                    family_id,
+                    &param_locals,
+                    params,
+                    result,
+                )
             };
-            body.push(self.program.stmts.alloc(tail));
-        }
+            vec![self.program.stmts.alloc(HirStmt::If {
+                cond,
+                then_body,
+                else_body,
+            })]
+        } else {
+            let middle = arms.len() / 2;
+            let pivot = arms[middle].0.tag;
+            let left_id = self.reserve_synth();
+            let left_number = *tree_number;
+            *tree_number += 1;
+            let left = self.construct_dispatch_tree_function(
+                dispatch,
+                &arms[..middle],
+                fallback,
+                format!("Any {family}.{method}$dispatch_tree{left_number}"),
+                tree_number,
+            );
+            self.fill_synth(left_id, left);
+            let right_id = self.reserve_synth();
+            let right_number = *tree_number;
+            *tree_number += 1;
+            let right = self.construct_dispatch_tree_function(
+                dispatch,
+                &arms[middle..],
+                fallback,
+                format!("Any {family}.{method}$dispatch_tree{right_number}"),
+                tree_number,
+            );
+            self.fill_synth(right_id, right);
+
+            let value = self.program.exprs.alloc(HirExpr::Local {
+                local: receiver,
+                ty: Type::Enum(family_id),
+            });
+            let tag = self.program.exprs.alloc(HirExpr::EnumTag { value });
+            let pivot = self.program.exprs.alloc(HirExpr::Int(i64::from(pivot)));
+            let cond = self.program.exprs.alloc(HirExpr::Binary {
+                op: HirBinaryOp::LtInt,
+                lhs: tag,
+                rhs: pivot,
+                ty: Type::Bool,
+            });
+            let then_body = self.construct_dispatch_function_call(
+                left_id,
+                receiver,
+                family_id,
+                &param_locals,
+                params,
+                result,
+            );
+            let else_body = self.construct_dispatch_function_call(
+                right_id,
+                receiver,
+                family_id,
+                &param_locals,
+                params,
+                result,
+            );
+            vec![self.program.stmts.alloc(HirStmt::If {
+                cond,
+                then_body,
+                else_body,
+            })]
+        };
         HirFunction {
-            name: format!("Any {family}.{method}$dispatch"),
+            name,
             param_count: 1 + params.len() as u32,
             return_type: result,
             locals: ctx.locals,
@@ -441,18 +632,112 @@ impl Analyzer<'_> {
         }
     }
 
-    fn construct_method_target(&self, variant: ConstructVariant, method: &str) -> Option<FuncId> {
+    /// Builds one concrete implementation arm in its own native function.
+    ///
+    /// The family dispatcher stays as a small tag test, while this helper owns
+    /// the payload extraction and the call into the concrete implementation.
+    /// The VM sees the same HIR operation sequence and therefore keeps the
+    /// existing semantics; native code simply gets a real call boundary for
+    /// stack-frame sizing.
+    fn construct_dispatch_arm_function(
+        &mut self,
+        dispatch: DispatchMethod<'_>,
+        variant: ConstructVariant,
+        target: FuncId,
+        target_result: Type,
+    ) -> HirFunction {
+        let DispatchMethod {
+            family,
+            method,
+            family_id,
+            params,
+            result,
+        } = dispatch;
+        let mut ctx = FnCtx::new(result);
+        let receiver =
+            ctx.declare_hidden_as(Type::Enum(family_id), false, OwnershipMode::BorrowRead);
+        let param_locals: Vec<_> = params
+            .iter()
+            .map(|&ty| ctx.declare_hidden_as(ty, false, OwnershipMode::BorrowRead))
+            .collect();
+        let body = self.construct_dispatch_arm(DispatchArm {
+            target,
+            target_result,
+            receiver,
+            family: family_id,
+            variant,
+            param_locals: &param_locals,
+            params,
+            result,
+        });
+        HirFunction {
+            name: format!("Any {family}.{method}$dispatch_arm{}", variant.tag),
+            param_count: 1 + params.len() as u32,
+            return_type: result,
+            locals: ctx.locals,
+            body,
+            is_main: false,
+            is_async: false,
+            execution: kira_semantics_model::Execution::Inherited,
+            mutates_self: false,
+            name_span: Span::new(0, 0),
+        }
+    }
+
+    /// Emits the small call/return body for one dispatcher arm.
+    fn construct_dispatch_function_call(
+        &mut self,
+        callee: FuncId,
+        receiver: LocalId,
+        family: EnumId,
+        param_locals: &[LocalId],
+        params: &[Type],
+        result: Type,
+    ) -> Vec<HirStmtId> {
+        let mut args = vec![self.program.exprs.alloc(HirExpr::Local {
+            local: receiver,
+            ty: Type::Enum(family),
+        })];
+        for (&local, &ty) in param_locals.iter().zip(params.iter()) {
+            args.push(self.program.exprs.alloc(HirExpr::Local { local, ty }));
+        }
+        let call = self.program.exprs.alloc(HirExpr::Call {
+            callee: Callee::User(callee),
+            args,
+            ty: result,
+            writebacks: Vec::new(),
+        });
+        if result == Type::Void {
+            vec![
+                self.program.stmts.alloc(HirStmt::Expr { expr: call }),
+                self.program.stmts.alloc(HirStmt::Return { value: None }),
+            ]
+        } else {
+            vec![
+                self.program
+                    .stmts
+                    .alloc(HirStmt::Return { value: Some(call) }),
+            ]
+        }
+    }
+
+    fn construct_method_target(
+        &self,
+        variant: ConstructVariant,
+        method: &str,
+    ) -> Option<(FuncId, Type)> {
         let owner = self
             .program
             .types
             .type_name(Type::Struct(variant.struct_id));
         self.lookup_function(&format!("{owner}.{method}"))
-            .map(|(id, _, _)| id)
+            .map(|(id, _, result)| (id, result))
     }
 
     fn construct_dispatch_arm(&mut self, arm: DispatchArm<'_>) -> Vec<HirStmtId> {
         let DispatchArm {
             target,
+            target_result,
             receiver,
             family,
             variant,
@@ -476,9 +761,13 @@ impl Analyzer<'_> {
         let call = self.program.exprs.alloc(HirExpr::Call {
             callee: Callee::User(target),
             args,
-            ty: result,
+            ty: target_result,
             writebacks: Vec::new(),
         });
+        // A child family may return something more specific than the family
+        // this dispatcher belongs to promised, so the arm carries its answer up
+        // to the declared result rather than relabelling it.
+        let call = self.coerce_into(call, result);
         if result == Type::Void {
             vec![
                 self.program.stmts.alloc(HirStmt::Expr { expr: call }),

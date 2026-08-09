@@ -336,6 +336,9 @@ impl Analyzer<'_> {
             return self.program.exprs.alloc(HirExpr::Error);
         };
         self.link_type_name(&struct_name, name_span);
+        // A C-layout struct's members are C storage, which is what lets a
+        // `String` fill a `CString` member and an array fill a `RawPtr` one.
+        let is_c_layout = self.ffi_c_layout_named(&struct_name).is_some();
         let field_count = self
             .program
             .types
@@ -367,14 +370,22 @@ impl Analyzer<'_> {
                 );
                 continue;
             }
-            // A `String` filling a `CString` member is the one coercion here:
-            // the member is a pointer word, and the bytes it points at are
-            // copied into storage that outlives the call. See
-            // `kira_runtime_abi::c_storage` for why that storage is never freed.
+            // Two coercions fill a C-layout member with C storage this side
+            // writes. A `String` filling a `CString` member copies its bytes
+            // out; an array filling a `RawPtr` member writes its elements out
+            // at C's widths and the member holds their address — which is what
+            // a descriptor carrying a data pointer, `sg_range` above all, is.
+            // Both keep the storage past the call, for the reason
+            // `kira_runtime_abi::c_storage` gives: the callee may hold on to it.
+            let array_elements = (is_c_layout && field_ty == Type::RawPtr)
+                .then(|| self.array_elements_address(value))
+                .flatten();
             let value = if field_ty == Type::CString && value_ty == Type::String {
                 self.program
                     .exprs
                     .alloc(HirExpr::CStringNew { text: value })
+            } else if let Some(elements) = array_elements {
+                elements
             } else {
                 if !self.admits(value_ty, field_ty) {
                     self.emit(
@@ -396,7 +407,6 @@ impl Analyzer<'_> {
         // from a zeroed value, so an omitted field with no default takes its
         // zero rather than being reported missing — the oracle's construction
         // rule.
-        let is_c_layout = self.ffi_c_layout_named(&struct_name).is_some();
         let mut fields = Vec::with_capacity(field_count);
         let mut missing: Vec<String> = Vec::new();
         for index in 0..field_count as u32 {
@@ -404,7 +414,7 @@ impl Analyzer<'_> {
                 fields.push(value);
                 continue;
             }
-            match self.resolve_field_default(id, index) {
+            match self.resolve_field_default_at(ctx, id, index) {
                 Some(default) => fields.push(default),
                 None if is_c_layout => {
                     fields.push(self.ffi_zero_field(id, index, name_span));
@@ -628,14 +638,20 @@ impl Analyzer<'_> {
         args: &[HirExprId],
         span: kira_source::Span,
     ) -> HirExprId {
-        // A subclass argument reaches the copy specialized for it, so the
-        // override inside the body wins. Falls back to the function as written
-        // when no argument is a subclass, which is every ordinary call.
+        // A program may still declare a function called `sqrt`; a *call* of one
+        // reaches the primitive only when nothing else answers to the name, so
+        // the check runs after the user table below has been consulted.
         let name = &self.specialized_name(name, args);
         let Some((id, params, ret)) = self
             .lookup_function(name)
             .map(|(id, params, ret)| (id, params.to_vec(), ret))
         else {
+            if let Some(op) = kira_runtime_abi::MathOp::from_name(name) {
+                return self.analyze_math_call(op, args, span);
+            }
+            if name == "scalarText" {
+                return self.analyze_scalar_text_call(args, span);
+            }
             self.emit(
                 span,
                 "KSEM061",
@@ -682,5 +698,75 @@ impl Analyzer<'_> {
             ty: ret,
             writebacks: Vec::new(),
         })
+    }
+
+    /// Analyzes `sqrt(x)` and the rest of the floating-point primitives.
+    fn analyze_math_call(
+        &mut self,
+        op: kira_runtime_abi::MathOp,
+        args: &[HirExprId],
+        span: kira_source::Span,
+    ) -> HirExprId {
+        let name = op.name();
+        let [value] = args else {
+            self.emit(
+                span,
+                "KSEM062",
+                format!(
+                    "`{name}` takes one argument, and this call passes {}",
+                    args.len()
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        };
+        let actual = self.program.expr(*value).type_of();
+        if !actual.assignable_to(Type::FLOAT) {
+            self.emit(
+                span,
+                "KSEM063",
+                format!(
+                    "`{name}` takes a `Float`, and this call passes a `{}`",
+                    self.type_name(actual)
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        let value = self.coerce_into(*value, Type::FLOAT);
+        self.program
+            .exprs
+            .alloc(HirExpr::MathOperation { op, value })
+    }
+
+    /// Analyzes `scalarText(codePoint)` — one Unicode scalar as text.
+    fn analyze_scalar_text_call(
+        &mut self,
+        args: &[HirExprId],
+        span: kira_source::Span,
+    ) -> HirExprId {
+        let [value] = args else {
+            self.emit(
+                span,
+                "KSEM062",
+                format!(
+                    "`scalarText` takes one argument, and this call passes {}",
+                    args.len()
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        };
+        let actual = self.program.expr(*value).type_of();
+        if !actual.assignable_to(Type::INT) {
+            self.emit(
+                span,
+                "KSEM063",
+                format!(
+                    "`scalarText` takes an `Int` code point, and this call passes a `{}`",
+                    self.type_name(actual)
+                ),
+            );
+            return self.program.exprs.alloc(HirExpr::Error);
+        }
+        let value = self.coerce_into(*value, Type::INT);
+        self.program.exprs.alloc(HirExpr::ScalarText { value })
     }
 }

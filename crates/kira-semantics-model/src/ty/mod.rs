@@ -10,6 +10,7 @@ pub mod arrays;
 pub mod cells;
 pub mod enums;
 pub mod erased;
+pub mod foreign_ptr;
 pub mod native_state;
 pub mod scalars;
 pub mod structs;
@@ -21,6 +22,7 @@ pub use arrays::{ArrayId, ArrayTable};
 pub use cells::{CellId, CellTable};
 pub use enums::{EnumDef, EnumId, EnumTable, Instantiation, VariantDef};
 pub use erased::ErasedTypeId;
+pub use foreign_ptr::{ForeignPtrId, ForeignPtrTable};
 pub use native_state::{NativeStateId, NativeStateTable};
 pub use scalars::{FloatSpelling, IntSpelling};
 pub use structs::{FieldDef, StructDef, StructId, StructTable};
@@ -32,14 +34,14 @@ pub use tasks::TaskResult;
 pub enum Type {
     /// A 64-bit two's-complement integer, carrying how it was spelled.
     ///
-    /// `Int`, `I8`..`I64`, and `U8`..`U64` are all this variant: they share one
+    /// `Int`, `I8`..`I32`, and `U8`..`U64` are all this variant: they share one
     /// runtime representation and differ only in the [`IntSpelling`] they
     /// carry. See [`scalars`] for what that spelling decides — distinctness and
     /// the signedness of `/`, `%`, and ordering — and, just as importantly, for
     /// what it does not.
     Int(IntSpelling),
     /// A 64-bit IEEE-754 float, carrying how it was spelled (`Float`, `F32`, or
-    /// `F64`).
+    /// `F32`).
     Float(FloatSpelling),
     /// The boolean type (`Bool`).
     Bool,
@@ -84,6 +86,17 @@ pub enum Type {
     /// heap. Its only purpose is the C-FFI seam: a foreign call hands one back
     /// and Kira hands it to a later foreign call unchanged.
     RawPtr,
+    /// A C pointer that knows what it addresses (`@FFI.Pointer { target: T; }`).
+    ///
+    /// The same pointer word [`Type::RawPtr`] is, carrying the one extra fact a
+    /// [`Type::RawPtr`] threw away: the C-layout struct at the other end. That
+    /// is what lets a field be *read* through the pointer instead of asked for
+    /// with a C accessor per field.
+    ///
+    /// Every position that only cares whether a value is a pointer word asks
+    /// [`Type::is_pointer_word`], so this type crosses the seam, boxes, and
+    /// compares exactly as a `RawPtr` does.
+    ForeignPtr(ForeignPtrId),
     /// An opaque handle to Kira-owned native callback state.
     NativeState(NativeStateId),
     /// An opaque handle to a deferred task, carrying what joining it yields.
@@ -179,12 +192,12 @@ impl Type {
     ///
     /// Numeric spellings add one rule: within a kind, a *named* width must
     /// match exactly, but the bare spelling (`Int`, `Float`) is a **wildcard**
-    /// matching any width. So `U8` and `I64` are incompatible while both accept
+    /// matching any width. So `U8` and `U32` are incompatible while both accept
     /// an integer literal, which is how `let x: U8 = 5` type-checks with no
     /// conversion rule.
     ///
     /// That makes assignability deliberately **non-transitive**: `U8` -> `Int`
-    /// and `Int` -> `I64` both hold, `U8` -> `I64` does not. The wildcard is
+    /// and `Int` -> `U32` both hold, `U8` -> `U32` does not. The wildcard is
     /// what a literal needs and the exactness is what a width means; this is
     /// the language's rule, not an artifact, so it is reproduced rather than
     /// smoothed over.
@@ -221,6 +234,11 @@ impl Type {
             (Type::Float(from), Type::Float(to)) => {
                 from == FloatSpelling::Plain || to == FloatSpelling::Plain || from == to
             }
+            // A pointer word is a pointer word. Knowing the target buys field
+            // reads; it does not make the two different values, and a C API
+            // hands one address back as `void*` in one function and as `T*` in
+            // the next — which C itself converts between without a cast.
+            (Type::ForeignPtr(_), Type::RawPtr) | (Type::RawPtr, Type::ForeignPtr(_)) => true,
             _ => self == target,
         }
     }
@@ -283,6 +301,7 @@ impl Type {
                 | Type::Bool
                 | Type::Void
                 | Type::RawPtr
+                | Type::ForeignPtr(_)
                 | Type::NativeState(_)
                 | Type::Task(_)
         )
@@ -322,7 +341,11 @@ impl Type {
             // trivially copyable by the same logic.
             // A task handle is a word naming a table row, so copying one copies
             // bits: the executor owns the task, not the handle.
-            Type::RawPtr | Type::CString | Type::NativeState(_) | Type::Task(_) => true,
+            Type::RawPtr
+            | Type::ForeignPtr(_)
+            | Type::CString
+            | Type::NativeState(_)
+            | Type::Task(_) => true,
             // An enum answers exactly as an array does: not trivially copyable
             // (a named enum local needs `move` into an owned parameter) and yet
             // it moves on bind.
@@ -380,6 +403,7 @@ impl Type {
             | Type::Error
             | Type::String
             | Type::RawPtr
+            | Type::ForeignPtr(_)
             | Type::CString
             | Type::NativeState(_)
             | Type::Task(_)

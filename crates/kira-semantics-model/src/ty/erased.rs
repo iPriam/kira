@@ -86,7 +86,7 @@ impl ErasedTypeId {
             Type::Float(_) => kind::FLOAT << 32,
             Type::Bool => kind::BOOL << 32,
             Type::String => kind::STRING << 32,
-            Type::RawPtr => kind::RAW_PTR << 32,
+            Type::RawPtr | Type::ForeignPtr(_) => kind::RAW_PTR << 32,
             Type::Struct(id) => (kind::STRUCT << 32) | u64::from(id.index()),
             Type::Array(id) => (kind::ARRAY << 32) | u64::from(id.index()),
             Type::Enum(id) => (kind::ENUM << 32) | u64::from(id.index()),

@@ -53,6 +53,36 @@ pub fn retain_bytes(bytes: &[u8]) -> u64 {
     leaked.as_mut_ptr() as usize as u64
 }
 
+/// Reads `size` bytes at `address + offset` out of storage C owns.
+///
+/// `None` for a null base, which is the one bad pointer a Kira program can
+/// actually produce: `nullPointer()` is spellable, and a C callback may hand
+/// over a null for an optional argument. Every other pointer here came from the
+/// foreign seam, and Kira has no pointer arithmetic to corrupt one with.
+///
+/// # Safety
+///
+/// `address` must be either null or a valid pointer to at least
+/// `offset + size` readable bytes.
+#[must_use]
+pub unsafe fn read_bytes(address: u64, offset: u32, size: u32) -> Option<[u8; 8]> {
+    if address == 0 {
+        return None;
+    }
+    let size = size as usize;
+    debug_assert!(size <= 8, "a seam scalar is at most eight bytes");
+    let mut word = [0u8; 8];
+    // SAFETY: the caller guarantees `address` addresses at least
+    // `offset + size` readable bytes, and the null case returned above. The copy
+    // is unaligned because a C struct's member is aligned within *its* layout
+    // and the base came from C, neither of which is provable here.
+    unsafe {
+        let source = (address as *const u8).add(offset as usize);
+        std::ptr::copy_nonoverlapping(source, word.as_mut_ptr(), size);
+    }
+    Some(word)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

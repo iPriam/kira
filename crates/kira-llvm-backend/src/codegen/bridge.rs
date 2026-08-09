@@ -59,7 +59,7 @@ fn bridge_tag_of(
         Type::Float(_) => (BridgeValueTag::FLOAT.0, Some(PayloadForm::FloatBits)),
         Type::Bool => (BridgeValueTag::BOOL.0, Some(PayloadForm::Widen)),
         Type::String => (BridgeValueTag::STRING.0, Some(PayloadForm::PointerBits)),
-        Type::RawPtr => (BridgeValueTag::RAW_PTR.0, Some(PayloadForm::AsIs)),
+        Type::RawPtr | Type::ForeignPtr(_) => (BridgeValueTag::RAW_PTR.0, Some(PayloadForm::AsIs)),
         // A struct and an array both cross as a node tree. Neither fits one
         // word, and neither side's storage means anything to the other — the VM
         // holds an index into its heap, native a pointer to a box — so what
@@ -158,7 +158,7 @@ impl Codegen<'_> {
                     self.decode_native_state_value(node, ty)?
                 }
                 Type::Any => return Err(LlvmError::AnyAtSeam),
-                Type::RawPtr => payload,
+                Type::RawPtr | Type::ForeignPtr(_) => payload,
                 Type::CString | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
                     return Err(LlvmError::Unsupported(
                         "a C string, callback-state handle, task handle, or captured `var` crossing the @Native boundary",

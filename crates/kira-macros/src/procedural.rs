@@ -48,6 +48,18 @@ pub(crate) struct Program<'a> {
     pub(crate) platform: &'a str,
 }
 
+impl<'a> Program<'a> {
+    /// What a compile-time body run for this program reaches.
+    pub(crate) fn comptime(&self) -> eval::Comptime<'a> {
+        eval::Comptime {
+            functions: self.registry.comptime_functions(),
+            shaders: self.shaders,
+            platform: self.platform,
+            enums: self.registry.enums(),
+        }
+    }
+}
+
 /// A struct registered as a wrapper template by a `kind { wrapper }` macro.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct WrapperTemplate {
@@ -163,13 +175,13 @@ pub(crate) fn collect<'a>(
             );
             continue;
         };
-        match eval::run(
-            &body,
-            vec![(parameter, all.clone())],
+        let comptime = eval::Comptime {
+            functions: registry.comptime_functions(),
             shaders,
             platform,
-            lint,
-        ) {
+            enums: registry.enums(),
+        };
+        match eval::run(&body, vec![(parameter, all.clone())], comptime, lint) {
             Ok(outcome) => {
                 // Only an error discards what the collector built. A collector
                 // that warns — which is what a lint does — still gets its
@@ -216,12 +228,8 @@ pub(crate) fn expand_declaration(
     buffer: &mut EditBuffer,
     reporter: &mut Reporter,
 ) {
-    let Program {
-        registry,
-        shaders,
-        platform,
-        ..
-    } = program;
+    let comptime = program.comptime();
+    let Program { registry, .. } = program;
     let mut generated: Vec<String> = Vec::new();
     let mut replacement: Option<String> = None;
     let mut consumed: Vec<Span> = Vec::new();
@@ -265,8 +273,7 @@ pub(crate) fn expand_declaration(
                         methods::declaration_value(declaration),
                     )],
                     annotation.span,
-                    shaders,
-                    platform,
+                    comptime,
                     reporter,
                 ) {
                     if declared.replace {
@@ -305,8 +312,7 @@ pub(crate) fn expand_declaration(
                         (parameter(declared, 1), value),
                     ],
                     annotation.span,
-                    shaders,
-                    platform,
+                    comptime,
                     reporter,
                 ) {
                     generated.push(output);
@@ -384,12 +390,8 @@ fn run_derives(
     generated: &mut Vec<String>,
     reporter: &mut Reporter,
 ) -> Option<String> {
-    let Program {
-        registry,
-        shaders,
-        platform,
-        ..
-    } = program;
+    let comptime = program.comptime();
+    let Program { registry, .. } = program;
     let mut kept: Vec<&str> = Vec::new();
     for name in &annotation.arguments {
         if name == BUILTIN_DERIVE_COPY {
@@ -428,8 +430,7 @@ fn run_derives(
                 methods::declaration_value(declaration),
             )],
             annotation.span,
-            shaders,
-            platform,
+            comptime,
             reporter,
         ) {
             generated.push(output);
@@ -451,11 +452,11 @@ fn summon_from_fields(
     generated: &mut Vec<String>,
     reporter: &mut Reporter,
 ) -> Option<String> {
+    let comptime = program.comptime();
     let Program {
         registry,
         templates,
-        shaders,
-        platform,
+        ..
     } = program;
     let mut summoned: Option<String> = None;
     let mut already: Vec<String> = Vec::new();
@@ -483,8 +484,7 @@ fn summon_from_fields(
                         ),
                     ],
                     annotation.span,
-                    shaders,
-                    platform,
+                    comptime,
                     reporter,
                 );
                 summoned = replace_once(summoned, output, file, declaration, reporter);
@@ -508,8 +508,7 @@ fn summon_from_fields(
                     methods::declaration_value(declaration),
                 )],
                 annotation.span,
-                shaders,
-                platform,
+                comptime,
                 reporter,
             );
             if declared.replace {
@@ -589,8 +588,7 @@ pub(crate) fn run(
     declared: &Procedural,
     arguments: Vec<(String, Value)>,
     span: Span,
-    shaders: Option<&dyn ShaderCompiler>,
-    platform: &str,
+    comptime: eval::Comptime<'_>,
     reporter: &mut Reporter,
 ) -> Option<String> {
     let Some(body) = eval::compile(&declared.body) else {
@@ -604,7 +602,7 @@ pub(crate) fn run(
     };
     // Not a collector, so not told: `Build.linting` answers which verb asked,
     // and only the macro form a verb runs for has any business asking.
-    match eval::run(&body, arguments, shaders, platform, false) {
+    match eval::run(&body, arguments, comptime, false) {
         Ok(outcome) => {
             // A warning leaves the expansion standing; only a refusal drops it.
             let failed = outcome
@@ -642,8 +640,7 @@ pub(crate) fn expand_call(
     file: &Lexed<'_>,
     declared: &Procedural,
     call: &Invocation,
-    shaders: Option<&dyn ShaderCompiler>,
-    platform: &str,
+    comptime: eval::Comptime<'_>,
     reporter: &mut Reporter,
 ) -> Option<String> {
     if declared.kind != ProceduralKind::Function {
@@ -670,8 +667,7 @@ pub(crate) fn expand_call(
         declared,
         vec![(parameter(declared, 0), Value::built(input))],
         call.span,
-        shaders,
-        platform,
+        comptime,
         reporter,
     )?;
     let trimmed = output.trim().to_owned();

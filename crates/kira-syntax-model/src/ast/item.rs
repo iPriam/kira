@@ -95,10 +95,26 @@ pub struct ConstructDecl {
     /// The behaviour members: computed block-bodied bridges (`let node: Any { … }`,
     /// each a zero-argument method read as a property) and `function` members.
     pub methods: Vec<ConstructMethod>,
+    /// The families this one extends, in written order.
+    ///
+    /// A family that extends another adds its parent's requirements and members
+    /// to its own surface, and every declaration backed by it also becomes a
+    /// variant of the parent's family type. That is what lets a runtime hold
+    /// `[Parent]` and drive declarations written against any child.
+    pub extends: Vec<ConstructParent>,
     /// Members and clauses parsed but not yet executable, kept so semantics can
     /// refuse each with a precise typed diagnostic rather than dropping it.
     pub deferred: Vec<DeferredConstruct>,
     /// Span covering the whole declaration.
+    pub span: Span,
+}
+
+/// One family named in a construct's `extends` clause.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstructParent {
+    /// The parent family's name.
+    pub name: Symbol,
+    /// Span of the name token, for diagnostics.
     pub span: Span,
 }
 
@@ -123,6 +139,17 @@ pub struct ConstructMethod {
     /// leaves the member unimplemented has no implementation at all, and that is
     /// what the conformance check reports.
     pub required: bool,
+    /// Whether this came from the family's `lifecycle { … }` section.
+    ///
+    /// A hook is an ordinary instance method — that is the whole point, so a
+    /// runtime holding a declaration's value can call it. What this records is
+    /// only that the family named it as a lifecycle point, which is how a
+    /// runtime finds the hooks it is meant to drive without knowing any hook by
+    /// name.
+    pub lifecycle: bool,
+    /// Whether the hook carried `@Comptime`: it runs during compilation rather
+    /// than being called by a runtime.
+    pub comptime: bool,
     /// The method itself: a zero-argument function for a computed member, or the
     /// written signature for a `function` member.
     pub function: Function,
@@ -164,8 +191,13 @@ pub struct ConstructField {
     /// for `some X`, `[X]` for `[some X]`), so a single slot and a list slot are
     /// told apart by whether the type is an array.
     pub slot: bool,
-    /// The declared member type.
-    pub ty: TypeRefId,
+    /// The declared member type, when the member wrote one.
+    ///
+    /// A stored member may omit the annotation when it has an initializer; the
+    /// semantic pass then infers the field type from that initializer. Slots
+    /// and computed members still require a type because their value is not an
+    /// ordinary stored initializer.
+    pub ty: Option<TypeRefId>,
     /// The default initializer, when one was written.
     pub default: Option<ExprId>,
     /// Span covering the whole member.

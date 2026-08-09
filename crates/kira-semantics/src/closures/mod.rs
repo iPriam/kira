@@ -49,6 +49,7 @@ use std::collections::HashMap;
 
 use kira_semantics_model::hir::{FuncId, LocalId};
 use kira_semantics_model::{OwnershipMode, StructId, Type};
+use kira_source::{SourceId, Span};
 
 mod calls;
 pub(crate) mod captures;
@@ -78,8 +79,50 @@ pub(crate) struct FnTypeInfo {
 /// One closure literal, lifted to a top-level function.
 #[derive(Debug, Clone)]
 pub(crate) struct ClosureImpl {
+    /// The stable identity stored in the closure value's `tag` field.
+    ///
+    /// This must not be the implementation's position in `impls`: values can
+    /// outlive a module swap in native callback state, while the compiler is
+    /// free to discover another closure before this one on the next build.
+    pub(crate) tag: u32,
     /// The lifted function's id.
     pub(crate) function: FuncId,
+}
+
+/// Builds a deterministic closure identity from the source declaration site.
+///
+/// Function values are ordinary structs in the VM, so the tag is the one bit
+/// of metadata that survives a `nativeState` round-trip. A small FNV-1a hash is
+/// enough here: the value is only compared inside one function-type
+/// dispatcher, and [`unique_impl_tag`] resolves the vanishingly rare collision.
+pub(crate) fn stable_impl_tag(source: SourceId, span: Span, discriminator: &str) -> u32 {
+    let mut hash = 0x811c9dc5_u32;
+    for byte in source
+        .value()
+        .to_le_bytes()
+        .into_iter()
+        .chain(span.start.to_le_bytes())
+        .chain(span.len.to_le_bytes())
+        .chain(discriminator.as_bytes().iter().copied())
+    {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// Keeps one function-type dispatcher collision-free without making the
+/// common stable-tag path depend on discovery order.
+pub(crate) fn unique_impl_tag(info: &FnTypeInfo, candidate: u32) -> u32 {
+    let mut tag = candidate;
+    while info
+        .impls
+        .iter()
+        .any(|implementation| implementation.tag == tag)
+    {
+        tag = tag.wrapping_add(1);
+    }
+    tag
 }
 
 /// A closure literal's `StructNew`, waiting for the field list to stop growing.

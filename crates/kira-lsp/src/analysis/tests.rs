@@ -385,14 +385,14 @@ fn attempt_and_try_analyze_the_way_the_compiler_does() {
 fn fixed_width_types_analyze_the_way_the_compiler_does() {
     let clean = analyze(
         "t.kira",
-        "@Main function main() { let a: U8 = 5 let b: I64 = 6 let c: F32 = 1.5 \
+        "@Main function main() { let a: U8 = 5 let b: U64 = 6 let c: F32 = 1.5 \
          print(a + 1) print(b + 1) print(c + 0.5) return }",
     );
     assert!(clean.diagnostics.is_empty(), "{:?}", clean.diagnostics);
 
     let bad = analyze(
         "t.kira",
-        "@Main function main() { let a: U8 = 1 let b: I64 = a return }",
+        "@Main function main() { let a: U8 = 1 let b: U32 = a return }",
     );
     let diagnostic = bad
         .diagnostics
@@ -402,7 +402,7 @@ fn fixed_width_types_analyze_the_way_the_compiler_does() {
     assert_eq!(diagnostic.severity, Severity::Error);
     assert!(!diagnostic.labels.is_empty(), "a span to squiggle");
     assert!(
-        diagnostic.message.contains("U8") && diagnostic.message.contains("I64"),
+        diagnostic.message.contains("U8") && diagnostic.message.contains("U32"),
         "the message names both widths: {}",
         diagnostic.message
     );

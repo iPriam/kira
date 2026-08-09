@@ -378,7 +378,8 @@ fn scalar_for(kind: TypeKind, ty: &CType<'_>) -> Option<KiraType> {
         Some(1) => Some(KiraType::Int("I8")),
         Some(2) => Some(KiraType::Int("I16")),
         Some(4) => Some(KiraType::Int("I32")),
-        Some(8) => Some(KiraType::Int("I64")),
+        // Bare `Int` is the 64-bit signed integer; there is no `I64` spelling.
+        Some(8) => Some(KiraType::Int("Int")),
         _ => None,
     };
     let unsigned = |width: Option<u64>| match width {

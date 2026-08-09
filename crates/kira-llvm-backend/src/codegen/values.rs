@@ -539,4 +539,99 @@ impl Codegen<'_> {
         // arguments matching the callable's declared signature.
         unsafe { self.call_runtime(callable, args, name) }
     }
+
+    /// Allocates one temporary value with a runtime-sized alloca.
+    ///
+    /// A plain alloca contributes its full type size to the enclosing native
+    /// function's static frame even when it lives in a mutually-exclusive
+    /// dispatcher arm.  These temporaries are only needed on the selected arm,
+    /// so make the element count genuinely dynamic; LLVM then adjusts the
+    /// stack at the point of execution instead of reserving every arm's
+    /// payload in every call frame.  The count is one or two elements and the
+    /// second element is intentionally unused.
+    pub(super) fn dynamic_alloca(
+        &self,
+        llvm_type: LLVMTypeRef,
+        name: &std::ffi::CStr,
+    ) -> LLVMValueRef {
+        // SAFETY: the stack-save intrinsic, integer conversions, and alloca
+        // use types from this module's context and the builder is on a live
+        // block.
+        unsafe {
+            let mut no_args = [];
+            let stack = self.call(self.runtime.stack_save, &mut no_args, c"temporary.stack");
+            let bits = LLVMBuildPtrToInt(
+                self.builder,
+                stack,
+                self.types.i64,
+                c"temporary.stack.bits".as_ptr(),
+            );
+            let low_bit = LLVMBuildAnd(
+                self.builder,
+                bits,
+                LLVMConstInt(self.types.i64, 1, 0),
+                c"temporary.count.bit".as_ptr(),
+            );
+            let count = LLVMBuildAdd(
+                self.builder,
+                low_bit,
+                LLVMConstInt(self.types.i64, 1, 0),
+                c"temporary.count".as_ptr(),
+            );
+            LLVMBuildArrayAlloca(self.builder, llvm_type, count, name.as_ptr())
+        }
+    }
+
+    /// Marks a temporary allocation as live for LLVM's stack slot colouring.
+    ///
+    /// Synthesized construct dispatchers contain one temporary for every
+    /// possible family variant, but only one arm can execute. Plain `alloca`
+    /// gives LLVM function-long lifetime semantics, so a large family made
+    /// every nested dispatch reserve the sum of all arm payloads. The lifetime
+    /// intrinsics make the mutually-exclusive scope explicit without changing
+    /// ownership or the generated ABI.
+    pub(super) fn lifetime_start(&self, pointer: LLVMValueRef) {
+        self.lifetime(pointer, c"llvm.lifetime.start.p0");
+    }
+
+    /// Ends the lifetime of a temporary allocation after its last use.
+    pub(super) fn lifetime_end(&self, pointer: LLVMValueRef) {
+        self.lifetime(pointer, c"llvm.lifetime.end.p0");
+    }
+
+    fn lifetime(&self, pointer: LLVMValueRef, name: &std::ffi::CStr) {
+        // SAFETY: LLVM 22 spells the opaque-pointer lifetime declarations
+        // `llvm.lifetime.{start,end}.p0` with the exact `void(ptr)` signature;
+        // both the declaration and argument belong to this live module/context.
+        unsafe {
+            // LLVM 22 removed the size operand from these intrinsics.  The
+            // default-address-space overload has the fixed signature
+            // `void (ptr)` and the `.p0` suffix is part of its canonical name.
+            let mut params = [self.types.ptr];
+            let function_type =
+                LLVMFunctionType(self.types.void, params.as_mut_ptr(), params.len() as u32, 0);
+            // Registering the canonical intrinsic name with its exact LLVM 22
+            // signature is more robust than asking the C API to infer an
+            // overload for a non-overloaded intrinsic.  The verifier still
+            // recognizes the declaration by name and applies the intrinsic's
+            // lifetime semantics.
+            let declaration = {
+                let existing = LLVMGetNamedFunction(self.module, name.as_ptr());
+                if existing.is_null() {
+                    LLVMAddFunction(self.module, name.as_ptr(), function_type)
+                } else {
+                    existing
+                }
+            };
+            let mut args = [pointer];
+            LLVMBuildCall2(
+                self.builder,
+                function_type,
+                declaration,
+                args.as_mut_ptr(),
+                args.len() as u32,
+                c"".as_ptr(),
+            );
+        }
+    }
 }

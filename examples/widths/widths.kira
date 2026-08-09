@@ -1,4 +1,4 @@
-// Fixed-width scalar types: I8..I64, U8..U64, F32, and F64.
+// Fixed-width scalar types: I8..Int, U8..U64, F32, and Float.
 //
 // These are *spellings*, not new representations. Every integer type — bare
 // `Int` included — is one 64-bit two's-complement value at run time, and every
@@ -8,7 +8,7 @@
 // A spelling decides exactly two things.
 //
 // First, distinctness. Two *written* widths must match exactly: a `U8` does not
-// flow into an `I64` and `u8Value + i64Value` is an error, because this language
+// flow into an `Int` and `u8Value + i64Value` is an error, because this language
 // has no implicit widening. Bare `Int` and `Float` are the exception — each is a
 // wildcard matching any width in its kind, which is what lets an integer literal
 // be written at every width without a conversion rule.
@@ -49,7 +49,7 @@ function main() {
     let tiny: I8 = 7
     let small: I16 = 300
     let medium: I32 = 70000
-    let large: I64 = 5000000000
+    let large: Int = 5000000000
     print(tiny + 1)
     print(small + 1)
     print(medium + 1)
@@ -65,8 +65,8 @@ function main() {
     print(big % two)
 
     // The same operators on a signed width keep their signed answers.
-    let below: I64 = -8
-    let three: I64 = 3
+    let below: Int = -8
+    let three: Int = 3
     print(below < three)
     print(below / three)
     print(below % three)
@@ -85,7 +85,7 @@ function main() {
 
     // Floats have widths too, and the same exactness rule.
     let coarse: F32 = 1.5
-    let fine: F64 = 2.25
+    let fine: Float = 2.25
     print(coarse + 0.5)
     print(fine / 0.25)
     print(coarse < 2.0)

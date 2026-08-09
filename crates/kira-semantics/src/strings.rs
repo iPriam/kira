@@ -250,6 +250,8 @@ impl Analyzer<'_> {
         // here where the program is in reach.
         let ty = if op.answers_bool() {
             Type::Bool
+        } else if op.answers_int() {
+            Type::INT
         } else if op.answers_string_array() {
             // `array_of` answers `Type::Error` when the id space is exhausted,
             // which flows on as an error node rather than stopping analysis.

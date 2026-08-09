@@ -3,7 +3,7 @@ struct Cells4 {}
 
 @FFI.Struct { layout: c; }
 struct Grid { var cells: Cells4
-var weight: F64 }
+var weight: Float }
 
 @FFI.Struct { layout: c; }
 struct Slot { var p: I32

@@ -10,6 +10,7 @@ mod aliases;
 mod arrays;
 mod classes;
 mod closures;
+mod construct_values;
 mod constructs;
 mod declarations;
 mod enums;

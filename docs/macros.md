@@ -1,7 +1,8 @@
-# Macros
+# Macros and compile-time functions
 
-Kira has two macro forms, and both are pure frontend source-to-source
-transforms that run after lexing and before semantic analysis. `macro` is
+Kira has two macro forms and one compile-time function form. All three are pure
+frontend source-to-source transforms that run after lexing and before semantic
+analysis. `macro` is
 **declarative**: it binds expression fragments and substitutes them into a fixed
 template, with no compile-time execution. `comptime macro` is **procedural**: a
 real compile-time function that receives syntax, runs arbitrary Kira against it,
@@ -24,11 +25,60 @@ Kira. There is no per-backend macro work.
 | Procedural, derive | `comptime macro Name { kind { derive } … }` | `@Derive(Name, …)` above a declaration |
 | Procedural, field-triggered | `kind { attribute } trigger { field } replace { true }` | `@Name` on a *field* of a declaration |
 | Procedural, wrapper | `comptime macro Name { kind { wrapper } … }` | `@Name` declares a template; the template's name on a field summons it |
+| Compile-time function | `comptime function name(p: Int) -> Int { … }` | `name(arg)` — **no `!`** |
 
 A trailing `!` marks every value-position macro, so a reader always sees that
-the arguments are unevaluated syntax rather than values. Attribute and derive
+the arguments are unevaluated syntax rather than values. A `comptime function`
+is the exception, and deliberately: see below. Attribute and derive
 macros attach to a declaration with `@`, and `@Derive` takes a comma-separated
 list, running each derive over the same declaration.
+
+## `comptime function`
+
+Ordinary Kira that runs while the program is being compiled. Its body goes on
+the same evaluator a `comptime macro`'s `expand` runs on, so it has `let`, `if`,
+`while`, `for`, `match` and `attempt`, and it reads the same namespaces.
+
+```kira
+comptime function sumTo(limit: Int) -> Int {
+    var total = 0
+    var i = 1
+    while i <= limit {
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+
+@Main
+function main() {
+    print(sumTo(100))   // the backend sees `print(5050)`
+    return
+}
+```
+
+What differs from a macro is the two ends. Its arguments arrive as **values**
+rather than as the source text a fragment parameter carries, and what it returns
+becomes a **literal** at the call site rather than syntax to splice.
+
+**Which is why it takes no `!`.** A macro call is written `Name!(…)` because what
+happens there is code substitution and a reader should see it. A comptime
+function's call site is a value — indistinguishable from having written the
+answer out — so it reads as the ordinary call it is.
+
+The declaration is blanked like a macro's, so nothing reaches a backend. A call
+site is found by **name**, which is the one thing that makes this form different
+to scan for: a method call (`value.name(…)`) and a declaration
+(`function name(…)`) are told apart by what precedes the name, so an ordinary
+function or method sharing the name is left alone.
+
+One comptime function may call another, which is what makes them compose. A call
+that nests more than 32 deep is `KMAC010` rather than a hang: a comptime function
+that calls itself has no base case here.
+
+An argument the evaluator cannot fold — a runtime binding, say — is `KMAC020`
+and the call is **refused**, never left standing. A call that survived into a
+backend would be a call to a function that is not there.
 
 ## Fragment evaluation and ownership
 
@@ -170,6 +220,41 @@ and everything a macro consumes — the macro declarations themselves, the
 annotations they answer to — is blanked rather than deleted. Every byte the user
 wrote that survives expansion keeps the offset it started at, so a diagnostic
 about untouched code still points at its own line.
+
+### Naming a program's enums
+
+A macro body may name any enum the program declares, and gets a case back:
+
+```kira
+enum ShaderBackend { Msl Wgsl Glsl Hlsl Spirv }
+
+comptime macro pick {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        let target = ShaderBackend.Glsl
+        match target {
+            Msl -> { return quote { "metal" } }
+            Wgsl -> { return quote { "webgpu" } }
+            Glsl -> { return quote { "opengl" } }
+            Hlsl -> { return quote { "d3d" } }
+            Spirv -> { return quote { "vulkan" } }
+        }
+    }
+}
+```
+
+The evaluator reads the program's enum declarations, so `ShaderBackend.Glsl` is
+the case rather than a field of some value called `ShaderBackend`. A case the
+enum does not have is refused by name, and the refusal lists the ones it does:
+
+```text
+error[KMAC020]: … does not support `ShaderBackend.Gsl`, because `ShaderBackend`
+has no case `Gsl` — it has `.Msl`, `.Wgsl`, `.Glsl`, `.Hlsl`, `.Spirv`
+```
+
+That is the whole reason to prefer a case over a string here. A misspelled or
+renamed string is a value like any other: it travels, and fails wherever it is
+finally compared. A case fails at the line that writes it.
 
 ### Compiler reflection API
 
@@ -480,15 +565,15 @@ one shader:
 comptime macro ksl {
     kind { function }
     expand(input: Syntax) -> Syntax {
-        let msl = Ksl.compile(input, "msl")
-        let wgsl = Ksl.compile(input, "wgsl")
+        let msl = Ksl.compile(input, ShaderBackend.Msl)
+        let wgsl = Ksl.compile(input, ShaderBackend.Wgsl)
         return quote {
             KslArtifact(
                 combinedMsl: #{msl.combinedSource},
                 vertexWgsl: #{wgsl.vertexSource},
                 fragmentWgsl: #{wgsl.fragmentSource},
                 vertexEntry: #{msl.vertexEntry},
-                uniformReflection: #{msl.uniformReflection},
+                resourceReflection: #{msl.resourceReflection},
             )
         }
     }
@@ -499,21 +584,32 @@ Note what the compiler does not know there: `KslArtifact`, its field names, and
 how many backends get inlined are all Kira source, so an engine can add a
 target, drop one, or rename a field without a compiler release.
 
-The targets are `msl`, `wgsl`, `glsl_330`, `hlsl`, and `spirv`. Metal compiles
-one module holding every stage, so its whole source arrives in `combinedSource`;
-the other four compile a stage at a time and fill `vertexSource`,
-`fragmentSource`, and `computeSource`. A target that cannot express a shader —
-GLSL 330 has no compute stage and no storage buffers, and SPIR-V has no output
-variables in a compute entry point — leaves its sources empty and reports a
-note, because the other targets still carry the shader and the build should
-still succeed. SPIR-V is binary rather than source, and arrives as hexadecimal
+The target is a **case**, not a string: `ShaderBackend.Msl`, `.Wgsl`, `.Glsl`,
+`.Hlsl`, `.Spirv`. `ShaderBackend` is an ordinary Kira enum the engine declares
+beside the macro — a macro body may name any enum the program declares — and
+naming a case it does not have is an error that lists the ones it does. That
+matters because the alternative failed late: a string target that no longer
+existed compiled into every artifact as an empty field and surfaced as "no
+output was compiled for it" at each call site instead of at the one line naming
+it.
+
+The case carries no version. `Glsl` is the backend; which GLSL version it emits
+is the compiler's business, and moving from 330 to 430 changed no program.
+
+Metal compiles one module holding every stage, so its whole source arrives in
+`combinedSource`; the other four compile a stage at a time and fill
+`vertexSource`, `fragmentSource`, and `computeSource`. A target that cannot
+express a shader — SPIR-V has no output variables in a compute entry point —
+leaves its sources empty and reports a note, because the other targets still
+carry the shader and the build should still succeed. SPIR-V is binary rather
+than source, and arrives as hexadecimal
 with eight characters to a word, ready to be read straight into the `uint32_t`
 array `vkCreateShaderModule` takes.
 
 The value `Ksl.compile` returns is a record whose every member is a `String` —
 `shaderName`, `combinedSource`, `vertexSource`, `fragmentSource`,
 `computeSource`, `vertexEntry`, `fragmentEntry`, `computeEntry`, and
-`uniformReflection`. Every member is always present: a stage a shader does not
+`resourceReflection`. Every member is always present: a stage a shader does not
 have, and a source form a target does not use, read as the empty string rather
 than as an absent member, so a macro body asks whether one is empty instead of
 branching on a shape that varies per target. Being strings is also what makes

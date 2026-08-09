@@ -168,36 +168,93 @@ impl Analyzer<'_> {
         // being reported as a missing input.
         self.fill_content_slots(ctx, id, children, &name, &mut initializers, span);
 
-        // Every slot is filled: a param from its argument, and each remaining
-        // slot — an unset param or an own field — from its declared default.
-        let mut slot = 0u32;
-        while (slot as usize) < field_count {
-            let index = slot as usize;
-            slot += 1;
-            if initializers[index].is_some() {
+        // Defaults are instance initializers, not declaration-global
+        // expressions. An isolated scope prevents them from seeing caller
+        // locals, while each completed field is bound before the next one is
+        // analyzed. This is what makes `let second = first` work and makes a
+        // forward reference fail at the declaration-owned expression.
+        ctx.push_isolated_scope();
+        let definitions: Vec<(String, Type)> = self
+            .program
+            .types
+            .structs()
+            .get(id)
+            .map(|definition| {
+                definition
+                    .fields
+                    .iter()
+                    .map(|field| (field.name.clone(), field.ty))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (index, initializer) in initializers.iter_mut().enumerate() {
+            let Some((field, field_ty)) = definitions.get(index).cloned() else {
                 continue;
-            }
-            let filled = match self.resolve_field_default(id, index as u32) {
-                Some(default) => default,
-                None => {
-                    let field = self
-                        .program
-                        .types
-                        .structs()
-                        .get(id)
-                        .and_then(|def| def.field(index as u32))
-                        .map(|field| field.name.clone())
-                        .unwrap_or_default();
-                    self.emit(
-                        span,
-                        "KSEM208",
-                        format!("construction of `{name}` is missing input `{field}`"),
-                    );
-                    self.program.exprs.alloc(HirExpr::Error)
-                }
             };
-            initializers[index] = Some(filled);
+            let value = match initializer.take() {
+                Some(value) => value,
+                None => match self.field_default(id, index as u32) {
+                    Some(default) => {
+                        if field_ty == Type::Error {
+                            self.program.exprs.alloc(HirExpr::Error)
+                        } else if !self
+                            .resolving_struct_defaults
+                            .insert((id.index(), index as u32))
+                        {
+                            let previous_source = self.source;
+                            self.source = default.source;
+                            self.emit(
+                                self.tree.expr(default.syntax).span(),
+                                "KSEM213",
+                                "construct member defaults recursively construct each other and have no finite value",
+                            );
+                            self.source = previous_source;
+                            self.program.exprs.alloc(HirExpr::Error)
+                        } else {
+                            let previous_source = self.source;
+                            self.source = default.source;
+                            let value =
+                                self.analyze_expr_expecting(ctx, default.syntax, Some(field_ty));
+                            self.source = previous_source;
+                            let actual = self.program.expr(value).type_of();
+                            if actual != Type::Error && !self.admits(actual, field_ty) {
+                                self.emit(
+                                    self.tree.expr(default.syntax).span(),
+                                    "KSEM207",
+                                    format!(
+                                        "construct member `{field}` of `{name}` expects `{}`, found `{}`",
+                                        self.type_name(field_ty),
+                                        self.type_name(actual)
+                                    ),
+                                );
+                            }
+                            self.resolving_struct_defaults
+                                .remove(&(id.index(), index as u32));
+                            self.coerce_into(value, field_ty)
+                        }
+                    }
+                    None => {
+                        self.emit(
+                            span,
+                            "KSEM208",
+                            format!("construction of `{name}` is missing input `{field}`"),
+                        );
+                        self.program.exprs.alloc(HirExpr::Error)
+                    }
+                },
+            };
+            let local = ctx.declare(&field, field_ty, false);
+            ctx.hoist_stmt(
+                self.program
+                    .stmts
+                    .alloc(HirStmt::Let { local, init: value }),
+            );
+            *initializer = Some(self.program.exprs.alloc(HirExpr::Local {
+                local,
+                ty: field_ty,
+            }));
         }
+        ctx.pop_scope();
         let fields: Vec<HirExprId> = initializers
             .into_iter()
             .map(|value| value.unwrap_or_else(|| self.program.exprs.alloc(HirExpr::Error)))
@@ -215,7 +272,7 @@ impl Analyzer<'_> {
     /// (`[some X]`) takes an ordered array of them. Children on a declaration
     /// with no slot, or a bare block for more than one slot (which would need
     /// named fills), are refused — the latter is the still-deferred boundary.
-    fn fill_content_slots(
+    pub(crate) fn fill_content_slots(
         &mut self,
         ctx: &mut FnCtx,
         id: StructId,

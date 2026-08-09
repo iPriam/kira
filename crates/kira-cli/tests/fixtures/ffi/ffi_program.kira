@@ -22,7 +22,7 @@ function idU16(x: U16) -> U16;
 function idU32(x: U32) -> U32;
 
 @FFI.Extern { library: ffifixture; symbol: ffi_add_i64; abi: c; }
-function addI64(a: I64, b: I64) -> I64;
+function addI64(a: Int, b: Int) -> Int;
 
 @FFI.Extern { library: ffifixture; symbol: ffi_id_u64; abi: c; }
 function idU64(x: U64) -> U64;
@@ -34,7 +34,7 @@ function notBool(b: Bool) -> Bool;
 function addF32(a: F32, b: F32) -> F32;
 
 @FFI.Extern { library: ffifixture; symbol: ffi_add_f64; abi: c; }
-function addF64(a: F64, b: F64) -> F64;
+function addF64(a: Float, b: Float) -> Float;
 
 @FFI.Extern { library: ffifixture; symbol: ffi_strlen; abi: c; }
 function cstrLen(s: CString) -> U64;
@@ -46,7 +46,7 @@ function makePtr() -> RawPtr;
 function nullPtr() -> RawPtr;
 
 @FFI.Extern { library: ffifixture; symbol: ffi_ptr_word; abi: c; }
-function ptrWord(p: RawPtr) -> I64;
+function ptrWord(p: RawPtr) -> Int;
 
 @FFI.Extern { library: ffifixture; symbol: ffi_store; abi: c; }
 function storeCell(v: I32);
@@ -55,7 +55,7 @@ function storeCell(v: I32);
 function loadCell() -> I32;
 
 @FFI.Extern { library: ffifixture; symbol: ffi_bump; abi: c; }
-function bump() -> I64;
+function bump() -> Int;
 
 // A `CString` result: C returns a pointer into storage it keeps, and the seam
 // copies the bytes out of it, so the Kira side of this call is an ordinary
@@ -68,8 +68,8 @@ function echoOrNull(s: CString) -> CString;
 
 // One wrapper per engine: the hybrid backend runs the first on the VM half and
 // the second as machine code, and both reach the same C counter.
-@Runtime function bumpRuntime() -> I64 { return bump() }
-@Native function bumpNative() -> I64 { return bump() }
+@Runtime function bumpRuntime() -> Int { return bump() }
+@Native function bumpNative() -> Int { return bump() }
 
 @Main function main() {
     print(addI32(20, 22))

@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex};
 use kira_live::{AppOutcome, Bundle, RunnerHost};
 
 use crate::host::DesktopHost;
+use crate::hotpatch::VmHotPatch;
 
 /// What the protocol thread asks the app thread to do.
 enum Work {
@@ -97,6 +98,8 @@ pub struct RelayHost {
     running: Arc<AtomicBool>,
     exited: ExitSlot,
     hotpatch_disabled: bool,
+    hotpatch: VmHotPatch,
+    pending_generation: Option<u64>,
 }
 
 /// The app thread's end: the requests, and the app itself.
@@ -112,6 +115,16 @@ pub struct AppThread {
 /// `hotpatch_disabled` is passed in rather than read here so that both ends of a
 /// session agree on it: the switch is read once, where the host is built.
 pub fn pair(hotpatch_disabled: bool) -> (RelayHost, AppThread) {
+    pair_with_hotpatch(hotpatch_disabled, VmHotPatch::new(std::path::PathBuf::new()))
+}
+
+/// Splits a runner while sharing its VM hot-patch controller with the protocol
+/// thread. The controller is published by [`DesktopHost::link`] before the
+/// entrypoint starts.
+pub fn pair_with_hotpatch(
+    hotpatch_disabled: bool,
+    hotpatch: VmHotPatch,
+) -> (RelayHost, AppThread) {
     let (work, requests) = channel();
     let running = Arc::new(AtomicBool::new(false));
     let exited: ExitSlot = Arc::new(Mutex::new(None));
@@ -121,6 +134,8 @@ pub fn pair(hotpatch_disabled: bool) -> (RelayHost, AppThread) {
             running: Arc::clone(&running),
             exited: Arc::clone(&exited),
             hotpatch_disabled,
+            hotpatch,
+            pending_generation: None,
         },
         AppThread {
             work: requests,
@@ -179,6 +194,22 @@ impl RunnerHost for RelayHost {
     }
 
     fn run_once(&mut self) -> Result<(), RelayError> {
+        // VM graphics reloads do not send a second Start request: their
+        // original entrypoint remains suspended in the native window loop.
+        // Waiting for a callback to enter the replacement is the proof the
+        // live session reports as `reload.completed`.
+        if let Some(generation) = self.pending_generation.take() {
+            return self
+                .hotpatch
+                .wait_for_observation(generation)
+                .then_some(())
+                .ok_or_else(|| {
+                    RelayError::Host(
+                        "the swapped VM code was not observed by a live frame callback"
+                            .to_owned(),
+                    )
+                });
+        }
         let (entered, running) = channel();
         let (finished, returned) = channel();
         self.ask(
@@ -194,6 +225,17 @@ impl RunnerHost for RelayHost {
     }
 
     fn swap(&mut self, bundle: &Bundle) -> Result<(), RelayError> {
+        if self.hotpatch.has_active_vm() {
+            let generation = self
+                .hotpatch
+                .swap(bundle)
+                .map_err(|error| RelayError::Host(error.to_string()))?
+                .ok_or_else(|| {
+                    RelayError::Host("the VM hot-patch session disappeared".to_owned())
+                })?;
+            self.pending_generation = Some(generation);
+            return Ok(());
+        }
         let (done, answer) = channel();
         self.ask(
             Work::Swap {
@@ -216,9 +258,13 @@ impl RunnerHost for RelayHost {
         if self.hotpatch_disabled {
             return Some(kira_live::hotpatch_kill_switch_reason());
         }
-        // A run loop has a call stack in the code a swap would replace. Nothing
-        // clever is available here: the swap is refused, the session relaunches,
-        // and the reason says which of the two it was.
+        // VM-only graphics sessions switch the program used by future native
+        // callbacks while preserving the current window. Mixed hybrid apps do
+        // not have that guarantee: native code may still hold a stack into the
+        // old image, so they retain the relaunch fallback.
+        if self.hotpatch.has_active_vm() {
+            return None;
+        }
         self.running.load(Ordering::SeqCst).then(|| {
             "the app's entrypoint is still running, and a swap needs the runner idle".to_owned()
         })

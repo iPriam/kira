@@ -43,7 +43,7 @@ pub mod frontend;
 pub mod hybrid;
 pub mod library;
 pub mod native;
-mod shader;
+pub mod shader;
 pub mod wrapper;
 
 pub use autobind::{NativeDeclarationError, declaring_packages};

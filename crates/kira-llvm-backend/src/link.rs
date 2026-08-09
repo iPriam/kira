@@ -294,6 +294,7 @@ pub fn link_executable(
     shim: Option<&Path>,
     executable: &Path,
 ) -> Result<(), LinkError> {
+    let extra = executable_stack_arguments();
     link_with(
         llvm,
         objects,
@@ -301,7 +302,7 @@ pub fn link_executable(
         foreign_link,
         shim,
         executable,
-        &[],
+        &extra,
     )
 }
 
@@ -760,6 +761,21 @@ fn platform_link_arguments() -> Vec<String> {
         arguments.push((*framework).to_owned());
     }
     arguments
+}
+
+/// The stack reserve for a generated executable on Windows.
+///
+/// Kira lowers aggregates and construct dispatch explicitly. A large UI can
+/// therefore have a deeper, wider call graph than the 1 MiB PE default. Put
+/// the reserve on the executable itself so a launcher does not need a Kira
+/// runtime-specific stack setting. Shared libraries and sidecars do not get
+/// this flag: their host owns the thread stack.
+fn executable_stack_arguments() -> Vec<String> {
+    if cfg!(target_os = "windows") {
+        vec!["-Wl,/STACK:33554432".to_owned()]
+    } else {
+        Vec::new()
+    }
 }
 
 /// Flags that make this host's linker write the same bytes for the same inputs.

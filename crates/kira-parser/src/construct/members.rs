@@ -16,7 +16,7 @@ use kira_runtime_abi::Execution;
 use kira_source::Span;
 use kira_syntax_model::TokenKind;
 use kira_syntax_model::ast::{
-    Block, ConstructField, ConstructMethod, DeferredConstruct, Function, Stmt, TypeRefId,
+    Block, ConstructField, ConstructMethod, DeferredConstruct, Function, Param, Stmt, TypeRefId,
 };
 
 use super::ConstructBody;
@@ -75,6 +75,8 @@ impl Parser<'_> {
                     {
                         body.methods.push(ConstructMethod {
                             computed: false,
+                            lifecycle: false,
+                            comptime: false,
                             required: false,
                             function,
                         });
@@ -161,6 +163,75 @@ impl Parser<'_> {
         self.expect(TokenKind::RBrace);
     }
 
+    /// Parses `lifecycle { name() { … } … }`, with `lifecycle` at the cursor.
+    ///
+    /// A hook is an ordinary instance method, which is what lets a runtime
+    /// holding a declaration's value call it: an async executor driving
+    /// `onStart`, a UI framework driving `onAppear`. The section is how the
+    /// family says *which* of its methods are lifecycle points, so a runtime
+    /// finds them without knowing any hook by name.
+    ///
+    /// A hook carrying `@Comptime` runs during compilation instead, and is the
+    /// one kind no runtime ever sees.
+    pub(super) fn parse_construct_lifecycle_section(&mut self, body: &mut ConstructBody) {
+        self.bump(); // `lifecycle`
+        self.bump(); // `{`
+        while !self.at(TokenKind::RBrace) && !self.at_eof() {
+            while self.eat(TokenKind::Semicolon) {}
+            if self.at(TokenKind::RBrace) || self.at_eof() {
+                break;
+            }
+            let before = self.pos;
+            let comptime = self.eat_comptime_annotation();
+            if self.at(TokenKind::Identifier) && self.peek(1).kind == TokenKind::LParen {
+                self.parse_construct_hook(body, comptime);
+            } else {
+                self.error(
+                    self.current().span,
+                    "KPAR066",
+                    format!(
+                        "a `lifecycle` section lists `name(…) {{ … }}` hooks, found {}",
+                        self.current_kind().describe()
+                    ),
+                );
+                self.recover_to_next_construct_member();
+            }
+            if self.pos == before {
+                self.bump();
+            }
+        }
+        self.expect(TokenKind::RBrace);
+    }
+
+    /// Consumes a `@Comptime` annotation, reporting whether one was there.
+    fn eat_comptime_annotation(&mut self) -> bool {
+        if !self.at(TokenKind::At) || !self.peek_is_word(1, "Comptime") {
+            return false;
+        }
+        self.bump(); // `@`
+        self.bump(); // `Comptime`
+        true
+    }
+
+    /// Parses one `name(params) [-> Type] { … }` hook.
+    fn parse_construct_hook(&mut self, body: &mut ConstructBody, comptime: bool) {
+        let start = self.current().span;
+        let name_span = start;
+        let name = self.intern_span(name_span);
+        self.bump(); // hook name
+        let params = self.parse_params();
+        let return_type = self.eat(TokenKind::Arrow).then(|| self.parse_type_ref());
+        let block = self.parse_block();
+        let span = Span::from_bounds(start.start, self.previous_end());
+        body.methods.push(ConstructMethod {
+            computed: false,
+            lifecycle: true,
+            comptime,
+            required: false,
+            function: Self::hook_function(name, name_span, params, return_type, block, span),
+        });
+    }
+
     /// Parses `@Required function name(params) [-> Type]`, with `function` at
     /// the cursor.
     ///
@@ -198,6 +269,8 @@ impl Parser<'_> {
         let span = Span::from_bounds(start.start, self.previous_end());
         body.methods.push(ConstructMethod {
             computed: false,
+            lifecycle: false,
+            comptime: false,
             required: true,
             function: Function {
                 name,
@@ -277,6 +350,15 @@ impl Parser<'_> {
             return;
         };
         if self.at(TokenKind::LBrace) {
+            let Some(ty) = ty else {
+                self.error(
+                    self.current().span,
+                    "KPAR066",
+                    "a computed construct member must declare its result type",
+                );
+                self.parse_block();
+                return;
+            };
             // `let node: Any { block }` — a computed member: a zero-argument method
             // read as a property.
             let block = self.parse_block();
@@ -284,6 +366,8 @@ impl Parser<'_> {
             let span = Span::from_bounds(start.start, self.previous_end());
             body.methods.push(ConstructMethod {
                 computed: true,
+                lifecycle: false,
+                comptime: false,
                 required: false,
                 function: Self::computed_member_function(name, name_span, ty, block, span),
             });
@@ -302,10 +386,10 @@ impl Parser<'_> {
         });
     }
 
-    /// Parses the `name: Type` head shared by every `let` construct member,
-    /// returning whether the type was written as a child slot (`some X` /
-    /// `[some X]`).
-    fn parse_construct_member_head(&mut self) -> Option<(Symbol, Span, TypeRefId, bool)> {
+    /// Parses the optional `name: Type` head shared by every `let` construct
+    /// member, returning whether the type was written as a child slot (`some X`
+    /// / `[some X]`).
+    fn parse_construct_member_head(&mut self) -> Option<(Symbol, Span, Option<TypeRefId>, bool)> {
         if !self.at(TokenKind::Identifier) {
             self.error(self.current().span, "KPAR010", "expected a member name");
             return None;
@@ -313,8 +397,12 @@ impl Parser<'_> {
         let name_span = self.current().span;
         let name = self.intern_span(name_span);
         self.bump();
-        self.expect(TokenKind::Colon);
-        let (ty, slot) = self.parse_construct_field_type();
+        let (ty, slot) = if self.eat(TokenKind::Colon) {
+            let (ty, slot) = self.parse_construct_field_type();
+            (Some(ty), slot)
+        } else {
+            (None, false)
+        };
         Some((name, name_span, ty, slot))
     }
 
@@ -373,6 +461,33 @@ impl Parser<'_> {
 
     /// Builds the zero-argument method a computed member (`let node: Any { … }`)
     /// desugars to: no parameters, result type `Any`, body the written block.
+    /// The `Function` one lifecycle hook lowers to.
+    ///
+    /// An ordinary method: the runtime that drives it calls it like any other,
+    /// and the family's section is the only thing that says it is a hook.
+    fn hook_function(
+        name: Symbol,
+        name_span: Span,
+        params: Vec<Param>,
+        return_type: Option<TypeRefId>,
+        body: Block,
+        span: Span,
+    ) -> Function {
+        Function {
+            name,
+            name_span,
+            is_main: false,
+            is_async: false,
+            foreign: None,
+            export: None,
+            execution: Execution::Inherited,
+            params,
+            return_type,
+            body,
+            span,
+        }
+    }
+
     pub(super) fn computed_member_function(
         name: Symbol,
         name_span: Span,

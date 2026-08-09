@@ -80,6 +80,96 @@ pub fn bundle(manifest: &HybridManifest, module: &Module) -> Result<(), HybridEr
     entry(manifest)
 }
 
+/// Validates a replacement bytecode module for an all-runtime live session and
+/// returns the old native-to-runtime function-id map.
+///
+/// The native library is deliberately not replaced during a VM hot patch. Its
+/// generated callback thunks still carry the old function ids, while the new
+/// bytecode is allowed to add, remove, or reorder runtime-only functions. The
+/// crossing surface must remain identical; the implementation table itself
+/// does not have to remain positional.
+pub fn hot_reload(
+    manifest: &HybridManifest,
+    previous: &Module,
+    next: &Module,
+) -> Result<Vec<u32>, HybridError> {
+    if manifest
+        .functions
+        .iter()
+        .any(|function| function.execution != Execution::Runtime)
+    {
+        return Err(HybridError::Mismatch(
+            "a VM hot reload was requested for a mixed execution manifest".to_owned(),
+        ));
+    }
+    if previous.foreign_imports != next.foreign_imports
+        || previous.foreign_aggregates != next.foreign_aggregates
+        || previous.foreign_callbacks != next.foreign_callbacks
+    {
+        return Err(HybridError::Mismatch(
+            "the native library's foreign crossing surface changed; relaunch is required"
+                .to_owned(),
+        ));
+    }
+    foreign(manifest, next)?;
+    if next
+        .functions
+        .iter()
+        .any(|function| function.execution != Execution::Runtime)
+    {
+        return Err(HybridError::Mismatch(
+            "the replacement module contains a native function body".to_owned(),
+        ));
+    }
+
+    let mut remap = vec![u32::MAX; manifest.functions.len()];
+    let mut used = std::collections::HashSet::new();
+    for function in &manifest.functions {
+        let candidates: Vec<u32> = next
+            .functions
+            .iter()
+            .enumerate()
+            .filter(|(_, prototype)| {
+                prototype.name == function.name
+                    && prototype.param_count == function.params.len() as u16
+            })
+            .map(|(index, _)| index as u32)
+            .collect();
+        let Some(&replacement) = candidates.first() else {
+            return Err(HybridError::Mismatch(format!(
+                "the replacement module has no runtime function `{}` with {} parameter(s)",
+                function.name,
+                function.params.len()
+            )));
+        };
+        if candidates.len() != 1 || !used.insert(replacement) {
+            return Err(HybridError::Mismatch(format!(
+                "the replacement module has an ambiguous runtime identity for `{}`",
+                function.name
+            )));
+        }
+        remap[function.id as usize] = replacement;
+    }
+
+    if let Some(entry) = manifest.entry {
+        let replacement = remap
+            .get(entry as usize)
+            .copied()
+            .filter(|&id| id != u32::MAX);
+        if next.main != replacement {
+            return Err(HybridError::Mismatch(
+                "the replacement module's entrypoint no longer matches the live app".to_owned(),
+            ));
+        }
+    } else if next.main.is_some() {
+        return Err(HybridError::Mismatch(
+            "the replacement module gained an entrypoint".to_owned(),
+        ));
+    }
+
+    Ok(remap)
+}
+
 /// Proves the manifest's foreign table matches the bytecode half's.
 ///
 /// A `CallForeign(id)` in the bytecode indexes both the module's own import

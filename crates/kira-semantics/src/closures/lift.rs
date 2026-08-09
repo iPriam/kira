@@ -5,7 +5,10 @@ use kira_semantics_model::{FieldDef, OwnershipMode, StructDef, StructId, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{Block, ClosureParam};
 
-use super::{Capture, Captured, ClosureCtx, ClosureImpl, ClosureSite, FnTypeInfo};
+use super::{
+    Capture, Captured, ClosureCtx, ClosureImpl, ClosureSite, FnTypeInfo, stable_impl_tag,
+    unique_impl_tag,
+};
 use crate::analyze::{Analyzer, FnCtx};
 
 impl Analyzer<'_> {
@@ -268,14 +271,34 @@ impl Analyzer<'_> {
         {
             Some(tag) => tag,
             None => {
-                let tag = self
+                let display_tag = self
                     .fn_types
                     .get(repr)
                     .map_or(0, |info| info.impls.len() as u32);
-                let wrapper =
-                    self.named_function_wrapper(repr, target, name, params, modes, result, tag);
+                let candidate = self
+                    .function_identity(target)
+                    .map(|(source, span, identity)| stable_impl_tag(source, span, identity))
+                    .unwrap_or_else(|| {
+                        stable_impl_tag(crate::FILE_SOURCE_ID, Span::new(0, target.0), name)
+                    });
+                let tag = self
+                    .fn_types
+                    .get(repr)
+                    .map_or(candidate, |info| unique_impl_tag(info, candidate));
+                let wrapper = self.named_function_wrapper(
+                    repr,
+                    target,
+                    name,
+                    params,
+                    modes,
+                    result,
+                    display_tag,
+                );
                 if let Some(info) = self.fn_types.get_mut(repr) {
-                    info.impls.push(ClosureImpl { function: wrapper });
+                    info.impls.push(ClosureImpl {
+                        tag,
+                        function: wrapper,
+                    });
                     info.named_functions.insert(target, tag);
                 }
                 tag
@@ -396,12 +419,17 @@ impl Analyzer<'_> {
         // read the same `impls.len()` and take the same tag — so the dispatcher
         // would send every call to whichever body was registered second. The
         // function id is already reserved, so the row can be complete here.
-        let tag = self
+        let display_tag = self
             .fn_types
             .get(repr)
             .map_or(0, |info| info.impls.len() as u32);
+        let candidate = stable_impl_tag(self.source, body.span, "closure");
+        let tag = self
+            .fn_types
+            .get(repr)
+            .map_or(candidate, |info| unique_impl_tag(info, candidate));
         if let Some(info) = self.fn_types.get_mut(repr) {
-            info.impls.push(ClosureImpl { function });
+            info.impls.push(ClosureImpl { tag, function });
         }
 
         let mut inner = FnCtx::new(result);
@@ -488,7 +516,7 @@ impl Analyzer<'_> {
         stmts.extend(analyzed);
 
         let param_count = 1 + params.len() as u32;
-        let name = format!("{}#{tag}", self.type_name(Type::Struct(repr)));
+        let name = format!("{}#{display_tag}", self.type_name(Type::Struct(repr)));
         let execution = self.current_execution;
         self.fill_synth(
             function,

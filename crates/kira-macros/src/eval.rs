@@ -13,11 +13,13 @@
 
 use std::collections::HashMap;
 
+use crate::registry::ComptimeFunction;
+
 use kira_core::Names;
 use kira_diagnostics::Severity;
 use kira_source::{FileSpan, SourceId};
 use kira_syntax_model::SyntaxTree;
-use kira_syntax_model::ast::{Block, Expr, ExprId, ForIterable, Item, Stmt, StmtId};
+use kira_syntax_model::ast::{Block, Expr, ExprId, ForIterable, Item, MatchArm, Stmt, StmtId};
 
 use crate::diagnostics;
 use crate::ksl::ShaderCompiler;
@@ -160,28 +162,13 @@ pub(crate) struct Outcome {
 }
 
 /// Runs `body` with `arguments` bound to its `expand` parameters.
-///
-/// `shaders` is the KSL pipeline the `Ksl` namespace reaches, or `None` when
-/// the caller supplied none.
 pub(crate) fn run(
     body: &Body,
     arguments: Vec<(String, Value)>,
-    shaders: Option<&dyn ShaderCompiler>,
-    platform: &str,
+    comptime: Comptime<'_>,
     lint: bool,
 ) -> Result<Outcome, EvalError> {
-    let mut evaluator = Evaluator {
-        body,
-        scopes: vec![arguments.into_iter().collect()],
-        reported: Vec::new(),
-        shaders,
-        platform: platform.to_owned(),
-        lint,
-    };
-    let value = match evaluator.block(&body.block)? {
-        Flow::Return(value) => value,
-        Flow::Normal | Flow::Break | Flow::Continue => Value::Void,
-    };
+    let (value, reported) = run_value(body, arguments, comptime, lint)?;
     let syntax = match value {
         Value::Void => String::new(),
         other => other.splice().ok_or_else(|| {
@@ -191,10 +178,80 @@ pub(crate) fn run(
             )
         })?,
     };
-    Ok(Outcome {
-        syntax,
-        reported: evaluator.reported,
-    })
+    Ok(Outcome { syntax, reported })
+}
+
+/// Runs `body` and hands back the value it returned, unspliced.
+///
+/// What a `comptime function` needs: its result becomes a literal at the call
+/// site, and its arguments are themselves values rather than the source text a
+/// macro's fragment parameter carries. [`run`] is this plus the splice a macro
+/// wants.
+pub(crate) fn run_value(
+    body: &Body,
+    arguments: Vec<(String, Value)>,
+    comptime: Comptime<'_>,
+    lint: bool,
+) -> Result<(Value, Vec<Report>), EvalError> {
+    run_nested(body, arguments, comptime, lint, 0)
+}
+
+/// The comptime functions in scope during an evaluation, by name.
+pub(crate) type ComptimeFunctions = HashMap<String, ComptimeFunction>;
+
+/// What a compile-time body reaches besides its own arguments.
+///
+/// The three travel together through every layer that can run one — a macro's
+/// `expand`, a `comptime function`, and each nested call either makes — so they
+/// are carried as one value rather than threaded as three parameters that no
+/// call site ever varies independently.
+#[derive(Clone, Copy)]
+pub(crate) struct Comptime<'a> {
+    /// Every `comptime function` the program declares.
+    pub(crate) functions: &'a ComptimeFunctions,
+    /// The KSL pipeline the `Ksl` namespace reaches, or `None` when the caller
+    /// supplied none.
+    pub(crate) shaders: Option<&'a dyn ShaderCompiler>,
+    /// The target platform the `Target` namespace answers for.
+    pub(crate) platform: &'a str,
+    /// Every enum the program declares, so a body may name one of its cases.
+    pub(crate) enums: &'a HashMap<String, Vec<String>>,
+}
+
+/// How deep one comptime call may nest inside another.
+const CALL_DEPTH_LIMIT: u32 = 32;
+
+fn run_nested(
+    body: &Body,
+    arguments: Vec<(String, Value)>,
+    comptime: Comptime<'_>,
+    lint: bool,
+    depth: u32,
+) -> Result<(Value, Vec<Report>), EvalError> {
+    let mut evaluator = Evaluator {
+        body,
+        functions: comptime.functions,
+        depth,
+        scopes: vec![arguments.into_iter().collect()],
+        reported: Vec::new(),
+        shaders: comptime.shaders,
+        platform: comptime.platform.to_owned(),
+        enums: comptime.enums.clone(),
+        lint,
+    };
+    let value = match evaluator.block(&body.block)? {
+        Flow::Return(value) => value,
+        Flow::Normal | Flow::Break | Flow::Continue => Value::Void,
+    };
+    Ok((value, evaluator.reported))
+}
+
+/// How one statement of an `attempt` body finished.
+enum Attempted {
+    /// It ran; this is how it left.
+    Ran(Flow),
+    /// A `try` in it unwrapped the failure case, which the handlers route.
+    Failed(crate::value::EnumCaseValue),
 }
 
 /// How a statement finished.
@@ -212,12 +269,22 @@ enum Flow {
 /// The running interpreter.
 struct Evaluator<'a> {
     body: &'a Body,
+    /// The `comptime function`s the program declares, so one can call another.
+    ///
+    /// Composition is the point: a comptime function that could not call its
+    /// neighbours would be a single expression wearing a declaration's clothes.
+    functions: &'a ComptimeFunctions,
+    /// How many comptime calls deep this evaluation already is, so a function
+    /// that calls itself is refused rather than hanging the compiler.
+    depth: u32,
     scopes: Vec<HashMap<String, Value>>,
     reported: Vec<Report>,
     /// The KSL pipeline `Ksl.compile` reaches, when one was supplied.
     shaders: Option<&'a dyn ShaderCompiler>,
     /// The operating system this build targets, for `Build.platform`.
     platform: String,
+    /// Every enum the program declares, by name, with its case names.
+    enums: HashMap<String, Vec<String>>,
     /// Whether `kira lint` asked for this collection, for `Build.linting`.
     ///
     /// Only a collector is told: it is the one macro form a verb runs *for*,
@@ -349,10 +416,145 @@ impl Evaluator<'_> {
                 body,
                 ..
             } => self.for_loop(name, &iterable, &body),
+            Stmt::Match { subject, arms, .. } => self.match_statement(subject, &arms),
+            Stmt::Attempt { body, handlers, .. } => self.attempt_statement(&body, &handlers),
             Stmt::Break { .. } => Ok(Flow::Break),
             Stmt::Continue { .. } => Ok(Flow::Continue),
             other => Err(EvalError::unsupported(statement_shape(&other))),
         }
+    }
+
+    /// Runs an `attempt { … } handle { … }`.
+    ///
+    /// The body runs statement by statement until a `try` unwraps a case that
+    /// turned out to be the failure one, at which point the rest of the body is
+    /// skipped and the arm naming that failure runs instead — which is what the
+    /// language does, and the reason statements after a `try` nest into its
+    /// success branch there.
+    ///
+    /// `Result`-shaped is structural here as it is everywhere else: any case
+    /// named `Ok` succeeds and carries the value on, any other case is the
+    /// failure and is routed. Nothing nominal is required, so a body may `try`
+    /// an enum it declared itself.
+    fn attempt_statement(
+        &mut self,
+        body: &Block,
+        handlers: &[MatchArm],
+    ) -> Result<Flow, EvalError> {
+        self.scopes.push(HashMap::new());
+        let mut failure = None;
+        let mut flow = Flow::Normal;
+        for &id in &body.stmts {
+            match self.try_statement(id)? {
+                Attempted::Ran(next) => {
+                    flow = next;
+                    if !matches!(flow, Flow::Normal) {
+                        break;
+                    }
+                }
+                Attempted::Failed(case) => {
+                    failure = Some(case);
+                    break;
+                }
+            }
+        }
+        self.scopes.pop();
+        let Some(case) = failure else {
+            return Ok(flow);
+        };
+        for arm in handlers {
+            if self.name(arm.variant) != case.variant {
+                continue;
+            }
+            self.scopes.push(HashMap::new());
+            if let Some(binding) = &arm.binding {
+                let name = self.name(binding.name).to_owned();
+                let payload = case.payload.clone().unwrap_or(Value::Void);
+                self.bind(&name, payload);
+            }
+            let mut handled = Flow::Normal;
+            for &id in &arm.body.stmts {
+                handled = self.statement(id)?;
+                if !matches!(handled, Flow::Normal) {
+                    break;
+                }
+            }
+            self.scopes.pop();
+            return Ok(handled);
+        }
+        Err(EvalError::unsupported(format!(
+            "an `attempt` with no handler for `{}`",
+            case.variant
+        )))
+    }
+
+    /// Runs one statement of an `attempt` body, reporting a `try` that failed.
+    fn try_statement(&mut self, id: StmtId) -> Result<Attempted, EvalError> {
+        let Stmt::Let { name, init, .. } = self.stmt(id).clone() else {
+            return Ok(Attempted::Ran(self.statement(id)?));
+        };
+        let Expr::Try { value, .. } = self.expr(init).clone() else {
+            return Ok(Attempted::Ran(self.statement(id)?));
+        };
+        let outcome = self.value(value)?;
+        let Value::EnumCase(case) = outcome else {
+            return Err(EvalError::unsupported(format!(
+                "`try` on a `{}`; it unwraps a `Result`-shaped enum case",
+                outcome.type_name()
+            )));
+        };
+        if case.variant != "Ok" {
+            return Ok(Attempted::Failed(*case));
+        }
+        let name = self.name(name).to_owned();
+        self.bind(&name, case.payload.clone().unwrap_or(Value::Void));
+        Ok(Attempted::Ran(Flow::Normal))
+    }
+
+    /// Runs a `match` over an enum case.
+    ///
+    /// An arm selects by variant name, which is all a case carries that matters
+    /// here: a bare `.Variant` never knew its enum, so matching on the name is
+    /// the only rule that works for both a case read from reflection and one the
+    /// body wrote itself.
+    ///
+    /// A subject no arm names is an error rather than a fall-through. The
+    /// language checks exhaustiveness before a program runs; an `expand` body is
+    /// evaluated rather than compiled, so the equivalent guarantee has to be
+    /// this — a macro that forgot a variant hears about it instead of silently
+    /// producing nothing.
+    fn match_statement(&mut self, subject: ExprId, arms: &[MatchArm]) -> Result<Flow, EvalError> {
+        let value = self.value(subject)?;
+        let Value::EnumCase(case) = value else {
+            return Err(EvalError::unsupported(format!(
+                "matching on a `{}`; `match` in an `expand` body selects a variant of an enum case",
+                value.type_name()
+            )));
+        };
+        for arm in arms {
+            if self.name(arm.variant) != case.variant {
+                continue;
+            }
+            self.scopes.push(HashMap::new());
+            if let Some(binding) = &arm.binding {
+                let name = self.name(binding.name).to_owned();
+                let payload = case.payload.clone().unwrap_or(Value::Void);
+                self.bind(&name, payload);
+            }
+            let mut flow = Flow::Normal;
+            for &id in &arm.body.stmts {
+                flow = self.statement(id)?;
+                if !matches!(flow, Flow::Normal) {
+                    break;
+                }
+            }
+            self.scopes.pop();
+            return Ok(flow);
+        }
+        Err(EvalError::unsupported(format!(
+            "a `match` with no arm for `{}`",
+            case.variant
+        )))
     }
 
     fn for_loop(
@@ -443,6 +645,10 @@ fn shape(expr: &Expr) -> &'static str {
         Expr::MethodCall { .. } => "method call",
         Expr::StructLit { .. } => "struct literal",
         Expr::Closure { .. } => "closure",
+        // `try` reaching here means it was written somewhere other than as the
+        // whole initializer of a `let` inside an `attempt`, which is the one
+        // position the language accepts it in either.
+        Expr::Try { .. } => "`try` outside a `let` in an `attempt`",
         _ => "expression",
     }
 }
@@ -453,6 +659,53 @@ fn statement_shape(stmt: &Stmt) -> &'static str {
         Stmt::Match { .. } => "`match`",
         Stmt::Attempt { .. } => "`attempt`",
         _ => "that statement",
+    }
+}
+
+impl Evaluator<'_> {
+    /// Runs a `comptime function` the body called, when `callee` names one.
+    pub(super) fn call_comptime(
+        &mut self,
+        callee: &str,
+        values: &[Value],
+    ) -> Option<Result<Value, EvalError>> {
+        let declared = self.functions.get(callee)?;
+        if declared.parameters.len() != values.len() {
+            return None;
+        }
+        if self.depth >= CALL_DEPTH_LIMIT {
+            return Some(Err(EvalError::coded(
+                diagnostics::DEPTH_LIMIT,
+                format!(
+                    "`{callee}` nested more than {CALL_DEPTH_LIMIT} comptime calls deep; a                      comptime function that calls itself has no base case here"
+                ),
+            )));
+        }
+        let Some(body) = compile(&declared.body) else {
+            return Some(Err(EvalError::coded(
+                diagnostics::EXPAND_SIGNATURE,
+                format!("the body of `comptime function {callee}` does not parse"),
+            )));
+        };
+        let bound: Vec<(String, Value)> = declared
+            .parameters
+            .iter()
+            .cloned()
+            .zip(values.iter().cloned())
+            .collect();
+        let comptime = Comptime {
+            functions: self.functions,
+            shaders: self.shaders,
+            platform: &self.platform.clone(),
+            enums: &self.enums.clone(),
+        };
+        match run_nested(&body, bound, comptime, self.lint, self.depth + 1) {
+            Ok((value, reported)) => {
+                self.reported.extend(reported);
+                Some(Ok(value))
+            }
+            Err(error) => Some(Err(error)),
+        }
     }
 }
 
@@ -467,7 +720,15 @@ mod tests {
 
     fn run_body(text: &str, arguments: Vec<(String, Value)>) -> Result<Outcome, EvalError> {
         let body = compile(text).expect("a parseable expand body");
-        run(&body, arguments, None, "unknown", false)
+        let functions = ComptimeFunctions::new();
+        let enums = HashMap::new();
+        let comptime = Comptime {
+            functions: &functions,
+            shaders: None,
+            platform: "unknown",
+            enums: &enums,
+        };
+        run(&body, arguments, comptime, false)
     }
 
     #[test]

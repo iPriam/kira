@@ -1,0 +1,334 @@
+// Reading a JPEG's entropy-coded scan: the bits, the Huffman symbols, and the
+// blocks of coefficients they spell out.
+//
+// Two things make this the fiddly part of the format. The first is that the
+// data is a bit stream inside a byte stream that reserves `0xFF` for markers,
+// so an encoder that produces a `0xFF` byte writes `0xFF 0x00` and the reader
+// has to put it back. The second is that a block's DC coefficient is stored as
+// a *difference* from the block before it, so a scan is stateful from end to
+// end — which is why a file may ask for restart intervals, points at which both
+// the bit position and every difference start again, so damage cannot spread
+// past one interval.
+
+extend JpegDecoder {
+    // The scan header: which components this scan carries and which Huffman
+    // tables each of them was coded against.
+    function readScan(body: Int, length: Int) {
+        if length < 1 || self.components.count == 0 {
+            self.fail(.Malformed)
+            return
+        }
+        let count = Int(self.data[body])
+        if count < 1 || count > self.components.count || length < 1 + (count * 2) + 3 {
+            self.fail(.Malformed)
+            return
+        }
+        self.scanComponents = []
+        var index = 0
+        while index < count {
+            let identifier = Int(self.data[body + 1 + (index * 2)])
+            let tables = Int(self.data[body + 2 + (index * 2)])
+            var found = 0 - 1
+            var search = 0
+            while search < self.components.count {
+                if self.components[search].identifier == identifier {
+                    found = search
+                }
+                search = search + 1
+            }
+            if found < 0 || (tables >> 4) > 3 || (tables & 15) > 3 {
+                self.fail(.Malformed)
+                return
+            }
+            self.components[found].dcTable = tables >> 4
+            self.components[found].acTable = (tables & 15) + 4
+            self.scanComponents.append(found)
+            index = index + 1
+        }
+        self.decodeScan()
+        return
+    }
+
+    function decodeScan() {
+        self.bitBuffer = 0
+        self.bitCount = 0
+        self.noMoreData = false
+        self.pendingMarker = 0
+        var index = 0
+        while index < self.components.count {
+            self.components[index].predictor = 0
+            index = index + 1
+        }
+        self.todo = self.restartInterval
+        if self.scanComponents.count == 1 {
+            self.decodeSeparateScan()
+        } else {
+            self.decodeInterleavedScan()
+        }
+        // The reader consumed the marker that ended the data. Step back over it
+        // so the segment walk sees it too.
+        if self.pendingMarker != 0 && self.pos >= 2 {
+            self.pos = self.pos - 2
+        }
+        return
+    }
+
+    // A scan carrying every component: the blocks arrive interleaved, one
+    // minimum coded unit at a time, each holding as many blocks of a component
+    // as that component's sampling asks for.
+    function decodeInterleavedScan() {
+        var mcuY = 0
+        while mcuY < self.mcusY && !self.stopped {
+            var mcuX = 0
+            while mcuX < self.mcusX && !self.stopped {
+                var which = 0
+                while which < self.scanComponents.count {
+                    let index = self.scanComponents[which]
+                    var down = 0
+                    while down < self.components[index].vertical {
+                        var across = 0
+                        while across < self.components[index].horizontal {
+                            self.decodeBlock(
+                                index,
+                                (mcuX * self.components[index].horizontal) + across,
+                                (mcuY * self.components[index].vertical) + down
+                            )
+                            across = across + 1
+                        }
+                        down = down + 1
+                    }
+                    which = which + 1
+                }
+                if !self.advanceRestart() {
+                    return
+                }
+                mcuX = mcuX + 1
+            }
+            mcuY = mcuY + 1
+        }
+        return
+    }
+
+    // A scan carrying one component: no interleaving, and the block grid is the
+    // component's own rather than the frame's.
+    function decodeSeparateScan() {
+        let index = self.scanComponents[0]
+        let blocksAcross = (self.components[index].width + 7) / 8
+        let blocksDown = (self.components[index].height + 7) / 8
+        var down = 0
+        while down < blocksDown && !self.stopped {
+            var across = 0
+            while across < blocksAcross && !self.stopped {
+                self.decodeBlock(index, across, down)
+                if !self.advanceRestart() {
+                    return
+                }
+                across = across + 1
+            }
+            down = down + 1
+        }
+        return
+    }
+
+    // One 8x8 block: a DC difference, then runs of AC coefficients, each
+    // multiplied by its quantisation divisor as it lands and then transformed
+    // back into samples.
+    function decodeBlock(component: Int, blockX: Int, blockY: Int) {
+        if self.stopped {
+            return
+        }
+        var index = 0
+        while index < 64 {
+            self.block[index] = 0
+            index = index + 1
+        }
+        let quant = self.components[component].quantTable
+        let magnitude = self.decodeHuffman(self.components[component].dcTable)
+        if self.stopped {
+            return
+        }
+        if magnitude > 15 {
+            self.fail(.Malformed)
+            return
+        }
+        var difference = 0
+        if magnitude > 0 {
+            difference = extendCoefficient(self.takeBits(magnitude), magnitude)
+        }
+        let predictor = self.components[component].predictor + difference
+        self.components[component].predictor = predictor
+        self.block[0] = predictor * self.quantTables[quant][0]
+
+        var place = 1
+        while place < 64 {
+            let symbol = self.decodeHuffman(self.components[component].acTable)
+            if self.stopped {
+                return
+            }
+            let magnitudeOfValue = symbol & 15
+            let run = symbol >> 4
+            if magnitudeOfValue == 0 {
+                // A run of sixteen zeros is the one code that is not the end of
+                // the block; every other zero-magnitude symbol ends it.
+                if run != 15 {
+                    place = 64
+                } else {
+                    place = place + 16
+                }
+            } else {
+                place = place + run
+                if place > 63 {
+                    self.fail(.Malformed)
+                    return
+                }
+                let natural = self.zigzag[place]
+                self.block[natural] = extendCoefficient(self.takeBits(magnitudeOfValue), magnitudeOfValue)
+                    * self.quantTables[quant][natural]
+                place = place + 1
+            }
+        }
+        self.inverseTransform(component, blockX * 8, blockY * 8)
+        return
+    }
+
+    // One byte of the entropy stream, with `0xFF 0x00` read back as `0xFF` and
+    // a real marker ending the data.
+    function loadByte() -> Int {
+        if self.noMoreData {
+            return 0
+        }
+        if self.pos >= self.data.count {
+            self.noMoreData = true
+            return 0
+        }
+        let value = Int(self.data[self.pos])
+        self.pos = self.pos + 1
+        if value != 255 {
+            return value
+        }
+        while self.pos < self.data.count && Int(self.data[self.pos]) == 255 {
+            self.pos = self.pos + 1
+        }
+        if self.pos >= self.data.count {
+            self.noMoreData = true
+            return 0
+        }
+        let following = Int(self.data[self.pos])
+        self.pos = self.pos + 1
+        if following != 0 {
+            self.pendingMarker = following
+            self.noMoreData = true
+            return 0
+        }
+        return 255
+    }
+
+    // `count` bits, most significant first. Past the end of the data the
+    // stream reads as zeros rather than trapping: a truncated file should give
+    // back the picture it does hold.
+    function takeBits(count: Int) -> Int {
+        while self.bitCount < count {
+            self.bitBuffer = (self.bitBuffer << 8) | self.loadByte()
+            self.bitCount = self.bitCount + 8
+        }
+        let value = (self.bitBuffer >> (self.bitCount - count)) & ((1 << count) - 1)
+        self.bitCount = self.bitCount - count
+        self.bitBuffer = self.bitBuffer & ((1 << self.bitCount) - 1)
+        return value
+    }
+
+    // One symbol from a canonical code, most significant bit first.
+    //
+    // The sixteen bits a code can be are brought in once and the walk reads
+    // them out of that window, rather than asking for a bit at a time: no code
+    // is longer than sixteen, so nothing else can be needed, and taking them
+    // one by one made the innermost loop of the whole decoder a call per bit.
+    function decodeHuffman(table: Int) -> Int {
+        while self.bitCount < 16 {
+            self.bitBuffer = (self.bitBuffer << 8) | self.loadByte()
+            self.bitCount = self.bitCount + 8
+        }
+        let window = (self.bitBuffer >> (self.bitCount - 16)) & 65535
+        var first = 0
+        var index = 0
+        var length = 1
+        while length <= 16 {
+            let code = window >> (16 - length)
+            let count = self.huffmanTables[table].counts[length - 1]
+            if (code - first) < count {
+                self.bitCount = self.bitCount - length
+                self.bitBuffer = self.bitBuffer & ((1 << self.bitCount) - 1)
+                let at = index + (code - first)
+                // A table whose counts promise more symbols than it listed. The
+                // walk cannot tell until it lands, and landing past the end has
+                // to be an answer rather than a trap.
+                if at >= self.huffmanTables[table].symbols.count {
+                    self.fail(.Malformed)
+                    return 0
+                }
+                return self.huffmanTables[table].symbols[at]
+            }
+            index = index + count
+            first = (first + count) << 1
+            length = length + 1
+        }
+        self.fail(.Malformed)
+        return 0
+    }
+
+    // Count down to the next restart, and take it when it arrives.
+    function advanceRestart() -> Bool {
+        if self.restartInterval == 0 {
+            return true
+        }
+        self.todo = self.todo - 1
+        if self.todo > 0 {
+            return true
+        }
+        return self.consumeRestart()
+    }
+
+    // A restart marker: the bits left in the current byte are padding, the
+    // marker follows on the byte boundary, and everything stateful resets.
+    //
+    // Anything else where a restart was expected ends the scan rather than
+    // failing it. An encoder that leaves the final interval unmarked, and a
+    // file that stops early, are both files whose picture is there to be read;
+    // this is the same answer the bit reader gives past the end of the data.
+    function consumeRestart() -> Bool {
+        self.bitBuffer = 0
+        self.bitCount = 0
+        if self.pendingMarker == 0 {
+            while self.pos + 1 < self.data.count {
+                if Int(self.data[self.pos]) == 255 && Int(self.data[self.pos + 1]) != 0 {
+                    self.pendingMarker = Int(self.data[self.pos + 1])
+                    self.pos = self.pos + 2
+                    break
+                }
+                self.pos = self.pos + 1
+            }
+        }
+        if self.pendingMarker < 208 || self.pendingMarker > 215 {
+            // Not ours. Leave it where the segment walk will find it.
+            return false
+        }
+        self.pendingMarker = 0
+        self.noMoreData = false
+        var index = 0
+        while index < self.components.count {
+            self.components[index].predictor = 0
+            index = index + 1
+        }
+        self.todo = self.restartInterval
+        return true
+    }
+}
+
+// A coefficient's sign, which its magnitude class does not carry: the low half
+// of the range is negative and reads as a value below zero.
+function extendCoefficient(value: Int, magnitude: Int) -> Int {
+    if value < (1 << (magnitude - 1)) {
+        return value - (1 << magnitude) + 1
+    }
+    return value
+}

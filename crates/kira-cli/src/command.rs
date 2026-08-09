@@ -114,8 +114,9 @@ impl Command {
                 " [file|dir] [--backend vm|llvm|hybrid] [--device] [--timings] [--show-notes]"
             }
             Self::Check => " [file|dir] [--timings] [--show-notes]",
+            Self::Shader => " build [--target <name>] [--emit <name>]",
             Self::Lint | Self::Sync => " [file|dir]",
-            Self::Live => " [runner] <file> [--backend vm|hybrid] [--watch]",
+            Self::Live => " [runner] <file> [--backend vm|hybrid] [--no-watch]",
             Self::Help => " [all]",
             _ => "",
         }
@@ -134,7 +135,7 @@ impl Command {
             Self::Build => "compile to a native binary via LLVM",
             Self::Ffi => "inspect and bind native libraries",
             Self::Instruments => "profile a running program",
-            Self::Shader => "compile KSL shaders",
+            Self::Shader => "build every KSL shader and report what each target emitted",
             Self::New => "scaffold a new project",
             Self::Sync => "write `kira.lock` from the package manifests",
             Self::Add => "add a dependency",

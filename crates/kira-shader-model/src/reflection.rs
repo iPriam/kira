@@ -8,7 +8,7 @@ use crate::types;
 /// Shader-language backend a shader was lowered for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackendTarget {
-    Glsl330,
+    Glsl430,
     Wgsl,
     Hlsl,
     Msl,
@@ -16,10 +16,31 @@ pub enum BackendTarget {
 }
 
 impl BackendTarget {
+    /// Every backend, in the order a shader is compiled for them.
+    ///
+    /// The one place the set is written down, so a backend cannot be added to
+    /// the enum and forgotten by something that iterates them.
+    pub const ALL: [BackendTarget; 5] = [
+        BackendTarget::Msl,
+        BackendTarget::Wgsl,
+        BackendTarget::Glsl430,
+        BackendTarget::Hlsl,
+        BackendTarget::Spirv,
+    ];
+
+    /// The backend a canonical label names, exactly.
+    ///
+    /// Stricter than [`Self::parse`] on purpose: a *case* a macro body writes is
+    /// spelled one way, and accepting aliases there would let two spellings of
+    /// one target drift apart.
+    pub fn from_label(label: &str) -> Option<BackendTarget> {
+        Self::ALL.into_iter().find(|target| target.label() == label)
+    }
+
     /// Parse a user-facing backend name (accepts common aliases).
     pub fn parse(value: &str) -> Option<BackendTarget> {
         match value {
-            "glsl" | "glsl_330" | "glsl330" => Some(BackendTarget::Glsl330),
+            "glsl" | "glsl_430" | "glsl430" => Some(BackendTarget::Glsl430),
             "wgsl" => Some(BackendTarget::Wgsl),
             "hlsl" => Some(BackendTarget::Hlsl),
             "msl" | "metal" | "mlsl" => Some(BackendTarget::Msl),
@@ -28,10 +49,26 @@ impl BackendTarget {
         }
     }
 
-    /// Canonical label.
+    /// The name a Kira program writes this backend's case as.
+    ///
+    /// Deliberately without the version [`Self::label`] carries: `Glsl` is the
+    /// backend, and which GLSL version it emits is this compiler's business. A
+    /// bump from 330 to 430 changed the label and must not change what a
+    /// program wrote.
+    pub fn case_name(self) -> &'static str {
+        match self {
+            BackendTarget::Glsl430 => "Glsl",
+            BackendTarget::Wgsl => "Wgsl",
+            BackendTarget::Hlsl => "Hlsl",
+            BackendTarget::Msl => "Msl",
+            BackendTarget::Spirv => "Spirv",
+        }
+    }
+
+    /// Canonical label, version included, for a diagnostic or a file name.
     pub fn label(self) -> &'static str {
         match self {
-            BackendTarget::Glsl330 => "glsl_330",
+            BackendTarget::Glsl430 => "glsl_430",
             BackendTarget::Wgsl => "wgsl",
             BackendTarget::Hlsl => "hlsl",
             BackendTarget::Msl => "msl",
@@ -125,6 +162,18 @@ pub struct ReflectedResource {
     /// SPIR-V has `OpArrayLength`, but MSL has nothing, so a host binds the
     /// count as its own small buffer.
     pub length_bindings: Vec<(BackendTarget, u32)>,
+    /// For a texture, the sampler a stage body actually reads it with.
+    ///
+    /// KSL keeps a texture and a sampler apart, and so do Metal, WebGPU, HLSL
+    /// and SPIR-V. GLSL does not: the two collapse into one `sampler2D`, so a GL
+    /// host has to know which sampler object to attach to a texture unit, and
+    /// nothing in the declarations says — only the `sample` call does. Measured
+    /// from the bodies rather than assumed from declaration order, because
+    /// adjacency is a convention a shader is free not to follow.
+    ///
+    /// `None` on every resource that is not a texture, and on a texture no stage
+    /// samples.
+    pub paired_sampler: Option<String>,
 }
 
 /// The complete reflection blob for one lowered shader.

@@ -121,6 +121,7 @@ impl<'a> Analyzer<'a> {
                 signature: mapped.signature,
                 param_wrappers: mapped.param_wrappers,
                 param_pointees: mapped.param_pointees,
+                result_pointee: mapped.result_pointee,
                 result_wrapper: mapped.result_wrapper,
                 name_span: function.name_span,
             }),
@@ -290,6 +291,7 @@ impl<'a> Analyzer<'a> {
                 signature: ForeignSignature::new(params, result.spec),
                 param_wrappers: param_wrappers.into(),
                 param_pointees: param_pointees.into(),
+                result_pointee: result.pointee.map(|pointee| pointee.struct_id),
                 result_wrapper: result.wrapper,
             }),
             _ => None,
@@ -308,21 +310,31 @@ impl<'a> Analyzer<'a> {
         // A parameter written as an `@FFI.Pointer` to a C-layout struct is a
         // pointer word at the wire and also accepts the struct itself, which the
         // call hands over by address.
-        if ty == Type::RawPtr {
-            let written = self.written_type_name(param.ty);
-            if let Some(target) = self.pointer_targets.get(&written).cloned()
-                // Resolved by the same visibility rules any written type name
-                // takes — own package first — but silently: a pointer to a C
-                // type nobody declared is an opaque handle, not a mistake.
-                && let Some(struct_id) = self.visible_struct(&target)
-                && self.ffi_struct_kind(struct_id) == Some(FfiStructKind::CLayout)
-                && let Some(aggregate) = self.aggregate_seam_of(struct_id, span)
-            {
-                seam.pointee = Some(kira_semantics_model::hir::ForeignPointee {
-                    struct_id,
-                    aggregate,
-                });
+        //
+        // A pointer whose target resolved carries it on the type; one whose
+        // target did not is a plain `RawPtr`, and the name is looked up in case
+        // the target became visible after the alias resolved. A pointer to a C
+        // type nobody declared is an opaque handle, not a mistake, so neither
+        // path reports.
+        let target = match ty {
+            Type::ForeignPtr(pointer) => self.program.types.foreign_ptr_target(pointer),
+            Type::RawPtr => {
+                let written = self.written_type_name(param.ty);
+                self.pointer_targets
+                    .get(&written)
+                    .cloned()
+                    .and_then(|target| self.visible_struct(&target))
             }
+            _ => None,
+        };
+        if let Some(struct_id) = target
+            && self.ffi_struct_kind(struct_id) == Some(FfiStructKind::CLayout)
+            && let Some(aggregate) = self.aggregate_seam_of(struct_id, span)
+        {
+            seam.pointee = Some(kira_semantics_model::hir::ForeignPointee {
+                struct_id,
+                aggregate,
+            });
         }
         Some(seam)
     }
@@ -338,7 +350,22 @@ impl<'a> Analyzer<'a> {
             return None;
         }
         let ty = self.resolve_foreign_type(type_ref);
-        self.foreign_seam_of(ty, span, Position::Result)
+        let mut seam = self.foreign_seam_of(ty, span, Position::Result)?;
+        // A result written as an `@FFI.Pointer` to a C-layout struct is a
+        // pointer word at the wire, and the call hands back a pointer that still
+        // knows its target so members can be read through it.
+        if let Type::ForeignPtr(pointer) = ty
+            && let Some(struct_id) = self.program.types.foreign_ptr_target(pointer)
+        {
+            seam.pointee = Some(kira_semantics_model::hir::ForeignPointee {
+                struct_id,
+                // The target's own row, which the read needs to find member
+                // offsets. A target that cannot be described has no readable
+                // members, and the pointer stays a plain word.
+                aggregate: self.aggregate_seam_of(struct_id, span)?,
+            });
+        }
+        Some(seam)
     }
 
     /// The seam a written parameter or result crosses as.
@@ -386,10 +413,9 @@ impl<'a> Analyzer<'a> {
     }
 
     /// The [`ForeignType`] a struct crosses as when it has exactly one field and
-    /// that field is a fixed-width seam scalar — the C single-member-struct
-    /// handle, passed in a register exactly like its member. `None` for any
-    /// other shape (no field, many fields, or a field that is itself an
-    /// aggregate or an ambiguous bare `Int`/`Float`).
+    /// that field is a seam scalar — the C single-member-struct handle, passed
+    /// in a register exactly like its member. `None` for any other shape (no
+    /// field, many fields, or a field that is itself an aggregate).
     fn single_scalar_field_seam(&self, id: StructId) -> Option<ForeignType> {
         let def = self.program.types.structs().get(id)?;
         let [field] = def.fields.as_slice() else {
@@ -412,10 +438,14 @@ impl<'a> Analyzer<'a> {
     /// a function pointer, a generic, or an array — with a message precise to
     /// the shape. Returns `Some(())` when it refused.
     ///
-    /// These are caught from the written [`TypeRef`] rather than the resolved
-    /// [`Type`] because the shape names the fix: a callback and a generic have
-    /// no resolved-type spelling to blame, and an array's message is clearer
-    /// before it is interned into an anonymous row.
+    /// Caught from the written [`TypeRef`] rather than the resolved [`Type`]
+    /// because the shape names the fix: a function type has no resolved-type
+    /// spelling to blame, and `@FFI.Callback` is the form that carries one.
+    ///
+    /// Only that shape. An array and a generic instantiation were refused here
+    /// too, which pre-empted the answer: both have crossings once resolved — an
+    /// array of seam scalars is a pointer, and a generic instantiation is
+    /// whatever it instantiated to.
     fn refuse_written_shape(
         &mut self,
         type_ref: kira_syntax_model::ast::TypeRefId,
@@ -431,26 +461,21 @@ impl<'a> Analyzer<'a> {
                 );
                 Some(())
             }
-            TypeRef::Generic { .. } => {
-                self.emit(
-                    span,
-                    "KSEM182",
-                    "a generic type cannot cross the C seam: an `@FFI.Extern` signature \
-                     names only fixed-width scalars, `Bool`, `RawPtr`, and `CString`",
-                );
-                Some(())
-            }
-            TypeRef::Array { .. } => {
-                self.emit(
-                    span,
-                    "KSEM182",
-                    "an array cannot cross the C seam: pass the elements through a \
-                     `RawPtr` and a length instead",
-                );
-                Some(())
-            }
             _ => None,
         }
+    }
+
+    /// Whether an enum is a set of named numbers, which is what a C enum is.
+    ///
+    /// Every case payload-less. One that carries a payload is a tagged union,
+    /// and C's own is a different shape with a different layout — so it has no
+    /// crossing here rather than a lossy one.
+    fn enum_crosses_as_a_number(&self, id: kira_semantics_model::EnumId) -> bool {
+        self.program
+            .types
+            .enums()
+            .get(id)
+            .is_some_and(|def| def.variants.iter().all(|variant| variant.payload.is_none()))
     }
 
     /// Maps a resolved [`Type`] to the [`ForeignType`] it crosses the seam as,
@@ -460,27 +485,13 @@ impl<'a> Analyzer<'a> {
     fn foreign_type_of(&mut self, ty: Type, span: Span, position: Position) -> Option<ForeignType> {
         match ty {
             Type::Error => None,
-            Type::Int(IntSpelling::Plain) => {
-                self.emit(
-                    span,
-                    "KSEM182",
-                    "bare `Int` cannot cross the C seam: use a fixed-width integer like \
-                     `I32` or `U64` so the C width is unambiguous",
-                );
-                None
-            }
+            // `Int` crosses as `int64_t` and `Float` as `double`, because that
+            // is what they are: one spelling per 64-bit type, so a signature
+            // naming one leaves no width unsaid. A narrower C type still names
+            // its own — `I32`, `U8`, `F32`.
             Type::Int(spelling) => Some(int_foreign_type(spelling)),
-            Type::Float(FloatSpelling::Plain) => {
-                self.emit(
-                    span,
-                    "KSEM182",
-                    "bare `Float` cannot cross the C seam: use `F32` or `F64` so the C \
-                     width is unambiguous",
-                );
-                None
-            }
+            Type::Float(FloatSpelling::Plain) => Some(ForeignType::F64),
             Type::Float(FloatSpelling::F32) => Some(ForeignType::F32),
-            Type::Float(FloatSpelling::F64) => Some(ForeignType::F64),
             Type::Bool => Some(ForeignType::Bool),
             Type::Void => match position {
                 Position::Result => Some(ForeignType::Void),
@@ -502,7 +513,7 @@ impl<'a> Analyzer<'a> {
                 );
                 None
             }
-            Type::RawPtr => Some(ForeignType::RawPtr),
+            Type::RawPtr | Type::ForeignPtr(_) => Some(ForeignType::RawPtr),
             // A task handle names a row in the running program's own task table,
             // so it means nothing outside it and never crosses the C seam.
             Type::Task(_) => {
@@ -557,7 +568,44 @@ impl<'a> Analyzer<'a> {
                 );
                 None
             }
-            Type::Struct(_) | Type::Array(_) | Type::Enum(_) | Type::NativeState(_) => {
+            // An array of seam scalars is a pointer to the elements, which the
+            // seam writes out in C's widths at the call. A *result* has no such
+            // reading: a C function answers a pointer, and nothing in that
+            // answer says how many elements are behind it.
+            Type::Array(id) if position == Position::Param => {
+                match self
+                    .program
+                    .types
+                    .arrays()
+                    .element(id)
+                    .and_then(scalar_foreign_type)
+                {
+                    Some(_) => Some(ForeignType::RawPtr),
+                    None => {
+                        self.emit(
+                            span,
+                            "KSEM182",
+                            format!(
+                                "`{}` cannot cross the C seam: its elements are not a type C has a width for",
+                                self.type_name(ty)
+                            ),
+                        );
+                        None
+                    }
+                }
+            }
+            Type::Array(_) => {
+                self.emit(
+                    span,
+                    "KSEM182",
+                    "an array cannot be a foreign result: a C function answers a pointer, and nothing in that answer says how many elements are behind it",
+                );
+                None
+            }
+            // A payload-less enum is an integer with named values, which is what
+            // a C enum is. Its case's number is what crosses.
+            Type::Enum(id) if self.enum_crosses_as_a_number(id) => Some(ForeignType::I32),
+            Type::Struct(_) | Type::Enum(_) | Type::NativeState(_) => {
                 self.emit(
                     span,
                     "KSEM182",
@@ -597,13 +645,14 @@ impl<'a> Analyzer<'a> {
         // alongside: a single-scalar-field handle struct crosses as its field's
         // scalar, so the Kira side reads that field out of an argument and
         // rebuilds the struct around the result.
-        let (params, param_wrappers, param_pointees, result, result_wrapper, name) = {
+        let (params, param_wrappers, param_pointees, result, result_pointee, result_wrapper, name) = {
             let foreign = &self.program.foreign[id.0 as usize];
             (
                 foreign.signature.parameters().to_vec(),
                 foreign.param_wrappers.clone(),
                 foreign.param_pointees.clone(),
                 foreign.signature.result(),
+                foreign.result_pointee,
                 foreign.result_wrapper,
                 foreign.kira_name.clone(),
             )
@@ -653,7 +702,12 @@ impl<'a> Analyzer<'a> {
         let aggregate_result = result.aggregate().is_some();
         let call_type = match (aggregate_result, result_wrapper) {
             (true, Some(struct_id)) => Type::Struct(struct_id),
-            _ => kira_type_for_spec(result),
+            // A pointer result keeps its target, so the value handed back is the
+            // same type the declaration wrote rather than a bare word.
+            _ => match result_pointee {
+                Some(target) => self.program.types.foreign_ptr_to(target),
+                None => kira_type_for_spec(result),
+            },
         };
         let call = self.program.exprs.alloc(HirExpr::Call {
             callee: Callee::Foreign(id),
@@ -726,6 +780,39 @@ impl<'a> Analyzer<'a> {
                         }));
                         continue;
                     }
+                    // A payload-less enum crosses as its case's number, which
+                    // is what a C enum reads as. The named type stays on the
+                    // Kira side of the call rather than being mapped to an
+                    // integer by hand at every site.
+                    if let Type::Enum(_) = actual
+                        && matches!(
+                            params[index].scalar(),
+                            Some(
+                                ForeignType::I8
+                                    | ForeignType::I16
+                                    | ForeignType::I32
+                                    | ForeignType::I64
+                                    | ForeignType::U8
+                                    | ForeignType::U16
+                                    | ForeignType::U32
+                                    | ForeignType::U64
+                            )
+                        )
+                    {
+                        seam_args.push(self.program.exprs.alloc(HirExpr::EnumTag { value: arg }));
+                        continue;
+                    }
+                    // A pointer parameter also accepts an array of seam
+                    // scalars: the seam writes the elements out as C's widths
+                    // and passes the address of what it wrote. This is what the
+                    // `RawPtr`-and-a-length shape a C API asks for looks like
+                    // from Kira, without the caller building the buffer by hand.
+                    if params[index].scalar() == Some(ForeignType::RawPtr)
+                        && let Some(elements) = self.array_elements_address(arg)
+                    {
+                        seam_args.push(elements);
+                        continue;
+                    }
                     let param = params[index];
                     if actual != Type::Error && !foreign_arg_matches(actual, param) {
                         let expected = match param.scalar() {
@@ -747,6 +834,31 @@ impl<'a> Analyzer<'a> {
             }
         }
         seam_args
+    }
+
+    /// The address of `value`'s elements written out at C's widths, when `value`
+    /// is an array of seam scalars filling a pointer position.
+    ///
+    /// A pointer word is a pointer word wherever it is written, so this reads
+    /// the same at an extern's `RawPtr` argument and at a C-layout struct's
+    /// `RawPtr` member — the two places a `RawPtr`-and-a-length C API is
+    /// reached from. `sg_range { ptr: values, size: … }` is the second one, and
+    /// without it a descriptor holding a data pointer can only be built in C.
+    ///
+    /// Answers `None` when the value is not an array, or its elements are not
+    /// scalars the seam can write, which leaves the position's ordinary type
+    /// check to report it.
+    pub(crate) fn array_elements_address(&mut self, value: HirExprId) -> Option<HirExprId> {
+        let Type::Array(id) = self.program.expr(value).type_of() else {
+            return None;
+        };
+        let element = self.program.types.arrays().element(id)?;
+        let element = scalar_foreign_type(element)?;
+        Some(
+            self.program
+                .exprs
+                .alloc(HirExpr::ArrayElements { value, element }),
+        )
     }
 }
 
@@ -788,36 +900,36 @@ struct MappedForeign {
     /// One pointee per parameter, `Some` for an `@FFI.Pointer` to a C-layout
     /// struct.
     param_pointees: Box<[Option<kira_semantics_model::hir::ForeignPointee>]>,
+    /// The result's pointer target, if it was written as an `@FFI.Pointer` to a
+    /// C-layout struct.
+    result_pointee: Option<StructId>,
     /// The result's wrapper, if it is a single-scalar-field handle.
     result_wrapper: Option<StructId>,
 }
 
 /// The [`ForeignType`] a resolved type crosses as when it is already a seam
 /// scalar, without emitting anything. Used to test a struct's sole field: a
-/// handle struct's member is a fixed-width integer, `F32`/`F64`, `Bool`, or
-/// `RawPtr`. A bare `Int`/`Float` (ambiguous width), a `CString` (borrowed,
-/// never a stored field), or any aggregate returns `None`.
+/// handle struct's member is an integer, `Float`/`F32`, `Bool`, or `RawPtr`. A
+/// `CString` (borrowed, never a stored field) or any aggregate returns `None`.
 pub(crate) fn scalar_foreign_type(ty: Type) -> Option<ForeignType> {
     match ty {
-        Type::Int(IntSpelling::Plain) => None,
         Type::Int(spelling) => Some(int_foreign_type(spelling)),
         Type::Float(FloatSpelling::F32) => Some(ForeignType::F32),
-        Type::Float(FloatSpelling::F64) => Some(ForeignType::F64),
+        Type::Float(FloatSpelling::Plain) => Some(ForeignType::F64),
         Type::Bool => Some(ForeignType::Bool),
-        Type::RawPtr => Some(ForeignType::RawPtr),
+        Type::RawPtr | Type::ForeignPtr(_) => Some(ForeignType::RawPtr),
         _ => None,
     }
 }
 
-/// The fixed-width [`ForeignType`] a signed/unsigned integer spelling crosses
-/// as. The plain spelling is refused before it reaches here.
+/// The fixed-width [`ForeignType`] an integer spelling crosses as. Bare `Int`
+/// is the 64-bit one, which is why it needs no separate spelling.
 fn int_foreign_type(spelling: IntSpelling) -> ForeignType {
     match spelling {
         IntSpelling::Plain => ForeignType::I64,
         IntSpelling::I8 => ForeignType::I8,
         IntSpelling::I16 => ForeignType::I16,
         IntSpelling::I32 => ForeignType::I32,
-        IntSpelling::I64 => ForeignType::I64,
         IntSpelling::U8 => ForeignType::U8,
         IntSpelling::U16 => ForeignType::U16,
         IntSpelling::U32 => ForeignType::U32,
@@ -837,14 +949,14 @@ fn kira_type_for_foreign(foreign_type: ForeignType) -> Type {
         ForeignType::I8 => Type::Int(IntSpelling::I8),
         ForeignType::I16 => Type::Int(IntSpelling::I16),
         ForeignType::I32 => Type::Int(IntSpelling::I32),
-        ForeignType::I64 => Type::Int(IntSpelling::I64),
+        ForeignType::I64 => Type::Int(IntSpelling::Plain),
         ForeignType::U8 => Type::Int(IntSpelling::U8),
         ForeignType::U16 => Type::Int(IntSpelling::U16),
         ForeignType::U32 => Type::Int(IntSpelling::U32),
         ForeignType::U64 => Type::Int(IntSpelling::U64),
         ForeignType::Bool => Type::Bool,
         ForeignType::F32 => Type::Float(FloatSpelling::F32),
-        ForeignType::F64 => Type::Float(FloatSpelling::F64),
+        ForeignType::F64 => Type::Float(FloatSpelling::Plain),
         ForeignType::RawPtr => Type::RawPtr,
         ForeignType::CString => Type::String,
     }

@@ -71,7 +71,7 @@ fn writing_bytes_requires_a_byte_array() {
         codes(
             r#"
 @Main function main() {
-    var wide: [I64] = [1, 2]
+    var wide: [Int] = [1, 2]
     fsWriteBytes("a.bin", wide)
     return
 }

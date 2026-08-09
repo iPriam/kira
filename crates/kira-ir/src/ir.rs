@@ -140,6 +140,9 @@ impl IrProgram {
             IrExpr::Bool(_) => Type::Bool,
             IrExpr::Str(_) => Type::String,
             IrExpr::RawPtrNull | IrExpr::ForeignCallbackPtr { .. } => Type::RawPtr,
+            IrExpr::MathOperation { .. } => Type::FLOAT,
+            IrExpr::ScalarText { .. } => Type::String,
+            IrExpr::ArrayElements { .. } => Type::RawPtr,
             IrExpr::Local(slot) => function
                 .locals
                 .get(*slot as usize)
@@ -156,6 +159,9 @@ impl IrProgram {
             IrExpr::StructNew { struct_id, .. } => Type::Struct(*struct_id),
             IrExpr::EnumNew { enum_id, .. } => Type::Enum(*enum_id),
             IrExpr::Field { ty, .. }
+            | IrExpr::ForeignField { ty, .. }
+            | IrExpr::ForeignMemberAddress { ty, .. }
+            | IrExpr::ForeignElement { ty, .. }
             | IrExpr::ArrayNew { ty, .. }
             | IrExpr::EnumPayload { ty, .. }
             | IrExpr::NativeState { ty, .. }

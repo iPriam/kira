@@ -8,6 +8,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use kira_bytecode::Module;
 use kira_vm_runtime::Program;
@@ -24,7 +25,7 @@ pub enum Staged {
     /// A VM bytecode entry, validated and ready to run.
     VmLinked {
         /// The validated program.
-        program: Box<Program>,
+        program: Arc<Program>,
     },
     /// A hybrid entry, staged on disk but not yet loaded.
     HybridLoaded {
@@ -37,7 +38,7 @@ pub enum Staged {
     /// is why a hot patch builds its replacement before assigning over it.
     HybridLinked {
         /// The live hybrid session.
-        session: Box<kira_hybrid_runtime::Session>,
+        session: Arc<kira_hybrid_runtime::Session>,
     },
 }
 

@@ -31,6 +31,7 @@ mod library;
 mod lower;
 mod native_state;
 mod native_state_enums;
+mod native_state_values;
 mod plan;
 mod symbols;
 mod target;
@@ -67,6 +68,28 @@ pub(crate) use self::plan::CodegenUnit;
 pub(crate) use self::symbols::trampoline_name;
 pub(crate) use self::types::Callable;
 
+/// The direct LLVM selector is substantially faster for a large executable
+/// module. Smaller programs keep the normal codegen level, which is important
+/// because it colours stack slots and is what keeps ordinary native programs'
+/// frames compact.
+const FAST_CODEGEN_REACHABLE_FUNCTIONS: usize = 1_000;
+
+fn needs_fast_codegen(program: &IrProgram, plan: &Plan<'_>) -> bool {
+    if !cfg!(target_os = "windows") || plan.kind != ModuleKind::Executable {
+        return false;
+    }
+    let native_reachable = program
+        .functions
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            plan.engines.get(*index) == Some(&Execution::Native)
+                && plan.reachable.get(*index).copied().unwrap_or(false)
+        })
+        .count();
+    native_reachable >= FAST_CODEGEN_REACHABLE_FUNCTIONS
+}
+
 /// An LLVM module holding a lowered Kira program.
 ///
 /// Owns its LLVM context; dropping it disposes of every LLVM object built from
@@ -75,6 +98,7 @@ pub(crate) struct Module {
     context: LLVMContextRef,
     module: LLVMModuleRef,
     builder: LLVMBuilderRef,
+    fast_codegen: bool,
 }
 
 impl Module {
@@ -101,6 +125,7 @@ impl Module {
             Plan {
                 kind: ModuleKind::Executable,
                 engines: vec![Execution::Native; program.functions.len()],
+                reachable: crate::reachability::native_functions(program),
                 exports: &NativeExportSurface::default(),
                 pointer_width,
                 unavailable,
@@ -125,6 +150,7 @@ impl Module {
             Plan {
                 kind: ModuleKind::Library,
                 engines: vec![Execution::Native; program.functions.len()],
+                reachable: vec![true; program.functions.len()],
                 exports,
                 pointer_width: ForeignPointerWidth::HOST,
                 unavailable: &[],
@@ -150,6 +176,7 @@ impl Module {
             Plan {
                 kind: ModuleKind::AdapterSidecar,
                 engines: vec![Execution::Runtime; program.functions.len()],
+                reachable: vec![false; program.functions.len()],
                 exports: &NativeExportSurface::default(),
                 pointer_width: ForeignPointerWidth::HOST,
                 unavailable,
@@ -174,6 +201,7 @@ impl Module {
                     .iter()
                     .map(|function| function.execution.resolve(Execution::Runtime))
                     .collect(),
+                reachable: vec![true; program.functions.len()],
                 exports: &NativeExportSurface::default(),
                 pointer_width: ForeignPointerWidth::HOST,
                 unavailable,
@@ -184,6 +212,7 @@ impl Module {
 
     /// Builds the module.
     fn lower(program: &IrProgram, module_name: &str, plan: Plan<'_>) -> Result<Self, LlvmError> {
+        let fast_codegen = needs_fast_codegen(program, &plan);
         let name = c_string(module_name);
         // SAFETY: the context, module, and builder are created together and
         // owned by the returned `Module`, which disposes of them on drop; each
@@ -196,6 +225,7 @@ impl Module {
                 context,
                 module,
                 builder,
+                fast_codegen,
             }
         };
 
@@ -245,7 +275,7 @@ impl Module {
 
     /// Emits a native object file for the host into `path`.
     pub(crate) fn emit_object(&self, path: &Path, optimize: bool) -> Result<(), LlvmError> {
-        let machine = TargetMachine::host(optimize)?;
+        let machine = TargetMachine::host(optimize, self.fast_codegen)?;
         machine.emit_object(self.module, path)
     }
 
@@ -298,6 +328,8 @@ pub(crate) struct Codegen<'a> {
     kind: ModuleKind,
     /// Which of the program's function bodies this module carries.
     unit: CodegenUnit,
+    /// Which program functions can be reached by this module.
+    reachable: Vec<bool>,
     /// What this library exports, empty for anything that is not one.
     exports: NativeExportSurface,
     /// Which engine owns each function, in [`IrProgram::functions`] order.
@@ -352,6 +384,7 @@ impl<'a> Codegen<'a> {
         let Plan {
             kind,
             engines,
+            reachable,
             exports,
             pointer_width,
             unavailable,
@@ -363,7 +396,7 @@ impl<'a> Codegen<'a> {
         // The module needs the host's data layout in place before any element
         // is sized, and object emission sets the same layout again (harmlessly)
         // when it runs. `target_data` borrows it from the module.
-        TargetMachine::host(false)?.set_module_layout(owned.module);
+        TargetMachine::host(false, false)?.set_module_layout(owned.module);
         // SAFETY: the layout was just set, so the module has one; the returned
         // handle borrows it and lives as long as the module does.
         let target_data = unsafe { LLVMGetModuleDataLayout(owned.module) };
@@ -378,6 +411,7 @@ impl<'a> Codegen<'a> {
             runtime,
             kind,
             unit,
+            reachable,
             exports: exports.clone(),
             engines,
             functions: Vec::with_capacity(program.functions.len()),
@@ -398,7 +432,9 @@ impl<'a> Codegen<'a> {
             // A function that runs on the other engine has no body here; its
             // callers reach it through the bridge, so there is nothing to
             // declare.
-            let declared = if codegen.engine_of(index) == Execution::Native {
+            let declared = if codegen.engine_of(index) == Execution::Native
+                && codegen.reachable.get(index).copied().unwrap_or(false)
+            {
                 Some(codegen.declare_function(index, function)?)
             } else {
                 None
@@ -507,7 +543,10 @@ impl<'a> Codegen<'a> {
     fn lower_program(&mut self) -> Result<(), LlvmError> {
         let program = self.program;
         for (index, function) in program.functions.iter().enumerate() {
-            if self.engine_of(index) != Execution::Native || !self.unit.owns(index) {
+            if self.engine_of(index) != Execution::Native
+                || !self.reachable.get(index).copied().unwrap_or(false)
+                || !self.unit.owns(index)
+            {
                 continue;
             }
             self.lower_function(index, function)?;
@@ -613,7 +652,11 @@ impl<'a> Codegen<'a> {
             // C-layout struct it is real storage: the address of bytes that
             // outlive the call, which Kira stores and passes back and never
             // dereferences.
-            Type::RawPtr | Type::NativeState(_) | Type::CString | Type::Task(_) => self.types.i64,
+            Type::RawPtr
+            | Type::ForeignPtr(_)
+            | Type::NativeState(_)
+            | Type::CString
+            | Type::Task(_) => self.types.i64,
             Type::Void => self.types.void,
             Type::Struct(id) => *self
                 .struct_types

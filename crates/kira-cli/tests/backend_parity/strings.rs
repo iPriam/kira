@@ -269,3 +269,38 @@ function main() {
     );
     assert_eq!(output, "3\na\nb\nc\n1\nabc\n3\ntrue\n1\nabc\n");
 }
+
+/// The Unicode scalar primitives, on every backend.
+///
+/// `charAt`, `substring` and `.count` all index **bytes**, which is the right
+/// unit for carving text at a delimiter you found yourself and the wrong one
+/// for backspace: dropping the last byte of a multi-byte scalar leaves text
+/// that is no longer UTF-8. `dropLastScalar` is that operation, and
+/// `scalarText` is its inverse — the two together are what a text field needs.
+///
+/// The emoji and the `ä` are the point: one is four bytes and the other two, so
+/// a byte-wise implementation gives a different answer rather than a slightly
+/// wrong one.
+#[test]
+fn the_unicode_scalar_primitives_agree_on_every_backend() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    let a = scalarText(65)
+    let accented = scalarText(233)
+    let emoji = scalarText(128512)
+    print(a + accented + emoji)
+    print((a + emoji).dropLastScalar())
+    print("kirä".dropLastScalar())
+    print("".dropLastScalar() + "|")
+    // A code point outside Unicode names no scalar and renders as nothing
+    // rather than trapping.
+    print(scalarText(-1) + "|")
+    print(scalarText(1114112) + "|")
+    return
+}
+"#,
+    );
+    assert_eq!(output, "Aé😀\nA\nkir\n|\n|\n|\n");
+}

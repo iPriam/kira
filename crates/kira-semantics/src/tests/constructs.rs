@@ -6,8 +6,10 @@
 //! a family obliges its declarations to provide, and [`slots`] covers the
 //! children a construction passes.
 
+mod inheritance;
 mod requirements;
 mod slots;
+mod values;
 
 use super::{analyze_text, codes, library_codes};
 
@@ -56,6 +58,30 @@ Shape Square(side: Int) {
 @Main
 function main() {
     print(Square(5).area)
+    return
+}
+"#,
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_construct_uses_defaults_for_omitted_inputs_and_members() {
+    assert!(
+        codes(
+            r#"
+construct Family { }
+
+Family StrictExample(name: String, title: String = "default title") {
+    let content: String = "default content"
+    let value: String { name + title + content }
+}
+
+@Main
+function main() {
+    let example = StrictExample(name: "given name")
+    print(example.value)
     return
 }
 "#,
@@ -144,9 +170,14 @@ Family Thing(value: Int) {
     );
 }
 
+/// A child family's own member wins over the one it inherits.
+///
+/// This used to be `KSEM203`, the refusal that `extends` did not execute. It
+/// executes now; see `constructs::inheritance` for the surface it brings with
+/// it.
 #[test]
-fn an_extends_clause_is_refused_as_not_yet_executable() {
-    assert_eq!(
+fn an_extends_clause_lets_a_child_override_an_inherited_member() {
+    assert!(
         library_codes(
             r#"
 construct Base {
@@ -157,8 +188,8 @@ construct Derived extends Base {
     let node: Int { 1 }
 }
 "#,
-        ),
-        vec!["KSEM203"]
+        )
+        .is_empty()
     );
 }
 
@@ -170,7 +201,7 @@ fn a_body_shorthand_and_family_dispatch_check_cleanly() {
         codes(
             r#"
 construct Widget {
-    @Required let body: Widget
+    @Required let body: Any Widget
     function value() -> Int {
         return body.value()
     }
@@ -270,7 +301,7 @@ Widget Padding(length: Int) {
 }
 
 extend Widget {
-    function padding(length: Int) -> Widget {
+    function padding(length: Int) -> Any Widget {
         return Padding(length: length) {
             self
         }
@@ -396,7 +427,7 @@ construct Widget {
 }
 
 extend Widget {
-    function lower() -> Widget {
+    function lower() -> Any Widget {
         return self
     }
 }

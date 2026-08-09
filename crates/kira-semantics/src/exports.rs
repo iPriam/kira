@@ -251,7 +251,12 @@ impl Analyzer<'_> {
             // manages. It is not surface either, so no author can reach this
             // arm by writing a signature — it exists so the desugar cannot leak
             // one through an export.
-            Type::RawPtr | Type::CString | Type::NativeState(_) | Type::Task(_) | Type::Cell(_) => {
+            Type::RawPtr
+            | Type::ForeignPtr(_)
+            | Type::CString
+            | Type::NativeState(_)
+            | Type::Task(_)
+            | Type::Cell(_) => {
                 self.emit(
                     span,
                     "KSEM186",

@@ -14,6 +14,12 @@ impl StructId {
     pub fn index(self) -> u32 {
         self.0
     }
+
+    /// The id at `index`, for a test building a table by hand.
+    #[cfg(test)]
+    pub(crate) fn new(index: u32) -> Self {
+        Self(index)
+    }
 }
 
 /// One declared struct: its name and its stored fields, in declaration order.

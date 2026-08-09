@@ -20,8 +20,8 @@ OwyTreeNode OwyLeafNode {
 }
 
 OwyTreeNode OwyPairNode {
-    @Required let first: OwyTreeNode
-    @Required let second: OwyTreeNode
+    @Required let first: Any OwyTreeNode
+    @Required let second: Any OwyTreeNode
 
     let label: String {
         "pair"

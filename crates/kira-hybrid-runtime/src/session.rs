@@ -27,13 +27,16 @@
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 
 use kira_bytecode::module::Module;
 use kira_hybrid_definition::HybridManifest;
 use kira_runtime_abi::{
     BridgeValue, Execution, FileRequest, FileResponse, FileSystemError, ForeignArg,
     ForeignCallError, ForeignResult, HostCapabilities, NativeArg, NativeCallError, NativeReturn,
-    NativeStateError, NativeStateToken, NativeStateTypeId, NativeStateValue, file_system,
+    NativeStateError, NativeStatePathStep, NativeStateStore, NativeStateToken, NativeStateTypeId,
+    NativeStateValue, file_system, native_state_walk, native_state_walk_mut,
 };
 use kira_vm_runtime::Program;
 
@@ -55,8 +58,41 @@ thread_local! {
 /// manifest tying them together.
 pub struct Session {
     manifest: HybridManifest,
-    program: Program,
+    /// The program used for the next VM entry or native callback.
+    ///
+    /// A graphics app's entrypoint is suspended inside the native window loop
+    /// for most of its lifetime. The native callback thunks can still enter the
+    /// VM while that happens, so a live VM reload replaces this slot rather
+    /// than trying to interrupt the suspended entrypoint. An `Arc` keeps the
+    /// program that is already executing alive until its current callback
+    /// returns.
+    program: RwLock<VmProgram>,
     library: NativeLibrary,
+    /// VM callback state for an all-runtime bundle.
+    ///
+    /// `kira live --backend vm` still needs a native library for its foreign
+    /// adapters, so it is transported as a hybrid bundle. Its Kira functions
+    /// all run in the VM, though, and using the native bridge's whole-value
+    /// state ABI there turns every field read into a copy of the entire UI
+    /// state. Keep the VM's path-addressed store for that split; genuine
+    /// hybrid programs continue to use the native half's state ABI.
+    vm_state: Option<Mutex<NativeStateStore>>,
+    /// The generation of the latest program swap, and the generation observed
+    /// by a callback after that swap. The runner waits for the latter before it
+    /// reports a reload complete, so a committed swap is not mistaken for a
+    /// frame that never used the new code.
+    observed_generation: AtomicU64,
+    observed_wait: Condvar,
+    observed_lock: Mutex<()>,
+}
+
+/// A validated VM program plus the reload generation it belongs to.
+struct VmProgram {
+    generation: u64,
+    program: Arc<Program>,
+    /// Maps function ids baked into the loaded native callback thunks to the
+    /// corresponding function in this generation's module.
+    callback_ids: Arc<Vec<u32>>,
 }
 
 impl Session {
@@ -87,7 +123,17 @@ impl Session {
         // every crossing marshals against.
         validate::bundle(&manifest, &module)?;
 
-        let program = Program::load(module).map_err(HybridError::Program)?;
+        let program = Arc::new(Program::load(module).map_err(HybridError::Program)?);
+        let callback_ids = Arc::new(
+            (0..manifest.functions.len())
+                .map(|index| index as u32)
+                .collect(),
+        );
+        let vm_state = manifest
+            .functions
+            .iter()
+            .all(|function| function.execution == Execution::Runtime)
+            .then(|| Mutex::new(NativeStateStore::new()));
         // The callback rows ride on the bytecode half, which already carries
         // them for the VM's own `ForeignCallback`; the native half is where
         // their thunks live.
@@ -101,14 +147,109 @@ impl Session {
 
         Ok(Session {
             manifest,
-            program,
+            program: RwLock::new(VmProgram {
+                generation: 0,
+                program,
+                callback_ids,
+            }),
             library,
+            vm_state,
+            observed_generation: AtomicU64::new(0),
+            observed_wait: Condvar::new(),
+            observed_lock: Mutex::new(()),
         })
     }
 
     /// The manifest this session was loaded from.
     pub fn manifest(&self) -> &HybridManifest {
         &self.manifest
+    }
+
+    /// Whether every Kira function in this session is running on the VM.
+    ///
+    /// The live VM backend still carries a native adapter library when the
+    /// program reaches C, but its Kira code is safe to replace at callback
+    /// boundaries. A genuinely mixed hybrid session cannot make that promise:
+    /// native code may still hold a stack into the old native image.
+    pub fn is_vm_only(&self) -> bool {
+        self.manifest
+            .functions
+            .iter()
+            .all(|function| function.execution == Execution::Runtime)
+    }
+
+    /// Replaces the VM half while preserving the loaded native adapter library
+    /// and callback-state store.
+    ///
+    /// The manifest is intentionally validated again. The loaded native half
+    /// remains in place, so a changed function signature, callback table, or
+    /// foreign boundary must be rejected and handled by the supervisor's
+    /// relaunch path rather than being allowed to cross an old ABI.
+    pub fn replace_vm_program(&self, module: Module) -> Result<u64, HybridError> {
+        if !self.is_vm_only() {
+            return Err(HybridError::Mismatch(
+                "a mixed hybrid session cannot replace its VM half while running".to_owned(),
+            ));
+        }
+        let callback_ids = {
+            let slot = self.program.read().unwrap_or_else(|held| held.into_inner());
+            validate::hot_reload(&self.manifest, slot.program.module(), &module)
+                .map_err(|error| HybridError::Mismatch(error.to_string()))?
+        };
+        let program = Arc::new(Program::load(module).map_err(HybridError::Program)?);
+        let mut slot = self
+            .program
+            .write()
+            .unwrap_or_else(|held| held.into_inner());
+        let generation = slot.generation.saturating_add(1);
+        slot.generation = generation;
+        slot.program = program;
+        slot.callback_ids = Arc::new(callback_ids);
+        // The retained UI must rebuild once after this swap. The marker lives
+        // in the loaded adapter library, not in the runner, so the callback
+        // consumes the same state even though the swap request came from the
+        // protocol thread.
+        self.library.mark_live_reload();
+        Ok(generation)
+    }
+
+    /// Waits until a callback has entered the newly swapped program.
+    pub fn wait_for_vm_reload(&self, generation: u64, timeout: std::time::Duration) -> bool {
+        if self.observed_generation.load(Ordering::Acquire) >= generation {
+            return true;
+        }
+        let guard = self
+            .observed_lock
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
+        let (guard, _) = self
+            .observed_wait
+            .wait_timeout_while(guard, timeout, |_| {
+                self.observed_generation.load(Ordering::Acquire) < generation
+            })
+            .unwrap_or_else(|held| held.into_inner());
+        drop(guard);
+        self.observed_generation.load(Ordering::Acquire) >= generation
+    }
+
+    /// Takes the program currently selected for a callback or entrypoint.
+    fn current_program(&self) -> (Arc<Program>, u64, Arc<Vec<u32>>) {
+        let slot = self.program.read().unwrap_or_else(|held| held.into_inner());
+        (
+            Arc::clone(&slot.program),
+            slot.generation,
+            Arc::clone(&slot.callback_ids),
+        )
+    }
+
+    /// Records that a callback ran through `generation`.
+    fn observe_generation(&self, generation: u64) {
+        let observed = self.observed_generation.load(Ordering::Acquire);
+        if observed < generation {
+            self.observed_generation
+                .store(generation, Ordering::Release);
+            self.observed_wait.notify_all();
+        }
     }
 
     /// Runs the program's entrypoint to completion.
@@ -151,7 +292,8 @@ impl Session {
             }
             _ => {
                 let mut host = Host { session: self };
-                self.program
+                let (program, _, _) = self.current_program();
+                program
                     .run(&mut host)
                     .map(|_| ())
                     .map_err(HybridError::Trap)
@@ -281,7 +423,13 @@ impl HostCapabilities for Host<'_> {
         ty: NativeStateTypeId,
         value: NativeStateValue,
     ) -> Result<NativeStateToken, NativeStateError> {
-        self.session.library.native_state_create(ty, value)
+        match &self.session.vm_state {
+            Some(state) => state
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .create(ty, value),
+            None => self.session.library.native_state_create(ty, value),
+        }
     }
 
     fn native_state_recover(
@@ -289,7 +437,13 @@ impl HostCapabilities for Host<'_> {
         token: NativeStateToken,
         ty: NativeStateTypeId,
     ) -> Result<NativeStateValue, NativeStateError> {
-        self.session.library.native_state_recover(token, ty)
+        match &self.session.vm_state {
+            Some(state) => state
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .recover(token, ty),
+            None => self.session.library.native_state_recover(token, ty),
+        }
     }
 
     fn native_state_replace(
@@ -298,11 +452,112 @@ impl HostCapabilities for Host<'_> {
         ty: NativeStateTypeId,
         value: NativeStateValue,
     ) -> Result<(), NativeStateError> {
-        self.session.library.native_state_replace(token, ty, value)
+        match &self.session.vm_state {
+            Some(state) => state
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .replace(token, ty, value),
+            None => self.session.library.native_state_replace(token, ty, value),
+        }
     }
 
     fn native_state_free(&mut self, token: NativeStateToken) -> Result<(), NativeStateError> {
-        self.session.library.native_state_free(token)
+        match &self.session.vm_state {
+            Some(state) => state
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .free(token),
+            None => self.session.library.native_state_free(token),
+        }
+    }
+
+    fn native_state_check(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+    ) -> Result<(), NativeStateError> {
+        match &self.session.vm_state {
+            Some(state) => state
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .check(token, ty),
+            None => self
+                .session
+                .library
+                .native_state_recover(token, ty)
+                .map(|_| ()),
+        }
+    }
+
+    fn native_state_read(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+    ) -> Result<NativeStateValue, NativeStateError> {
+        let result = match &self.session.vm_state {
+            Some(state) => state
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .read_at(token, ty, path)
+                .cloned(),
+            None => {
+                let root = self.session.library.native_state_recover(token, ty)?;
+                native_state_walk(&root, path).cloned()
+            }
+        };
+        result
+    }
+
+    fn native_state_write(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+        value: NativeStateValue,
+    ) -> Result<(), NativeStateError> {
+        match &self.session.vm_state {
+            Some(state) => {
+                *state
+                    .lock()
+                    .unwrap_or_else(|held| held.into_inner())
+                    .write_at(token, ty, path)? = value;
+                Ok(())
+            }
+            None => {
+                let mut root = self.session.library.native_state_recover(token, ty)?;
+                *native_state_walk_mut(&mut root, path)? = value;
+                self.session.library.native_state_replace(token, ty, root)
+            }
+        }
+    }
+
+    fn native_state_append(
+        &mut self,
+        token: NativeStateToken,
+        ty: NativeStateTypeId,
+        path: &[NativeStatePathStep],
+        value: NativeStateValue,
+    ) -> Result<(), NativeStateError> {
+        match &self.session.vm_state {
+            Some(state) => match state
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .write_at(token, ty, path)?
+            {
+                NativeStateValue::Array(elements) => Arc::make_mut(elements).push(value),
+                _ => return Err(NativeStateError::PathMismatch),
+            },
+            None => {
+                let mut root = self.session.library.native_state_recover(token, ty)?;
+                match native_state_walk_mut(&mut root, path)? {
+                    NativeStateValue::Array(elements) => Arc::make_mut(elements).push(value),
+                    _ => return Err(NativeStateError::PathMismatch),
+                }
+                self.session.library.native_state_replace(token, ty, root)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -397,11 +652,15 @@ unsafe extern "C" fn invoke_runtime(
         .collect();
 
     let mut host = Host { session };
-    match session
-        .program
-        .call_capturing(&mut host, function_id, &borrowed, &capture)
-    {
+    let (program, generation, callback_ids) = session.current_program();
+    let Some(&current_function_id) = callback_ids.get(function_id as usize) else {
+        fatal(&format!(
+            "native code called runtime function {function_id}, but the live module has no identity for it"
+        ));
+    };
+    match program.call_capturing(&mut host, current_function_id, &borrowed, &capture) {
         Ok(returned) => {
+            session.observe_generation(generation);
             // Each written-through parameter's final value replaces the argument
             // that arrived in its slot, exactly as a trampoline does going the
             // other way. The argument's own handle was consumed by `take_args`,

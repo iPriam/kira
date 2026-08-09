@@ -1,7 +1,7 @@
 //! `kira live`: what the verb was asked for, and how a bundle gets built.
 //!
 //! ```text
-//! kira live [runner] [file|dir] [--backend vm|hybrid] [--watch] [--quit-after 5s]
+//! kira live [runner] [file|dir] [--backend vm|hybrid] [--no-watch] [--quit-after 5s]
 //! ```
 //!
 //! The session itself — the server, the runner process, the watching, the
@@ -115,7 +115,10 @@ impl LiveOptions {
         let mut runner = None;
         let mut path: Option<String> = None;
         let mut backend = LiveBackend::Vm;
-        let mut watch = false;
+        // A live session is useful because it stays attached to the source. Keep
+        // watching on by default; `--no-watch` is the explicit one-shot escape
+        // hatch, while `--watch` and `--hot` remain accepted aliases for scripts.
+        let mut watch = true;
         let mut quit_after = None;
 
         let mut index = 0;
@@ -130,8 +133,12 @@ impl LiveOptions {
                         .ok_or_else(|| LiveOptionsError::UnknownBackend(value.clone()))?;
                     index += 2;
                 }
-                "--watch" => {
+                "--watch" | "--hot" => {
                     watch = true;
+                    index += 1;
+                }
+                "--no-watch" => {
+                    watch = false;
                     index += 1;
                 }
                 "--quit-after" => {
@@ -465,6 +472,17 @@ mod tests {
         assert_eq!(options.runner, RunnerId::Desktop);
         assert_eq!(options.path, "app.kira");
         assert_eq!(options.backend, LiveBackend::Vm);
+        assert!(options.watch, "live watches source files by default");
+    }
+
+    #[test]
+    fn live_watch_can_be_named_or_explicitly_disabled() {
+        for flag in ["--watch", "--hot"] {
+            let options = LiveOptions::parse(&args(&[flag, "app.kira"])).expect("parses");
+            assert!(options.watch, "{flag} keeps watching enabled");
+        }
+        let options = LiveOptions::parse(&args(&["--no-watch", "app.kira"])).expect("parses");
+        assert!(!options.watch, "--no-watch is the explicit one-shot mode");
     }
 
     #[test]

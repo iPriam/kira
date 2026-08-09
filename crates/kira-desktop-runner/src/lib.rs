@@ -16,16 +16,17 @@
 //! one. That is what lets the native path be a real path here rather than a
 //! deferred one.
 //!
-//! The runner is deliberately headless. Presenting a frame means a window and a
-//! swapchain, which this repo does not own — kira-graphics does. A headless
-//! session is honest about stopping at the entrypoint rather than claiming a
-//! frame it never drew.
+//! The runner hosts the real Kira Graphics window and event loop for live apps.
+//! The bundle owns the UI tree and rendering calls; this binary owns the live
+//! session, window, input relay, and frame lifecycle around it.
 
 pub mod host;
+pub mod hotpatch;
 pub mod relay;
 pub mod stage;
 pub mod staged;
 
 pub use host::{DesktopHost, DesktopRunnerError};
+pub use hotpatch::VmHotPatch;
 pub use relay::{AppThread, RelayError, RelayHost};
 pub use staged::Staged;

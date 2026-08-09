@@ -11,7 +11,7 @@
 
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{HirExpr, HirExprId};
-use kira_syntax_model::ast::{BinaryOp, Expr, ExprId};
+use kira_syntax_model::ast::{BinaryOp, CallArg, Expr, ExprId};
 
 use crate::analyze::{Analyzer, FnCtx};
 use crate::classes::Qualifier;
@@ -52,6 +52,17 @@ impl Analyzer<'_> {
         id: ExprId,
         expected: Option<Type>,
     ) -> HirExprId {
+        // A bare integer literal takes the floating-point type of the position
+        // that asks for it. Named integer values remain distinct from Float;
+        // only the literal spelling is context-sensitive.
+        if matches!(expected, Some(Type::Float(_))) {
+            if let Expr::Int { value, .. } = self.tree.expr(id) {
+                return self
+                    .program
+                    .exprs
+                    .alloc(HirExpr::Float(*value as f64));
+            }
+        }
         // A bare function name is not an expression anywhere else — Kira has no
         // function type — so the one position that gives it a meaning is
         // recognized before the name is resolved as a value and reported
@@ -231,18 +242,28 @@ impl Analyzer<'_> {
             Expr::Call {
                 callee,
                 callee_span,
+                braced,
                 type_args,
                 args,
                 children,
                 ..
             } => {
                 let name = self.interner.resolve(callee).to_owned();
+                let local = ctx.resolve(&name);
+                let is_construct_update = braced
+                    && local.is_some_and(|local| {
+                        let ty = self
+                            .cell_inner(ctx, local)
+                            .unwrap_or_else(|| ctx.local_type(local));
+                        self.concrete_construct_id(ty).is_some()
+                    });
                 // Child content belongs to a construct-backed declaration alone.
                 // A call that carries children but is not one is reported here,
                 // once, after its children are analyzed so their own errors
                 // still surface.
-                let is_construct_construction =
-                    self.construct_backed_named(&name).is_some() && ctx.resolve(&name).is_none();
+                let is_construct_construction = (self.construct_backed_named(&name).is_some()
+                    && local.is_none())
+                    || is_construct_update;
                 if !children.is_empty() && !is_construct_construction {
                     for &child in &children {
                         self.analyze_expr(ctx, child);
@@ -292,6 +313,15 @@ impl Analyzer<'_> {
                 // binding wins over a function of the same name for the same
                 // reason a local wins over a field: the nearer name is the one
                 // a reader means.
+                if is_construct_update && let Some(local) = local {
+                    return self.analyze_construct_update(
+                        ctx,
+                        local,
+                        &args,
+                        &children,
+                        callee_span,
+                    );
+                }
                 if let Some(call) =
                     self.analyze_local_closure_call(ctx, &name, &values, callee_span)
                 {
@@ -311,10 +341,30 @@ impl Analyzer<'_> {
                 // like a class — but its params carry names, so a labeled
                 // argument binds to the input of that name.
                 if let Some(id) = self.construct_backed_named(&name)
-                    && ctx.resolve(&name).is_none()
+                    && local.is_none()
                 {
                     self.link_type_name(&name, callee_span);
                     return self.analyze_construct_new(ctx, id, &args, &children, callee_span);
+                }
+                // Empty bare braces are also the spelling of an empty data
+                // struct literal. The parser keeps the braces on the call so
+                // this choice can happen after name resolution; a construct or
+                // a local construct value took the paths above.
+                if braced && local.is_none() && self.plain_struct_named(&name).is_some() {
+                    if !args.is_empty() {
+                        for arg in &args {
+                            self.analyze_expr(ctx, arg.value);
+                        }
+                        self.emit(
+                            callee_span,
+                            "KSEM269",
+                            format!(
+                                "plain struct `{name}` does not accept `let` construction overrides"
+                            ),
+                        );
+                        return self.program.exprs.alloc(HirExpr::Error);
+                    }
+                    return self.analyze_struct_literal(ctx, callee, callee_span, &[]);
                 }
                 // `StructType()` on a `@FFI.Struct { layout: c }` is the zeroed-value
                 // form: it takes no arguments and every field takes its zero.
@@ -404,8 +454,35 @@ impl Analyzer<'_> {
                 name,
                 name_span,
                 fields,
-                ..
-            } => self.analyze_struct_literal(ctx, name, name_span, &fields),
+                span,
+            } => {
+                // A local concrete construct value may shadow the family/type
+                // name. Its `Name { field = value }` form is the canonical
+                // component-style update, even though the parser must retain
+                // the same AST shape as an ordinary struct literal to keep
+                // `Color { r = ... }` unambiguous.
+                let written = self.interner.resolve(name).to_owned();
+                let local = ctx.resolve(&written);
+                let is_construct_update = local.is_some_and(|local| {
+                    let ty = self
+                        .cell_inner(ctx, local)
+                        .unwrap_or_else(|| ctx.local_type(local));
+                    self.concrete_construct_id(ty).is_some()
+                });
+                if let Some(local) = local.filter(|_| is_construct_update) {
+                    let args: Vec<CallArg> = fields
+                        .iter()
+                        .map(|field| CallArg {
+                            label: Some(field.name),
+                            label_span: Some(field.name_span),
+                            value: field.value,
+                            span: field.span,
+                        })
+                        .collect();
+                    return self.analyze_construct_update(ctx, local, &args, &[], span);
+                }
+                self.analyze_struct_literal(ctx, name, name_span, &fields)
+            }
             Expr::Field {
                 base,
                 field,
@@ -495,6 +572,12 @@ impl Analyzer<'_> {
                 {
                     return self
                         .analyze_construct_bridge_read(ctx, base_hir, id, &name, field_span);
+                }
+                // A member reached through an `@FFI.Pointer` resolves against
+                // the target's C layout rather than a Kira value's fields, and
+                // lowers to a load or to the member's address.
+                if let Type::ForeignPtr(pointer) = base_ty {
+                    return self.analyze_foreign_field(base_hir, pointer, &name, field_span);
                 }
                 match self.resolve_field(base_ty, &name, field_span) {
                     Some((index, ty)) => {
@@ -655,15 +738,30 @@ impl Analyzer<'_> {
         Some(self.program.exprs.alloc(HirExpr::Field { base, index, ty }))
     }
 
-    /// Analyzes a field's default initializer at a construction site.
+    /// Analyzes a default initializer in a declaration-owned scope.
     ///
-    /// Deliberately analyzed in an empty scope rather than the construction
-    /// site's: a default belongs to the declaration, so it must not be able to
-    /// see whatever locals happen to be in scope wherever the struct is built.
+    /// The scope is isolated from the construction site, but the local arena is
+    /// the caller's arena. That distinction matters for defaults which construct
+    /// another value: their synthesized field-binding statements and local
+    /// reads must belong to the function that will execute them, not to a
+    /// throwaway probe context.
+    pub(crate) fn analyze_default_in(
+        &mut self,
+        ctx: &mut FnCtx,
+        default: ExprId,
+        declared: Option<Type>,
+    ) -> HirExprId {
+        ctx.push_isolated_scope();
+        let value = self.analyze_expr_expecting(ctx, default, declared);
+        ctx.pop_scope();
+        value
+    }
+
+    /// Analyzes a declaration default for the eager validation pass. Callers
+    /// that need an executable value use [`Self::analyze_default_in`] so any
+    /// locals introduced by a nested construct are owned by the caller.
     pub(crate) fn analyze_default(&mut self, default: ExprId, declared: Option<Type>) -> HirExprId {
         let mut empty = FnCtx::new(Type::Void);
-        // The member's declared type is the default's expected type, so
-        // `struct H { var values: [Int] = [] }` knows what `[]` holds.
-        self.analyze_expr_expecting(&mut empty, default, declared)
+        self.analyze_default_in(&mut empty, default, declared)
     }
 }

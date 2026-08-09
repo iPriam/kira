@@ -27,7 +27,7 @@
 //! adapter, the native call site, the VM host — speaks only pointers and
 //! scalars, which the seam already handles exactly. `byval`/`sret` would not
 //! substitute: both force the memory class, and the corpus needs the register
-//! cases (`MetalCGRect` is four `F64`s, an AArch64 HFA returned in `v0`–`v3`).
+//! cases (`MetalCGRect` is four `Float`s, an AArch64 HFA returned in `v0`–`v3`).
 //!
 //! # Only an aggregate result takes an out-pointer
 //!

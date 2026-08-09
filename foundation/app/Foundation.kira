@@ -83,55 +83,6 @@ struct Mat4 {
     var m33: Float = 1.0
 }
 
-// Newton's method square root: eight iterations from the value itself, which is
-// enough for the geometry the corpus uses it for. Zero and negatives return 0.0.
-function sqrtApprox(value: Float) -> Float {
-    if value <= 0.0 {
-        return 0.0
-    }
-
-    var estimate = value
-    var index = 0
-    while index < 8 {
-        estimate = 0.5 * (estimate + value / estimate)
-        index = index + 1
-    }
-    return estimate
-}
-
-// Reduces an angle in radians to the range (-pi, pi] the series below converge on.
-function wrapRadians(radians: Float) -> Float {
-    let pi = 3.141592653589793
-    let twoPi = 6.283185307179586
-    var value = radians
-    while value > pi {
-        value = value - twoPi
-    }
-    while value < -pi {
-        value = value + twoPi
-    }
-    return value
-}
-
-// Sine, from the first four terms of the Taylor series about a wrapped angle.
-function sinApprox(radians: Float) -> Float {
-    let x = wrapRadians(radians)
-    let x2 = x * x
-    let x3 = x2 * x
-    let x5 = x3 * x2
-    let x7 = x5 * x2
-    return x - x3 / 6.0 + x5 / 120.0 - x7 / 5040.0
-}
-
-// Cosine, from the first four terms of the Taylor series about a wrapped angle.
-function cosApprox(radians: Float) -> Float {
-    let x = wrapRadians(radians)
-    let x2 = x * x
-    let x4 = x2 * x2
-    let x6 = x4 * x2
-    return 1.0 - x2 / 2.0 + x4 / 24.0 - x6 / 720.0
-}
-
 // The 4x4 identity matrix.
 function mat4Identity() -> Mat4 {
     return Mat4()

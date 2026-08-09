@@ -38,6 +38,11 @@ pub(crate) struct FnCtx {
     /// declare signatures — and their many call sites — unchanged.
     binding_spans: Vec<Option<Span>>,
     pub(crate) scopes: Vec<HashMap<String, LocalId>>,
+    /// The innermost scope index visible to name lookup while an isolated
+    /// declaration-owned expression is analyzed. Ordinary blocks leave this
+    /// at zero; construct defaults use a barrier so a field initializer cannot
+    /// accidentally capture a same-named local from its construction site.
+    scope_floor: usize,
     pub(crate) return_type: Type,
     /// The struct this body is a method of, when it is one.
     ///
@@ -103,6 +108,7 @@ impl FnCtx {
             ownership: Vec::new(),
             binding_spans: Vec::new(),
             scopes: vec![HashMap::new()],
+            scope_floor: 0,
             return_type,
             receiver: None,
             loop_depth: 0,
@@ -181,8 +187,20 @@ impl FnCtx {
         self.scopes.push(HashMap::new());
     }
 
+    /// Starts a scope whose lookup cannot fall through into the surrounding
+    /// function. Construct member defaults use this to keep declaration-owned
+    /// names separate from the caller's locals while still sharing the
+    /// function's local and pending-statement arenas.
+    pub(crate) fn push_isolated_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+        self.scope_floor = self.scopes.len() - 1;
+    }
+
     pub(crate) fn pop_scope(&mut self) {
         self.scopes.pop();
+        if self.scope_floor >= self.scopes.len() {
+            self.scope_floor = 0;
+        }
     }
 
     /// Declares a new owned local in the innermost scope, returning its slot.
@@ -397,6 +415,7 @@ impl FnCtx {
     pub(crate) fn resolve(&self, name: &str) -> Option<LocalId> {
         self.scopes
             .iter()
+            .skip(self.scope_floor)
             .rev()
             .find_map(|scope| scope.get(name).copied())
     }

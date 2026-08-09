@@ -36,10 +36,22 @@ pub fn write_message<W: Write, M: Message>(
     if len > MAX_FRAME_LEN {
         return Err(ProtocolError::FrameTooLarge { len });
     }
-    writer.write_all(&len.to_le_bytes())?;
-    writer.write_all(&body)?;
-    writer.flush()?;
+    // A write to a peer that already left is that peer having left, not a
+    // broken stream — the same event `read_message` reports, arriving from the
+    // other direction because nothing had read since it went.
+    sent(writer.write_all(&len.to_le_bytes()))?;
+    sent(writer.write_all(&body))?;
+    sent(writer.flush())?;
     Ok(())
+}
+
+/// Maps a write's outcome, treating a vanished peer as a disconnect.
+fn sent(outcome: std::io::Result<()>) -> Result<(), ProtocolError> {
+    match outcome {
+        Ok(()) => Ok(()),
+        Err(error) if peer_left(&error) => Err(ProtocolError::Disconnected),
+        Err(error) => Err(ProtocolError::Io(error)),
+    }
 }
 
 /// Reads one length-prefixed frame and decodes the message in it.
@@ -47,10 +59,9 @@ pub fn read_message<R: Read, M: Message>(reader: &mut R) -> Result<M, ProtocolEr
     let mut len_bytes = [0u8; 4];
     match reader.read_exact(&mut len_bytes) {
         Ok(()) => {}
-        // A clean close between frames is the peer leaving, not a broken stream.
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Err(ProtocolError::Disconnected);
-        }
+        // A close between frames is the peer leaving, not a broken stream —
+        // whether or not it was a polite one.
+        Err(error) if peer_left(&error) => return Err(ProtocolError::Disconnected),
         Err(error) => return Err(ProtocolError::Io(error)),
     }
     let len = u32::from_le_bytes(len_bytes);
@@ -59,13 +70,34 @@ pub fn read_message<R: Read, M: Message>(reader: &mut R) -> Result<M, ProtocolEr
         return Err(ProtocolError::FrameTooLarge { len });
     }
     let mut body = vec![0u8; len as usize];
-    reader
-        .read_exact(&mut body)
-        .map_err(|error| match error.kind() {
-            std::io::ErrorKind::UnexpectedEof => ProtocolError::Truncated,
-            _ => ProtocolError::Io(error),
-        })?;
+    reader.read_exact(&mut body).map_err(|error| {
+        // Mid-frame, a peer that left took the rest of the message with it,
+        // which is a truncated frame however the stream ended.
+        if peer_left(&error) {
+            ProtocolError::Truncated
+        } else {
+            ProtocolError::Io(error)
+        }
+    })?;
     M::decode(&body)
+}
+
+/// Whether an error means the peer is gone rather than the stream is broken.
+///
+/// A host that exits closes its end, and what that looks like here depends on
+/// the platform: a graceful shutdown reads as end-of-file, and an abrupt one —
+/// which is what a process simply exiting produces on Windows — arrives as
+/// `ConnectionAborted` or `ConnectionReset`. Both are the same event, and
+/// treating only the first as leaving made a session that ran to completion
+/// report an i/o failure on one platform and success on the other.
+fn peer_left(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::BrokenPipe
+    )
 }
 
 /// Appends a length-prefixed byte string.

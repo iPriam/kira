@@ -82,6 +82,22 @@ fn a_payload_variant_uses_its_default_when_none_is_written() {
 }
 
 #[test]
+fn a_payload_variant_accepts_a_named_payload_label() {
+    assert!(
+        codes(
+            "enum ContentMargins { automatic: Float = 0.0 }\n\
+             @Main function main() {\n\
+                 let value: ContentMargins = .automatic(extra: 8)\n\
+                 let implicit: ContentMargins = .automatic\n\
+                 let called: ContentMargins = .automatic()\n\
+                 return\n\
+             }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
 fn a_payload_variant_without_an_argument_or_default_is_reported() {
     assert_eq!(
         codes(

@@ -145,6 +145,75 @@ pub unsafe extern "C" fn kira_rt_string_uppercase(value: KStr) -> KStr {
     bytes_to_handle(raised.into_bytes())
 }
 
+/// Whether `value` reads as a whole number, freeing it.
+///
+/// # Safety
+/// `value` must be null or a live handle; it is freed here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_string_is_int(value: KStr) -> bool {
+    // SAFETY: caller passes a live (or null) handle that outlives this read.
+    let reads = unsafe { text_of(value).trim().parse::<i64>().is_ok() };
+    // SAFETY: the same handle, consumed exactly once here.
+    unsafe { drop_handle(value) };
+    reads
+}
+
+/// The whole number `value` reads as, freeing it.
+///
+/// Traps on text that reads as none, which `isInt` is there to prevent — the
+/// same shape `charAt` has for an index out of range.
+///
+/// # Safety
+/// `value` must be null or a live handle; it is freed here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_string_to_int(value: KStr) -> i64 {
+    // SAFETY: caller passes a live (or null) handle that outlives this read.
+    let parsed = unsafe { text_of(value).trim().parse::<i64>() };
+    // SAFETY: the same handle, consumed exactly once here.
+    unsafe { drop_handle(value) };
+    match parsed {
+        Ok(value) => value,
+        Err(_) => {
+            eprintln!("kira: runtime trap: text does not read as a whole number");
+            crate::runtime::print_trap_backtrace();
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `value` without its last Unicode scalar, freeing it.
+///
+/// `pop` removes a whole `char`, which is what makes this different from
+/// dropping the last byte: the other primitives index bytes, and truncating a
+/// multi-byte scalar mid-way would leave text that is no longer UTF-8.
+///
+/// # Safety
+/// `value` must be null or a live handle; it is freed here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kira_rt_string_drop_last_scalar(value: KStr) -> KStr {
+    // SAFETY: caller passes a live (or null) handle that outlives this read.
+    let mut dropped = unsafe { text_of(value).to_owned() };
+    dropped.pop();
+    // SAFETY: the same handle, consumed exactly once here.
+    unsafe { drop_handle(value) };
+    bytes_to_handle(dropped.into_bytes())
+}
+
+/// The text of one Unicode scalar, from its code point.
+///
+/// A code point outside Unicode, or a surrogate half, names no scalar and
+/// renders as the empty string rather than trapping — the same answer the VM
+/// gives.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_scalar_text(code: i64) -> KStr {
+    let text = u32::try_from(code)
+        .ok()
+        .and_then(char::from_u32)
+        .map(String::from)
+        .unwrap_or_default();
+    bytes_to_handle(text.into_bytes())
+}
+
 /// `value` split on every occurrence of `separator`, freeing both.
 ///
 /// An empty separator answers the whole text as one piece — the same answer the

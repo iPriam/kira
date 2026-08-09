@@ -100,7 +100,7 @@ impl Analyzer<'_> {
             // A slot left unfilled by a call that already had the wrong number
             // of arguments is that same mistake, not a second one.
             let filled = match arity_matches {
-                true => self.class_field_default(id, slot, span),
+                true => self.class_field_default(ctx, id, slot, span),
                 false => self.program.exprs.alloc(HirExpr::Error),
             };
             initializers[slot as usize] = Some(filled);
@@ -116,8 +116,14 @@ impl Analyzer<'_> {
     }
 
     /// Analyzes the default written for one slot, or reports its absence.
-    fn class_field_default(&mut self, id: StructId, slot: u32, span: Span) -> HirExprId {
-        match self.resolve_field_default(id, slot) {
+    fn class_field_default(
+        &mut self,
+        ctx: &mut FnCtx,
+        id: StructId,
+        slot: u32,
+        span: Span,
+    ) -> HirExprId {
+        match self.resolve_field_default_at(ctx, id, slot) {
             Some(default) => default,
             None => {
                 let name = self.program.types.type_name(Type::Struct(id));

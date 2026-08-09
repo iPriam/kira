@@ -220,7 +220,7 @@ fn ffi_callback_parses_params_and_result() {
 
 #[test]
 fn ffi_callback_parses_an_empty_params_list() {
-    let result = parse_text("@FFI.Callback { abi: c; params: []; result: I64; }\nstruct Thunk {}");
+    let result = parse_text("@FFI.Callback { abi: c; params: []; result: Int; }\nstruct Thunk {}");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     match only_ffi_kind(&result) {
         FfiTypeKind::Callback { params, .. } => assert!(params.is_empty()),

@@ -71,6 +71,7 @@ impl FunctionLowering<'_, '_> {
                     // foreign word has no pinned rendering) and `CString` is
                     // seam-only, so neither reaches a type-checked program.
                     Type::RawPtr
+                    | Type::ForeignPtr(_)
                     | Type::CString
                     | Type::NativeState(_)
                     | Type::Task(_)
@@ -200,6 +201,7 @@ impl FunctionLowering<'_, '_> {
                 )
             };
             self.drop_value(value, ty)?;
+            self.codegen.lifetime_end(pointer);
         }
         Ok(())
     }
@@ -221,8 +223,8 @@ impl FunctionLowering<'_, '_> {
         let llvm_type = self.codegen.llvm_type(ty)?;
         // SAFETY: the builder is on a live block and `llvm_type` is this
         // module's.
-        let pointer =
-            unsafe { LLVMBuildAlloca(self.codegen.builder, llvm_type, c"lent.arg".as_ptr()) };
+        let pointer = self.codegen.dynamic_alloca(llvm_type, c"lent.arg");
+        self.codegen.lifetime_start(pointer);
         // SAFETY: a fresh alloca of exactly this value's type.
         unsafe { LLVMBuildStore(self.codegen.builder, value, pointer) };
         Ok((pointer, Some((pointer, ty))))

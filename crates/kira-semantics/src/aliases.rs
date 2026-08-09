@@ -262,14 +262,14 @@ impl Analyzer<'_> {
         }
         self.set_alias_state(name, AliasState::Resolving);
         let ty = match header.body {
-            // A pointer is one machine word whatever it points at, so the target
-            // is deliberately **not** resolved here. Generated bindings point at
-            // C types nobody declared (`SECURITY_ATTRIBUTES`) and at themselves
-            // (an opaque handle typedef), and resolving either would invent a
-            // diagnostic for a declaration that is perfectly good. What the
-            // target is *called* is recorded at collection time instead, and
-            // looked up by name only where a call needs it.
-            AliasBody::Pointer => Type::RawPtr,
+            // A pointer is one machine word whatever it points at. The target
+            // is looked up silently: generated bindings point at C types nobody
+            // declared (`SECURITY_ATTRIBUTES`) and at themselves (an opaque
+            // handle typedef), so a target that does not resolve to a C-layout
+            // struct is an opaque handle rather than a mistake and stays a plain
+            // `RawPtr`. One that does resolve keeps what it points at, which is
+            // what lets a field be read through it.
+            AliasBody::Pointer => self.foreign_pointer_type(name),
             AliasBody::Written(target) => self.resolve_type_in(target, context),
         };
         let state = match ty {
@@ -278,6 +278,20 @@ impl Analyzer<'_> {
         };
         self.set_alias_state(name, state);
         Some(ty)
+    }
+
+    /// The pointer type an `@FFI.Pointer` typedef named `alias` resolves to.
+    fn foreign_pointer_type(&mut self, alias: &str) -> Type {
+        let Some(target) = self.pointer_targets.get(alias).cloned() else {
+            return Type::RawPtr;
+        };
+        let Some(struct_id) = self.visible_struct(&target) else {
+            return Type::RawPtr;
+        };
+        if self.ffi_struct_kind(struct_id) != Some(crate::ffi_types::FfiStructKind::CLayout) {
+            return Type::RawPtr;
+        }
+        self.program.types.foreign_ptr_to(struct_id)
     }
 
     /// Advances one alias's resolution state.

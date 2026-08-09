@@ -33,7 +33,7 @@ use kira_source::{SourceId, Span};
 use kira_syntax_model::SyntaxTree;
 use kira_syntax_model::ast::{Item, StructDecl};
 
-use crate::analyze::{Analyzer, FieldDefault};
+use crate::analyze::{Analyzer, FieldDefault, FnCtx};
 use crate::classes::OwnMethod;
 use crate::types::{AggregateKind, NameContext};
 
@@ -472,6 +472,12 @@ impl<'a> Analyzer<'a> {
         // because two packages may each declare it.
         let ids: Vec<StructId> = self.program.types.structs().ids().collect();
         for id in ids {
+            // Construct-backed defaults are instance initializers: their
+            // names are resolved in declaration order at each construction
+            // site, where earlier fields have real per-instance locals.
+            if self.constructs.contains_key(&id) {
+                continue;
+            }
             let field_count = self
                 .struct_defaults
                 .get(id.index() as usize)
@@ -485,6 +491,9 @@ impl<'a> Analyzer<'a> {
     /// Returns one resolved field default, resolving it in declaration scope on
     /// first use when recursive aggregate defaults reach it before the outer pass.
     pub(crate) fn resolve_field_default(&mut self, id: StructId, index: u32) -> Option<HirExprId> {
+        if self.constructs.contains_key(&id) {
+            return None;
+        }
         let default = self.field_default(id, index)?;
         if let Some(resolved) = default.resolved {
             return Some(resolved);
@@ -512,17 +521,68 @@ impl<'a> Analyzer<'a> {
             .map(|field| field.ty);
         let previous_source = self.source;
         self.source = default.source;
-        let resolved = self.analyze_default(default.syntax, declared);
+        let mut empty = FnCtx::new(Type::Void);
+        let resolved = self.analyze_default_in(&mut empty, default.syntax, declared);
         self.source = previous_source;
         self.resolving_struct_defaults.remove(&key);
-        if let Some(slot) = self
-            .struct_defaults
-            .get_mut(id.index() as usize)
-            .and_then(|defaults| defaults.get_mut(index as usize))
-            .and_then(Option::as_mut)
+        // A default whose analysis allocated locals cannot be shared: the
+        // LocalId values belong to the probe context, and nested constructs may
+        // also have hoisted binding statements that only make sense at the use
+        // site. Keep the eager pass for diagnostics, but re-analyze such a
+        // default in the caller's context below.
+        if empty.locals.is_empty()
+            && let Some(slot) = self
+                .struct_defaults
+                .get_mut(id.index() as usize)
+                .and_then(|defaults| defaults.get_mut(index as usize))
+                .and_then(Option::as_mut)
         {
             slot.resolved = Some(resolved);
         }
+        Some(resolved)
+    }
+
+    /// Resolves a field default for an actual construction site. Cached HIR is
+    /// safe only when the eager pass proved it introduced no locals; nested
+    /// construct values are rebuilt in this function's local arena.
+    pub(crate) fn resolve_field_default_at(
+        &mut self,
+        ctx: &mut FnCtx,
+        id: StructId,
+        index: u32,
+    ) -> Option<HirExprId> {
+        if self.constructs.contains_key(&id) {
+            return None;
+        }
+        let default = self.field_default(id, index)?;
+        if let Some(resolved) = default.resolved {
+            return Some(resolved);
+        }
+
+        let key = (id.index(), index);
+        if !self.resolving_struct_defaults.insert(key) {
+            let previous_source = self.source;
+            self.source = default.source;
+            self.emit(
+                self.tree.expr(default.syntax).span(),
+                "KSEM213",
+                "field defaults recursively construct each other and have no finite value",
+            );
+            self.source = previous_source;
+            return Some(self.program.exprs.alloc(HirExpr::Error));
+        }
+        let declared = self
+            .program
+            .types
+            .structs()
+            .get(id)
+            .and_then(|def| def.field(index))
+            .map(|field| field.ty);
+        let previous_source = self.source;
+        self.source = default.source;
+        let resolved = self.analyze_default_in(ctx, default.syntax, declared);
+        self.source = previous_source;
+        self.resolving_struct_defaults.remove(&key);
         Some(resolved)
     }
 }

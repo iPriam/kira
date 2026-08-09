@@ -433,6 +433,10 @@ impl<'a> Analyzer<'a> {
         // A family type must exist before ordinary structs resolve fields that
         // name it; concrete variants are filled after backed structs exist.
         self.collect_construct_family_headers();
+        // A parent's surface joins its children before anything reads a family:
+        // a backed declaration is checked against the merged surface, and a
+        // child's declarations become variants of the parent's type.
+        self.inherit_construct_families();
         // `extend Family { … }` modifiers join the family's method surface once
         // the family exists and before its method signatures are resolved, so a
         // modifier's parameter and result types are resolved with the rest.
@@ -493,6 +497,14 @@ impl<'a> Analyzer<'a> {
         // the signature index — and before any body, so a call in a body
         // resolves to `Callee::Foreign`.
         self.collect_foreign();
+        // An unannotated construct field needs the complete callable/type
+        // surface to analyze its initializer. Resolve it before the ordinary
+        // default pass so construction sites see the inferred field type.
+        self.resolve_construct_field_types();
+        // Inference can reveal a by-value edge that was `Error` while the
+        // construct header was collected. Re-run the value-cycle break after
+        // those edges become concrete, before any instance default is lowered.
+        self.break_remaining_value_cycles();
         // A field default belongs to its declaration. Resolve every one now, with
         // signatures and foreign callables available but before a construction
         // site can supply some unrelated file scope, and reuse that HIR at every

@@ -14,6 +14,7 @@
 
 use std::ffi::c_char;
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The prefix every telemetry line carries.
 ///
@@ -23,6 +24,10 @@ pub const LIVE_MARKER_PREFIX: &str = "@kira.live ";
 
 /// The line reported when the first frame has been presented.
 pub const FIRST_FRAME_LINE: &str = "live.first_frame";
+
+/// Set by the live runner after it swaps VM bytecode. The next graphics frame
+/// consumes it so a retained UI invalidates its cached tree exactly once.
+static RELOAD_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// Writes one telemetry line to stderr.
 fn emit(line: &str) {
@@ -38,6 +43,18 @@ fn emit(line: &str) {
 #[unsafe(no_mangle)]
 pub extern "C" fn kira_live_emit_first_frame() {
     emit(FIRST_FRAME_LINE);
+}
+
+/// Marks the next VM-backed graphics callback as a reload boundary.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_live_mark_reload() {
+    RELOAD_PENDING.store(true, Ordering::Release);
+}
+
+/// Consumes the VM reload marker from the next graphics frame.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_live_take_reload() -> bool {
+    RELOAD_PENDING.swap(false, Ordering::AcqRel)
 }
 
 /// Reports one telemetry line from a native library.
@@ -82,5 +99,12 @@ mod tests {
         let text = std::ffi::CString::new("live.test.line").expect("no interior NUL");
         // SAFETY: `text` outlives the call and is NUL-terminated by `CString`.
         unsafe { kira_live_emit_log_line(text.as_ptr()) };
+    }
+
+    #[test]
+    fn a_reload_marker_is_consumed_once() {
+        kira_live_mark_reload();
+        assert!(kira_live_take_reload());
+        assert!(!kira_live_take_reload());
     }
 }

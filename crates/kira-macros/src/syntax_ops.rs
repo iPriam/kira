@@ -24,6 +24,8 @@ pub(crate) enum SyntaxError {
     NoSuchField(String),
     /// An assignment writes *through* the rewritten property (KMAC027).
     WriteThroughProperty(String),
+    /// The declaration already writes a lifecycle hook the macro adds.
+    AlreadyHasHook(String),
 }
 
 /// Every identifier in `text`, in order.
@@ -46,6 +48,55 @@ pub(crate) fn drop_field(text: &str, name: &str) -> Result<String, SyntaxError> 
     let mut buffer = EditBuffer::new();
     buffer.blank(field.span, text);
     Ok(buffer.apply(text).text)
+}
+
+/// Inserts `member` as the last member of the declaration `text`.
+///
+/// A span edit like [`drop_field`], so everything already written survives
+/// byte-for-byte, comments included: only the bytes just before the body's
+/// closing brace are touched.
+///
+/// What this is for is a macro that gives a declaration a `lifecycle { … }`
+/// section it did not write — the runtime's half of a contract the author
+/// opted into by annotating. Adding it here rather than through `extend` keeps
+/// the family one declaration, so a reader sees the whole of it in one place.
+pub(crate) fn add_member(text: &str, member: &str) -> Result<String, SyntaxError> {
+    // Parsed only to refuse text that is not a declaration, so a macro cannot
+    // graft a member onto arbitrary syntax.
+    let declaration = decl::parse(text).ok_or(SyntaxError::NotADeclaration)?;
+    // A hook a macro supplies is the runtime's half of the contract, so a
+    // declaration writing its own copy is a collision rather than an override:
+    // one of the two would silently win. Caught here, where the macro and the
+    // declaration are both in hand, so the message can name the macro's hook —
+    // by the time semantics sees the merged text there is nothing left to say
+    // *which* half a reader cannot see.
+    if let Some(added) = decl::parse(&format!("construct __Added {{\n{member}\n}}\n")) {
+        for hook in &added.hooks {
+            if declaration
+                .hooks
+                .iter()
+                .any(|existing| existing.name == hook.name)
+            {
+                return Err(SyntaxError::AlreadyHasHook(hook.name.clone()));
+            }
+        }
+    }
+    let close = text.rfind('}').ok_or(SyntaxError::NotADeclaration)?;
+    // The closing brace's own indentation is the body's, so a member laid out
+    // against it lands where a hand-written one would.
+    let line_start = text[..close].rfind('\n').map_or(0, |at| at + 1);
+    let indent: String = text[line_start..close]
+        .chars()
+        .take_while(|character| character.is_whitespace())
+        .collect();
+    let mut out = String::with_capacity(text.len() + member.len() + indent.len() + 8);
+    out.push_str(&text[..close]);
+    out.push_str(&indent);
+    out.push_str("    ");
+    out.push_str(member.trim());
+    out.push('\n');
+    out.push_str(&text[close..]);
+    Ok(out)
 }
 
 /// Rewrites every unshadowed use of the property `name` in the declaration

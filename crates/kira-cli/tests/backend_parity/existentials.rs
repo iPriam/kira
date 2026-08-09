@@ -38,8 +38,8 @@ TreeNode LeafNode {
 }
 
 TreeNode PairNode {
-    @Required let first: TreeNode
-    @Required let second: TreeNode
+    @Required let first: Any TreeNode
+    @Required let second: Any TreeNode
     let label: String { "pair" }
     let weight: Int { 3 }
 }
@@ -53,7 +53,7 @@ function buildRow(index: Int) -> some TreeNode {
 }
 
 // `some X` in parameter position.
-function scoreOf(node: borrow TreeNode) -> Int {
+function scoreOf(node: borrow Any TreeNode) -> Int {
     if node.label == "leaf" {
         return 1
     }
@@ -118,7 +118,7 @@ Cell Mixed {
     let tag: String { "mixed" }
 }
 
-function describe(cell: borrow Cell) -> String {
+function describe(cell: borrow Any Cell) -> String {
     return cell.tag
 }
 

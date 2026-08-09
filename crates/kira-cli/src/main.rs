@@ -18,6 +18,7 @@ mod options;
 mod pipeline;
 mod progress;
 mod serve;
+mod shader;
 mod supervisor;
 mod sync;
 mod timings;

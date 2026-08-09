@@ -195,19 +195,20 @@ impl Codegen<'_> {
             let llvm_type = self.llvm_type(ty)?;
             // SAFETY: `llvm_type` belongs to this context and the runtime writes
             // one owned aggregate value into this slot.
-            let out = unsafe {
-                LLVMBuildAlloca(self.builder, llvm_type, c"enum.aggregate.payload".as_ptr())
-            };
+            let out = self.dynamic_alloca(llvm_type, c"enum.aggregate.payload");
+            self.lifetime_start(out);
             self.call(self.runtime.enum_payload_aggregate, &mut [value, out], c"");
             // SAFETY: the helper initialized `out` as `llvm_type`.
-            return Ok(unsafe {
+            let payload = unsafe {
                 LLVMBuildLoad2(
                     self.builder,
                     llvm_type,
                     out,
                     c"enum.aggregate.value".as_ptr(),
                 )
-            });
+            };
+            self.lifetime_end(out);
+            return Ok(payload);
         }
         let word = self.call(self.runtime.enum_payload, &mut [value], c"enum.payload");
         self.decode_payload_word(ty, word)
@@ -221,21 +222,22 @@ impl Codegen<'_> {
     ) -> Result<LLVMValueRef, LlvmError> {
         if matches!(ty, Type::Struct(_)) {
             let llvm_type = self.llvm_type(ty)?;
-            // SAFETY: the slot belongs to this context and `value` has its type.
-            let source = unsafe {
-                let source =
-                    LLVMBuildAlloca(self.builder, llvm_type, c"enum.aggregate.source".as_ptr());
-                LLVMBuildStore(self.builder, value, source);
-                source
-            };
             let size = self.abi_size(ty)?;
+            // SAFETY: the slot belongs to this context and `value` has its type.
+            let source = self.dynamic_alloca(llvm_type, c"enum.aggregate.source");
+            self.lifetime_start(source);
+            // SAFETY: `source` was allocated with `llvm_type` and `value` has
+            // that same type.
+            unsafe { LLVMBuildStore(self.builder, value, source) };
             let clone = self.element_clone(ty)?;
             let free = self.element_free(ty)?;
-            return Ok(self.call(
+            let result = self.call(
                 self.runtime.enum_new_aggregate,
                 &mut [tag, source, size, clone, free],
                 c"enum.aggregate",
-            ));
+            );
+            self.lifetime_end(source);
+            return Ok(result);
         }
         let (kind, word) = self.encode_payload_word(ty, value)?;
         Ok(self.call(self.runtime.enum_new, &mut [tag, kind, word], c"enum"))

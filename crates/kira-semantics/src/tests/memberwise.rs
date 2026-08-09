@@ -41,6 +41,68 @@ fn an_empty_construction_is_the_all_defaulted_value() {
 }
 
 #[test]
+fn a_named_construction_fills_every_omitted_defaulted_field() {
+    let text = r#"
+struct StrictExample {
+    var name: String = "default name"
+    var title: String = "default title"
+    var content: String = "default content"
+}
+
+@Main
+function main() {
+    let value = StrictExample(name: "given name")
+    print(value.title)
+    print(value.content)
+    return
+}
+"#;
+    assert!(diagnostics(text).is_empty());
+}
+
+#[test]
+fn a_braced_struct_literal_fills_every_omitted_defaulted_field() {
+    let text = r#"
+struct StrictExample {
+    var name: String
+    var title: String = "default title"
+    var content: String = "default content"
+}
+
+@Main
+function main() {
+    let value = StrictExample {
+        name = "given name"
+        content = "given content"
+    }
+    print(value.title)
+    print(value.content)
+    return
+}
+"#;
+    assert!(diagnostics(text).is_empty(), "{:?}", codes(text));
+}
+
+#[test]
+fn an_empty_braced_struct_literal_uses_all_field_defaults() {
+    let text = r#"
+struct StrictExample {
+    let title: String = "default title"
+    let content: String = "default content"
+}
+
+@Main
+function main() {
+    let value = StrictExample { }
+    print(value.title)
+    print(value.content)
+    return
+}
+"#;
+    assert!(diagnostics(text).is_empty(), "{:?}", codes(text));
+}
+
+#[test]
 fn too_many_arguments_are_refused() {
     assert_eq!(
         codes(

@@ -18,7 +18,7 @@
 //!                 fragmentWgsl: #{wgsl.fragmentSource},
 //!                 vertexEntry: #{wgsl.vertexEntry},
 //!                 fragmentEntry: #{wgsl.fragmentEntry},
-//!                 uniformReflection: #{msl.uniformReflection},
+//!                 resourceReflection: #{msl.resourceReflection},
 //!             )
 //!         }
 //!     }
@@ -79,8 +79,8 @@ pub struct CompiledShader {
     pub fragment_entry: String,
     /// The compute entry point's name in the emitted source.
     pub compute_entry: String,
-    /// The uniform layout the host binds against, in the pipeline's encoding.
-    pub uniform_reflection: String,
+    /// Every resource the host binds against, in the pipeline's encoding.
+    pub resource_reflection: String,
 }
 
 /// Why a shader could not be compiled.
@@ -181,15 +181,7 @@ pub(crate) fn compile(
         ));
     };
     let path = literal_path(path)?;
-    let Value::Str(target) = target else {
-        return Err(EvalError::coded(
-            diagnostics::SHADER_COMPILE,
-            format!(
-                "`{NAMESPACE}.compile` needs its target as a `String`, not a `{}`",
-                target.type_name()
-            ),
-        ));
-    };
+    let target = &target_label(target)?;
     let Some(shaders) = shaders else {
         return Err(EvalError::coded(
             diagnostics::SHADER_COMPILE,
@@ -205,6 +197,29 @@ pub(crate) fn compile(
         .compile(&path, target)
         .map_err(|error| EvalError::coded(diagnostics::SHADER_COMPILE, error.to_string()))?;
     Ok(record(&compiled))
+}
+
+/// The backend label a macro body named, from the case it wrote.
+///
+/// A **case** rather than a string, because a target is a closed set. The name
+/// is checked by the shader compiler behind [`ShaderCompiler`], which owns the
+/// backend enum; what this earns is that the target is *written* as a case, so a
+/// backend that is renamed fails at the one place naming it rather than being
+/// carried into every artifact as an empty field.
+fn target_label(target: &Value) -> Result<String, EvalError> {
+    let Value::EnumCase(case) = target else {
+        return Err(EvalError::coded(
+            diagnostics::SHADER_COMPILE,
+            format!(
+                "`{NAMESPACE}.compile` names its target as a case, not a `{}` — the cases are `.Msl`, `.Wgsl`, `.Glsl`, `.Hlsl`, `.Spirv`",
+                target.type_name()
+            ),
+        ));
+    };
+    // The case is spelled in Kira's style (`Glsl`); the backend registry spells
+    // its labels in the shader world's (`glsl`). Lowercasing is the whole of the
+    // translation, and doing it here keeps the enum reading like Kira.
+    Ok(case.variant.to_lowercase())
 }
 
 /// The path a macro body passed, whether it wrote a `String` or handed the
@@ -256,7 +271,7 @@ fn record(compiled: &CompiledShader) -> Value {
         ("vertexEntry", &compiled.vertex_entry),
         ("fragmentEntry", &compiled.fragment_entry),
         ("computeEntry", &compiled.compute_entry),
-        ("uniformReflection", &compiled.uniform_reflection),
+        ("resourceReflection", &compiled.resource_reflection),
     ];
     Value::Record(Box::new(RecordValue {
         name: RECORD_NAME,
@@ -292,7 +307,7 @@ mod tests {
             combined_source: "vertex float4 v() {}".to_owned(),
             vertex_entry: "v".to_owned(),
             fragment_entry: "f".to_owned(),
-            uniform_reflection: "{}".to_owned(),
+            resource_reflection: "{}".to_owned(),
             ..CompiledShader::default()
         })
     }
@@ -312,14 +327,20 @@ mod tests {
         }
     }
 
+    /// The target as a macro body writes it.
+    fn backend(case: &str) -> Value {
+        Value::EnumCase(Box::new(crate::value::EnumCaseValue {
+            enum_name: "ShaderBackend".to_owned(),
+            variant: case.to_owned(),
+            payload: None,
+        }))
+    }
+
     #[test]
     fn with_no_pipeline_it_refuses_rather_than_returning_an_empty_shader() {
         let error = compile(
             None,
-            &[
-                Value::Str("Shaders/X.ksl".to_owned()),
-                Value::Str("msl".to_owned()),
-            ],
+            &[Value::Str("Shaders/X.ksl".to_owned()), backend("Msl")],
         )
         .expect_err("no pipeline");
         assert_eq!(error.code, diagnostics::SHADER_COMPILE);
@@ -331,10 +352,7 @@ mod tests {
         let shaders = fixture();
         let value = compile(
             Some(&shaders),
-            &[
-                Value::Str("Shaders/X.ksl".to_owned()),
-                Value::Str("msl".to_owned()),
-            ],
+            &[Value::Str("Shaders/X.ksl".to_owned()), backend("Msl")],
         )
         .expect("compiled");
         assert!(member(&value, "combinedSource").contains("Shaders/X.ksl"));
@@ -349,10 +367,7 @@ mod tests {
         let shaders = fixture();
         let value = compile(
             Some(&shaders),
-            &[
-                Value::built("\"Shaders/X.ksl\""),
-                Value::Str("msl".to_owned()),
-            ],
+            &[Value::built("\"Shaders/X.ksl\""), backend("Msl")],
         )
         .expect("compiled");
         assert!(member(&value, "combinedSource").contains("Shaders/X.ksl"));
@@ -363,7 +378,14 @@ mod tests {
         let shaders = fixture();
         let error = compile(
             Some(&shaders),
-            &[Value::built("name"), Value::Str("msl".to_owned())],
+            &[
+                Value::built("name"),
+                Value::EnumCase(Box::new(crate::value::EnumCaseValue {
+                    enum_name: "ShaderBackend".to_owned(),
+                    variant: "Msl".to_owned(),
+                    payload: None,
+                })),
+            ],
         )
         .expect_err("not a literal");
         assert_eq!(error.code, diagnostics::SHADER_PATH_NOT_LITERAL);
@@ -374,10 +396,7 @@ mod tests {
         let shaders = fixture();
         let error = compile(
             Some(&shaders),
-            &[
-                Value::Str("Shaders/X.ksl".to_owned()),
-                Value::Str("spirv".to_owned()),
-            ],
+            &[Value::Str("Shaders/X.ksl".to_owned()), backend("Spirv")],
         )
         .expect_err("unknown target");
         assert_eq!(error.code, diagnostics::SHADER_COMPILE);

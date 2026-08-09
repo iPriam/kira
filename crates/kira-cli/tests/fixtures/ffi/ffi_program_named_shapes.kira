@@ -1,0 +1,51 @@
+// Two shapes a signature could not name until now: a Kira enum and an array.
+//
+// Each was refused with a message telling the author to write something else —
+// an integer, or a `RawPtr` and a length — and each of those workarounds threw
+// away the name the author had already written. A graphics binding paid for it
+// twice over: sixteen enums, each with a hand-written `*Code()` mapper, and a
+// six-function shim whose only job was streaming an array into C.
+
+enum Usage { Vertex Index Uniform }
+
+@FFI.Struct { layout: c; }
+struct Pair {
+    let first: I32 = 0
+    let second: I32 = 0
+}
+
+@FFI.Extern { library: ffifixture; symbol: ffi_usage_stride; abi: c; }
+function ffiUsageStride(usage: Usage): I32;
+@FFI.Extern { library: ffifixture; symbol: ffi_sum_floats; abi: c; }
+function ffiSumFloats(values: [F32], count: I32): F32;
+@FFI.Extern { library: ffifixture; symbol: ffi_pair_sum; abi: c; }
+function ffiPairSum(pair: Pair): I32;
+
+// The enum crosses as its case's number, so the named type stays on this side
+// of the call rather than being mapped to an integer at every site.
+@Native
+function strideOf(usage: Usage) -> Int {
+    return ffiUsageStride(usage)
+}
+
+// The parameter says `[F32]` rather than `RawPtr`, so the signature states what
+// it takes.
+@Native
+function sumOf(values: borrow [F32]) -> Float {
+    return ffiSumFloats(values, values.count)
+}
+
+@Native
+function pairSum() -> Int {
+    return ffiPairSum(Pair { first: 17, second: 25 })
+}
+
+@Main
+function main() {
+    print(strideOf(Usage.Vertex))
+    print(strideOf(Usage.Index))
+    print(strideOf(Usage.Uniform))
+    print(sumOf([1.5, 2.25, 3.0]))
+    print(pairSum())
+    return
+}

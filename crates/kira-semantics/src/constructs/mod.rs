@@ -20,12 +20,15 @@ use std::collections::{BTreeMap, HashSet};
 use kira_semantics_model::hir::{FuncId, HirExprId};
 use kira_semantics_model::{EnumId, OwnershipMode, StructId, Type};
 use kira_source::SourceId;
-use kira_syntax_model::ast::{Function, TypeRefId};
+use kira_syntax_model::ast::{ExprId, Function, TypeRefId};
 
 mod collection;
 mod construction;
 mod dispatch;
 mod extend;
+mod inferred;
+mod inherit;
+mod updates;
 mod value_members;
 
 /// Everything analysis remembers about one construct-backed declaration beyond
@@ -36,8 +39,13 @@ pub(crate) struct ConstructInfo {
     pub(crate) computed: HashSet<String>,
     /// Child slots filled from construction trailing content.
     pub(crate) slots: Vec<ContentSlot>,
-    /// The heterogeneous family variant this concrete struct wraps into.
-    pub(crate) family: Option<(EnumId, u32)>,
+    /// The heterogeneous family variants this concrete struct wraps into: the
+    /// family it is backed by first, then one per family that family extends.
+    ///
+    /// A declaration is a variant of every family it can be seen through, and
+    /// each holds its own tag, so a value coerced to `Any Parent` carries the
+    /// tag the parent's dispatchers branch on rather than the child's.
+    pub(crate) families: Vec<(EnumId, u32)>,
 }
 
 /// One child slot of a construct-backed declaration.
@@ -146,6 +154,19 @@ pub(crate) struct ConstructFamilyField {
     pub(crate) dispatcher: Option<FuncId>,
 }
 
+/// A non-required stored field declared by a construct family. Backed
+/// declarations inherit these fields and their defaults, which is what makes
+/// a family-backed value support sparse component-style updates such as
+/// `StyleImplementation { additionalEffect = … }`.
+#[derive(Debug, Clone)]
+pub(crate) struct ConstructFamilyStoredField {
+    pub(crate) name: String,
+    pub(crate) ty: Option<TypeRefId>,
+    pub(crate) default: Option<ExprId>,
+    pub(crate) source: SourceId,
+    pub(crate) slot: bool,
+}
+
 /// One construct family's type, conformance surface, and concrete variants.
 #[derive(Debug, Clone)]
 pub(crate) struct ConstructFamilyInfo<'a> {
@@ -157,8 +178,13 @@ pub(crate) struct ConstructFamilyInfo<'a> {
     pub(crate) methods: BTreeMap<String, ConstructFamilyMethod<'a>>,
     /// `@Required let` value members, dynamically dispatched on read.
     pub(crate) field_members: BTreeMap<String, ConstructFamilyField>,
-    /// Concrete backed declarations in source order.
+    /// Non-required stored fields inherited by every backed declaration.
+    pub(crate) stored_fields: Vec<ConstructFamilyStoredField>,
+    /// Concrete backed declarations in source order, including those backed by
+    /// a family that extends this one.
     pub(crate) variants: Vec<ConstructVariant>,
+    /// Families this one extends, nearest first and already transitive.
+    pub(crate) parents: Vec<String>,
     /// The type each declared member was written with, and the file it was
     /// written in.
     ///

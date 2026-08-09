@@ -8,7 +8,7 @@
 //!
 //! The conversion matrix mirrors the language oracle: the operand must be an
 //! `Int` or a `Float`, and the target must be an integer width (`Int`,
-//! `I8`..`I64`, `U8`..`U64`) or a float width (`Float`, `F32`, `F64`). `Bool`
+//! `I8`..`I32`, `U8`..`U64`) or a float width (`Float`, `F32`). `Bool`
 //! is neither a source nor a target, so `Bool(x)` is not a conversion and falls
 //! through to the ordinary call path. Because every integer shares one 64-bit
 //! representation and every float one 64-bit representation, an int-to-int and

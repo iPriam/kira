@@ -20,6 +20,7 @@ mod exports;
 mod ffi_types;
 mod file_system;
 mod foreign;
+mod foreign_field;
 mod generics;
 mod imports;
 mod libraries;

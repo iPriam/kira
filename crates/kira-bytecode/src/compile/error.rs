@@ -100,6 +100,15 @@ pub enum CompileError {
         count: usize,
     },
     /// An array literal has more elements than the format's `u32` can count.
+    /// A read through an `@FFI.Pointer` names a member the target's C layout
+    /// does not describe.
+    #[error("function `{function}` reads member {member} of a C layout that has no such member")]
+    ForeignMemberMissing {
+        /// The function being compiled.
+        function: String,
+        /// The member index the read asked for.
+        member: u32,
+    },
     #[error("function `{function}` builds an array of {count} elements; the format allows 2^32-1")]
     TooManyElements {
         /// The offending function's name.

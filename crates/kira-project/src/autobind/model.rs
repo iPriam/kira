@@ -37,7 +37,8 @@ impl KiraType {
             Self::Bool => "Bool",
             Self::Int(spelling) => spelling,
             Self::F32 => "F32",
-            Self::F64 => "F64",
+            // `Float` is the 64-bit float; there is no `F64` spelling.
+            Self::F64 => "Float",
             Self::CString => "CString",
             Self::RawPtr => "RawPtr",
             Self::Named(name) => name,

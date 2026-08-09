@@ -65,7 +65,7 @@ fn a_bare_literal_branch_agrees_with_a_written_width() {
     // Two *different* written widths still agree on nothing.
     assert_eq!(
         codes(
-            "@Main function main() { let a: U8 = 7 let b: I64 = 9 let x = true ? a : b print(x) return }"
+            "@Main function main() { let a: U8 = 7 let b: U32 = 9 let x = true ? a : b print(x) return }"
         ),
         vec!["KSEM132"]
     );
@@ -134,7 +134,7 @@ fn complement_requires_an_integer() {
 #[test]
 fn a_shift_accepts_any_integer_count() {
     assert!(
-        diagnostics("@Main function main() { let w: U8 = 7 let n: I64 = 2 print(w << n) return }")
+        diagnostics("@Main function main() { let w: U8 = 7 let n: Int = 2 print(w << n) return }")
             .is_empty()
     );
     assert_eq!(
@@ -152,7 +152,7 @@ fn a_shift_accepts_any_integer_count() {
 #[test]
 fn bitwise_operands_must_agree_on_a_width() {
     assert_eq!(
-        codes("@Main function main() { let a: U8 = 7 let b: I64 = 9 print(a & b) return }"),
+        codes("@Main function main() { let a: U8 = 7 let b: U32 = 9 print(a & b) return }"),
         vec!["KSEM071"]
     );
     // A bare literal still pairs with any width.

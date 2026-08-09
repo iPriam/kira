@@ -1,0 +1,202 @@
+import Foundation
+
+// Deep `kira test` suite for the primitives the compiler answers directly:
+// the floating-point maths, the two Unicode-scalar string operations, and the
+// two that read a number out of text.
+//
+// These are worth a suite of their own because each replaced something a
+// program used to write for itself, and the thing it replaced was *nearly*
+// right. `sqrtApprox` was eight Newton iterations and agreed to about six
+// digits; `substring(0, count - 1)` is a backspace that works until the last
+// character is not one byte. A test that only checks the easy case would pass
+// against either.
+//
+// All top-level names use the `prm`/`Primitive` prefix so they never collide in
+// the harness's single flat package namespace.
+
+// --- helpers ---------------------------------------------------------------
+
+// Folds a float to an Int the runner can compare, keeping `digits` of it.
+//
+// The Test runner compares scalars, and comparing floats directly would make
+// these tests assert a decimal rendering rather than a value.
+function prmScaled(value: Float, digits: Int) -> Int {
+    var scale = 1
+    var index = 0
+    while index < digits {
+        scale = scale * 10
+        index = index + 1
+    }
+    return Int(value * Float(scale))
+}
+
+// --- floating point --------------------------------------------------------
+
+Test PrimitiveSqrtIsExactOnASquare {
+    test { return Int(sqrt(144.0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(12); return e }
+}
+
+// The case the Newton approximation could not answer: ten digits of a root
+// that is not one.
+Test PrimitiveSqrtHoldsTenDigits {
+    test { return prmScaled(sqrt(2.0), 10) }
+    expect { let e: Result<Int, TestFailure> = .Ok(14142135623); return e }
+}
+
+Test PrimitiveSqrtOfZero {
+    test { return Int(sqrt(0.0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+Test PrimitiveSinAndCosAtZero {
+    test { return Int(sin(0.0)) * 10 + Int(cos(0.0)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(1); return e }
+}
+
+// A quarter turn: sine is one and cosine is zero, which a series expansion
+// only reaches approximately.
+Test PrimitiveSinAtAQuarterTurn {
+    test { return prmScaled(sin(1.5707963267948966), 9) }
+    expect { let e: Result<Int, TestFailure> = .Ok(1000000000); return e }
+}
+
+// An eighth turn's tangent is 1 in mathematics and 0.9999999999999999 in
+// IEEE-754, because pi/4 is not exactly representable. The assertion is the
+// value the hardware gives — rounding it up to 1 here would be a test that
+// passes against an implementation which is wrong by more.
+Test PrimitiveTanAtAnEighthTurn {
+    test { return prmScaled(tan(0.7853981633974483), 9) }
+    expect { let e: Result<Int, TestFailure> = .Ok(999999999); return e }
+}
+
+// Rounding away from zero is where floor and ceil differ, and where a naive
+// truncation gets both wrong.
+Test PrimitiveFloorAndCeilOnANegative {
+    test { return Int(floor(0.0 - 1.5)) * 10 + Int(ceil(0.0 - 1.5)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 21); return e }
+}
+
+Test PrimitiveAbsDropsTheSign {
+    test { return prmScaled(abs(0.0 - 1.5), 1) + prmScaled(abs(1.5), 1) }
+    expect { let e: Result<Int, TestFailure> = .Ok(30); return e }
+}
+
+// A program may still name a function `sqrt`; the primitive answers only when
+// nothing else does.
+function prmSqrt(value: Int) -> Int {
+    return value + 1
+}
+
+Test PrimitiveAProgramsOwnNameWins {
+    test { return prmSqrt(41) }
+    expect { let e: Result<Int, TestFailure> = .Ok(42); return e }
+}
+
+// --- Unicode scalars -------------------------------------------------------
+
+Test PrimitiveScalarTextBuildsAscii {
+    test { return scalarText(65) + scalarText(66) }
+    expect { let e: Result<String, TestFailure> = .Ok("AB"); return e }
+}
+
+// Two bytes and four bytes: a byte-wise implementation gives a different
+// answer here rather than a slightly wrong one.
+Test PrimitiveScalarTextBuildsMultiByteScalars {
+    test { return scalarText(233).count * 10 + scalarText(128512).count }
+    expect { let e: Result<Int, TestFailure> = .Ok(24); return e }
+}
+
+Test PrimitiveScalarTextOfANonScalarIsEmpty {
+    test { return scalarText(0 - 1).count + scalarText(1114112).count }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+Test PrimitiveDropLastScalarOnAscii {
+    test { return "kira".dropLastScalar() }
+    expect { let e: Result<String, TestFailure> = .Ok("kir"); return e }
+}
+
+// The whole reason this is not `substring(0, count - 1)`: the last scalar is
+// two bytes, so a byte-wise drop leaves text that is no longer UTF-8.
+Test PrimitiveDropLastScalarOnATwoByteScalar {
+    test { return "kirä".dropLastScalar() }
+    expect { let e: Result<String, TestFailure> = .Ok("kir"); return e }
+}
+
+Test PrimitiveDropLastScalarOnAFourByteScalar {
+    test { let text = "A" + scalarText(128512)  return text.dropLastScalar() }
+    expect { let e: Result<String, TestFailure> = .Ok("A"); return e }
+}
+
+Test PrimitiveDropLastScalarOnEmptyTextIsEmpty {
+    test { return "".dropLastScalar().count }
+    expect { let e: Result<Int, TestFailure> = .Ok(0); return e }
+}
+
+// Appending a code point and taking it back off is what a text field does.
+Test PrimitiveScalarRoundTripsThroughATextField {
+    test {
+        var typed = ""
+        typed = typed + scalarText(107)
+        typed = typed + scalarText(105)
+        typed = typed + scalarText(128512)
+        typed = typed.dropLastScalar()
+        return typed
+    }
+    expect { let e: Result<String, TestFailure> = .Ok("ki"); return e }
+}
+
+// --- reading a number out of text ------------------------------------------
+
+Test PrimitiveIsIntAcceptsAWholeNumber {
+    test { return "42".isInt() }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+Test PrimitiveIsIntAcceptsANegative {
+    test { return "-13".isInt() }
+    expect { let e: Result<Bool, TestFailure> = .Ok(true); return e }
+}
+
+Test PrimitiveIsIntRefusesText {
+    test { return "abc".isInt() }
+    expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
+}
+
+Test PrimitiveIsIntRefusesEmptyText {
+    test { return "".isInt() }
+    expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
+}
+
+// A decimal is not a whole number, and answering `3` for `"3.5"` would be a
+// wrong answer rather than a refusal.
+Test PrimitiveIsIntRefusesADecimal {
+    test { return "3.5".isInt() }
+    expect { let e: Result<Bool, TestFailure> = .Ok(false); return e }
+}
+
+Test PrimitiveToIntReadsSurroundingSpace {
+    test { return "  7 ".toInt() }
+    expect { let e: Result<Int, TestFailure> = .Ok(7); return e }
+}
+
+Test PrimitiveToIntReadsANegative {
+    test { return "-13".toInt() }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 13); return e }
+}
+
+// The pair as a program uses them: ask, then convert.
+Test PrimitiveIsIntGuardsToInt {
+    test {
+        var total = 0
+        let written = ["10", "x", "20", "", "30"]
+        for each in written {
+            if each.isInt() {
+                total = total + each.toInt()
+            }
+        }
+        return total
+    }
+    expect { let e: Result<Int, TestFailure> = .Ok(60); return e }
+}

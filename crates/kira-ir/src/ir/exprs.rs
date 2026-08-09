@@ -157,6 +157,46 @@ pub enum IrExpr {
         /// The field's type.
         ty: Type,
     },
+    /// The address of a member whose bytes live inside the container.
+    ///
+    /// A nested struct or an inline array names a place, so there is nothing to
+    /// load: the address is the container's plus the member's offset.
+    ForeignMemberAddress {
+        /// The pointer-typed expression being read through.
+        base: IrExprId,
+        /// The container's row in the program's C-layout aggregate table.
+        aggregate: kira_runtime_abi::ForeignAggregateId,
+        /// The member's index in declaration order.
+        member: u32,
+        /// The pointer type the address has.
+        ty: Type,
+    },
+    /// The address of one element of a C array, by pointer arithmetic.
+    ForeignElement {
+        /// The pointer being indexed.
+        base: IrExprId,
+        /// The element's row in the program's C-layout aggregate table.
+        aggregate: kira_runtime_abi::ForeignAggregateId,
+        /// The element index.
+        index: IrExprId,
+        /// The pointer type the address has.
+        ty: Type,
+    },
+    /// A member read through an `@FFI.Pointer`: a load from C memory.
+    ///
+    /// Carries the aggregate and member index rather than a byte offset: the
+    /// offset depends on the target's pointer width, so each backend asks the
+    /// aggregate table for the width it emits for.
+    ForeignField {
+        /// The pointer-typed expression being read through.
+        base: IrExprId,
+        /// The target's row in the program's C-layout aggregate table.
+        aggregate: kira_runtime_abi::ForeignAggregateId,
+        /// The member's index in declaration order.
+        member: u32,
+        /// The Kira type the member reads as.
+        ty: Type,
+    },
     /// Construction of an array from its elements, in written order.
     ArrayNew {
         /// The array's type.
@@ -213,6 +253,25 @@ pub enum IrExpr {
     },
     /// One of the string operations that share an opcode. See
     /// [`kira_semantics_model::hir::HirExpr::StringOperation`].
+    /// The address of a C buffer holding an array's elements.
+    ArrayElements {
+        /// The array whose elements are written out.
+        value: IrExprId,
+        /// The seam type each element is written as.
+        element: kira_runtime_abi::ForeignType,
+    },
+    /// The text of one Unicode scalar, from its code point.
+    ScalarText {
+        /// The code point.
+        value: IrExprId,
+    },
+    /// A floating-point operation the hardware already has.
+    MathOperation {
+        /// Which operation to perform.
+        op: kira_runtime_abi::MathOp,
+        /// The value it is performed on.
+        value: IrExprId,
+    },
     StringOperation {
         /// Which operation to perform.
         op: kira_runtime_abi::StringOp,

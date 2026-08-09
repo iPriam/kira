@@ -1,0 +1,84 @@
+// A file a program ships with, declared rather than spelled at the point of use.
+//
+//     Asset GlassBackdrop {
+//         path { return "assets/background-cubes-cool.rgba" }
+//         byteCount { return 1600 * 900 * 4 }
+//     }
+//
+// # Why this is a declaration
+//
+// An asset reached by a string at the point of use is a path nothing checks. The
+// failure mode is not that the program stops — it is that the program carries on
+// with a fallback, and the reason it took the fallback is gone by the time anyone
+// reads the screen. The shape that produces is a *ladder*: two, then four, then
+// six candidate paths tried in order, each added by someone who found the asset
+// missing on their machine, none of them able to say whether the file was absent
+// or the load itself failed.
+//
+// Declaring it puts the path in one place under a name, and — because a
+// `collector` is handed every declaration in the program — lets a runtime ask
+// what a program's assets *are* rather than being told one at a time. That is
+// what `declaredAssets()` answers, so preloading, verifying, or listing them is
+// a walk over a list instead of a list someone has to remember to update.
+//
+// Nothing in the compiler knows the name `Asset`. It is an ordinary construct
+// family, the same surface `Test` and `Lint` are written in.
+
+// Where the file is, relative to the directory the program is run from.
+//
+// `byteCount` is for a raw blob whose size is fixed by its dimensions — a
+// headerless RGBA image, say — where a short read means a truncated file rather
+// than a shorter image. It is 0 for a container format that carries its own
+// size, which is most of them.
+construct Asset {
+    @Required function path() -> String
+    function byteCount() -> Int { return 0 }
+}
+
+// One declared asset, as the registry hands it back.
+struct AssetEntry {
+    // The name it was declared with.
+    var name: String = ""
+    var path: String = ""
+    var byteCount: Int = 0
+}
+
+// Every `Asset` declaration in this program, in declaration order.
+//
+// A declaration is not a value — `GlassBackdrop.path()` works, passing
+// `GlassBackdrop` does not — so a program cannot hold a list of them. Every
+// other macro form is attached to the declaration or the call it rewrites, so
+// none of them can ask what a program contains. A `collector` runs once for the
+// whole program and is handed every declaration in it, which is that question.
+//
+// A program that declares no assets gets nothing: this runs for every program
+// that imports Foundation, and emitting a function naming `AssetEntry` into one
+// that never asked for it would be a compile error in a program whose only
+// crime is not using the feature.
+comptime macro AssetRegistry {
+    kind { collector }
+    expand(declarations: [Declaration]) -> Syntax {
+        var rows: [Syntax] = []
+        for declaration in declarations {
+            if declaration.family == "Asset" {
+                rows.append(quote {
+                    entries.append(AssetEntry {
+                        name: #{declaration.name.asString()},
+                        path: #{declaration.name}.path(),
+                        byteCount: #{declaration.name}.byteCount(),
+                    })
+                })
+            }
+        }
+        if rows.count == 0 {
+            return quote { }
+        }
+        return quote {
+            function declaredAssets() -> [AssetEntry] {
+                var entries: [AssetEntry] = []
+                #{rows}
+                return entries
+            }
+        }
+    }
+}

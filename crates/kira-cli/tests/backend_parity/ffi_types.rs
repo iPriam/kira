@@ -16,9 +16,9 @@ fn a_c_layout_empty_literal_zero_fills_every_field() {
 @FFI.Struct { layout: c; }
 struct V {
     var a: I32
-    var b: I64
+    var b: Int
     var flag: Bool
-    var ratio: F64
+    var ratio: Float
 }
 
 @Main

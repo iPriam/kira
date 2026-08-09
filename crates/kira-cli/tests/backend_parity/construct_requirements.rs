@@ -66,7 +66,7 @@ Drawable Tile {
     }
 }
 
-function describe(d: borrow Drawable) -> String {
+function describe(d: borrow Any Drawable) -> String {
     return d.name()
 }
 
@@ -154,4 +154,62 @@ function main() {
         output,
         "[stored]\nstored\n<computed>\ncomputed\n11\n[stored]\n"
     );
+}
+
+/// A family that extends another, driven entirely through the parent's type.
+///
+/// Nothing in `drive` names `Task` or `Job`. It holds `[Any Runnable]` and calls
+/// a member the parent declared, so what is proven is that a declaration backed
+/// by a child family really is a variant of the parent's enum and reaches its
+/// own body through the parent's dispatcher.
+///
+/// The narrowed `render` is the second half: `Task` promises a `String` where
+/// `Runnable` promised an `Any`, so every backend has to carry the concrete
+/// answer up to the erased result rather than hand back a bare string.
+#[test]
+fn a_child_family_dispatches_through_its_parent_on_every_backend() {
+    let output = assert_parity(
+        r#"
+construct Runnable {
+    @Required function label() -> String
+    @Required function render() -> Any
+    function announce() -> String { return "run " + label() }
+}
+
+construct Task extends Runnable {
+    @Required function render() -> String
+}
+
+construct Job extends Runnable {}
+
+Task Fetch {
+    label { return "fetch" }
+    render { return "[fetch]" }
+}
+
+Job Render {
+    label { return "render" }
+    function render() -> Any { return 7 }
+}
+
+function drive(items: borrow [Any Runnable]) -> Int {
+    var count = 0
+    for item in items {
+        print(item.announce())
+        count = count + 1
+    }
+    return count
+}
+
+@Main
+function main() {
+    let all: [Any Runnable] = [Fetch(), Render()]
+    print(drive(all))
+    let narrowed: Any Task = Fetch()
+    print(narrowed.render())
+    return
+}
+"#,
+    );
+    assert_eq!(output, "run fetch\nrun render\n2\n[fetch]\n");
 }

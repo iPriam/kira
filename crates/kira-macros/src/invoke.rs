@@ -92,6 +92,72 @@ pub(crate) fn find(file: &Lexed<'_>) -> Vec<Invocation> {
     found
 }
 
+/// Every call to one of `names` in `file`, in source order.
+///
+/// A `comptime function` is called without a `!`, so unlike a macro call there
+/// is no shape that identifies it — only the name. That is why this takes the
+/// declared names: an ordinary call is left alone, and only a name the program
+/// declared as a comptime function is a call site here.
+///
+/// A member call is skipped. `batch.render(…)` names a method on a value, and a
+/// comptime function is a free function, so a preceding `.` means this is not
+/// one however the name reads.
+pub(crate) fn find_named(file: &Lexed<'_>, names: &[String]) -> Vec<Invocation> {
+    let mut found = Vec::new();
+    let mut depth = 0usize;
+    let mut index = 0usize;
+    while index < file.len() {
+        match file.kind(index) {
+            TokenKind::Eof => break,
+            TokenKind::LBrace => depth += 1,
+            TokenKind::RBrace => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if file.is_ident(index)
+            && file.kind(index + 1) == TokenKind::LParen
+            && (index == 0 || !precedes_a_name(file, index - 1))
+            && names.iter().any(|name| name == file.text_at(index))
+            && let Some(close) = file.match_close(index + 1)
+        {
+            let position = if depth == 0 {
+                Position::Declaration
+            } else if starts_a_statement(file, index) {
+                Position::Statement
+            } else {
+                Position::Expression
+            };
+            found.push(Invocation {
+                name: file.text_at(index).to_owned(),
+                span: file.span_of(index, close),
+                name_span: file.span(index),
+                position,
+                arguments: file
+                    .split_group(index + 1, close)
+                    .into_iter()
+                    .map(|(first, last)| file.span_of(first, last))
+                    .collect(),
+                statement_start: file.span(index).start,
+            });
+        }
+        index += 1;
+    }
+    found
+}
+
+/// Whether the token at `index` means the identifier after it is being
+/// *declared* or reached through a value, rather than called.
+///
+/// `.name(…)` is a method on a value and `function name(…)` is a declaration —
+/// a comptime function is neither, however the name reads. Without this, a
+/// method or a function that happens to share the name of a comptime function
+/// would have its parameter list evaluated as arguments.
+fn precedes_a_name(file: &Lexed<'_>, index: usize) -> bool {
+    matches!(
+        file.kind(index),
+        TokenKind::Dot | TokenKind::Function | TokenKind::Struct | TokenKind::Class
+    )
+}
+
 /// The calls in `found` that contain no other call.
 ///
 /// A macro argument may itself be a macro call, and the inner one has to expand

@@ -411,9 +411,23 @@ impl Parser<'_> {
             self.tree.add_expr(Expr::Call {
                 callee: symbol,
                 callee_span: name_span,
+                braced: false,
                 type_args,
                 args,
                 children: Vec::new(),
+                span,
+            })
+        } else if self.at_bare_construct_block() {
+            let mut args = Vec::new();
+            let children = self.parse_trailing_block(&mut args);
+            let span = Span::from_bounds(name_span.start, self.previous_end());
+            self.tree.add_expr(Expr::Call {
+                callee: symbol,
+                callee_span: name_span,
+                braced: true,
+                type_args,
+                args,
+                children,
                 span,
             })
         } else if self.at_content_block() {
@@ -427,6 +441,7 @@ impl Parser<'_> {
             self.tree.add_expr(Expr::Call {
                 callee: symbol,
                 callee_span: name_span,
+                braced: true,
                 type_args,
                 args: Vec::new(),
                 children,
@@ -555,26 +570,14 @@ impl Parser<'_> {
         }
     }
 
-    /// Parses a `(...)` argument list for a position that takes no labels,
-    /// reporting any that appear and keeping the values.
+    /// Parses a `(...)` argument list for an enum variant payload.
     ///
-    /// An enum variant payload (`.Ok(value)`) is positional: the payload binds
-    /// by shape, not by a parameter name, so a label there is a mistake rather
-    /// than a binder.
+    /// The payload still binds by position — the label is only the readable
+    /// name at the call site — so the syntax tree keeps the same value-only
+    /// representation used by the enum analyzer.
     fn parse_positional_call_args(&mut self) -> Vec<ExprId> {
         let args = self.parse_call_args();
-        args.into_iter()
-            .map(|arg| {
-                if let Some(span) = arg.label_span {
-                    self.error(
-                        span,
-                        "KPAR056",
-                        "an enum variant payload does not take argument labels",
-                    );
-                }
-                arg.value
-            })
-            .collect()
+        args.into_iter().map(|arg| arg.value).collect()
     }
 
     fn parse_paren(&mut self) -> ExprId {

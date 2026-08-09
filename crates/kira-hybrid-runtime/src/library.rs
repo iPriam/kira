@@ -72,6 +72,7 @@ type StrFreeFn = unsafe extern "C" fn(value: *mut c_void);
 type StrDataFn = unsafe extern "C" fn(value: *mut c_void) -> *const u8;
 type StrLenFn = unsafe extern "C" fn(value: *mut c_void) -> usize;
 type HeapReportFn = unsafe extern "C" fn();
+type LiveReloadMarkFn = unsafe extern "C" fn();
 type InstallInvokerFn = unsafe extern "C" fn(invoker: Option<RuntimeInvoker>);
 type StateNode = *mut c_void;
 type StateIntFn = unsafe extern "C" fn(i64) -> StateNode;
@@ -106,6 +107,7 @@ const STR_FREE: &[u8] = b"kira_rt_str_free\0";
 const STR_DATA: &[u8] = b"kira_rt_str_data\0";
 const STR_LEN: &[u8] = b"kira_rt_str_len\0";
 const INSTALL_INVOKER: &[u8] = b"kira_hybrid_install_runtime_invoker\0";
+const LIVE_RELOAD_MARK: &[u8] = b"kira_live_mark_reload\0";
 /// Optional, unlike the rest: an older library simply has no accounting.
 const HEAP_REPORT: &[u8] = b"kira_rt_heap_report\0";
 const STATE_VALUE_INT: &[u8] = b"kira_rt_native_value_int\0";
@@ -164,6 +166,7 @@ pub struct NativeLibrary {
     str_data: StrDataFn,
     str_len: StrLenFn,
     install_invoker: InstallInvokerFn,
+    live_reload_mark: LiveReloadMarkFn,
     state_value_int: StateIntFn,
     state_value_raw_ptr: StateRawPtrFn,
     state_value_float: StateFloatFn,
@@ -225,6 +228,7 @@ impl NativeLibrary {
         let str_data = bind(&library, path, STR_DATA)?;
         let str_len = bind(&library, path, STR_LEN)?;
         let install_invoker = bind(&library, path, INSTALL_INVOKER)?;
+        let live_reload_mark = bind(&library, path, LIVE_RELOAD_MARK)?;
         // Optional: a library built before heap accounting existed simply has
         // no such symbol, and that is not a reason to refuse to load it.
         let heap_report: Option<HeapReportFn> = bind(&library, path, HEAP_REPORT).ok();
@@ -316,6 +320,7 @@ impl NativeLibrary {
             str_data,
             str_len,
             install_invoker,
+            live_reload_mark,
             state_value_int,
             state_value_raw_ptr,
             state_value_float,
@@ -354,6 +359,13 @@ impl NativeLibrary {
         // SAFETY: the symbol was bound from this library, which is still
         // loaded, and it takes and returns nothing.
         unsafe { report() };
+    }
+
+    /// Marks the next graphics callback as a VM reload boundary.
+    pub fn mark_live_reload(&self) {
+        // SAFETY: the symbol was bound from this library, which remains loaded
+        // for as long as `self` and has no arguments or return value.
+        unsafe { (self.live_reload_mark)() };
     }
 
     /// Where this library was loaded from.

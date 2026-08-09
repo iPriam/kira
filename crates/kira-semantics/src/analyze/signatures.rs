@@ -188,6 +188,14 @@ impl<'a> Analyzer<'a> {
         self.sigs[id.0 as usize].params.clone()
     }
 
+    /// The stable source identity of a declared function, for a function value
+    /// that must survive a live VM rebuild.
+    pub(crate) fn function_identity(&self, id: FuncId) -> Option<(SourceId, Span, &str)> {
+        self.sigs
+            .get(id.0 as usize)
+            .map(|sig| (sig.source, sig.name_span, sig.name.as_str()))
+    }
+
     /// The resolved return type of `id`, `Void` when none was written.
     ///
     /// Read rather than re-resolved, for the reason [`Self::param_types`]

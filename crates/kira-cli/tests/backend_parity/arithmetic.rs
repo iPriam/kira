@@ -177,3 +177,56 @@ function main() {
     );
     assert_eq!(output, "2.5\ntrue\n7\n7\n");
 }
+
+/// The floating-point primitives, on every backend.
+///
+/// These replaced a Taylor series and a Newton iteration that the foundation
+/// shipped as `sinApprox` and `sqrtApprox`, so what matters is that the answer
+/// is the hardware's rather than an approximation's: `sqrt(2.0)` printing to
+/// seventeen digits is the assertion, not a tolerance.
+///
+/// LLVM lowers these to `llvm.sqrt.f64` and friends while the VM calls Rust's
+/// own, so agreement here is two independent implementations of IEEE-754
+/// agreeing, not one shared helper answering twice.
+#[test]
+fn the_floating_point_primitives_agree_on_every_backend() {
+    let output = assert_parity(
+        r#"
+@Main
+function main() {
+    print(sqrt(144.0))
+    print(sqrt(2.0))
+    print(floor(-1.5))
+    print(ceil(-1.5))
+    print(abs(-1.5))
+    print(sin(0.0))
+    print(cos(0.0))
+    print(tan(0.0))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "12\n1.4142135623730951\n-2\n-1\n1.5\n0\n1\n0\n");
+}
+
+/// A program may still name a function `sqrt` itself.
+///
+/// The primitive answers only when nothing else does, so adding it shadowed
+/// nobody's existing code.
+#[test]
+fn a_program_may_define_its_own_sqrt() {
+    let output = assert_parity(
+        r#"
+function sqrt(value: Int) -> Int {
+    return value + 1
+}
+
+@Main
+function main() {
+    print(sqrt(41))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "42\n");
+}

@@ -25,10 +25,11 @@ foreign declaration may not also be `@Main`, `@Runtime`, `@Native`, or
 
 ## The supported type surface
 
-Parameters and results may be `Void`, the fixed-width integers `I8`/`I16`/`I32`/
-`I64` and `U8`/`U16`/`U32`/`U64`, `Bool`, `F32`/`F64`, and `RawPtr`. Fixed-width
-integer names are mandatory because the C width is part of the contract — bare
-`Int` and `Float` are refused, as is a Kira `String` in a signature.
+Parameters and results may be `Void`, `Int` and the narrower integers
+`I8`/`I16`/`I32` and `U8`/`U16`/`U32`/`U64`, `Bool`, `Float` and `F32`, and
+`RawPtr`. `Int` crosses as `int64_t` and `Float` as `double` — they *are* the
+64-bit types, so nothing is left unsaid by writing them; a narrower C type still
+names its width. A Kira `String` in a signature is refused.
 
 `CString` is C text, and how long its storage lives depends on where it is
 written. As a **parameter**, a call passes a Kira `String` — the one implicit
@@ -136,11 +137,11 @@ such struct — to any depth:
 
 ```text
 @FFI.Struct { layout: c; }
-struct Rect { var x: F64
-var y: F64 }
+struct Rect { var x: Float
+var y: Float }
 
 @FFI.Extern { library: graphics; symbol: rect_scale; abi: c; }
-function rectScale(r: Rect, k: F64) -> Rect;
+function rectScale(r: Rect, k: Float) -> Rect;
 ```
 
 The annotation is required. An ordinary Kira struct is refused even when its
@@ -169,6 +170,52 @@ struct's C-layout image and passes its address. The image gets the same storage
 a `CString` member does, and for the same reason — the callee may keep the
 pointer, and nothing on this side knows whether it did.
 
+### Reading members through a pointer
+
+A pointer whose `target` is a C-layout struct keeps that target, so the members
+behind it are read directly:
+
+```text
+@FFI.Struct { layout: c; }
+struct sapp_event {
+    let kind: U8 = 0
+    let mouse_x: F32 = 0.0
+}
+
+@FFI.Pointer { target: sapp_event; ownership: borrowed; }
+struct sapp_event_ptr {}
+
+function onEvent(event: sapp_event_ptr) {
+    if event.kind == 3 { moveTo(event.mouse_x) }
+}
+```
+
+This is what a callback argument needs. C hands over `const sapp_event*` and the
+members behind it are the whole payload; without the read, each one needs an
+accessor compiled into a shim — twenty of them, for sokol's event struct alone.
+
+A read lowers to a load at the member's offset in the target's C layout. The
+offset is computed per target, because a C pointer is four bytes on `wasm32` and
+eight elsewhere, so a struct with a pointer member ahead of the one being read
+lays out differently.
+
+A member is one of two things. A scalar reads back as a value — that is the
+load. A nested struct or an inline array has its bytes *inside* the container, so
+it names a place, and reading it gives that place's address:
+
+```text
+let x = event.at.x                    // nested struct
+let y = event.touches[index].pos_y    // inline array, indexed like C's
+```
+
+An array member decays to a pointer to its first element and indexing walks from
+there, both with the meaning C gives them. Nothing is copied out of C storage:
+every step is an address until the last, which is the load.
+
+A pointer whose target is not a declared C-layout struct stays an opaque handle
+and reads nothing, which is deliberate: generated bindings point at C types
+nobody declared and at themselves, and neither is a mistake.
+
 ### Inline arrays
 
 A C struct that reserves storage inline — `int cells[4]` — is spelled with an
@@ -180,7 +227,7 @@ struct Cells4 {}
 
 @FFI.Struct { layout: c; }
 struct Grid { var cells: Cells4
-var weight: F64 }
+var weight: Float }
 ```
 
 The elements live in one Kira field named `elements`, so `grid.cells.elements[2]`
@@ -201,6 +248,42 @@ An `@FFI.Array` type crosses as a **member**. In a parameter or result position
 C decays an array to a pointer — a different type with different ownership — so
 the seam refuses it there and asks for `RawPtr` when that is what the symbol
 takes.
+
+## Arrays as C buffers
+
+A Kira array fills a **pointer word** — an extern's `RawPtr` parameter, or a
+C-layout struct's `RawPtr` member — as long as its elements are seam scalars.
+The seam writes the elements out at C's widths and the pointer is the address of
+what it wrote:
+
+```text
+@FFI.Extern { library: ffimath; symbol: sum_floats; abi: c; }
+function sumFloats(values: RawPtr, count: I32) -> F32;
+
+let values: [F32] = [1.5, 2.25, 3.0]
+sumFloats(values, I32(values.count))            // pointer and a count
+
+@FFI.Struct { layout: c; }
+struct Range { var ptr: RawPtr
+var size: U64 }
+
+Range { ptr: values, size: U64(values.count * 4) }   // the same buffer, named
+```
+
+Writing the elements out is the whole point, not a copy that could be skipped:
+Kira holds a `[F32]` as `double`s and C reads four bytes each, so handing over
+the array's own storage would give C wrong *numbers* rather than a wrong
+pointer — a rendering bug rather than a crash. An empty array is a null pointer.
+
+The buffer gets the storage a `CString` member gets, and is never reclaimed, for
+the same reason: `sg_make_buffer` reads it during the call but `sg_range` handed
+to `sg_apply_uniforms` may be kept, and nothing this side knows which kind of
+callee it has.
+
+The member position is what makes a graphics API reachable at all. Almost none
+of them take a pointer and a count as two arguments; they take a descriptor
+holding both, and without a way to name an array's address inside a struct
+literal that descriptor can only be built in a C helper.
 
 ## Callbacks
 
@@ -280,7 +363,7 @@ dialect above, compiled with the rest of that package, and readable: nothing
 about it is generator-private.
 
 The C parser is the managed toolchain's own `libclang`, and every width is read
-from it rather than assumed. `long length` binds as `I64` on macOS and `I32`
+from it rather than assumed. `long length` binds as `Int` on macOS and `I32`
 under MSVC because that is what `long` *is* on each — the mistake a hand-written
 binding makes silently, and the reason this is the compiler's job.
 

@@ -194,16 +194,10 @@ fn a_bare_identifier_argument_is_not_a_label() {
 }
 
 #[test]
-fn an_enum_payload_rejects_an_argument_label() {
-    // A variant payload binds by shape, not by name, so a label there is a
-    // parse error rather than a binder.
+fn an_enum_payload_accepts_an_argument_label() {
+    // The payload still binds positionally; the label documents the value.
     let result = parse_text("function f() { let v = .Ok(value: 1) }");
-    let codes: Vec<_> = result
-        .diagnostics
-        .iter()
-        .filter_map(kira_diagnostics::Diagnostic::code_text)
-        .collect();
-    assert_eq!(codes, vec!["KPAR056"]);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
 }
 
 #[test]

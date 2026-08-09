@@ -26,6 +26,7 @@ pub mod erased;
 pub mod execution;
 pub mod file_system;
 pub mod foreign;
+pub mod math_op;
 pub mod native_state;
 pub mod ownership;
 pub mod string_op;
@@ -52,6 +53,7 @@ pub use foreign::{
     ForeignAdapterFn, ForeignAdapterStatus, ForeignArg, ForeignCallError, ForeignCallback,
     ForeignImport, ForeignResult, ForeignSignature, ForeignType, ForeignTypeSpec,
 };
+pub use math_op::MathOp;
 pub use native_state::{
     NativeStateError, NativeStateHost, NativeStatePathStep, NativeStateStatus, NativeStateStore,
     NativeStateToken, NativeStateTypeId, NativeStateValue, NativeStateValueTag, native_state_walk,
@@ -135,6 +137,8 @@ pub const HYBRID_HOST_SYMBOLS: &[&str] = &[
     "kira_rt_str_data",
     "kira_rt_str_len",
     "kira_hybrid_install_runtime_invoker",
+    "kira_live_mark_reload",
+    "kira_live_take_reload",
     "kira_rt_heap_report",
     "kira_rt_native_value_int",
     "kira_rt_native_value_raw_ptr",

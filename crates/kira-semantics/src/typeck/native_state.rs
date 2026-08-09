@@ -248,7 +248,12 @@ impl Analyzer<'_> {
             return true;
         }
         let eligible = match ty {
-            Type::Int(_) | Type::Float(_) | Type::Bool | Type::String | Type::RawPtr => true,
+            Type::Int(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::String
+            | Type::RawPtr
+            | Type::ForeignPtr(_) => true,
             Type::Struct(id) => self.native_state_struct_eligible(id, visiting),
             Type::Array(id) => self
                 .program

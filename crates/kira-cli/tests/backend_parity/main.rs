@@ -284,6 +284,7 @@ mod classes;
 mod closures;
 mod compiler;
 mod construct_requirements;
+mod construct_values;
 mod constructs;
 mod control_flow;
 mod conversions;

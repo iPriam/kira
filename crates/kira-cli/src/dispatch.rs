@@ -21,6 +21,7 @@ pub fn dispatch(command: Command, args: &[String]) -> i32 {
         Command::Test => pipeline::test(args),
         Command::Live => pipeline::live(args),
         Command::Sync => crate::sync::sync(args),
+        Command::Shader => crate::shader::shader(args),
         Command::Help => {
             let all = args.iter().any(|arg| arg == "all" || arg == "--all");
             print_usage_with(all);
@@ -54,6 +55,7 @@ fn implemented(command: Command) -> bool {
             | Command::Test
             | Command::Live
             | Command::Sync
+            | Command::Shader
             | Command::Help
             | Command::Version
     )

@@ -1,15 +1,17 @@
 //! The runner's half of a live session: fetch the bundle, load it, report.
 //!
 //! [`RunnerClient`] owns the protocol; [`RunnerHost`] owns what a bundle *means*
-//! on a given platform. That split is the point. This crate must not know how a
-//! desktop runner loads bytecode or how an Apple runner links a signed app —
-//! each runner implements the trait and this drives it. So a new runner adds a
-//! `RunnerHost` and nothing here changes.
+//! on a given platform, and lives in [`host`] for that reason. That split is the
+//! point: this crate must not know how a desktop runner loads bytecode or how an
+//! Apple runner links a signed app — each runner implements the trait and this
+//! drives it. So a new runner adds a `RunnerHost` and nothing here changes.
 //!
 //! The client reports each milestone only after the host actually reached it.
 //! [`RunnerClient::run_session`] calls `load`, and only if `load` returns `Ok`
 //! does it report `BundleLoaded`. A host that fails reports `Failed` with its
 //! reason and the session ends — it never falls through to the next milestone.
+
+pub mod host;
 
 use std::fmt;
 use std::io::{BufReader, BufWriter};
@@ -25,6 +27,8 @@ use crate::protocol::{
     ClientMessage, PROTOCOL_VERSION, ProtocolError, ServerMessage, read_message, write_message,
 };
 use crate::store::{Bundle, BundleError};
+
+pub use host::{AppOutcome, RunnerHost};
 
 /// How long a runner waits on a server that has gone quiet.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -42,95 +46,6 @@ const IDLE_POLL: Duration = Duration::from_millis(20);
 /// fills, and a runner that cannot be killed by its own timeout is a runner that
 /// outlives the session that started it.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// What a platform actually does with a bundle.
-///
-/// Implemented once per runner. The three steps are separate because they fail
-/// for different reasons and a session needs to say which one failed: a bundle
-/// that will not load is a different problem from one that loads and will not
-/// link.
-pub trait RunnerHost {
-    /// Why this host could not do something.
-    ///
-    /// An associated type because this crate cannot enumerate the failures of
-    /// runners it does not know about. It crosses the wire as its `Display`
-    /// text, which is the only form the other end could use anyway.
-    type Error: fmt::Display;
-
-    /// Loads the bundle's payloads into the process.
-    fn load(&mut self, bundle: &Bundle) -> Result<(), Self::Error>;
-
-    /// Links what was loaded, resolving whatever the payloads need from each
-    /// other and from the host.
-    fn link(&mut self) -> Result<(), Self::Error>;
-
-    /// Starts the app's entrypoint.
-    ///
-    /// Returns when the entrypoint is *running*, which for an app with a run
-    /// loop is not when it has finished. A host whose entrypoint outlives this
-    /// call keeps it running somewhere the protocol is not: the milestone this
-    /// return value feeds is `entrypoint started`, and a session that could only
-    /// report it after the app exited could never report it for an app.
-    fn start(&mut self) -> Result<(), Self::Error>;
-
-    /// Runs a just-swapped entrypoint to completion.
-    ///
-    /// The proof behind `reload.completed`: a swap that commits and then traps
-    /// on its first call is not a reload that worked, and only running the code
-    /// tells the two apart. Asked exclusively after a swap, which means
-    /// exclusively of a host that answered [`RunnerHost::hot_patch_refusal`] with
-    /// `None` — an idle one. That is what makes waiting for the run to finish
-    /// safe here and not at [`RunnerHost::start`].
-    ///
-    /// Defaults to [`RunnerHost::start`], which is right for any host that runs
-    /// its entrypoint on the calling thread: for such a host the two are the same
-    /// call.
-    fn run_once(&mut self) -> Result<(), Self::Error> {
-        self.start()
-    }
-
-    /// Swaps `bundle` into the running process, in place.
-    ///
-    /// The supervisor has already established that the swap is possible — the
-    /// native half is byte-identical, so the process's loaded code is still
-    /// current — and this is the host committing to it. The process, its loaded
-    /// libraries, and anything they hold survive; the bytecode does not.
-    ///
-    /// A host that cannot take a particular swap returns an error, and the
-    /// session relaunches instead. That is the honest answer and it is always
-    /// available: only the host knows what its own live values depend on.
-    fn swap(&mut self, bundle: &Bundle) -> Result<(), Self::Error>;
-
-    /// How the app's run ended, if it has ended since this was last asked.
-    ///
-    /// Taken rather than read: the fact is reported to the server once, and a
-    /// host that kept answering would report the same exit on every poll.
-    ///
-    /// This is the second thing a runner waits on. The server arrives over the
-    /// socket and the app arrives here, and a host that never answers anything
-    /// but `None` — one whose entrypoint runs on the calling thread, so its
-    /// return is already an event the caller saw — is the default.
-    fn take_app_exit(&mut self) -> Option<AppOutcome> {
-        None
-    }
-
-    /// Why this host cannot take a hot patch, or `None` if it can.
-    ///
-    /// Asked before a rebuilt bundle is downloaded, so a host that was never
-    /// going to swap does not pay for the payloads first. The reason crosses the
-    /// wire as the session's relaunch reason, so it is written for whoever is
-    /// watching the terminal.
-    ///
-    /// Two kinds of answer live here. The kill switch is one: a host that has it
-    /// set relaunches every reload, which is what makes it possible to tell
-    /// whether a bug belongs to the hot-patch path or was always there. The other
-    /// is a host that is simply busy — an app still inside its run loop has a
-    /// call stack in the code a swap would replace, and no runner gets to pull a
-    /// module out from under one.
-    fn hot_patch_refusal(&self) -> Option<String> {
-        None
-    }
-}
 
 /// An error running a live session from the runner's side.
 #[derive(Debug, thiserror::Error)]
@@ -183,25 +98,6 @@ pub enum ClientError {
     },
 }
 
-/// How an app's own run ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppOutcome {
-    /// The entrypoint returned.
-    Finished,
-    /// The entrypoint stopped because it failed.
-    Failed(String),
-}
-
-impl AppOutcome {
-    /// The reason to report, or `None` for an app that simply finished.
-    fn reason(self) -> Option<String> {
-        match self {
-            Self::Finished => None,
-            Self::Failed(reason) => Some(reason),
-        }
-    }
-}
-
 /// A runner's connection to a live server.
 #[derive(Debug)]
 pub struct RunnerClient {
@@ -210,6 +106,15 @@ pub struct RunnerClient {
     /// The bundle the runner currently holds, kept so a reload can reuse the
     /// payloads that did not change rather than re-downloading them.
     loaded: Option<Bundle>,
+    /// Whether the server has already gone.
+    ///
+    /// A session ends at the server's word, and the last thing the runner has to
+    /// say — its goodbye, or the news that the app exited — is only news to a
+    /// server still listening for it. Once the peer is gone those sends have
+    /// nobody to reach, so they stop being attempted rather than failing: a
+    /// runner that reported the end of a session it completed as a protocol
+    /// error would exit non-zero for having finished.
+    peer_left: bool,
 }
 
 impl RunnerClient {
@@ -226,6 +131,7 @@ impl RunnerClient {
             reader: BufReader::new(stream.try_clone()?),
             writer: BufWriter::new(stream),
             loaded: None,
+            peer_left: false,
         };
         client.handshake(runner)?;
         Ok(client)
@@ -282,15 +188,13 @@ impl RunnerClient {
     /// Reports that the app's entrypoint returned, and why if it did not finish.
     ///
     /// The runner stays connected across this: the app is over, the runner is
-    /// not, and which of those ends the session is the server's to decide.
+    /// not, and which of those ends the session is the server's to decide. A
+    /// server that has already decided — and gone — is not a failure of this
+    /// report, only the other order of the same two events.
     pub fn report_app_exited(&mut self, outcome: AppOutcome) -> Result<(), ClientError> {
-        write_message(
-            &mut self.writer,
-            &ClientMessage::AppExited {
-                reason: outcome.reason(),
-            },
-        )?;
-        Ok(())
+        self.tell_a_listening_server(&ClientMessage::AppExited {
+            reason: outcome.reason(),
+        })
     }
 
     /// Reports that this runner could not continue, and why.
@@ -305,9 +209,37 @@ impl RunnerClient {
     }
 
     /// Ends the session cleanly.
+    ///
+    /// A goodbye to a server that has already gone is not one that failed: the
+    /// session it would have ended is over, and the only thing left to do about
+    /// it is nothing.
     pub fn goodbye(&mut self) -> Result<(), ClientError> {
-        write_message(&mut self.writer, &ClientMessage::Goodbye)?;
-        Ok(())
+        self.tell_a_listening_server(&ClientMessage::Goodbye)
+    }
+
+    /// Sends something that only matters to a server still on the other end.
+    ///
+    /// The two messages a runner sends of its own accord once the app is up —
+    /// its goodbye and the app's exit — are news for a live session, and a
+    /// session whose server has ended has already stopped being one. So a peer
+    /// that is gone makes these no-ops rather than errors, in both the order
+    /// they can happen in: the departure already seen, and the departure this
+    /// write is the first to find. Nothing else in the protocol is forgiving
+    /// this way — every message the session is *waiting* on stays a failure when
+    /// it cannot be delivered, which is what keeps a runner that loses its
+    /// server mid-startup from looking like one that finished.
+    fn tell_a_listening_server(&mut self, message: &ClientMessage) -> Result<(), ClientError> {
+        if self.peer_left {
+            return Ok(());
+        }
+        match write_message(&mut self.writer, message) {
+            Ok(()) => Ok(()),
+            Err(ProtocolError::Disconnected) => {
+                self.peer_left = true;
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Runs a whole session: download the bundle, drive `host` through it, and
@@ -376,7 +308,10 @@ impl RunnerClient {
                 Ok(message) => message,
                 // The server went away without saying goodbye. The session is
                 // over either way; a runner outliving its server is an orphan.
-                Err(ProtocolError::Disconnected) => return Ok(()),
+                Err(ProtocolError::Disconnected) => {
+                    self.peer_left = true;
+                    return Ok(());
+                }
                 Err(error) => return Err(error.into()),
             };
 
@@ -441,6 +376,22 @@ impl RunnerClient {
             // reports as a disconnect — this only has to say that waiting is over.
             Ok(_) => Ok(true),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
+            // A peer that went away *without* a graceful shutdown is the same
+            // situation as the zero-byte read above, and it is what a host
+            // exiting normally looks like on Windows: the clean FIN a Unix host
+            // sends arrives here as `ConnectionAborted` or `ConnectionReset`.
+            // Reporting it as a socket failure made the runner exit non-zero for
+            // a session that ran to completion, depending on which the OS chose.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::BrokenPipe
+                ) =>
+            {
+                Ok(true)
+            }
             Err(error) => Err(ClientError::Io(error)),
         };
         socket.set_nonblocking(false)?;
@@ -626,5 +577,101 @@ impl RunnerClient {
                 Err(ClientError::Host { step, reason })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
+
+    /// A host that is never asked to do anything: these are tests about the
+    /// protocol, not about what a bundle means on a platform.
+    struct NoHost;
+
+    impl RunnerHost for NoHost {
+        type Error = String;
+
+        fn load(&mut self, _bundle: &Bundle) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn link(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn start(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn swap(&mut self, _bundle: &Bundle) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// Welcomes one runner and then goes away, which is a server ending a
+    /// session the only way a socket can express it.
+    fn a_server_that_welcomes_and_leaves() -> (SocketAddr, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+            .expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let served = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut writer = BufWriter::new(stream);
+            let hello: ClientMessage = read_message(&mut reader).expect("hello");
+            assert!(matches!(hello, ClientMessage::Hello { .. }));
+            write_message(
+                &mut writer,
+                &ServerMessage::Welcome {
+                    protocol: PROTOCOL_VERSION,
+                },
+            )
+            .expect("welcome");
+        });
+        (address, served)
+    }
+
+    /// The end of a session is not a failure of one. A runner whose server has
+    /// gone still has a goodbye to say and an app exit to report, and neither
+    /// has anywhere to go — so both succeed at doing nothing rather than failing
+    /// the run that already happened.
+    #[test]
+    fn a_runner_whose_server_left_still_ends_cleanly() {
+        let (address, served) = a_server_that_welcomes_and_leaves();
+        let mut client = RunnerClient::connect(address, RunnerId::Desktop).expect("connect");
+        served.join().expect("the server thread does not panic");
+
+        client
+            .serve_reloads(&mut NoHost)
+            .expect("a server that leaves ends the session rather than breaking it");
+        assert!(
+            client.peer_left,
+            "the departure is remembered, not re-tried"
+        );
+        client
+            .goodbye()
+            .expect("a goodbye to nobody is not a failure");
+        client
+            .report_app_exited(AppOutcome::Finished)
+            .expect("an app exit reported to nobody is not a failure");
+    }
+
+    /// The other half of the same rule: a server that leaves *before* the runner
+    /// has what it needs is a failure, and stays one. Tolerating the end of a
+    /// session must not tolerate never having had one.
+    #[test]
+    fn a_server_that_leaves_before_the_bundle_fails_the_session() {
+        let (address, served) = a_server_that_welcomes_and_leaves();
+        let mut client = RunnerClient::connect(address, RunnerId::Desktop).expect("connect");
+        served.join().expect("the server thread does not panic");
+
+        let error = client
+            .fetch_bundle()
+            .expect_err("a bundle that never arrives is a failed session");
+        assert!(
+            matches!(error, ClientError::Protocol(ProtocolError::Disconnected)),
+            "got {error:?}"
+        );
     }
 }

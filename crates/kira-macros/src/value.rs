@@ -54,6 +54,28 @@ pub(crate) enum Value {
     Record(Box<RecordValue>),
     /// An array of values.
     Array(Vec<Value>),
+    /// One case of an enum: the variant it holds, and its payload when it has
+    /// one.
+    ///
+    /// A macro body writes a case the way the rest of the language does — a
+    /// leading dot, `.Enum`, `.Some(4)` — and reads one back from reflection.
+    /// The enum's *name* is carried when the value came from somewhere that
+    /// knew it and is empty for a bare `.Variant`, because a dot literal
+    /// resolves against the expected type and an `expand` body has no types to
+    /// resolve against. Matching never needs it: an arm selects by variant.
+    EnumCase(Box<EnumCaseValue>),
+}
+
+/// One case of an enum, as a macro body sees it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct EnumCaseValue {
+    /// The enum this case belongs to, or `""` when it was written as a bare
+    /// `.Variant` and nothing said which enum that is.
+    pub(crate) enum_name: String,
+    /// The variant's name.
+    pub(crate) variant: String,
+    /// The payload it carries, when the variant has one.
+    pub(crate) payload: Option<Value>,
 }
 
 /// A record a compile-time namespace returns, read member by member.
@@ -78,12 +100,17 @@ pub(crate) struct DeclarationValue {
     pub(crate) name: String,
     /// Its fields, or an enum's variants, in declaration order.
     pub(crate) fields: Vec<FieldValue>,
+    /// Its behaviour members, as name and body text, in declaration order.
+    ///
+    /// Carried so a macro can *run* one during compilation rather than emit
+    /// code that calls it at startup — see `Declaration.value(name)`.
+    pub(crate) members: Vec<(String, String)>,
     /// Its exact source text.
     pub(crate) syntax: String,
     /// Where it was written, or `None` when it was re-scanned from detached
     /// text.
     pub(crate) span: Option<FileSpan>,
-    /// The `appliesTo` word for the form it wears.
+    /// The `DeclarationForm` variant a macro body matches this form as.
     pub(crate) kind: &'static str,
     /// The construct family backing it, or `""` when it is not a form.
     pub(crate) family: String,
@@ -156,9 +183,14 @@ impl DeclarationValue {
         Self {
             name: declaration.name.clone(),
             fields: declaration.fields.iter().map(FieldValue::of).collect(),
+            members: declaration
+                .members
+                .iter()
+                .map(|member| (member.name.clone(), member.body.clone()))
+                .collect(),
             syntax: declaration.syntax.clone(),
             span: declaration.at(),
-            kind: declaration.kind.word(),
+            kind: declaration.kind.variant(),
             family: declaration.family.clone(),
             path: declaration.path.clone(),
             line: declaration.line,
@@ -237,6 +269,7 @@ impl Value {
             Value::Statement(_) => "Statement",
             Value::Record(record) => record.name,
             Value::Array(_) => "[T]",
+            Value::EnumCase(_) => "enum case",
         }
     }
 
@@ -254,6 +287,15 @@ impl Value {
             Value::Str(text) => Some(quote_string(text)),
             Value::Int(value) => Some(value.to_string()),
             Value::Bool(value) => Some(value.to_string()),
+            // A case splices as the language writes one: leading dot, and the
+            // payload in parentheses when it carries one. The enum's name is
+            // deliberately not spelled even when it is known, because the
+            // position it lands in is what resolves a dot member — which is the
+            // rule everywhere else a variant is written.
+            Value::EnumCase(case) => match &case.payload {
+                Some(payload) => Some(format!(".{}({})", case.variant, payload.splice()?)),
+                None => Some(format!(".{}", case.variant)),
+            },
             Value::Array(items) => {
                 let mut parts = Vec::with_capacity(items.len());
                 for item in items {
@@ -334,6 +376,7 @@ mod tests {
     #[test]
     fn a_declaration_has_no_splice_rule() {
         let declaration = Value::Declaration(Box::new(DeclarationValue {
+            members: Vec::new(),
             name: "S".to_owned(),
             fields: Vec::new(),
             syntax: String::new(),

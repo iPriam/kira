@@ -1,0 +1,67 @@
+// A Kira array named as a C-layout struct's data pointer.
+//
+// A graphics API rarely takes a pointer and a count as two arguments — it takes
+// a descriptor holding both, `sg_range` and `sg_buffer_desc` among them. Without
+// this, that descriptor could only be built in a C helper whose whole job was to
+// name the address of an array, which is what kira-graphics did before.
+//
+// The widths differ on purpose, as they do for the argument position: Kira holds
+// a `[F32]` as doubles and C reads four bytes each.
+
+@FFI.Struct { layout: c; }
+struct FfiRange {
+    var ptr: RawPtr
+    var size: U64
+}
+
+@FFI.Pointer { target: FfiRange; ownership: borrowed; }
+struct FfiRangePtr {}
+
+@FFI.Extern { library: ffifixture; symbol: ffi_range_sum_floats; abi: c; }
+function ffiRangeSumFloats(range: FfiRangePtr): F32;
+@FFI.Extern { library: ffifixture; symbol: ffi_range_sum_ints; abi: c; }
+function ffiRangeSumInts(range: FfiRange): I32;
+@FFI.Extern { library: ffifixture; symbol: ffi_range_keep; abi: c; }
+function ffiRangeKeep(range: FfiRangePtr): Void;
+@FFI.Extern { library: ffifixture; symbol: ffi_range_recall; abi: c; }
+function ffiRangeRecall(): I32;
+
+// The descriptor reaches C by address, which is how sokol takes every one.
+@Native
+function sumFloatsThroughRange() -> Float {
+    let values: [F32] = [1.5, 2.25, 3.0]
+    return ffiRangeSumFloats(move FfiRange { ptr: values, size: U64(values.count * 4) })
+}
+
+// And by value, so the member is proven a pointer word either way it travels.
+@Native
+function sumIntsThroughRange() -> Int {
+    let values: [I32] = [10, 20, 30, 40]
+    return ffiRangeSumInts(move FfiRange { ptr: values, size: U64(values.count * 4) })
+}
+
+// An empty array is a null pointer, which the fixture answers -1 for rather than
+// reading through it.
+@Native
+function sumEmptyThroughRange() -> Int {
+    let values: [I32] = []
+    return ffiRangeSumInts(move FfiRange { ptr: values, size: 0 })
+}
+
+// C keeps the pointer and reads it after the call returns, which is what proves
+// the elements got storage that outlives the descriptor naming them.
+@Native
+function recallKeptRange() -> Int {
+    let values: [I32] = [7, 8, 9]
+    ffiRangeKeep(move FfiRange { ptr: values, size: U64(values.count * 4) })
+    return ffiRangeRecall()
+}
+
+@Main
+function main() {
+    print(sumFloatsThroughRange())
+    print(sumIntsThroughRange())
+    print(sumEmptyThroughRange())
+    print(recallKeptRange())
+    return
+}

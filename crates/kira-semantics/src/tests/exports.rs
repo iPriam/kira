@@ -82,7 +82,7 @@ fn an_export_indexes_the_function_it_names() {
 fn an_export_records_the_signature_a_consumer_is_generated_against() {
     let text = "@Export\nclass Button { var title: String = \"\" }\n\
                 @Export\nfunction makeButton(title: String) -> Button { return Button() }\n\
-                @Export\nfunction clickAt(x: I64, y: F64) -> Bool { return true }\n\
+                @Export\nfunction clickAt(x: Int, y: Float) -> Bool { return true }\n\
                 @Export\nfunction reset(v: Int) { return }";
     let db = salsa::DatabaseImpl::new();
     let source = SourceProgram::new(

@@ -177,7 +177,7 @@ impl<'a> Analyzer<'a> {
         struct_id: kira_semantics_model::StructId,
         name: &str,
     ) -> Option<EnumId> {
-        let (enum_id, _) = self.constructs.get(&struct_id)?.family?;
+        let (enum_id, _) = *self.constructs.get(&struct_id)?.families.first()?;
         let family = self.construct_family_names.get(&enum_id)?;
         let method = self.construct_families.get(family)?.methods.get(name)?;
         method.uniform.then_some(enum_id)

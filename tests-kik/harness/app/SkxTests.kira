@@ -14,14 +14,14 @@ import Foundation
 // ---------------------------------------------------------------------------
 
 struct SkxPair1 {
-    var left: I64
-    var right: I64
+    var left: Int
+    var right: Int
 }
 
 struct SkxState1 {
     var first: SkxPair1
     var second: SkxPair1
-    var total: I64
+    var total: Int
 }
 
 // ---------------------------------------------------------------------------
@@ -58,9 +58,9 @@ function skxMutViaReborrow2(t: borrow mut SkxTree2) {
 // ---------------------------------------------------------------------------
 
 class SkxCounter3 {
-    let value: I64
+    let value: Int
 
-    function emit(): I64 {
+    function emit(): Int {
         return self.value
     }
 }
@@ -302,7 +302,7 @@ Test SkxStructStateParity {
     }
 
     expect {
-        let e: Result<I64, TestFailure> = .Ok(60)
+        let e: Result<Int, TestFailure> = .Ok(60)
         return e
     }
 }
@@ -338,7 +338,7 @@ Test SkxInstanceMethodParity {
     }
 
     expect {
-        let e: Result<I64, TestFailure> = .Ok(42)
+        let e: Result<Int, TestFailure> = .Ok(42)
         return e
     }
 }

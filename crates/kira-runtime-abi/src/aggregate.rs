@@ -293,6 +293,36 @@ impl ForeignAggregates {
         Ok(leaves)
     }
 
+    /// Returns the byte offset of each **top-level** member of one aggregate,
+    /// in declaration order.
+    ///
+    /// [`Self::leaves_of`] flattens: a nested aggregate contributes one leaf per
+    /// scalar inside it, so a member's index is not its leaf's index. Reading a
+    /// named field through a pointer needs the member's own offset, which is
+    /// what this returns — one entry per member, whatever that member is.
+    pub fn member_offsets_of(
+        &self,
+        id: ForeignAggregateId,
+        width: ForeignPointerWidth,
+    ) -> Result<Vec<u32>, ForeignAggregateError> {
+        let layouts = self.layouts(width)?;
+        let aggregate = self
+            .get(id)
+            .ok_or(ForeignAggregateError::UnknownAggregate(id.0))?;
+        let mut offsets = Vec::with_capacity(aggregate.members().len());
+        let mut offset: u32 = 0;
+        for member in aggregate.members() {
+            let layout = member_layout(member, id.0, width, &layouts)?;
+            offset = round_up(offset, layout.align)
+                .ok_or(ForeignAggregateError::TooLarge { index: id.0 })?;
+            offsets.push(offset);
+            offset = offset
+                .checked_add(layout.size)
+                .ok_or(ForeignAggregateError::TooLarge { index: id.0 })?;
+        }
+        Ok(offsets)
+    }
+
     /// Appends `id`'s leaves, shifted by `base`, to `leaves`.
     fn collect_leaves(
         &self,
@@ -696,5 +726,59 @@ mod tests {
             Ok(ForeignLayout { size: 1, align: 1 })
         );
         assert_eq!(table.leaves_of(id, ForeignPointerWidth::Bits64), Ok(vec![]));
+    }
+
+    /// A member's offset is its own, not its first leaf's.
+    ///
+    /// `{ i32, { i32, i32 }, i32 }` has three members and four leaves, so the
+    /// last member is leaf 3 — reading it by leaf index would read the wrong
+    /// field.
+    #[test]
+    fn member_offsets_are_per_member_not_per_leaf() {
+        let mut table = ForeignAggregates::new();
+        let inner = table
+            .push(ForeignAggregate::new(vec![
+                ForeignMember::Scalar(ForeignType::I32),
+                ForeignMember::Scalar(ForeignType::I32),
+            ]))
+            .expect("inner");
+        let outer = table
+            .push(ForeignAggregate::new(vec![
+                ForeignMember::Scalar(ForeignType::I32),
+                ForeignMember::Aggregate(inner),
+                ForeignMember::Scalar(ForeignType::I32),
+            ]))
+            .expect("outer");
+        let width = ForeignPointerWidth::Bits64;
+        assert_eq!(
+            table.member_offsets_of(outer, width).expect("offsets"),
+            [0, 4, 12]
+        );
+        let leaves: Vec<u32> = table
+            .leaves_of(outer, width)
+            .expect("leaves")
+            .iter()
+            .map(|leaf| leaf.offset)
+            .collect();
+        assert_eq!(leaves, [0, 4, 8, 12], "four leaves, three members");
+    }
+
+    /// A member after a wider one starts at its own alignment, not packed.
+    #[test]
+    fn member_offsets_respect_alignment_padding() {
+        let mut table = ForeignAggregates::new();
+        let id = table
+            .push(ForeignAggregate::new(vec![
+                ForeignMember::Scalar(ForeignType::I8),
+                ForeignMember::Scalar(ForeignType::I64),
+                ForeignMember::Scalar(ForeignType::I8),
+            ]))
+            .expect("aggregate");
+        assert_eq!(
+            table
+                .member_offsets_of(id, ForeignPointerWidth::Bits64)
+                .expect("offsets"),
+            [0, 8, 16]
+        );
     }
 }

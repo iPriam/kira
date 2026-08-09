@@ -165,4 +165,61 @@ int ffi_desc_by_pointer(const struct ffi_desc *d);
 void ffi_desc_keep(const struct ffi_desc *d);
 int ffi_desc_recall(void);
 
+/* An event struct C owns and hands over by address, the shape a windowing
+ * library's callback argument has. Kira reads its members through the pointer
+ * rather than calling an accessor per field, so the members are deliberately of
+ * mixed width and signedness with padding between them: reading any of them at
+ * the wrong offset gives a wrong answer rather than a crash. */
+struct ffi_touch {
+    unsigned long long identifier;
+    float pos_x;
+    float pos_y;
+};
+struct ffi_event {
+    unsigned char kind;
+    int code;
+    float weight;
+    signed char delta;
+    struct ffi_touch touches[4];
+    const struct ffi_event *next;
+};
+const struct ffi_event *ffi_event_current(void);
+const struct ffi_event *ffi_event_none(void);
+
+/* A buffer a caller builds and C reads, the shape every graphics API takes:
+ * a pointer and a count. Kira hands over its own array; the seam writes the
+ * elements out in C's widths. */
+float ffi_sum_floats(const float *values, int count);
+int ffi_sum_ints(const int *values, int count);
+
+/* The same buffer, but named inside a descriptor rather than as two arguments —
+ * `sg_range` and every other graphics API's data member. `ffi_range_keep`
+ * stashes the pointer and `ffi_range_recall` sums it afterwards, which is what
+ * proves the elements outlive the call that named them. */
+struct ffi_range {
+    const void *ptr;
+    unsigned long long size;
+};
+float ffi_range_sum_floats(const struct ffi_range *range);
+int ffi_range_sum_ints(struct ffi_range range);
+void ffi_range_keep(const struct ffi_range *range);
+int ffi_range_recall(void);
+
+/* A C enum, which is an int with named values — the shape a graphics API's
+ * every option takes. */
+enum ffi_usage { FFI_USAGE_VERTEX = 0, FFI_USAGE_INDEX = 1, FFI_USAGE_UNIFORM = 2 };
+int ffi_usage_stride(enum ffi_usage usage);
+
+/* A generic instantiation on the Kira side arrives here as the struct it
+ * instantiated to. */
+struct ffi_pair {
+    int first;
+    int second;
+};
+int ffi_pair_sum(struct ffi_pair pair);
+
+/* Writes through the buffer it is given, to show which direction an array
+ * argument travels. */
+void ffi_fill_floats(float *values, int count);
+
 #endif /* KIRA_FFI_FIXTURE_H */
