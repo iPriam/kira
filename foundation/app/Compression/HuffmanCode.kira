@@ -1,0 +1,61 @@
+// A canonical Huffman code, as the two formats that use one describe it.
+//
+// Nothing here stores a code. A canonical code is decided entirely by how many
+// codes there are of each length and which symbols they name, so a decoder can
+// walk length by length — taking one more bit each step and asking whether the
+// value it has reached falls inside that length's block — and never build a
+// code table at all. That is what keeps a table to two small arrays whatever
+// the alphabet's size.
+//
+// DEFLATE and JPEG both use canonical codes and disagree only on where the bits
+// come from: DEFLATE reads a byte least-significant bit first, JPEG most. So the
+// table is shared and each format's reader carries its own walk.
+
+struct HuffmanCode {
+    // `counts[i]` is how many codes are `i + 1` bits long.
+    var counts: [Int] = []
+    // Every symbol that has a code, ordered by code length and then by symbol —
+    // which is the order canonical codes are assigned in, so a symbol's place
+    // here is its code's place among the codes of its length.
+    var symbols: [Int] = []
+}
+
+// The table for an alphabet given one code length per symbol, where a length of
+// zero means the symbol has no code.
+//
+// This is DEFLATE's shape: a dynamic block spells its tables as a length per
+// symbol and leaves the reader to sort them. JPEG's DHT segment already carries
+// the counts and the symbols in order, so it builds a `HuffmanCode` directly.
+function huffmanCodeFromLengths(lengths: borrow [Int], maxLength: Int) -> HuffmanCode {
+    var counts = filledInts(maxLength, 0)
+    for length in lengths {
+        if length > 0 && length <= maxLength {
+            counts[length - 1] = counts[length - 1] + 1
+        }
+    }
+
+    var offsets = filledInts(maxLength, 0)
+    var running = 0
+    var length = 0
+    while length < maxLength {
+        offsets[length] = running
+        running = running + counts[length]
+        length = length + 1
+    }
+
+    var symbols = filledInts(running, 0)
+    var symbol = 0
+    while symbol < lengths.count {
+        let codeLength = lengths[symbol]
+        if codeLength > 0 && codeLength <= maxLength {
+            symbols[offsets[codeLength - 1]] = symbol
+            offsets[codeLength - 1] = offsets[codeLength - 1] + 1
+        }
+        symbol = symbol + 1
+    }
+
+    return HuffmanCode {
+        counts: move counts
+        symbols: move symbols
+    }
+}

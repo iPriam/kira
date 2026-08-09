@@ -153,6 +153,9 @@ pub fn encode(reflection: &Reflection) -> String {
                 optional(binding.glsl_name.as_deref())
             ));
         }
+        if let Some(sampler) = &resource.paired_sampler {
+            out.push_str(&format!("pair {} {}\n", resource.resource_name, sampler));
+        }
         for (target, binding) in &resource.length_bindings {
             out.push_str(&format!(
                 "count {} {} {}\n",
@@ -331,7 +334,21 @@ pub fn decode(text: &str) -> Result<Reflection, ReflectionError> {
                     visibility: parse_visibility(fields[8], at)?,
                     backend_bindings: Vec::new(),
                     length_bindings: Vec::new(),
+                    paired_sampler: None,
                 });
+            }
+            "pair" => {
+                count(3)?;
+                let sampler = fields[2].to_owned();
+                let owner = reflection
+                    .resources
+                    .iter_mut()
+                    .find(|resource| resource.resource_name == fields[1])
+                    .ok_or_else(|| ReflectionError::Unanchored {
+                        line: at,
+                        name: fields[1].to_owned(),
+                    })?;
+                owner.paired_sampler = Some(sampler);
             }
             "bind" => {
                 count(6)?;
@@ -595,49 +612,53 @@ words!(builtin_word, builtin_from, Builtin,
     "local_index" => Builtin::LocalIndex,
 );
 
-/// Renders the uniform blocks in the compact digest a graphics host parses.
+/// Renders every resource in the compact digest a graphics host parses.
 ///
 /// Not a second reflection format competing with [`encode`] — a different
 /// contract. `KSLR1` is the whole reflection, versioned and round-trippable,
 /// for anything that wants to read what a shader declares. This is the string
-/// the prebuilt graphics runtime already parses when it configures a pipeline's
-/// uniform blocks, and its shape is that consumer's, not ours:
+/// a graphics runtime parses when it configures a pipeline, and its shape is
+/// that consumer's, not ours: one record per resource, records separated by
+/// `;`, each opening with a letter naming its kind.
 ///
 /// ```text
-/// name:binding:size:stageMask:memberCount:member,member;…
+/// u|name:binding:size:stageMask:memberCount:member,member:kinds
+/// s|name:binding:stageMask:glslBinding:readonly
+/// t|name:binding:stageMask:samplerBinding:glslName
+/// i|name:binding:stageMask:glslBinding:writeonly
+/// m|name:binding:stageMask
 /// ```
 ///
-/// with each member written `name@offset#size`. Blocks are separated by `;`,
-/// `binding` is the **WGSL** binding — which is also the slot an application
-/// binds against — `size` is the block's `std140` size, and `stageMask` is
-/// bit 0 vertex, bit 1 fragment, bit 2 compute.
+/// `binding` is the **WGSL** binding throughout — which is also the slot an
+/// application binds against — and `stageMask` is bit 0 vertex, bit 1 fragment,
+/// bit 2 compute.
 ///
-/// A member's `size` is its *natural* size, not its padded one: the host maps
-/// that size onto a GL uniform type, and a 3-wide vector has to arrive as 12 so
-/// it maps to `FLOAT3` rather than `FLOAT4`. Offsets stay `std140`, which is
-/// where the value actually sits.
+/// A uniform (`u`) carries its `std140` size and its members, each written
+/// `name@offset#size`. A member's `size` is its *natural* size, not its padded
+/// one: the host maps that size onto a GL uniform type, and a 3-wide vector has
+/// to arrive as 12 so it maps to `FLOAT3` rather than `FLOAT4`. Offsets stay
+/// `std140`, which is where the value actually sits. `kinds` is one letter per
+/// member in the same order — `f` float, `i` signed integer, `u` unsigned —
+/// because a size alone cannot tell `float` from `int`, and a GL host loads the
+/// two through different calls.
+///
+/// A storage buffer (`s`) carries the GLSL `binding` its `std430` block was
+/// emitted with and whether it is read-only. A texture (`t`) carries the public
+/// slot of the sampler its body samples it with — `255` when no stage samples it
+/// — and the name it takes in GLSL, where the two collapse into one `sampler2D`.
+/// A texture the shader **writes** is a storage image (`i`) instead: it is not a
+/// `sampler2D` on any backend, it is bound as an image rather than a texture,
+/// and it carries the GLSL image unit its `layout(binding = n)` was emitted with
+/// plus whether the shader only ever writes it. A sampler (`m`) carries only
+/// where it binds.
+///
+/// The resource name comes last in the records that carry one, so a reader can
+/// split the fixed fields on `:` without a name having to avoid the separator.
 #[must_use]
-pub fn uniform_block_digest(reflection: &Reflection) -> String {
+pub fn resource_digest(reflection: &Reflection) -> String {
     let mut out = String::new();
     for resource in &reflection.resources {
-        if resource.resource_kind != ResourceKind::Uniform {
-            continue;
-        }
-        let Some(declared) = reflection
-            .types
-            .iter()
-            .find(|declared| declared.name == resource.type_name)
-        else {
-            continue;
-        };
-        let Some(layout) = &declared.uniform_layout else {
-            continue;
-        };
-        let binding = resource
-            .backend_bindings
-            .iter()
-            .find(|binding| binding.target == BackendTarget::Wgsl)
-            .map_or(0, |binding| binding.binding_index);
+        let binding = target_binding(resource, BackendTarget::Wgsl);
         let mut mask = 0u32;
         for stage in &resource.visibility {
             mask |= match stage {
@@ -646,27 +667,121 @@ pub fn uniform_block_digest(reflection: &Reflection) -> String {
                 Stage::Compute => 4,
             };
         }
-        out.push_str(&format!(
-            "{}:{binding}:{}:{mask}:{}",
-            resource.resource_name,
-            layout.size,
-            layout.fields.len()
-        ));
-        for (at, field) in layout.fields.iter().enumerate() {
-            out.push(if at == 0 { ':' } else { ',' });
-            let natural = declared
-                .fields
-                .iter()
-                .find(|member| member.name == field.name)
-                .map_or(field.size, |member| natural_size(&member.type_name));
-            out.push_str(&format!("{}@{}#{natural}", field.name, field.offset));
+        match resource.resource_kind {
+            ResourceKind::Uniform => {
+                let Some(declared) = reflection
+                    .types
+                    .iter()
+                    .find(|declared| declared.name == resource.type_name)
+                else {
+                    continue;
+                };
+                let Some(layout) = &declared.uniform_layout else {
+                    continue;
+                };
+                out.push_str(&format!(
+                    "u|{}:{binding}:{}:{mask}:{}",
+                    resource.resource_name,
+                    layout.size,
+                    layout.fields.len()
+                ));
+                let mut kinds = String::new();
+                for (at, field) in layout.fields.iter().enumerate() {
+                    out.push(if at == 0 { ':' } else { ',' });
+                    let member = declared
+                        .fields
+                        .iter()
+                        .find(|member| member.name == field.name);
+                    let natural =
+                        member.map_or(field.size, |member| natural_size(&member.type_name));
+                    kinds.push(member.map_or('f', |member| scalar_kind(&member.type_name)));
+                    out.push_str(&format!("{}@{}#{natural}", field.name, field.offset));
+                }
+                if !kinds.is_empty() {
+                    out.push(':');
+                    out.push_str(&kinds);
+                }
+            }
+            ResourceKind::Storage => {
+                let readonly = u32::from(resource.access != Some(AccessMode::ReadWrite));
+                out.push_str(&format!(
+                    "s|{}:{binding}:{mask}:{}:{readonly}",
+                    resource.resource_name,
+                    target_binding(resource, BackendTarget::Glsl430)
+                ));
+            }
+            // A written texture is a storage image, and nothing about it is
+            // shaped like a sampled one: no sampler pairs with it, and it binds
+            // at an image unit rather than a texture unit.
+            ResourceKind::Texture
+                if matches!(
+                    resource.access,
+                    Some(AccessMode::Write | AccessMode::ReadWrite)
+                ) =>
+            {
+                let writeonly = u32::from(resource.access == Some(AccessMode::Write));
+                out.push_str(&format!(
+                    "i|{}:{binding}:{mask}:{}:{writeonly}",
+                    resource.resource_name,
+                    target_binding(resource, BackendTarget::Glsl430)
+                ));
+            }
+            ResourceKind::Texture => {
+                let sampler = resource
+                    .paired_sampler
+                    .as_ref()
+                    .and_then(|name| {
+                        reflection
+                            .resources
+                            .iter()
+                            .find(|other| &other.resource_name == name)
+                    })
+                    .map_or(255, |other| target_binding(other, BackendTarget::Wgsl));
+                let glsl_name = resource
+                    .backend_bindings
+                    .iter()
+                    .find(|entry| entry.target == BackendTarget::Glsl430)
+                    .and_then(|entry| entry.glsl_name.clone())
+                    .unwrap_or_else(|| resource.resource_name.clone());
+                out.push_str(&format!(
+                    "t|{}:{binding}:{mask}:{sampler}:{glsl_name}",
+                    resource.resource_name
+                ));
+            }
+            ResourceKind::Sampler => {
+                out.push_str(&format!("m|{}:{binding}:{mask}", resource.resource_name));
+            }
         }
         out.push(';');
     }
     out
 }
 
+/// The binding `resource` takes on `target`, or 0 if it has none.
+fn target_binding(resource: &ReflectedResource, target: BackendTarget) -> u32 {
+    resource
+        .backend_bindings
+        .iter()
+        .find(|binding| binding.target == target)
+        .map_or(0, |binding| binding.binding_index)
+}
+
 /// The unpadded size of a member type, as the host's type table expects it.
+/// The letter naming a uniform member's scalar kind in the digest.
+///
+/// A member's byte size says how wide it is and nothing about how it is loaded:
+/// `float` and `int` are both four bytes and a GL host reaches them through
+/// `glUniform1fv` and `glUniform1iv`, which are not interchangeable. Matrices
+/// are float by construction, and anything unrecognized is float because that is
+/// what every non-integer KSL type is.
+fn scalar_kind(type_name: &str) -> char {
+    match type_name {
+        "Int" | "Int2" | "Int3" | "Int4" | "Bool" => 'i',
+        "UInt" | "UInt2" | "UInt3" | "UInt4" => 'u',
+        _ => 'f',
+    }
+}
+
 fn natural_size(type_name: &str) -> u32 {
     match type_name {
         "Float" | "Int" | "UInt" | "Bool" => 4,
@@ -748,6 +863,7 @@ mod tests {
                     glsl_name: None,
                 }],
                 length_bindings: vec![(BackendTarget::Msl, 3)],
+                paired_sampler: Some("linear".to_owned()),
             }],
         }
     }

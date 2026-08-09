@@ -1,0 +1,255 @@
+// Turning a PNG's inflated stream into pixels: undoing the per-row predictor,
+// then reading whatever samples the colour type and bit depth describe and
+// writing them out as RGBA8.
+//
+// The two halves are separate because they run at different granularities. A
+// predictor works on *bytes* and knows nothing about pixels — that is why a
+// 1-bit image filters against the byte one to its left rather than the pixel —
+// while the expansion works on samples and knows nothing about how they were
+// stored.
+
+// What filter type 4 guesses: whichever of the pixel to the left, the one above
+// and the one diagonally above is closest to their linear combination.
+function paethPredictor(left: Int, above: Int, corner: Int) -> Int {
+    let estimate = left + above - corner
+    var toLeft = estimate - left
+    var toAbove = estimate - above
+    var toCorner = estimate - corner
+    if toLeft < 0 {
+        toLeft = 0 - toLeft
+    }
+    if toAbove < 0 {
+        toAbove = 0 - toAbove
+    }
+    if toCorner < 0 {
+        toCorner = 0 - toCorner
+    }
+    if toLeft <= toAbove && toLeft <= toCorner {
+        return left
+    }
+    if toAbove <= toCorner {
+        return above
+    }
+    return corner
+}
+
+extend PngDecoder {
+    // Every pass in the stream: one for an ordinary image, seven for an
+    // interlaced one. They run back to back with no separator, so each pass
+    // leaves the cursor where the next one starts.
+    function readPasses(stream: [U8]) {
+        self.raw = move stream
+        self.rawCursor = 0
+        if !self.interlaced {
+            self.readPass(self.width, self.height, 0, 0, 1, 1)
+            return
+        }
+        let originX = adam7OriginX()
+        let originY = adam7OriginY()
+        let stepX = adam7StepX()
+        let stepY = adam7StepY()
+        var pass = 0
+        while pass < 7 && !self.stopped {
+            if self.width > originX[pass] && self.height > originY[pass] {
+                let passWidth = ((self.width - originX[pass]) + stepX[pass] - 1) / stepX[pass]
+                let passHeight = ((self.height - originY[pass]) + stepY[pass] - 1) / stepY[pass]
+                self.readPass(passWidth, passHeight, originX[pass], originY[pass], stepX[pass], stepY[pass])
+            }
+            pass = pass + 1
+        }
+        return
+    }
+
+    // One pass: a filter byte and a row of packed samples, repeated.
+    function readPass(passWidth: Int, passHeight: Int, originX: Int, originY: Int, stepX: Int, stepY: Int) {
+        let channels = self.channels()
+        let bitsPerPixel = channels * self.bitDepth
+        let rowBytes = ((passWidth * bitsPerPixel) + 7) / 8
+        // What a predictor treats as "the pixel to the left". Below eight bits
+        // per pixel there is no whole byte to step back over, so the format
+        // says one byte.
+        let unit = bitsPerPixel >= 8 ? bitsPerPixel / 8 : 1
+        self.rowBuffers = [filledBytes(rowBytes, 0), filledBytes(rowBytes, 0)]
+        // The row above the first one is all zeros, which is what the unused
+        // second buffer already holds.
+        self.parity = 0
+        var row = 0
+        while row < passHeight {
+            if self.rawCursor + 1 + rowBytes > self.raw.count {
+                self.fail(.Malformed)
+                return
+            }
+            let predictor = Int(self.raw[self.rawCursor])
+            self.rawCursor = self.rawCursor + 1
+            var index = 0
+            while index < rowBytes {
+                self.rowBuffers[self.parity][index] = self.raw[self.rawCursor + index]
+                index = index + 1
+            }
+            self.rawCursor = self.rawCursor + rowBytes
+            self.unfilterRow(predictor, rowBytes, unit)
+            if self.stopped {
+                return
+            }
+            self.emitRow(passWidth, originX, originY + (row * stepY), stepX, channels)
+            self.parity = 1 - self.parity
+            row = row + 1
+        }
+        return
+    }
+
+    // Undo one row's predictor, in place.
+    function unfilterRow(predictor: Int, rowBytes: Int, unit: Int) {
+        if predictor == 0 {
+            return
+        }
+        if predictor > 4 {
+            self.fail(.Malformed)
+            return
+        }
+        let current = self.parity
+        let above = 1 - self.parity
+        var index = 0
+        while index < rowBytes {
+            let stored = Int(self.rowBuffers[current][index])
+            var left = 0
+            var corner = 0
+            let up = Int(self.rowBuffers[above][index])
+            if index >= unit {
+                left = Int(self.rowBuffers[current][index - unit])
+                corner = Int(self.rowBuffers[above][index - unit])
+            }
+            var value = stored
+            if predictor == 1 {
+                value = stored + left
+            } else if predictor == 2 {
+                value = stored + up
+            } else if predictor == 3 {
+                value = stored + ((left + up) / 2)
+            } else {
+                value = stored + paethPredictor(left, up, corner)
+            }
+            self.rowBuffers[current][index] = U8(value & 255)
+            index = index + 1
+        }
+        return
+    }
+
+    // One decoded row, scattered into the image at this pass's stride.
+    function emitRow(passWidth: Int, originX: Int, y: Int, stepX: Int, channels: Int) {
+        if y >= self.height {
+            return
+        }
+        var column = 0
+        while column < passWidth {
+            let x = originX + (column * stepX)
+            if x >= self.width {
+                return
+            }
+            self.emitPixel(column * channels, ((y * self.width) + x) * 4)
+            column = column + 1
+        }
+        return
+    }
+
+    // The sample at `index` along the current row, at the image's own bit
+    // depth. Below eight bits the samples are packed most significant first.
+    function sampleAt(index: Int) -> Int {
+        let current = self.parity
+        if self.bitDepth == 8 {
+            return Int(self.rowBuffers[current][index])
+        }
+        if self.bitDepth == 16 {
+            return (Int(self.rowBuffers[current][index * 2]) << 8)
+                | Int(self.rowBuffers[current][(index * 2) + 1])
+        }
+        let perByte = 8 / self.bitDepth
+        let packed = Int(self.rowBuffers[current][index / perByte])
+        let shift = 8 - (self.bitDepth * ((index % perByte) + 1))
+        return (packed >> shift) & ((1 << self.bitDepth) - 1)
+    }
+
+    // A sample brought up to eight bits.
+    //
+    // The narrow depths multiply rather than shift so that the widest value
+    // reaches 255 — a 4-bit 15 is white, and `15 << 4` would be 240.
+    function scaleSample(sample: Int) -> Int {
+        if self.bitDepth == 16 {
+            return sample >> 8
+        }
+        if self.bitDepth == 8 {
+            return sample
+        }
+        if self.bitDepth == 4 {
+            return sample * 17
+        }
+        if self.bitDepth == 2 {
+            return sample * 85
+        }
+        return sample * 255
+    }
+
+    function emitPixel(base: Int, offset: Int) {
+        if self.colorType == 3 {
+            let index = self.sampleAt(base)
+            var red = 0
+            var green = 0
+            var blue = 0
+            if ((index * 3) + 2) < self.palette.count {
+                red = Int(self.palette[index * 3])
+                green = Int(self.palette[(index * 3) + 1])
+                blue = Int(self.palette[(index * 3) + 2])
+            }
+            var alpha = 255
+            if index < self.paletteAlpha.count {
+                alpha = Int(self.paletteAlpha[index])
+            }
+            self.writePixel(offset, red, green, blue, alpha)
+            return
+        }
+        if self.colorType == 0 {
+            let sample = self.sampleAt(base)
+            let grey = self.scaleSample(sample)
+            var alpha = 255
+            if self.hasTransparentSample && sample == self.transparentRed {
+                alpha = 0
+            }
+            self.writePixel(offset, grey, grey, grey, alpha)
+            return
+        }
+        if self.colorType == 4 {
+            let grey = self.scaleSample(self.sampleAt(base))
+            let alpha = self.scaleSample(self.sampleAt(base + 1))
+            self.writePixel(offset, grey, grey, grey, alpha)
+            return
+        }
+        let redSample = self.sampleAt(base)
+        let greenSample = self.sampleAt(base + 1)
+        let blueSample = self.sampleAt(base + 2)
+        var alpha = 255
+        if self.colorType == 6 {
+            alpha = self.scaleSample(self.sampleAt(base + 3))
+        } else if self.hasTransparentSample
+            && redSample == self.transparentRed
+            && greenSample == self.transparentGreen
+            && blueSample == self.transparentBlue {
+            alpha = 0
+        }
+        self.writePixel(
+            offset,
+            self.scaleSample(redSample),
+            self.scaleSample(greenSample),
+            self.scaleSample(blueSample),
+            alpha
+        )
+        return
+    }
+
+    function writePixel(offset: Int, red: Int, green: Int, blue: Int, alpha: Int) {
+        self.pixels[offset] = U8(red)
+        self.pixels[offset + 1] = U8(green)
+        self.pixels[offset + 2] = U8(blue)
+        self.pixels[offset + 3] = U8(alpha)
+        return
+    }
+}

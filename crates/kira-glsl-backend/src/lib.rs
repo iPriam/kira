@@ -1,18 +1,17 @@
-//! Lowers shader IR to GLSL 330.
+//! Lowers shader IR to GLSL 430.
 //!
 //! Layer 4 of the Kira package graph.
 //!
 //! Emits **one module per stage**, like WGSL and unlike Metal, because OpenGL
 //! compiles and attaches a vertex and a fragment shader separately.
 //!
-//! GLSL 330 is the one target that cannot express every KSL shader. It has no
-//! compute stage and no shader storage buffers — both arrived in 430 — so a
-//! shader using either is refused by name rather than emitted as something that
-//! would not link. Refusing is the honest answer: the corpus builds its GPU
-//! simulation steps on storage buffers, and silently dropping them would leave
-//! a shader that compiles and computes nothing.
+//! 430 rather than 330 because that is the version with the features KSL
+//! actually uses: compute stages and shader storage buffers both arrived in it,
+//! and the corpus builds its GPU simulation steps on storage buffers. At 330
+//! this was the one target that could not express every shader, and a shader it
+//! refused reached the driver as an empty string.
 //!
-//! Two dialect facts shape the rest. GLSL 330 has no standalone sampler object,
+//! Two dialect facts shape the rest. GLSL has no standalone sampler object,
 //! so a texture and the sampler that reads it collapse into one `sampler2D`
 //! uniform and the sampler argument disappears at the call. And a stage's
 //! interface is loose `in`/`out` variables rather than a struct, so the entry
@@ -23,63 +22,20 @@ mod emit;
 #[cfg(test)]
 mod tests;
 
-use kira_ksl_semantics::model::{CheckedStage, CheckedStmt};
+use kira_ksl_semantics::model::CheckedStage;
 use kira_shader_ir::ShaderIr;
-use kira_shader_model::{Reflection, ResourceKind, Stage};
+use kira_shader_model::Stage;
 
 pub use emit::type_name;
 
-/// Why a shader could not be emitted as GLSL 330.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum GlslError {
-    /// The shader declares a compute stage, which 330 does not have.
-    #[error(
-        "`{shader}` has a compute stage, which GLSL 330 does not have — compute arrived in 430"
-    )]
-    ComputeStage {
-        /// The shader's name.
-        shader: String,
-    },
-    /// The shader binds storage, which 330 does not have.
-    #[error(
-        "`{shader}` binds `{resource}` as storage, which GLSL 330 does not have — shader storage \
-         buffers arrived in 430"
-    )]
-    StorageBuffer {
-        /// The shader's name.
-        shader: String,
-        /// The resource that cannot be bound.
-        resource: String,
-    },
-}
-
 /// Emits the GLSL module for one stage of `ir`.
 ///
-/// `Ok("")` when the shader has no such stage, which is not an error: a shader
-/// may declare only a vertex stage.
-pub fn emit(ir: &ShaderIr, stage: Stage) -> Result<String, GlslError> {
+/// `""` when the shader has no such stage, which is not an error: a shader may
+/// declare only a vertex stage.
+pub fn emit(ir: &ShaderIr, stage: Stage) -> String {
     let (Some(reflection), Some(shader)) = (&ir.reflection, &ir.module.shader) else {
-        return Ok(String::new());
+        return String::new();
     };
-    if shader
-        .stages
-        .iter()
-        .any(|candidate| candidate.stage == Stage::Compute)
-    {
-        return Err(GlslError::ComputeStage {
-            shader: shader.name.clone(),
-        });
-    }
-    if let Some(storage) = reflection
-        .resources
-        .iter()
-        .find(|resource| resource.resource_kind == ResourceKind::Storage)
-    {
-        return Err(GlslError::StorageBuffer {
-            shader: shader.name.clone(),
-            resource: storage.resource_name.clone(),
-        });
-    }
     let (Some(checked), Some(reflected)) = (
         shader
             .stages
@@ -90,17 +46,31 @@ pub fn emit(ir: &ShaderIr, stage: Stage) -> Result<String, GlslError> {
             .iter()
             .find(|candidate| candidate.stage == stage),
     ) else {
-        return Ok(String::new());
+        return String::new();
     };
 
     let mut emitter = emit::Emitter {
         module: &ir.module,
         reflection,
         out: String::new(),
+        stage,
         samplers: Vec::new(),
+        images: Vec::new(),
+        entry_outputs: None,
     };
-    emitter.line(0, "#version 330 core");
+    emitter.line(0, "#version 430 core");
     emitter.out.push('\n');
+
+    // GL measures a fragment's window position from the framebuffer's LOWER
+    // left; every other target KSL emits for measures it from the upper left.
+    // A shader that reads `@builtin(position)` in its fragment stage would
+    // therefore mean two different pixels in one source file, which is what
+    // `layout(origin_upper_left)` settles — the redeclaration is core GLSL
+    // since 1.50 and costs nothing where the builtin is never read.
+    if stage == Stage::Fragment {
+        emitter.line(0, "layout(origin_upper_left) in vec4 gl_FragCoord;");
+        emitter.out.push('\n');
+    }
 
     for option in &shader.options {
         let value = match option.value {
@@ -116,9 +86,19 @@ pub fn emit(ir: &ShaderIr, stage: Stage) -> Result<String, GlslError> {
         emitter.out.push('\n');
     }
 
-    emit_structs(&mut emitter, reflection);
+    emit_structs(&mut emitter);
     emitter.resources();
-    emit_interface(&mut emitter, reflected, stage);
+    // A compute stage declares its workgroup size instead of an interface: its
+    // inputs are builtins, which are already in scope.
+    if stage == Stage::Compute {
+        let [x, y, z] = reflected.threads.unwrap_or([1, 1, 1]);
+        let line =
+            format!("layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;");
+        emitter.line(0, &line);
+        emitter.out.push('\n');
+    } else {
+        emit_interface(&mut emitter, reflected, stage);
+    }
 
     for function in &ir.module.functions {
         emitter.function(function);
@@ -127,27 +107,41 @@ pub fn emit(ir: &ShaderIr, stage: Stage) -> Result<String, GlslError> {
         emitter.function(helper);
     }
     emit_entry(&mut emitter, checked, reflected, stage);
-    Ok(emitter.out)
+    emitter.out
 }
 
-/// Emits every struct, interfaces included — GLSL keeps them as ordinary types
-/// because the stage's own interface is loose variables instead.
-fn emit_structs(emitter: &mut emit::Emitter<'_>, reflection: &Reflection) {
-    let uniforms: Vec<String> = reflection
+/// Emits every struct, interfaces and uniform types included — GLSL keeps them
+/// as ordinary types because the stage's own interface is loose variables
+/// instead, and a uniform is a struct-typed uniform rather than a block.
+///
+/// A **uniform** struct's unsigned members are emitted signed, which is the one
+/// place this backend narrows a type. GL loads a uniform by name through one
+/// call per type, and the host this emits for reaches an integral uniform
+/// through `glUniform*iv` — handing an `int` array to a `uint` uniform is a
+/// type mismatch GL refuses outright, so an unsigned member declared as `uint`
+/// is a uniform nothing can ever write. The bits round-trip exactly, because
+/// GLSL's implicit `int` to `uint` conversion is a reinterpretation and every
+/// read of the member is in unsigned context; only reading one **above** 2^31
+/// as a float differs, and that is a count no extent or index reaches.
+fn emit_structs(emitter: &mut emit::Emitter<'_>) {
+    let uniform_types: Vec<String> = emitter
+        .reflection
         .resources
         .iter()
-        .filter(|resource| resource.resource_kind == ResourceKind::Uniform)
+        .filter(|resource| resource.resource_kind == kira_shader_model::ResourceKind::Uniform)
         .map(|resource| resource.type_name.clone())
         .collect();
     for declared in &emitter.module.structs.clone() {
-        // A uniform's struct is emitted as the block itself, not beside it.
-        if uniforms.contains(&declared.name) {
-            continue;
-        }
+        let is_uniform = uniform_types.contains(&declared.name);
         let opened = format!("struct {} {{", declared.name);
         emitter.line(0, &opened);
         for field in &declared.fields {
-            let line = format!("{} {};", type_name(&field.ty), field.name);
+            let ty = if is_uniform {
+                type_name(&signed_for_uniform(&field.ty))
+            } else {
+                type_name(&field.ty)
+            };
+            let line = format!("{ty} {};", field.name);
             emitter.line(1, &line);
         }
         emitter.line(0, "};");
@@ -155,10 +149,25 @@ fn emit_structs(emitter: &mut emit::Emitter<'_>, reflection: &Reflection) {
     }
 }
 
+/// `ty` with every unsigned scalar made signed, for a uniform member.
+fn signed_for_uniform(ty: &kira_shader_model::Type) -> kira_shader_model::Type {
+    use kira_shader_model::{ScalarType, Type};
+    match ty {
+        Type::Scalar(ScalarType::Uint) => Type::Scalar(ScalarType::Int),
+        Type::Vector(vector) if vector.scalar == ScalarType::Uint => {
+            Type::Vector(kira_shader_model::VectorType {
+                scalar: ScalarType::Int,
+                width: vector.width,
+            })
+        }
+        other => other.clone(),
+    }
+}
+
 /// Emits the stage's loose `in` and `out` variables.
 ///
 /// A varying is named `v_<field>` in both stages so the vertex output and the
-/// fragment input link by name, which is how GLSL 330 matches them.
+/// fragment input link by name, which is how GLSL matches them.
 fn emit_interface(
     emitter: &mut emit::Emitter<'_>,
     reflected: &kira_shader_model::ReflectedStage,
@@ -217,7 +226,8 @@ fn emit_entry(
 
     // On the way in: rebuild the input struct from the loose variables.
     if let (Some(param), Some(name)) = (checked.entry.params.first(), &reflected.input_type) {
-        let declared = format!("{name} {};", param.name);
+        let param_name = emit::safe_name(&param.name);
+        let declared = format!("{name} {param_name};");
         emitter.line(1, &declared);
         for field in &reflected.inputs {
             let source = match (field.builtin, stage) {
@@ -225,30 +235,22 @@ fn emit_entry(
                 (None, Stage::Vertex) => field.name.clone(),
                 (None, _) => format!("v_{}", field.name),
             };
-            let line = format!("{}.{} = {source};", param.name, field.name);
+            let line = format!("{param_name}.{} = {source};", field.name);
             emitter.line(1, &line);
         }
     }
 
-    // The body, with its `return` replaced by the copy-out, because `main`
-    // returns nothing and the outputs are variables rather than a value.
+    // The body, with every `return value` becoming the copy-out: `main` returns
+    // nothing and the outputs are variables rather than a value. Handled by the
+    // statement emitter rather than here, so a `return` inside an `if` is
+    // rewritten too.
+    emitter.entry_outputs = Some(emit::EntryOutputs {
+        fields: reflected.outputs.clone(),
+        stage,
+    });
     for &id in &checked.entry.body {
-        match emitter.module.stmt(id).clone() {
-            CheckedStmt::Return(Some(value)) => {
-                let returned = emitter.expr(value);
-                for field in &reflected.outputs {
-                    let target = match (field.builtin, stage) {
-                        (Some(builtin), _) => emit::builtin_name(builtin, stage).to_owned(),
-                        (None, Stage::Fragment) => field.name.clone(),
-                        (None, _) => format!("v_{}", field.name),
-                    };
-                    let line = format!("{target} = {returned}.{};", field.name);
-                    emitter.line(1, &line);
-                }
-                emitter.line(1, "return;");
-            }
-            _ => emitter.stmt(id, 1),
-        }
+        emitter.stmt(id, 1);
     }
+    emitter.entry_outputs = None;
     emitter.line(0, "}");
 }

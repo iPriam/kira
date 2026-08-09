@@ -177,13 +177,13 @@ fn extern_param(ty: &str) -> String {
 }
 
 #[test]
-fn a_bare_int_parameter_is_refused() {
-    assert_eq!(codes(&extern_param("Int")), vec!["KSEM182"]);
-}
-
-#[test]
-fn a_bare_float_parameter_is_refused() {
-    assert_eq!(codes(&extern_param("Float")), vec!["KSEM182"]);
+fn the_bare_scalars_cross_as_the_sixty_four_bit_c_types() {
+    // `Int` *is* the 64-bit signed integer and `Float` the 64-bit float — there
+    // is no second spelling for either — so both name a C type exactly and are
+    // accepted. They were refused back when `I64`/`F64` existed to say the
+    // width out loud; refusing them now would leave nothing to write.
+    assert_eq!(codes(&extern_param("Int")), Vec::<String>::new());
+    assert_eq!(codes(&extern_param("Float")), Vec::<String>::new());
 }
 
 #[test]
@@ -192,8 +192,10 @@ fn a_string_in_the_signature_is_refused() {
 }
 
 #[test]
-fn an_array_parameter_is_refused() {
-    assert_eq!(codes(&extern_param("[I32]")), vec!["KSEM182"]);
+fn an_array_parameter_names_itself() {
+    // It used to be refused, with a message telling the author to write a
+    // `RawPtr` and a length — which threw away what the signature knew.
+    assert!(codes(&extern_param("[I32]")).is_empty());
 }
 
 #[test]
@@ -202,10 +204,13 @@ fn a_callback_parameter_is_refused() {
 }
 
 #[test]
-fn a_generic_type_in_the_signature_is_refused() {
-    // The written `Opt<I32>` is a generic *shape*, refused before it is even
-    // resolved, so no undeclared-`Opt` diagnostic joins it.
-    assert_eq!(codes(&extern_param("Opt<I32>")), vec!["KSEM182"]);
+fn a_generic_type_in_the_signature_is_judged_by_what_it_resolves_to() {
+    // `Opt` is undeclared here, so what this reports is that — not a refusal
+    // for being generic. The shape used to be turned away before anything
+    // asked what it resolved to, which meant an instantiation that *could*
+    // cross was refused for the wrong reason.
+    let codes = codes(&extern_param("Opt<I32>"));
+    assert!(codes.iter().any(|code| code == "KSEM050"), "{codes:?}");
 }
 
 #[test]
@@ -242,7 +247,7 @@ fn a_single_scalar_field_struct_crosses_as_its_field() {
 #[test]
 fn a_c_layout_struct_crosses_by_value_as_an_aggregate() {
     let text = "@FFI.Struct { layout: c; }\n\
-                struct Rect { var x: F64\n var y: F64\n var w: F64\n var h: F64 }\n\
+                struct Rect { var x: Float\n var y: Float\n var w: Float\n var h: Float }\n\
                 @Main function main() { return }\n\
                 @FFI.Extern { library: l; symbol: s; abi: c; } function f(r: Rect) -> Rect;";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
@@ -256,7 +261,7 @@ fn a_c_layout_struct_crosses_by_value_as_an_aggregate() {
     assert!(row.param_wrappers[0].is_some());
     assert_eq!(row.param_wrappers[0], row.result_wrapper);
 
-    // Four `F64` members — the `MetalCGRect` shape, an AArch64 HFA.
+    // Four `Float` members — the `MetalCGRect` shape, an AArch64 HFA.
     assert_eq!(program.foreign_aggregates.len(), 1);
     let entry = program
         .foreign_aggregates
@@ -271,9 +276,9 @@ fn a_c_layout_struct_crosses_by_value_as_an_aggregate() {
 #[test]
 fn a_nested_c_layout_struct_is_one_table_row_below_its_container() {
     let text = "@FFI.Struct { layout: c; }\n\
-                struct Origin { var x: F64\n var y: F64 }\n\
+                struct Origin { var x: Float\n var y: Float }\n\
                 @FFI.Struct { layout: c; }\n\
-                struct Frame { var origin: Origin\n var w: F64\n var h: F64 }\n\
+                struct Frame { var origin: Origin\n var w: Float\n var h: Float }\n\
                 @Main function main() { return }\n\
                 @FFI.Extern { library: l; symbol: s; abi: c; } function f(fr: Frame) -> I32;";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
@@ -294,7 +299,7 @@ fn a_nested_c_layout_struct_is_one_table_row_below_its_container() {
 #[test]
 fn naming_one_aggregate_twice_adds_one_table_row() {
     let text = "@FFI.Struct { layout: c; }\n\
-                struct P { var x: F64\n var y: F64 }\n\
+                struct P { var x: Float\n var y: Float }\n\
                 @Main function main() { return }\n\
                 @FFI.Extern { library: l; symbol: a; abi: c; } function f(p: P) -> P;\n\
                 @FFI.Extern { library: l; symbol: b; abi: c; } function g(p: P) -> I32;";
@@ -307,7 +312,7 @@ fn an_ffi_array_member_crosses_as_one_inline_array_row() {
     let text = "@FFI.Array { element: I32; count: 4; }\n\
                 struct Cells {}\n\
                 @FFI.Struct { layout: c; }\n\
-                struct Grid { var cells: Cells\n var weight: F64 }\n\
+                struct Grid { var cells: Cells\n var weight: Float }\n\
                 @Main function main() { return }\n\
                 @FFI.Extern { library: l; symbol: s; abi: c; } function f(g: Grid) -> Grid;";
     assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
@@ -508,7 +513,7 @@ fn a_local_wins_over_a_function_of_the_same_name_in_a_callback_slot() {
 #[test]
 fn a_c_layout_struct_with_an_unseamable_field_is_refused_by_field_name() {
     let text = "@FFI.Struct { layout: c; }\n\
-                struct Bad { var x: F64\n var label: String }\n\
+                struct Bad { var x: Float\n var label: String }\n\
                 @Main function main() { return }\n\
                 @FFI.Extern { library: l; symbol: s; abi: c; } function f(b: Bad) -> I32;";
     assert_eq!(codes(text), vec!["KSEM182"]);
@@ -517,14 +522,15 @@ fn a_c_layout_struct_with_an_unseamable_field_is_refused_by_field_name() {
 }
 
 #[test]
-fn a_c_layout_struct_whose_field_is_a_bare_int_is_refused() {
-    // The same ambiguity the seam refuses at a parameter: `Int` has no fixed C
-    // width, so a member of one has no offset a shim could agree on.
+fn a_c_layout_struct_may_hold_the_bare_scalars() {
+    // A member's offset is decided by its width, and both bare scalars have
+    // one: `Int` is `int64_t` and `Float` is `double`. They were refused here
+    // while `I64`/`F64` existed to say the width out loud.
     let text = "@FFI.Struct { layout: c; }\n\
-                struct Bad { var a: F64\n var n: Int }\n\
+                struct Fine { var a: Float\n var n: Int }\n\
                 @Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f(b: Bad) -> I32;";
-    assert_eq!(codes(text), vec!["KSEM182"]);
+                @FFI.Extern { library: l; symbol: s; abi: c; } function f(b: Fine) -> I32;";
+    assert_eq!(codes(text), Vec::<String>::new());
 }
 
 #[test]
@@ -532,7 +538,7 @@ fn a_multi_field_struct_without_the_annotation_is_still_refused() {
     // The annotation is the author's statement that this type mirrors a C
     // declaration. Without it, adding a Kira field would silently change what
     // the C function receives, so the plain struct keeps its refusal.
-    let text = "struct Loose { var x: F64\n var y: F64 }\n\
+    let text = "struct Loose { var x: Float\n var y: Float }\n\
                 @Main function main() { return }\n\
                 @FFI.Extern { library: l; symbol: s; abi: c; } function f(p: Loose) -> I32;";
     assert_eq!(codes(text), vec!["KSEM182"]);
@@ -540,13 +546,14 @@ fn a_multi_field_struct_without_the_annotation_is_still_refused() {
 }
 
 #[test]
-fn a_struct_whose_one_field_is_a_bare_int_is_refused() {
-    // `Int` has no fixed C width, so a struct wrapping one is not a handle: it
-    // falls to the ordinary aggregate refusal rather than crossing silently.
-    let text = "struct Loose { var n: Int }\n\
+fn a_struct_whose_one_field_is_a_bare_int_is_a_handle() {
+    // One 64-bit member, passed in a register exactly like the member — the C
+    // single-member-struct handle. `Int` names a width now, so this crosses
+    // rather than falling to the aggregate refusal.
+    let text = "struct Handle { var n: Int }\n\
                 @Main function main() { return }\n\
-                @FFI.Extern { library: l; symbol: s; abi: c; } function f(h: Loose) -> I32;";
-    assert_eq!(codes(text), vec!["KSEM182"]);
+                @FFI.Extern { library: l; symbol: s; abi: c; } function f(h: Handle) -> I32;";
+    assert_eq!(codes(text), Vec::<String>::new());
 }
 
 #[test]
@@ -650,4 +657,109 @@ fn two_foreign_functions_may_not_share_a_name() {
         "{:?}",
         codes(text)
     );
+}
+
+/// A payload-less enum crosses as its case's number, which is what a C enum is.
+#[test]
+fn a_payload_less_enum_is_a_foreign_parameter() {
+    let source = r#"
+enum Usage { Vertex Index Uniform }
+
+@FFI.Extern { library: fixture; symbol: stride; abi: c; }
+function stride(usage: Usage): I32;
+
+function ask() -> Int {
+    return stride(Usage.Index)
+}
+"#;
+    assert!(
+        library_codes(source).is_empty(),
+        "{:?}",
+        library_codes(source)
+    );
+}
+
+/// An enum that carries a payload is a tagged union, and C's own is a different
+/// shape with a different layout — so it has no crossing rather than a lossy one.
+#[test]
+fn an_enum_with_a_payload_is_refused() {
+    let source = r#"
+enum Reading { None Value(Int) }
+
+@FFI.Extern { library: fixture; symbol: take; abi: c; }
+function take(reading: Reading): I32;
+"#;
+    assert!(
+        library_codes(source).iter().any(|code| code == "KSEM182"),
+        "{:?}",
+        library_codes(source)
+    );
+}
+
+/// An array names itself in a signature rather than being spelled `RawPtr`.
+#[test]
+fn an_array_is_a_foreign_parameter() {
+    let source = r#"
+@FFI.Extern { library: fixture; symbol: sum; abi: c; }
+function sum(values: [F32], count: I32): F32;
+
+function ask(values: borrow [F32]) -> Float {
+    return sum(values, values.count)
+}
+"#;
+    assert!(
+        library_codes(source).is_empty(),
+        "{:?}",
+        library_codes(source)
+    );
+}
+
+/// An array *result* has no reading: a C function answers a pointer, and
+/// nothing in that answer says how many elements are behind it.
+#[test]
+fn an_array_result_is_refused_for_having_no_length() {
+    let source = r#"
+@FFI.Extern { library: fixture; symbol: give; abi: c; }
+function give(): [F32];
+"#;
+    let codes = library_codes(source);
+    assert!(codes.iter().any(|code| code == "KSEM182"), "{codes:?}");
+}
+
+/// An array of something C has no width for is refused by its element.
+#[test]
+fn an_array_of_a_non_seam_element_is_refused() {
+    let source = r#"
+@FFI.Extern { library: fixture; symbol: take; abi: c; }
+function take(values: [String]): I32;
+"#;
+    assert!(
+        library_codes(source).iter().any(|code| code == "KSEM182"),
+        "{:?}",
+        library_codes(source)
+    );
+}
+
+/// A generic instantiation is judged by what it instantiated to.
+///
+/// It used to be refused for *being* generic, before anything asked what it
+/// resolved to. The refusal now names the type and the real reason — this one is
+/// a tagged union — so an instantiation that does cross is not turned away for
+/// the wrong cause.
+#[test]
+fn a_generic_instantiation_is_refused_by_what_it_resolves_to() {
+    let source = r#"
+enum Wrapped<T> { Ok(T) Bad }
+
+@FFI.Extern { library: fixture; symbol: take; abi: c; }
+function take(w: Wrapped<I32>): I32;
+"#;
+    let diagnostics = library_diagnostics(source);
+    let said = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(said.contains("Wrapped<I32>"), "{said}");
+    assert!(!said.contains("a generic type cannot"), "{said}");
 }

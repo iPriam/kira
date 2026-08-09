@@ -137,7 +137,7 @@ fn wgsl_takes_the_group_a_shader_wrote_as_its_set() {
 
 #[test]
 fn glsl_carries_the_name_a_host_looks_the_binding_up_by() {
-    let ir = build(TEXTURED, BackendTarget::Glsl330);
+    let ir = build(TEXTURED, BackendTarget::Glsl430);
     let reflection = ir.reflection.expect("a shader");
     let albedo = reflection
         .resources
@@ -147,7 +147,7 @@ fn glsl_carries_the_name_a_host_looks_the_binding_up_by() {
     let binding = albedo
         .backend_bindings
         .iter()
-        .find(|binding| binding.target == BackendTarget::Glsl330)
+        .find(|binding| binding.target == BackendTarget::Glsl430)
         .expect("glsl");
     assert_eq!(binding.glsl_name.as_deref(), Some("albedo"));
 }
@@ -227,15 +227,15 @@ shader Step {
 }
 
 #[test]
-fn the_uniform_digest_matches_the_shape_the_graphics_host_parses() {
-    // `name:binding:size:stageMask:memberCount:member,member;` with each member
-    // `name@offset#size`. The host already parses this; the shape is its
+fn the_resource_digest_matches_the_shape_the_graphics_host_parses() {
+    // `u|name:binding:size:stageMask:memberCount:member,member:kinds;` with each
+    // member `name@offset#size`. The host parses this; the shape is its
     // contract, not ours, so it is pinned literally.
     let ir = build(TEXTURED, BackendTarget::Msl);
-    let digest = ir.uniform_digest();
+    let digest = ir.resource_digest();
     // Stage mask 1 is vertex alone: `camera` is read there and nowhere else.
     assert!(
-        digest.contains("camera:0:64:1:1:view_projection@0#64;"),
+        digest.contains("u|camera:0:64:1:1:view_projection@0#64:f;"),
         "{digest}"
     );
     // `Surface` is `Float3` then `Float`: the vector sits at 0 and the scalar at
@@ -243,22 +243,75 @@ fn the_uniform_digest_matches_the_shape_the_graphics_host_parses() {
     // host maps it onto `FLOAT3` rather than `FLOAT4`.
     // `surface` is declared and never read, so no stage claims it — mask 0.
     assert!(
-        digest.contains("surface:0:32:0:2:albedo@0#12,alpha@16#4;"),
+        digest.contains("u|surface:0:32:0:2:albedo@0#12,alpha@16#4:ff;"),
         "{digest}"
     );
+    // The texture carries the slot of the sampler its body samples it with, and
+    // the name the two collapse into in GLSL.
+    assert!(digest.contains("t|albedo:1:2:2:albedo;"), "{digest}");
+    assert!(digest.contains("m|linear:2:2;"), "{digest}");
 }
 
 #[test]
-fn the_uniform_digest_carries_the_wgsl_binding_not_metals() {
+fn a_written_texture_reaches_the_digest_as_a_storage_image() {
+    let ir = build(
+        r#"
+type Extent {
+    let width: UInt
+    let height: UInt
+}
+
+type QIn {
+    @builtin(thread_id)
+    let gid: UInt3
+}
+
+shader Blit {
+    group Work {
+        uniform extent: Extent
+        sampler smp: Sampler
+        texture src: Texture2d
+        texture write dst: Texture2d
+    }
+    compute {
+        input QIn
+        threads(16, 16, 1)
+        function entry(q: QIn) {
+            let uv = Float2(Float(q.gid.x) / Float(extent.width), Float(q.gid.y) / Float(extent.height))
+            store(dst, q.gid.xy, sample(src, smp, uv))
+            return
+        }
+    }
+}
+"#,
+        BackendTarget::Glsl430,
+    );
+    let digest = ir.resource_digest();
+    // Unsigned members are `u`: a size of 4 alone would leave the host loading
+    // them through `glUniform1fv`, which a `uint` uniform refuses.
+    assert!(
+        digest.contains("u|extent:0:16:4:2:width@0#4,height@4#4:uu;"),
+        "{digest}"
+    );
+    // The sampled texture stays a `t` record with its sampler and GLSL name;
+    // the written one is an `i` record carrying its image unit and that the
+    // shader only writes it.
+    assert!(digest.contains("t|src:2:4:1:src;"), "{digest}");
+    assert!(digest.contains("i|dst:3:4:1:1;"), "{digest}");
+}
+
+#[test]
+fn the_resource_digest_carries_the_wgsl_binding_not_metals() {
     // The host matches this against the slot an application binds, which is the
     // WGSL binding — Metal's buffer index is a different number entirely.
     let ir = build(TEXTURED, BackendTarget::Msl);
-    let digest = ir.uniform_digest();
+    let digest = ir.resource_digest();
     let surface = digest
         .split(';')
-        .find(|block| block.starts_with("surface:"))
+        .find(|block| block.starts_with("u|surface:"))
         .expect("the surface block");
     let binding: u32 = surface
+        .trim_start_matches("u|")
         .split(':')
         .nth(1)
         .and_then(|field| field.parse().ok())
@@ -267,7 +320,7 @@ fn the_uniform_digest_carries_the_wgsl_binding_not_metals() {
 }
 
 #[test]
-fn a_shader_with_no_uniforms_has_an_empty_digest() {
+fn a_shader_with_no_resources_has_an_empty_digest() {
     let ir = build(
         r#"
 type VOut {
@@ -287,7 +340,7 @@ shader S {
 "#,
         BackendTarget::Msl,
     );
-    assert_eq!(ir.uniform_digest(), "");
+    assert_eq!(ir.resource_digest(), "");
 }
 
 #[test]

@@ -142,7 +142,7 @@ fn an_unsigned_shift_right_zero_fills() {
         r#"
 @Main
 function main() {
-    let signed: I64 = -1
+    let signed: Int = -1
     var unsigned: U64 = 0
     unsigned = unsigned - 1
     print(signed >> 60)

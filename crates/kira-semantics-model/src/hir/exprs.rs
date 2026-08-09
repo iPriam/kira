@@ -156,6 +156,60 @@ pub enum HirExpr {
         /// The field's type.
         ty: Type,
     },
+    /// A member read through an `@FFI.Pointer` — a load from C memory.
+    ///
+    /// Unlike [`HirExpr::Field`], nothing here is a Kira value until the load
+    /// happens: the base is a pointer word into storage C owns, and the member
+    /// lives at a byte offset inside that struct's C layout.
+    ///
+    /// Carries the aggregate and member index rather than a byte offset: a C
+    /// pointer is four bytes on `wasm32` and eight elsewhere, so a struct with a
+    /// pointer member ahead of this one sits at a different offset per target.
+    /// Each backend computes the offset for the width it emits for.
+    /// The address of a member that names storage rather than a value.
+    ///
+    /// A nested struct and an inline array have bytes inside the container, so
+    /// there is nothing to load: what the member names is a place. Its address
+    /// is the container's plus the member's offset, and the result is a pointer
+    /// that knows what it addresses — so `event.at.x` reads through it, and
+    /// `event.touches` is the pointer to element zero that C's array-to-pointer
+    /// decay produces.
+    ForeignMemberAddress {
+        /// The pointer-typed expression being read through.
+        base: HirExprId,
+        /// The container's row in the program's C-layout aggregate table.
+        aggregate: ForeignAggregateId,
+        /// The member's index in declaration order.
+        member: u32,
+        /// The pointer type the address has.
+        ty: Type,
+    },
+    /// The address of one element of a C array, by pointer arithmetic.
+    ///
+    /// `pointer[index]` on a pointer into C storage, with the same meaning C
+    /// gives it: the address `index` elements along. The element's size comes
+    /// from the target's C layout, so it is computed for the target being built
+    /// for.
+    ForeignElement {
+        /// The pointer being indexed.
+        base: HirExprId,
+        /// The element's row in the program's C-layout aggregate table.
+        aggregate: ForeignAggregateId,
+        /// The element index.
+        index: HirExprId,
+        /// The pointer type the address has.
+        ty: Type,
+    },
+    ForeignField {
+        /// The pointer-typed expression being read through.
+        base: HirExprId,
+        /// The target's row in the program's C-layout aggregate table.
+        aggregate: ForeignAggregateId,
+        /// The member's index in declaration order.
+        member: u32,
+        /// The Kira type the member reads as.
+        ty: Type,
+    },
     /// Construction of an array value from its written elements.
     ///
     /// Carries its own type rather than deriving it from the elements: an
@@ -222,14 +276,57 @@ pub enum HirExpr {
         /// The string being searched for.
         needle: HirExprId,
     },
+    /// The address of a C buffer holding an array's elements.
+    ///
+    /// A Kira array is a heap object this runtime owns, and its elements are
+    /// Kira's widths — a `[F32]` holds them as the seam's `float` only once
+    /// something writes them out. So the seam writes them, exactly as it writes
+    /// a C-layout struct's image for [`HirExpr::CLayoutAddress`], and hands over
+    /// the address of what it wrote.
+    ///
+    /// The storage outlives the call for the reason a `CString` member's does:
+    /// a C API given a buffer may keep it — `sg_make_buffer` reads it during the
+    /// call, but nothing on this side knows which kind of callee it has.
+    ///
+    /// Written wherever a pointer word is: an extern's `RawPtr` argument, and a
+    /// C-layout struct's `RawPtr` member. The second is what lets a descriptor
+    /// carrying a data pointer — `sg_range { ptr: values, size: … }` — be built
+    /// in Kira instead of in a C helper that exists only to name the address.
+    ArrayElements {
+        /// The array whose elements are written out.
+        value: HirExprId,
+        /// The seam type each element is written as.
+        element: kira_runtime_abi::ForeignType,
+    },
+    /// The text of one Unicode scalar, from its code point.
+    ///
+    /// The inverse of reading a scalar out of text, and the operation a text
+    /// field needs when a key press arrives as a code point. It is a
+    /// constructor rather than a [`kira_runtime_abi::StringOp`] because it
+    /// starts from a number instead of from text.
+    ScalarText {
+        /// The code point.
+        value: HirExprId,
+    },
+    /// A floating-point operation the hardware already has.
+    ///
+    /// `sqrt(x)`, `sin(x)` and the rest. Written as an ordinary call, resolved
+    /// here rather than to a user function, so a program cannot shadow one with
+    /// a series expansion that answers slightly differently.
+    MathOperation {
+        /// Which operation to perform.
+        op: kira_runtime_abi::MathOp,
+        /// The value it is performed on.
+        value: HirExprId,
+    },
     /// One of the string operations that share an opcode (`s.contains(n)`,
     /// `s.trim()`, `s.split(sep)`, …).
     ///
     /// Which operation, how many arguments it takes and what it answers with
-    /// all follow from the [`StringOp`] — it is the whole expression, not a
-    /// hint. Grouped rather than given a variant each because the set is meant
-    /// to keep growing, and a variant per operation makes every layer below
-    /// grow with it.
+    /// all follow from the [`StringOp`](kira_runtime_abi::StringOp) — it is the
+    /// whole expression, not a hint. Grouped rather than given a variant each
+    /// because the set is meant to keep growing, and a variant per operation
+    /// makes every layer below grow with it.
     StringOperation {
         /// Which operation to perform.
         op: kira_runtime_abi::StringOp,
@@ -511,7 +608,7 @@ pub enum ConvertKind {
     /// Integer to integer, any width to any width. An identity copy: widths
     /// share one 64-bit representation, so nothing is truncated or extended.
     IntToInt,
-    /// Float to float (`F32`/`F64`/`Float`). An identity copy: every float is
+    /// Float to float (`Float`/`F32`). An identity copy: every float is
     /// one 64-bit representation, and float arithmetic runs at that width.
     FloatToFloat,
     /// Integer to float, a signed conversion (round to nearest, ties to even).
@@ -555,14 +652,20 @@ impl HirExpr {
             HirExpr::Bool(_) => Type::Bool,
             HirExpr::Str(_) => Type::String,
             HirExpr::RawPtrNull | HirExpr::ForeignCallbackPtr { .. } => Type::RawPtr,
+            // Every one of them takes a `Float` and answers one.
+            HirExpr::MathOperation { .. } => Type::FLOAT,
+            HirExpr::ScalarText { .. } => Type::String,
             HirExpr::CStringNew { .. } | HirExpr::CStringNull => Type::CString,
-            HirExpr::CLayoutAddress { .. } => Type::RawPtr,
+            HirExpr::CLayoutAddress { .. } | HirExpr::ArrayElements { .. } => Type::RawPtr,
             HirExpr::Local { ty, .. }
             | HirExpr::Unary { ty, .. }
             | HirExpr::Binary { ty, .. }
             | HirExpr::Select { ty, .. }
             | HirExpr::Call { ty, .. }
             | HirExpr::Field { ty, .. }
+            | HirExpr::ForeignField { ty, .. }
+            | HirExpr::ForeignMemberAddress { ty, .. }
+            | HirExpr::ForeignElement { ty, .. }
             | HirExpr::ArrayNew { ty, .. }
             | HirExpr::EnumPayload { ty, .. }
             | HirExpr::NativeState { ty, .. }

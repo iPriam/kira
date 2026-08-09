@@ -29,21 +29,28 @@ struct KslArtifact {
     // name. Fields for it used to be declared here and nothing could ever fill
     // them — a renderer reading `vertexMsl` got an empty string and no reason.
     var combinedMsl: String = ""
-    // Per-stage sources.
+    // Per-stage sources. A compute kernel is a stage like any other here: every
+    // target that splits stages emits one, and a backend that dispatches
+    // compute reads its own — `combinedMsl` is only Metal's answer to the same
+    // question. A graphics shader leaves the compute fields empty, which is
+    // what `computeEntry` being empty already says.
     var vertexHlsl: String = ""
     var fragmentHlsl: String = ""
+    var computeHlsl: String = ""
     var vertexGlsl: String = ""
     var fragmentGlsl: String = ""
-    // WGSL, for WebGPU and wasm32-emscripten. Graphics stages only today, and a
-    // compute-only shader leaves these empty. Entry names reuse
-    // `vertexEntry`/`fragmentEntry`.
+    var computeGlsl: String = ""
+    // WGSL, for WebGPU and wasm32-emscripten. Entry names reuse
+    // `vertexEntry`/`fragmentEntry`/`computeEntry`.
     var vertexWgsl: String = ""
     var fragmentWgsl: String = ""
-    // A compact uniform-block descriptor emitted from KSL reflection
-    // (`name:binding:sizeBytes:stageMask:memberCount:members;` per block), for a
-    // backend that configures blocks per shader rather than by convention.
-    // Empty for a shader with no uniform blocks.
-    var uniformReflection: String = ""
+    var computeWgsl: String = ""
+    // A compact resource descriptor emitted from KSL reflection: one record per
+    // resource, separated by `;`, each opening with a letter naming its kind —
+    // `u` uniform block, `s` storage buffer, `t` texture, `m` sampler. For a
+    // backend that configures a shader's bindings per shader rather than by
+    // convention. Empty for a shader that declares no resources.
+    var resourceReflection: String = ""
 }
 
 // `ksl!("Shaders/Name.ksl")` — the compile-time shader macro, written in Kira.
@@ -58,22 +65,31 @@ struct KslArtifact {
 // this file, so `ksl!("Shaders/UiBatch.ksl")` in an app names that app's own
 // `Shaders/` directory.
 //
-// Targets: "msl" is Metal, which compiles one module holding every stage, so
-// its whole source lands in `combinedMsl`. "wgsl" is WebGPU, "glsl_330" is
-// OpenGL and "hlsl" is Direct3D, and all three compile a stage at a time. A
-// shader GLSL 330 cannot express
-// — one using compute or storage, both of which arrived in 430 — comes back
-// with its GLSL fields empty rather than failing the build, because the other
-// backends still carry it. A field no target fills keeps the empty default
-// declared above, so a renderer reads the same fields either way.
+// A target is named as a case rather than spelled as a string. The set is
+// closed, so a backend that is renamed fails here — at the one line naming it —
+// instead of being carried into every artifact as an empty field and surfacing
+// as "no output was compiled for it" at each call site.
+enum ShaderBackend {
+    // Metal, which compiles one module holding every stage, so its whole source
+    // lands in `combinedMsl`.
+    Msl
+    // WebGPU, OpenGL and Direct3D each compile a stage at a time.
+    Wgsl
+    Glsl
+    Hlsl
+    Spirv
+}
+
+// A field no target fills keeps the empty default declared above, so a renderer
+// reads the same fields either way.
 
 comptime macro ksl {
     kind { function }
     expand(input: Syntax) -> Syntax {
-        let msl = Ksl.compile(input, "msl")
-        let wgsl = Ksl.compile(input, "wgsl")
-        let glsl = Ksl.compile(input, "glsl_330")
-        let hlsl = Ksl.compile(input, "hlsl")
+        let msl = Ksl.compile(input, ShaderBackend.Msl)
+        let wgsl = Ksl.compile(input, ShaderBackend.Wgsl)
+        let glsl = Ksl.compile(input, ShaderBackend.Glsl)
+        let hlsl = Ksl.compile(input, ShaderBackend.Hlsl)
         return quote {
             KslArtifact(
                 shaderName: #{msl.shaderName},
@@ -83,11 +99,14 @@ comptime macro ksl {
                 combinedMsl: #{msl.combinedSource},
                 vertexGlsl: #{glsl.vertexSource},
                 fragmentGlsl: #{glsl.fragmentSource},
+                computeGlsl: #{glsl.computeSource},
                 vertexWgsl: #{wgsl.vertexSource},
                 fragmentWgsl: #{wgsl.fragmentSource},
+                computeWgsl: #{wgsl.computeSource},
                 vertexHlsl: #{hlsl.vertexSource},
                 fragmentHlsl: #{hlsl.fragmentSource},
-                uniformReflection: #{msl.uniformReflection}
+                computeHlsl: #{hlsl.computeSource},
+                resourceReflection: #{msl.resourceReflection}
             )
         }
     }

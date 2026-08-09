@@ -1,7 +1,7 @@
 //! Expression and call lowering.
 
 use kira_ir::{ConvertKind, IrBinOp, IrCallee, IrExpr, IrExprId, IrWriteback};
-use kira_runtime_abi::Execution;
+use kira_runtime_abi::{Execution, ForeignMember, ForeignPointerWidth, ForeignType};
 use kira_semantics_model::ErasedTypeId;
 
 use crate::op::{Instruction, WritebackTarget};
@@ -67,6 +67,80 @@ impl FnCompiler<'_> {
                 let index = self.field_index(*index)?;
                 self.compile_expr(base)?;
                 self.code.push(Instruction::GetField(index));
+            }
+            IrExpr::ArrayElements { value, element } => {
+                let (value, element) = (*value, *element);
+                self.compile_expr(value)?;
+                self.code.push(Instruction::ArrayElements(element));
+            }
+            IrExpr::ScalarText { value } => {
+                let value = *value;
+                self.compile_expr(value)?;
+                self.code.push(Instruction::ScalarText);
+            }
+            IrExpr::MathOperation { op, value } => {
+                let (op, value) = (*op, *value);
+                self.compile_expr(value)?;
+                self.code.push(Instruction::MathOp(op));
+            }
+            IrExpr::ForeignMemberAddress {
+                base,
+                aggregate,
+                member,
+                ..
+            } => {
+                let (base, aggregate, member) = (*base, *aggregate, *member);
+                let offset = self.foreign_member_offset(aggregate, member)?;
+                self.compile_expr(base)?;
+                self.code.push(Instruction::ForeignOffset(offset));
+            }
+            IrExpr::ForeignElement {
+                base,
+                aggregate,
+                index,
+                ..
+            } => {
+                let (base, aggregate, index) = (*base, *aggregate, *index);
+                // The VM runs on the host, so the host's pointer width is the
+                // one this bytecode is executed with.
+                let stride = self
+                    .program
+                    .foreign_aggregates
+                    .layout_of(aggregate, ForeignPointerWidth::HOST)
+                    .map_err(|_| CompileError::ForeignMemberMissing {
+                        function: self.function_name.to_owned(),
+                        member: 0,
+                    })?
+                    .size;
+                self.compile_expr(base)?;
+                self.compile_expr(index)?;
+                self.code.push(Instruction::ForeignIndex(stride));
+            }
+            IrExpr::ForeignField {
+                base,
+                aggregate,
+                member,
+                ..
+            } => {
+                let (base, aggregate, member) = (*base, *aggregate, *member);
+                // The VM runs on the host, so the host's pointer width is the
+                // one this bytecode will be executed with.
+                let offset = self
+                    .program
+                    .foreign_aggregates
+                    .member_offsets_of(aggregate, ForeignPointerWidth::HOST)
+                    .ok()
+                    .and_then(|offsets| offsets.get(member as usize).copied());
+                let (Some(offset), Some(ty)) =
+                    (offset, self.foreign_member_type(aggregate, member))
+                else {
+                    return Err(CompileError::ForeignMemberMissing {
+                        function: self.function_name.to_owned(),
+                        member,
+                    });
+                };
+                self.compile_expr(base)?;
+                self.code.push(Instruction::ForeignLoad { offset, ty });
             }
             IrExpr::ArrayNew { elements, .. } => {
                 let elements = elements.clone();
@@ -499,5 +573,44 @@ impl FnCompiler<'_> {
         self.patch_to_here(to_rhs)?;
         self.compile_expr(rhs)?;
         self.patch_to_here(to_end)
+    }
+
+    /// The byte offset of one member of a C-layout aggregate.
+    fn foreign_member_offset(
+        &self,
+        aggregate: kira_runtime_abi::ForeignAggregateId,
+        member: u32,
+    ) -> Result<u32, CompileError> {
+        self.program
+            .foreign_aggregates
+            .member_offsets_of(aggregate, ForeignPointerWidth::HOST)
+            .ok()
+            .and_then(|offsets| offsets.get(member as usize).copied())
+            .ok_or_else(|| CompileError::ForeignMemberMissing {
+                function: self.function_name.to_owned(),
+                member,
+            })
+    }
+
+    /// The seam type of one member of a C-layout aggregate.
+    ///
+    /// Only a scalar member is loadable; semantics refuses a nested aggregate or
+    /// an inline array before this, so reaching one here is a mismatch between
+    /// the two and is reported rather than guessed at.
+    fn foreign_member_type(
+        &self,
+        aggregate: kira_runtime_abi::ForeignAggregateId,
+        member: u32,
+    ) -> Option<ForeignType> {
+        match self
+            .program
+            .foreign_aggregates
+            .get(aggregate)?
+            .members()
+            .get(member as usize)?
+        {
+            ForeignMember::Scalar(ty) => Some(*ty),
+            ForeignMember::Aggregate(_) | ForeignMember::Array { .. } => None,
+        }
     }
 }

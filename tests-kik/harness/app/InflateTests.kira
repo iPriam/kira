@@ -1,0 +1,91 @@
+import Foundation
+
+// `kira test` cover for Foundation's DEFLATE reader.
+//
+// The format has three kinds of block and they share almost no code: a stored
+// block copies bytes and reads no Huffman code at all, a fixed block uses two
+// tables the format itself defines, and a dynamic block spells its own two
+// tables out through a third. A stream compressed at one setting exercises one
+// of the three, which is why there is a fixture per kind rather than a fixture
+// per size — the expected bytes were produced by an established compressor and
+// the checksums taken from what it compressed.
+
+function inflateChecksum(bytes: borrow [U8]) -> Int {
+    var total = 0
+    var index = 0
+    while index < bytes.count {
+        total = ((total * 31) + Int(bytes[index])) & 1073741823
+        index = index + 1
+    }
+    return total
+}
+
+function inflateOutcome(stream: [U8]) -> Int {
+    match inflateZlib(move stream) {
+        Ok(bytes) -> { return inflateChecksum(bytes) }
+        Error(reason) -> {
+            match reason {
+                Truncated -> { return 0 - 1 }
+                Malformed -> { return 0 - 2 }
+            }
+        }
+    }
+}
+
+function inflateSize(stream: [U8]) -> Int {
+    match inflateZlib(move stream) {
+        Ok(bytes) -> { return bytes.count }
+        Error(reason) -> { return 0 - 1 }
+    }
+}
+
+function inflateShortened(stream: borrow [U8], count: Int) -> [U8] {
+    var cut: [U8] = []
+    var index = 0
+    while index < count && index < stream.count {
+        cut.append(stream[index])
+        index = index + 1
+    }
+    return cut
+}
+
+Test InflateStoredBlocks {
+    test { return inflateOutcome(inflateStoredStream()) }
+    expect { let e: Result<Int, TestFailure> = .Ok(698935781); return e }
+}
+
+Test InflateStoredBlocksLength {
+    test { return inflateSize(inflateStoredStream()) }
+    expect { let e: Result<Int, TestFailure> = .Ok(405); return e }
+}
+
+Test InflateFixedTables {
+    test { return inflateOutcome(inflateFixedStream()) }
+    expect { let e: Result<Int, TestFailure> = .Ok(881232256); return e }
+}
+
+// The one that reads back references reaching thousands of bytes into what it
+// has already produced, and a table it had to build first.
+Test InflateDynamicTables {
+    test { return inflateOutcome(inflateDynamicStream()) }
+    expect { let e: Result<Int, TestFailure> = .Ok(927257648); return e }
+}
+
+Test InflateDynamicTablesLength {
+    test { return inflateSize(inflateDynamicStream()) }
+    expect { let e: Result<Int, TestFailure> = .Ok(4436); return e }
+}
+
+// A stream that stops in the middle says so, rather than handing back what it
+// managed — the caller asked for a whole thing.
+Test InflateTruncatedStreamIsReported {
+    test { return inflateOutcome(inflateShortened(inflateDynamicStream(), 200)) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 1); return e }
+}
+
+// The two header bytes carry a check value, and bytes that are not a zlib
+// stream fail it before a single block is read.
+Test InflateRejectsANonStream {
+    test { return inflateOutcome([9, 9, 9, 9, 9, 9, 9, 9]) }
+    expect { let e: Result<Int, TestFailure> = .Ok(0 - 2); return e }
+}

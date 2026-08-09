@@ -28,7 +28,6 @@ unsigned long long ffi_strlen(const char *s) {
     }
     return n;
 }
-
 void *ffi_make_ptr(void) { return (void *)42; }
 void *ffi_null_ptr(void) { return (void *)0; }
 long long ffi_ptr_word(void *p) { return (long long)p; }
@@ -248,4 +247,87 @@ void ffi_desc_keep(const struct ffi_desc *d) {
 
 int ffi_desc_recall(void) {
     return ffi_classify_title(ffi_kept_title) * 10 + ffi_kept_tag;
+}
+
+static const struct ffi_event ffi_event_tail = {
+    9, -70000, 0.25f, -3, {{0, 0.0f, 0.0f}}, 0,
+};
+
+static const struct ffi_event ffi_event_head = {
+    200,
+    -1234,
+    1.5f,
+    -7,
+    {{1, 10.5f, 20.5f}, {2, 30.5f, 40.5f}, {3, 50.5f, 60.5f}, {4, 70.5f, 80.5f}},
+    &ffi_event_tail,
+};
+
+const struct ffi_event *ffi_event_current(void) {
+    return &ffi_event_head;
+}
+
+const struct ffi_event *ffi_event_none(void) {
+    return 0;
+}
+
+float ffi_sum_floats(const float *values, int count) {
+    float total = 0.0f;
+    for (int i = 0; i < count; i += 1) {
+        total += values[i];
+    }
+    return total;
+}
+
+int ffi_sum_ints(const int *values, int count) {
+    int total = 0;
+    for (int i = 0; i < count; i += 1) {
+        total += values[i];
+    }
+    return total;
+}
+
+float ffi_range_sum_floats(const struct ffi_range *range) {
+    if (range == 0 || range->ptr == 0) {
+        return -1.0f;
+    }
+    return ffi_sum_floats((const float *)range->ptr,
+                          (int)(range->size / sizeof(float)));
+}
+
+int ffi_range_sum_ints(struct ffi_range range) {
+    if (range.ptr == 0) {
+        return -1;
+    }
+    return ffi_sum_ints((const int *)range.ptr, (int)(range.size / sizeof(int)));
+}
+
+static struct ffi_range kept_range = {0, 0};
+
+void ffi_range_keep(const struct ffi_range *range) {
+    if (range != 0) {
+        kept_range = *range;
+    }
+}
+
+int ffi_range_recall(void) {
+    return ffi_range_sum_ints(kept_range);
+}
+
+int ffi_usage_stride(enum ffi_usage usage) {
+    switch (usage) {
+        case FFI_USAGE_VERTEX: return 24;
+        case FFI_USAGE_INDEX: return 4;
+        case FFI_USAGE_UNIFORM: return 16;
+    }
+    return 0;
+}
+
+int ffi_pair_sum(struct ffi_pair pair) {
+    return pair.first + pair.second;
+}
+
+void ffi_fill_floats(float *values, int count) {
+    for (int i = 0; i < count; i += 1) {
+        values[i] = 99.0f;
+    }
 }

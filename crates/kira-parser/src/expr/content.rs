@@ -21,9 +21,8 @@ impl Parser<'_> {
     ///
     /// Pure lookahead. A content block is what a `{` is when it is neither a
     /// closure (`{ x in … }`) nor a struct literal (whose first field is
-    /// `name =` / `name :`) nor empty (`{}`, which stays a struct literal). Only
-    /// the leftover — a `{` whose first token begins an expression rather than a
-    /// field binder — opens children.
+    /// `name =` / `name :`) nor one of the empty/`let` blocks handled as a bare
+    /// construction.
     pub(crate) fn at_content_block(&self) -> bool {
         if !self.at(TokenKind::LBrace) || self.no_struct_literal || self.at_closure_start() {
             return false;
@@ -32,12 +31,46 @@ impl Parser<'_> {
         if self.peek(1).kind == TokenKind::RBrace {
             return false;
         }
-        if self.peek(1).kind == TokenKind::Identifier
-            && matches!(self.peek(2).kind, TokenKind::Equals | TokenKind::Colon)
+        if (self.peek(1).kind == TokenKind::Identifier
+            && matches!(self.peek(2).kind, TokenKind::Equals | TokenKind::Colon))
+            || self.at_braced_field_override()
         {
             return false;
         }
         true
+    }
+
+    /// Whether a bare name is followed by the construct-only brace forms that
+    /// are ambiguous with a struct literal: empty braces or `let` overrides.
+    ///
+    /// The parser records these as calls and leaves the final choice between a
+    /// construct update and a plain empty struct to semantic analysis, where
+    /// local bindings and construct declarations are visible.
+    pub(crate) fn at_bare_construct_block(&self) -> bool {
+        if !self.at(TokenKind::LBrace) || self.no_struct_literal || self.at_closure_start() {
+            return false;
+        }
+        self.peek(1).kind == TokenKind::RBrace
+            || self.peek(1).kind == TokenKind::Let
+            || self.at_braced_field_override()
+    }
+
+    /// Whether the first item after `{` is the canonical dotted construction
+    /// override path. Plain `field: value` remains a struct literal; the dot
+    /// is what makes this the otherwise ambiguous construct-update spelling.
+    fn at_braced_field_override(&self) -> bool {
+        if self.peek(1).kind != TokenKind::Identifier {
+            return false;
+        }
+        let mut index = 2;
+        let mut dotted = false;
+        while self.peek(index).kind == TokenKind::Dot
+            && self.peek(index + 1).kind == TokenKind::Identifier
+        {
+            dotted = true;
+            index += 2;
+        }
+        dotted && matches!(self.peek(index).kind, TokenKind::Equals | TokenKind::Colon)
     }
 
     /// Parses `{ child child … }`, with the cursor on `{`, into the list of
@@ -69,12 +102,9 @@ impl Parser<'_> {
 
     /// Whether the cursor sits on a `{` that closes a construction.
     ///
-    /// Looser than [`Self::at_content_block`] on purpose, and only usable where
-    /// the cursor has just left a call's `)`: there a `{` cannot be a struct
-    /// literal, because the literal's own name was consumed by the call. So an
-    /// empty `{ }` and a `{ let field = value }` override block — neither of
-    /// which opens *children* — still belong to the construction here, where in
-    /// bare-name position they would be a struct literal.
+    /// Looser than [`Self::at_content_block`] on purpose. An empty `{ }` and a
+    /// `{ let field = value }` override block belong to the construction after
+    /// a call, where a struct literal is no longer possible.
     pub(crate) fn at_trailing_block(&self) -> bool {
         self.at(TokenKind::LBrace) && !self.no_struct_literal && !self.at_closure_start()
     }
@@ -87,7 +117,7 @@ impl Parser<'_> {
     /// than inside it, so it becomes an ordinary labeled argument and every
     /// later check — unknown label, duplicate label, missing argument — reads it
     /// the way it reads one written between the parentheses.
-    fn parse_trailing_block(&mut self, args: &mut Vec<CallArg>) -> Vec<ExprId> {
+    pub(crate) fn parse_trailing_block(&mut self, args: &mut Vec<CallArg>) -> Vec<ExprId> {
         self.bump(); // `{`
         let mut children = Vec::new();
         self.with_struct_literals(|parser| {
@@ -111,23 +141,51 @@ impl Parser<'_> {
         children
     }
 
-    /// Parses `let field = value` as a labeled argument, or nothing.
+    /// Parses `let field[.nested] = value` or the canonical
+    /// `field.nested: value` spelling as a labeled argument, or nothing.
     ///
     /// `None` leaves the cursor untouched, so the caller reads the item as a
     /// child instead.
     fn parse_override(&mut self) -> Option<CallArg> {
-        if !self.at(TokenKind::Let)
-            || self.peek(1).kind != TokenKind::Identifier
-            || self.peek(2).kind != TokenKind::Equals
+        let has_let = self.at(TokenKind::Let);
+        let starts_bare_path = self.at(TokenKind::Identifier)
+            && matches!(self.peek(1).kind, TokenKind::Dot | TokenKind::Colon);
+        if (!has_let && !starts_bare_path)
+            || (has_let && self.peek(1).kind != TokenKind::Identifier)
+        {
+            return None;
+        }
+        if has_let && self.peek(2).kind != TokenKind::Equals && self.peek(2).kind != TokenKind::Dot
         {
             return None;
         }
         let start = self.current().span.start;
-        self.bump(); // `let`
-        let label_span = self.current().span;
-        let label = self.intern_span(label_span);
+        if has_let {
+            self.bump(); // `let`
+        }
+        let first_span = self.current().span;
+        let mut path = self.text_of(first_span).to_owned();
+        let mut label_span = first_span;
         self.bump(); // name
-        self.bump(); // `=`
+        while self.eat(TokenKind::Dot) {
+            if !self.at(TokenKind::Identifier) {
+                self.error(
+                    self.current().span,
+                    "KPAR022",
+                    "expected a field name after `.` in a construction override",
+                );
+                break;
+            }
+            let segment_span = self.current().span;
+            path.push('.');
+            path.push_str(self.text_of(segment_span));
+            label_span = Span::from_bounds(label_span.start, segment_span.end());
+            self.bump();
+        }
+        let label = self.intern_text(&path, label_span);
+        if !self.eat(TokenKind::Colon) {
+            self.expect(TokenKind::Equals);
+        }
         let value = self.parse_expr();
         Some(CallArg {
             label: Some(label),
@@ -226,6 +284,7 @@ impl Parser<'_> {
         let Expr::Call {
             callee,
             callee_span,
+            braced,
             type_args,
             args,
             children: existing,
@@ -245,6 +304,7 @@ impl Parser<'_> {
         Some(self.tree.add_expr(Expr::Call {
             callee,
             callee_span,
+            braced,
             type_args,
             args,
             children,

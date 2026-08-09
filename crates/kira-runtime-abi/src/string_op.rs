@@ -43,6 +43,26 @@ pub enum StringOp {
     Lowercase = 6,
     /// The text with every character uppercased.
     Uppercase = 7,
+    /// Whether the text reads as a whole number.
+    ///
+    /// The question `toInt` needs answered first. Kira has no way to say "this
+    /// text is not a number" in the result of a conversion — every `Int` is a
+    /// valid answer, so there is no sentinel to spare — and asking beforehand is
+    /// what `charAt` and `.count` already do for a range.
+    IsInt = 9,
+    /// The whole number the text reads as, trapping when it reads as none.
+    ///
+    /// Traps rather than clamping or answering zero, exactly as `charAt` does
+    /// out of range: `"abc".toInt()` has no answer, and `0` would be a wrong one
+    /// that a program cannot tell from parsing `"0"`.
+    ToInt = 10,
+    /// The text without its last Unicode scalar.
+    ///
+    /// Not `substring(0, count - 1)`: the other primitives index **bytes**, and
+    /// dropping the last byte of a multi-byte scalar leaves text that is no
+    /// longer UTF-8. Backspace in a text field is this operation, and it is the
+    /// one place a program has to think in scalars rather than bytes.
+    DropLastScalar = 8,
 }
 
 impl StringOp {
@@ -51,7 +71,7 @@ impl StringOp {
     /// The one place the set is written down: decoding indexes this rather than
     /// repeating a match, so a new operation cannot be added to the enum and
     /// forgotten by the decoder.
-    pub const ALL: [StringOp; 8] = [
+    pub const ALL: [StringOp; 11] = [
         StringOp::Contains,
         StringOp::StartsWith,
         StringOp::EndsWith,
@@ -60,6 +80,9 @@ impl StringOp {
         StringOp::Trim,
         StringOp::Lowercase,
         StringOp::Uppercase,
+        StringOp::DropLastScalar,
+        StringOp::IsInt,
+        StringOp::ToInt,
     ];
 
     /// The wire byte this operation travels as.
@@ -89,6 +112,9 @@ impl StringOp {
             StringOp::Trim => "trim",
             StringOp::Lowercase => "lowercase",
             StringOp::Uppercase => "uppercase",
+            StringOp::DropLastScalar => "dropLastScalar",
+            StringOp::IsInt => "isInt",
+            StringOp::ToInt => "toInt",
         }
     }
 
@@ -102,7 +128,12 @@ impl StringOp {
     #[must_use]
     pub const fn argument_count(self) -> usize {
         match self {
-            StringOp::Trim | StringOp::Lowercase | StringOp::Uppercase => 0,
+            StringOp::Trim
+            | StringOp::Lowercase
+            | StringOp::Uppercase
+            | StringOp::DropLastScalar
+            | StringOp::IsInt
+            | StringOp::ToInt => 0,
             StringOp::Contains | StringOp::StartsWith | StringOp::EndsWith | StringOp::Split => 1,
             StringOp::Replace => 2,
         }
@@ -113,8 +144,14 @@ impl StringOp {
     pub const fn answers_bool(self) -> bool {
         matches!(
             self,
-            StringOp::Contains | StringOp::StartsWith | StringOp::EndsWith
+            StringOp::Contains | StringOp::StartsWith | StringOp::EndsWith | StringOp::IsInt
         )
+    }
+
+    /// Whether the operation answers with an `Int`.
+    #[must_use]
+    pub const fn answers_int(self) -> bool {
+        matches!(self, StringOp::ToInt)
     }
 
     /// Whether the operation answers with a `[String]`.
@@ -135,6 +172,9 @@ impl StringOp {
             StringOp::Trim => "kira_rt_string_trim",
             StringOp::Lowercase => "kira_rt_string_lowercase",
             StringOp::Uppercase => "kira_rt_string_uppercase",
+            StringOp::DropLastScalar => "kira_rt_string_drop_last_scalar",
+            StringOp::IsInt => "kira_rt_string_is_int",
+            StringOp::ToInt => "kira_rt_string_to_int",
         }
     }
 }

@@ -367,7 +367,7 @@ fn tag(ty: Type, function: &str) -> Result<BridgeValueTag, HybridLibraryError> {
         Type::Enum(_) => BridgeValueTag::ENUM,
         // A `RawPtr` is a first-class scalar a `@Native`/`@Runtime` signature may
         // name, so the manifest describes it with its own tag.
-        Type::RawPtr => BridgeValueTag::RAW_PTR,
+        Type::RawPtr | Type::ForeignPtr(_) => BridgeValueTag::RAW_PTR,
         // `CString` is seam-only — legal only as a foreign parameter — so it
         // never appears in a manifest row for an ordinary function.
         // Described like a struct, and travelling no more than one does: a

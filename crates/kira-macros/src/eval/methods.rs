@@ -15,6 +15,32 @@ use crate::syntax_ops::{self, SyntaxError};
 use crate::value::{DeclarationValue, StatementValue, Value};
 
 impl Evaluator<'_> {
+    /// The case `enum_name.variant` names, when `enum_name` is a declared enum.
+    ///
+    /// `Ok(None)` when the name is not an enum at all, so an ordinary field read
+    /// carries on. A *known* enum with an unknown case is an error naming what
+    /// the enum does have: that is the whole reason to write a case rather than
+    /// a string.
+    fn enum_case(&self, enum_name: &str, variant: &str) -> Result<Option<Value>, EvalError> {
+        let Some(variants) = self.enums.get(enum_name) else {
+            return Ok(None);
+        };
+        if !variants.iter().any(|declared| declared == variant) {
+            let spellings: Vec<String> = variants.iter().map(|case| format!("`.{case}`")).collect();
+            return Err(EvalError::unsupported(format!(
+                "`{enum_name}.{variant}`, because `{enum_name}` has no case `{variant}` — it has {}",
+                spellings.join(", ")
+            )));
+        }
+        Ok(Some(Value::EnumCase(Box::new(
+            crate::value::EnumCaseValue {
+                enum_name: enum_name.to_owned(),
+                variant: variant.to_owned(),
+                payload: None,
+            },
+        ))))
+    }
+
     /// Evaluates the expression at `id`.
     pub(super) fn value(&mut self, id: ExprId) -> Result<Value, EvalError> {
         match self.expr(id).clone() {
@@ -80,8 +106,52 @@ impl Evaluator<'_> {
             }
             Expr::Field { base, field, .. } => {
                 let name = self.name(field).to_owned();
+                // `Backend.Glsl` names a case of an enum the *program* declares,
+                // so it resolves before the base is evaluated — there is no
+                // value called `Backend`, and asking for one would report that
+                // the name is unbound rather than that the case is misspelled.
+                if let Expr::Name { symbol, .. } = self.expr(base).clone()
+                    && let Some(case) = self.enum_case(self.name(symbol), &name)?
+                {
+                    return Ok(case);
+                }
                 let value = self.value(base)?;
+                // `Self.test` inside a lifecycle hook: a name the reflection
+                // surface does not answer, on a declaration that declares a
+                // member of that name, is that member — run now. Which is what
+                // makes a hook read like the code it replaces.
+                if let Value::Declaration(declaration) = &value
+                    && member(&value, &name).is_err()
+                    && declaration.members.iter().any(|(each, _)| each == &name)
+                {
+                    let declaration = declaration.clone();
+                    return self.member_value(&declaration, &name);
+                }
                 member(&value, &name)
+            }
+            // `.Variant` / `.Variant(payload)`. Which enum it belongs to is the
+            // expected type's business everywhere else in the language, and an
+            // `expand` body has no expected type here — so the case carries the
+            // variant and, when the arm that reads it needs one, the payload.
+            Expr::DotMember { name, args, .. } => {
+                let variant = self.name(name).to_owned();
+                let payload = match args {
+                    Some(arguments) if !arguments.is_empty() => {
+                        if arguments.len() > 1 {
+                            return Err(EvalError::unsupported(format!(
+                                "a variant carrying {} payloads; one is the most a variant holds",
+                                arguments.len()
+                            )));
+                        }
+                        Some(self.value(arguments[0])?)
+                    }
+                    _ => None,
+                };
+                Ok(Value::EnumCase(Box::new(crate::value::EnumCaseValue {
+                    enum_name: String::new(),
+                    variant,
+                    payload,
+                })))
             }
             Expr::Call {
                 callee, args, span, ..
@@ -134,10 +204,16 @@ impl Evaluator<'_> {
             ("Int", [Value::Int(n)]) => Ok(Value::Int(*n)),
             ("Int", [Value::Str(text)]) => parse_int(text),
             ("Int", [Value::Syntax(written)]) => parse_int(&written.text),
-            _ => Err(EvalError::unsupported(format!(
-                "a call to `{callee}` with {} argument(s)",
-                values.len()
-            ))),
+            // A `comptime function` the program declared, which is how one
+            // composes with another. Asked last, so a builtin of the same name
+            // keeps its meaning.
+            _ => match self.call_comptime(callee, &values) {
+                Some(result) => result,
+                None => Err(EvalError::unsupported(format!(
+                    "a call to `{callee}` with {} argument(s)",
+                    values.len()
+                ))),
+            },
         }
     }
 
@@ -179,7 +255,62 @@ impl Evaluator<'_> {
         }
         let value = self.value(receiver)?;
         let values = self.arguments(args)?;
+        // Running a declaration's member needs the evaluator, so it cannot live
+        // in `method_on` with the pure reads.
+        if let (Value::Declaration(declaration), "value") = (&value, method) {
+            let [Value::Str(name)] = values.as_slice() else {
+                return Err(EvalError::unsupported(
+                    "`value` with other than one member name",
+                ));
+            };
+            return self.member_value(declaration, name);
+        }
         method_on(&value, method, &values)
+    }
+
+    /// Runs one member of a construct-backed declaration and hands back what it
+    /// answered.
+    ///
+    /// This is what lets a family's declarations be read as **data during
+    /// compilation** rather than as code a program runs at startup: a collector
+    /// asking `declaration.value("path")` gets the string, not syntax that would
+    /// fetch it later.
+    ///
+    /// The member's body runs on this same evaluator, so it may itself call a
+    /// `comptime function` and use every statement form an `expand` body has.
+    fn member_value(
+        &mut self,
+        declaration: &DeclarationValue,
+        name: &str,
+    ) -> Result<Value, EvalError> {
+        let Some((_, body)) = declaration
+            .members
+            .iter()
+            .find(|(member, _)| member == name)
+        else {
+            return Err(EvalError::unsupported(format!(
+                "`{}` declares no member `{name}` to run",
+                declaration.name
+            )));
+        };
+        let Some(compiled) = super::compile(body) else {
+            return Err(EvalError::coded(
+                diagnostics::EXPAND_SIGNATURE,
+                format!(
+                    "the body of `{}`'s `{name}` does not parse",
+                    declaration.name
+                ),
+            ));
+        };
+        let comptime = super::Comptime {
+            functions: self.functions,
+            shaders: self.shaders,
+            platform: &self.platform.clone(),
+            enums: &self.enums.clone(),
+        };
+        let (value, reported) = super::run_value(&compiled, Vec::new(), comptime, self.lint)?;
+        self.reported.extend(reported);
+        Ok(value)
     }
 
     /// A call on `Syntax` or `Diagnostics`.
@@ -279,11 +410,29 @@ fn member(value: &Value, name: &str) -> Result<Value, EvalError> {
         // string, so a macro can select declarations by family without the
         // compiler knowing any family by name. Empty for every other form.
         (Value::Declaration(declaration), "family") => Ok(Value::Str(declaration.family.clone())),
+        // The names of its behaviour members, in declaration order.
+        (Value::Declaration(declaration), "memberNames") => Ok(Value::Array(
+            declaration
+                .members
+                .iter()
+                .map(|(name, _)| Value::Str(name.clone()))
+                .collect(),
+        )),
         // Which form the declaration wears, as the word `appliesTo` uses:
         // `struct`, `class`, `enum`, `construct`, `form`, `function`. The value
         // has carried this since reflection existed; without a way to read it, a
         // lint that cares about one kind of declaration had to guess from text.
-        (Value::Declaration(declaration), "kind") => Ok(Value::Str(declaration.kind.to_owned())),
+        // Which form the declaration wears, as a case a macro body matches
+        // rather than a string it compares. The set is closed and the compiler
+        // owns it, so a `match` over it is checked and a misspelled arm is an
+        // error instead of a branch that silently never runs.
+        (Value::Declaration(declaration), "kind") => {
+            Ok(Value::EnumCase(Box::new(crate::value::EnumCaseValue {
+                enum_name: "DeclarationForm".to_owned(),
+                variant: declaration.kind.to_owned(),
+                payload: None,
+            })))
+        }
         // Where it sits, and how big the file holding it is.
         //
         // A macro is handed declarations, never files, so without these a lint
@@ -378,6 +527,13 @@ fn member(value: &Value, name: &str) -> Result<Value, EvalError> {
 /// Calls a method on a reflection value.
 fn method_on(value: &Value, method: &str, args: &[Value]) -> Result<Value, EvalError> {
     match (value, method, args) {
+        // Whether the declaration writes a body for `name` itself. One that does
+        // not inherits its family's default, which is a *different* declaration
+        // — so a collector that wants the inherited answer asks this first and
+        // falls back to the family.
+        (Value::Declaration(declaration), "hasMember", [Value::Str(name)]) => Ok(Value::Bool(
+            declaration.members.iter().any(|(member, _)| member == name),
+        )),
         (Value::Identifier(name), "asString", []) => Ok(Value::Str(name.clone())),
         (Value::TypeRef(written), "asSyntax", []) => Ok(Value::built(written.clone())),
         (Value::Str(text), "asString", []) => Ok(Value::Str(text.clone())),
@@ -447,6 +603,14 @@ fn method_on(value: &Value, method: &str, args: &[Value]) -> Result<Value, EvalE
         // bytes it came from, so the result points nowhere: a span into the
         // original text would underline the wrong run after an edit shifted
         // everything past it.
+        // `addMember` — how a macro gives a declaration a section it did not
+        // write, a `lifecycle { … }` above all.
+        (Value::Syntax(syntax), "addMember", [member]) => {
+            let member = text_of(member)?;
+            syntax_ops::add_member(&syntax.text, &member)
+                .map(Value::built)
+                .map_err(syntax_error)
+        }
         (Value::Syntax(syntax), "dropField", [name]) => {
             let field = text_of(name)?;
             syntax_ops::drop_field(&syntax.text, &field)
@@ -531,6 +695,14 @@ fn syntax_error(error: SyntaxError) -> EvalError {
             diagnostics::NO_SUCH_FIELD,
             format!("this declaration has no field named `{name}`"),
         ),
+        SyntaxError::AlreadyHasHook(name) => EvalError::coded(
+            diagnostics::NO_SUCH_FIELD,
+            format!(
+                "this declaration writes a `{name}` lifecycle hook and the macro adds one: a \
+                 hook a macro supplies is the runtime's half of the contract, so remove the \
+                 hand-written one rather than declaring it twice"
+            ),
+        ),
         SyntaxError::WriteThroughProperty(name) => EvalError::coded(
             diagnostics::WRITE_THROUGH_WRAPPER,
             format!(
@@ -579,6 +751,21 @@ fn comparable(left: &Value, right: &Value) -> Result<bool, EvalError> {
     match (left, right) {
         (Value::Int(a), Value::Int(b)) => Ok(a == b),
         (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
+        // Two cases are the same case when they hold the same variant and the
+        // same payload. The enum's *name* is not part of it: a bare `.Enum`
+        // written in a body never learned which enum it belongs to, and
+        // demanding it match would make the one spelling a body can write never
+        // equal to the one reflection hands back.
+        (Value::EnumCase(a), Value::EnumCase(b)) => {
+            if a.variant != b.variant {
+                return Ok(false);
+            }
+            match (&a.payload, &b.payload) {
+                (None, None) => Ok(true),
+                (Some(a), Some(b)) => comparable(a, b),
+                _ => Ok(false),
+            }
+        }
         (a, b) => match (as_text(a), as_text(b)) {
             (Some(a), Some(b)) => Ok(a == b),
             _ => Err(EvalError::unsupported(format!(

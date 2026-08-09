@@ -11,7 +11,7 @@
 //! unknown opcode is rejected rather than guessed at.
 
 use super::{
-    CompilerOp, EnvOp, FieldPath, FileSystemOp, Instruction, PathStep, PlacePath, StringOp,
+    CompilerOp, EnvOp, FieldPath, FileSystemOp, Instruction, MathOp, PathStep, PlacePath, StringOp,
     TaskPrim, WritebackTarget, opcode as o, step_tag,
 };
 
@@ -121,6 +121,19 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
             out.push(o::GET_FIELD);
             out.extend_from_slice(&index.to_le_bytes());
         }
+        Instruction::ForeignOffset(offset) => {
+            out.push(o::FOREIGN_OFFSET);
+            out.extend_from_slice(&offset.to_le_bytes());
+        }
+        Instruction::ForeignIndex(stride) => {
+            out.push(o::FOREIGN_INDEX);
+            out.extend_from_slice(&stride.to_le_bytes());
+        }
+        Instruction::ForeignLoad { offset, ty } => {
+            out.push(o::FOREIGN_LOAD);
+            out.extend_from_slice(&offset.to_le_bytes());
+            out.push(ty.tag());
+        }
         Instruction::StoreField { slot, path } => {
             out.push(o::STORE_FIELD);
             out.extend_from_slice(&slot.to_le_bytes());
@@ -187,6 +200,15 @@ pub fn encode_one(instruction: &Instruction, out: &mut Vec<u8>) {
         Instruction::StringOp(op) => {
             out.push(o::STRING_OP);
             out.push(op.as_byte());
+        }
+        Instruction::ScalarText => out.push(o::SCALAR_TEXT),
+        Instruction::ArrayElements(ty) => {
+            out.push(o::ARRAY_ELEMENTS);
+            out.push(ty.tag());
+        }
+        Instruction::MathOp(op) => {
+            out.push(o::MATH_OP);
+            out.push(op.tag());
         }
         Instruction::Compiler(op) => {
             out.push(o::COMPILER);
@@ -345,6 +367,20 @@ impl Cursor<'_> {
             o::NATIVE_RECOVER => Instruction::NativeRecover(u64::from_le_bytes(self.take()?)),
             o::NEW_STRUCT => Instruction::NewStruct(u16::from_le_bytes(self.take()?)),
             o::GET_FIELD => Instruction::GetField(u16::from_le_bytes(self.take()?)),
+            o::FOREIGN_OFFSET => Instruction::ForeignOffset(u32::from_le_bytes(self.take()?)),
+            o::FOREIGN_INDEX => Instruction::ForeignIndex(u32::from_le_bytes(self.take()?)),
+            o::FOREIGN_LOAD => {
+                let offset = u32::from_le_bytes(self.take()?);
+                let at = self.offset;
+                let [tag] = self.take()?;
+                let ty = kira_runtime_abi::ForeignType::from_tag(tag).ok_or(
+                    DecodeError::UnknownOpcode {
+                        opcode: tag,
+                        offset: at,
+                    },
+                )?;
+                Instruction::ForeignLoad { offset, ty }
+            }
             o::STORE_FIELD => {
                 let slot = u16::from_le_bytes(self.take()?);
                 let count = u16::from_le_bytes(self.take()?);
@@ -413,6 +449,27 @@ impl Cursor<'_> {
                     offset: tag_offset,
                 })?;
                 Instruction::StringOp(op)
+            }
+            o::SCALAR_TEXT => Instruction::ScalarText,
+            o::ARRAY_ELEMENTS => {
+                let at = self.offset;
+                let [tag] = self.take()?;
+                let ty = kira_runtime_abi::ForeignType::from_tag(tag).ok_or(
+                    DecodeError::UnknownOpcode {
+                        opcode: tag,
+                        offset: at,
+                    },
+                )?;
+                Instruction::ArrayElements(ty)
+            }
+            o::MATH_OP => {
+                let tag_offset = self.offset;
+                let [tag] = self.take::<1>()?;
+                let op = MathOp::from_tag(tag).ok_or(DecodeError::UnknownOpcode {
+                    opcode: tag,
+                    offset: tag_offset,
+                })?;
+                Instruction::MathOp(op)
             }
             o::COMPILER => {
                 let tag_offset = self.offset;

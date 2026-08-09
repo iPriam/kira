@@ -1,0 +1,252 @@
+// PNG.
+//
+// The format is a chunk list around one zlib stream. What the stream holds is
+// not pixels but *filtered* pixels: each scanline is preceded by a byte naming
+// one of five predictors, and the bytes after it are the difference between the
+// real pixel and what that predictor guessed. Undoing that is the whole of
+// `unfilterRow`, and it has to happen in order — a row's predictor reads the
+// row above it after that row was already undone.
+//
+// Everything else is width: five colour types, five bit depths, a palette, two
+// kinds of transparency, and an interlace that splits the image into seven
+// sparse passes. Each of those is a real file someone exports, so each is read
+// rather than refused; a decoder that handles only 8-bit RGBA is one that works
+// until the first asset saved from a different tool.
+
+class PngDecoder {
+    var data: [U8] = []
+    var width: Int = 0
+    var height: Int = 0
+    var bitDepth: Int = 0
+    var colorType: Int = 0
+    var interlaced: Bool = false
+    // Three bytes per entry, as PLTE writes them.
+    var palette: [U8] = []
+    // One byte per palette entry, from tRNS; entries past its end are opaque.
+    var paletteAlpha: [U8] = []
+    // tRNS for a greyscale or truecolour image names one sample value that is
+    // transparent, at the image's own bit depth rather than scaled to 8 bits.
+    var hasTransparentSample: Bool = false
+    var transparentRed: Int = 0
+    var transparentGreen: Int = 0
+    var transparentBlue: Int = 0
+    var compressed: [U8] = []
+    // The inflated stream, and how far through it the passes have read.
+    var raw: [U8] = []
+    var rawCursor: Int = 0
+    var pixels: [U8] = []
+    // The row being undone and the one above it. Two buffers with a flipping
+    // index rather than one buffer that is copied back: the predictor needs
+    // both, and a copy per row is a second pass over the whole image.
+    var rowBuffers: [[U8]] = []
+    var parity: Int = 0
+    var stopped: Bool = false
+    var failure: ImageFailure = .Malformed
+
+    function fail(reason: ImageFailure) {
+        self.stopped = true
+        self.failure = reason
+        return
+    }
+
+    function readBigEndian32(at: Int) -> Int {
+        return (Int(self.data[at]) << 24)
+            | (Int(self.data[at + 1]) << 16)
+            | (Int(self.data[at + 2]) << 8)
+            | Int(self.data[at + 3])
+    }
+
+    function chunkIs(at: Int, a: Int, b: Int, c: Int, d: Int) -> Bool {
+        return Int(self.data[at]) == a
+            && Int(self.data[at + 1]) == b
+            && Int(self.data[at + 2]) == c
+            && Int(self.data[at + 3]) == d
+    }
+
+    // How many samples one pixel carries, before any expansion to RGBA.
+    function channels() -> Int {
+        if self.colorType == 0 {
+            return 1
+        }
+        if self.colorType == 2 {
+            return 3
+        }
+        if self.colorType == 3 {
+            return 1
+        }
+        if self.colorType == 4 {
+            return 2
+        }
+        return 4
+    }
+
+    // Whether this colour type may be written at this bit depth. The format
+    // pairs them: a palette index is never 16 bits, and a colour channel is
+    // never fewer than 8.
+    function headerIsCoherent() -> Bool {
+        if self.width <= 0 || self.height <= 0 {
+            return false
+        }
+        if self.colorType == 0 {
+            return self.bitDepth == 1 || self.bitDepth == 2 || self.bitDepth == 4
+                || self.bitDepth == 8 || self.bitDepth == 16
+        }
+        if self.colorType == 3 {
+            return self.bitDepth == 1 || self.bitDepth == 2 || self.bitDepth == 4
+                || self.bitDepth == 8
+        }
+        if self.colorType == 2 || self.colorType == 4 || self.colorType == 6 {
+            return self.bitDepth == 8 || self.bitDepth == 16
+        }
+        return false
+    }
+
+    // The chunk list: a header, a palette and its transparency if there is one,
+    // the image data in as many pieces as the writer felt like, and an end.
+    function readChunks() {
+        var at = 8
+        var sawHeader = false
+        while !self.stopped {
+            if at + 8 > self.data.count {
+                self.fail(.Malformed)
+                return
+            }
+            let length = self.readBigEndian32(at)
+            let body = at + 8
+            if length < 0 || body + length + 4 > self.data.count {
+                self.fail(.Malformed)
+                return
+            }
+            if self.chunkIs(at + 4, 73, 72, 68, 82) {
+                if length != 13 {
+                    self.fail(.Malformed)
+                    return
+                }
+                self.width = self.readBigEndian32(body)
+                self.height = self.readBigEndian32(body + 4)
+                self.bitDepth = Int(self.data[body + 8])
+                self.colorType = Int(self.data[body + 9])
+                let compression = Int(self.data[body + 10])
+                let filtering = Int(self.data[body + 11])
+                let interlace = Int(self.data[body + 12])
+                if compression != 0 || filtering != 0 || interlace > 1 {
+                    self.fail(.Malformed)
+                    return
+                }
+                self.interlaced = interlace == 1
+                if !self.headerIsCoherent() {
+                    self.fail(.Malformed)
+                    return
+                }
+                sawHeader = true
+            } else if self.chunkIs(at + 4, 80, 76, 84, 69) {
+                var index = 0
+                while index < length {
+                    self.palette.append(self.data[body + index])
+                    index = index + 1
+                }
+            } else if self.chunkIs(at + 4, 116, 82, 78, 83) {
+                self.readTransparency(body, length)
+            } else if self.chunkIs(at + 4, 73, 68, 65, 84) {
+                var index = 0
+                while index < length {
+                    self.compressed.append(self.data[body + index])
+                    index = index + 1
+                }
+            } else if self.chunkIs(at + 4, 73, 69, 78, 68) {
+                if !sawHeader {
+                    self.fail(.Malformed)
+                }
+                return
+            }
+            at = body + length + 4
+        }
+        return
+    }
+
+    function readTransparency(body: Int, length: Int) {
+        if self.colorType == 3 {
+            var index = 0
+            while index < length {
+                self.paletteAlpha.append(self.data[body + index])
+                index = index + 1
+            }
+            return
+        }
+        if self.colorType == 0 && length >= 2 {
+            self.hasTransparentSample = true
+            self.transparentRed = (Int(self.data[body]) << 8) | Int(self.data[body + 1])
+            self.transparentGreen = self.transparentRed
+            self.transparentBlue = self.transparentRed
+            return
+        }
+        if self.colorType == 2 && length >= 6 {
+            self.hasTransparentSample = true
+            self.transparentRed = (Int(self.data[body]) << 8) | Int(self.data[body + 1])
+            self.transparentGreen = (Int(self.data[body + 2]) << 8) | Int(self.data[body + 3])
+            self.transparentBlue = (Int(self.data[body + 4]) << 8) | Int(self.data[body + 5])
+        }
+        return
+    }
+}
+
+// Seven sparse passes, each a grid offset from the image's origin and stepping
+// over it. Pass 1 is every eighth pixel of every eighth row; pass 7 is every
+// remaining row entirely. An interlaced file is these seven images one after
+// another, each filtered on its own.
+function adam7OriginX() -> [Int] {
+    return [0, 4, 0, 2, 0, 1, 0]
+}
+
+function adam7OriginY() -> [Int] {
+    return [0, 0, 4, 0, 2, 0, 1]
+}
+
+function adam7StepX() -> [Int] {
+    return [8, 8, 4, 4, 2, 2, 1]
+}
+
+function adam7StepY() -> [Int] {
+    return [8, 8, 8, 4, 4, 2, 2]
+}
+
+// The image a PNG's bytes hold.
+function decodePng(bytes: [U8]) -> Result<Image, ImageFailure> {
+    if bytes.count < 8 {
+        return .Error(.Malformed)
+    }
+    if bytes[0] != 137 || bytes[1] != 80 || bytes[2] != 78 || bytes[3] != 71
+        || bytes[4] != 13 || bytes[5] != 10 || bytes[6] != 26 || bytes[7] != 10 {
+        return .Error(.UnknownFormat)
+    }
+
+    var decoder = PngDecoder()
+    decoder.data = move bytes
+    decoder.readChunks()
+    if decoder.stopped {
+        return .Error(decoder.failure)
+    }
+    if decoder.width <= 0 || decoder.compressed.count == 0 {
+        return .Error(.Malformed)
+    }
+    if decoder.colorType == 3 && decoder.palette.count < 3 {
+        return .Error(.Malformed)
+    }
+
+    var inflated: [U8] = []
+    match inflateZlib(move decoder.compressed) {
+        Ok(stream) -> { inflated = move stream }
+        Error(reason) -> { return .Error(.Malformed) }
+    }
+
+    decoder.pixels = filledBytes(decoder.width * decoder.height * 4, 0)
+    decoder.readPasses(move inflated)
+    if decoder.stopped {
+        return .Error(decoder.failure)
+    }
+    return .Ok(Image {
+        width: decoder.width
+        height: decoder.height
+        pixels: move decoder.pixels
+    })
+}

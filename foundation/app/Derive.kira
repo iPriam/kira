@@ -29,14 +29,27 @@
 //     reproduces its source text (`[Int]` gives `"Int"`, which is not `"[Int]"`).
 //   * `Deserializable` refuses a `Float` field: there is no lossless `Float`
 //     parsing primitive, so refusing beats shipping a lossy parser.
-//   * `appliesTo { struct }` only. An enum derive is possible — see
-//     `DeriveTagged.kira`, which is one — but the four here fold *fields*, and
-//     an enum's variants are not fields with values to compare or clone.
+//   * `Serializable` and `Deserializable` are `appliesTo { struct }` only.
+//     `Equatable` and `Clone` also take an enum, because a struct holding an
+//     enum field recurses through that enum's own `eq_` / `clone_` and those
+//     have to exist — which is what `@Derive(Equatable) enum Blend { … }` gives.
 
 comptime macro Equatable {
     kind { derive }
-    appliesTo { struct }
+    appliesTo { struct enum }
     expand(target: Declaration) -> Syntax {
+        // An enum is one value, not a fold over fields: `==` on two enum values
+        // is structural and total — it compares the tag, and the payloads when
+        // there are any — so the whole comparison is the operator. This is what
+        // lets a struct holding an enum field derive at all: the field's arm
+        // recurses through `eq_<Enum>`, and that function has to exist.
+        if target.kind == .Enum {
+            return quote {
+                function eq_#{target.name}(a: borrow #{target.name}, b: borrow #{target.name}) -> Bool {
+                    return a == b
+                }
+            }
+        }
         var checks: [Syntax] = []
         for field in target.fields {
             var joined: String = ""
@@ -47,7 +60,7 @@ comptime macro Equatable {
                 Diagnostics.error("Derive(Equatable): field has an unsupported array or generic type; only bare scalar or nested-derived struct fields are supported", at: target.syntax)
             }
             var isScalar: Bool = false
-            for sname in ["Int", "Float", "Bool", "String", "I8", "U8", "I16", "U16", "I32", "U32", "I64", "U64", "F32", "F64", "CBool", "CString", "RawPtr"] {
+            for sname in ["Int", "Float", "Bool", "String", "I8", "U8", "I16", "U16", "I32", "U32", "Int", "U64", "F32", "Float", "CBool", "CString", "RawPtr"] {
                 if field.type == sname {
                     isScalar = true
                 }
@@ -77,8 +90,46 @@ comptime macro Equatable {
 
 comptime macro Clone {
     kind { derive }
-    appliesTo { struct }
+    appliesTo { struct enum }
     expand(target: Declaration) -> Syntax {
+        // An enum is cloned by naming the variant it holds. A payload-less
+        // variant rebuilds to itself; a payload recurses through its own
+        // `clone_`, the same rule a struct field follows — so an enum of plain
+        // variants costs one match and an enum carrying values stays correct
+        // rather than sharing what it should have copied.
+        if target.kind == .Enum {
+            var arms: [Syntax] = []
+            for variant in target.fields {
+                if variant.type.asSyntax() == "" {
+                    arms.append(quote { #{variant.name} -> return .#{variant.name}; })
+                } else {
+                    // A payload is classified exactly as a struct field is: a
+                    // scalar copies by read, anything else recurses through its
+                    // own `clone_`. Recursing on an `Int` would name a
+                    // `clone_Int` that does not and should not exist.
+                    var isScalar: Bool = false
+                    for sname in ["Int", "Float", "Bool", "String", "I8", "U8", "I16", "U16", "I32", "U32", "Int", "U64", "F32", "Float", "CBool", "CString", "RawPtr"] {
+                        if variant.type == sname {
+                            isScalar = true
+                        }
+                    }
+                    if isScalar {
+                        arms.append(quote { #{variant.name}(payload) -> return .#{variant.name}(payload); })
+                    } else {
+                        arms.append(quote {
+                            #{variant.name}(payload) -> return .#{variant.name}(clone_#{variant.type.asSyntax()}(payload));
+                        })
+                    }
+                }
+            }
+            return quote {
+                function clone_#{target.name}(v: borrow #{target.name}) -> #{target.name} {
+                    match v {
+                        #{arms}
+                    }
+                }
+            }
+        }
         var inits: [Syntax] = []
         for field in target.fields {
             var joined: String = ""
@@ -89,7 +140,7 @@ comptime macro Clone {
                 Diagnostics.error("Derive(Clone): field has an unsupported array or generic type; only bare scalar or nested-derived struct fields are supported", at: target.syntax)
             }
             var isScalar: Bool = false
-            for sname in ["Int", "Float", "Bool", "String", "I8", "U8", "I16", "U16", "I32", "U32", "I64", "U64", "F32", "F64", "CBool", "CString", "RawPtr"] {
+            for sname in ["Int", "Float", "Bool", "String", "I8", "U8", "I16", "U16", "I32", "U32", "Int", "U64", "F32", "Float", "CBool", "CString", "RawPtr"] {
                 if field.type == sname {
                     isScalar = true
                 }

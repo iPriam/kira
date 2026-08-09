@@ -2,12 +2,12 @@
 //!
 //! Kira has one integer runtime representation (64-bit two's complement) and
 //! one float representation (64-bit IEEE-754). The fixed-width names — `I8`
-//! through `I64`, `U8` through `U64`, `F32`, `F64` — do not introduce new
+//! through `I32`, `U8` through `U64`, `F32` — do not introduce new
 //! representations. They are **spellings** carried alongside the kind, and they
 //! decide exactly two things:
 //!
 //! 1. **Type distinctness.** Two *named* widths must match exactly, so `U8` is
-//!    not assignable to `I64`. Bare `Int` and bare `Float` are wildcards that
+//!    not assignable to `U32`. Bare `Int` and bare `Float` are wildcards that
 //!    match any width in their kind — which is what lets `let x: U8 = 5` work
 //!    without an implicit-conversion rule, since an integer literal is spelled
 //!    [`IntSpelling::Plain`]. See [`super::Type::assignable_to`].
@@ -39,8 +39,6 @@ pub enum IntSpelling {
     I16,
     /// `I32`.
     I32,
-    /// `I64`.
-    I64,
     /// `U8`.
     U8,
     /// `U16`.
@@ -55,7 +53,7 @@ impl IntSpelling {
     /// Whether this spelling selects unsigned division, remainder, and
     /// ordering.
     ///
-    /// True for exactly the `U`-prefixed names. Bare `Int` and `I8`..`I64` are
+    /// True for exactly the `U`-prefixed names. Bare `Int` and `I8`..`I32` are
     /// signed. Equality is *not* affected — two 64-bit patterns compare equal
     /// under either signedness — so only `/`, `%`, and the four ordering
     /// comparisons consult this.
@@ -73,7 +71,6 @@ impl IntSpelling {
             IntSpelling::I8 => "I8",
             IntSpelling::I16 => "I16",
             IntSpelling::I32 => "I32",
-            IntSpelling::I64 => "I64",
             IntSpelling::U8 => "U8",
             IntSpelling::U16 => "U16",
             IntSpelling::U32 => "U32",
@@ -92,7 +89,6 @@ impl IntSpelling {
             "I8" => IntSpelling::I8,
             "I16" => IntSpelling::I16,
             "I32" => IntSpelling::I32,
-            "I64" => IntSpelling::I64,
             "U8" => IntSpelling::U8,
             "U16" => IntSpelling::U16,
             "U32" => IntSpelling::U32,
@@ -106,7 +102,11 @@ impl IntSpelling {
 ///
 /// The runtime representation is 64-bit IEEE-754 for every variant. Unlike
 /// [`IntSpelling`], no operation's behavior depends on this: it exists purely
-/// so `F32` and `F64` are distinct types to the checker.
+/// so `F32` and bare `Float` are distinct types to the checker.
+///
+/// There is no `F64`. `Float` *is* the 64-bit float — a second spelling for one
+/// type bought nothing and cost every reader a moment deciding which to write.
+/// The same is true of `Int`, which is why there is no `I64` either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FloatSpelling {
     /// Bare `Float`, and the type of every float literal.
@@ -116,8 +116,6 @@ pub enum FloatSpelling {
     Plain,
     /// `F32`.
     F32,
-    /// `F64`.
-    F64,
 }
 
 impl FloatSpelling {
@@ -126,7 +124,6 @@ impl FloatSpelling {
         match self {
             FloatSpelling::Plain => "Float",
             FloatSpelling::F32 => "F32",
-            FloatSpelling::F64 => "F64",
         }
     }
 
@@ -136,7 +133,6 @@ impl FloatSpelling {
     pub fn from_name(name: &str) -> Option<FloatSpelling> {
         Some(match name {
             "F32" => FloatSpelling::F32,
-            "F64" => FloatSpelling::F64,
             _ => return None,
         })
     }
@@ -153,7 +149,6 @@ mod tests {
             IntSpelling::I8,
             IntSpelling::I16,
             IntSpelling::I32,
-            IntSpelling::I64,
         ] {
             assert!(!signed.is_unsigned(), "{signed:?} is signed");
         }
@@ -173,7 +168,6 @@ mod tests {
             IntSpelling::I8,
             IntSpelling::I16,
             IntSpelling::I32,
-            IntSpelling::I64,
             IntSpelling::U8,
             IntSpelling::U16,
             IntSpelling::U32,
@@ -181,9 +175,12 @@ mod tests {
         ] {
             assert_eq!(IntSpelling::from_name(spelling.name()), Some(spelling));
         }
-        for spelling in [FloatSpelling::F32, FloatSpelling::F64] {
-            assert_eq!(FloatSpelling::from_name(spelling.name()), Some(spelling));
-        }
+        // `F32` is the only fixed-width float spelling: `Float` is the
+        // wildcard, and there is no `F64`.
+        assert_eq!(
+            FloatSpelling::from_name(FloatSpelling::F32.name()),
+            Some(FloatSpelling::F32)
+        );
     }
 
     #[test]
@@ -192,6 +189,11 @@ mod tests {
         // second resolution path here is how the two could drift apart.
         assert_eq!(IntSpelling::from_name("Int"), None);
         assert_eq!(FloatSpelling::from_name("Float"), None);
+        // And the widths they replaced are gone outright: `Int` *is* the 64-bit
+        // signed integer and `Float` the 64-bit float, so a second spelling for
+        // either would be one type wearing two names.
+        assert_eq!(IntSpelling::from_name("I64"), None);
+        assert_eq!(FloatSpelling::from_name("F64"), None);
     }
 
     #[test]

@@ -18,7 +18,7 @@ Family Leaf(number: Int) {
 }
 
 Family Stack() {
-    @Content let children: [Family]
+    @Content let children: [Any Family]
     function value() -> Int { return children.count }
 }
 "#,
@@ -260,7 +260,7 @@ fn builder_content_items_check_clean() {
         codes(
             r#"
 construct Widget {
-    @Required let body: Widget
+    @Required let body: Any Widget
     function total() -> Int { return body.total() }
 }
 
@@ -305,7 +305,7 @@ fn a_wrong_typed_builder_child_is_refused() {
         codes(
             r#"
 construct Widget {
-    @Required let body: Widget
+    @Required let body: Any Widget
     function total() -> Int { return body.total() }
 }
 
@@ -347,7 +347,7 @@ fn a_builder_filling_a_single_slot_is_refused() {
         codes(
             r#"
 construct Widget {
-    @Required let body: Widget
+    @Required let body: Any Widget
     function total() -> Int { return body.total() }
 }
 
@@ -403,10 +403,10 @@ fn some_over_a_non_construct_is_refused_in_every_type_position() {
     }
 }
 
-/// A family named by `some` resolves to exactly what the bare family name
-/// resolves to, so the two spellings are interchangeable in a signature.
+/// `some Family` and `Any Family` resolve to the same type, so the two
+/// spellings are interchangeable in a signature.
 #[test]
-fn some_family_and_the_bare_family_are_the_same_type() {
+fn some_family_and_any_family_are_the_same_type() {
     assert!(
         library_codes(
             r#"
@@ -422,15 +422,43 @@ function takesSome(f: borrow some Family) -> Int {
     return f.value
 }
 
-function takesBare(f: borrow Family) -> Int {
+function takesAny(f: borrow Any Family) -> Int {
     return takesSome(f)
 }
 
 function roundTrip() -> Int {
-    return takesBare(One())
+    return takesAny(One())
 }
 "#,
         )
         .is_empty()
+    );
+}
+
+/// The bare family name is not a type.
+///
+/// A family is not one of its own values, and the two spellings that *are*
+/// types both say which: `Any Family` and `some Family` name a value of some
+/// declaration backing it. Left accepted, the bare name reads like a concrete
+/// type and hides that the value is heterogeneous.
+#[test]
+fn the_bare_family_name_is_not_a_type() {
+    let source = r#"
+construct Family {
+    @Required let value: Int
+}
+
+Family One {
+    let value: Int = 1
+}
+
+function takesBare(f: borrow Family) -> Int {
+    return f.value
+}
+"#;
+    assert!(
+        library_codes(source).iter().any(|code| code == "KSEM207"),
+        "{:?}",
+        library_codes(source)
     );
 }

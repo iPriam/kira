@@ -24,15 +24,9 @@ enum TypeEnd {
     /// identifier can only be part of the type, so `Any Widget` is unambiguous.
     Enclosed,
     /// The type may be the statement's last token, so a following identifier
-    /// may be the next statement. Only `some Family` is accepted here.
+    /// may be the next statement. `Any Family` is accepted only when what
+    /// follows the family name is the binding's `=`.
     StatementFinal,
-}
-
-impl TypeEnd {
-    /// Whether the compat `Any Family` spelling is unambiguous in this position.
-    fn admits_any_construct(self) -> bool {
-        matches!(self, TypeEnd::Enclosed)
-    }
 }
 
 impl Parser<'_> {
@@ -185,17 +179,28 @@ impl Parser<'_> {
         self.at_word("some") && self.peek(1).kind == TokenKind::Identifier
     }
 
-    /// Whether the cursor sits on `Any Family`, the pre-Construct-2.0 spelling
-    /// of [`Parser::at_some_construct`].
+    /// Whether the cursor sits on `Any Family`, the spelling of the family
+    /// existential.
     ///
-    /// Kept because checked-in Kira still writes it (`[Any Widget]`), and it
-    /// parses to the same node. It is *not* accepted where a type may be the
-    /// last token of its statement — see [`TypeEnd`] — because `Any` is also
-    /// the top type, so `var x: Any` followed by a statement that starts with a
-    /// name would otherwise be read as `Any <that name>`. `some` has no such
-    /// ambiguity and is the spelling to write.
-    fn at_any_construct(&self) -> bool {
-        self.at_word("Any") && self.peek(1).kind == TokenKind::Identifier
+    /// `Any` is also the top type, so in a position where the type may end the
+    /// statement a following name could instead begin the next one. A binding
+    /// always carries an `=`, so requiring one after the family name is what
+    /// tells the two apart — `let x: Any` followed by `render()` still reads as
+    /// two statements, and `let x: Any Widget = w` reads as one.
+    fn at_any_construct(&self, end: TypeEnd) -> bool {
+        if !(self.at_word("Any") && self.peek(1).kind == TokenKind::Identifier) {
+            return false;
+        }
+        if end == TypeEnd::Enclosed {
+            return true;
+        }
+        let mut ahead = 2;
+        while self.peek(ahead).kind == TokenKind::Dot
+            && self.peek(ahead + 1).kind == TokenKind::Identifier
+        {
+            ahead += 2;
+        }
+        self.peek(ahead).kind == TokenKind::Equals
     }
 
     /// Whether the cursor sits on `[some Family]`, the list existential.
@@ -277,7 +282,7 @@ impl Parser<'_> {
         }
         if self.at(TokenKind::Identifier) {
             let start = self.current().span;
-            if self.at_some_construct() || (end.admits_any_construct() && self.at_any_construct()) {
+            if self.at_some_construct() || self.at_any_construct(end) {
                 self.bump(); // `some` / `Any`
                 let family_start = self.current().span;
                 let (text, family_span) = self.parse_qualified_name(family_start);

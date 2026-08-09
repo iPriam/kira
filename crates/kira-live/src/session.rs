@@ -419,9 +419,69 @@ impl LiveSession {
     }
 
     /// Asks the runner to shut down, and stops talking to it.
+    ///
+    /// The ask, and only the ask. A caller that goes on to wait for the runner
+    /// process keeps this socket open while it does, which is enough for the
+    /// runner's own goodbye to land; a caller that does not should use
+    /// [`LiveSession::end`] instead.
     pub fn shutdown(&mut self) -> Result<(), ServerError> {
         write_message(&mut self.writer, &ServerMessage::Shutdown)?;
         Ok(())
+    }
+
+    /// Ends the session: asks the runner to shut down and waits for its goodbye.
+    ///
+    /// A session is a conversation, and a conversation ends with both ends
+    /// knowing it has. Dropping the socket instead leaves the runner's last
+    /// messages unread, which on Windows resets the connection and turns the
+    /// runner's goodbye — sent to a server that had already got everything it
+    /// asked for — into a write that fails. That is a session which completed
+    /// and a runner which exits non-zero for it.
+    ///
+    /// Bounded by [`GOODBYE_TIMEOUT`](crate::server::GOODBYE_TIMEOUT): a runner
+    /// that will not say goodbye is closed on rather than waited on, because
+    /// there is nothing left in the session to wait for.
+    pub fn end(&mut self, on_event: &mut dyn FnMut(LiveEvent)) -> Result<(), ServerError> {
+        self.shutdown()?;
+        self.reader
+            .get_ref()
+            .set_read_timeout(Some(crate::server::GOODBYE_TIMEOUT))?;
+        let outcome = self.read_until_goodbye(on_event);
+        self.reader
+            .get_ref()
+            .set_read_timeout(Some(crate::server::READ_TIMEOUT))?;
+        outcome
+    }
+
+    /// Reads what the runner has left to say, up to its goodbye.
+    fn read_until_goodbye(
+        &mut self,
+        on_event: &mut dyn FnMut(LiveEvent),
+    ) -> Result<(), ServerError> {
+        loop {
+            match read_message(&mut self.reader) {
+                Ok(ClientMessage::Goodbye) => {
+                    self.app_exited = true;
+                    return Ok(());
+                }
+                Ok(message) => self.observe(message, on_event)?,
+                // A runner that closed instead of answering has still gone,
+                // which is all this was waiting to know.
+                Err(ProtocolError::Disconnected) => return Ok(()),
+                // Nor is a runner that stops mid-goodbye worth failing a
+                // finished session over: the timeout is the give-up, and giving
+                // up is the point of having one.
+                Err(ProtocolError::Io(error))
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    return Ok(());
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
     }
 
     /// Sends the current bundle's manifest.

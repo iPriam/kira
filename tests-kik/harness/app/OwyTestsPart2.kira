@@ -326,7 +326,7 @@ Test OwyMidIrDisjointStructFieldBorrows {
 // ---- consuming_nested_field_receiver_parity ----
 
 construct OwyWidget23 {
-    @Required let body: OwyWidget23
+    @Required let body: Any OwyWidget23
 
     @Consuming
     function render() -> [String] {
@@ -374,7 +374,7 @@ Test OwyConsumingNestedFieldReceiverParity {
 // ---- consuming_nested_indexed_receiver_parity ----
 
 construct OwyWidget24 {
-    @Required let body: OwyWidget24
+    @Required let body: Any OwyWidget24
 
     @Consuming
     function render() -> [String] {

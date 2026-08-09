@@ -72,7 +72,7 @@ impl Analyzer<'_> {
                 span,
                 "KSEM245",
                 format!(
-                    "`{callback_name}` declares a signature that cannot cross the C seam, so                      `{name}` cannot be passed as one: a callback carries fixed-width scalars,                      `Bool`, and `RawPtr`, and returns one of those or nothing"
+                    "`{callback_name}` declares a signature that cannot cross the C seam, so                      `{name}` cannot be passed as one: a callback carries fixed-width scalars,                      `Bool`, and a pointer, and returns one of those or nothing"
                 ),
             );
             return Some(self.program.exprs.alloc(HirExpr::Error));

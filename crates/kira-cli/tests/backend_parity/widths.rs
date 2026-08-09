@@ -1,8 +1,8 @@
-//! Parity for the fixed-width scalar spellings `I8`..`I64`, `U8`..`U64`,
-//! `F32`, and `F64`.
+//! Parity for the fixed-width scalar spellings `I8`..`Int`, `U8`..`U64`,
+//! `F32`, and `Float`.
 //!
 //! Most of a width is a *frontend* distinction — every integer spelling shares
-//! one 64-bit representation, so `I32` and `I64` reach the backends as the same
+//! one 64-bit representation, so `I32` and `Int` reach the backends as the same
 //! value. The one thing a width decides that a backend can get wrong is
 //! **signedness**, and that is what these programs are built to catch: each
 //! picks operands whose signed and unsigned answers differ, so a backend that
@@ -47,13 +47,13 @@ fn unsigned_ordering_differs_from_signed_on_every_backend() {
 
 #[test]
 fn signed_widths_keep_signed_division_and_ordering() {
-    // The same shape as the unsigned cases, spelled `I64`, to prove the
+    // The same shape as the unsigned cases, spelled `Int`, to prove the
     // signedness switch is driven by the spelling rather than applied to every
     // integer.
     assert_parity(
         r#"@Main function main() {
-            let neg: I64 = -8
-            let three: I64 = 3
+            let neg: Int = -8
+            let three: Int = 3
             print(neg / three)
             print(neg % three)
             print(neg < three)
@@ -88,7 +88,7 @@ fn every_integer_spelling_carries_a_value_across_the_backends() {
             let a: I8 = 7
             let b: I16 = 300
             let c: I32 = 70000
-            let d: I64 = 5000000000
+            let d: Int = 5000000000
             let e: U8 = 200
             let f: U16 = 60000
             let g: U32 = 4000000000
@@ -113,7 +113,7 @@ fn float_spellings_carry_a_value_across_the_backends() {
     assert_parity(
         r#"@Main function main() {
             let a: F32 = 1.5
-            let b: F64 = 2.25
+            let b: Float = 2.25
             let c: Float = 0.25
             print(a + b)
             print(b / c)

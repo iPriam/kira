@@ -2,13 +2,26 @@
 
 use kira_bytecode::module::Module;
 use kira_runtime_abi::{
-    ForeignArg, ForeignPointerWidth, ForeignResult, NativeArg, NativeStateValue,
+    ForeignArg, ForeignPointerWidth, ForeignResult, NativeArg, NativeResult, NativeStateToken,
+    NativeStateTypeId, NativeStateValue,
 };
 
 use super::Vm;
 use super::frames::{Frame, Writeback};
 use crate::error::VmError;
 use crate::value::{AggregateMismatch, Value};
+
+/// The native-state object a recovered view names in the host store.
+///
+/// A view cannot be handed to the native half as a raw handle: the native call
+/// receives a value tree, and a mutable parameter returns a value tree. The
+/// source is kept beside that tree so the returned tree can be written back to
+/// the state object rather than installed as an ordinary VM value.
+#[derive(Clone, Copy)]
+struct NativeViewSource {
+    token: NativeStateToken,
+    type_id: NativeStateTypeId,
+}
 
 impl Vm<'_> {
     /// Rebuilds every deferred state read sitting at or above `first` on the
@@ -30,7 +43,9 @@ impl Vm<'_> {
     /// callee was declared to write through those parameters, and their final
     /// values come back with the result rather than being moved out of a callee
     /// frame — there is no callee frame, and the two engines share no heap, so
-    /// what crossed was a copy and what returns is another one.
+    /// what crossed was a copy and what returns is another one. A recovered
+    /// native-state view follows the same copy protocol, with the returned
+    /// tree replacing the host-owned state when the view was passed whole.
     pub(super) fn call_native(
         &mut self,
         module: &Module,
@@ -48,9 +63,9 @@ impl Vm<'_> {
             .len()
             .checked_sub(count)
             .ok_or(VmError::StackUnderflow)?;
-        // A deferred state read becomes objects before it reaches the seam, so
-        // an aggregate arriving here is refused by the shape it actually has
-        // rather than as an opaque handle.
+        // A deferred state read becomes objects before it reaches the seam.
+        // A recovered view is materialized below from the host-owned state, so
+        // neither deferred reads nor native-state handles cross this call.
         self.own_arguments(first);
         // Copied off the stack so the borrow ends here: building an aggregate's
         // tree needs the heap mutably, and the borrowed arguments below cannot
@@ -64,7 +79,8 @@ impl Vm<'_> {
         // borrows, so the trees have to outlive the argument list built from
         // them; this is where they live for the duration of the call.
         let mut trees: Vec<Option<NativeStateValue>> = Vec::with_capacity(count);
-        for value in &arguments {
+        let mut native_views = vec![None; count];
+        for (index, value) in arguments.iter().enumerate() {
             let tree = match *value {
                 Value::Struct(_) | Value::Array(_) => Some(
                     self.heap
@@ -78,6 +94,19 @@ impl Vm<'_> {
                         .seam_tree(*value)
                         .ok_or(VmError::EnumAtSeam { function: id })?,
                 ),
+                // A recovered view is a borrow into host-owned callback state,
+                // not a VM heap handle. Snapshot it into the same backend-
+                // neutral tree used by an ordinary aggregate. If the callee
+                // writes through the parameter, the source is used below to
+                // replace the state with the returned tree.
+                Value::NativeView { token, type_id } => {
+                    native_views[index] = Some(NativeViewSource { token, type_id });
+                    Some(
+                        self.host
+                            .native_state_recover(token, type_id)
+                            .map_err(VmError::NativeState)?,
+                    )
+                }
                 _ => None,
             };
             trees.push(tree);
@@ -123,12 +152,15 @@ impl Vm<'_> {
                 // `own_arguments` above rebuilt every one on this stack, so a
                 // state read arrives as the struct, array or enum it holds.
                 Value::NativeState(_)
-                | Value::NativeView { .. }
                 | Value::NativeSnapshot(_)
                 | Value::Cell(_)
                 | Value::Erased(_) => {
                     return Err(VmError::HandleAtSeam { function: id });
                 }
+                Value::NativeView { .. } => match &trees[index] {
+                    Some(tree) => NativeArg::Aggregate(tree),
+                    None => return Err(VmError::HandleAtSeam { function: id }),
+                },
             });
         }
         let returned = self
@@ -155,6 +187,24 @@ impl Vm<'_> {
                     function: id,
                     param: writeback.param,
                 })?;
+            // A whole recovered view is still backed by the host's state
+            // store. Replacing the caller's VM local with an ordinary struct
+            // would silently sever that view, so write the native result back
+            // into the object it names. A non-empty path remains a normal VM
+            // writeback; the place machinery already writes through a view.
+            if let Some(source) = native_views
+                .get(writeback.param as usize)
+                .and_then(|source| *source)
+                && writeback.steps.is_empty()
+            {
+                let NativeResult::Aggregate(value) = value else {
+                    return Err(VmError::HandleAtSeam { function: id });
+                };
+                self.host
+                    .native_state_replace(source.token, source.type_id, value)
+                    .map_err(VmError::NativeState)?;
+                continue;
+            }
             let value = self
                 .heap
                 .absorb(value)
@@ -264,10 +314,13 @@ impl Vm<'_> {
                 foreign: id,
                 expected,
             }),
-            (None, None) => self
-                .host
-                .call_foreign(id, &lowered)
-                .map_err(VmError::ForeignCall),
+            (None, None) => {
+                let outcome = self
+                    .host
+                    .call_foreign(id, &lowered)
+                    .map_err(VmError::ForeignCall);
+                outcome
+            }
         };
         drop(lowered);
         for value in self.stack.split_off(first) {

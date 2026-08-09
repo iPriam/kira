@@ -38,7 +38,7 @@ fn callback_state_rejects_non_owned_and_statically_wrong_types() {
         codes(
             r#"
 @FFI.Struct { layout: c; }
-struct CState { var count: I64 }
+struct CState { var count: Int }
 @Main function main() { var state = nativeState(CState { count: 0 }); return }
 "#,
         ),

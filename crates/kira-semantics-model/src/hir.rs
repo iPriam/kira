@@ -123,6 +123,13 @@ pub struct HirForeign {
     /// struct. The wire position is a pointer word either way; this records what
     /// it points at, so a call may pass the struct and have its address taken.
     pub param_pointees: Box<[Option<ForeignPointee>]>,
+    /// The result's pointer target, `Some(id)` when the result was written as
+    /// an `@FFI.Pointer` to a C-layout struct.
+    ///
+    /// The wire position is a pointer word, which is all the signature records.
+    /// This is what a *call* needs to hand back a pointer that still knows what
+    /// it addresses, so members can be read through the returned pointer.
+    pub result_pointee: Option<StructId>,
     /// The result's wrapper struct, `Some(id)` when the result is a
     /// single-scalar-field struct rebuilt from the seam scalar at the call.
     pub result_wrapper: Option<StructId>,

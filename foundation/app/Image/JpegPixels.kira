@@ -1,0 +1,330 @@
+// Turning a JPEG's coefficients into pixels: the inverse transform that makes
+// samples out of frequencies, the stretch that brings a subsampled channel back
+// to the frame's size, and the conversion from luma and chroma to RGB.
+//
+// All three are fixed-point rather than floating-point, and deliberately so.
+// The transform below is the integer approximation the format's own reference
+// implementation uses, with the multiplier constants scaled by 4096; a decoder
+// that used real arithmetic here would be no more correct — the standard says
+// what the answer is to within a tolerance, not exactly — and would disagree
+// with every other decoder on the last bit of a great many pixels.
+
+extend JpegDecoder {
+    // One 8x8 block of dequantised coefficients, transformed back into samples
+    // and written into the component's plane at (outX, outY).
+    //
+    // Separable: eight column transforms into a workspace, then eight row
+    // transforms out of it. The one-dimensional kernel is written out twice
+    // rather than called, because it produces eight values at once and there is
+    // no cheaper way to hand eight of them back.
+    function inverseTransform(component: Int, outX: Int, outY: Int) {
+        var column = 0
+        while column < 8 {
+            let s0 = self.block[column]
+            let s1 = self.block[column + 8]
+            let s2 = self.block[column + 16]
+            let s3 = self.block[column + 24]
+            let s4 = self.block[column + 32]
+            let s5 = self.block[column + 40]
+            let s6 = self.block[column + 48]
+            let s7 = self.block[column + 56]
+            if s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 0 && s6 == 0 && s7 == 0 {
+                // A column that is only its average: every row of it is that
+                // average, and the general path would compute the same thing
+                // through thirty multiplications.
+                let flat = s0 * 4
+                var row = 0
+                while row < 8 {
+                    self.workspace[column + (row * 8)] = flat
+                    row = row + 1
+                }
+            } else {
+                var p1 = (s2 + s6) * 2217
+                var t2 = p1 + (s6 * (0 - 7567))
+                var t3 = p1 + (s2 * 3135)
+                var t0 = (s0 + s4) * 4096
+                var t1 = (s0 - s4) * 4096
+                var x0 = t0 + t3
+                var x3 = t0 - t3
+                var x1 = t1 + t2
+                var x2 = t1 - t2
+                t0 = s7
+                t1 = s5
+                t2 = s3
+                t3 = s1
+                var p3 = t0 + t2
+                var p4 = t1 + t3
+                p1 = t0 + t3
+                var p2 = t1 + t2
+                let p5 = (p3 + p4) * 4816
+                t0 = t0 * 1223
+                t1 = t1 * 8410
+                t2 = t2 * 12586
+                t3 = t3 * 6149
+                p1 = p5 + (p1 * (0 - 3685))
+                p2 = p5 + (p2 * (0 - 10497))
+                p3 = p3 * (0 - 8034)
+                p4 = p4 * (0 - 1597)
+                t3 = t3 + p1 + p4
+                t2 = t2 + p2 + p3
+                t1 = t1 + p2 + p4
+                t0 = t0 + p1 + p3
+                x0 = x0 + 512
+                x1 = x1 + 512
+                x2 = x2 + 512
+                x3 = x3 + 512
+                self.workspace[column] = (x0 + t3) >> 10
+                self.workspace[column + 56] = (x0 - t3) >> 10
+                self.workspace[column + 8] = (x1 + t2) >> 10
+                self.workspace[column + 48] = (x1 - t2) >> 10
+                self.workspace[column + 16] = (x2 + t1) >> 10
+                self.workspace[column + 40] = (x2 - t1) >> 10
+                self.workspace[column + 24] = (x3 + t0) >> 10
+                self.workspace[column + 32] = (x3 - t0) >> 10
+            }
+            column = column + 1
+        }
+
+        let stride = self.components[component].stride
+        var row = 0
+        while row < 8 {
+            let at = row * 8
+            let s0 = self.workspace[at]
+            let s1 = self.workspace[at + 1]
+            let s2 = self.workspace[at + 2]
+            let s3 = self.workspace[at + 3]
+            let s4 = self.workspace[at + 4]
+            let s5 = self.workspace[at + 5]
+            let s6 = self.workspace[at + 6]
+            let s7 = self.workspace[at + 7]
+            var p1 = (s2 + s6) * 2217
+            var t2 = p1 + (s6 * (0 - 7567))
+            var t3 = p1 + (s2 * 3135)
+            var t0 = (s0 + s4) * 4096
+            var t1 = (s0 - s4) * 4096
+            var x0 = t0 + t3
+            var x3 = t0 - t3
+            var x1 = t1 + t2
+            var x2 = t1 - t2
+            t0 = s7
+            t1 = s5
+            t2 = s3
+            t3 = s1
+            var p3 = t0 + t2
+            var p4 = t1 + t3
+            p1 = t0 + t3
+            var p2 = t1 + t2
+            let p5 = (p3 + p4) * 4816
+            t0 = t0 * 1223
+            t1 = t1 * 8410
+            t2 = t2 * 12586
+            t3 = t3 * 6149
+            p1 = p5 + (p1 * (0 - 3685))
+            p2 = p5 + (p2 * (0 - 10497))
+            p3 = p3 * (0 - 8034)
+            p4 = p4 * (0 - 1597)
+            t3 = t3 + p1 + p4
+            t2 = t2 + p2 + p3
+            t1 = t1 + p2 + p4
+            t0 = t0 + p1 + p3
+            // The rounding term, and the 128 that puts a signed sample back in
+            // the unsigned range the format stored it away from.
+            x0 = x0 + 16842752
+            x1 = x1 + 16842752
+            x2 = x2 + 16842752
+            x3 = x3 + 16842752
+            let out = ((outY + row) * stride) + outX
+            self.components[component].samples[out] = U8(clampByte((x0 + t3) >> 17))
+            self.components[component].samples[out + 7] = U8(clampByte((x0 - t3) >> 17))
+            self.components[component].samples[out + 1] = U8(clampByte((x1 + t2) >> 17))
+            self.components[component].samples[out + 6] = U8(clampByte((x1 - t2) >> 17))
+            self.components[component].samples[out + 2] = U8(clampByte((x2 + t1) >> 17))
+            self.components[component].samples[out + 5] = U8(clampByte((x2 - t1) >> 17))
+            self.components[component].samples[out + 3] = U8(clampByte((x3 + t0) >> 17))
+            self.components[component].samples[out + 4] = U8(clampByte((x3 - t0) >> 17))
+            row = row + 1
+        }
+        return
+    }
+
+    // The finished picture: every component stretched to the frame's size, row
+    // by row, and folded into RGBA.
+    function assemble() -> Image {
+        var index = 0
+        while index < self.components.count {
+            let horizontalScale = self.maxHorizontal / self.components[index].horizontal
+            let verticalScale = self.maxVertical / self.components[index].vertical
+            self.components[index].horizontalScale = horizontalScale
+            self.components[index].verticalScale = verticalScale
+            self.components[index].loresWidth = (self.width + horizontalScale - 1) / horizontalScale
+            // Half a source row in: the first output row sits on the first
+            // source row rather than between it and the next one.
+            self.components[index].step = verticalScale >> 1
+            self.components[index].sourceRow = 0
+            self.components[index].line0 = 0
+            self.components[index].line1 = 0
+            self.lineBuffers.append(filledBytes(self.width, 0))
+            index = index + 1
+        }
+
+        self.output = []
+        var y = 0
+        while y < self.height {
+            index = 0
+            while index < self.components.count {
+                self.stretchRow(index)
+                self.advanceRow(index)
+                index = index + 1
+            }
+            self.foldRow()
+            y = y + 1
+        }
+        return Image {
+            width: self.width
+            height: self.height
+            pixels: move self.output
+        }
+    }
+
+    // One component's current source rows, stretched across the frame's width.
+    //
+    // The blend is the format's usual one: a sample two-to-one away from its
+    // neighbour is three parts itself and one part that neighbour, in both
+    // directions. Stretching by more than two is a plain repeat, because a
+    // filter over samples that far apart invents detail rather than recovering
+    // it.
+    function stretchRow(index: Int) {
+        let stride = self.components[index].stride
+        let horizontalScale = self.components[index].horizontalScale
+        let verticalScale = self.components[index].verticalScale
+        let lores = self.components[index].loresWidth
+        let below = self.components[index].step >= (verticalScale >> 1)
+        var near = self.components[index].line0
+        var far = self.components[index].line1
+        if below {
+            near = self.components[index].line1
+            far = self.components[index].line0
+        }
+        if verticalScale == 1 {
+            // A component already at the frame's height has no second row to
+            // blend towards: `line0` and `line1` are one row apart because the
+            // stretch always keeps a row in hand, and reading both here would
+            // blur the channel against the row below it.
+            far = near
+        }
+        let nearAt = near * stride
+        let farAt = far * stride
+
+        if horizontalScale > 2 {
+            var x = 0
+            while x < self.width {
+                var source = x / horizontalScale
+                if source >= lores {
+                    source = lores - 1
+                }
+                self.lineBuffers[index][x] = self.components[index].samples[nearAt + source]
+                x = x + 1
+            }
+            return
+        }
+
+        if horizontalScale == 1 {
+            var x = 0
+            while x < self.width {
+                let blended = (3 * Int(self.components[index].samples[nearAt + x]))
+                    + Int(self.components[index].samples[farAt + x])
+                self.lineBuffers[index][x] = U8((blended + 2) >> 2)
+                x = x + 1
+            }
+            return
+        }
+
+        var previous = (3 * Int(self.components[index].samples[nearAt]))
+            + Int(self.components[index].samples[farAt])
+        self.lineBuffers[index][0] = U8((previous + 2) >> 2)
+        var source = 1
+        while source < lores {
+            let current = (3 * Int(self.components[index].samples[nearAt + source]))
+                + Int(self.components[index].samples[farAt + source])
+            let left = (source * 2) - 1
+            if left < self.width {
+                self.lineBuffers[index][left] = U8(((3 * previous) + current + 8) >> 4)
+            }
+            if left + 1 < self.width {
+                self.lineBuffers[index][left + 1] = U8(((3 * current) + previous + 8) >> 4)
+            }
+            previous = current
+            source = source + 1
+        }
+        let last = (lores * 2) - 1
+        if last < self.width {
+            self.lineBuffers[index][last] = U8((previous + 2) >> 2)
+        }
+        return
+    }
+
+    // Step one component's stretch on by one output row.
+    function advanceRow(index: Int) {
+        self.components[index].step = self.components[index].step + 1
+        if self.components[index].step < self.components[index].verticalScale {
+            return
+        }
+        self.components[index].step = 0
+        self.components[index].line0 = self.components[index].line1
+        self.components[index].sourceRow = self.components[index].sourceRow + 1
+        if self.components[index].sourceRow < self.components[index].height {
+            self.components[index].line1 = self.components[index].line1 + 1
+        }
+        return
+    }
+
+    // The stretched rows folded into one row of RGBA.
+    function foldRow() {
+        if self.components.count == 1 {
+            var x = 0
+            while x < self.width {
+                let grey = self.lineBuffers[0][x]
+                self.output.append(grey)
+                self.output.append(grey)
+                self.output.append(grey)
+                self.output.append(255)
+                x = x + 1
+            }
+            return
+        }
+        if self.directRgb {
+            var x = 0
+            while x < self.width {
+                self.output.append(self.lineBuffers[0][x])
+                self.output.append(self.lineBuffers[1][x])
+                self.output.append(self.lineBuffers[2][x])
+                self.output.append(255)
+                x = x + 1
+            }
+            return
+        }
+        var x = 0
+        while x < self.width {
+            // The luma, carried at twenty fractional bits with the rounding
+            // already added, plus the two chroma channels as offsets from the
+            // middle of their range.
+            let luma = (Int(self.lineBuffers[0][x]) << 20) + 524288
+            let blueChroma = Int(self.lineBuffers[1][x]) - 128
+            let redChroma = Int(self.lineBuffers[2][x]) - 128
+            let red = luma + (redChroma * 1470208)
+            // Green's blue term is truncated to whole sixteenths before it is
+            // added, which is what the reference conversion does and what every
+            // decoder agreeing with it reproduces.
+            let green = luma
+                + (redChroma * (0 - 748800))
+                + ((blueChroma * (0 - 360960)) & (0 - 65536))
+            let blue = luma + (blueChroma * 1858048)
+            self.output.append(U8(clampByte(red >> 20)))
+            self.output.append(U8(clampByte(green >> 20)))
+            self.output.append(U8(clampByte(blue >> 20)))
+            self.output.append(255)
+            x = x + 1
+        }
+        return
+    }
+}

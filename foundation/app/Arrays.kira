@@ -1,0 +1,31 @@
+// Building an array whose size is known before its contents are.
+//
+// An array grows through `append` and has no other constructor, so code that
+// writes its result out of order — a PNG's interlace passes land every eighth
+// pixel, a JPEG's coefficients arrive in zigzag order — has to have the whole
+// array in hand before the first write. Writing that loop again at every such
+// site is what these replace.
+
+// `count` copies of `value`. A negative count is an empty array, because a
+// count is usually computed and a caller asking for fewer than none wants the
+// none rather than a trap.
+function filledBytes(count: Int, value: U8) -> [U8] {
+    var bytes: [U8] = []
+    var index = 0
+    while index < count {
+        bytes.append(value)
+        index = index + 1
+    }
+    return bytes
+}
+
+// The same for whole numbers.
+function filledInts(count: Int, value: Int) -> [Int] {
+    var numbers: [Int] = []
+    var index = 0
+    while index < count {
+        numbers.append(value)
+        index = index + 1
+    }
+    return numbers
+}

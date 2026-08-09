@@ -48,6 +48,24 @@ impl DeclarationKind {
             DeclarationKind::Other => "declaration",
         }
     }
+
+    /// The `DeclarationForm` variant a macro body matches this kind as.
+    ///
+    /// Distinct from [`DeclarationKind::word`], which is the lowercase spelling
+    /// an `appliesTo` list is written with. A macro body reads the *variant*,
+    /// so `match target.kind { Enum -> … }` is a closed set the evaluator
+    /// checks rather than a string nothing checks.
+    pub(crate) fn variant(self) -> &'static str {
+        match self {
+            DeclarationKind::Struct => "Struct",
+            DeclarationKind::Class => "Class",
+            DeclarationKind::Enum => "Enum",
+            DeclarationKind::Construct => "Construct",
+            DeclarationKind::Form => "Form",
+            DeclarationKind::Function => "Function",
+            DeclarationKind::Other => "Declaration",
+        }
+    }
 }
 
 /// One `@Name` or `@Derive(A, B)` written above a declaration or a field.
@@ -90,6 +108,38 @@ impl Field {
     }
 }
 
+/// One hook of a construct family's `lifecycle { … }` section.
+///
+/// A hook marked `@Comptime` runs **during compilation**, once for each
+/// declaration backed by the family, with `Self` bound to that declaration. It
+/// is what lets a family act on its own declarations without a collector macro
+/// standing between them.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Hook {
+    /// The hook's name.
+    pub(crate) name: String,
+    /// The text between the braces of its body.
+    pub(crate) body: String,
+    /// Whether it carried `@Comptime`.
+    pub(crate) comptime: bool,
+    /// Where it was written.
+    pub(crate) span: Span,
+}
+
+/// One behaviour member of a construct-backed declaration.
+///
+/// The `path { … }` shorthand and the long `function path() -> String { … }` are
+/// the same thing here: a name and a body. What a macro does with the body is
+/// run it — see `Declaration.value(name)` — which is what lets a family's
+/// declarations be read as data during compilation rather than at startup.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Member {
+    /// The member's name.
+    pub(crate) name: String,
+    /// The text between the braces of its body.
+    pub(crate) body: String,
+}
+
 /// One declaration, as a macro sees it.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Declaration {
@@ -106,6 +156,11 @@ pub(crate) struct Declaration {
     pub(crate) family: String,
     /// Its fields, or an enum's variants, in declaration order.
     pub(crate) fields: Vec<Field>,
+    /// Its behaviour members, in declaration order. Empty for a declaration
+    /// that has none.
+    pub(crate) members: Vec<Member>,
+    /// The hooks of its `lifecycle { … }` section, for a family that has one.
+    pub(crate) hooks: Vec<Hook>,
     /// The declaration's exact source text, annotations **excluded**.
     pub(crate) syntax: String,
     /// The bytes the declaration covers, annotations excluded.
@@ -199,6 +254,18 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
         DeclarationKind::Enum => scan_variants(file, open, close),
         _ => scan_fields(file, open, close),
     };
+    // A backed declaration's members are the bodies it provides; a family's are
+    // the defaults a declaration that says nothing inherits. Both are worth
+    // running, which is why both are scanned. A struct's `function` is not: it
+    // is a method with a receiver the evaluator has no value for.
+    let members = match kind {
+        DeclarationKind::Form | DeclarationKind::Construct => scan_members(file, open, close),
+        _ => Vec::new(),
+    };
+    let hooks = match kind {
+        DeclarationKind::Construct => scan_hooks(file, open, close),
+        _ => Vec::new(),
+    };
 
     Some((
         Declaration {
@@ -206,6 +273,8 @@ pub(crate) fn scan(file: &Lexed<'_>, start: usize) -> Option<(Declaration, usize
             name,
             family,
             fields,
+            members,
+            hooks,
             syntax: file.slice(span).to_owned(),
             span,
             source: Some(file.source),
@@ -290,6 +359,157 @@ fn scan_annotations(file: &Lexed<'_>, start: usize) -> (Vec<Annotation>, usize) 
     (annotations, index)
 }
 
+/// Scans a construct family's `lifecycle { … }` section, if it has one.
+///
+/// A hook is `name() { … }`, optionally annotated. `lifecycle` is a contextual
+/// identifier: a member of that name followed by a brace is the section, and
+/// anything else called `lifecycle` is left alone.
+fn scan_hooks(file: &Lexed<'_>, open: usize, close: usize) -> Vec<Hook> {
+    let mut index = open + 1;
+    while index < close {
+        if file.is_word(index, "lifecycle") && file.kind(index + 1) == TokenKind::LBrace {
+            let Some(section_close) = file.match_close(index + 1) else {
+                return Vec::new();
+            };
+            return scan_hook_bodies(file, index + 1, section_close);
+        }
+        if matches!(
+            file.kind(index),
+            TokenKind::LBrace | TokenKind::LParen | TokenKind::LBracket
+        ) {
+            match file.match_close(index) {
+                Some(end) => index = end + 1,
+                None => return Vec::new(),
+            }
+            continue;
+        }
+        index += 1;
+    }
+    Vec::new()
+}
+
+/// Scans the hooks inside a `lifecycle { … }` section.
+fn scan_hook_bodies(file: &Lexed<'_>, open: usize, close: usize) -> Vec<Hook> {
+    let mut hooks = Vec::new();
+    let mut index = open + 1;
+    while index < close {
+        let (annotations, after) = scan_annotations(file, index);
+        if !file.is_ident(after) || file.kind(after + 1) != TokenKind::LParen {
+            index = if after > index { after } else { index + 1 };
+            continue;
+        }
+        let Some(arguments_close) = file.match_close(after + 1) else {
+            break;
+        };
+        let brace = arguments_close + 1;
+        if file.kind(brace) != TokenKind::LBrace {
+            index = brace;
+            continue;
+        }
+        let Some(end) = file.match_close(brace) else {
+            break;
+        };
+        hooks.push(Hook {
+            name: file.text_at(after).to_owned(),
+            body: body_text(file, brace, end),
+            comptime: annotations
+                .iter()
+                .any(|annotation| annotation.name == "Comptime"),
+            span: file.span_of(index, end),
+        });
+        index = end + 1;
+    }
+    hooks
+}
+
+/// Scans the behaviour members of a declaration body.
+///
+/// Both spellings a construct-backed declaration may use: the `name { … }`
+/// shorthand, and `function name(…) -> T { … }`. A `let` member is a field and
+/// is scanned by [`scan_fields`] instead.
+fn scan_members(file: &Lexed<'_>, open: usize, close: usize) -> Vec<Member> {
+    let mut members = Vec::new();
+    let mut index = open + 1;
+    while index < close {
+        // `function name(…) … { … }`. A `@Required` member has no body at all —
+        // it states an obligation — so the search for one stops at the next
+        // member rather than running on and swallowing that member's braces.
+        if file.kind(index) == TokenKind::Function && file.is_ident(index + 1) {
+            let name = file.text_at(index + 1).to_owned();
+            let mut brace = index + 2;
+            while brace < close && file.kind(brace) != TokenKind::LBrace {
+                if matches!(
+                    file.kind(brace),
+                    TokenKind::Function | TokenKind::At | TokenKind::Let | TokenKind::Var
+                ) {
+                    break;
+                }
+                // A parameter list or a `[T]` is skipped whole: neither holds
+                // the body, and a `(` here would otherwise be walked into.
+                if matches!(file.kind(brace), TokenKind::LParen | TokenKind::LBracket) {
+                    match file.match_close(brace) {
+                        Some(end) => brace = end + 1,
+                        None => break,
+                    }
+                    continue;
+                }
+                brace += 1;
+            }
+            if file.kind(brace) != TokenKind::LBrace {
+                // A requirement, not an implementation. Nothing to run.
+                index = brace.max(index + 1);
+                continue;
+            }
+            let Some(end) = file.match_close(brace) else {
+                break;
+            };
+            members.push(Member {
+                name,
+                body: body_text(file, brace, end),
+            });
+            index = end + 1;
+            continue;
+        }
+        if matches!(
+            file.kind(index),
+            TokenKind::At | TokenKind::Let | TokenKind::Var
+        ) {
+            let (_, after) = scan_annotations(file, index);
+            if matches!(file.kind(after), TokenKind::Let | TokenKind::Var)
+                && file.is_ident(after + 1)
+            {
+                let end = member_end(file, after + 2, close);
+                index = end.saturating_add(1);
+                continue;
+            }
+        }
+        // `name { … }`, the shorthand for the member the family calls `name`.
+        if file.is_ident(index) && file.kind(index + 1) == TokenKind::LBrace {
+            let name = file.text_at(index).to_owned();
+            let Some(end) = file.match_close(index + 1) else {
+                break;
+            };
+            members.push(Member {
+                name,
+                body: body_text(file, index + 1, end),
+            });
+            index = end + 1;
+            continue;
+        }
+        index += 1;
+    }
+    members
+}
+
+/// The text between a body's braces.
+fn body_text(file: &Lexed<'_>, open: usize, close: usize) -> String {
+    file.slice(Span::from_bounds(
+        file.span(open).end(),
+        file.span(close).start,
+    ))
+    .to_owned()
+}
+
 /// Scans the `var` / `let` members of a declaration body.
 fn scan_fields(file: &Lexed<'_>, open: usize, close: usize) -> Vec<Field> {
     let mut fields = Vec::new();
@@ -297,6 +517,12 @@ fn scan_fields(file: &Lexed<'_>, open: usize, close: usize) -> Vec<Field> {
     while index < close {
         if file.kind(index) == TokenKind::Function {
             index = skip_member(file, index, close);
+            continue;
+        }
+        if is_named_rule_start(file, index) {
+            index = file
+                .match_close(index + 1)
+                .map_or(close, |end| end.saturating_add(1));
             continue;
         }
         if file.kind(index) != TokenKind::At
@@ -400,20 +626,37 @@ fn payload_end(file: &Lexed<'_>, from: usize, close: usize) -> usize {
 fn member_end(file: &Lexed<'_>, from: usize, close: usize) -> usize {
     let mut index = from;
     let mut last = from;
+    let mut saw_equals = false;
+    let mut saw_value = false;
     while index < close {
+        if is_named_rule_start(file, index) && (!saw_equals || saw_value) {
+            break;
+        }
         match file.kind(index) {
             TokenKind::At | TokenKind::Let | TokenKind::Var | TokenKind::Function => break,
+            TokenKind::Equals => {
+                saw_equals = true;
+                last = index;
+            }
             TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => {
                 match file.match_close(index) {
                     Some(end) => {
                         last = end;
+                        if saw_equals {
+                            saw_value = true;
+                        }
                         index = end + 1;
                         continue;
                     }
                     None => break,
                 }
             }
-            _ => last = index,
+            _ => {
+                if saw_equals {
+                    saw_value = true;
+                }
+                last = index;
+            }
         }
         index += 1;
     }
@@ -479,6 +722,10 @@ fn skip_member(file: &Lexed<'_>, from: usize, close: usize) -> usize {
     close
 }
 
+fn is_named_rule_start(file: &Lexed<'_>, index: usize) -> bool {
+    file.is_ident(index) && file.kind(index + 1) == TokenKind::LBrace
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,6 +777,37 @@ mod tests {
         assert_eq!(declaration.fields[0].initializer, "7");
         assert!(declaration.fields[0].syntax.starts_with("@Tracked"));
         assert!(declaration.fields[1].annotations.is_empty());
+    }
+
+    #[test]
+    fn a_form_field_stops_before_a_named_rule_body() {
+        let declaration = scan_text(
+            "Widget DashboardShell() {\n                @State var status: String = \"ready\"\n\n                body {\n                    Text(status)\n                }\n            }",
+        );
+
+        assert_eq!(declaration.fields.len(), 1);
+        assert_eq!(declaration.fields[0].name, "status");
+        assert_eq!(declaration.fields[0].initializer, "\"ready\"");
+        assert!(!declaration.fields[0].syntax.contains("body {"));
+        assert_eq!(declaration.members.len(), 1);
+        assert_eq!(declaration.members[0].name, "body");
+        assert!(declaration.members[0].body.contains("Text(status)"));
+    }
+
+    #[test]
+    fn a_form_field_keeps_a_braced_initializer_before_a_named_rule() {
+        let declaration = scan_text(
+            "Widget DashboardShell() {\n                @State var model: Model = Model { value: 1 }\n\n                body {\n                    Text(\"ready\")\n                }\n            }",
+        );
+
+        assert_eq!(declaration.fields.len(), 1);
+        assert!(
+            declaration.fields[0]
+                .initializer
+                .contains("Model { value: 1 }")
+        );
+        assert_eq!(declaration.members.len(), 1);
+        assert_eq!(declaration.members[0].name, "body");
     }
 
     #[test]

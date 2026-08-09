@@ -95,7 +95,10 @@ impl TargetMachine {
     /// Builds a target machine for the compiling host.
     ///
     /// `optimize` chooses the code-generation level: the default one, or the
-    /// aggressive one when a build asks to be optimized.
+    /// aggressive one when a build asks to be optimized. `fast_codegen` is the
+    /// large-executable escape hatch: it uses LLVM's direct instruction
+    /// selector, which avoids spending minutes colouring the enormous frames
+    /// produced by a generated UI module.
     ///
     /// # There is no unoptimized level to choose
     ///
@@ -107,7 +110,7 @@ impl TargetMachine {
     /// calls overflowed an 8 MB stack. The next level down from the default is
     /// not a middle ground either — measured on the editor it emits *slower*
     /// than the default and buys nothing.
-    pub(super) fn host(optimize: bool) -> Result<Self, LlvmError> {
+    pub(super) fn host(optimize: bool, fast_codegen: bool) -> Result<Self, LlvmError> {
         // SAFETY: the initializers are idempotent and safe to call repeatedly;
         // every out-parameter below is a live local, and each LLVM-owned string
         // is disposed of before returning or stored in `Self` for its drop.
@@ -125,16 +128,19 @@ impl TargetMachine {
 
             let cpu = LLVMGetHostCPUName();
             let features = LLVMGetHostCPUFeatures();
+            let codegen_level = if fast_codegen && !optimize {
+                LLVMCodeGenOptLevel::LLVMCodeGenLevelNone
+            } else if optimize {
+                LLVMCodeGenOptLevel::LLVMCodeGenLevelAggressive
+            } else {
+                LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault
+            };
             let machine = LLVMCreateTargetMachine(
                 target,
                 triple,
                 cpu,
                 features,
-                if optimize {
-                    LLVMCodeGenOptLevel::LLVMCodeGenLevelAggressive
-                } else {
-                    LLVMCodeGenOptLevel::LLVMCodeGenLevelDefault
-                },
+                codegen_level,
                 // Host executables link position-independent everywhere Kira
                 // targets; PIC is required on macOS and the default on modern
                 // Linux distributions.

@@ -177,7 +177,7 @@ fn heterogeneous_family_values_dispatch_on_every_backend() {
     let output = assert_parity(
         r#"
 construct Widget {
-    @Required let body: Widget
+    @Required let body: Any Widget
     function value() -> Int {
         return body.value()
     }
@@ -196,7 +196,7 @@ Widget Double(number: Int) {
 }
 
 Widget Sum() {
-    @Content let children: [Widget]
+    @Content let children: [Any Widget]
     function value() -> Int {
         var total = 0
         for index in 0..children.count {
@@ -211,7 +211,7 @@ function read(widget: Any Widget) -> Int {
 }
 
 @Main function main() {
-    let tree: Widget = Sum() {
+    let tree: Any Widget = Sum() {
         Leaf(number = 2)
         Double(number = 3)
     }
@@ -232,7 +232,7 @@ fn extend_modifiers_chain_on_every_backend() {
     let output = assert_parity(
         r#"
 construct Widget {
-    @Required let body: Widget
+    @Required let body: Any Widget
     function value() -> Int {
         return body.value()
     }
@@ -252,7 +252,7 @@ Widget Boxed(extra: Int) {
 }
 
 extend Widget {
-    function plus(amount: Int) -> Widget {
+    function plus(amount: Int) -> Any Widget {
         return Boxed(extra: amount) {
             self
         }
@@ -282,7 +282,7 @@ fn an_extend_modifier_default_fills_on_every_backend() {
     let output = assert_parity(
         r#"
 construct Widget {
-    @Required let body: Widget
+    @Required let body: Any Widget
     function value() -> Int {
         return body.value()
     }
@@ -302,7 +302,7 @@ Widget Boxed(extra: Int) {
 }
 
 extend Widget {
-    function plus(amount: Int = 100) -> Widget {
+    function plus(amount: Int = 100) -> Any Widget {
         return Boxed(extra: amount) {
             self
         }
@@ -333,7 +333,7 @@ fn builder_content_items_fill_a_slot_on_every_backend() {
     let output = assert_parity(
         r#"
 construct Widget {
-    @Required let body: Widget
+    @Required let body: Any Widget
     function total() -> Int { return body.total() }
 }
 
@@ -392,7 +392,7 @@ fn empty_builders_contribute_nothing_on_every_backend() {
     let output = assert_parity(
         r#"
 construct Widget {
-    @Required let body: Widget
+    @Required let body: Any Widget
     function total() -> Int { return body.total() }
 }
 
@@ -442,7 +442,7 @@ fn builders_nested_through_a_construction_agree() {
     let output = assert_parity(
         r#"
 construct Widget {
-    @Required let body: Widget
+    @Required let body: Any Widget
     function total() -> Int { return body.total() }
 }
 
@@ -497,7 +497,7 @@ fn a_body_may_choose_its_widget_with_a_condition_on_every_backend() {
     let output = assert_parity(
         r#"
 construct Widget {
-    @Required let body: Widget
+    @Required let body: Any Widget
     function total() -> Int { return body.total() }
 }
 

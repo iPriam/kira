@@ -1,0 +1,40 @@
+// A Kira array handed to C as a pointer and a count.
+//
+// Every graphics API takes this shape, and without it a caller has to stream
+// values into a C-side buffer one at a time through a shim — which is exactly
+// what kira-graphics did before this.
+//
+// The widths differ on purpose: Kira holds a `[F32]` as doubles and C reads
+// four bytes each, so a seam that handed over the array's own storage would
+// give C the wrong numbers rather than a wrong pointer.
+
+@FFI.Extern { library: ffifixture; symbol: ffi_sum_floats; abi: c; }
+function ffiSumFloats(values: RawPtr, count: I32): F32;
+@FFI.Extern { library: ffifixture; symbol: ffi_sum_ints; abi: c; }
+function ffiSumInts(values: RawPtr, count: I32): I32;
+
+@Native
+function sumFloats() -> Float {
+    let values: [F32] = [1.5, 2.25, 3.0]
+    return ffiSumFloats(values, 3)
+}
+
+@Native
+function sumInts() -> Int {
+    let values: [I32] = [10, 20, 30, 40]
+    return ffiSumInts(values, 4)
+}
+
+@Native
+function sumEmpty() -> Int {
+    let values: [I32] = []
+    return ffiSumInts(values, 0)
+}
+
+@Main
+function main() {
+    print(sumFloats())
+    print(sumInts())
+    print(sumEmpty())
+    return
+}

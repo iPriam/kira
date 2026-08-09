@@ -313,6 +313,50 @@ impl Lowerer<'_> {
                 index,
                 ty,
             },
+            HirExpr::ForeignMemberAddress {
+                base,
+                aggregate,
+                member,
+                ty,
+            } => IrExpr::ForeignMemberAddress {
+                base: self.lower_expr(base),
+                aggregate,
+                member,
+                ty,
+            },
+            HirExpr::ForeignElement {
+                base,
+                aggregate,
+                index,
+                ty,
+            } => IrExpr::ForeignElement {
+                base: self.lower_expr(base),
+                aggregate,
+                index: self.lower_expr(index),
+                ty,
+            },
+            HirExpr::ArrayElements { value, element } => IrExpr::ArrayElements {
+                value: self.lower_expr(value),
+                element,
+            },
+            HirExpr::ScalarText { value } => IrExpr::ScalarText {
+                value: self.lower_expr(value),
+            },
+            HirExpr::MathOperation { op, value } => IrExpr::MathOperation {
+                op,
+                value: self.lower_expr(value),
+            },
+            HirExpr::ForeignField {
+                base,
+                aggregate,
+                member,
+                ty,
+            } => IrExpr::ForeignField {
+                base: self.lower_expr(base),
+                aggregate,
+                member,
+                ty,
+            },
             HirExpr::ArrayNew { ty, elements } => {
                 let ir_elements = elements
                     .iter()

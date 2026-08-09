@@ -1,12 +1,15 @@
 //! The program's one table of type shapes: structs and array types together.
 
+use std::collections::HashSet;
+
 use kira_runtime_abi::NativeStateTypeId;
 
 use super::arrays::ArrayTable;
 use super::cells::CellTable;
 use super::enums::EnumTable;
+use super::foreign_ptr::{ForeignPtrId, ForeignPtrTable};
 use super::native_state::NativeStateTable;
-use super::structs::StructTable;
+use super::structs::{StructId, StructTable};
 use super::{FloatSpelling, IntSpelling, Type};
 
 /// Every shape a program's types can name: its structs and its array types.
@@ -23,12 +26,31 @@ pub struct TypeTable {
     enums: EnumTable,
     native_states: NativeStateTable,
     cells: CellTable,
+    foreign_ptrs: ForeignPtrTable,
 }
 
 impl TypeTable {
     /// Creates an empty table.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The type of a C pointer addressing `target`, minting it on first
+    /// mention.
+    ///
+    /// Returns [`Type::RawPtr`] when the id space is exhausted: a pointer that
+    /// cannot carry its target is still a correct pointer word, and degrading to
+    /// one loses field reads rather than correctness.
+    pub fn foreign_ptr_to(&mut self, target: StructId) -> Type {
+        match self.foreign_ptrs.intern(target) {
+            Some(id) => Type::ForeignPtr(id),
+            None => Type::RawPtr,
+        }
+    }
+
+    /// What the foreign pointer named by `id` addresses.
+    pub fn foreign_ptr_target(&self, id: ForeignPtrId) -> Option<StructId> {
+        self.foreign_ptrs.target(id)
     }
 
     /// The declared structs.
@@ -125,10 +147,17 @@ impl TypeTable {
             Type::Float(spelling) => (2, float_code(spelling)),
             Type::Bool => (3, 0),
             Type::String => (4, 0),
-            Type::Struct(id) => (5, u64::from(id.index())),
-            Type::Array(id) => (6, u64::from(id.index())),
-            Type::Enum(id) => (7, u64::from(id.index())),
-            Type::RawPtr => (8, 0),
+            // Table indices are compilation-local. A live VM keeps callback
+            // state across a rebuild, so using a struct/array/enum index here
+            // would make an unrelated declaration invalidate every state
+            // token after it. Fingerprinting the declaration shape keeps the
+            // type id stable while still refusing a changed state schema.
+            Type::Struct(_) => (5, self.native_state_fingerprint(ty)),
+            Type::Array(_) => (6, self.native_state_fingerprint(ty)),
+            Type::Enum(_) => (7, self.native_state_fingerprint(ty)),
+            // The same runtime word a `RawPtr` is, so the same identity: what
+            // it points at is a compile-time fact, not a runtime one.
+            Type::RawPtr | Type::ForeignPtr(_) => (8, 0),
             // `Any` has no identity to give: the whole point of the type is
             // that the value inside it kept its own and this one has none, so
             // there is nothing for a recovery to check against.
@@ -145,7 +174,100 @@ impl TypeTable {
                 return None;
             }
         };
-        Some(NativeStateTypeId::new((tag << 56) | payload))
+        const PAYLOAD_MASK: u64 = 0x00ff_ffff_ffff_ffff;
+        Some(NativeStateTypeId::new(
+            (tag << 56) | (payload & PAYLOAD_MASK),
+        ))
+    }
+
+    /// Stable shape identity for an aggregate callback-state type.
+    ///
+    /// The recursive walk deliberately uses declaration names and field
+    /// shapes, never the table's local ids. An unrelated struct added before a
+    /// state-bearing struct therefore leaves the token recoverable, while a
+    /// field insertion, removal, or type change produces a different id and
+    /// is rejected at the state boundary instead of trapping later on a bad
+    /// path.
+    fn native_state_fingerprint(&self, ty: Type) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        let mut visiting = HashSet::new();
+        self.mix_native_state_type(&mut hash, ty, &mut visiting);
+        if hash == 0 { 1 } else { hash }
+    }
+
+    fn mix_native_state_type(&self, hash: &mut u64, ty: Type, visiting: &mut HashSet<(u8, u32)>) {
+        match ty {
+            Type::Int(spelling) => {
+                mix_native_state_bytes(hash, b"int");
+                mix_native_state_u64(hash, int_code(spelling));
+            }
+            Type::Float(spelling) => {
+                mix_native_state_bytes(hash, b"float");
+                mix_native_state_u64(hash, float_code(spelling));
+            }
+            Type::Bool => mix_native_state_bytes(hash, b"bool"),
+            Type::String => mix_native_state_bytes(hash, b"string"),
+            Type::RawPtr | Type::ForeignPtr(_) => mix_native_state_bytes(hash, b"raw-ptr"),
+            Type::Struct(id) => {
+                let Some(def) = self.structs.get(id) else {
+                    mix_native_state_bytes(hash, b"missing-struct");
+                    return;
+                };
+                mix_native_state_bytes(hash, b"struct");
+                mix_native_state_bytes(hash, def.name.as_bytes());
+                if !visiting.insert((5, id.index())) {
+                    mix_native_state_bytes(hash, b"recursive");
+                    return;
+                }
+                for field in &def.fields {
+                    mix_native_state_bytes(hash, field.name.as_bytes());
+                    mix_native_state_u64(hash, u64::from(field.mutable as u8));
+                    self.mix_native_state_type(hash, field.ty, visiting);
+                }
+                visiting.remove(&(5, id.index()));
+            }
+            Type::Array(id) => {
+                mix_native_state_bytes(hash, b"array");
+                if let Some(element) = self.arrays.element(id) {
+                    self.mix_native_state_type(hash, element, visiting);
+                } else {
+                    mix_native_state_bytes(hash, b"missing-array");
+                }
+            }
+            Type::Enum(id) => {
+                let Some(def) = self.enums.get(id) else {
+                    mix_native_state_bytes(hash, b"missing-enum");
+                    return;
+                };
+                mix_native_state_bytes(hash, b"enum");
+                mix_native_state_bytes(hash, def.name.as_bytes());
+                if !visiting.insert((7, id.index())) {
+                    mix_native_state_bytes(hash, b"recursive");
+                    return;
+                }
+                for variant in &def.variants {
+                    mix_native_state_bytes(hash, variant.name.as_bytes());
+                    match variant.payload {
+                        Some(payload) => {
+                            mix_native_state_bytes(hash, b"payload");
+                            self.mix_native_state_type(hash, payload, visiting);
+                        }
+                        None => mix_native_state_bytes(hash, b"no-payload"),
+                    }
+                }
+                visiting.remove(&(7, id.index()));
+            }
+            // These shapes are refused before this method is called. Keeping a
+            // marker here makes the fingerprint total if an error node leaks
+            // through a diagnostic-preserving analysis.
+            Type::Void
+            | Type::Error
+            | Type::CString
+            | Type::NativeState(_)
+            | Type::Task(_)
+            | Type::Cell(_)
+            | Type::Any => mix_native_state_bytes(hash, b"unsupported"),
+        }
     }
 
     /// The canonical spelling of `ty`, for diagnostics.
@@ -154,7 +276,7 @@ impl TypeTable {
     /// is nowhere in the table to point at.
     pub fn type_name(&self, ty: Type) -> String {
         match ty {
-            // A width names itself: a mismatch between `U8` and `I64` has to
+            // A width names itself: a mismatch between `U8` and `U32` has to
             // say which two types it means, not report both as "Int".
             Type::Int(spelling) => spelling.name().to_owned(),
             Type::Float(spelling) => spelling.name().to_owned(),
@@ -181,6 +303,13 @@ impl TypeTable {
             Type::Enum(id) => match self.enums.get(id) {
                 Some(def) => def.name.clone(),
                 None => "<unknown enum>".to_owned(),
+            },
+            // Named by what it addresses. The typedef's own name is not here —
+            // the table holds types, not the spellings that resolved to them —
+            // and the target is the fact a reader needs anyway.
+            Type::ForeignPtr(id) => match self.foreign_ptr_target(id) {
+                Some(target) => format!("pointer to {}", self.type_name(Type::Struct(target))),
+                None => "<unknown foreign pointer>".to_owned(),
             },
             // Named for a diagnostic that should never reach a reader: a cell
             // is not surface, so anything printing one is reporting on the
@@ -223,13 +352,28 @@ impl TypeTable {
     }
 }
 
+fn mix_native_state_bytes(hash: &mut u64, bytes: &[u8]) {
+    for &byte in bytes {
+        *hash ^= u64::from(byte);
+        *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    // Keep concatenations unambiguous (`ab` + `c` is not `a` + `bc`).
+    *hash ^= 0xff;
+    *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+}
+
+fn mix_native_state_u64(hash: &mut u64, value: u64) {
+    mix_native_state_bytes(hash, &value.to_le_bytes());
+}
+
+// The codes leave a gap where `I64` and `F64` were, so a value that
+// outlived them still means what it did.
 fn int_code(spelling: IntSpelling) -> u64 {
     match spelling {
         IntSpelling::Plain => 0,
         IntSpelling::I8 => 1,
         IntSpelling::I16 => 2,
         IntSpelling::I32 => 3,
-        IntSpelling::I64 => 4,
         IntSpelling::U8 => 5,
         IntSpelling::U16 => 6,
         IntSpelling::U32 => 7,
@@ -241,7 +385,6 @@ fn float_code(spelling: FloatSpelling) -> u64 {
     match spelling {
         FloatSpelling::Plain => 0,
         FloatSpelling::F32 => 1,
-        FloatSpelling::F64 => 2,
     }
 }
 

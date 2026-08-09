@@ -382,6 +382,7 @@ impl Analyzer<'_> {
             | Type::Void
             | Type::Error
             | Type::RawPtr
+            | Type::ForeignPtr(_)
             | Type::CString
             | Type::Any
             | Type::Task(_)
@@ -474,7 +475,7 @@ impl Analyzer<'_> {
         // value from, and no value of an arbitrary result type can be conjured
         // that every backend agrees is of that type.
         let mut body: Vec<HirStmtId> = Vec::with_capacity(impls.len().max(1));
-        for (tag, closure) in impls.iter().enumerate() {
+        for (index, closure) in impls.iter().enumerate() {
             let arm = self.dispatch_arm(
                 closure.function,
                 env,
@@ -484,7 +485,7 @@ impl Analyzer<'_> {
                 &modes,
                 result,
             );
-            if tag + 1 == impls.len() {
+            if index + 1 == impls.len() {
                 body.extend(arm);
                 break;
             }
@@ -499,7 +500,10 @@ impl Analyzer<'_> {
                     ty: Type::INT,
                 })
             };
-            let wanted = self.program.exprs.alloc(HirExpr::Int(tag as i64));
+            let wanted = self
+                .program
+                .exprs
+                .alloc(HirExpr::Int(i64::from(closure.tag)));
             let cond = self.program.exprs.alloc(HirExpr::Binary {
                 op: HirBinaryOp::EqInt,
                 lhs: tag_read,

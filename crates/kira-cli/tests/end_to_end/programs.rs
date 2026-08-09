@@ -79,6 +79,31 @@ fn a_construct_declaration_compiles_and_runs() {
 }
 
 #[test]
+fn inferred_construct_members_and_updates_run_through_the_binary() {
+    let output = run_source(
+        "enum Material { Low XHigh }\n\
+         struct Glass { var material: Material = .Low }\n\
+         construct Style { let additionalEffect: Int = 0\n\
+             let liquidGlass: Glass = Glass {}\n\
+             let score: Int { additionalEffect + (liquidGlass.material == .XHigh ? 10 : 0) } }\n\
+         Style Base { let additionalEffect = 3\n\
+             let liquidGlass = Glass {} }\n\
+         @Main function main() {\n\
+             let StyleImplementation = Base {}\n\
+             let button = StyleImplementation { let additionalEffect = 8 }\n\
+             let sidebar = StyleImplementation { let liquidGlass.material = .XHigh }\n\
+             print(button.score) print(sidebar.score) return\n\
+         }",
+    );
+    assert!(
+        output.status.success(),
+        "stderr was: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "8\n13\n");
+}
+
+#[test]
 fn a_class_declaration_compiles_and_runs() {
     // The counterpart to the case above: a `class` used to be reported as
     // unsupported, and is now ordinary language surface. An inherited method

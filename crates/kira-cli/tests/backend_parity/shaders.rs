@@ -69,17 +69,22 @@ struct KslArtifact {
     var computeHlsl: String = ""
     var vertexSpirv: String = ""
     var computeSpirv: String = ""
-    var uniformReflection: String = ""
+    var resourceReflection: String = ""
 }
+
+// Declared here rather than imported, like `KslArtifact` above: the point of
+// this test is that the whole surface is userland, so the target enum is the
+// program's too.
+enum ShaderBackend { Msl Wgsl Glsl Hlsl Spirv }
 
 comptime macro ksl {
     kind { function }
     expand(input: Syntax) -> Syntax {
-        let msl = Ksl.compile(input, "msl")
-        let wgsl = Ksl.compile(input, "wgsl")
-        let glsl = Ksl.compile(input, "glsl_330")
-        let hlsl = Ksl.compile(input, "hlsl")
-        let spirv = Ksl.compile(input, "spirv")
+        let msl = Ksl.compile(input, ShaderBackend.Msl)
+        let wgsl = Ksl.compile(input, ShaderBackend.Wgsl)
+        let glsl = Ksl.compile(input, ShaderBackend.Glsl)
+        let hlsl = Ksl.compile(input, ShaderBackend.Hlsl)
+        let spirv = Ksl.compile(input, ShaderBackend.Spirv)
         return quote {
             KslArtifact(
                 shaderName: #{msl.shaderName},
@@ -96,7 +101,7 @@ comptime macro ksl {
                 computeHlsl: #{hlsl.computeSource},
                 vertexSpirv: #{spirv.vertexSource},
                 computeSpirv: #{spirv.computeSource},
-                uniformReflection: #{msl.uniformReflection}
+                resourceReflection: #{msl.resourceReflection}
             )
         }
     }
@@ -119,13 +124,13 @@ function main() {{
     print(art.shaderName)
     print(art.vertexEntry)
     print(art.fragmentEntry)
-    print(art.uniformReflection)
+    print(art.resourceReflection)
     // The whole Metal module arrived, newlines and quotes intact.
     print(art.combinedMsl.indexOf("#include <metal_stdlib>") >= 0)
     print(art.combinedMsl.indexOf("vertex_main") >= 0)
     print(art.vertexWgsl.indexOf("@vertex") >= 0)
     print(art.fragmentWgsl.indexOf("@fragment") >= 0)
-    print(art.vertexGlsl.indexOf("#version 330 core") >= 0)
+    print(art.vertexGlsl.indexOf("#version 430 core") >= 0)
     print(art.vertexHlsl.indexOf("column_major float4x4") >= 0)
     print(art.fragmentHlsl.indexOf("SV_Target0") >= 0)
     // SPIR-V is binary, so it crossed as hexadecimal — the magic word first.
@@ -140,7 +145,7 @@ function main() {{
         "Tri\n\
          vertex_main\n\
          fragment_main\n\
-         camera:0:64:1:1:view_projection@0#64;\n\
+         u|camera:0:64:1:1:view_projection@0#64:f;\n\
          true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n\
          07230203\n",
     );

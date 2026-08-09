@@ -91,6 +91,31 @@ pub(crate) struct Declarative {
     pub(crate) template: String,
 }
 
+/// A `comptime function name(…) -> T { … }` declaration.
+///
+/// Ordinary Kira that runs during compilation. Its body goes on the same
+/// evaluator a `comptime macro`'s `expand` runs on — the difference is only what
+/// each hands back: a macro returns syntax to splice, and this returns a *value*
+/// that becomes a literal at the call site.
+///
+/// Which is why it needs no `!`. A macro is called `name!(…)` because what
+/// happens there is code substitution and the reader should see it; a comptime
+/// function's call site is a value, indistinguishable from writing the answer
+/// out, so it reads as the ordinary call it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ComptimeFunction {
+    /// The function's name.
+    pub(crate) name: String,
+    /// Its parameter names, in order.
+    pub(crate) parameters: Vec<String>,
+    /// The text between the braces of its body.
+    pub(crate) body: String,
+    /// Where it was written.
+    pub(crate) source: SourceId,
+    /// The span of its name.
+    pub(crate) span: Span,
+}
+
 /// A `comptime macro Name { … }` declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Procedural {
@@ -119,6 +144,8 @@ pub(crate) struct Procedural {
 pub(crate) struct Registry {
     declarative: HashMap<String, Declarative>,
     procedural: HashMap<String, Procedural>,
+    comptime_functions: HashMap<String, ComptimeFunction>,
+    enums: HashMap<String, Vec<String>>,
 }
 
 impl Registry {
@@ -137,6 +164,13 @@ impl Registry {
             self.procedural
                 .insert(declared.name.clone(), declared.clone());
         }
+        for declared in &file.comptime_functions {
+            self.comptime_functions
+                .insert(declared.name.clone(), declared.clone());
+        }
+        for (name, variants) in &file.enums {
+            self.enums.insert(name.clone(), variants.clone());
+        }
     }
 
     /// Whether the program declares no macros at all.
@@ -144,7 +178,38 @@ impl Registry {
     /// The whole expansion pass is skipped when this holds, which is what keeps
     /// a program that never mentions a macro byte-identical to its own source.
     pub(crate) fn is_empty(&self) -> bool {
-        self.declarative.is_empty() && self.procedural.is_empty()
+        self.declarative.is_empty()
+            && self.procedural.is_empty()
+            && self.comptime_functions.is_empty()
+    }
+
+    /// Every enum the program declares, by name, with its case names.
+    ///
+    /// A macro body naming `Backend.Glsl` is asking about a type the *program*
+    /// declares, not one the compiler knows, so the evaluator has to be told
+    /// what the program said.
+    pub(crate) fn enums(&self) -> &HashMap<String, Vec<String>> {
+        &self.enums
+    }
+
+    /// Every `comptime function` the program declares, for the evaluator.
+    pub(crate) fn comptime_functions(&self) -> &HashMap<String, ComptimeFunction> {
+        &self.comptime_functions
+    }
+
+    /// The `comptime function` named `name`, if there is one.
+    pub(crate) fn comptime_function(&self, name: &str) -> Option<&ComptimeFunction> {
+        self.comptime_functions.get(name)
+    }
+
+    /// Every `comptime function` name the program declares, in name order.
+    ///
+    /// A call to one is found by name alone — it wears no `!` — so the finder
+    /// needs the whole set before it can tell one from an ordinary call.
+    pub(crate) fn comptime_function_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.comptime_functions.keys().cloned().collect();
+        names.sort();
+        names
     }
 
     /// The declarative macro named `name`, if there is one.
@@ -185,6 +250,10 @@ pub(crate) struct FileRegistry {
     pub(crate) declarative: Vec<Declarative>,
     /// The procedural macros this file declares, in declaration order.
     pub(crate) procedural: Vec<Procedural>,
+    /// The `comptime function`s this file declares, in declaration order.
+    pub(crate) comptime_functions: Vec<ComptimeFunction>,
+    /// Each `enum Name { … }` this file declares, with its case names.
+    pub(crate) enums: Vec<(String, Vec<String>)>,
     /// The bytes each declaration covers, `macro` keyword through closing
     /// brace, so the caller can blank them.
     pub(crate) spans: Vec<Span>,
@@ -193,7 +262,9 @@ pub(crate) struct FileRegistry {
 impl FileRegistry {
     /// Whether this file declares no macro at all.
     pub(crate) fn is_empty(&self) -> bool {
-        self.declarative.is_empty() && self.procedural.is_empty()
+        self.declarative.is_empty()
+            && self.procedural.is_empty()
+            && self.comptime_functions.is_empty()
     }
 }
 
@@ -212,6 +283,52 @@ pub(crate) fn collect_file(file: &Lexed<'_>, reporter: &mut Reporter) -> FileReg
                 continue;
             }
             _ => {}
+        }
+        // `enum Name { A B }` — read for its case names, so a macro body may
+        // name one. Only the shape is taken; what the cases mean is the
+        // program's business.
+        if file.kind(index) == TokenKind::Enum
+            && file.is_ident(index + 1)
+            && file.kind(index + 2) == TokenKind::LBrace
+            && let Some(end) = file.match_close(index + 2)
+        {
+            let name = file.text_at(index + 1).to_owned();
+            let mut variants = Vec::new();
+            let mut at = index + 3;
+            while at < end {
+                // A case is an identifier at the top of the body; anything
+                // nested belongs to a payload and is skipped whole.
+                match file.kind(at) {
+                    TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => {
+                        match file.match_close(at) {
+                            Some(close) => at = close + 1,
+                            None => break,
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+                if file.is_ident(at) {
+                    variants.push(file.text_at(at).to_owned());
+                }
+                at += 1;
+            }
+            found.enums.push((name, variants));
+            index = end + 1;
+            continue;
+        }
+        // `function` is a keyword token, not a contextual identifier the way
+        // `macro` is, so it is matched by kind rather than by text.
+        if file.is_word(index, "comptime") && file.kind(index + 1) == TokenKind::Function {
+            match scan_comptime_function(file, index, reporter) {
+                Some((function, span, next)) => {
+                    found.spans.push(span);
+                    found.comptime_functions.push(function);
+                    index = next;
+                    continue;
+                }
+                None => break,
+            }
         }
         if file.is_word(index, "comptime") && file.is_word(index + 1, "macro") {
             match scan_procedural(file, index, reporter) {
@@ -332,6 +449,80 @@ fn find_expand_block(file: &Lexed<'_>, open: usize, close: usize) -> Option<(usi
         index += 1;
     }
     None
+}
+
+/// Scans `comptime function name(…) -> T { … }` starting at the `comptime` word.
+///
+/// The shape is an ordinary function declaration, so only the name, the
+/// parameter names and the body text are taken: the written types are the
+/// analyzer's business, and the evaluator binds arguments by position.
+fn scan_comptime_function(
+    file: &Lexed<'_>,
+    start: usize,
+    reporter: &mut Reporter,
+) -> Option<(ComptimeFunction, Span, usize)> {
+    let name_index = start + 2;
+    if !file.is_ident(name_index) {
+        reporter.error(
+            file.source,
+            file.span(name_index),
+            diagnostics::BAD_KIND,
+            "expected a name after `comptime function`",
+        );
+        return None;
+    }
+    let name = file.text_at(name_index).to_owned();
+    let name_span = file.span(name_index);
+    let open_parameters = name_index + 1;
+    if file.kind(open_parameters) != TokenKind::LParen {
+        reporter.error(
+            file.source,
+            name_span,
+            diagnostics::EXPAND_SIGNATURE,
+            format!("`comptime function {name}` needs a parameter list"),
+        );
+        return None;
+    }
+    let close_parameters = file.match_close(open_parameters)?;
+    let parameters = file
+        .split_group(open_parameters, close_parameters)
+        .into_iter()
+        .map(|(first, _)| file.text_at(first).to_owned())
+        .collect();
+    // Whatever sits between the parameters and the body is the written result
+    // type, which the evaluator does not need: the value it produces carries its
+    // own shape, and the analyzer checks the call site against the declaration.
+    let mut open_body = close_parameters + 1;
+    while open_body < file.len() && file.kind(open_body) != TokenKind::LBrace {
+        if file.kind(open_body) == TokenKind::Eof {
+            reporter.error(
+                file.source,
+                name_span,
+                diagnostics::EXPAND_SIGNATURE,
+                format!("`comptime function {name}` needs a `{{ … }}` body"),
+            );
+            return None;
+        }
+        open_body += 1;
+    }
+    let close_body = file.match_close(open_body)?;
+    let body = file
+        .slice(Span::from_bounds(
+            file.span(open_body).end(),
+            file.span(close_body).start,
+        ))
+        .to_owned();
+    Some((
+        ComptimeFunction {
+            name,
+            parameters,
+            body,
+            source: file.source,
+            span: name_span,
+        },
+        file.span_of(start, close_body),
+        close_body + 1,
+    ))
 }
 
 /// Scans `comptime macro Name { … }` starting at the `comptime` word.
