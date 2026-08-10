@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use kira_runtime_abi::{ForeignAggregates, ForeignImport};
+use kira_runtime_abi::{ForeignAggregates, ForeignCallback, ForeignImport};
 use kira_toolchain::LlvmInstallation;
 
 use crate::LlvmError;
@@ -35,22 +35,24 @@ pub struct ShimObject {
     pub object: PathBuf,
 }
 
-/// Compiles the foreign shim for `imports` beside `object_path`, if one is needed.
+/// Compiles the foreign shim for `imports` and `callbacks` beside
+/// `object_path`, if one is needed.
 ///
-/// Returns `None` when no import names an aggregate — the common case, which
-/// never invokes clang at all. The artifacts are named after `object_path`'s
-/// stem so two builds in one directory do not collide.
+/// Returns `None` when no position in either direction names an aggregate — the
+/// common case, which never invokes clang at all. The artifacts are named after
+/// `object_path`'s stem so two builds in one directory do not collide.
 ///
-/// Takes the imports and the table rather than the whole program: what a shim
-/// needs is exactly the seam, and a narrower argument is one a test can build.
+/// Takes the seam rows rather than the whole program: what a shim needs is
+/// exactly the seam, and a narrower argument is one a test can build.
 pub fn build(
     imports: &[ForeignImport],
+    callbacks: &[ForeignCallback],
     table: &ForeignAggregates,
     unavailable: &[usize],
     object_path: &Path,
     llvm: &LlvmInstallation,
 ) -> Result<Option<ShimObject>, LlvmError> {
-    let Some(text) = shim::generate(imports, table, unavailable) else {
+    let Some(text) = shim::generate(imports, callbacks, table, unavailable) else {
         return Ok(None);
     };
 
@@ -122,6 +124,7 @@ mod tests {
         for imports in [&scalar_only[..], &[][..]] {
             let built = build(
                 imports,
+                &[],
                 &ForeignAggregates::new(),
                 &[],
                 Path::new("/tmp/kira-shim-none.o"),

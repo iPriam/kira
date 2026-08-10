@@ -29,10 +29,23 @@ pub struct NativeLinkAttributes {
     pub compiler_flags: Vec<String>,
     /// Flags passed to the linker driver when linking this library.
     pub linker_flags: Vec<String>,
+    /// Files the finished program must find beside itself at run time, relative
+    /// to the declaring manifest. A file, or a directory whose files are taken.
+    ///
+    /// A dynamic library is two things: an import library the linker reads, and
+    /// a shared object the *loader* opens when the program starts. Naming only
+    /// the first leaves a program that links clean and cannot start — which is
+    /// what `webgpu_dawn.dll` does, and Dawn then opens `dxcompiler.dll` by name
+    /// with no link-time mention of it at all.
+    pub runtime_files: Vec<String>,
 }
 
 impl NativeLinkAttributes {
     /// True when the row contributes no link input of any kind.
+    ///
+    /// Runtime files are not a link input and do not count: a row naming only
+    /// those still has nothing for the linker, and a dynamic one still links by
+    /// its own name.
     pub fn is_empty(&self) -> bool {
         self.frameworks.is_empty()
             && self.system_libs.is_empty()
@@ -48,6 +61,7 @@ pub struct ResolvedTargetRow {
     triple: TargetTriple,
     artifact: Option<PathBuf>,
     attributes: NativeLinkAttributes,
+    runtime_files: Vec<PathBuf>,
 }
 
 impl ResolvedTargetRow {
@@ -64,7 +78,20 @@ impl ResolvedTargetRow {
             triple,
             artifact,
             attributes,
+            runtime_files: Vec::new(),
         }
+    }
+
+    /// Adds the located files this row's program must find beside itself.
+    #[must_use]
+    pub fn with_runtime_files(mut self, runtime_files: Vec<PathBuf>) -> Self {
+        self.runtime_files = runtime_files;
+        self
+    }
+
+    /// The located files the finished program must find beside itself.
+    pub fn runtime_files(&self) -> &[PathBuf] {
+        &self.runtime_files
     }
 
     /// The target this row provides link inputs for.
@@ -153,6 +180,7 @@ pub struct NativeLinkInputs {
     system_libs: Vec<String>,
     compiler_flags: Vec<String>,
     linker_flags: Vec<String>,
+    runtime_files: Vec<PathBuf>,
     unavailable_imports: Vec<usize>,
 }
 
@@ -183,6 +211,7 @@ impl NativeLinkInputs {
         system_libs: Vec::new(),
         compiler_flags: Vec::new(),
         linker_flags: Vec::new(),
+        runtime_files: Vec::new(),
         unavailable_imports: Vec::new(),
     };
 
@@ -204,6 +233,18 @@ impl NativeLinkInputs {
         for flag in &attributes.linker_flags {
             push_unique(&mut self.linker_flags, flag.clone());
         }
+        for file in row.runtime_files() {
+            push_unique(&mut self.runtime_files, file.clone());
+        }
+    }
+
+    /// The files every link output must be able to find beside itself.
+    ///
+    /// Not a link input: nothing on the command line names them. They are what
+    /// the *loader* opens, and a program that links clean without them still
+    /// cannot start.
+    pub fn runtime_files(&self) -> &[PathBuf] {
+        &self.runtime_files
     }
 
     /// True when no import selected any link input.
@@ -361,6 +402,26 @@ mod tests {
         assert_eq!(inputs.system_libs(), ["objc"]);
     }
 
+    /// A runtime file travels with the row and is not a link input.
+    ///
+    /// Two rows naming the same shared library must not stage it twice, and
+    /// nothing about it belongs on the command line: the loader opens it, the
+    /// linker never sees it.
+    #[test]
+    fn runtime_files_gather_without_repeats_and_reach_no_command_line() {
+        let with_files = row(None, NativeLinkAttributes::default())
+            .with_runtime_files(vec![PathBuf::from("/pkg/bin/webgpu_dawn.dll")]);
+        let mut inputs = NativeLinkInputs::default();
+        inputs.push_row(&with_files);
+        inputs.push_row(&with_files);
+
+        assert_eq!(
+            inputs.runtime_files(),
+            [PathBuf::from("/pkg/bin/webgpu_dawn.dll")]
+        );
+        assert!(inputs.driver_arguments().is_empty());
+    }
+
     #[test]
     fn a_row_with_no_artifact_still_contributes_its_attributes() {
         // The `kira_metal` shape: no archive at all, frameworks only.
@@ -390,6 +451,7 @@ mod tests {
                 system_libs: vec!["objc".to_owned(), "m".to_owned()],
                 compiler_flags: vec!["--use-port=emdawnwebgpu".to_owned()],
                 linker_flags: vec!["-sERROR_ON_UNDEFINED_SYMBOLS=0".to_owned()],
+                ..NativeLinkAttributes::default()
             },
         ));
         assert_eq!(

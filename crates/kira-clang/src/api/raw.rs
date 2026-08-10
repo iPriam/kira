@@ -93,6 +93,8 @@ impl CursorKind {
     pub const PARM_DECL: Self = Self(10);
     /// `CXCursor_TypedefDecl`.
     pub const TYPEDEF_DECL: Self = Self(20);
+    /// `CXCursor_InvalidFile`, the kind a null cursor carries.
+    pub const INVALID_FILE: Self = Self(70);
 }
 
 /// What a type is (`CXTypeKind`).

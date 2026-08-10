@@ -71,6 +71,11 @@ impl<'a> Analyzer<'a> {
         for entry in resolved {
             self.commit_struct(entry);
         }
+        // Last, because a `@FFI.Callback` may name a C-layout struct among its
+        // parameters and the row describing that struct is built out of the
+        // struct's fields — which are only in the table once every struct above
+        // has been committed.
+        self.resolve_callback_signatures(&headers);
     }
 
     /// First pass: declares every struct's name as an empty header, minting its

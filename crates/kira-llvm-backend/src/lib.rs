@@ -35,6 +35,7 @@
 use std::path::{Path, PathBuf};
 
 use kira_ir::IrProgram;
+use kira_runtime_abi::ForeignSignature;
 use kira_toolchain::LlvmDiscoveryError;
 
 // Re-exported because it is the type of a public option field: a caller
@@ -53,6 +54,8 @@ mod platform;
 mod reachability;
 pub mod shim;
 mod shim_build;
+#[cfg(test)]
+mod shim_tests;
 
 pub use exports::{NativeClass, NativeExport, NativeExportSurface};
 pub use link::LinkError;
@@ -68,13 +71,41 @@ pub fn adapter_name(index: usize) -> String {
     format!("kira_foreign_adapter_{index}")
 }
 
-/// The exported symbol of the generated entry thunk for callback `index`.
+/// The exported symbol C holds for callback `index`.
 ///
 /// The other half of the same wire contract [`adapter_name`] carries: the
 /// backend defines this symbol, and the VM's host resolves it by name to get the
 /// address a `@FFI.Callback` value holds.
+///
+/// *Which* half of the build defines it depends on the signature. A scalar-only
+/// callback is entered directly, so LLVM emits this symbol itself. One whose
+/// signature takes a struct by value cannot be: only a C compiler knows how that
+/// struct arrives, so the generated shim defines this symbol with the true C
+/// prototype and forwards to [`callback_body_name`]. Either way the address C
+/// holds is this name, which is why no host has to know the difference.
 pub fn callback_name(index: usize) -> String {
     format!("kira_ffi_callback_{index}")
+}
+
+/// The symbol LLVM's entry thunk for callback `index` is defined under when the
+/// generated shim owns [`callback_name`].
+///
+/// Never the address C holds: the shim's entry is, and this is what it calls
+/// with each by-value struct replaced by its address.
+pub fn callback_body_name(index: usize) -> String {
+    format!("kira_ffi_callback_body_{index}")
+}
+
+/// The symbol LLVM defines the entry thunk for callback `index` under.
+///
+/// [`callback_name`] for a signature LLVM can present to C on its own, and
+/// [`callback_body_name`] for one whose by-value struct the shim classifies.
+pub fn callback_thunk_symbol(index: usize, signature: &ForeignSignature) -> String {
+    if shim::callback_needs_entry(signature) {
+        callback_body_name(index)
+    } else {
+        callback_name(index)
+    }
 }
 
 /// What went wrong producing native code.
@@ -234,10 +265,12 @@ pub struct NativeArtifacts {
     pub ir: Option<PathBuf>,
 }
 
-/// Compiles the C shim `program` needs to carry aggregates across the seam.
+/// Compiles the C shim `program` needs to carry aggregates across the seam, in
+/// either direction.
 ///
-/// `None` for a program that passes no struct by value, which is every program
-/// that has always worked — those never invoke clang for a shim.
+/// `None` for a program that neither passes a struct by value nor hands C a
+/// callback entered with one, which is every program that has always worked —
+/// those never invoke clang for a shim.
 fn build_foreign_shim(
     program: &IrProgram,
     unavailable: &[usize],
@@ -251,6 +284,7 @@ fn build_foreign_shim(
         .collect();
     shim_build::build(
         &imports,
+        &program.foreign_callbacks,
         &program.foreign_aggregates,
         unavailable,
         object_path,

@@ -90,6 +90,20 @@ impl<'a> Cursor<'a> {
         self.api.cursor_is_definition(self.raw)
     }
 
+    /// The cursor that defines what this one declares, anywhere in this unit.
+    ///
+    /// `None` when the unit only ever declares it. A header that writes
+    /// `struct S;` and defines `S` later hands out the forward declaration at
+    /// the first use, so asking this cursor alone whether it is a definition
+    /// answers about the spelling rather than about the type.
+    pub fn definition(&self) -> Option<Cursor<'a>> {
+        let raw = self.api.cursor_definition(self.raw);
+        if CursorKind(raw.kind) == CursorKind::INVALID_FILE {
+            return None;
+        }
+        Some(Cursor::new(raw, self.api))
+    }
+
     /// This cursor's immediate children, in declaration order.
     pub fn children(&self) -> Vec<Cursor<'a>> {
         let mut collected: Vec<CxCursor> = Vec::new();

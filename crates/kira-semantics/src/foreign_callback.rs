@@ -18,7 +18,9 @@
 //! and anywhere else it is still an undefined name. That keeps a function name
 //! from silently becoming a value in positions the language does not have one.
 
-use kira_runtime_abi::{ForeignCallback, ForeignSignature, ForeignType, ForeignTypeSpec};
+use kira_runtime_abi::{
+    ForeignAggregateId, ForeignCallback, ForeignSignature, ForeignType, ForeignTypeSpec,
+};
 use kira_semantics_model::Type;
 use kira_semantics_model::hir::{HirExpr, HirExprId};
 use kira_source::Span;
@@ -72,7 +74,10 @@ impl Analyzer<'_> {
                 span,
                 "KSEM245",
                 format!(
-                    "`{callback_name}` declares a signature that cannot cross the C seam, so                      `{name}` cannot be passed as one: a callback carries fixed-width scalars,                      `Bool`, and a pointer, and returns one of those or nothing"
+                    "`{callback_name}` declares a signature that cannot cross the C seam, so \
+                     `{name}` cannot be passed as one: a callback carries fixed-width scalars, \
+                     `Bool`, a pointer, and a `@FFI.Struct {{ layout: c }}` C passes by value, \
+                     and returns one of the scalars or nothing"
                 ),
             );
             return Some(self.program.exprs.alloc(HirExpr::Error));
@@ -121,14 +126,27 @@ impl Analyzer<'_> {
             ));
         }
         for (index, (spec, param)) in declared.iter().zip(params.iter()).enumerate() {
-            let ForeignTypeSpec::Scalar(expected) = spec else {
-                return Err(format!(
-                    "argument {} crosses as an aggregate, which a callback does not carry yet",
-                    index + 1
-                ));
+            let expected = match spec {
+                ForeignTypeSpec::Scalar(expected) => *expected,
+                // A struct C passes by value reaches Kira as a pointer to it,
+                // so the function declares the pointer rather than the struct:
+                // the seam has one C-layout image and Kira never copies it in.
+                ForeignTypeSpec::Aggregate(aggregate) => {
+                    if self.callback_pointer_fits(*param, *aggregate) {
+                        continue;
+                    }
+                    return Err(format!(
+                        "argument {} is `{}`, which C passes by value, so the function receives \
+                         a pointer to it: declare an `@FFI.Pointer` to that type (the function \
+                         declares `{}`)",
+                        index + 1,
+                        self.aggregate_type_name(*aggregate),
+                        self.type_name(*param),
+                    ));
+                }
             };
             match self.callback_scalar_of(*param, CallbackPosition::Param) {
-                Some(actual) if actual == *expected => {}
+                Some(actual) if actual == expected => {}
                 _ => {
                     return Err(format!(
                         "argument {} is `{expected:?}` at the seam and the function declares `{}`",
@@ -160,6 +178,37 @@ impl Analyzer<'_> {
                  `{}`",
                 self.type_name(result)
             )),
+        }
+    }
+
+    /// Whether a Kira parameter can receive the address of the struct `aggregate`
+    /// describes.
+    ///
+    /// An `@FFI.Pointer` naming that very struct is the spelling to write, and
+    /// the one a generated binding produces. A bare `RawPtr` is accepted too —
+    /// it is the same pointer word, and a binding whose target C type nothing
+    /// described has nothing else to say. A pointer to a *different* C-layout
+    /// struct is refused: that is a mistake the seam can see.
+    fn callback_pointer_fits(&self, param: Type, aggregate: ForeignAggregateId) -> bool {
+        match param {
+            Type::RawPtr => true,
+            Type::ForeignPtr(pointer) => {
+                match self.program.types.foreign_ptr_target(pointer) {
+                    Some(target) => self.built_aggregate_of(target) == Some(aggregate),
+                    // A pointer to a C type nobody described is an opaque
+                    // handle, which is a pointer word like any other.
+                    None => true,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// The name of the struct an aggregate row came from, for a diagnostic.
+    fn aggregate_type_name(&self, aggregate: ForeignAggregateId) -> String {
+        match self.struct_of_aggregate(aggregate) {
+            Some(id) => self.type_name(Type::Struct(id)),
+            None => "a C-layout struct".to_owned(),
         }
     }
 
@@ -248,10 +297,9 @@ impl Analyzer<'_> {
         self.in_foreign_signature = outer_foreign;
 
         let mut specs = Vec::with_capacity(params.len());
-        for ty in resolved {
-            specs.push(ForeignTypeSpec::Scalar(
-                self.callback_scalar_of(ty, CallbackPosition::Param)?,
-            ));
+        for (&written, ty) in params.iter().zip(resolved) {
+            let span = self.tree.type_ref(written).span();
+            specs.push(self.callback_param_spec(ty, span)?);
         }
         let result = match written_result {
             None => ForeignType::Void,
@@ -262,5 +310,26 @@ impl Analyzer<'_> {
             specs,
             ForeignTypeSpec::Scalar(result),
         ))
+    }
+
+    /// The seam position one written callback parameter takes.
+    ///
+    /// A scalar as itself, and a `@FFI.Struct { layout: c }` as the aggregate
+    /// row describing it — the position C passes by value and Kira receives as a
+    /// pointer to. There is no equivalent for the result: a callback returning a
+    /// struct would have to build C's bytes out of a Kira value the seam does
+    /// not carry back, so that position stays scalar.
+    fn callback_param_spec(&mut self, ty: Type, span: Span) -> Option<ForeignTypeSpec> {
+        if let Some(scalar) = self.callback_scalar_of(ty, CallbackPosition::Param) {
+            return Some(ForeignTypeSpec::Scalar(scalar));
+        }
+        let Type::Struct(id) = ty else {
+            return None;
+        };
+        if self.ffi_struct_kind(id) != Some(FfiStructKind::CLayout) {
+            return None;
+        }
+        self.aggregate_seam_of(id, span)
+            .map(ForeignTypeSpec::Aggregate)
     }
 }

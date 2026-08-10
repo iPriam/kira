@@ -8,4 +8,4 @@ pub mod adapter;
 pub mod dynamic_library;
 
 pub use adapter::{ForeignAdapterError, ForeignAdapterLibrary, RuntimeInvoker};
-pub use dynamic_library::{DynamicLibrary, FfiError};
+pub use dynamic_library::{DynamicLibrary, FfiError, open_shared_library};

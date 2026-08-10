@@ -78,6 +78,16 @@ impl Api {
         unsafe { (self.is_cursor_definition)(cursor) != 0 }
     }
 
+    /// The cursor defining what `cursor` declares, anywhere in this unit.
+    ///
+    /// A null cursor when nothing in the unit defines it, which is how a
+    /// genuinely opaque type is told apart from one whose definition simply
+    /// arrives after the declaration that named it.
+    pub(crate) fn cursor_definition(&self, cursor: CxCursor) -> CxCursor {
+        // SAFETY: `cursor` came from this library.
+        unsafe { (self.get_cursor_definition)(cursor) }
+    }
+
     /// What a `typedef` cursor is a typedef of.
     pub(crate) fn typedef_underlying_type(&self, cursor: CxCursor) -> CxType {
         // SAFETY: `cursor` came from this library.

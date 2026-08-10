@@ -71,13 +71,20 @@ impl Harvest {
 
     /// Declares `name` as an opaque C type when that is what it is.
     ///
+    /// Opaque means the unit never defines it, not that this cursor is not the
+    /// definition. A header is free to write `struct S;` early and define `S`
+    /// later, and clang hands out whichever declaration the use site reached;
+    /// judging by that one alone files a type with fields as a handle, and a
+    /// handle has no layout to pass by value.
+    ///
     /// `true` when it was opaque and is now declared, so the caller stops.
     pub(super) fn declare_if_opaque(&mut self, ty: &CType<'_>, name: &str) -> bool {
         let declaration = ty.canonical().declaration();
         let opaque = matches!(
             declaration.kind(),
             CursorKind::STRUCT_DECL | CursorKind::UNION_DECL
-        ) && !declaration.is_definition();
+        ) && !declaration.is_definition()
+            && declaration.definition().is_none();
         if opaque && self.declared.insert(name.to_owned()) {
             self.module.opaques.push(OpaqueDecl {
                 name: name.to_owned(),
@@ -164,8 +171,16 @@ impl Harvest {
         ) {
             return self.declare_callback(ty, &pointee.canonical(), field);
         }
+        // The written pointee is asked first so a pointer to a typedef keeps the
+        // typedef's spelling. It answers nothing when the pointer itself is
+        // what was typedef'd — `typedef struct T *Handle` is a typedef type,
+        // not a pointer type, until it is canonicalized — and the canonical
+        // pointee is the same C type under the name its own declaration
+        // carries. Without that fallback every handle-based C API binds
+        // nothing: WebGPU spells all 263 of its entry points this way.
         let target = self
             .type_name(&ty.pointee())
+            .or_else(|| self.type_name(&pointee))
             .or_else(|| builtin_target_name(&pointee.canonical()))
             .ok_or_else(|| {
                 format!(
@@ -175,9 +190,10 @@ impl Harvest {
             })?;
         // An opaque C type — named by the headers, never defined — gets an
         // alias so the pointer has a target that reads as the C type it is.
-        let declaration = ty.pointee().canonical().declaration();
+        let declaration = pointee.canonical().declaration();
         if declaration.kind() == CursorKind::STRUCT_DECL
             && !declaration.is_definition()
+            && declaration.definition().is_none()
             && self.declared.insert(target.clone())
         {
             self.module.opaques.push(OpaqueDecl {
@@ -243,13 +259,20 @@ impl Harvest {
         name: &str,
         position: Position,
     ) -> Result<Vec<FieldDecl>, String> {
-        if !declaration.is_definition() {
-            return Err(format!(
-                "`{name}`, which the headers declare and never define, so it has no layout"
-            ));
-        }
+        // The cursor a use site reaches may be a forward declaration of a type
+        // the unit defines further down, so the fields are read from whichever
+        // cursor defines it. Only a type nothing defines has no layout.
+        let defining = match declaration.definition() {
+            Some(defining) => defining,
+            None if declaration.is_definition() => *declaration,
+            None => {
+                return Err(format!(
+                    "`{name}`, which the headers declare and never define, so it has no layout"
+                ));
+            }
+        };
         let mut fields = Vec::new();
-        for field in declaration.children() {
+        for field in defining.children() {
             if field.kind() != CursorKind::FIELD_DECL {
                 continue;
             }
@@ -319,12 +342,11 @@ impl Harvest {
     /// after the field that holds it, and a signature reached from nowhere in
     /// particular after its own shape.
     ///
-    /// A signature the *callback* seam cannot carry — a string, an aggregate —
-    /// is still declared. The language draws the line at the use: declaring
-    /// such a callback is clean, and handing a Kira function to one is what
-    /// KSEM245 refuses. Refusing it here instead would take the whole struct
-    /// that holds it with it, and with `sapp_desc` that is every entry point
-    /// sokol has.
+    /// A signature the *callback* seam cannot carry is still declared. The
+    /// language draws the line at the use: declaring such a callback is clean,
+    /// and handing a Kira function to one is what KSEM245 refuses. Refusing it
+    /// here instead would take the whole struct that holds it with it, and with
+    /// `sapp_desc` that is every entry point sokol has.
     fn declare_callback(
         &mut self,
         written: &CType<'_>,

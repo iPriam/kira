@@ -165,6 +165,7 @@ fn target_value(value: &str) -> Result<NativeTargetSpec, DeclarationError> {
             "systemLibs" => attributes.system_libs = string_array(value)?,
             "compilerFlags" => attributes.compiler_flags = string_array(value)?,
             "linkerFlags" => attributes.linker_flags = string_array(value)?,
+            "runtimeFiles" => attributes.runtime_files = string_array(value)?,
             _ => {}
         }
     }

@@ -1,0 +1,98 @@
+// An extension chained onto a descriptor, which is how every modern graphics
+// header is extended.
+//
+// The descriptor holds a pointer to a base link; an extension is a struct whose
+// FIRST member is that link, and C is handed the extension's address. That is
+// sound because a struct and its first member share an address — the same fact
+// the `(const struct ffi_chain_scale *)link` cast in the fixture relies on.
+//
+// `WGPUSurfaceDescriptor.nextInChain` pointed at a `WGPUSurfaceSourceWindowsHWND`
+// is this exact shape, and it is the only route from a window to a WebGPU
+// surface. Vulkan's `pNext` is the same. Without it, reaching one extension
+// means redeclaring the descriptor with the extension's own pointer type — one
+// mirror per extension, each of which stops matching the header the moment it
+// changes.
+
+@FFI.Struct { layout: c; }
+struct FfiChain {
+    var next: FfiChainPtr
+    var kind: I32
+}
+
+@FFI.Pointer { target: FfiChain; ownership: borrowed; }
+struct FfiChainPtr {}
+
+@FFI.Struct { layout: c; }
+struct FfiChainScale {
+    var chain: FfiChain
+    var factor: I32
+}
+
+@FFI.Struct { layout: c; }
+struct FfiChainedDescriptor {
+    var nextInChain: FfiChainPtr
+    var base: I32
+}
+
+@FFI.Pointer { target: FfiChainedDescriptor; ownership: borrowed; }
+struct FfiChainedDescriptorPtr {}
+
+@FFI.Extern { library: ffifixture; symbol: ffi_chained_total; abi: c; }
+function ffiChainedTotal(descriptor: FfiChainedDescriptorPtr): I32;
+
+// No extension. The omitted pointer member is `NULL`, so C walks nothing.
+@Native
+function totalWithNoChain() -> Int {
+    return Int(ffiChainedTotal(FfiChainedDescriptor { base: 7 }))
+}
+
+// One extension. The member's declared target is `FfiChain`; the value written
+// is an `FfiChainScale`, whose first member is one.
+@Native
+function totalWithOneLink() -> Int {
+    return Int(ffiChainedTotal(FfiChainedDescriptor {
+        nextInChain: FfiChainScale {
+            chain: FfiChain { kind: 1 }
+            factor: 3
+        }
+        base: 7
+    }))
+}
+
+// Two links, the second reached through the first's own `next` member — so the
+// fill works at a nested member as well as at the descriptor's own.
+@Native
+function totalWithTwoLinks() -> Int {
+    return Int(ffiChainedTotal(FfiChainedDescriptor {
+        nextInChain: FfiChainScale {
+            chain: FfiChain {
+                next: FfiChainScale {
+                    chain: FfiChain { kind: 1 }
+                    factor: 5
+                }
+                kind: 1
+            }
+            factor: 3
+        }
+        base: 7
+    }))
+}
+
+// A link the walker does not recognise is skipped, which is what an unknown
+// `sType` means: the base struct itself fills the same member.
+@Native
+function totalWithAnUnknownLink() -> Int {
+    return Int(ffiChainedTotal(FfiChainedDescriptor {
+        nextInChain: FfiChain { kind: 9 }
+        base: 7
+    }))
+}
+
+@Main
+function main() {
+    print(totalWithNoChain())
+    print(totalWithOneLink())
+    print(totalWithTwoLinks())
+    print(totalWithAnUnknownLink())
+    return
+}

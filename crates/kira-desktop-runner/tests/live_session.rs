@@ -506,6 +506,12 @@ fn a_silent_runner_does_not_hang_the_server() {
 /// Reads, writes, and the accept are each bounded, and each covers a distinct
 /// way a session can stop making progress: a runner that says nothing, one that
 /// stops reading, and one that never arrives.
+///
+/// One wait a live *session* does not own: the supervisor's watch loop, which
+/// ends at `--quit-after` or when a person ends it and has no constant to check
+/// here. Its half of the same rule is
+/// `a_live_session_no_terminal_asked_for_ends_on_its_own`, in `kira-cli`'s
+/// `live` module, where that loop's options are parsed.
 #[test]
 fn every_wait_in_a_session_is_bounded() {
     let ceiling = Duration::from_secs(60);

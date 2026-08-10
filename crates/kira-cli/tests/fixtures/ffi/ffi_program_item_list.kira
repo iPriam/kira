@@ -1,0 +1,90 @@
+// An item list handed to C, as an argument and inside a descriptor.
+//
+// A pointer position already accepted the struct it points at — one item. What
+// every descriptor-driven graphics API actually asks for is several beside a
+// count: `WGPUVertexBufferLayout.attributes`, `WGPUBindGroupDescriptor.entries`,
+// `VkPipelineVertexInputStateCreateInfo.pVertexAttributeDescriptions`. A C array
+// is its elements laid out end to end, which is exactly what an `@FFI.Array`
+// reserves, so the array type fills the pointer and the count travels beside it.
+
+@FFI.Struct { layout: c; }
+struct FfiItem {
+    var location: I32
+    var offset: U64
+}
+
+@FFI.Pointer { target: FfiItem; ownership: borrowed; }
+struct FfiItemPtr {}
+
+@FFI.Array { element: FfiItem; count: 4; }
+struct FfiItemArray4 {}
+
+@FFI.Struct { layout: c; }
+struct FfiItemList {
+    var items: FfiItemPtr
+    var count: I32
+}
+
+@FFI.Pointer { target: FfiItemList; ownership: borrowed; }
+struct FfiItemListPtr {}
+
+@FFI.Extern { library: ffifixture; symbol: ffi_items_checksum; abi: c; }
+function ffiItemsChecksum(items: FfiItemPtr, count: I32): I32;
+
+@FFI.Extern { library: ffifixture; symbol: ffi_item_list_checksum; abi: c; }
+function ffiItemListChecksum(list: FfiItemListPtr): I32;
+
+// Several items at a pointer argument.
+@Native
+function checksumOfThree() -> Int {
+    return Int(ffiItemsChecksum(FfiItemArray4 {
+        elements: [
+            FfiItem { location: 1, offset: 0 },
+            FfiItem { location: 2, offset: 12 },
+            FfiItem { location: 3, offset: 28 }
+        ]
+    }, 3))
+}
+
+// One item at the same argument, which is the case that already worked and has
+// to keep working: the array form must not have displaced it.
+@Native
+function checksumOfOne() -> Int {
+    return Int(ffiItemsChecksum(FfiItem { location: 4, offset: 5 }, 1))
+}
+
+// A shorter list than the extent zero-fills the rest, and the count beside the
+// pointer is what says how many C reads — so the fourth slot is never seen.
+@Native
+function checksumOfTwoInFour() -> Int {
+    return Int(ffiItemsChecksum(FfiItemArray4 {
+        elements: [
+            FfiItem { location: 1, offset: 1 },
+            FfiItem { location: 1, offset: 2 }
+        ]
+    }, 2))
+}
+
+// The same list named inside a descriptor, which is where a real graphics API
+// puts it: the member is an `@FFI.Pointer`, not a bare `RawPtr`.
+@Native
+function checksumThroughDescriptor() -> Int {
+    return Int(ffiItemListChecksum(move FfiItemList {
+        items: FfiItemArray4 {
+            elements: [
+                FfiItem { location: 5, offset: 6 },
+                FfiItem { location: 7, offset: 8 }
+            ]
+        }
+        count: 2
+    }))
+}
+
+@Main
+function main() {
+    print(checksumOfThree())
+    print(checksumOfOne())
+    print(checksumOfTwoInFour())
+    print(checksumThroughDescriptor())
+    return
+}

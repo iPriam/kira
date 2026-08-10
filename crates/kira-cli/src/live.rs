@@ -1,7 +1,7 @@
 //! `kira live`: what the verb was asked for, and how a bundle gets built.
 //!
 //! ```text
-//! kira live [runner] [file|dir] [--backend vm|hybrid] [--no-watch] [--quit-after 5s]
+//! kira live [runner] [file|dir] [--backend vm|hybrid] [--watch|--no-watch] [--quit-after 5s]
 //! ```
 //!
 //! The session itself — the server, the runner process, the watching, the
@@ -14,6 +14,7 @@
 //! so — never silence, and never a session that claims to have run somewhere it
 //! did not.
 
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -76,6 +77,23 @@ pub struct LiveOptions {
     pub quit_after: Option<Duration>,
 }
 
+impl LiveOptions {
+    /// Whether this session runs until something outside it stops it.
+    ///
+    /// Every other wait a live session performs is bounded — the server's
+    /// accept, its reads and writes, its goodbye, the runner's reads — and this
+    /// is the one that is not. An unwatched session ends when the app does, and
+    /// a `--quit-after` bounds any session by the clock; a watched session with
+    /// neither ends only when a person ends it.
+    ///
+    /// Which is why it is not something an invocation falls into. It is reached
+    /// by a terminal, where that person is, or by naming `--watch`, which is
+    /// saying so.
+    pub fn runs_until_stopped(&self) -> bool {
+        self.watch && self.quit_after.is_none()
+    }
+}
+
 /// A usage error in a `kira live` invocation.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LiveOptionsError {
@@ -111,14 +129,31 @@ impl LiveOptions {
     /// `run`, `build`, and `check` take. Nothing is guessed here: `.` goes
     /// through the same package discovery an explicit path does, so a directory
     /// holding no `package.kira` is refused by name there.
+    ///
+    /// Reads whether this invocation is attached to a terminal, which is what
+    /// decides the watching default; see [`LiveOptions::parse_in`].
     pub fn parse(args: &[String]) -> Result<LiveOptions, LiveOptionsError> {
+        Self::parse_in(args, std::io::stdout().is_terminal())
+    }
+
+    /// [`LiveOptions::parse`] against a stated environment.
+    ///
+    /// `interactive` is whether a person is watching this session's output, and
+    /// it decides one thing: whether watching is the default. A live session is
+    /// useful because it stays attached to the source, so at a terminal that is
+    /// what `kira live` means, and `--no-watch` is the one-shot escape hatch.
+    ///
+    /// Driven by a tool — a pipe, a script, a test harness — there is nobody to
+    /// end a watched session, and a default that watched would be a wait nothing
+    /// can end (see [`LiveOptions::runs_until_stopped`]). So there the default is
+    /// the session that ends when the app does, and a script that really wants
+    /// to watch says `--watch`, normally beside the `--quit-after` that bounds
+    /// it.
+    pub fn parse_in(args: &[String], interactive: bool) -> Result<LiveOptions, LiveOptionsError> {
         let mut runner = None;
         let mut path: Option<String> = None;
         let mut backend = LiveBackend::Vm;
-        // A live session is useful because it stays attached to the source. Keep
-        // watching on by default; `--no-watch` is the explicit one-shot escape
-        // hatch, while `--watch` and `--hot` remain accepted aliases for scripts.
-        let mut watch = true;
+        let mut watch = interactive;
         let mut quit_after = None;
 
         let mut index = 0;
@@ -472,17 +507,72 @@ mod tests {
         assert_eq!(options.runner, RunnerId::Desktop);
         assert_eq!(options.path, "app.kira");
         assert_eq!(options.backend, LiveBackend::Vm);
-        assert!(options.watch, "live watches source files by default");
+    }
+
+    /// At a terminal, `kira live` is the dev loop: it watches.
+    #[test]
+    fn a_live_session_at_a_terminal_watches() {
+        let options = LiveOptions::parse_in(&args(&["app.kira"]), true).expect("parses");
+        assert!(options.watch, "live watches source files at a terminal");
     }
 
     #[test]
     fn live_watch_can_be_named_or_explicitly_disabled() {
-        for flag in ["--watch", "--hot"] {
-            let options = LiveOptions::parse(&args(&[flag, "app.kira"])).expect("parses");
-            assert!(options.watch, "{flag} keeps watching enabled");
+        for interactive in [false, true] {
+            for flag in ["--watch", "--hot"] {
+                let options =
+                    LiveOptions::parse_in(&args(&[flag, "app.kira"]), interactive).expect("parses");
+                assert!(options.watch, "{flag} watches, terminal or not");
+            }
+            let options = LiveOptions::parse_in(&args(&["--no-watch", "app.kira"]), interactive)
+                .expect("parses");
+            assert!(!options.watch, "--no-watch is the explicit one-shot mode");
         }
-        let options = LiveOptions::parse(&args(&["--no-watch", "app.kira"])).expect("parses");
-        assert!(!options.watch, "--no-watch is the explicit one-shot mode");
+    }
+
+    /// The bound on the one wait a live session has that no timeout covers.
+    ///
+    /// `kira-live`'s own waits are each bounded by a constant, and
+    /// `every_wait_in_a_session_is_bounded` checks them. The supervisor's watch
+    /// loop is the wait those constants do not reach: it ends at `--quit-after`
+    /// or when a person ends it, and nothing else. So a session nobody is
+    /// watching must not be watching either — a tool that starts one and reads
+    /// its output to end of file would never get there.
+    ///
+    /// Naming `--watch` is exempt because it is the person saying so, and it is
+    /// how a script that means it asks; that is also why the shape is checked
+    /// rather than the flag.
+    #[test]
+    fn a_live_session_no_terminal_asked_for_ends_on_its_own() {
+        let invocations: [&[&str]; 6] = [
+            &[],
+            &["app.kira"],
+            &["--backend", "vm", "app.kira"],
+            &["--backend", "hybrid", "app.kira"],
+            &["desktop", "app.kira"],
+            &["--no-watch", "app.kira"],
+        ];
+        for invocation in invocations {
+            let options = LiveOptions::parse_in(&args(invocation), false).expect("parses");
+            assert!(
+                !options.runs_until_stopped(),
+                "`kira live {}` off a terminal would run until something killed it",
+                invocation.join(" ")
+            );
+        }
+
+        // Asked for in words, it is asked for — and a bound supplied in words
+        // ends it whoever asked.
+        assert!(
+            LiveOptions::parse_in(&args(&["--watch", "app.kira"]), false)
+                .expect("parses")
+                .runs_until_stopped()
+        );
+        assert!(
+            !LiveOptions::parse_in(&args(&["--watch", "--quit-after", "5s", "app.kira"]), false)
+                .expect("parses")
+                .runs_until_stopped()
+        );
     }
 
     #[test]

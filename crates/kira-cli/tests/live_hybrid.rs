@@ -145,10 +145,15 @@ fn live_until(
     (stdout, stderr)
 }
 
-/// Runs `kira live` with extra arguments.
+/// Runs `kira live` with extra arguments, one shot.
+///
+/// `--no-watch` in words: this reads the session's output to end of file, and
+/// that only arrives when the session ends. A watched session is one that does
+/// not end on its own, which is the opposite of what is being read for.
 fn live_with(path: &Path, backend: &str, extra: &[&str]) -> (String, String, bool) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_kira"))
         .arg("live")
+        .arg("--no-watch")
         .arg("--backend")
         .arg(backend)
         .args(extra)

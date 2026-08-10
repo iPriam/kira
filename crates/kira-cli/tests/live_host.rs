@@ -60,10 +60,13 @@ impl Drop for Session {
 
 /// Runs one unwatched `kira live --backend vm` session and returns
 /// (stdout, stderr, ok).
+///
+/// `--no-watch` in words: the output is read to end of file, which only arrives
+/// when the session ends, and a watched session does not end on its own.
 fn live(scratch: &Scratch) -> (String, String, bool) {
     let mut session = Session(
         Command::new(env!("CARGO_BIN_EXE_kira"))
-            .args(["live", "--backend", "vm"])
+            .args(["live", "--no-watch", "--backend", "vm"])
             .arg(scratch.program())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

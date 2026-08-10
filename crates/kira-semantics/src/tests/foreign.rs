@@ -7,7 +7,7 @@
 //! the *only* diagnostic reported, so a rule is never mistaken for a cascade.
 
 use super::*;
-use kira_runtime_abi::{ForeignAbi, ForeignType};
+use kira_runtime_abi::{ForeignAbi, ForeignType, ForeignTypeSpec};
 use kira_semantics_model::HirProgram;
 use kira_semantics_model::hir::{Callee, HirExpr};
 
@@ -350,6 +350,49 @@ fn an_ffi_array_holds_its_elements_in_a_named_field() {
 }
 
 #[test]
+fn an_ffi_array_fills_a_pointer_to_its_element_type() {
+    // `T const *items` beside an `itemCount` is what every descriptor-driven
+    // graphics API asks for, and a C array is its elements end to end — so the
+    // array typedef's own image is what the pointer addresses. The pointer
+    // member is written as an `@FFI.Pointer`, not a bare `RawPtr`, because that
+    // is what a generated binding writes.
+    let text = "@FFI.Struct { layout: c; }\n\
+                struct Item { var location: I32\n var offset: U64 }\n\
+                @FFI.Pointer { target: Item; ownership: borrowed; }\n\
+                struct ItemPtr {}\n\
+                @FFI.Array { element: Item; count: 4; }\n\
+                struct Items4 {}\n\
+                @FFI.Struct { layout: c; }\n\
+                struct List { var items: ItemPtr\n var count: I32 }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; } \
+                function f(items: ItemPtr, count: I32) -> I32;\n\
+                @Main function main() {\n\
+                let one = Item { location: 1, offset: 2 }\n\
+                print(f(Items4 { elements: [one] }, 1))\n\
+                print(f(one, 1))\n\
+                let list = List { items: Items4 { elements: [one] }, count: 1 }\n\
+                print(list.count)\n\
+                return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+#[test]
+fn an_ffi_array_of_the_wrong_element_does_not_fill_a_pointer() {
+    // The extent is not what makes the fill legal — the element type is. An
+    // array of something else laid out at that pointer would hand C bytes it
+    // reads as the type it declared.
+    let text = "@FFI.Struct { layout: c; }\n\
+                struct Item { var location: I32 }\n\
+                @FFI.Pointer { target: Item; ownership: borrowed; }\n\
+                struct ItemPtr {}\n\
+                @FFI.Array { element: I32; count: 4; }\n\
+                struct Cells {}\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; } function f(items: ItemPtr) -> I32;\n\
+                @Main function main() { print(f(Cells { elements: [1] })) return }";
+    assert_eq!(codes(text), vec!["KSEM183"]);
+}
+
+#[test]
 fn an_ffi_array_on_its_own_at_the_seam_is_refused_because_c_decays_it() {
     // C turns an array parameter into a pointer, which is a different type with
     // different ownership, so the seam refuses it rather than choosing one.
@@ -396,8 +439,8 @@ fn a_kira_function_named_where_a_callback_is_expected_records_one_entry() {
     assert_eq!(
         entry.signature().parameters(),
         &[
-            kira_runtime_abi::ForeignTypeSpec::Scalar(ForeignType::I32),
-            kira_runtime_abi::ForeignTypeSpec::Scalar(ForeignType::I32)
+            ForeignTypeSpec::Scalar(ForeignType::I32),
+            ForeignTypeSpec::Scalar(ForeignType::I32)
         ]
     );
 }
@@ -465,6 +508,86 @@ fn a_callback_declaring_a_type_the_seam_cannot_carry_is_refused_where_it_is_fill
                   function use_it(a: Sink) -> Void;\n\
                   @Main function main() { use_it(takes) return }";
     assert_eq!(codes(filled), vec!["KSEM245"]);
+}
+
+/// A callback parameter C passes by value is recorded as the aggregate it is,
+/// and the Kira function receives a pointer to it.
+///
+/// `WGPURequestAdapterCallback` is why: its `WGPUStringView` parameter is fixed
+/// by Dawn's header, and `wgpuInstanceRequestAdapter` is the only route to an
+/// adapter — so a binding that could not fill this callback could not reach a
+/// device at all.
+#[test]
+fn a_struct_callback_parameter_is_an_aggregate_the_function_takes_by_pointer() {
+    let text = "@FFI.Struct { layout: c; }\n\
+                struct View { let length: U64 }\n\
+                @FFI.Pointer { target: View; ownership: borrowed; }\n\
+                struct ViewPtr {}\n\
+                @FFI.Callback { abi: c; params: [I32, View]; result: Void; }\n\
+                struct Sink {}\n\
+                function takes(tag: I32, view: ViewPtr) -> Void { return }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; }\n\
+                function use_it(a: Sink) -> Void;\n\
+                @Main function main() { use_it(takes) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+    let program = program(text);
+    assert_eq!(program.foreign_callbacks.len(), 1);
+    let declared = program.foreign_callbacks[0].signature().parameters();
+    assert_eq!(declared[0], ForeignTypeSpec::Scalar(ForeignType::I32));
+    assert!(
+        declared[1].aggregate().is_some(),
+        "the struct position stays an aggregate on the wire: {declared:?}"
+    );
+}
+
+/// The struct itself is not what such a function receives, and saying so is the
+/// diagnostic — a copy would be a second image of storage C already owns.
+#[test]
+fn a_struct_callback_parameter_taken_by_value_in_kira_is_refused() {
+    let by_value = "@FFI.Struct { layout: c; }\n\
+                    struct View { let length: U64 }\n\
+                    @FFI.Callback { abi: c; params: [View]; result: Void; }\n\
+                    struct Sink {}\n\
+                    function takes(view: View) -> Void { return }\n\
+                    @FFI.Extern { library: l; symbol: s; abi: c; }\n\
+                    function use_it(a: Sink) -> Void;\n\
+                    @Main function main() { use_it(takes) return }";
+    assert_eq!(codes(by_value), vec!["KSEM246"]);
+
+    // And a pointer to a *different* C-layout struct is a mistake the seam can
+    // see, rather than a pointer word it waves through.
+    let wrong_target = "@FFI.Struct { layout: c; }\n\
+                        struct View { let length: U64 }\n\
+                        @FFI.Struct { layout: c; }\n\
+                        struct Other { let n: I32 }\n\
+                        @FFI.Pointer { target: Other; ownership: borrowed; }\n\
+                        struct OtherPtr {}\n\
+                        @FFI.Callback { abi: c; params: [View]; result: Void; }\n\
+                        struct Sink {}\n\
+                        function takes(view: OtherPtr) -> Void { return }\n\
+                        @FFI.Extern { library: l; symbol: s; abi: c; }\n\
+                        function use_it(a: Sink) -> Void;\n\
+                        @Main function main() { use_it(takes) return }";
+    assert_eq!(codes(wrong_target), vec!["KSEM246"]);
+}
+
+/// A callback *returning* a struct stays refused, and stays refused at the fill
+/// site rather than at the declaration.
+///
+/// Not the same question as a parameter. A parameter is storage C already owns,
+/// and its address is the whole answer; a result would have to be C-layout bytes
+/// built out of a Kira value, which nothing on this seam carries back.
+#[test]
+fn a_struct_callback_result_is_refused_where_it_is_filled() {
+    let text = "@FFI.Struct { layout: c; }\n\
+                struct View { let length: U64 }\n\
+                @FFI.Callback { abi: c; params: []; result: View; }\n\
+                struct Sink {}\n\
+                function gives() -> View { return View {} }\n\
+                @FFI.Extern { library: l; symbol: s; abi: c; }\n\
+                function use_it(a: Sink) -> Void;\n\
+                @Main function main() { use_it(gives) return }";
+    assert_eq!(codes(text), vec!["KSEM245"]);
 }
 
 /// A `String` callback parameter is the one Kira type that *does* fit a C

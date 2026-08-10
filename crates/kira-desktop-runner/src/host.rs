@@ -23,8 +23,8 @@ use kira_live::{Bundle, BundleError, PayloadKind, RunnerHost};
 use kira_runtime_abi::{HostCapabilities, NativeStateHost};
 use kira_vm_runtime::{Program, VmError};
 
-use crate::staged::Staged;
 use crate::VmHotPatch;
+use crate::staged::Staged;
 
 /// Why the desktop runner could not load, link, or start a bundle.
 #[derive(Debug, thiserror::Error)]

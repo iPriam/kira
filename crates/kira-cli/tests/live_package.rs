@@ -85,9 +85,14 @@ impl Drop for Session {
 
 /// Runs `kira live` *inside* `directory` with `extra` and nothing else — no
 /// path, which is the whole point — and returns (stdout, stderr, ok).
+///
+/// `--no-watch` because this reads the session's output to end of file, which
+/// only arrives when the session ends: a watched session is one that does not,
+/// and asking for the one-shot in words is what says so.
 fn live_in(directory: &Path, extra: &[&str]) -> (String, String, bool) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_kira"))
         .arg("live")
+        .arg("--no-watch")
         .args(extra)
         .current_dir(directory)
         .stdout(Stdio::piped())

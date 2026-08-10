@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use kira_hybrid_definition::HybridManifest;
 use kira_ir::IrProgram;
 use kira_llvm_backend::{NativeBuildOptions, NativeLinkInputs};
+use kira_runtime_abi::Execution;
 
 use crate::native::{self, Artifacts, NativeError};
 
@@ -86,32 +87,59 @@ pub fn build(
     let bytecode_path = artifacts.bytecode();
     write(&bytecode_path, &module.to_bytes())?;
 
-    // The native half: one trampoline per `@Native` function, plus one adapter
-    // per foreign import, with the selected C archives linked in.
-    let options = NativeBuildOptions {
-        module_name: artifacts.stem().to_owned(),
-        object_path: artifacts.object(),
-        // A hybrid program has no entrypoint of its own to link: the host is
-        // the executable, and this half is a library it loads.
-        executable_path: None,
-        shared_library_path: Some(artifacts.shared_library()),
-        // A hybrid half is entered through its per-function trampolines, not
-        // through an export surface, and it is a dylib rather than an archive.
-        archive_path: None,
-        exports: kira_llvm_backend::NativeExportSurface::default(),
-        ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
-        runtime_archive: native::runtime_archive(program)?,
-        optimize: false,
-        unavailable_imports: foreign_link.unavailable_imports().to_vec(),
-        foreign_link: foreign_link.clone(),
+    // A VM live bundle carries a native library only for foreign adapters and
+    // callbacks. Its Kira function bodies are all in the bytecode half, so a
+    // source edit that leaves this crossing surface unchanged must not invoke
+    // LLVM and the linker again.
+    let reusable_native = program
+        .functions
+        .iter()
+        .all(|function| function.execution.resolve(Execution::Runtime) == Execution::Runtime);
+    let surface_key = native_surface_key(program, foreign_link);
+    let cache_path = artifacts.native_surface_key();
+    let cache_hit = reusable_native
+        && artifacts.shared_library().is_file()
+        && (!emit_llvm_ir || artifacts.llvm_ir().is_file())
+        && std::fs::read_to_string(&cache_path)
+            .map(|cached| cached == surface_key)
+            .unwrap_or(false);
+    let exports = if cache_hit {
+        Vec::new()
+    } else {
+        // The native half: one trampoline per `@Native` function, plus one
+        // adapter per foreign import, with the selected C archives linked in.
+        let options = NativeBuildOptions {
+            module_name: artifacts.stem().to_owned(),
+            object_path: artifacts.object(),
+            // A hybrid program has no entrypoint of its own to link: the host is
+            // the executable, and this half is a library it loads.
+            executable_path: None,
+            shared_library_path: Some(artifacts.shared_library()),
+            // A hybrid half is entered through its per-function trampolines, not
+            // through an export surface, and it is a dylib rather than an archive.
+            archive_path: None,
+            exports: kira_llvm_backend::NativeExportSurface::default(),
+            ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
+            runtime_archive: native::runtime_archive(program)?,
+            optimize: false,
+            unavailable_imports: foreign_link.unavailable_imports().to_vec(),
+            foreign_link: foreign_link.clone(),
+        };
+        let native = kira_llvm_backend::build_hybrid_library(program, &options)?;
+        if reusable_native {
+            std::fs::write(&cache_path, &surface_key).map_err(|source| HybridError::Io {
+                path: cache_path.clone(),
+                source,
+            })?;
+        }
+        native.exports
     };
-    let native = kira_llvm_backend::build_hybrid_library(program, &options)?;
 
     // The manifest, last: it names the two payloads above.
     let manifest = manifest(
         program,
         &artifacts,
-        &native.exports,
+        &exports,
         kira_build::hybrid_internal_function_count(program, &module)?,
     )?;
     let manifest_path = artifacts.manifest();
@@ -120,6 +148,21 @@ pub fn build(
     Ok(HybridBundle {
         manifest: manifest_path,
     })
+}
+
+/// The exact input that can change a VM live session's native adapter library.
+///
+/// The version makes an old compiler's `.kira-build` output conservative after
+/// a native ABI change. The ordinary Kira function bodies are deliberately not
+/// present: they do not enter the native half of a VM bundle.
+fn native_surface_key(program: &IrProgram, foreign_link: &NativeLinkInputs) -> String {
+    format!(
+        "kira-vm-native-surface-v1\nimports={:?}\naggregates={:?}\ncallbacks={:?}\nlink={:?}",
+        program.foreign_imports,
+        program.foreign_aggregates,
+        program.foreign_callbacks,
+        foreign_link,
+    )
 }
 
 /// Builds a hybrid bundle and runs it, returning the program's exit code.

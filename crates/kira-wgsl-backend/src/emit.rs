@@ -6,6 +6,11 @@ use kira_ksl_semantics::model::{
 };
 use kira_shader_model::{Builtin, Reflection, ScalarType, Stage, TextureDimension, Type};
 
+/// WGSL reserves far more words than KSL does, so every author-written
+/// identifier goes through this on its way out. See `kira_shader_ir::wgsl_names`
+/// for what is on the list and why.
+pub(crate) use kira_shader_ir::wgsl_safe_name as safe_name;
+
 /// The WGSL spelling of a type.
 #[must_use]
 pub fn type_name(ty: &Type) -> String {
@@ -80,17 +85,14 @@ impl Emitter<'_> {
         let params = function
             .params
             .iter()
-            .map(|param| format!("{}: {}", param.name, type_name(&param.ty)))
+            .map(|param| format!("{}: {}", safe_name(&param.name), type_name(&param.ty)))
             .collect::<Vec<_>>()
             .join(", ");
+        let name = safe_name(&function.name);
         let signature = if function.result == Type::Void {
-            format!("fn {}({params}) {{", function.name)
+            format!("fn {name}({params}) {{")
         } else {
-            format!(
-                "fn {}({params}) -> {} {{",
-                function.name,
-                type_name(&function.result)
-            )
+            format!("fn {name}({params}) -> {} {{", type_name(&function.result))
         };
         self.line(0, &signature);
         self.body(&function.body, 1);
@@ -111,6 +113,7 @@ impl Emitter<'_> {
             // WGSL's `let` is immutable and KSL's is not — the corpus reassigns
             // bindings constantly — so every local becomes a `var`.
             CheckedStmt::Let { name, ty, init } => {
+                let name = safe_name(&name);
                 let declared = match init {
                     None => format!("var {name}: {} = {}();", type_name(&ty), type_name(&ty)),
                     Some(value) => {
@@ -175,7 +178,10 @@ impl Emitter<'_> {
             CheckedExprKind::Const(value) => constant(*value),
             CheckedExprKind::Local(name)
             | CheckedExprKind::Option(name)
-            | CheckedExprKind::Resource(name) => name.clone(),
+            | CheckedExprKind::Resource(name) => safe_name(name),
+            // A field name is not prefixed: it is spelled by the struct
+            // declaration the interface lowering wrote, which is where it would
+            // have to be prefixed too, and both are the same string.
             CheckedExprKind::Field { base, field } => {
                 format!("{}.{field}", self.expr(*base))
             }
@@ -206,7 +212,7 @@ impl Emitter<'_> {
                 format!("{}({})", type_name(&node.ty), self.expr(*value))
             }
             CheckedExprKind::Call { name, args } => {
-                format!("{name}({})", self.args(args))
+                format!("{}({})", safe_name(name), self.args(args))
             }
             CheckedExprKind::Builtin { which, args } => self.builtin(*which, args),
             CheckedExprKind::Unary { op, operand } => {
@@ -231,6 +237,8 @@ impl Emitter<'_> {
     /// Whether `id` names a storage buffer this shader uses atomically.
     fn is_atomic(&self, id: CheckedExprId) -> bool {
         match &self.module.expr(id).kind {
+            // Against the name as written, not as emitted: `atomics` is gathered
+            // from the same expressions.
             CheckedExprKind::Resource(name) => self.atomics.contains(name),
             _ => false,
         }
@@ -252,7 +260,34 @@ impl Emitter<'_> {
         };
         match which {
             BuiltinFn::Mul => format!("({} * {})", at(0), at(1)),
-            BuiltinFn::Sample => format!("textureSample({}, {}, {})", at(0), at(1), at(2)),
+            // At an explicit level, never `textureSample`.
+            //
+            // `textureSample` computes its own derivatives, and WGSL allows that
+            // only from uniform control flow: a sample inside an `if` or a loop
+            // is refused outright, which every other target accepts. The UI
+            // corpus samples inside branches constantly — a glass surface picks
+            // its source per pixel — so the derivative form is unreachable there
+            // and the whole shader fails to compile.
+            //
+            // Level 0 is not a compromise while KSL's `sample` names no level
+            // and nothing in this toolchain builds a mip chain: there is exactly
+            // one level to read. It becomes one the day KSL grows mips, and the
+            // level will come from the call then.
+            BuiltinFn::Sample => {
+                let level = match args.first().map(|&id| self.module.expr(id).ty.clone()) {
+                    // A depth texture's level is an integer; every other
+                    // texture's is a float, and WGSL takes neither for the
+                    // other.
+                    Some(Type::Texture(TextureDimension::Depth2d)) => "0",
+                    _ => "0.0",
+                };
+                format!(
+                    "textureSampleLevel({}, {}, {}, {level})",
+                    at(0),
+                    at(1),
+                    at(2)
+                )
+            }
             // `textureLoad` needs integer texel coordinates and an explicit
             // mip level; KSL's `load` names neither, so level 0 is implied.
             BuiltinFn::Load => format!("textureLoad({}, vec2<i32>({}), 0)", at(0), at(1)),
@@ -309,7 +344,8 @@ impl Emitter<'_> {
                 "@group({}) @binding({})",
                 binding.group_index, binding.binding_index
             );
-            let name = &resource.resource_name;
+            let written = &resource.resource_name;
+            let name = safe_name(written);
             let declared = match resource.resource_kind {
                 kira_shader_model::ResourceKind::Uniform => {
                     format!("{at} var<uniform> {name}: {};", resource.type_name)
@@ -322,7 +358,7 @@ impl Emitter<'_> {
                             "read"
                         };
                     let element = element_name(&resource.type_name);
-                    let element = if self.atomics.contains(name) {
+                    let element = if self.atomics.contains(written) {
                         format!("atomic<{element}>")
                     } else {
                         element

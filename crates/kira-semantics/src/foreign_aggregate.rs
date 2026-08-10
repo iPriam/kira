@@ -266,6 +266,25 @@ impl Analyzer<'_> {
         None
     }
 
+    /// The aggregate id already built for `id`, without building one.
+    ///
+    /// For asking whether a struct is *the* one a recorded seam position names,
+    /// from a check that only reads: a position that named it built the row, so
+    /// a struct with no row is not the struct that position was about.
+    pub(crate) fn built_aggregate_of(&self, id: StructId) -> Option<ForeignAggregateId> {
+        self.foreign_aggregates.built.get(&id).copied()
+    }
+
+    /// The struct a built aggregate row came from, for a diagnostic that has an
+    /// id and needs the name the author wrote.
+    pub(crate) fn struct_of_aggregate(&self, aggregate: ForeignAggregateId) -> Option<StructId> {
+        self.foreign_aggregates
+            .built
+            .iter()
+            .find(|(_, built)| **built == aggregate)
+            .map(|(id, _)| *id)
+    }
+
     /// A struct's written name, for a diagnostic.
     fn struct_name(&self, id: StructId) -> String {
         self.type_name(Type::Struct(id))

@@ -478,11 +478,29 @@ impl NativeLibrarySpec {
             if artifact.is_none() && attributes.is_empty() && self.link_mode == LinkMode::Dynamic {
                 attributes.system_libs.push(self.name.clone());
             }
-            rows.push(ResolvedTargetRow::new(
-                row.triple.clone(),
-                artifact,
-                attributes,
-            ));
+            // A runtime file is located exactly as an artifact is, and its
+            // absence is reported on the same terms: a row for the target being
+            // built must have the files its program will look for, and a row for
+            // another platform is located but not required.
+            let mut runtime_files = Vec::with_capacity(attributes.runtime_files.len());
+            for declared in &attributes.runtime_files {
+                let located = base_dir.join(declared);
+                if exists(&located) {
+                    runtime_files.push(located);
+                } else if required {
+                    return Err(NativeLibraryError::MissingArchive(Box::new(
+                        MissingArchive {
+                            library: self.name.clone(),
+                            triple: row.triple.clone(),
+                            path: located,
+                        },
+                    )));
+                }
+            }
+            rows.push(
+                ResolvedTargetRow::new(row.triple.clone(), artifact, attributes)
+                    .with_runtime_files(runtime_files),
+            );
         }
         Ok(ResolvedNativeLibrary::new(
             self.name.clone(),
@@ -520,6 +538,64 @@ mod tests {
                 triple: triple("aarch64-macos-none"),
             }
         );
+    }
+
+    /// The Dawn shape: an import library to link, and a directory of shared
+    /// libraries the loader will want beside the program.
+    #[test]
+    fn runtime_files_are_located_against_the_manifest() {
+        let wanted = triple("x86_64-windows-msvc");
+        let spec = NativeLibrarySpec::new(
+            "dawn",
+            LinkMode::Dynamic,
+            vec![
+                NativeTargetSpec::new(
+                    wanted.clone(),
+                    NativeArtifact::SharedLibrary("lib/webgpu_dawn.lib".to_owned()),
+                )
+                .with_attributes(NativeLinkAttributes {
+                    runtime_files: vec!["bin".to_owned()],
+                    ..NativeLinkAttributes::default()
+                }),
+            ],
+        )
+        .expect("a dynamic row with an import library is valid");
+        let resolved = spec
+            .resolve(Path::new("/pkg"), Some(&wanted), |_| true)
+            .expect("every declared path is present");
+        assert_eq!(
+            resolved.targets()[0].runtime_files(),
+            [PathBuf::from("/pkg/bin")]
+        );
+    }
+
+    /// A runtime file the target being built does not have is refused by name.
+    ///
+    /// Otherwise the program links clean and cannot start, and what the loader
+    /// says about that names no file at all.
+    #[test]
+    fn a_missing_runtime_file_is_refused_for_the_target_being_built() {
+        let wanted = triple("x86_64-windows-msvc");
+        let spec = NativeLibrarySpec::new(
+            "dawn",
+            LinkMode::Dynamic,
+            vec![
+                NativeTargetSpec::new(wanted.clone(), NativeArtifact::None).with_attributes(
+                    NativeLinkAttributes {
+                        runtime_files: vec!["bin/webgpu_dawn.dll".to_owned()],
+                        ..NativeLinkAttributes::default()
+                    },
+                ),
+            ],
+        )
+        .expect("a dynamic row resolved by install name is valid");
+        let error = spec
+            .resolve(Path::new("/pkg"), Some(&wanted), |_| false)
+            .expect_err("the declared file is not there");
+        let NativeLibraryError::MissingArchive(missing) = error else {
+            panic!("expected the missing-file refusal");
+        };
+        assert_eq!(missing.path, PathBuf::from("/pkg/bin/webgpu_dawn.dll"));
     }
 
     #[test]

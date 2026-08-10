@@ -31,6 +31,7 @@ use kira_semantics::{
     BuildKind, DiagnosticAccumulator, FILE_SOURCE_ID, ModuleSource, SourceProgram,
 };
 use kira_source::SourceMap;
+use salsa::Setter;
 
 /// Analyzes and lowers the source program to IR.
 ///
@@ -83,6 +84,46 @@ impl Compiled {
     /// Whether anything the frontend reported would stop a build.
     pub fn has_errors(&self) -> bool {
         kira_diagnostics::has_errors(&self.diagnostics)
+    }
+}
+
+/// A frontend that keeps its Salsa database alive across compilations.
+///
+/// The one-shot [`compile_for`] API intentionally starts from a clean database
+/// for callers such as `kira check`: one invocation must not inherit inputs from
+/// another. A live session has the opposite requirement. It compiles the same
+/// program repeatedly, and the semantics frontend already has per-file queries
+/// designed to reuse unchanged expansion and parsing. Keeping the database and
+/// input handle here is what makes that reuse cross a save boundary.
+pub struct FrontendSession {
+    db: salsa::DatabaseImpl,
+    source: Option<SourceProgram>,
+}
+
+impl FrontendSession {
+    /// Creates an empty incremental frontend session.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            db: salsa::DatabaseImpl::new(),
+            source: None,
+        }
+    }
+
+    /// Compiles `path`, retaining all reusable Salsa answers for the next call.
+    pub fn compile_for(
+        &mut self,
+        path: &Path,
+        kind: Option<BuildKind>,
+        target: &kira_native_lib_definition::TargetTriple,
+    ) -> Result<Compiled, FrontendError> {
+        compile_for_with_session(&mut self.db, &mut self.source, path, kind, target)
+    }
+}
+
+impl Default for FrontendSession {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -143,6 +184,18 @@ pub fn compile_as(path: &Path, kind: Option<BuildKind>) -> Result<Compiled, Fron
 /// binding per target, and the binding is Kira source the analyzer reads. Every
 /// other decision the target drives happens after this and takes it again.
 pub fn compile_for(
+    path: &Path,
+    kind: Option<BuildKind>,
+    target: &kira_native_lib_definition::TargetTriple,
+) -> Result<Compiled, FrontendError> {
+    let mut session = FrontendSession::new();
+    session.compile_for(path, kind, target)
+}
+
+/// Compiles into an existing Salsa session, updating its one source input.
+fn compile_for_with_session(
+    db: &mut salsa::DatabaseImpl,
+    previous: &mut Option<SourceProgram>,
     path: &Path,
     kind: Option<BuildKind>,
     target: &kira_native_lib_definition::TargetTriple,
@@ -233,18 +286,33 @@ pub fn compile_for(
     drop(shader_files);
 
     kira_diagnostics::progress!("indexing sources");
-    let db = salsa::DatabaseImpl::new();
     let module_paths: Vec<String> = modules.iter().map(|module| module.path.clone()).collect();
-    let source = SourceProgram::new(
-        &db,
-        text,
-        display.clone(),
-        modules,
-        build_kind,
-        shaders,
-        kira_semantics::host_platform(),
-        lint_requested(),
-    );
+    let source = match *previous {
+        Some(source) => {
+            source.set_text(db).to(text);
+            source.set_path(db).to(display.clone());
+            source.set_modules(db).to(modules);
+            source.set_build_kind(db).to(build_kind);
+            source.set_shaders(db).to(shaders);
+            source.set_platform(db).to(kira_semantics::host_platform());
+            source.set_lint(db).to(lint_requested());
+            source
+        }
+        None => {
+            let source = SourceProgram::new(
+                db,
+                text,
+                display.clone(),
+                modules,
+                build_kind,
+                shaders,
+                kira_semantics::host_platform(),
+                lint_requested(),
+            );
+            *previous = Some(source);
+            source
+        }
+    };
 
     // The SourceMap mirrors the salsa input file for file and in the same order,
     // so diagnostic spans render against the file they were written in: the
@@ -254,7 +322,7 @@ pub fn compile_for(
     // that declares no macros gets its own bytes back, so this is the file as
     // written for all but a macro-using program.
     kira_diagnostics::progress!("expanding macros");
-    let expansion = kira_semantics::expanded(&db, source);
+    let expansion = kira_semantics::expanded(db, source);
     let mut sources = SourceMap::new();
     let id = sources
         .insert(display, expansion.entry.clone())
@@ -282,10 +350,10 @@ pub fn compile_for(
             })?;
     }
 
-    let ir = lowered(&db, source);
+    let ir = lowered(db, source);
     kira_diagnostics::progress!("collecting diagnostics");
     diagnostics.extend(
-        lowered::accumulated::<DiagnosticAccumulator>(&db, source)
+        lowered::accumulated::<DiagnosticAccumulator>(db, source)
             .into_iter()
             .map(|accumulated| accumulated.0.clone()),
     );

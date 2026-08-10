@@ -78,6 +78,7 @@ pub struct Api {
     pub(super) cursor_is_bit_field: unsafe extern "C" fn(CxCursor) -> c_uint,
     pub(super) cursor_storage_class: unsafe extern "C" fn(CxCursor) -> c_int,
     pub(super) is_cursor_definition: unsafe extern "C" fn(CxCursor) -> c_uint,
+    pub(super) get_cursor_definition: unsafe extern "C" fn(CxCursor) -> CxCursor,
     pub(super) get_typedef_decl_underlying_type: unsafe extern "C" fn(CxCursor) -> CxType,
     pub(super) get_enum_decl_integer_type: unsafe extern "C" fn(CxCursor) -> CxType,
     pub(super) get_enum_constant_decl_value: unsafe extern "C" fn(CxCursor) -> c_longlong,
@@ -187,6 +188,7 @@ impl Api {
                 cursor_is_bit_field: entry(&library, path, "clang_Cursor_isBitField")?,
                 cursor_storage_class: entry(&library, path, "clang_Cursor_getStorageClass")?,
                 is_cursor_definition: entry(&library, path, "clang_isCursorDefinition")?,
+                get_cursor_definition: entry(&library, path, "clang_getCursorDefinition")?,
                 get_typedef_decl_underlying_type: entry(
                     &library,
                     path,
