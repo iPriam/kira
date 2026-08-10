@@ -222,4 +222,72 @@ int ffi_pair_sum(struct ffi_pair pair);
  * argument travels. */
 void ffi_fill_floats(float *values, int count);
 
+/* An item list beside a count — the shape every descriptor-driven graphics API
+ * takes for its vertex attributes, its bind group entries, its colour targets.
+ * The items are structs, so naming them from Kira needs the array of aggregates
+ * an `@FFI.Array` spells, both as an argument and inside a descriptor. */
+struct ffi_item {
+    int location;
+    unsigned long long offset;
+};
+int ffi_items_checksum(const struct ffi_item *items, int count);
+
+struct ffi_item_list {
+    const struct ffi_item *items;
+    int count;
+};
+int ffi_item_list_checksum(const struct ffi_item_list *list);
+
+/* The chained-extension shape every modern graphics header is built on:
+ * a descriptor holds a pointer to a base link, and an extension is a struct
+ * whose FIRST member is that base link — so the address of the extension is the
+ * address of the link, and C walks the chain without knowing what it is walking.
+ * `WGPUChainedStruct *nextInChain` and Vulkan's `pNext` are this, and Dawn's
+ * `WGPUSurfaceSourceWindowsHWND` is how a window reaches WebGPU at all. */
+struct ffi_chain {
+    const struct ffi_chain *next;
+    int kind;
+};
+
+struct ffi_chain_scale {
+    struct ffi_chain chain;
+    int factor;
+};
+
+struct ffi_chained_descriptor {
+    const struct ffi_chain *next_in_chain;
+    int base;
+};
+
+int ffi_chained_total(const struct ffi_chained_descriptor *descriptor);
+
+/* A callback C enters with a struct *by value*, which is the shape
+ * `WGPURequestAdapterCallback` has — and `wgpuInstanceRequestAdapter` is the
+ * only route Dawn offers to an adapter, so nothing can route around it.
+ *
+ * Kira must not classify such a parameter: how a struct arrives is the target C
+ * compiler's decision. So the generated entry takes it by value *here*, where
+ * this compiler decides, and hands its address to the Kira thunk.
+ *
+ * The two shapes are the two that a guessed classification gets wrong.
+ * `ffi_view` is a pointer beside a length, which is `WGPUStringView` itself and
+ * on x86-64 arrives in two registers; `ffi_quad` is four doubles, an AArch64
+ * homogeneous float aggregate passed in v0-v3 rather than in memory. Each
+ * caller passes a scalar beside the struct so argument order is observable too,
+ * and `ffi_store_viewer`/`ffi_run_stored_viewer` prove a callback C keeps and
+ * enters after the call that gave it still receives the struct. */
+struct ffi_view {
+    const char *data;
+    unsigned long long length;
+};
+typedef long long (*ffi_viewer)(int tag, struct ffi_view view);
+long long ffi_call_viewer(ffi_viewer view_cb, int tag, const char *data,
+                          unsigned long long length);
+void ffi_store_viewer(ffi_viewer view_cb);
+long long ffi_run_stored_viewer(int tag, const char *data, unsigned long long length);
+
+typedef double (*ffi_quad_taker)(struct ffi_quad q, int tag);
+double ffi_call_quad_taker(ffi_quad_taker take, double a, double b, double c, double d,
+                           int tag);
+
 #endif /* KIRA_FFI_FIXTURE_H */

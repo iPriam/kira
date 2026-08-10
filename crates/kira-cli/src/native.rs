@@ -105,6 +105,11 @@ impl Artifacts {
         self.directory.join(shared_library_name(&self.stem))
     }
 
+    /// The cache marker for a VM live session's reusable native adapter surface.
+    pub fn native_surface_key(&self) -> PathBuf {
+        self.directory.join(format!("{}.native-surface", self.stem))
+    }
+
     /// The object file for the VM's foreign-adapter sidecar.
     fn foreign_object(&self) -> PathBuf {
         self.directory.join(format!("{}_ffi.o", self.stem))

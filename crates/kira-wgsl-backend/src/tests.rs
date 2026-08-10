@@ -108,6 +108,52 @@ shader Step {
 }
 "#;
 
+/// A shader whose texture and whose local are both WGSL reserved words. Both
+/// spellings are ordinary KSL, and both are in the UI corpus.
+const RESERVED: &str = r#"
+type VIn {
+    let position: Float2
+}
+
+type VOut {
+    @builtin(position)
+    let clip_position: Float4
+}
+
+type FOut {
+    let color: Float4
+}
+
+shader Reserved {
+    group Material {
+        texture external: Texture2d
+        sampler smp: Sampler
+    }
+
+    vertex {
+        input VIn
+        output VOut
+        function entry(v: VIn) -> VOut {
+            let ref: Float4
+            ref = Float4(v.position, 0.0, 1.0)
+            let r: VOut
+            r.clip_position = ref
+            return r
+        }
+    }
+
+    fragment {
+        input VOut
+        output FOut
+        function entry(f: VOut) -> FOut {
+            let r: FOut
+            r.color = sample(external, smp, Float2(0.0, 0.0))
+            return r
+        }
+    }
+}
+"#;
+
 #[test]
 fn each_stage_is_its_own_module() {
     // A WebGPU pipeline creates and names the vertex and fragment modules
@@ -181,12 +227,33 @@ fn every_literal_carries_its_suffix() {
     assert!(compute.contains("1u"), "{compute}");
 }
 
+/// A sample names its level, because the form that does not is unreachable.
+///
+/// `textureSample` computes its own derivatives and WGSL permits it only from
+/// uniform control flow — a sample inside an `if` is refused, and the UI corpus
+/// samples inside branches on every glass surface. There is one mip level to
+/// read, so naming it costs nothing and compiles everywhere.
 #[test]
-fn sample_becomes_texture_sample() {
+fn a_sample_names_its_level_so_it_may_appear_inside_a_branch() {
     let ir = build(TEXTURED);
     let fragment = emit(&ir, Stage::Fragment);
     assert!(
-        fragment.contains("textureSample(albedo, linear, f.uv)"),
+        fragment.contains("textureSampleLevel(albedo, linear, f.uv, 0.0)"),
+        "{fragment}"
+    );
+    assert!(!fragment.contains("textureSample("), "{fragment}");
+}
+
+/// A reserved word is prefixed on its way out, at every position it can appear.
+#[test]
+fn a_reserved_word_is_renamed_wherever_it_is_written() {
+    let ir = build(RESERVED);
+    let vertex = emit(&ir, Stage::Vertex);
+    assert!(vertex.contains("var ksl_ref: vec4<f32>"), "{vertex}");
+    let fragment = emit(&ir, Stage::Fragment);
+    assert!(fragment.contains("var ksl_external:"), "{fragment}");
+    assert!(
+        fragment.contains("textureSampleLevel(ksl_external, smp,"),
         "{fragment}"
     );
 }

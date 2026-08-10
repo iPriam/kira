@@ -142,10 +142,14 @@ impl Drop for Session {
 
 /// Runs one unwatched live session on `backend` and returns
 /// (stdout, stderr, ok).
+///
+/// `--no-watch` in words: this reads the session's output to end of file, and
+/// that only arrives when the session ends. A watched session is one that does
+/// not end on its own, so it is the opposite of what is being read for.
 fn live(fixture: &Fixture, backend: &str) -> (String, String, bool) {
     let mut session = Session(
         Command::new(env!("CARGO_BIN_EXE_kira"))
-            .args(["live", "--backend", backend])
+            .args(["live", "--no-watch", "--backend", backend])
             .arg(fixture.program())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

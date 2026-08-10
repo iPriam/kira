@@ -314,13 +314,10 @@ impl Vm<'_> {
                 foreign: id,
                 expected,
             }),
-            (None, None) => {
-                let outcome = self
-                    .host
-                    .call_foreign(id, &lowered)
-                    .map_err(VmError::ForeignCall);
-                outcome
-            }
+            (None, None) => self
+                .host
+                .call_foreign(id, &lowered)
+                .map_err(VmError::ForeignCall),
         };
         drop(lowered);
         for value in self.stack.split_off(first) {

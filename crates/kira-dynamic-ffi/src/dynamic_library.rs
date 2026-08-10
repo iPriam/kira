@@ -1,7 +1,32 @@
 //! Cross-platform shared-library handle.
 //!
-//! Delegates to `libloading`, which wraps `dlopen` (POSIX) and
-//! `LoadLibraryExW` (Windows) with altered-search-path semantics.
+//! Delegates to `libloading`, which wraps `dlopen` (POSIX) and `LoadLibraryExW`
+//! (Windows).
+//!
+//! # The library's own directory
+//!
+//! A library Kira opens may itself depend on shared libraries that ship beside
+//! it — a `NativeTarget`'s `runtimeFiles` puts them there, and a hybrid
+//! program's native half or a VM adapter sidecar links against them. POSIX finds
+//! those through the `RPATH`/`RUNPATH` the link recorded; Windows does not look
+//! in the loaded module's directory at all unless it is told to, and searches
+//! the *calling process*'s directory instead. So a sidecar sitting beside
+//! `webgpu_dawn.dll` failed to load with nothing but `LoadLibraryExW failed`,
+//! while the executable built from the same objects — found by the loader in its
+//! own directory — started fine.
+//!
+//! `LOAD_WITH_ALTERED_SEARCH_PATH` is the flag that says "search where this
+//! library is". It is honoured only for an absolute path, so the path is made
+//! absolute first.
+//!
+//! # Names that are not paths
+//!
+//! Not every argument is a path. A driver opened by name — `vulkan-1.dll`,
+//! `d3d12.dll`, the host C runtime — is a *module name* the loader resolves
+//! through the system search order, and there is no file at that name relative
+//! to anything. Making such a name absolute produces a path that does not exist
+//! and turns a load that would have succeeded into a failure, so a name that
+//! does not resolve to a real file on disk is handed to the loader unchanged.
 
 use thiserror::Error;
 
@@ -45,13 +70,7 @@ enum Backend {
 impl DynamicLibrary {
     /// Open a shared library at `path` (failures normalized across platforms).
     pub fn open(path: &std::path::Path) -> Result<DynamicLibrary, FfiError> {
-        // SAFETY: loading a library runs its platform initializers
-        // (constructors, DllMain). Kira only opens libraries the manifest or
-        // user explicitly named; the caller is the trust boundary. No
-        // Rust-side invariants are assumed of the loaded code beyond what each
-        // later `lookup` asserts.
-        let library =
-            unsafe { libloading::Library::new(path) }.map_err(FfiError::NativeLibraryLoadFailed)?;
+        let library = open_native(path).map_err(FfiError::NativeLibraryLoadFailed)?;
         Ok(DynamicLibrary {
             inner: Backend::Library(library),
         })
@@ -102,6 +121,63 @@ impl DynamicLibrary {
     }
 }
 
+/// Opens a shared library the way every Kira host should, and hands back the
+/// raw `libloading` handle.
+///
+/// Public because the hybrid host loads its native half itself — it deliberately
+/// resolves every `kira_rt_*` symbol out of that library rather than out of this
+/// process — and the *search* rule is the same question there as here.
+///
+/// # Safety
+/// Loading a library runs its platform initializers (constructors, `DllMain`).
+/// Kira only opens libraries the manifest or the user explicitly named; the
+/// caller is the trust boundary.
+pub fn open_shared_library(
+    path: &std::path::Path,
+) -> Result<libloading::Library, libloading::Error> {
+    open_native(path)
+}
+
+/// Loads the library, telling Windows to look beside it for what it depends on.
+///
+/// # Safety
+/// See [`open_shared_library`].
+#[cfg(windows)]
+fn open_native(path: &std::path::Path) -> Result<libloading::Library, libloading::Error> {
+    use libloading::os::windows::{LOAD_WITH_ALTERED_SEARCH_PATH, Library};
+
+    // The flag is honoured only for an absolute path, and only a path that
+    // names a real file can be made absolute meaningfully; a module name goes
+    // to the loader as it was written so the system search order applies.
+    let library = match module_file(path) {
+        // SAFETY: see this function's own safety note.
+        Some(file) => unsafe { Library::load_with_flags(file, LOAD_WITH_ALTERED_SEARCH_PATH) }?,
+        // SAFETY: see this function's own safety note.
+        None => unsafe { Library::new(path) }?,
+    };
+    Ok(library.into())
+}
+
+/// The absolute path of the file `path` names, or `None` when it names no file
+/// — which is how a module name resolved through the system search order, and a
+/// library that is simply absent, both present.
+#[cfg(windows)]
+fn module_file(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let absolute = std::path::absolute(path).ok()?;
+    absolute.is_file().then_some(absolute)
+}
+
+/// The POSIX side: `dlopen` already honours the `RUNPATH` the link recorded, so
+/// there is nothing to add.
+///
+/// # Safety
+/// See [`open_shared_library`].
+#[cfg(not(windows))]
+fn open_native(path: &std::path::Path) -> Result<libloading::Library, libloading::Error> {
+    // SAFETY: see this function's own safety note.
+    unsafe { libloading::Library::new(path) }
+}
+
 impl std::fmt::Debug for DynamicLibrary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.inner {
@@ -114,6 +190,25 @@ impl std::fmt::Debug for DynamicLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The C library under whatever name this platform gives it — a name the
+    /// loader resolves through its own search order, with no file at that name
+    /// relative to this process.
+    const HOST_C_LIBRARY: &str = if cfg!(windows) {
+        "msvcrt.dll"
+    } else if cfg!(target_vendor = "apple") {
+        "libSystem.B.dylib"
+    } else {
+        "libc.so.6"
+    };
+
+    #[test]
+    fn a_bare_module_name_still_reaches_the_system_search_order() {
+        assert!(
+            DynamicLibrary::open(std::path::Path::new(HOST_C_LIBRARY)).is_ok(),
+            "a name that is not a path must not be resolved against the cwd"
+        );
+    }
 
     #[test]
     fn open_reports_a_missing_library_precisely() {

@@ -188,6 +188,23 @@ fn a_pointer_field_zero_fills_to_null() {
 }
 
 #[test]
+fn a_typed_foreign_pointer_field_zero_fills_to_null() {
+    // The `nextInChain` shape every WebGPU descriptor carries: a member typed as
+    // an `@FFI.Pointer` to a C-layout struct. It is the same pointer word a
+    // `RawPtr` member is, so omitting it means `NULL` rather than being refused.
+    let text = "@FFI.Struct { layout: c; }\nstruct Chain { var kind: I32 }\n\
+         @FFI.Pointer { target: Chain; ownership: borrowed; }\nstruct ChainPtr {}\n\
+         @FFI.Struct { layout: c; }\nstruct V { var next: ChainPtr\n var width: U32 }\n\
+         @Main function main() { let v = V {}\n return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+    let fields = last_struct_new(&program(text));
+    assert!(
+        matches!(fields.as_slice(), [HirExpr::RawPtrNull, HirExpr::Int(0)]),
+        "{fields:?}"
+    );
+}
+
+#[test]
 fn a_c_layout_initializer_still_type_checks_its_value() {
     let text = "@FFI.Struct { layout: c; }\nstruct V { var a: I32 }\n\
          @Main function main() { let v = V { a: true }\n return }";

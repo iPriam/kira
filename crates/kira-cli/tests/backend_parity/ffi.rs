@@ -454,6 +454,54 @@ fn every_backend_agrees_on_a_kira_function_called_from_c() {
     let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
 }
 
+/// C calls a Kira function with a **struct by value**, on every backend.
+///
+/// The direction Dawn forces. `wgpuInstanceRequestAdapter` is the only route to
+/// an adapter, it answers through a callback, and that callback's third
+/// parameter is a `WGPUStringView` by value — a field type fixed by the header,
+/// with no userdata word and no sibling entry point to route around it.
+///
+/// Kira classifies none of it, exactly as it does not for a by-value argument:
+/// the generated C entry takes the struct by value, so the target's own C
+/// compiler decides how it arrives, and hands the entry thunk its address. The
+/// Kira function declares the matching `@FFI.Pointer` and reads members through
+/// it.
+///
+/// The two shapes are the ones a guessed classification gets wrong — a pointer
+/// beside a length (`WGPUStringView` itself) and four doubles (an AArch64
+/// homogeneous float aggregate in `v0`-`v3`) — with a scalar beside each so
+/// argument order is observable, in both orders. The third line is the
+/// asynchronous shape: C keeps the callback and enters it after the call that
+/// gave it returned.
+#[test]
+fn every_backend_agrees_on_a_kira_callback_entered_with_a_struct() {
+    let entry = write_ffi_package(include_str!(
+        "../fixtures/ffi/ffi_program_struct_callback.kira"
+    ));
+
+    // 7 * 100 + 4; 3 * 100 + 0 through a NULL data pointer; 5 * 100 + 4 from
+    // the stored callback; then a + d and b + c of the same four doubles.
+    const EXPECTED_STRUCT_CALLBACK: &str = "704\n300\n504\n6.25\n5.75\n";
+
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            EXPECTED_STRUCT_CALLBACK,
+            "the {backend} backend disagreed on a struct C passes to a Kira callback\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "the {backend} backend did not exit cleanly\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(entry.parent().expect("package directory"));
+}
+
 /// A single-scalar-field C handle struct crosses the seam as its field: the
 /// result of `ffi_make_handle` (a `struct { unsigned int id; }` by value) is
 /// rebuilt into the Kira `Handle`, and `ffi_handle_id` reads the field back out
@@ -639,6 +687,73 @@ fn every_backend_agrees_on_an_array_named_in_a_c_layout_member() {
             String::from_utf8_lossy(&run.stdout),
             EXPECTED_ARRAY_MEMBER,
             "the {backend} backend disagreed on an array named in a C-layout member\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "the {backend} backend did not exit cleanly\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+}
+
+/// An item list — several C structs behind one pointer — on every backend.
+///
+/// A pointer position already took the struct it points at, which covers a
+/// descriptor with one of something. Every descriptor-driven graphics API asks
+/// for several beside a count instead: vertex attributes, bind group entries,
+/// colour targets. A C array is its elements laid out end to end, which is what
+/// an `@FFI.Array` reserves, so the array type fills the pointer.
+///
+/// The third line is the one worth watching: a Kira array shorter than the
+/// extent zero-fills the rest, and the count beside the pointer is what says
+/// how many C reads.
+#[test]
+fn every_backend_agrees_on_an_item_list_behind_one_pointer() {
+    let entry = write_ffi_package(include_str!("../fixtures/ffi/ffi_program_item_list.kira"));
+
+    // Three items by argument, one by argument, two of a four-slot extent, and
+    // two named inside a descriptor whose member is an `@FFI.Pointer`.
+    const EXPECTED_ITEM_LIST: &str = "6040\n4005\n2003\n12014\n";
+
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            EXPECTED_ITEM_LIST,
+            "the {backend} backend disagreed on an item list behind one pointer\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "the {backend} backend did not exit cleanly\nstderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+}
+
+/// An extension chained onto a descriptor, on every backend.
+///
+/// The pointer member's target is the base link; the value written is a struct
+/// that *begins* with one. A struct and its first member share an address, which
+/// is what every `nextInChain`/`pNext` cast in an extensible header relies on —
+/// and reaching a WebGPU surface from a window has no other shape at all.
+#[test]
+fn every_backend_agrees_on_an_extension_chained_onto_a_descriptor() {
+    let entry = write_ffi_package(include_str!("../fixtures/ffi/ffi_program_chained.kira"));
+
+    // 7 with no chain, 7*3 with one link, 7*3*5 with two, and 7 again for a
+    // link the walker does not recognise.
+    const EXPECTED_CHAINED: &str = "7\n21\n105\n7\n";
+
+    for backend in BACKENDS {
+        let run = run_on(&entry, backend);
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            EXPECTED_CHAINED,
+            "the {backend} backend disagreed on a chained extension\nstderr: {}",
             String::from_utf8_lossy(&run.stderr),
         );
         assert_eq!(

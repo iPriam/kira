@@ -213,12 +213,14 @@ impl NativeLibrary {
         foreign: &[HybridForeign],
         callbacks: usize,
     ) -> Result<NativeLibrary, HybridError> {
-        // SAFETY: loading a library runs its initializers, which is why this is
-        // unsafe. The library is one this toolchain built and named in a
-        // manifest it also wrote; a host that cannot trust its own build has
-        // already lost.
+        // Through the shared opener rather than `libloading::Library::new`: the
+        // native half may sit beside shared libraries a `runtimeFiles` row put
+        // there, and Windows searches the *calling process*'s directory for
+        // those unless it is told to search the loaded module's. The library is
+        // one this toolchain built and named in a manifest it also wrote; a host
+        // that cannot trust its own build has already lost.
         let library =
-            unsafe { libloading::Library::new(path) }.map_err(|source| HybridError::Library {
+            kira_dynamic_ffi::open_shared_library(path).map_err(|source| HybridError::Library {
                 path: path.to_path_buf(),
                 source,
             })?;

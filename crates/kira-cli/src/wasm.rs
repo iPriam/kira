@@ -214,11 +214,12 @@ pub fn build(
 
 /// Compiles the program's foreign C shim for wasm with `emcc`, if it needs one.
 ///
-/// `None` for a program that passes no struct by value — which is every program
-/// that ever built for the Web before, so no build gains an `emcc -c` step it
-/// does not need. The generated source is the same text the host build compiles;
-/// only the compiler differs, which is the point: each target's own C compiler
-/// decides that target's by-value ABI.
+/// `None` for a program that neither passes a struct by value nor hands C a
+/// callback entered with one — which is every program that ever built for the
+/// Web before, so no build gains an `emcc -c` step it does not need. The
+/// generated source is the same text the host build compiles; only the compiler
+/// differs, which is the point: each target's own C compiler decides that
+/// target's by-value ABI.
 fn build_wasm_shim(
     ir: &IrProgram,
     foreign_link: &NativeLinkInputs,
@@ -231,6 +232,7 @@ fn build_wasm_shim(
         .collect();
     let Some(text) = kira_llvm_backend::shim::generate(
         &imports,
+        &ir.foreign_callbacks,
         &ir.foreign_aggregates,
         foreign_link.unavailable_imports(),
     ) else {

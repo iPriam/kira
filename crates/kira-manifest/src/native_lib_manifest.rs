@@ -157,4 +157,8 @@ pub struct RawSectionedTarget {
     /// Linker flags for this target.
     #[serde(default)]
     pub linker_flags: Vec<String>,
+    /// Files the finished program must find beside itself at run time — a
+    /// shared library the loader opens, or a directory holding several.
+    #[serde(default)]
+    pub runtime_files: Vec<String>,
 }

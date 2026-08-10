@@ -331,3 +331,72 @@ void ffi_fill_floats(float *values, int count) {
         values[i] = 99.0f;
     }
 }
+
+int ffi_items_checksum(const struct ffi_item *items, int count) {
+    if (items == 0) {
+        return -1;
+    }
+    int total = 0;
+    for (int i = 0; i < count; i += 1) {
+        total += items[i].location * 1000 + (int)items[i].offset;
+    }
+    return total;
+}
+
+int ffi_item_list_checksum(const struct ffi_item_list *list) {
+    if (list == 0) {
+        return -1;
+    }
+    return ffi_items_checksum(list->items, list->count);
+}
+
+/* Walks the chain, scaling by every `ffi_chain_scale` link it finds. The cast
+ * back from the link to the extension is the point: it is only sound because
+ * the link is the extension's first member. */
+int ffi_chained_total(const struct ffi_chained_descriptor *descriptor) {
+    int total;
+    const struct ffi_chain *link;
+    if (descriptor == 0) {
+        return -1;
+    }
+    total = descriptor->base;
+    link = descriptor->next_in_chain;
+    while (link != 0) {
+        if (link->kind == 1) {
+            total *= ((const struct ffi_chain_scale *)link)->factor;
+        }
+        link = link->next;
+    }
+    return total;
+}
+
+long long ffi_call_viewer(ffi_viewer view_cb, int tag, const char *data,
+                          unsigned long long length) {
+    struct ffi_view view;
+    view.data = data;
+    view.length = length;
+    return view_cb(tag, view);
+}
+
+static ffi_viewer stored_viewer = 0;
+
+void ffi_store_viewer(ffi_viewer view_cb) {
+    stored_viewer = view_cb;
+}
+
+long long ffi_run_stored_viewer(int tag, const char *data, unsigned long long length) {
+    if (stored_viewer == 0) {
+        return -1;
+    }
+    return ffi_call_viewer(stored_viewer, tag, data, length);
+}
+
+double ffi_call_quad_taker(ffi_quad_taker take, double a, double b, double c, double d,
+                           int tag) {
+    struct ffi_quad q;
+    q.a = a;
+    q.b = b;
+    q.c = c;
+    q.d = d;
+    return take(q, tag);
+}

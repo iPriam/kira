@@ -1,0 +1,82 @@
+// A Kira function C calls back with a struct *by value*.
+//
+// This is the shape `WGPURequestAdapterCallback` has, and
+// `wgpuInstanceRequestAdapter` is the only route Dawn offers to an adapter — so
+// a binding cannot route around it: the field's type is fixed by the header,
+// the userdata words cannot carry the answer, and no other entry point has a
+// signature to borrow.
+//
+// The struct reaches Kira as a pointer to it. C classified the by-value
+// parameter, because only C can; the generated entry took it by value there and
+// handed on its address, and this side declares the matching `@FFI.Pointer` and
+// reads members through it.
+
+@FFI.Struct { layout: c; }
+struct FfiView {
+    let data: CString
+    let length: U64
+}
+
+@FFI.Pointer { target: FfiView; ownership: borrowed; }
+struct FfiViewPtr {}
+
+@FFI.Callback { abi: c; params: [I32, FfiView]; result: Int; }
+struct Viewer {}
+
+@FFI.Struct { layout: c; }
+struct FfiQuad {
+    let a: Float = 0.0
+    let b: Float = 0.0
+    let c: Float = 0.0
+    let d: Float = 0.0
+}
+
+@FFI.Pointer { target: FfiQuad; ownership: borrowed; }
+struct FfiQuadPtr {}
+
+@FFI.Callback { abi: c; params: [FfiQuad, I32]; result: Float; }
+struct QuadTaker {}
+
+@FFI.Extern { library: ffifixture; symbol: ffi_call_viewer; abi: c; }
+function callViewer(viewCb: Viewer, tag: I32, data: CString, length: U64) -> Int;
+@FFI.Extern { library: ffifixture; symbol: ffi_store_viewer; abi: c; }
+function storeViewer(viewCb: Viewer) -> Void;
+@FFI.Extern { library: ffifixture; symbol: ffi_run_stored_viewer; abi: c; }
+function runStoredViewer(tag: I32, data: CString, length: U64) -> Int;
+@FFI.Extern { library: ffifixture; symbol: ffi_call_quad_taker; abi: c; }
+function callQuadTaker(take: QuadTaker, a: Float, b: Float, c: Float, d: Float,
+                       tag: I32) -> Float;
+
+// The struct arrives behind a pointer, so its members are read the way every
+// other C-owned struct's are. `tag` is a scalar beside it, which is what makes
+// argument order observable rather than assumed.
+function onView(tag: I32, view: FfiViewPtr) -> Int {
+    let length: Int = view.length
+    let seen: Int = tag
+    return seen * 100 + length
+}
+
+// Four doubles: an AArch64 homogeneous float aggregate, passed in v0-v3 rather
+// than in memory. The aggregate is first here and the scalar second, so the two
+// orders are both covered.
+function onQuad(q: FfiQuadPtr, tag: I32) -> Float {
+    if tag == 1 {
+        return q.a + q.d
+    }
+    return q.b + q.c
+}
+
+@Main
+function main() {
+    print(callViewer(onView, 7, "kira", 4))
+    // A NULL `data` with a zero length: the struct still arrives, and nothing
+    // reads through the pointer it carries.
+    print(callViewer(onView, 3, "", 0))
+    // C keeps the callback and enters it after the call that gave it returned,
+    // which is exactly what an asynchronous request does.
+    storeViewer(onView)
+    print(runStoredViewer(5, "dawn", 4))
+    print(callQuadTaker(onQuad, 1.5, 2.25, 3.5, 4.75, 1))
+    print(callQuadTaker(onQuad, 1.5, 2.25, 3.5, 4.75, 2))
+    return
+}

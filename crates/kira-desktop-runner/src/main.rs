@@ -72,8 +72,7 @@ enum RunError {
 fn run(options: &Options) -> Result<(), RunError> {
     let client = RunnerClient::connect(options.server, RunnerId::Desktop)?;
     let mut host = DesktopHost::new(options.cache.clone());
-    let (relay, app) =
-        relay::pair_with_hotpatch(host.hotpatch_disabled(), host.hotpatch());
+    let (relay, app) = relay::pair_with_hotpatch(host.hotpatch_disabled(), host.hotpatch());
     let running = app.running();
 
     let protocol = std::thread::Builder::new()

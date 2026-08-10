@@ -272,12 +272,15 @@ pub fn live(args: &[String]) -> i32 {
     // Compiling is a closure rather than a value, because a watched session
     // rebuilds: the frontend runs again for every save, and a save that does not
     // compile yields `None` rather than an error, so the session keeps the app
-    // that is already running.
-    let rebuild = || -> Result<Option<kira_live::Bundle>, crate::live::LiveError> {
-        let Ok(ir) = runnable_path_ir(
+    // that is already running. The frontend itself stays alive in this closure;
+    // its Salsa queries are deliberately incremental across these calls.
+    let mut frontend = kira_build::FrontendSession::new();
+    let mut rebuild = || -> Result<Option<kira_live::Bundle>, crate::live::LiveError> {
+        let Ok(ir) = runnable_path_ir_with_frontend(
             "live",
             &entry,
             &crate::foreign_libs::target_for_device(Device::Host),
+            &mut frontend,
         ) else {
             return Ok(None);
         };
@@ -299,7 +302,7 @@ pub fn live(args: &[String]) -> i32 {
         .map(Some)
     };
 
-    match crate::supervisor::run(&options, &watched, &rebuild) {
+    match crate::supervisor::run(&options, &watched, &mut rebuild) {
         Ok(()) => EXIT_OK,
         Err(error) => {
             err!("kira live: {error}");
@@ -732,13 +735,27 @@ fn verified(
     Ok(compiled)
 }
 
-/// Compiles a path and returns runnable IR for callers without package defaults.
-fn runnable_path_ir(
+fn verified_with_frontend(
+    path: &str,
+    target: &kira_native_lib_definition::TargetTriple,
+    frontend: &mut kira_build::FrontendSession,
+) -> Result<Compiled, i32> {
+    let compiled = compile_with_frontend(path, target, frontend)?;
+    emit_diagnostics(&compiled.diagnostics, &compiled.sources);
+    if compiled.has_errors() {
+        return Err(EXIT_FAILURE);
+    }
+    Ok(compiled)
+}
+
+/// Compiles a live path against the frontend session retained by the watcher.
+fn runnable_path_ir_with_frontend(
     verb: &str,
     path: &str,
     target: &kira_native_lib_definition::TargetTriple,
+    frontend: &mut kira_build::FrontendSession,
 ) -> Result<IrProgram, i32> {
-    runnable_ir(verb, verified(path, target)?)
+    runnable_ir(verb, verified_with_frontend(path, target, frontend)?)
 }
 
 /// Returns a compiled program's IR, refusing a library by name.
@@ -768,19 +785,32 @@ fn runnable_ir(verb: &str, compiled: Compiled) -> Result<IrProgram, i32> {
 /// (a missing or unreadable file, an unusable manifest); compile errors are
 /// carried as diagnostics, not as an error here.
 fn compile(path: &str, target: &kira_native_lib_definition::TargetTriple) -> Result<Compiled, i32> {
+    let mut frontend = kira_build::FrontendSession::new();
+    compile_with_frontend(path, target, &mut frontend)
+}
+
+fn compile_with_frontend(
+    path: &str,
+    target: &kira_native_lib_definition::TargetTriple,
+    frontend: &mut kira_build::FrontendSession,
+) -> Result<Compiled, i32> {
     let resolved = resolve_path(path)?;
-    kira_build::compile_for(std::path::Path::new(&resolved), None, target).map_err(|error| {
-        err!("kira: {error}");
-        // A path the user typed that is not there is a usage error; everything
-        // else got far enough that the invocation itself was fine.
-        match error {
-            // A file that could not be read is the same usage error whether it
-            // is the path the user typed or a source the package claims to own.
-            FrontendError::Read { .. }
-            | FrontendError::Assembly(kira_program_graph::AssemblyError::Read { .. }) => EXIT_USAGE,
-            FrontendError::SourceMapFull { .. } | FrontendError::Assembly(_) => EXIT_FAILURE,
-        }
-    })
+    frontend
+        .compile_for(std::path::Path::new(&resolved), None, target)
+        .map_err(|error| {
+            err!("kira: {error}");
+            // A path the user typed that is not there is a usage error; everything
+            // else got far enough that the invocation itself was fine.
+            match error {
+                // A file that could not be read is the same usage error whether it
+                // is the path the user typed or a source the package claims to own.
+                FrontendError::Read { .. }
+                | FrontendError::Assembly(kira_program_graph::AssemblyError::Read { .. }) => {
+                    EXIT_USAGE
+                }
+                FrontendError::SourceMapFull { .. } | FrontendError::Assembly(_) => EXIT_FAILURE,
+            }
+        })
 }
 
 /// Renders every diagnostic to stderr in source order.
