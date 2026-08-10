@@ -107,6 +107,7 @@ fn target_row(triple: TargetTriple, target: RawSectionedTarget) -> NativeTargetS
             system_libs: target.system_libs,
             compiler_flags: target.compiler_flags,
             linker_flags: target.linker_flags,
+            runtime_files: target.runtime_files,
         })
 }
 

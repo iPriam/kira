@@ -97,8 +97,7 @@ impl VmHotPatch {
             .lock()
             .unwrap_or_else(|held| held.into_inner())
             .clone();
-        session.is_some_and(|session| {
-            session.wait_for_vm_reload(generation, Duration::from_secs(5))
-        })
+        session
+            .is_some_and(|session| session.wait_for_vm_reload(generation, Duration::from_secs(5)))
     }
 }

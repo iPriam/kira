@@ -116,7 +116,7 @@ impl Command {
             Self::Check => " [file|dir] [--timings] [--show-notes]",
             Self::Shader => " build [--target <name>] [--emit <name>]",
             Self::Lint | Self::Sync => " [file|dir]",
-            Self::Live => " [runner] <file> [--backend vm|hybrid] [--no-watch]",
+            Self::Live => " [runner] <file> [--backend vm|hybrid] [--watch|--no-watch]",
             Self::Help => " [all]",
             _ => "",
         }

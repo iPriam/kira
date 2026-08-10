@@ -125,6 +125,26 @@ whatsoever links the library by its own name (`dynamicLib: ""` on a library
 called `vulkan` is `-lvulkan`); the same row under `.Static` is refused,
 because it says nothing about what to link.
 
+A row may also name `runtimeFiles`: what the finished program has to find beside
+itself when it *starts*, as opposed to what the linker reads.
+
+```text
+NativeTarget {
+    triple: "x86_64-windows-msvc",
+    dynamicLib: "NativeLibs/Dawn/x86_64-windows-msvc/lib/webgpu_dawn.lib",
+    runtimeFiles: ["NativeLibs/Dawn/x86_64-windows-msvc/bin"]
+}
+```
+
+A dynamic library is two files, and naming only the first leaves a program that
+links clean and cannot start. Each entry is copied beside every link output — a
+file as itself, a directory as its files one level deep — because the loader
+searches the program's own directory before anything else. A directory rather
+than three named DLLs is what a vendor's release payload actually is, and Dawn
+opens one of them (`dxcompiler.dll`) by name at run time with no link-time
+mention of it at all. An entry missing on the target being built is refused by
+name, since the alternative is a loader status code naming no file.
+
 `headers` and `sources` describe how the library is built, and `autobind`
 describes what to call in it — see [Generated bindings](#generated-bindings)
 below.
@@ -169,6 +189,57 @@ struct itself, which is what `sapp_run(move desc)` means: the seam writes the
 struct's C-layout image and passes its address. The image gets the same storage
 a `CString` member does, and for the same reason — the callee may keep the
 pointer, and nothing on this side knows whether it did.
+
+The same position accepts an **`@FFI.Array` of that struct**, which is the same
+image with an extent: a C array is its elements laid out end to end, so one row
+describes both and the address of the row is the address of element zero.
+
+```text
+@FFI.Array { element: WGPUVertexAttribute; count: 4; }
+struct WGPUVertexAttributeArray4 {}
+
+WGPUVertexBufferLayout {
+    arrayStride: 20
+    attributeCount: 2
+    attributes: WGPUVertexAttributeArray4 { elements: [position, colour] }
+}
+```
+
+That is what makes a descriptor-driven graphics API reachable. Almost none of
+them take one item; they take `T const *items` beside an `itemCount` — vertex
+attributes, bind group entries, colour targets — and without a way to name
+several items' storage from Kira, that descriptor could only be built in C. A
+Kira array shorter than the extent zero-fills the rest, exactly as it does for
+an inline-array member, and the count travelling beside the pointer is what says
+how many C reads.
+
+A third value fills the same position: a struct that **begins** with the target.
+A struct and its first member share an address, so writing the extension writes
+the base too:
+
+```text
+wgpuInstanceCreateSurface(instance, WGPUSurfaceDescriptor {
+    nextInChain: WGPUSurfaceSourceWindowsHWND {
+        chain: WGPUChainedStruct { sType: 5 }
+        hinstance: instance
+        hwnd: window
+    }
+    label: title
+})
+```
+
+`nextInChain` is declared `WGPUChainedStruct *`; the value is the HWND source,
+whose first member is that chain. This is how every extensible C header extends
+— WebGPU's `nextInChain`, Vulkan's `pNext` — and C walks the chain by casting a
+link back to whichever extension it belongs to. Only the *first* member counts:
+anything later sits at a nonzero offset and is a different address. Without it,
+one extension costs a redeclared descriptor carrying that extension's own
+pointer type, and the mirror stops matching the header the moment it changes.
+
+All three fills work at a **member** as well as at an argument, and a member
+written as an `@FFI.Pointer` is a pointer word exactly as a `RawPtr` member is —
+so the array-of-scalars fill below reaches a typed pointer member too, not only a
+bare `RawPtr` one.
 
 ### Reading members through a pointer
 
@@ -216,6 +287,21 @@ A pointer whose target is not a declared C-layout struct stays an opaque handle
 and reads nothing, which is deliberate: generated bindings point at C types
 nobody declared and at themselves, and neither is a mistake.
 
+An `@FFI.Pointer` member left out of a literal is `NULL`, on the same terms as a
+`RawPtr` one — a typed pointer is the same word, and knowing what it addresses
+cannot change what zeroing it means. That is what makes a modern graphics
+descriptor writable at all: WebGPU gives every one of them a
+`WGPUChainedStruct *nextInChain` plus an optional `T const *` per feature, and
+
+```text
+WGPURenderPassColorAttachment { view: view, loadOp: 2, storeOp: 1 }
+```
+
+leaves the chain, the resolve target and the rest at `NULL` without naming them.
+`RawPtr` and an `@FFI.Pointer` also pass for each other at an argument and at a
+member, so one address may be held as `RawPtr` and handed to a symbol that
+declares the typed pointer.
+
 ### Inline arrays
 
 A C struct that reserves storage inline — `int cells[4]` — is spelled with an
@@ -244,10 +330,12 @@ nowhere to go, and writing only the ones that fit would hand C a value the
 program did not write. A result always carries the whole extent back, because C
 storage has no length of its own.
 
-An `@FFI.Array` type crosses as a **member**. In a parameter or result position
-C decays an array to a pointer — a different type with different ownership — so
-the seam refuses it there and asks for `RawPtr` when that is what the symbol
-takes.
+An `@FFI.Array` type crosses as a **member**, and — as
+[A struct passed by address](#a-struct-passed-by-address) describes — as the
+storage a pointer to its element type addresses. What it is not is a value C
+receives by itself: in a parameter or result position C decays an array to a
+pointer, a different type with different ownership, so the seam refuses it there
+and asks for `RawPtr` when that is what the symbol takes.
 
 ## Arrays as C buffers
 
@@ -322,11 +410,44 @@ ordinary Kira function — and C then calls into Kira through it:
 Zero-fill gives a callback member `NULL`, so `Hooks {}` is the no-callback case
 and C sees it as null.
 
-A callback signature carries fixed-width scalars, `Bool`, and `RawPtr`, and
-returns one of those or nothing. A generated binding may declare callbacks whose
-types the seam cannot carry — or has never seen defined — and declaring one is
-clean; the refusal (`KSEM245`) comes when a Kira function is handed to it.
-Closures and methods are not callbacks: nothing captures across the boundary.
+A callback signature carries fixed-width scalars, `Bool`, `RawPtr`, `CString`,
+and a `@FFI.Struct { layout: c }` C passes by value, and returns one of the
+scalars or nothing. A generated binding may declare callbacks whose types the
+seam cannot carry — or has never seen defined — and declaring one is clean; the
+refusal (`KSEM245`) comes when a Kira function is handed to it. Closures and
+methods are not callbacks: nothing captures across the boundary.
+
+### A struct C passes by value
+
+`WGPURequestAdapterCallback` takes a `WGPUStringView` by value, and
+`wgpuInstanceRequestAdapter` is Dawn's only route to an adapter — so this is not
+a shape a binding can route around. It reaches Kira **as a pointer to the
+struct**, the way a `const sapp_event*` argument already does:
+
+```text
+@FFI.Struct { layout: c; }
+struct FfiView { let data: CString
+let length: U64 }
+
+@FFI.Pointer { target: FfiView; ownership: borrowed; }
+struct FfiViewPtr {}
+
+@FFI.Callback { abi: c; params: [I32, FfiView]; result: Int; }
+struct Viewer {}
+
+function onView(tag: I32, view: FfiViewPtr) -> Int { return view.length }
+```
+
+Kira never classifies the by-value parameter, exactly as it never classifies a
+by-value argument. The address C holds is a generated C entry that takes the
+struct by value — so the target's own C compiler decides how it arrives — and
+calls the thunk with `&param`. The pointer is good for the call, which is the
+lifetime a callback argument has, so members are read through it rather than
+kept.
+
+A callback **result** stays scalar. A parameter is storage C already owns and
+its address is the whole answer; a result would have to be C-layout bytes built
+out of a Kira value, which this seam does not carry back.
 
 ## Wasm
 
@@ -408,7 +529,6 @@ clang and writes the scalar the target actually uses, so `VkFlags` arrives as
 
 ## Deferred to later milestones
 
-`CString` results, Kira enums and heap types across the seam, aggregates and
-strings in a callback signature, non-C ABIs, variadics, generic externs, and
-dynamic-only C libraries. Each is refused today with a typed diagnostic rather
-than mislowered.
+Kira enums and heap types across the seam, an aggregate *result* in a callback
+signature, non-C ABIs, variadics, generic externs, and dynamic-only C libraries.
+Each is refused today with a typed diagnostic rather than mislowered.

@@ -495,7 +495,7 @@ impl HostCapabilities for Host<'_> {
         ty: NativeStateTypeId,
         path: &[NativeStatePathStep],
     ) -> Result<NativeStateValue, NativeStateError> {
-        let result = match &self.session.vm_state {
+        match &self.session.vm_state {
             Some(state) => state
                 .lock()
                 .unwrap_or_else(|held| held.into_inner())
@@ -505,8 +505,7 @@ impl HostCapabilities for Host<'_> {
                 let root = self.session.library.native_state_recover(token, ty)?;
                 native_state_walk(&root, path).cloned()
             }
-        };
-        result
+        }
     }
 
     fn native_state_write(

@@ -12,9 +12,10 @@
 //!   oracle's construction rule. That lowers to an ordinary `StructNew` of zero
 //!   literals, so every backend agrees with no new opcode — the zero-fill is a
 //!   frontend rule, and the field types it can zero are the ones with a Kira
-//!   literal ([`Type::Int`]/[`Type::Float`]/[`Type::Bool`]) plus nested C-layout
-//!   aggregates. A field with no such zero (a `RawPtr`, a `CString`, an enum, a
-//!   heap array) is refused precisely rather than mis-initialized.
+//!   literal ([`Type::Int`]/[`Type::Float`]/[`Type::Bool`]), every pointer word
+//!   (`RawPtr`, `CString`, an `@FFI.Pointer` typedef), and nested C-layout
+//!   aggregates. A field with no such zero (an enum, a heap array, a `String`)
+//!   is refused precisely rather than mis-initialized.
 //! * `@FFI.Array` and `@FFI.Callback` are declared as nominal types so the
 //!   binding files that name them type-check, but their runtime behavior —
 //!   inline element storage for the array, a native function pointer for the
@@ -304,6 +305,17 @@ impl Analyzer<'_> {
         self.ffi_array_counts.get(&id).copied()
     }
 
+    /// What one element of an `@FFI.Array` type is, when `id` is one.
+    ///
+    /// Read back off the storage field the declaration was given rather than
+    /// off the annotation, so it is the resolved type the rest of the analyzer
+    /// compares against.
+    pub(crate) fn ffi_array_element(&self, id: StructId) -> Option<Type> {
+        self.ffi_array_count(id)?;
+        let field = self.program.types.structs().get(id)?.fields.first()?;
+        self.program.types.element_of(field.ty)
+    }
+
     /// Gives an `@FFI.Callback` declaration its storage: one `RawPtr` field
     /// holding the C function pointer.
     ///
@@ -319,10 +331,9 @@ impl Analyzer<'_> {
         let Some(mark) = declaration.ffi.as_ref() else {
             return false;
         };
-        let FfiTypeKind::Callback { params, result, .. } = &mark.kind else {
+        if !matches!(mark.kind, FfiTypeKind::Callback { .. }) {
             return false;
-        };
-        let (params, result) = (params.clone(), *result);
+        }
         if !def.fields.is_empty() {
             let name = self.interner.resolve(declaration.name).to_owned();
             self.emit(
@@ -335,23 +346,44 @@ impl Analyzer<'_> {
             );
             return false;
         }
-        let name = self.interner.resolve(declaration.name).to_owned();
-        let owner = self.imports.package_of(self.source).map(str::to_owned);
-        if let Some(signature) = self.resolve_callback_signature(&params, result)
-            && let Some(id) = self
-                .program
-                .types
-                .structs()
-                .lookup_owned(owner.as_deref(), &name)
-        {
-            self.ffi_callback_signatures.insert(id, signature);
-        }
+        // The signature itself is not resolved here. It may name a C-layout
+        // struct, whose row is built out of that struct's fields — and this pass
+        // is the one *building* fields, so the table it would read is still half
+        // empty. [`Analyzer::resolve_callback_signatures`] runs once every
+        // struct is committed.
         def.fields.push(kira_semantics_model::FieldDef {
             name: FFI_CALLBACK_FIELD.to_owned(),
             ty: Type::RawPtr,
             mutable: true,
         });
         true
+    }
+
+    /// Resolves every `@FFI.Callback` declaration's C signature, once the struct
+    /// table is complete.
+    ///
+    /// Keyed by the id the header pass minted rather than by looking the name up
+    /// again: the declaration and its id are the same row, and a lookup would
+    /// have to reconstruct which package owns it.
+    pub(crate) fn resolve_callback_signatures(
+        &mut self,
+        headers: &[(StructId, &StructDecl, kira_source::SourceId)],
+    ) {
+        for &(id, declaration, source) in headers {
+            let Some(mark) = declaration.ffi.as_ref() else {
+                continue;
+            };
+            let FfiTypeKind::Callback { params, result, .. } = &mark.kind else {
+                continue;
+            };
+            let (params, result) = (params.clone(), *result);
+            // The written types resolve against the imports of the file that
+            // wrote them, not of whichever file this pass visited last.
+            self.source = source;
+            if let Some(signature) = self.resolve_callback_signature(&params, result) {
+                self.ffi_callback_signatures.insert(id, signature);
+            }
+        }
     }
 
     /// The struct id of `name` when it is a `@FFI.*` type that constructs from
@@ -431,8 +463,9 @@ impl Analyzer<'_> {
     ///
     /// The scalars zero to their Kira literal; a nested C-layout aggregate (a
     /// `@FFI.Struct`, or an empty `@FFI.Array`/`@FFI.Callback` nominal) zeroes
-    /// field by field. A `RawPtr`, `CString`, `String`, enum, or heap array has
-    /// no literal zero here and yields `None`.
+    /// field by field; every pointer word — `RawPtr`, `CString`, and an
+    /// `@FFI.Pointer` typedef — zeroes to `NULL`. A `String`, enum, or heap
+    /// array has no literal zero here and yields `None`.
     fn ffi_zero_value(&mut self, ty: Type, span: Span) -> Option<HirExprId> {
         let expr = match ty {
             Type::Int(_) => HirExpr::Int(0),
@@ -445,7 +478,15 @@ impl Analyzer<'_> {
             // pointer or an opaque handle member to. A `CString` member is a
             // pointer too, and its zero is the same `NULL` — which is a
             // different value from a pointer to `""`, and C tells them apart.
-            Type::RawPtr => HirExpr::RawPtrNull,
+            //
+            // An `@FFI.Pointer` member is the same word: `RawPtr` and
+            // `ForeignPtr` already widen into each other, so knowing what a
+            // pointer addresses cannot change what zeroing it means. Nearly
+            // every descriptor in a modern graphics header is built on this —
+            // WebGPU gives each one a `WGPUChainedStruct *nextInChain` and an
+            // optional `T const *` per feature, all of them `NULL` unless the
+            // caller wants them.
+            Type::RawPtr | Type::ForeignPtr(_) => HirExpr::RawPtrNull,
             Type::CString => HirExpr::CStringNull,
             // An `@FFI.Array`'s storage zeroes to an empty Kira array, not to
             // `count` zero elements: the seam zeroes the C bytes it does not

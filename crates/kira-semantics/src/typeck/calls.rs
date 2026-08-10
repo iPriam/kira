@@ -372,19 +372,23 @@ impl Analyzer<'_> {
             }
             // Two coercions fill a C-layout member with C storage this side
             // writes. A `String` filling a `CString` member copies its bytes
-            // out; an array filling a `RawPtr` member writes its elements out
-            // at C's widths and the member holds their address — which is what
-            // a descriptor carrying a data pointer, `sg_range` above all, is.
-            // Both keep the storage past the call, for the reason
+            // out; and a POINTER member — `RawPtr`, or an `@FFI.Pointer` naming
+            // what it addresses — is filled from an array of seam scalars, from
+            // the struct it points at, or from an `@FFI.Array` of that struct.
+            // That is what a descriptor carrying a data pointer (`sg_range`) or
+            // an item list beside a count (`WGPUVertexBufferLayout.attributes`)
+            // is, and both are the shape a graphics API asks for.
+            // The storage outlives the call, for the reason
             // `kira_runtime_abi::c_storage` gives: the callee may hold on to it.
-            let array_elements = (is_c_layout && field_ty == Type::RawPtr)
-                .then(|| self.array_elements_address(value))
-                .flatten();
+            let pointer_fill = (is_c_layout
+                && matches!(field_ty, Type::RawPtr | Type::ForeignPtr(_)))
+            .then(|| self.foreign_pointer_fill(value, field_ty, init.span))
+            .flatten();
             let value = if field_ty == Type::CString && value_ty == Type::String {
                 self.program
                     .exprs
                     .alloc(HirExpr::CStringNew { text: value })
-            } else if let Some(elements) = array_elements {
+            } else if let Some(elements) = pointer_fill {
                 elements
             } else {
                 if !self.admits(value_ty, field_ty) {

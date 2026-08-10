@@ -332,8 +332,11 @@ impl Codegen<'_> {
         let payload = unsafe {
             match kira_ty {
                 // Every integer width shares the VM's `i64` representation and a
-                // `RawPtr` is already an `i64` word; both cross as-is.
-                Type::Int(_) | Type::RawPtr => value,
+                // pointer word is already an `i64` word; both cross as-is. A
+                // typed `@FFI.Pointer` is that same word — the two widen into
+                // each other, so a value one symbol handed back as `T *` is
+                // passed to the next by the name that symbol gave it.
+                Type::Int(_) | Type::RawPtr | Type::ForeignPtr(_) => value,
                 Type::Float(_) => LLVMBuildBitCast(builder, value, types.i64, c"arg.bits".as_ptr()),
                 Type::Bool => LLVMBuildZExt(builder, value, types.i64, c"arg.wide".as_ptr()),
                 // A `String` argument crosses to a `CString` parameter as its

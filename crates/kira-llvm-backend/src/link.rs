@@ -104,6 +104,22 @@ pub enum LinkError {
         /// The marker this compiler expected it to define.
         marker: &'static str,
     },
+    /// A file the finished program must find beside itself could not be put
+    /// there.
+    ///
+    /// Named on its own because the failure it prevents is silent: a program
+    /// that links clean and cannot start reports whatever the operating system's
+    /// loader says, which on Windows is a status code and no file name at all.
+    #[error("cannot place the runtime file `{source_path}` beside `{output}`: {source}")]
+    RuntimeFileUnplaceable {
+        /// The declared file that could not be copied.
+        source_path: PathBuf,
+        /// What it was to sit beside.
+        output: PathBuf,
+        /// The underlying I/O failure.
+        #[source]
+        source: std::io::Error,
+    },
     /// The linker ran and rejected the link.
     #[error("linking `{output}` failed:\n{diagnostic}")]
     Failed {
@@ -632,6 +648,87 @@ fn strip_verbatim_prefix(path: &str) -> &str {
     path.strip_prefix(r"\\?\").unwrap_or(path)
 }
 
+/// Puts every declared runtime file beside the link output.
+///
+/// The loader searches the directory the program was loaded from first, so a
+/// shared library that sits there is found without a `PATH` entry, an install
+/// step, or a `@rpath`. A directory is taken as its files, one level deep:
+/// `NativeLibs/Dawn/<triple>/bin` is how a release payload ships, and naming its
+/// three DLLs one at a time would go stale the moment the payload gains a
+/// fourth.
+///
+/// Copied on every link rather than only when missing: the declared file is the
+/// truth, and a stale copy beside a freshly linked program is the failure this
+/// exists to prevent.
+fn stage_runtime_files(foreign_link: &NativeLinkInputs, output: &Path) -> Result<(), LinkError> {
+    let Some(directory) = output.parent() else {
+        return Ok(());
+    };
+    for declared in foreign_link.runtime_files() {
+        let sources = if declared.is_dir() {
+            let entries = std::fs::read_dir(declared).map_err(|source| {
+                LinkError::RuntimeFileUnplaceable {
+                    source_path: declared.clone(),
+                    output: output.to_path_buf(),
+                    source,
+                }
+            })?;
+            let mut files = Vec::new();
+            for entry in entries {
+                let entry = entry.map_err(|source| LinkError::RuntimeFileUnplaceable {
+                    source_path: declared.clone(),
+                    output: output.to_path_buf(),
+                    source,
+                })?;
+                if entry.path().is_file() {
+                    files.push(entry.path());
+                }
+            }
+            files
+        } else {
+            vec![declared.clone()]
+        };
+        for file in sources {
+            let Some(name) = file.file_name() else {
+                continue;
+            };
+            let destination = directory.join(name);
+            // A program still running from this directory holds its own copy
+            // open, and replacing a file the loader has mapped is refused. The
+            // bytes are already the ones being copied in that case, so the link
+            // is not failed over it.
+            if destination.is_file() && same_file_contents(&file, &destination) {
+                continue;
+            }
+            std::fs::create_dir_all(directory)
+                .and_then(|()| std::fs::copy(&file, &destination))
+                .map(|_| ())
+                .map_err(|source| LinkError::RuntimeFileUnplaceable {
+                    source_path: file.clone(),
+                    output: output.to_path_buf(),
+                    source,
+                })?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether two files hold the same bytes, for deciding a copy can be skipped.
+///
+/// A read failure answers `false`, so an unreadable destination is replaced
+/// rather than trusted.
+fn same_file_contents(left: &Path, right: &Path) -> bool {
+    match (std::fs::metadata(left), std::fs::metadata(right)) {
+        (Ok(left_meta), Ok(right_meta)) if left_meta.len() == right_meta.len() => {
+            matches!(
+                (std::fs::read(left), std::fs::read(right)),
+                (Ok(a), Ok(b)) if a == b
+            )
+        }
+        _ => false,
+    }
+}
+
 fn link_with(
     llvm: &LlvmInstallation,
     objects: &[PathBuf],
@@ -706,6 +803,8 @@ fn link_with(
         arguments.push("-isysroot".into());
         arguments.push(sysroot.into());
     }
+
+    stage_runtime_files(foreign_link, executable)?;
 
     let mut command = Command::new(&driver);
     match response_file_for(&arguments, executable)? {

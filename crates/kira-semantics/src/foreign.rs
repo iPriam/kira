@@ -768,16 +768,16 @@ impl<'a> Analyzer<'a> {
                     }
                 }
                 None => {
-                    // A pointer parameter also accepts the struct it points at:
-                    // the seam writes that struct's C-layout image and passes
-                    // its address, which is what `sapp_run(move desc)` means.
+                    // A pointer parameter also accepts the struct it points at,
+                    // and an `@FFI.Array` of that struct: the seam writes the
+                    // C-layout image and passes its address, which is what
+                    // `sapp_run(move desc)` means for one and what a
+                    // `T const *items` argument means for several.
                     if let Some(pointee) = param_pointees[index]
-                        && actual == Type::Struct(pointee.struct_id)
+                        && let Some(image) =
+                            self.clayout_image_address(arg, pointee.struct_id, span)
                     {
-                        seam_args.push(self.program.exprs.alloc(HirExpr::CLayoutAddress {
-                            value: arg,
-                            aggregate: pointee.aggregate,
-                        }));
+                        seam_args.push(image);
                         continue;
                     }
                     // A payload-less enum crosses as its case's number, which
@@ -859,6 +859,94 @@ impl<'a> Analyzer<'a> {
                 .exprs
                 .alloc(HirExpr::ArrayElements { value, element }),
         )
+    }
+
+    /// The address of a C-layout image a pointer position accepts in place of
+    /// the pointer itself.
+    ///
+    /// Two values fill a `T *`. The struct `T`, whose image the seam writes and
+    /// whose address it passes — that is what `sapp_run(move desc)` means. And
+    /// an `@FFI.Array` of `T`, which is the same image with an extent: a C array
+    /// is its elements laid out end to end, so one row describes both and the
+    /// address of the row is the address of element zero.
+    ///
+    /// The second is what makes a descriptor-shaped graphics API reachable.
+    /// Almost none of them take one item; they take `T const *items` beside an
+    /// `itemCount` — vertex attributes, bind group entries, colour targets —
+    /// and without a way to name several items' storage from Kira, that
+    /// descriptor can only be built in a C helper.
+    ///
+    /// A shorter Kira array than the extent zero-fills the rest, which is the
+    /// rule an `@FFI.Array` member already follows: the count the descriptor
+    /// carries beside the pointer is what says how many C reads.
+    ///
+    /// A third value fills it: a struct that **begins** with `T`. The address of
+    /// a struct is the address of its first member, which is the whole of how an
+    /// extensible C API extends — `WGPUChainedStruct *nextInChain` pointed at a
+    /// `WGPUSurfaceSourceWindowsHWND` whose first member is that chain, and
+    /// Vulkan's `pNext` the same. Without it a caller can only reach an
+    /// extension by redeclaring the base descriptor once per extension it wants.
+    pub(crate) fn clayout_image_address(
+        &mut self,
+        value: HirExprId,
+        pointee: StructId,
+        span: Span,
+    ) -> Option<HirExprId> {
+        let Type::Struct(id) = self.program.expr(value).type_of() else {
+            return None;
+        };
+        if id != pointee
+            && self.ffi_array_element(id) != Some(Type::Struct(pointee))
+            && !self.clayout_leads_with(id, pointee)
+        {
+            return None;
+        }
+        let aggregate = self.aggregate_seam_of(id, span)?;
+        Some(
+            self.program
+                .exprs
+                .alloc(HirExpr::CLayoutAddress { value, aggregate }),
+        )
+    }
+
+    /// Whether C-layout `id` begins with a `pointee`, so the address of one is
+    /// the address of the other.
+    ///
+    /// This is C's own rule, not a relaxation of it: a struct and its first
+    /// member share an address, which is what every `pNext`/`nextInChain` cast
+    /// in an extensible header relies on. Only the *first* member counts —
+    /// anything later sits at a nonzero offset and is a different address.
+    fn clayout_leads_with(&self, id: StructId, pointee: StructId) -> bool {
+        self.ffi_struct_kind(id) == Some(FfiStructKind::CLayout)
+            && self
+                .program
+                .types
+                .structs()
+                .get(id)
+                .and_then(|def| def.fields.first())
+                .is_some_and(|field| field.ty == Type::Struct(pointee))
+    }
+
+    /// The value a C-layout struct's pointer member is filled with, when the
+    /// literal wrote storage this side owns rather than a pointer C handed out.
+    ///
+    /// A member typed as an `@FFI.Pointer` is a pointer word exactly as a
+    /// `RawPtr` member is, so both accept the same two fills: an array of seam
+    /// scalars, and — where the pointer names a C-layout target — that struct
+    /// or an `@FFI.Array` of it.
+    pub(crate) fn foreign_pointer_fill(
+        &mut self,
+        value: HirExprId,
+        member: Type,
+        span: Span,
+    ) -> Option<HirExprId> {
+        if let Type::ForeignPtr(pointer) = member
+            && let Some(target) = self.program.types.foreign_ptr_target(pointer)
+            && let Some(image) = self.clayout_image_address(value, target, span)
+        {
+            return Some(image);
+        }
+        self.array_elements_address(value)
     }
 }
 

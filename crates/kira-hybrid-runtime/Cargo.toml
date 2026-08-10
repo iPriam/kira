@@ -13,6 +13,9 @@ kira-hybrid-definition.workspace = true
 kira-bytecode.workspace = true
 kira-vm-runtime.workspace = true
 kira-runtime-abi.workspace = true
+# For `open_shared_library` alone: how a library's own directory is searched for
+# what it depends on is one rule, and both hosts that load one need it.
+kira-dynamic-ffi.workspace = true
 # The host loads the native half at run time. It deliberately does *not* depend
 # on `kira-native-bridge`: every `kira_rt_*` symbol must be resolved out of the
 # loaded library, never out of this process's own copy. See `library.rs`.

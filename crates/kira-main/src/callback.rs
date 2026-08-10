@@ -346,9 +346,11 @@ unsafe extern "C" fn invoke_runtime(
 
 /// One callback argument, which is always a scalar.
 ///
-/// A callback signature carries fixed-width scalars, `Bool`, and `RawPtr` — the
-/// frontend refuses everything else — so a string or a handle arriving here is a
-/// generated thunk and a signature that disagree, not a program.
+/// A callback signature carries fixed-width scalars, `Bool`, and `RawPtr` — and
+/// a struct C passes by value, which the generated C entry has already turned
+/// into the pointer word that reaches here. The frontend refuses everything
+/// else, so a handle arriving here is a generated thunk and a signature that
+/// disagree, not a program.
 fn scalar_arg(value: BridgeValue) -> NativeArg<'static> {
     match value.decode() {
         Some(BridgeData::Void) => NativeArg::Void,

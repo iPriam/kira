@@ -55,13 +55,10 @@ impl Analyzer<'_> {
         // A bare integer literal takes the floating-point type of the position
         // that asks for it. Named integer values remain distinct from Float;
         // only the literal spelling is context-sensitive.
-        if matches!(expected, Some(Type::Float(_))) {
-            if let Expr::Int { value, .. } = self.tree.expr(id) {
-                return self
-                    .program
-                    .exprs
-                    .alloc(HirExpr::Float(*value as f64));
-            }
+        if matches!(expected, Some(Type::Float(_)))
+            && let Expr::Int { value, .. } = self.tree.expr(id)
+        {
+            return self.program.exprs.alloc(HirExpr::Float(*value as f64));
         }
         // A bare function name is not an expression anywhere else — Kira has no
         // function type — so the one position that gives it a meaning is

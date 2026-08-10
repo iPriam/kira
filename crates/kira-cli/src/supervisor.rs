@@ -44,7 +44,7 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 ///
 /// `Ok(None)` means the program did not compile and its diagnostics have already
 /// been reported — a session keeps running on the last bundle that did.
-pub type Rebuild<'a> = &'a dyn Fn() -> Result<Option<Bundle>, LiveError>;
+pub type Rebuild<'a> = &'a mut dyn FnMut() -> Result<Option<Bundle>, LiveError>;
 
 /// A runner child process that is killed if the supervisor unwinds.
 ///
@@ -180,6 +180,12 @@ fn watch(
     // can change under a running session is a session that behaves two ways for
     // one invocation.
     let hotpatch_disabled = kira_live::hotpatch_disabled_by_env();
+    // A watched session with no `--quit-after` ends when whoever started it ends
+    // it, and nothing else — so it says so, once, rather than looking hung to
+    // someone who expected the program to finish and exit.
+    if options.runs_until_stopped() {
+        eprintln!("kira: watching for changes; end the session with Ctrl-C");
+    }
     let mut watcher = SourceWatcher::new(watch_set(source));
     // The baseline is now captured: from here on an edit will be seen. Announcing
     // it is what lets a tool — or a test — edit without racing the initial build.

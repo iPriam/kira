@@ -115,16 +115,16 @@ pub struct AppThread {
 /// `hotpatch_disabled` is passed in rather than read here so that both ends of a
 /// session agree on it: the switch is read once, where the host is built.
 pub fn pair(hotpatch_disabled: bool) -> (RelayHost, AppThread) {
-    pair_with_hotpatch(hotpatch_disabled, VmHotPatch::new(std::path::PathBuf::new()))
+    pair_with_hotpatch(
+        hotpatch_disabled,
+        VmHotPatch::new(std::path::PathBuf::new()),
+    )
 }
 
 /// Splits a runner while sharing its VM hot-patch controller with the protocol
 /// thread. The controller is published by [`DesktopHost::link`] before the
 /// entrypoint starts.
-pub fn pair_with_hotpatch(
-    hotpatch_disabled: bool,
-    hotpatch: VmHotPatch,
-) -> (RelayHost, AppThread) {
+pub fn pair_with_hotpatch(hotpatch_disabled: bool, hotpatch: VmHotPatch) -> (RelayHost, AppThread) {
     let (work, requests) = channel();
     let running = Arc::new(AtomicBool::new(false));
     let exited: ExitSlot = Arc::new(Mutex::new(None));
@@ -205,8 +205,7 @@ impl RunnerHost for RelayHost {
                 .then_some(())
                 .ok_or_else(|| {
                     RelayError::Host(
-                        "the swapped VM code was not observed by a live frame callback"
-                            .to_owned(),
+                        "the swapped VM code was not observed by a live frame callback".to_owned(),
                     )
                 });
         }

@@ -120,6 +120,51 @@ fn a_function_and_the_types_its_signature_reaches_are_bound() {
 }
 
 #[test]
+fn a_struct_forward_declared_before_it_is_defined_keeps_its_fields() {
+    let package = TempPackage::new("forward");
+    package.header(
+        "demo.h",
+        "struct demo_caps;\n\
+         typedef void (*demo_probe)(struct demo_caps *caps);\n\
+         typedef struct demo_caps { int count; float scale; } demo_caps;\n\
+         void demo_release(demo_caps caps);\n",
+    );
+    let text = bind(&package, &library(&["demo.h"]));
+
+    assert!(
+        text.contains("@FFI.Struct { layout: c; }\nstruct demo_caps {\n    var count: I32"),
+        "a type the header defines is a struct even when a forward declaration \
+         named it first: {text}"
+    );
+    assert!(
+        !text.contains("@FFI.Alias { target: demo_caps; }"),
+        "a defined type must not also be declared as an opaque handle, which \
+         would alias to itself and have no layout to pass by value: {text}"
+    );
+}
+
+#[test]
+fn a_handle_typedef_binds_the_functions_that_take_it() {
+    let package = TempPackage::new("handle");
+    package.header(
+        "demo.h",
+        "typedef struct demo_deviceImpl* demo_device;\n\
+         demo_device demo_device_create(void);\n\
+         void demo_device_release(demo_device device);\n",
+    );
+    let text = bind(&package, &library(&["demo.h"]));
+
+    assert!(
+        text.contains("function demo_device_release(device: demo_deviceImpl_ptr): Void;"),
+        "a pointer the header typedef'd is still a pointer to a named type: {text}"
+    );
+    assert!(
+        text.contains("@FFI.Alias { target: demo_deviceImpl; }"),
+        "the handle's pointee is declared so the pointer has a target: {text}"
+    );
+}
+
+#[test]
 fn an_inline_array_becomes_an_ffi_array_typedef_named_for_its_storage() {
     let package = TempPackage::new("array");
     package.header(

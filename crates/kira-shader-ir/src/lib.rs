@@ -16,6 +16,7 @@ pub mod glsl_names;
 pub mod layout;
 pub mod lower;
 pub mod reflection;
+pub mod wgsl_names;
 
 use kira_ksl_semantics::model::CheckedModule;
 use kira_shader_model::Reflection;
@@ -23,6 +24,7 @@ use kira_shader_model::Reflection;
 pub use glsl_names::glsl_safe_name;
 pub use lower::{entry_name, lower, type_name};
 pub use reflection::{MAGIC, ReflectionError, decode, encode, resource_digest};
+pub use wgsl_names::wgsl_safe_name;
 
 /// A shader ready for a backend to emit.
 #[derive(Debug, Clone, PartialEq)]
