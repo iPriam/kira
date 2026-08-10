@@ -6,5 +6,7 @@
 # (including Python) exist without ever reaching a commit.
 .codex/tmp/
 .codex/scheduled_tasks.lock
+# One machine's tool permissions, beside the settings the repository does share.
+.codex/settings.local.json
 Cargo.lock
 kira.lock
