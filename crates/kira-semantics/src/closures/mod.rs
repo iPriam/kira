@@ -34,8 +34,11 @@
 //! # Two kinds of capture
 //!
 //! An immutable binding is captured **by value**, and must be trivially
-//! copyable: a `String`, struct, array, or enum capture is refused (`KSEM117`),
-//! matching the oracle's `isTriviallyCopyable`, which admits only the scalars.
+//! copyable: a `String`, struct, or array capture is refused (`KSEM117`). An
+//! enum is admitted when it is structurally copyable — every variant payload is
+//! itself copyable, which a payload-less enum satisfies vacuously — because
+//! copy-ness in Kira is a property of what a value contains rather than of which
+//! type constructor spelled it.
 //!
 //! A `var` is captured by **sharing its storage**. The binding moved into a
 //! capture cell at its declaration — see [`crate::cells`] and
@@ -48,7 +51,7 @@
 use std::collections::HashMap;
 
 use kira_semantics_model::hir::{FuncId, LocalId};
-use kira_semantics_model::{OwnershipMode, StructId, Type};
+use kira_semantics_model::{EnumId, OwnershipMode, StructId, Type};
 use kira_source::{SourceId, Span};
 
 mod calls;
@@ -188,14 +191,14 @@ pub(crate) enum Captured {
 /// Whether a value of `ty` may be copied into a closure without a `copy`.
 ///
 /// The oracle's `isTriviallyCopyable`: the scalars, and a `RawPtr`, which is an
-/// opaque word that copies bits and frees nothing. A `String`, a struct, an
-/// array, and an enum all own heap storage, and copying one into a closure is
-/// exactly the "non-Copy owned capture" `KSEM117` names.
+/// opaque word that copies bits and frees nothing. A `String`, a struct, and an
+/// array all own heap storage, and copying one into a closure is exactly the
+/// "non-Copy owned capture" `KSEM117` names.
 ///
-/// A **function type** is decided by [`Analyzer::capture_is_trivially_copyable`]
-/// instead, because answering it needs the function-type table this cannot see.
-/// A **capture cell** is admitted too, and it is the one entry here that is not
-/// a scalar: copying one takes another hold on a share-counted box and owns
+/// An **enum** is decided by [`Analyzer::capture_is_trivially_copyable`], and a
+/// **function type** likewise: both answers need tables this cannot see.
+/// A **capture cell** is admitted here, and it is the one entry that is not a
+/// scalar: copying one takes another hold on a share-counted box and owns
 /// nothing new. That is what a captured `var` travels as, and the sharing is
 /// the point rather than something the copy hides.
 pub(crate) fn is_trivially_copyable(ty: Type) -> bool {
@@ -214,16 +217,56 @@ pub(crate) fn is_trivially_copyable(ty: Type) -> bool {
 impl crate::analyze::Analyzer<'_> {
     /// Whether a capture of `ty` copies without owning anything.
     ///
-    /// [`is_trivially_copyable`] plus the case it cannot see: a **function
-    /// value**. Its representation is a tag and this program's captures of that
-    /// type, and every one of those had to pass this same test to become a
-    /// capture at all — so a function value owns nothing transitively, and
-    /// copying one into a closure copies words.
+    /// [`is_trivially_copyable`] plus the two cases it cannot see.
     ///
-    /// That is what lets a callback be threaded through a closure, which is how
-    /// an application hands a frame handler to a loop it builds inline.
+    /// A **function value**: its representation is a tag and this program's
+    /// captures of that type, and every one of those had to pass this same test
+    /// to become a capture at all — so a function value owns nothing
+    /// transitively, and copying one into a closure copies words. That is what
+    /// lets a callback be threaded through a closure, which is how an
+    /// application hands a frame handler to a loop it builds inline.
+    ///
+    /// An **enum**, structurally. Copy-ness in Kira is a property of what a
+    /// value contains, not of which type constructor spelled it: a payload-less
+    /// enum is a tag, which is a word, which copies exactly as an `Int` does.
+    /// Refusing it nominally made a closure unable to capture a value that owns
+    /// nothing, and the workaround — capture the discriminant as an `Int` and
+    /// convert it back inside the body — is the same copy written where the type
+    /// system cannot see it.
     pub(crate) fn capture_is_trivially_copyable(&self, ty: Type) -> bool {
-        is_trivially_copyable(ty) || self.as_function_type(ty).is_some()
+        is_trivially_copyable(ty)
+            || self.as_function_type(ty).is_some()
+            || self.enum_is_trivially_copyable(ty, &mut std::collections::HashSet::new())
+    }
+
+    /// Whether `ty` is an enum whose every variant payload copies without
+    /// owning anything.
+    ///
+    /// `seen` breaks the cycle a recursive enum would otherwise spin on: an enum
+    /// reachable from its own payload is already being decided further up the
+    /// stack, and it contributes no *new* owned storage to that decision.
+    fn enum_is_trivially_copyable(
+        &self,
+        ty: Type,
+        seen: &mut std::collections::HashSet<EnumId>,
+    ) -> bool {
+        let Type::Enum(id) = ty else {
+            return false;
+        };
+        if !seen.insert(id) {
+            return true;
+        }
+        let Some(def) = self.program.types.enums().get(id) else {
+            return false;
+        };
+        def.variants.iter().all(|variant| match variant.payload {
+            None => true,
+            Some(payload) => {
+                is_trivially_copyable(payload)
+                    || self.as_function_type(payload).is_some()
+                    || self.enum_is_trivially_copyable(payload, seen)
+            }
+        })
     }
 
     /// Whether storing a value of `ty` in `repr` would let `repr` reach itself.

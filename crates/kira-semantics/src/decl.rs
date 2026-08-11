@@ -78,6 +78,32 @@ impl<'a> Analyzer<'a> {
         self.resolve_callback_signatures(&headers);
     }
 
+    /// Whether `name` is already an enum, reporting the collision when it is.
+    ///
+    /// Kira has ONE type namespace, and enums are declared before structs and
+    /// classes — so a name an enum took is visible by the time either of those
+    /// claims it. Letting both exist does not make the program ambiguous to the
+    /// compiler, which consults one table first and finds a winner; it makes it
+    /// ambiguous to the *reader*, and it moves the error to the use site. The
+    /// enum's own uses then fail in ways that describe the struct that won:
+    /// `match` on one reports "a `match` subject must be an enum", and naming a
+    /// variant reports that the type is a class. Neither mentions the second
+    /// declaration, which is the only thing that was actually wrong.
+    pub(crate) fn name_taken_by_enum(&mut self, name: &str, span: Span, kind: &str) -> bool {
+        if self.program.types.enums().lookup(name).is_none() {
+            return false;
+        }
+        self.emit(
+            span,
+            "KSEM004",
+            format!(
+                "`{name}` is already defined as an enum, so this {kind} cannot take the \
+                 same name: a type name means exactly one declaration"
+            ),
+        );
+        true
+    }
+
     /// First pass: declares every struct's name as an empty header, minting its
     /// id and reserving its `struct_defaults` slot.
     ///
@@ -105,6 +131,9 @@ impl<'a> Analyzer<'a> {
             // last.
             self.source = source;
             let name = self.interner.resolve(declaration.name).to_owned();
+            if self.name_taken_by_enum(&name, declaration.name_span, "struct") {
+                continue;
+            }
             // Filed under the package that wrote it, so two packages may each
             // declare the name and only a repeat *within* one is a duplicate.
             let owner = self.imports.package_of(source).map(str::to_owned);
