@@ -26,6 +26,7 @@
 
 use std::path::{Path, PathBuf};
 
+use kira_debug::DebugInfo;
 use kira_hybrid_definition::HybridManifest;
 use kira_ir::IrProgram;
 use kira_llvm_backend::{NativeBuildOptions, NativeLinkInputs};
@@ -79,6 +80,27 @@ pub fn build(
     emit_llvm_ir: bool,
     foreign_link: &NativeLinkInputs,
 ) -> Result<HybridBundle, HybridError> {
+    build_inner(program, source, emit_llvm_ir, foreign_link, None)
+}
+
+/// Builds a hybrid bundle with debug metadata on its native half.
+pub fn build_debug(
+    program: &IrProgram,
+    source: &Path,
+    emit_llvm_ir: bool,
+    foreign_link: &NativeLinkInputs,
+    debug: &DebugInfo,
+) -> Result<HybridBundle, HybridError> {
+    build_inner(program, source, emit_llvm_ir, foreign_link, Some(debug))
+}
+
+fn build_inner(
+    program: &IrProgram,
+    source: &Path,
+    emit_llvm_ir: bool,
+    foreign_link: &NativeLinkInputs,
+    debug: Option<&DebugInfo>,
+) -> Result<HybridBundle, HybridError> {
     let artifacts =
         Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
 
@@ -97,7 +119,8 @@ pub fn build(
         .all(|function| function.execution.resolve(Execution::Runtime) == Execution::Runtime);
     let surface_key = native_surface_key(program, foreign_link);
     let cache_path = artifacts.native_surface_key();
-    let cache_hit = reusable_native
+    let cache_hit = debug.is_none()
+        && reusable_native
         && artifacts.shared_library().is_file()
         && (!emit_llvm_ir || artifacts.llvm_ir().is_file())
         && std::fs::read_to_string(&cache_path)
@@ -121,11 +144,14 @@ pub fn build(
             exports: kira_llvm_backend::NativeExportSurface::default(),
             ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
             runtime_archive: native::runtime_archive(program)?,
-            optimize: false,
+            optimize: debug.is_some_and(|debug| debug.optimized),
             unavailable_imports: foreign_link.unavailable_imports().to_vec(),
             foreign_link: foreign_link.clone(),
         };
-        let native = kira_llvm_backend::build_hybrid_library(program, &options)?;
+        let native = match debug {
+            Some(debug) => kira_llvm_backend::build_hybrid_library_debug(program, &options, debug)?,
+            None => kira_llvm_backend::build_hybrid_library(program, &options)?,
+        };
         if reusable_native {
             std::fs::write(&cache_path, &surface_key).map_err(|source| HybridError::Io {
                 path: cache_path.clone(),
@@ -171,10 +197,13 @@ pub fn run(
     source: &Path,
     emit_llvm_ir: bool,
     foreign_link: &NativeLinkInputs,
+    program_arguments: &[String],
 ) -> Result<i32, HybridError> {
     let bundle = build(program, source, emit_llvm_ir, foreign_link)?;
     let session = kira_hybrid_runtime::Session::load(&bundle.manifest)?;
-    session.run()?;
+    // SAFETY: the CLI owns this run boundary and does not access the process
+    // environment from another thread while the Hybrid session executes.
+    unsafe { kira_runtime_abi::env::with_arguments(program_arguments, || session.run())? };
     Ok(0)
 }
 

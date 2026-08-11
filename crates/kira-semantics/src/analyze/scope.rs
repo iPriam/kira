@@ -230,6 +230,7 @@ impl FnCtx {
         self.ownership.push(LocalOwnership {
             mode: ownership,
             moved: None,
+            loop_reported: false,
         });
         self.binding_spans.push(None);
         if let Some(scope) = self.scopes.last_mut() {
@@ -332,6 +333,33 @@ impl FnCtx {
                 entry.moved = *moved;
             }
         }
+    }
+
+    /// Every local that was live in `state` and is moved now, with where it
+    /// went — what a loop's back edge would re-enter empty.
+    ///
+    /// A local declared since `state` was taken has no slot in it and is
+    /// skipped: it is bound afresh on each iteration, so its move is spent
+    /// within one.
+    pub(crate) fn moves_across(&self, state: &[Option<Span>]) -> Vec<(LocalId, Span)> {
+        state
+            .iter()
+            .enumerate()
+            .filter(|(_, was_moved)| was_moved.is_none())
+            .filter_map(|(slot, _)| {
+                let entry = self.ownership.get(slot)?;
+                if entry.loop_reported {
+                    return None;
+                }
+                entry.moved.map(|span| (LocalId(slot as u32), span))
+            })
+            .collect()
+    }
+
+    /// Records that a loop has blamed `local` for a move across its back edge,
+    /// so an enclosing loop does not repeat the report.
+    pub(crate) fn mark_loop_move_reported(&mut self, local: LocalId) {
+        self.ownership[local.0 as usize].loop_reported = true;
     }
 
     /// The name a local was declared with.

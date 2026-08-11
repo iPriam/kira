@@ -36,6 +36,11 @@ enum Position {
     Result,
     /// A struct member: an inline array is storage, `CString` is a pointer.
     Field,
+    /// The target of another pointer. A C pointer nested inside a pointer is
+    /// still a pointer word; it must keep its own named alias rather than
+    /// becoming the seam-only `CString` spelling used by a function
+    /// parameter/result.
+    PointerTarget,
 }
 
 impl Harvest {
@@ -58,7 +63,7 @@ impl Harvest {
     pub(super) fn type_name(&self, ty: &CType<'_>) -> Option<String> {
         [ty.declaration().name(), ty.canonical().declaration().name()]
             .into_iter()
-            .find(|candidate| !candidate.is_empty())
+            .find(|candidate| is_identifier(candidate))
     }
 
     /// Declares whatever `ty` names, and returns the name it is declared under.
@@ -116,7 +121,7 @@ impl Harvest {
         }
         match kind {
             TypeKind::ENUM => self.map_enum(&canonical),
-            TypeKind::POINTER => self.map_pointer(ty, &canonical, field),
+            TypeKind::POINTER => self.map_pointer(ty, &canonical, field, position),
             TypeKind::RECORD => self.map_record(ty, &canonical, position),
             TypeKind::CONSTANT_ARRAY => self.map_array(&canonical, position),
             TypeKind::INCOMPLETE_ARRAY => {
@@ -156,13 +161,35 @@ impl Harvest {
         ty: &CType<'_>,
         canonical: &CType<'_>,
         field: Option<&FieldSite<'_>>,
+        position: Position,
     ) -> Result<KiraType, String> {
         let pointee = canonical.pointee();
         let pointee_kind = pointee.canonical().kind();
+        if pointee_kind == TypeKind::POINTER {
+            // libclang keeps every pointer layer in the type tree. Resolve the
+            // inner layer first so `T **` becomes a pointer alias targeting
+            // `T_ptr`, and therefore has a stable, readable Kira spelling of
+            // `T_ptr_ptr`. The pointer-target position is important for
+            // `char **`: the inner `char *` is a C pointer alias, not the
+            // function-seam-only `CString` abstraction.
+            let inner = self.map_at(&pointee, Position::PointerTarget, field)?;
+            let target = inner.spelling().to_owned();
+            let name = pointer_alias_name(&target);
+            if self.declared.insert(name.clone()) {
+                self.module.pointers.push(PointerDecl {
+                    name: name.clone(),
+                    target,
+                });
+            }
+            return Ok(KiraType::Named(name));
+        }
         if pointee_kind == TypeKind::VOID {
             return Ok(KiraType::RawPtr);
         }
-        if matches!(pointee_kind, TypeKind::CHAR_S | TypeKind::CHAR_U) && pointee.is_const() {
+        if matches!(pointee_kind, TypeKind::CHAR_S | TypeKind::CHAR_U)
+            && pointee.is_const()
+            && position != Position::PointerTarget
+        {
             return Ok(KiraType::CString);
         }
         if matches!(
@@ -188,9 +215,22 @@ impl Harvest {
                     pointee.spelling()
                 )
             })?;
+        // A selected function is allowed to be the only declaration that
+        // reaches a C-layout record. Keep that record in the binding even when
+        // `autobind` is in `Selected` mode: callers of a typed pointer may pass
+        // the record by address and, for a readable target, inspect its fields.
+        // If one of the fields is outside the seam, leave the pointer as an
+        // opaque handle; that is still a valid and useful C pointer binding.
+        let declaration = pointee.canonical().declaration();
+        if matches!(
+            declaration.kind(),
+            CursorKind::STRUCT_DECL | CursorKind::UNION_DECL
+        ) && (declaration.is_definition() || declaration.definition().is_some())
+        {
+            let _ = self.map_record(&ty.pointee(), &pointee.canonical(), Position::Field);
+        }
         // An opaque C type — named by the headers, never defined — gets an
         // alias so the pointer has a target that reads as the C type it is.
-        let declaration = pointee.canonical().declaration();
         if declaration.kind() == CursorKind::STRUCT_DECL
             && !declaration.is_definition()
             && declaration.definition().is_none()
@@ -448,12 +488,19 @@ fn builtin_target_name(canonical: &CType<'_>) -> Option<String> {
 /// is refused rather than emitted with a name that would not parse.
 fn sanitized_target_name(spelling: &str) -> Option<String> {
     let cleaned = spelling.trim_start_matches("const ").trim();
-    let is_identifier = !cleaned.is_empty()
-        && !cleaned.starts_with(|c: char| c.is_ascii_digit())
-        && cleaned
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_');
-    is_identifier.then(|| cleaned.to_owned())
+    is_identifier(cleaned).then(|| cleaned.to_owned())
+}
+
+/// Whether a clang declaration name can be written as a Kira identifier.
+///
+/// Anonymous records are reported by libclang with spellings such as
+/// `struct (unnamed at header.h:12:3)`. They have a layout, but no stable name
+/// a generated Kira declaration can carry; treating them as unnamed lets the
+/// containing pointer remain an opaque handle instead of emitting invalid Kira.
+fn is_identifier(text: &str) -> bool {
+    !text.is_empty()
+        && !text.starts_with(|c: char| c.is_ascii_digit())
+        && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// The name an unnamed function-pointer signature is declared under.

@@ -7,3 +7,9 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+kira-core.workspace = true
+kira-parser.workspace = true
+kira-source.workspace = true
+kira-syntax-model.workspace = true

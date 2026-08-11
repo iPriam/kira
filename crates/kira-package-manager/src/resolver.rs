@@ -7,7 +7,9 @@ use kira_diagnostic_messages::package_messages::{
     missing_dependency_package,
 };
 use kira_diagnostics::Diagnostic;
-use kira_manifest::{DeclarationError, DependencySpec, ProjectManifest, load_declaration};
+use kira_manifest::{
+    DeclarationError, DependencySpec, ProjectManifest, load_declaration, load_legacy_manifest,
+};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -42,6 +44,14 @@ pub enum ResolveError {
         #[source]
         source: DeclarationError,
     },
+    /// The root legacy TOML manifest is present but malformed.
+    #[error("root legacy manifest `{path}` is invalid")]
+    RootLegacyManifestInvalid {
+        /// The manifest path.
+        path: PathBuf,
+        /// Why parsing failed.
+        message: String,
+    },
 }
 
 #[derive(Debug)]
@@ -69,16 +79,23 @@ pub fn resolve(root_dir: &Path) -> Result<ResolvedPackageGraph, ResolveError> {
             path: root_dir.to_path_buf(),
             source,
         })?;
-    let manifest_path = canonical_root.join("package.kira");
+    let manifest_path =
+        find_manifest(&canonical_root).unwrap_or_else(|| canonical_root.join("package.kira"));
     let root_text =
         fs::read_to_string(&manifest_path).map_err(|source| ResolveError::RootManifestRead {
             path: manifest_path.clone(),
             source,
         })?;
     let root_manifest =
-        load_declaration(&root_text).map_err(|source| ResolveError::RootManifestInvalid {
-            path: manifest_path,
-            source,
+        load_manifest_text(&manifest_path, &root_text).map_err(|error| match error {
+            ManifestLoadError::Declaration(source) => ResolveError::RootManifestInvalid {
+                path: manifest_path.clone(),
+                source,
+            },
+            ManifestLoadError::Legacy(message) => ResolveError::RootLegacyManifestInvalid {
+                path: manifest_path.clone(),
+                message,
+            },
         })?;
 
     let mut diagnostics = Vec::new();
@@ -128,11 +145,11 @@ pub fn resolve(root_dir: &Path) -> Result<ResolvedPackageGraph, ResolveError> {
             continue;
         }
 
-        let dependency_manifest_path = canonical_dir.join("package.kira");
-        let dependency_manifest = match fs::read_to_string(&dependency_manifest_path)
-            .ok()
-            .and_then(|text| load_declaration(&text).ok())
-        {
+        let dependency_manifest = match find_manifest(&canonical_dir).and_then(|path| {
+            fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| load_manifest_text(&path, &text).ok())
+        }) {
             Some(manifest) => manifest,
             None => {
                 diagnostics.push(missing_dependency_package(
@@ -177,6 +194,30 @@ pub fn resolve(root_dir: &Path) -> Result<ResolvedPackageGraph, ResolveError> {
         diagnostics,
         lockfile,
     })
+}
+
+/// The manifest names the project resolver accepts, in precedence order.
+const MANIFEST_FILE_NAMES: [&str; 4] = ["package.kira", "kira.toml", "project.toml", "Kira.toml"];
+
+fn find_manifest(root: &Path) -> Option<PathBuf> {
+    MANIFEST_FILE_NAMES
+        .iter()
+        .map(|name| root.join(name))
+        .find(|path| path.is_file())
+}
+
+#[derive(Debug)]
+enum ManifestLoadError {
+    Declaration(DeclarationError),
+    Legacy(String),
+}
+
+fn load_manifest_text(path: &Path, text: &str) -> Result<ProjectManifest, ManifestLoadError> {
+    if path.file_name().and_then(|name| name.to_str()) == Some("package.kira") {
+        load_declaration(text).map_err(ManifestLoadError::Declaration)
+    } else {
+        load_legacy_manifest(text).map_err(|error| ManifestLoadError::Legacy(error.to_string()))
+    }
 }
 
 fn resolved_package(

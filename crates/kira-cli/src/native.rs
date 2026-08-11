@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use kira_debug::DebugInfo;
 use kira_ir::IrProgram;
 use kira_llvm_backend::{
     AdapterSidecarOptions, LlvmError, NativeArtifacts, NativeBuildOptions, NativeLinkInputs,
@@ -173,6 +174,35 @@ pub fn build(
     Ok(kira_llvm_backend::build_native(program, &options)?)
 }
 
+/// Builds a native executable with debug metadata for a debugger session.
+pub fn build_debug(
+    program: &IrProgram,
+    source: &Path,
+    emit_llvm_ir: bool,
+    optimize: bool,
+    foreign_link: &NativeLinkInputs,
+    debug: &DebugInfo,
+) -> Result<NativeArtifacts, NativeError> {
+    let artifacts =
+        Artifacts::for_source(source).map_err(|source| NativeError::Layout { source })?;
+    let options = NativeBuildOptions {
+        module_name: artifacts.stem.clone(),
+        object_path: artifacts.object(),
+        executable_path: Some(artifacts.executable()),
+        shared_library_path: None,
+        archive_path: None,
+        exports: kira_llvm_backend::NativeExportSurface::default(),
+        ir_path: emit_llvm_ir.then(|| artifacts.llvm_ir()),
+        runtime_archive: runtime_archive(program)?,
+        optimize,
+        unavailable_imports: foreign_link.unavailable_imports().to_vec(),
+        foreign_link: foreign_link.clone(),
+    };
+    Ok(kira_llvm_backend::build_native_debug(
+        program, &options, debug,
+    )?)
+}
+
 /// Builds the VM's foreign-adapter sidecar for `program`, returning its path.
 ///
 /// The VM never links or `dlopen`s anything itself; this is what a VM build
@@ -197,12 +227,14 @@ pub fn build_adapter_sidecar(
     Ok(kira_llvm_backend::build_adapter_sidecar(program, &options)?)
 }
 
-/// Runs a built native executable, returning its exit code.
+/// Runs a built native executable with the program arguments, returning its
+/// exit code.
 ///
 /// The child inherits this process's streams, so a native run's output is
 /// indistinguishable from a VM run's.
-pub fn execute(executable: &Path) -> Result<i32, NativeError> {
+pub fn execute(executable: &Path, arguments: &[String]) -> Result<i32, NativeError> {
     let status = std::process::Command::new(executable)
+        .args(arguments)
         .status()
         .map_err(|source| NativeError::Spawn {
             executable: executable.to_path_buf(),
@@ -223,9 +255,10 @@ pub fn execute(executable: &Path) -> Result<i32, NativeError> {
 /// both is not possible — two Rust static libraries in one link line duplicate
 /// the standard library — so the answer is whichever one this program needs.
 ///
-/// Either sits beside this executable: cargo writes both staticlibs into the
-/// same profile directory as `kira`, and `kira` depends on both crates, so a
-/// built `kira` always has matching archives next to it.
+/// Cargo writes a workspace member's staticlib beside the executable, while a
+/// package-only build may leave a hashed copy under `target/<profile>/deps/`.
+/// Accept both layouts so `cargo build -p kira-cli` and a workspace build have
+/// the same runtime behavior.
 pub fn runtime_archive(program: &IrProgram) -> Result<PathBuf, NativeError> {
     let executable =
         std::env::current_exe().map_err(|source| NativeError::RuntimeArchive { source })?;
@@ -234,7 +267,42 @@ pub fn runtime_archive(program: &IrProgram) -> Result<PathBuf, NativeError> {
         .ok_or_else(|| NativeError::RuntimeArchive {
             source: std::io::Error::other("this executable has no parent directory"),
         })?;
-    Ok(directory.join(archive_file_name(program.uses_compiler())))
+    let name = archive_file_name(program.uses_compiler());
+    Ok(find_runtime_archive(directory, name).unwrap_or_else(|| directory.join(name)))
+}
+
+/// Finds an un-hashed profile artifact first, then the newest hashed staticlib
+/// Cargo placed in `deps/` when the runtime was built as a dependency.
+fn find_runtime_archive(directory: &Path, name: &str) -> Option<PathBuf> {
+    let direct = directory.join(name);
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    let expected = Path::new(name);
+    let stem = expected.file_stem()?.to_str()?;
+    let extension = expected.extension()?.to_str()?;
+    let prefix = format!("{stem}-");
+    let dependencies = directory.join("deps");
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(dependencies)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path.extension().and_then(|value| value.to_str()) == Some(extension)
+                && path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| value.starts_with(&prefix))
+        })
+        .collect();
+    candidates.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+    });
+    candidates.pop()
 }
 
 /// Which archive file a program needs, by name.
@@ -310,6 +378,34 @@ mod tests {
             assert_eq!(archive_file_name(false), "libkira_native_bridge.a");
             assert_eq!(archive_file_name(true), "libkira_compiler_bridge.a");
         }
+    }
+
+    #[test]
+    fn a_dependency_build_can_fall_back_to_a_hashed_profile_archive() {
+        let directory = std::env::temp_dir().join(format!(
+            "kira-runtime-archive-fallback-{}",
+            std::process::id()
+        ));
+        let dependencies = directory.join("deps");
+        std::fs::create_dir_all(&dependencies).expect("runtime archive test directory");
+        let name = archive_file_name(false);
+        let expected = Path::new(name);
+        let hashed_name = format!(
+            "{}-testhash.{}",
+            expected
+                .file_stem()
+                .expect("runtime archive has a file stem")
+                .to_string_lossy(),
+            expected
+                .extension()
+                .expect("runtime archive has an extension")
+                .to_string_lossy()
+        );
+        let hashed = dependencies.join(hashed_name);
+        std::fs::write(&hashed, b"archive").expect("hashed runtime archive");
+
+        assert_eq!(find_runtime_archive(&directory, name), Some(hashed.clone()));
+        std::fs::remove_dir_all(directory).expect("remove runtime archive test directory");
     }
 
     #[test]

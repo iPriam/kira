@@ -360,6 +360,32 @@ impl IrFunction {
     }
 }
 
+/// A linear `attempt`/`try`/`handle` region.
+///
+/// The handler edge skips the remaining steps and lands at the region's common
+/// end. This gives backends a direct control-flow shape without exposing the
+/// source construct to each engine as a separate expression or opcode.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrAttempt {
+    /// The guarded steps, in source order.
+    pub steps: Vec<IrAttemptStep>,
+    /// Statements after the final successful step.
+    pub trailing: Vec<IrStmt>,
+}
+
+/// One step in an [`IrAttempt`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrAttemptStep {
+    /// Ordinary setup, including the hidden result and tag bindings.
+    pub setup: Vec<IrStmt>,
+    /// True when this step's result carries an `Error` value.
+    pub error_condition: IrExprId,
+    /// Failure handler dispatch.
+    pub handler: Vec<IrStmt>,
+    /// The successful `Ok` payload binding.
+    pub success: Vec<IrStmt>,
+}
+
 /// A statement in a lowered function body.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrStmt {
@@ -406,6 +432,11 @@ pub enum IrStmt {
         then_body: Vec<IrStmt>,
         /// Statements run otherwise.
         else_body: Vec<IrStmt>,
+    },
+    /// A linear, typed `attempt` region.
+    Attempt {
+        /// The guarded region.
+        attempt: IrAttempt,
     },
     /// A pre-tested loop.
     ///

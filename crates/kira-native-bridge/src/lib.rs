@@ -28,6 +28,7 @@ pub mod live;
 pub mod native_state;
 mod pool;
 pub mod raw_memory;
+pub mod redb;
 pub mod runtime;
 pub mod state_box;
 pub mod string_ops;

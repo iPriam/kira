@@ -6,8 +6,8 @@
 //! its host, not something a Kira function body can express — the VM asks
 //! whatever host it was given, and native code calls `kira_rt_env_*`.
 //!
-//! One fixed signature each, no overloading and no inference: a `String` name
-//! in, and either the value or whether there is one.
+//! One fixed signature each, no overloading and no inference: environment
+//! names use `String`, while process arguments use an integer index.
 
 use kira_runtime_abi::EnvOp;
 use kira_semantics_model::Type;
@@ -48,16 +48,21 @@ impl Analyzer<'_> {
             return Some(self.program.exprs.alloc(HirExpr::Error));
         }
 
+        let expected = match op {
+            EnvOp::Text | EnvOp::IsSet => Type::String,
+            EnvOp::ArgumentCount | EnvOp::Argument | EnvOp::Sleep => Type::INT,
+        };
         let mut refused = false;
         for (index, &value) in values.iter().enumerate() {
             let got = self.program.expr(value).type_of();
-            if !got.assignable_to(Type::String) {
+            if !got.assignable_to(expected) {
                 self.emit(
                     span,
                     "KSEM253",
                     format!(
-                        "argument {} of `{name}` expects `String`, found `{}`",
+                        "argument {} of `{name}` expects `{}`, found `{}`",
                         index + 1,
+                        self.type_name(expected),
                         self.type_name(got)
                     ),
                 );
@@ -71,6 +76,9 @@ impl Analyzer<'_> {
         let ty = match op {
             EnvOp::Text => Type::String,
             EnvOp::IsSet => Type::Bool,
+            EnvOp::ArgumentCount => Type::INT,
+            EnvOp::Argument => Type::String,
+            EnvOp::Sleep => Type::Void,
         };
         Some(self.program.exprs.alloc(HirExpr::Env {
             op,

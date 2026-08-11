@@ -1,40 +1,25 @@
-//! The `attempt`/`try`/`handle` desugar: a guarded body into the nested
-//! `if`/`else` chain that [`matches`](super::matches) already builds.
+//! The `attempt`/`try`/`handle` lowering.
 //!
 //! # What this costs the backends
 //!
-//! Nothing. An `attempt` becomes [`HirStmt::If`] over an `Int` tag comparison,
-//! exactly like a `match`, and reuses that module's arm resolution, chain
-//! builder, and payload projection verbatim. No IR node, no opcode, no VM
-//! dispatch arm, no LLVM helper, and no WASM lowering learns that `attempt`,
-//! `try`, or `handle` exists.
+//! An attempt is kept as a structured linear region in the HIR and IR. Each
+//! `try` has a direct edge to its handler and the success path continues with
+//! the next step. The handler bodies still reuse ordinary match lowering, but
+//! a long source attempt no longer becomes a nested success tree.
 //!
 //! Given `attempt { let v = try f(n); return v * 2 } handle { A { P } B { Q } }`:
 //!
 //! ```text
 //! let <result> = f(n)                 // hidden: evaluated once
-//! let <rtag>   = EnumTag(<result>)
-//! if <rtag> == <tag of `Error`> {
-//!     let <failure> = EnumPayload(<result>)
-//!     let <ftag>    = EnumTag(<failure>)
-//!     if <ftag> == 0 { P } else { Q }  // the handlers, an exhaustive chain
-//! } else {
-//!     let v = EnumPayload(<result>)    // the `Ok` payload, as written
-//!     return v * 2                     // the rest of the body, nested here
-//! }
+//! setup for the first step
+//! if <first result is Error> { handlers } else { bind first Ok }
+//! setup for the second step
+//! if <second result is Error> { handlers } else { bind second Ok }
+//! trailing body
 //! ```
 //!
-//! # Why the rest of the body nests inside the `else`
-//!
-//! A `try` is an early exit, and the HIR has no early exit that is not a
-//! `return`. So the statements *after* a `try` are precisely the statements
-//! that run when it succeeded — which makes them the `else` branch. Lowering is
-//! therefore recursive over the body's statement list rather than a loop: each
-//! `try` consumes the remainder of the list into its own success branch.
-//!
-//! That shape is also what makes the reference's `emxProcess` a function that
-//! definitely returns with no trailing `return`: `body_definitely_returns`
-//! wants both branches of an `if` to return, and here both do.
+//! A backend gives every handler edge the attempt's common end target. This is
+//! what makes the control flow linear without changing the source contract.
 //!
 //! # Why `try` is accepted in one position only
 //!
@@ -45,16 +30,11 @@
 //! position would mean inventing an answer for `g(try f(), try h())`, which
 //! nothing pins. So every other position is refused rather than guessed at.
 //!
-//! # Why a handler chain is emitted per `try`
-//!
-//! Two `try`s in one body produce two copies of the handler arms. The
-//! alternative — one shared chain reached by a flag — needs a jump the HIR
-//! cannot express without inventing a loop, and the reference requires all
-//! `try`s of one `attempt` to share a single failure enum precisely so the arms
-//! *can* be repeated. Duplication is the cheaper of the two, and it is
-//! invisible below this module.
+//! Handler bodies remain per-step because a handler may see bindings established
+//! by earlier successful steps, but never bindings from a step that failed or
+//! from a later step.
 
-use kira_semantics_model::hir::{HirExpr, HirStmt, HirStmtId, LocalId};
+use kira_semantics_model::hir::{HirAttempt, HirAttemptStep, HirExpr, HirStmt, HirStmtId, LocalId};
 use kira_semantics_model::{EnumId, Type};
 use kira_source::Span;
 use kira_syntax_model::ast::{Block, Expr, ExprId, MatchArm, Stmt, StmtId, TypeRefId};
@@ -101,7 +81,7 @@ struct Guard<'a> {
 }
 
 impl Analyzer<'_> {
-    /// Analyzes an `attempt`, appending the chain it desugars to onto `out`.
+    /// Analyzes an `attempt`, preserving its steps as linear control flow.
     pub(crate) fn analyze_attempt(
         &mut self,
         ctx: &mut FnCtx,
@@ -118,10 +98,64 @@ impl Analyzer<'_> {
             saw_try: false,
         };
         ctx.push_scope();
-        let lowered = self.lower_guarded(ctx, &body.stmts, &mut guard);
+        let mut setup = Vec::new();
+        let mut steps = Vec::new();
+        let mut nested_scopes = 0usize;
+
+        for &stmt_id in &body.stmts {
+            let Some(guarded) = self.as_guarded_let(stmt_id) else {
+                self.analyze_stmt(ctx, stmt_id, &mut setup);
+                continue;
+            };
+
+            guard.saw_try = true;
+            let operand_span = self.tree.expr(guarded.value).span();
+            let result = self.analyze_expr(ctx, guarded.value);
+            let result_ty = self.program.expr(result).type_of();
+            let Some(shape) = self.result_shape(result_ty, operand_span) else {
+                self.bind_invalid_try(ctx, &guarded);
+                nested_scopes += 1;
+                continue;
+            };
+
+            if !self.agree_on_failure(&mut guard, shape.failure, guarded.span) {
+                self.bind_invalid_try(ctx, &guarded);
+                nested_scopes += 1;
+                continue;
+            }
+
+            let slot = ctx.declare_hidden(result_ty, false);
+            let bind = self.program.stmts.alloc(HirStmt::Let {
+                local: slot,
+                init: result,
+            });
+            setup.push(bind);
+
+            let tag_slot = self.bind_tag(ctx, slot, result_ty, &mut setup);
+            let frame = TryFrame {
+                slot,
+                result_ty,
+                shape,
+            };
+            let handler = self.lower_handlers(ctx, &frame, &mut guard);
+            let error_condition = self.tag_test(tag_slot, frame.shape.error_tag);
+            let success = self.bind_success(ctx, &frame, &guarded);
+            nested_scopes += 1;
+
+            steps.push(HirAttemptStep {
+                setup: std::mem::take(&mut setup),
+                error_condition,
+                handler,
+                success,
+            });
+        }
+
+        let trailing = setup;
         let guard_saw_try = guard.saw_try;
+        for _ in 0..nested_scopes {
+            ctx.pop_scope();
+        }
         ctx.pop_scope();
-        out.extend(lowered);
 
         // No `try` means the handlers name variants of an enum nothing chose,
         // so there is nothing to resolve them against. The reference does not
@@ -133,27 +167,22 @@ impl Analyzer<'_> {
                 "an `attempt` body must contain a `try`".to_owned(),
             );
         }
+
+        if steps.is_empty() {
+            out.extend(trailing);
+        } else {
+            out.push(self.program.stmts.alloc(HirStmt::Attempt {
+                attempt: HirAttempt { steps, trailing },
+            }));
+        }
     }
 
-    /// Lowers a run of statements, splitting at the first `try` and nesting
-    /// everything after it into that `try`'s success branch.
-    fn lower_guarded(
-        &mut self,
-        ctx: &mut FnCtx,
-        stmts: &[StmtId],
-        guard: &mut Guard<'_>,
-    ) -> Vec<HirStmtId> {
-        let mut out = Vec::new();
-        for (index, &stmt_id) in stmts.iter().enumerate() {
-            let Some(guarded) = self.as_guarded_let(stmt_id) else {
-                self.analyze_stmt(ctx, stmt_id, &mut out);
-                continue;
-            };
-            let rest = &stmts[index + 1..];
-            self.lower_try(ctx, &guarded, rest, guard, &mut out);
-            return out;
-        }
-        out
+    /// Keeps analysis moving after a malformed `try` without producing a
+    /// second wave of unknown-binding diagnostics for the rest of the body.
+    fn bind_invalid_try(&mut self, ctx: &mut FnCtx, guarded: &GuardedLet) {
+        ctx.push_scope();
+        let local = ctx.declare(&guarded.name, Type::Error, guarded.mutable);
+        ctx.note_binding_span(local, guarded.name_span);
     }
 
     /// Recognizes `let <name> = try <expr>` — the one position a `try` is
@@ -187,76 +216,13 @@ impl Analyzer<'_> {
         })
     }
 
-    /// Builds one `try`'s split: the failure branch running the handlers, the
-    /// success branch binding the payload and running the rest of the body.
-    fn lower_try(
-        &mut self,
-        ctx: &mut FnCtx,
-        guarded: &GuardedLet,
-        rest: &[StmtId],
-        guard: &mut Guard<'_>,
-        out: &mut Vec<HirStmtId>,
-    ) {
-        guard.saw_try = true;
-        let operand_span = self.tree.expr(guarded.value).span();
-        let result = self.analyze_expr(ctx, guarded.value);
-        let result_ty = self.program.expr(result).type_of();
-
-        let Some(shape) = self.result_shape(result_ty, operand_span) else {
-            // The operand is not `Result`-shaped, so there is no payload to
-            // bind and no failure to route. The rest of the body is still
-            // analyzed, with the binding declared as `Type::Error`, so its own
-            // mistakes surface instead of an avalanche of unknown-name reports.
-            ctx.push_scope();
-            let local = ctx.declare(&guarded.name, Type::Error, guarded.mutable);
-            ctx.note_binding_span(local, guarded.name_span);
-            let tail = self.lower_guarded(ctx, rest, guard);
-            ctx.pop_scope();
-            out.extend(tail);
-            return;
-        };
-
-        if !self.agree_on_failure(guard, shape.failure, guarded.span) {
-            return;
-        }
-
-        // Hidden, so nothing in either branch can name or shadow the result's
-        // storage. It is read once for its tag and once for whichever payload
-        // the branch it lands in projects.
-        let slot = ctx.declare_hidden(result_ty, false);
-        let bind = self.program.stmts.alloc(HirStmt::Let {
-            local: slot,
-            init: result,
-        });
-        out.push(bind);
-
-        let tag_slot = self.bind_tag(ctx, slot, result_ty, out);
-        let frame = TryFrame {
-            slot,
-            result_ty,
-            shape,
-        };
-
-        let then_body = self.lower_handlers(ctx, &frame, guard);
-        let else_body = self.lower_success(ctx, &frame, guarded, rest, guard);
-        let cond = self.tag_test(tag_slot, frame.shape.error_tag);
-        let hir = self.program.stmts.alloc(HirStmt::If {
-            cond,
-            then_body,
-            else_body,
-        });
-        out.push(hir);
-    }
-
-    /// Binds the `Ok` payload to the name the `let` wrote, then lowers the rest
-    /// of the body beneath it.
-    fn lower_success(
+    /// Binds the `Ok` payload and leaves its lexical scope open for the next
+    /// linear attempt step.
+    fn bind_success(
         &mut self,
         ctx: &mut FnCtx,
         frame: &TryFrame,
         guarded: &GuardedLet,
-        rest: &[StmtId],
-        guard: &mut Guard<'_>,
     ) -> Vec<HirStmtId> {
         ctx.push_scope();
         let read = self.program.exprs.alloc(HirExpr::Local {
@@ -268,9 +234,6 @@ impl Analyzer<'_> {
             ty: frame.shape.ok_payload,
         });
 
-        // An annotation is checked exactly as a plain `let`'s is: the reference
-        // never writes one on a `try`, but the syntax admits it and silently
-        // ignoring one would be worse than checking it.
         let local_ty = match guarded.annotation {
             Some(type_ref) => {
                 let declared = self.resolve_type_ref(type_ref);
@@ -296,10 +259,7 @@ impl Analyzer<'_> {
             local,
             init: payload,
         });
-        let mut body = vec![bind];
-        body.extend(self.lower_guarded(ctx, rest, guard));
-        ctx.pop_scope();
-        body
+        vec![bind]
     }
 
     /// Projects the failure out of the result and runs the handler chain over

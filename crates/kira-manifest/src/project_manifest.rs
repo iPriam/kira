@@ -2,7 +2,7 @@
 
 use kira_native_lib_definition::NativeLibrarySpec;
 
-use crate::dependency::DependencySpec;
+use crate::dependency::{DependencyMutationError, DependencySpec};
 use crate::platform_config::{ExecutionPolicy, ResolvedConfig, default_resolved_config};
 use crate::tests_config::TestsConfig;
 
@@ -86,5 +86,30 @@ impl ProjectManifest {
             tests: None,
             resolved_config: default_resolved_config(),
         }
+    }
+
+    /// Adds one dependency while preserving declaration order.
+    pub fn add_dependency(
+        &mut self,
+        dependency: DependencySpec,
+    ) -> Result<(), DependencyMutationError> {
+        if self
+            .dependencies
+            .iter()
+            .any(|existing| existing.name == dependency.name)
+        {
+            return Err(DependencyMutationError::Duplicate(dependency.name));
+        }
+        self.dependencies.push(dependency);
+        Ok(())
+    }
+
+    /// Removes a dependency by name, returning the removed declaration.
+    pub fn remove_dependency(&mut self, name: &str) -> Option<DependencySpec> {
+        let index = self
+            .dependencies
+            .iter()
+            .position(|dependency| dependency.name == name)?;
+        Some(self.dependencies.remove(index))
     }
 }

@@ -396,6 +396,122 @@ fn an_assignment_does_not_excuse_reading_the_moved_local_in_its_own_value() {
     assert_eq!(codes(text), vec!["KSEM107"]);
 }
 
+/// A loop body runs more than once, so a value it gives away is already gone
+/// when it starts again. The second `close` here would free a handle the first
+/// one already freed.
+#[test]
+fn a_move_a_loop_repeats_is_rejected() {
+    let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } var n = 0 \
+                    while n < 3 { print(consume(move mesh)) n = n + 1 } return }";
+    assert_eq!(codes(text), vec!["KSEM270"]);
+}
+
+/// The rule is about the back edge, not about `move` in a loop: a binding the
+/// body gives a new value to has one again when the body starts over. This is
+/// the idiom for threading an owned value through a loop, and it stays legal.
+#[test]
+fn a_move_the_loop_body_reassigns_is_accepted() {
+    let text = "struct Mesh { let id: Int }\n\
+                    function step(mesh: Mesh) -> Mesh { return Mesh { id: mesh.id + 1 } }\n\
+                    function inspect(mesh: borrow Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } var n = 0 \
+                    while n < 3 { mesh = step(move mesh) n = n + 1 } \
+                    print(inspect(mesh)) return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// A body that always returns never reaches the back edge, so its move runs at
+/// most once and is as sound as one in straight-line code.
+#[test]
+fn a_move_in_a_loop_body_that_always_returns_is_accepted() {
+    let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() -> Int { var mesh = Mesh { id: 1 } var n = 0 \
+                    while n < 3 { return consume(move mesh) } return 0 }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// The same for a body that always breaks out: `break` leaves the loop rather
+/// than jumping back to its head.
+#[test]
+fn a_move_in_a_loop_body_that_always_breaks_is_accepted() {
+    let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } var n = 0 \
+                    while n < 3 { print(consume(move mesh)) break } return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// A local the body declares is bound afresh on every iteration, so its move
+/// is spent inside one and never crosses the back edge.
+#[test]
+fn a_move_of_a_local_the_loop_body_declares_is_accepted() {
+    let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { var n = 0 \
+                    while n < 3 { let mesh = Mesh { id: n } print(consume(move mesh)) n = n + 1 } \
+                    return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// A `for` variable is rebound at the top of each iteration by the desugar, so
+/// it is a body-declared local for this purpose whatever its slot number says.
+#[test]
+fn a_move_of_a_for_loop_variable_is_accepted() {
+    let text = "function consume(s: String) -> Int { return s.count }\n\
+                    @Main function main() { let names = [\"ada\", \"grace\"] \
+                    for name in names { print(consume(move name)) } return }";
+    assert!(diagnostics(text).is_empty(), "{:?}", diagnostics(text));
+}
+
+/// A `for` loop's back edge is the `while` desugar's, so a move of an outer
+/// binding is caught there too.
+#[test]
+fn a_move_a_for_loop_repeats_is_rejected() {
+    let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } \
+                    for i in 0..3 { print(consume(move mesh)) } return }";
+    assert_eq!(codes(text), vec!["KSEM270"]);
+}
+
+/// One mistake, one diagnostic: every loop around the offending one sees the
+/// same local go from live to moved, and only the innermost says so.
+#[test]
+fn a_move_nested_loops_repeat_is_reported_once() {
+    let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } \
+                    for i in 0..3 { for j in 0..3 { print(consume(move mesh)) } } return }";
+    assert_eq!(codes(text), vec!["KSEM270"]);
+}
+
+/// A move on one path through the body still reaches the back edge on that
+/// path, so a conditional move is refused exactly as an unconditional one is.
+#[test]
+fn a_conditional_move_inside_a_loop_is_rejected() {
+    let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } var n = 0 \
+                    while n < 3 { if n == 1 { print(consume(move mesh)) } n = n + 1 } return }";
+    assert_eq!(codes(text), vec!["KSEM270"]);
+}
+
+/// The loop reports the repeat; code *after* it reports its own use-after-move,
+/// because the state the body ended in is what follows the loop.
+#[test]
+fn a_read_after_a_loop_that_moved_is_still_a_use_after_move() {
+    let text = "struct Mesh { let id: Int }\n\
+                    function consume(mesh: Mesh) -> Int { return mesh.id }\n\
+                    function inspect(mesh: borrow Mesh) -> Int { return mesh.id }\n\
+                    @Main function main() { var mesh = Mesh { id: 1 } var n = 0 \
+                    while n < 3 { print(consume(move mesh)) n = n + 1 } \
+                    print(inspect(mesh)) return }";
+    assert_eq!(codes(text), vec!["KSEM270", "KSEM107"]);
+}
+
 /// Writing *through* a moved-out binding is not a reinitialization: the field
 /// write needs the value that is gone.
 #[test]
@@ -487,8 +603,7 @@ fn moving_into_a_copy_parameter_is_rejected() {
     assert_eq!(codes(text), vec!["KSEM115"]);
 }
 
-/// Passing a named non-trivial value to a `copy` parameter must say
-/// `copy` — which then hits KSEM116, because there is no clone.
+/// Passing a named non-trivial value to a `copy` parameter must say `copy`.
 #[test]
 fn a_copy_parameter_wants_an_explicit_copy_of_a_non_trivial_value() {
     let text = "struct Mesh { let id: Int }\n\
@@ -497,19 +612,19 @@ fn a_copy_parameter_wants_an_explicit_copy_of_a_non_trivial_value() {
     assert_eq!(codes(text), vec!["KSEM113"]);
 }
 
-/// The oracle's `FsbOwnershipCopyNontrivialNotImplemented`. Kira reserves
-/// `copy` but has no clone semantics, so writing it on a struct is an
-/// error rather than a deep copy invented here.
+/// Explicit `copy` is defined for every runtime value. Structs and strings
+/// copy their owned storage; arrays copy their handle and detach on the first
+/// write, matching the VM and native value operations.
 #[test]
-fn copying_a_non_trivial_value_is_not_implemented() {
+fn copying_a_non_trivial_value_is_allowed() {
     let text = "struct Mesh { let id: Int }\n\
                     function duplicate(mesh: copy Mesh) -> Int { return mesh.id }\n\
                     @Main function main() { let mesh = Mesh { id: 4 } print(duplicate(copy mesh)) return }";
-    assert_eq!(codes(text), vec!["KSEM116"]);
-    // A `String` is non-trivial for exactly the same reason.
+    assert!(diagnostics(text).is_empty());
+    // A `String` owns bytes, so this also exercises an actual heap copy.
     let string = "function echo(s: copy String) -> String { return s }\n\
                       @Main function main() { let s = \"x\" print(echo(copy s)) return }";
-    assert_eq!(codes(string), vec!["KSEM116"]);
+    assert!(diagnostics(string).is_empty());
 }
 
 /// `copy` on a trivially-copyable value is legal and is a no-op.

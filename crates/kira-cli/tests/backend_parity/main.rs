@@ -137,10 +137,53 @@ fn assert_module_parity(entry: &str, modules: &[(&str, &str)]) -> String {
 
 /// Runs `source` on one backend.
 fn run_on(source_path: &std::path::Path, backend: &str) -> Output {
-    kira()
-        .args(["run", "--backend", backend, source_path.to_str().unwrap()])
-        .output()
-        .expect("run kira")
+    run_on_with_args(source_path, backend, &[])
+}
+
+/// Runs one backend with arguments after the program separator.
+fn run_on_with_args(source_path: &std::path::Path, backend: &str, arguments: &[&str]) -> Output {
+    let mut command = kira();
+    command.args([
+        "run",
+        "--backend",
+        backend,
+        source_path.to_str().unwrap(),
+        "--",
+    ]);
+    command.args(arguments);
+    command.output().expect("run kira")
+}
+
+/// Asserts every backend agrees when the launcher forwards explicit program
+/// arguments after `--`.
+fn assert_parity_with_args(source: &str, arguments: &[&str]) -> String {
+    let path = write_source(source);
+    let runs: Vec<(&str, Output)> = BACKENDS
+        .iter()
+        .map(|backend| (*backend, run_on_with_args(&path, backend, arguments)))
+        .collect();
+    let _ = std::fs::remove_dir_all(path.parent().expect("program directory"));
+
+    let (_, reference) = &runs[0];
+    let expected = String::from_utf8_lossy(&reference.stdout).into_owned();
+    for (backend, run) in &runs[1..] {
+        assert_eq!(
+            expected,
+            String::from_utf8_lossy(&run.stdout),
+            "the vm and {backend} backends disagree on output for explicit args:\n{source}\n\
+             vm stderr: {}\n{backend} stderr: {}",
+            String::from_utf8_lossy(&reference.stderr),
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            reference.status.code(),
+            run.status.code(),
+            "the vm and {backend} backends disagree on exit code for explicit args:\n{source}\n\
+             {backend} stderr: {}",
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+    expected
 }
 
 /// The repo's own `foundation/`, which every run here is pinned to.

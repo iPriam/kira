@@ -43,3 +43,21 @@ pub unsafe extern "C" fn kira_rt_env_is_set(name: KStr) -> u8 {
     unsafe { release(name) };
     u8::from(kira_runtime_abi::env::is_set(&text))
 }
+
+/// The number of user arguments passed to the process, excluding its path.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_env_argument_count() -> i64 {
+    kira_runtime_abi::env::argument_count()
+}
+
+/// One user argument by zero-based index, or an empty string out of range.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_env_argument(index: i64) -> KStr {
+    handle_of(&kira_runtime_abi::env::argument(index))
+}
+
+/// Pause the current process for a number of milliseconds.
+#[unsafe(no_mangle)]
+pub extern "C" fn kira_rt_process_sleep(milliseconds: i64) {
+    kira_runtime_abi::env::sleep(milliseconds)
+}

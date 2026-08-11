@@ -5,4 +5,4 @@
 pub mod generator;
 pub mod templates;
 
-pub use generator::TemplateKind;
+pub use generator::{GeneratedProject, GenerationError, TemplateKind};

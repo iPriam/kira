@@ -226,10 +226,11 @@ The value semantics are the mirror image of a struct's. A struct copies on
 binding, so a copy is independent. An array is a **handle**: reading one *out*
 of a place (an element, a returned value) copies it, so what you read cannot be
 perturbed afterwards — but the array itself aliases, which is why the ownership
-checker **moves it on binding** (`let alias = xs` ends `xs`). There is no array
-clone: `copy xs` is `KSEM116`. Independent arrays come from building with
-`append`, or from copying a struct that owns one — which deep-copies the array
-field rather than sharing the handle, the question the whole design turned on.
+checker **moves it on binding** (`let alias = xs` ends `xs`). An explicit
+`copy xs` keeps the source binding live. The copy shares its element block until
+one side writes, then detaches with copy-on-write; reads stay cheap while a
+mutation remains independent. Copying a struct that owns an array uses the same
+value operation for the field.
 
 The same pair as a struct's, and for the same reasons:
 
@@ -367,9 +368,10 @@ struct answers them differently. An **array** and an **enum** are the types that
 answer the second one `yes`: their bindings alias where a struct copies, so
 binding one moves it (see [Arrays](#arrays), [Enums](#enums)).
 
-`copy` is reserved but has no clone semantics: `copy` on anything non-trivial
-is `KSEM116` rather than a deep copy invented here. Borrow a value, move it, or
-build a new one.
+`copy` is an explicit non-consuming value copy. Scalars copy their bits,
+strings and structs copy owned storage, and arrays use copy-on-write. A named
+non-trivial value still needs the spelling when passed to a consuming or
+copying parameter, so the ownership checker can distinguish it from `move`.
 
 Two edges are deliberate:
 
@@ -553,9 +555,11 @@ in one `attempt` must fail with the same enum** (`KSEM141`); a `try` on
 something that is not `Result`-shaped is `KSEM138`, and an `attempt` with no
 `try` at all is `KSEM143`.
 
-Statements after a `try` run only when it succeeded, so they nest into the
-success branch. That is what makes `process` above a definite return with no
-trailing `return`: the failure test's two branches both return.
+Statements after a `try` run only when it succeeded. The compiler keeps a
+multi-`try` attempt as a linear sequence of guarded steps with one common exit:
+each success continues to the next step, while its handler skips the remaining
+steps. That preserves the same definite-return rule without building a deeply
+nested success tree.
 
 See [.codex/work/attempt.md](.codex/work/attempt.md) for the desugar.
 
@@ -1241,11 +1245,11 @@ cargo install --path crates/kira-lsp
 ```
 
 It lands in `~/.cargo/bin`. The server speaks LSP over stdio, takes no CLI
-arguments, and serves **diagnostics only** — it handles `initialize`,
-`didOpen`, `didChange`, `didClose`, and publishes diagnostics. It advertises
-full-document sync and nothing else, so a client knows not to ask for more;
-anything that asks anyway gets `MethodNotFound` rather than a wrong answer.
-Hover, completion, and goto-definition are not implemented yet.
+arguments, and handles `initialize`, `didOpen`, `didChange`, and `didClose`.
+It publishes diagnostics, go-to-definition/declaration, hover, and completion.
+Completion replaces the identifier prefix under the cursor; hover shows the
+declaration's source line and its file when the name resolves. Unsupported
+requests get `MethodNotFound` rather than a guessed answer.
 
 Analysis is **per-document, whole-program**: each open document is analyzed as
 the *entry* file of a program, and every module it imports is read off disk and

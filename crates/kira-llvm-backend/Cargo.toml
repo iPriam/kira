@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+kira-debug.workspace = true
 kira-ir.workspace = true
 kira-backend-api.workspace = true
 # The link line is built from the resolved native-library inputs — archives

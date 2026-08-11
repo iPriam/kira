@@ -202,12 +202,13 @@ fn foreign(manifest: &HybridManifest, module: &Module) -> Result<(), HybridError
     Ok(())
 }
 
-/// Rejects a parameter mode no code path implements.
+/// Rejects a manifest mode outside the hybrid crossing contract.
 ///
-/// A read-only borrow of a `String` is the one left. The codegen frees every
-/// `String` parameter it owns at return, so honouring a lent one would mean the
-/// callee *not* freeing it — which nothing emits, and accepting it here would
-/// be a double free at the first crossing.
+/// The build writes a read-only borrow as an owned crossing copy: the native
+/// half receives a fresh handle and releases it at return. A stale or manually
+/// edited manifest that says `Borrow` for a `String` asks for a non-owning path
+/// the trampoline does not emit, so accepting it would be a double free at the
+/// first crossing.
 ///
 /// `BorrowMut` is a different case and is implemented: the release plan already
 /// skips a written-through parameter, because within one engine it is a pointer
@@ -353,14 +354,13 @@ mod tests {
         assert!(matches!(error, HybridError::Mismatch(_)), "{error:?}");
     }
 
-    /// The mode nothing implements must be refused at load, where it is a
-    /// readable error, rather than at the first crossing, where it is a double
-    /// free.
+    /// A stale manifest must be refused at load, where it is a readable error,
+    /// rather than at the first crossing, where it could double free.
     #[test]
     fn a_borrowed_string_parameter_is_rejected() {
         let mut manifest = manifest();
         manifest.functions[1].params[0].ownership = Ownership::Borrow;
-        let error = bundle(&manifest, &module()).expect_err("borrowed strings are not implemented");
+        let error = bundle(&manifest, &module()).expect_err("a stale ownership mode");
         assert!(
             matches!(
                 error,

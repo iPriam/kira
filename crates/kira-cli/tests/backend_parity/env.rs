@@ -5,7 +5,7 @@
 //! the same variables from the same process — the test harness runs each engine
 //! as a child, so what this asserts is that neither invents an answer.
 
-use crate::assert_parity;
+use crate::{assert_parity, assert_parity_with_args};
 
 /// A variable no machine sets, so the unset answers are the same everywhere
 /// this runs — including CI, where a real variable's value is not knowable.
@@ -63,4 +63,43 @@ function main() {
 "#,
     );
     assert_eq!(output, "false\n\n7\n");
+}
+
+/// Process arguments use the same append-only environment capability as
+/// environment variables. With no user arguments both engines agree on the
+/// count and on the defined out-of-range answer.
+#[test]
+fn process_arguments_agree_across_engines() {
+    let output = assert_parity(
+        r#"
+import Foundation
+
+@Main
+function main() {
+    print(processArgumentCount())
+    print(processArgument(0))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "0\n\n");
+}
+
+#[test]
+fn explicit_process_arguments_are_forwarded_across_engines() {
+    let output = assert_parity_with_args(
+        r#"
+import Foundation
+
+@Main
+function main() {
+    print(processArgumentCount())
+    print(processArgument(0))
+    print(processArgument(1))
+    return
+}
+"#,
+        &["first", "second value"],
+    );
+    assert_eq!(output, "2\nfirst\nsecond value\n");
 }

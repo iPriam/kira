@@ -9,6 +9,7 @@
 use kira_bytecode::module::Module;
 use kira_runtime_abi::{HostCapabilities, NativeArg, NativeResult, NativeReturn};
 
+use crate::debug::VmDebugObserver;
 use crate::error::VmError;
 use crate::interp::Vm;
 use crate::value::{Heap, HeapStats, Value};
@@ -32,6 +33,16 @@ pub fn execute(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOu
     run_entry(module, host)
 }
 
+/// Runs `module`'s entrypoint with an instruction-level debugger attached.
+pub fn execute_with_debug(
+    module: &Module,
+    host: &mut dyn HostCapabilities,
+    observer: &mut dyn VmDebugObserver,
+) -> Result<RunOutcome, VmError> {
+    module.validate()?;
+    run_entry_with_debug(module, host, observer)
+}
+
 /// Runs `module`'s entrypoint on a fresh VM, assuming it is already validated.
 fn run_entry(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOutcome, VmError> {
     let mut vm = Vm::new(host, Heap::new());
@@ -39,6 +50,21 @@ fn run_entry(module: &Module, host: &mut dyn HostCapabilities) -> Result<RunOutc
     let result = vm.enter(module, main, &[])?;
     // The program's result is no longer referenced by anything; drop it so
     // heap accounting reflects a fully reclaimed program.
+    vm.heap.drop_value(result);
+    Ok(RunOutcome {
+        result,
+        heap: vm.heap.stats(),
+    })
+}
+
+fn run_entry_with_debug(
+    module: &Module,
+    host: &mut dyn HostCapabilities,
+    observer: &mut dyn VmDebugObserver,
+) -> Result<RunOutcome, VmError> {
+    let mut vm = Vm::new(host, Heap::new());
+    let main = module.main.ok_or(VmError::NoEntrypoint)?;
+    let result = vm.enter_values_with_debug(module, main, Vec::new(), observer)?;
     vm.heap.drop_value(result);
     Ok(RunOutcome {
         result,
@@ -82,6 +108,15 @@ impl Program {
     /// Runs the entrypoint, sending output to `host`.
     pub fn run(&self, host: &mut dyn HostCapabilities) -> Result<RunOutcome, VmError> {
         run_entry(&self.module, host)
+    }
+
+    /// Runs the entrypoint with an instruction-level debugger attached.
+    pub fn run_with_debug(
+        &self,
+        host: &mut dyn HostCapabilities,
+        observer: &mut dyn VmDebugObserver,
+    ) -> Result<RunOutcome, VmError> {
+        run_entry_with_debug(&self.module, host, observer)
     }
 
     /// Runs one function by id with `args`, and returns what it produced.

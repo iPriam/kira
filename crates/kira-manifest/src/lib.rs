@@ -1,13 +1,8 @@
 //! package.kira manifests, dependency specs, and lock files.
 //!
 //! Layer 5 of the Kira package graph.
-//!
-//! Scaffolding status: the manifest model types (this crate's public surface)
-//! are defined; the loaders/writers/parsers are module stubs that fill in as
-//! the crate grows.
 
 pub mod declaration_loader;
-pub mod declaration_loader_state;
 mod declaration_native_libs;
 pub mod declaration_writer;
 pub mod dependency;
@@ -22,13 +17,22 @@ pub mod tests_config;
 pub mod toml_text;
 
 pub use declaration_loader::{DeclarationError, load as load_declaration};
-pub use dependency::{DependencySource, DependencySpec, GitSource, PathSource, RegistrySource};
+pub use declaration_writer::{
+    DeclarationWriteError, render as render_declaration, write as write_declaration,
+};
+pub use dependency::{
+    DependencyMutationError, DependencySource, DependencySpec, GitSource, PathSource,
+    RegistrySource,
+};
 pub use lockfile::LockFile;
 pub use native_lib_manifest::{
     RawFlatManifest, RawFlatTarget, RawSectionedManifest, RawSectionedTarget,
 };
 pub use native_lib_parser::{NativeLibParseError, parse_native_lib_manifest};
 pub use package_manifest::PackageManifest;
+pub use parser::{
+    LegacyManifestError, load_legacy_manifest, render_legacy_manifest, write_legacy_manifest,
+};
 pub use platform_config::{
     ApplePlatform, Backend, BackendSelectionSource, BuildProfile, BuildSystem, ExecutionBackend,
     ExecutionPolicy, ExportFamily, HybridSelectionMode, LibraryExecutionPolicy, LiveProtocolMode,

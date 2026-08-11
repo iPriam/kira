@@ -1,9 +1,9 @@
 //! Manifest discovery: file names and target resolution from paths.
 //!
-//! The load/resolve functions land as discovery grows; the manifest naming
-//! constants are the stable surface.
+//! Declaration and legacy TOML manifests share one discovery path, with the
+//! declaration form taking precedence when a package carries both.
 
-use kira_manifest::{DeclarationError, PackageKind, ProjectManifest};
+use kira_manifest::{DeclarationError, LegacyManifestError, PackageKind, ProjectManifest};
 
 use crate::project::{Project, ResolvedTarget, TargetKind};
 
@@ -81,8 +81,18 @@ pub enum DiscoveryError {
         #[source]
         source: DeclarationError,
     },
-    /// A directory target did not contain a declaration manifest.
-    #[error("`{path}` is not a Kira package directory: expected `package.kira`")]
+    /// A legacy TOML manifest was found but could not be decoded.
+    #[error("cannot read the legacy package manifest `{path}`: {message}")]
+    LegacyMalformed {
+        /// The manifest that could not be parsed.
+        path: String,
+        /// Why parsing failed.
+        message: String,
+    },
+    /// A directory target did not contain a recognized manifest.
+    #[error(
+        "`{path}` is not a Kira package directory: expected one of `package.kira`, `kira.toml`, `project.toml`, or `Kira.toml`"
+    )]
     NotPackageDirectory {
         /// The directory supplied by the user.
         path: String,
@@ -107,17 +117,16 @@ pub enum DiscoveryError {
 
 /// The manifest governing `source`, found by walking up from its directory.
 ///
-/// `Ok(None)` means no `package.kira` sits above the file. That is not an
+/// `Ok(None)` means no recognized manifest sits above the file. That is not an
 /// error: a bare `.kira` file handed to `kira` is a program in its own right,
 /// and the caller supplies the default. A manifest that *is* present and
 /// unreadable is an error, because silently falling back to the default would
 /// build the wrong kind of thing.
 ///
-/// Only `package.kira` is consulted. The other names in [`MANIFEST_FILE_NAMES`]
-/// are TOML forms with no loader yet; finding one and ignoring it is the same
-/// silent-wrong-answer this function exists to avoid, so they are skipped
-/// explicitly rather than by omission — a `kira.toml`-only package resolves to
-/// `None` and is built as a program, exactly as it is today.
+/// `package.kira` wins when it sits beside a legacy TOML file. The TOML names
+/// are parsed through [`kira_manifest::load_legacy_manifest`] rather than
+/// ignored, so an older package cannot silently be treated as a standalone
+/// source file.
 pub fn manifest_for(source: &std::path::Path) -> Result<Option<Manifest>, DiscoveryError> {
     let start = if source.is_dir() {
         Some(source)
@@ -126,8 +135,11 @@ pub fn manifest_for(source: &std::path::Path) -> Result<Option<Manifest>, Discov
     };
     let mut dir = start;
     while let Some(current) = dir {
-        let candidate = current.join(DECLARATION_MANIFEST_FILE_NAME);
-        if candidate.is_file() {
+        for file_name in MANIFEST_FILE_NAMES {
+            let candidate = current.join(file_name);
+            if !candidate.is_file() {
+                continue;
+            }
             let path = candidate.display().to_string();
             let text = std::fs::read_to_string(&candidate).map_err(|error| {
                 DiscoveryError::Unreadable {
@@ -135,12 +147,22 @@ pub fn manifest_for(source: &std::path::Path) -> Result<Option<Manifest>, Discov
                     message: error.to_string(),
                 }
             })?;
-            let manifest = kira_manifest::load_declaration(&text)
-                .map_err(|source| DiscoveryError::Malformed { path, source })?;
-            return Ok(Some(Manifest {
-                path: candidate.display().to_string(),
-                manifest,
-            }));
+            let manifest = if file_name == DECLARATION_MANIFEST_FILE_NAME {
+                kira_manifest::load_declaration(&text).map_err(|source| {
+                    DiscoveryError::Malformed {
+                        path: path.clone(),
+                        source,
+                    }
+                })?
+            } else {
+                kira_manifest::load_legacy_manifest(&text).map_err(|source| {
+                    DiscoveryError::LegacyMalformed {
+                        path: path.clone(),
+                        message: legacy_error_message(source),
+                    }
+                })?
+            };
+            return Ok(Some(Manifest { path, manifest }));
         }
         dir = current.parent();
     }
@@ -151,9 +173,10 @@ pub fn manifest_for(source: &std::path::Path) -> Result<Option<Manifest>, Discov
 ///
 /// Non-directory paths are returned unchanged so standalone `.kira` files keep
 /// their historical behavior, including error reporting for a missing path. A
-/// package directory is governed by its own `package.kira`: applications use
+/// package directory is governed by its own manifest: applications use
 /// [`ENTRYPOINT_REL_PATH`], while libraries choose the entry from their complete
-/// [`LibrarySources`] set so the frontend can aggregate the rest of `app/`.
+/// [`LibrarySources`] set so the frontend can aggregate the rest of the package
+/// source tree.
 pub fn resolve_target(path: &std::path::Path) -> Result<ResolvedTarget, DiscoveryError> {
     if !path.is_dir() {
         return Ok(ResolvedTarget {
@@ -168,18 +191,11 @@ pub fn resolve_target(path: &std::path::Path) -> Result<ResolvedTarget, Discover
         });
     }
 
-    let declaration = path.join(DECLARATION_MANIFEST_FILE_NAME);
-    if !declaration.is_file() {
-        return Err(DiscoveryError::NotPackageDirectory {
-            path: path.display().to_string(),
-        });
-    }
     let Some(found) = manifest_for(path)? else {
         return Err(DiscoveryError::NotPackageDirectory {
             path: path.display().to_string(),
         });
     };
-    let source_root = path.join("app");
     let (source_path, target_kind) = match found.kind() {
         PackageKind::App => {
             let entrypoint = path.join(ENTRYPOINT_REL_PATH);
@@ -195,6 +211,10 @@ pub fn resolve_target(path: &std::path::Path) -> Result<ResolvedTarget, Discover
             let sources = library_sources(&found)?;
             (sources.entry().path().to_path_buf(), TargetKind::Library)
         }
+    };
+    let source_root = match found.kind() {
+        PackageKind::App => path.join("app"),
+        PackageKind::Library => library_source_root(&found),
     };
     let manifest_path = found.path.clone();
     let project_name = found.manifest.name.clone();
@@ -215,6 +235,10 @@ pub fn resolve_target(path: &std::path::Path) -> Result<ResolvedTarget, Discover
     })
 }
 
+fn legacy_error_message(error: LegacyManifestError) -> String {
+    error.to_string()
+}
+
 /// One source owned by a library package, with its import-visible module name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibrarySource {
@@ -223,12 +247,13 @@ pub struct LibrarySource {
 }
 
 impl LibrarySource {
-    /// The source path exactly as discovered below the package's `app/` directory.
+    /// The source path exactly as discovered below the package source root.
     pub fn path(&self) -> &std::path::Path {
         &self.path
     }
 
-    /// The dotted module name corresponding to the source's path below `app/`.
+    /// The dotted module name corresponding to the source's path below the
+    /// package source root.
     pub fn module(&self) -> &str {
         &self.module
     }
@@ -253,12 +278,15 @@ impl LibrarySources {
     }
 }
 
-/// Discovers every `.kira` source below a library package's `app/` directory.
+/// Discovers every `.kira` source below a library package's source root.
 ///
 /// Paths retain the spelling derived from the manifest path so diagnostics keep
 /// pointing at the same source names the package resolver found. The returned
 /// order is deterministic, with the conventional module-root file first when it
-/// exists and all remaining files sorted by path.
+/// exists and all remaining files sorted by path. New packages conventionally
+/// put sources under `app/`; a package without that directory may keep its
+/// sources beside `package.kira`, which is supported for the original library
+/// layout used by the examples.
 pub fn library_sources(manifest: &Manifest) -> Result<LibrarySources, DiscoveryError> {
     let source_root = library_source_root(manifest);
     let mut paths = Vec::new();
@@ -290,7 +318,7 @@ pub fn library_sources(manifest: &Manifest) -> Result<LibrarySources, DiscoveryE
     Ok(LibrarySources { entry, remaining })
 }
 
-/// Discovers all library sources when `entry` is inside the package's `app/` tree.
+/// Discovers all library sources when `entry` is inside the package's source tree.
 ///
 /// `Ok(None)` preserves explicit compilation of a package-adjacent source file:
 /// only the conventional package source tree has aggregate library semantics.
@@ -305,14 +333,23 @@ pub fn library_sources_for_entry(
     library_sources(manifest).map(Some)
 }
 
-/// Returns the conventional application source root beside a manifest.
+/// Returns the source root beside a manifest.
+///
+/// `app/` remains the preferred layout. Falling back to the package directory
+/// keeps older and small library packages source-compatible without making
+/// applications give up their required `app/main.kira` entrypoint.
 fn library_source_root(manifest: &Manifest) -> std::path::PathBuf {
     let manifest_path = std::path::Path::new(&manifest.path);
     let package_root = match manifest_path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => std::path::Path::new("."),
     };
-    package_root.join("app")
+    let app = package_root.join("app");
+    if app.is_dir() {
+        app
+    } else {
+        package_root.to_path_buf()
+    }
 }
 
 /// Produces a stable identity for package-boundary comparisons.
@@ -335,7 +372,7 @@ fn library_source(source_root: &std::path::Path, path: std::path::PathBuf) -> Li
     LibrarySource { path, module }
 }
 
-/// Collects every Kira source below a library's application source root.
+/// Collects every Kira source below a library's source root.
 fn collect_kira_sources(
     directory: &std::path::Path,
     sources: &mut Vec<std::path::PathBuf>,
@@ -367,7 +404,17 @@ fn collect_kira_sources(
             .extension()
             .is_some_and(|extension| extension == "kira")
         {
-            sources.push(path);
+            // In the root-layout fallback the declaration manifest itself is
+            // beside the source files. It is data for discovery, not a module
+            // to feed to the frontend. `linter.kira` is likewise attached by
+            // program assembly as a control module with its own fixed name.
+            let control_file = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| matches!(name, DECLARATION_MANIFEST_FILE_NAME | "linter.kira"));
+            if !control_file {
+                sources.push(path);
+            }
         }
     }
     Ok(())
@@ -567,10 +614,94 @@ mod tests {
     }
 
     #[test]
+    fn a_library_without_app_uses_sources_beside_the_manifest() {
+        let dir = TempDir::new("library-root");
+        std::fs::write(
+            dir.path().join(DECLARATION_MANIFEST_FILE_NAME),
+            "Package greetings {\n let kind = .Library\n}",
+        )
+        .unwrap();
+        let source = dir.path().join("greetings.kira");
+        std::fs::write(&source, "function hello() -> String { return \"hi\" }").unwrap();
+        let nested = dir.path().join("detail").join("format.kira");
+        std::fs::create_dir_all(nested.parent().expect("nested source parent")).unwrap();
+        std::fs::write(&nested, "function format() -> String { return \"ok\" }").unwrap();
+
+        let target = resolve_target(dir.path()).expect("resolve root-layout library");
+        assert_eq!(target.source_path.as_deref(), source.to_str());
+        assert_eq!(target.source_root.as_deref(), dir.path().to_str());
+        assert_eq!(target.target_kind, TargetKind::Library);
+
+        let manifest = manifest_for(dir.path())
+            .expect("discover manifest")
+            .expect("library manifest");
+        let sources = library_sources(&manifest).expect("discover root-layout sources");
+        let discovered = sources
+            .iter()
+            .map(|source| (source.module(), source.path()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            discovered,
+            vec![
+                ("greetings", source.as_path()),
+                ("detail.format", nested.as_path())
+            ]
+        );
+        assert!(
+            library_sources_for_entry(&manifest, &source)
+                .expect("entry is in the package source root")
+                .is_some()
+        );
+    }
+
+    #[test]
     fn declaration_manifest_wins_precedence() {
         assert_eq!(DECLARATION_MANIFEST_FILE_NAME, MANIFEST_FILE_NAMES[0]);
         assert!(is_declaration_manifest("some/dir/package.kira"));
         assert!(!is_declaration_manifest("some/dir/kira.toml"));
+    }
+
+    #[test]
+    fn a_legacy_toml_manifest_is_discovered_and_resolves_an_app() {
+        let dir = TempDir::new("legacy");
+        std::fs::write(
+            dir.path().join(PREFERRED_MANIFEST_FILE_NAME),
+            "[package]\nname = \"legacy\"\nversion = \"0.1.0\"\nkind = \"app\"\n",
+        )
+        .unwrap();
+        let entrypoint = dir.path().join(ENTRYPOINT_REL_PATH);
+        std::fs::create_dir_all(entrypoint.parent().expect("entrypoint parent")).unwrap();
+        std::fs::write(&entrypoint, "@Main function main() { return }").unwrap();
+
+        let found = manifest_for(dir.path()).unwrap().expect("legacy manifest");
+        assert_eq!(
+            found.path,
+            dir.path()
+                .join(PREFERRED_MANIFEST_FILE_NAME)
+                .display()
+                .to_string()
+        );
+        let target = resolve_target(dir.path()).expect("legacy target");
+        assert_eq!(target.package_kind, Some(PackageKind::App));
+        assert_eq!(target.source_path.as_deref(), entrypoint.to_str());
+    }
+
+    #[test]
+    fn declaration_manifest_wins_over_a_legacy_file_on_disk() {
+        let dir = TempDir::new("precedence");
+        std::fs::write(
+            dir.path().join(DECLARATION_MANIFEST_FILE_NAME),
+            "Package current { let kind = .Library }",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(PREFERRED_MANIFEST_FILE_NAME),
+            "this is not TOML =",
+        )
+        .unwrap();
+        let found = manifest_for(dir.path()).unwrap().expect("manifest");
+        assert_eq!(found.manifest.name, "current");
+        assert!(found.path.ends_with(DECLARATION_MANIFEST_FILE_NAME));
     }
 
     #[test]

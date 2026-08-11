@@ -59,6 +59,17 @@ fn walk_stmt(program: &IrProgram, statement: &IrStmt, found: &mut BTreeSet<u32>)
                 walk_stmt(program, statement, found);
             }
         }
+        IrStmt::Attempt { attempt } => {
+            for step in &attempt.steps {
+                walk_expr(program, step.error_condition, found);
+                for statement in step.setup.iter().chain(&step.handler).chain(&step.success) {
+                    walk_stmt(program, statement, found);
+                }
+            }
+            for statement in &attempt.trailing {
+                walk_stmt(program, statement, found);
+            }
+        }
         IrStmt::While { cond, body } => {
             walk_expr(program, *cond, found);
             for statement in body {

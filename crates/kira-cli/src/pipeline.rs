@@ -37,6 +37,7 @@ use kira_source::SourceMap;
 
 use kira_backend_api::WasmDevice;
 
+use crate::debugger;
 use crate::hybrid;
 use crate::hybrid_library;
 use crate::library;
@@ -133,10 +134,119 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     match options.backend {
-        BackendMode::VmBytecode => run_on_vm(&ir, std::path::Path::new(&options.path), link),
+        BackendMode::VmBytecode => run_on_vm(
+            &ir,
+            std::path::Path::new(&options.path),
+            link,
+            &options.program_arguments,
+        ),
         BackendMode::LlvmNative => run_native(&ir, &options, link),
-        BackendMode::Hybrid => run_hybrid(&ir, &options, link),
+        BackendMode::Hybrid => run_hybrid(&ir, &options, link, &options.program_arguments),
     }
+}
+
+/// Runs `kira debug [file|dir]` with a VM, hybrid, or LLVM/LLDB debugger.
+pub fn debug(args: &[String]) -> i32 {
+    let surface = crate::progress::Surface::install("Debugging");
+    let _guard = crate::progress::Finish(surface);
+    let mut debug_options = match debugger::parse(args) {
+        Ok(options) => options,
+        Err(error) => {
+            err!("kira debug: {error}");
+            return EXIT_USAGE;
+        }
+    };
+    crate::diagnostics::show_notes(debug_options.compile.show_notes);
+    let _timings = crate::timings::Timings::install(debug_options.compile.timings);
+    debug_options.compile.path = match resolve_path(&debug_options.compile.path) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    let compiled = match verified(
+        &debug_options.compile.path,
+        &options_target(&debug_options.compile),
+    ) {
+        Ok(compiled) => compiled,
+        Err(code) => return code,
+    };
+    if let Err(code) = apply_manifest_defaults("debug", &mut debug_options.compile, &compiled) {
+        return code;
+    }
+    if !matches!(debug_options.compile.device, Device::Host) {
+        err!("kira debug: the debugger currently targets host VM/LLVM/hybrid runs");
+        return EXIT_USAGE;
+    }
+    let ir = match runnable_ir("debug", compiled) {
+        Ok(ir) => ir,
+        Err(code) => return code,
+    };
+    let source = std::path::Path::new(&debug_options.compile.path);
+    let info = kira_debug::DebugInfo::from_ir(
+        &ir,
+        source
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "program".to_owned()),
+        debugger::backend(debug_options.compile.backend),
+        Some(source),
+    )
+    .optimized(debug_options.compile.release);
+    let foreign = match resolve_foreign(&debug_options.compile.path, &ir, Device::Host) {
+        Ok(foreign) => foreign,
+        Err(code) => return code,
+    };
+    let link = foreign_link(&foreign);
+    match debug_options.compile.backend {
+        BackendMode::VmBytecode => debugger::run_vm(&ir, source, link, &debug_options, &info),
+        BackendMode::Hybrid => debugger::run_hybrid(&ir, source, link, &debug_options, &info),
+        BackendMode::LlvmNative => debugger::run_llvm(&ir, source, link, &debug_options, &info),
+    }
+}
+
+/// Runs a verified program through the VM instruction profiler.
+pub(crate) fn profile_vm(
+    mut options: CompileOptions,
+    max_functions: usize,
+    max_sites: usize,
+) -> i32 {
+    let surface = crate::progress::Surface::install("Profiling");
+    let _guard = crate::progress::Finish(surface);
+    crate::diagnostics::show_notes(options.show_notes);
+    let _timings = crate::timings::Timings::install(options.timings);
+    options.path = match resolve_path(&options.path) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    let compiled = match verified(&options.path, &options_target(&options)) {
+        Ok(compiled) => compiled,
+        Err(code) => return code,
+    };
+    if let Err(code) = apply_manifest_defaults("instruments", &mut options, &compiled) {
+        return code;
+    }
+    if !matches!(options.backend, BackendMode::VmBytecode) {
+        err!(
+            "kira instruments: instruction profiling currently requires `--backend vm`; \
+             native CPU sampling belongs to `kira debug --backend llvm`"
+        );
+        return EXIT_USAGE;
+    }
+    let ir = match runnable_ir("profile", compiled) {
+        Ok(ir) => ir,
+        Err(code) => return code,
+    };
+    let foreign = match resolve_foreign(&options.path, &ir, options.device) {
+        Ok(foreign) => foreign,
+        Err(code) => return code,
+    };
+    debugger::run_profile_vm(
+        &ir,
+        std::path::Path::new(&options.path),
+        foreign_link(&foreign),
+        &options.program_arguments,
+        max_functions,
+        max_sites,
+    )
 }
 
 /// The function a `kira test` run enters.
@@ -210,9 +320,14 @@ pub fn test(args: &[String]) -> i32 {
     }
 
     match options.backend {
-        BackendMode::VmBytecode => run_on_vm(&ir, std::path::Path::new(&options.path), link),
+        BackendMode::VmBytecode => run_on_vm(
+            &ir,
+            std::path::Path::new(&options.path),
+            link,
+            &options.program_arguments,
+        ),
         BackendMode::LlvmNative => run_native(&ir, &options, link),
-        BackendMode::Hybrid => run_hybrid(&ir, &options, link),
+        BackendMode::Hybrid => run_hybrid(&ir, &options, link, &options.program_arguments),
     }
 }
 
@@ -583,6 +698,76 @@ pub fn build(args: &[String]) -> i32 {
     }
 }
 
+/// Runs `kira package`: the distribution-facing library build.
+///
+/// Library artifacts already contain the complete consumer contract — the VM
+/// bytecode plus wrapper crate, the LLVM archive plus wrapper, or the hybrid
+/// bundle plus wrapper. This verb adds the important precondition that an
+/// application cannot accidentally be published as a package, then delegates
+/// the artifact work to the same build paths `kira build` uses.
+pub fn package(args: &[String]) -> i32 {
+    let (options, compiled) = match library_command_inputs("package", args) {
+        Ok(inputs) => inputs,
+        Err(code) => return code,
+    };
+    if !matches!(options.device, Device::Host) {
+        err!(
+            "kira package: library distribution currently targets host consumers; \
+             wasm application artifacts use `kira build --device wasm32`"
+        );
+        return EXIT_USAGE;
+    }
+    if compiled.ir.main.is_some() {
+        err!(
+            "kira package: `{}` is an application, not a library; \
+             set `let kind = .Library` and provide a consumer-facing package",
+            options.path
+        );
+        return EXIT_FAILURE;
+    }
+    build(args)
+}
+
+/// Runs `kira export`: build a library that actually exposes an embedding API.
+pub fn export(args: &[String]) -> i32 {
+    let (options, compiled) = match library_command_inputs("export", args) {
+        Ok(inputs) => inputs,
+        Err(code) => return code,
+    };
+    if !matches!(options.device, Device::Host) {
+        err!(
+            "kira export: exported library surfaces currently target host consumers; \
+             wasm export ABI is not defined"
+        );
+        return EXIT_USAGE;
+    }
+    if compiled.ir.main.is_some() {
+        err!(
+            "kira export: `{}` is an application, not a library",
+            options.path
+        );
+        return EXIT_FAILURE;
+    }
+    if compiled.ir.exports.is_empty() {
+        err!(
+            "kira export: `{}` declares no `@Export` functions; add at least one \
+             consumer-facing export before building the wrapper",
+            options.path
+        );
+        return EXIT_FAILURE;
+    }
+    build(args)
+}
+
+/// Parses and verifies the common library-command precondition once.
+fn library_command_inputs(verb: &str, args: &[String]) -> Result<(CompileOptions, Compiled), i32> {
+    let mut options = parse_options(verb, args)?;
+    options.path = resolve_path(&options.path)?;
+    let compiled = verified(&options.path, &options_target(&options))?;
+    apply_manifest_defaults(verb, &mut options, &compiled)?;
+    Ok((options, compiled))
+}
+
 /// Parses shared options, reporting usage errors against `verb`.
 fn parse_options(verb: &str, args: &[String]) -> Result<CompileOptions, i32> {
     CompileOptions::parse(args).map_err(|error| {
@@ -600,13 +785,19 @@ fn resolve_path(path: &str) -> Result<String, i32> {
             | kira_project::DiscoveryError::MissingEntrypoint { .. }
             | kira_project::DiscoveryError::NoLibrarySources { .. } => EXIT_USAGE,
             kira_project::DiscoveryError::Unreadable { .. }
-            | kira_project::DiscoveryError::Malformed { .. } => EXIT_FAILURE,
+            | kira_project::DiscoveryError::Malformed { .. }
+            | kira_project::DiscoveryError::LegacyMalformed { .. } => EXIT_FAILURE,
         }
     })?;
     target.source_path.ok_or_else(|| {
         err!("kira: `{path}` did not resolve to a compilable Kira source");
         EXIT_USAGE
     })
+}
+
+/// Package-command access to the same discovery decision the build pipeline uses.
+pub(crate) fn resolve_source_path(path: &str) -> Result<String, i32> {
+    resolve_path(path)
 }
 
 /// The target a build for `path` selects, decided before the program compiles.
@@ -637,6 +828,13 @@ fn options_target(options: &CompileOptions) -> kira_native_lib_definition::Targe
         &options.path,
         options.device_explicit.then_some(options.device),
     )
+}
+
+/// The target selected before compiling a command's source.
+pub(crate) fn compile_target_for_options(
+    options: &CompileOptions,
+) -> kira_native_lib_definition::TargetTriple {
+    options_target(options)
 }
 
 /// Applies package defaults without replacing any command-line choice.
@@ -733,6 +931,14 @@ fn verified(
         return Err(EXIT_FAILURE);
     }
     Ok(compiled)
+}
+
+/// Compiles an already-discovered source and renders its diagnostics.
+pub(crate) fn compile_verified_path(
+    path: &str,
+    target: &kira_native_lib_definition::TargetTriple,
+) -> Result<Compiled, i32> {
+    verified(path, target)
 }
 
 fn verified_with_frontend(

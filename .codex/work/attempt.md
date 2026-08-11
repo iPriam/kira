@@ -1,45 +1,38 @@
 # attempt / try / handle
 
-Desugared entirely in `kira-semantics`. No IR node, no opcode, no VM dispatch
-arm, no LLVM helper, no WASM lowering learns the construct exists — it becomes
-the `if`/`else` chain over an enum tag that `match` already builds, and reuses
-that module's arm resolution, chain builder, and payload projection verbatim.
+The syntax and handler resolution live in `kira-semantics`, but the compiler
+keeps the guarded region as a typed linear HIR/IR node. That is intentional:
+long attempts should not become a recursively nested success tree. Each
+backend lowers the same shape to ordinary branches, with a handler edge to one
+common end block and a success edge to the next step.
 
-The one thing that was not free is the **nested enum payload**, and it cost a
+The one thing that is not free is the **nested enum payload**, and it costs a
 change on every backend. See below.
 
 ## The desugar
 
-`attempt { let v = try f(n); return v * 2 } handle { A { P } B { Q } }` becomes:
+`attempt { let v = try f(n); return v * 2 } handle { A { P } B { Q } }` has this
+typed control-flow shape:
 
 ```text
 let <result> = f(n)                 // hidden: evaluated once
 let <rtag>   = EnumTag(<result>)
-if <rtag> == <tag of `Error`> {
-    let <failure> = EnumPayload(<result>)
-    let <ftag>    = EnumTag(<failure>)
-    if <ftag> == 0 { P } else { Q }  // the handlers, an exhaustive chain
-} else {
-    let v = EnumPayload(<result>)    // the `Ok` payload, as written
-    return v * 2                     // the rest of the body, nested here
-}
+if <rtag> == <tag of `Error`> { handlers } else { bind <Ok> }
+trailing body
 ```
 
-A `try` is an early exit, and the HIR has no early exit that is not a `return`.
-So the statements *after* a `try` are exactly the statements that run when it
-succeeded, which makes them the `else` branch. Lowering recurses over the body's
-statement list rather than looping: each `try` consumes the remainder into its
-own success branch.
+A `try` is an early exit from the attempt region. A successful binding becomes
+the lexical input to the next step; a handler runs and then lands at the common
+end. Statements after the final `try` are the region's trailing body.
 
 That shape is also what makes the corpus's `emxProcess` a definite return with
 no trailing `return` — `body_definitely_returns` wants both branches of an `if`
 to return, and here both do. Getting the nesting wrong shows up immediately as a
 missing-return error rather than as a wrong answer.
 
-Two `try`s in one body emit the handler arms twice. The alternative — one shared
-chain reached by a flag — needs a jump the HIR cannot express without inventing a
-loop, and the reference requires all `try`s of one `attempt` to share a single
-failure enum precisely so the arms *can* be repeated.
+Each step retains its own handler chain because a handler may read values from
+earlier successful steps, but never from a failed or later step. This keeps
+scope behavior explicit while the success path stays linear.
 
 ## Result is structural, not nominal
 

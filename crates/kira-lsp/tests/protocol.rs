@@ -66,6 +66,18 @@ impl Server {
             response["result"]["capabilities"]["textDocumentSync"].is_number(),
             "the server advertises document sync: {response}",
         );
+        assert_eq!(
+            response["result"]["capabilities"]["definitionProvider"], true,
+            "the server advertises go-to-definition: {response}",
+        );
+        assert_eq!(
+            response["result"]["capabilities"]["hoverProvider"], true,
+            "the server advertises hover: {response}",
+        );
+        assert!(
+            response["result"]["capabilities"]["completionProvider"].is_object(),
+            "the server advertises completion: {response}",
+        );
 
         server.send(&serde_json::json!({
             "jsonrpc": "2.0",
@@ -257,6 +269,94 @@ fn diagnostics_follow_edits_and_clear_when_fixed() {
     server.shutdown();
 }
 
+/// Hover is backed by the same resolved link as go-to-definition and includes
+/// the declaration's source line, so an editor can show a useful signature
+/// without a second symbol database.
+#[test]
+fn hover_returns_the_resolved_declaration() {
+    let mut server = Server::start();
+    let uri = "file:///tmp/kira-lsp-test/hover.kira";
+    let text = concat!(
+        "function helperValue() -> Int { return 7 }\n",
+        "@Main\n",
+        "function main() {\n",
+        "    print(helperValue())\n",
+        "    return\n",
+        "}\n",
+    );
+    let diagnostics = server.open(uri, text);
+    assert_eq!(
+        diagnostics.as_array().map(Vec::len),
+        Some(0),
+        "the hover fixture is clean: {diagnostics}",
+    );
+    server.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "textDocument/hover",
+        "params": {
+            "textDocument": { "uri": uri },
+            "position": { "line": 3, "character": 10 },
+        },
+    }));
+    let response = server.read();
+    let hover = &response["result"];
+    assert_eq!(response["id"], 8, "hover is answered: {response}");
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .is_some_and(|value| value.contains("function helperValue() -> Int")),
+        "hover names the declaration: {response}",
+    );
+    assert_eq!(
+        hover["range"]["start"]["line"], 3,
+        "hover highlights use: {response}"
+    );
+    server.shutdown();
+}
+
+/// Completion combines declarations that have not been referenced with
+/// semantic links and replaces only the identifier prefix under the cursor.
+#[test]
+fn completion_returns_a_prefix_filtered_symbol_with_an_edit_range() {
+    let mut server = Server::start();
+    let uri = "file:///tmp/kira-lsp-test/completion.kira";
+    let text = concat!(
+        "function helperValue() -> Int { return 7 }\n",
+        "@Main\n",
+        "function main() {\n",
+        "    print(hel)\n",
+        "    return\n",
+        "}\n",
+    );
+    let _ = server.open(uri, text);
+    server.send(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "textDocument/completion",
+        "params": {
+            "textDocument": { "uri": uri },
+            "position": { "line": 3, "character": 13 },
+            "context": { "triggerKind": 1 },
+        },
+    }));
+    let response = server.read();
+    let items = response["result"]
+        .as_array()
+        .unwrap_or_else(|| panic!("completion returns an item array: {response}"));
+    let helper = items
+        .iter()
+        .find(|item| item["label"] == "helperValue")
+        .unwrap_or_else(|| panic!("completion includes helperValue: {response}"));
+    assert_eq!(response["id"], 9);
+    assert_eq!(helper["textEdit"]["range"]["start"]["character"], 10);
+    assert_eq!(
+        helper["textEdit"]["range"]["end"]["character"], 13,
+        "completion replaces the prefix: {response}",
+    );
+    server.shutdown();
+}
+
 /// The server must survive a request it never advertised, rather than dying and
 /// taking the editor's language support with it.
 #[test]
@@ -265,7 +365,7 @@ fn an_unsupported_request_is_refused_without_killing_the_server() {
     server.send(&serde_json::json!({
         "jsonrpc": "2.0",
         "id": 7,
-        "method": "textDocument/hover",
+        "method": "textDocument/signatureHelp",
         "params": {
             "textDocument": { "uri": "file:///tmp/kira-lsp-test/x.kira" },
             "position": { "line": 0, "character": 0 },

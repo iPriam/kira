@@ -23,10 +23,10 @@ fn a_locally_declared_ok_error_enum_is_result_shaped() {
     );
 }
 
-/// The corpus shape: an `attempt` whose body and every handler returns is
-/// itself a definite return, so the enclosing function needs no trailing
-/// `return`. That works only if the rest of the body nests into the `try`'s
-/// success branch.
+/// The corpus shape: an `attempt` whose trailing body and every handler returns
+/// is itself a definite return, so the enclosing function needs no trailing
+/// `return`. The linear attempt region preserves that rule without nesting the
+/// whole remaining body under every `try`.
 #[test]
 fn an_attempt_whose_branches_all_return_is_a_definite_return() {
     assert!(

@@ -34,6 +34,7 @@
 
 use std::path::{Path, PathBuf};
 
+use kira_debug::DebugInfo;
 use kira_ir::IrProgram;
 use kira_runtime_abi::ForeignSignature;
 use kira_toolchain::LlvmDiscoveryError;
@@ -343,6 +344,7 @@ fn unit_object_path(object_path: &Path, index: usize) -> PathBuf {
 fn emit_codegen_units(
     program: &IrProgram,
     options: &NativeBuildOptions,
+    debug: Option<&DebugInfo>,
 ) -> Result<Vec<PathBuf>, LlvmError> {
     let reachable = reachability::native_functions(program);
     let count = codegen_units(options, &reachable);
@@ -352,13 +354,23 @@ fn emit_codegen_units(
 
     if count == 1 {
         kira_diagnostics::progress!("generating native code for {}", options.module_name);
-        let module = codegen::Module::build(
-            program,
-            &options.module_name,
-            kira_runtime_abi::ForeignPointerWidth::HOST,
-            &options.unavailable_imports,
-            codegen::CodegenUnit::WHOLE,
-        )?;
+        let module = match debug {
+            Some(debug) => codegen::Module::build_debug(
+                program,
+                &options.module_name,
+                kira_runtime_abi::ForeignPointerWidth::HOST,
+                &options.unavailable_imports,
+                codegen::CodegenUnit::WHOLE,
+                debug,
+            )?,
+            None => codegen::Module::build(
+                program,
+                &options.module_name,
+                kira_runtime_abi::ForeignPointerWidth::HOST,
+                &options.unavailable_imports,
+                codegen::CodegenUnit::WHOLE,
+            )?,
+        };
         if let Some(path) = &options.ir_path {
             module.write_ir(path)?;
         }
@@ -377,13 +389,23 @@ fn emit_codegen_units(
             .enumerate()
             .map(|(index, path)| {
                 scope.spawn(move || {
-                    let module = codegen::Module::build(
-                        program,
-                        &format!("{}.{index}", options.module_name),
-                        kira_runtime_abi::ForeignPointerWidth::HOST,
-                        &options.unavailable_imports,
-                        codegen::CodegenUnit::new(index, count),
-                    )?;
+                    let module = match debug {
+                        Some(debug) => codegen::Module::build_debug(
+                            program,
+                            &format!("{}.{index}", options.module_name),
+                            kira_runtime_abi::ForeignPointerWidth::HOST,
+                            &options.unavailable_imports,
+                            codegen::CodegenUnit::new(index, count),
+                            debug,
+                        )?,
+                        None => codegen::Module::build(
+                            program,
+                            &format!("{}.{index}", options.module_name),
+                            kira_runtime_abi::ForeignPointerWidth::HOST,
+                            &options.unavailable_imports,
+                            codegen::CodegenUnit::new(index, count),
+                        )?,
+                    };
                     module.emit_object(path, options.optimize)
                 })
             })
@@ -407,7 +429,24 @@ pub fn build_native(
     program: &IrProgram,
     options: &NativeBuildOptions,
 ) -> Result<NativeArtifacts, LlvmError> {
-    let objects = emit_codegen_units(program, options)?;
+    build_native_inner(program, options, None)
+}
+
+/// Compiles and links a native executable with DWARF and native debug data.
+pub fn build_native_debug(
+    program: &IrProgram,
+    options: &NativeBuildOptions,
+    debug: &DebugInfo,
+) -> Result<NativeArtifacts, LlvmError> {
+    build_native_inner(program, options, Some(debug))
+}
+
+fn build_native_inner(
+    program: &IrProgram,
+    options: &NativeBuildOptions,
+    debug: Option<&DebugInfo>,
+) -> Result<NativeArtifacts, LlvmError> {
+    let objects = emit_codegen_units(program, options, debug)?;
 
     let executable = match &options.executable_path {
         Some(path) => {
@@ -420,14 +459,25 @@ pub fn build_native(
                 &llvm,
             )?;
             kira_diagnostics::progress!("linking {}", path.display());
-            link::link_executable(
-                &llvm,
-                &objects,
-                &options.runtime_archive,
-                &options.foreign_link,
-                shim.as_ref().map(|shim| shim.object.as_path()),
-                path,
-            )?;
+            match debug {
+                Some(debug) => link::link_executable_debug(
+                    &llvm,
+                    &objects,
+                    &options.runtime_archive,
+                    &options.foreign_link,
+                    shim.as_ref().map(|shim| shim.object.as_path()),
+                    path,
+                    &debug_symbols(program, debug, true),
+                )?,
+                None => link::link_executable(
+                    &llvm,
+                    &objects,
+                    &options.runtime_archive,
+                    &options.foreign_link,
+                    shim.as_ref().map(|shim| shim.object.as_path()),
+                    path,
+                )?,
+            }
             Some(path.clone())
         }
         None => None,
@@ -614,13 +664,41 @@ pub fn build_hybrid_library(
     program: &IrProgram,
     options: &NativeBuildOptions,
 ) -> Result<HybridArtifacts, LlvmError> {
-    let module =
-        codegen::Module::build_hybrid(program, &options.module_name, &options.unavailable_imports)?;
+    build_hybrid_library_inner(program, options, None)
+}
+
+/// Builds a hybrid native half with DWARF and native debug data.
+pub fn build_hybrid_library_debug(
+    program: &IrProgram,
+    options: &NativeBuildOptions,
+    debug: &DebugInfo,
+) -> Result<HybridArtifacts, LlvmError> {
+    build_hybrid_library_inner(program, options, Some(debug))
+}
+
+fn build_hybrid_library_inner(
+    program: &IrProgram,
+    options: &NativeBuildOptions,
+    debug: Option<&DebugInfo>,
+) -> Result<HybridArtifacts, LlvmError> {
+    let module = match debug {
+        Some(debug) => codegen::Module::build_hybrid_debug(
+            program,
+            &options.module_name,
+            &options.unavailable_imports,
+            debug,
+        )?,
+        None => codegen::Module::build_hybrid(
+            program,
+            &options.module_name,
+            &options.unavailable_imports,
+        )?,
+    };
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
     kira_diagnostics::progress!("emitting object");
-    module.emit_object(&options.object_path, false)?;
+    module.emit_object(&options.object_path, options.optimize)?;
 
     let library = options
         .shared_library_path
@@ -645,21 +723,55 @@ pub fn build_hybrid_library(
         &options.object_path,
         &llvm,
     )?;
-    link::link_hybrid_library(
-        &llvm,
-        &options.object_path,
-        &options.runtime_archive,
-        &options.foreign_link,
-        shim.as_ref().map(|shim| shim.object.as_path()),
-        &adapter_symbols,
-        &library,
-    )?;
+    match debug {
+        Some(debug) => link::link_hybrid_library_debug(
+            &llvm,
+            &options.object_path,
+            &options.runtime_archive,
+            &options.foreign_link,
+            shim.as_ref().map(|shim| shim.object.as_path()),
+            &adapter_symbols,
+            &library,
+            &debug_symbols(program, debug, false),
+        )?,
+        None => link::link_hybrid_library(
+            &llvm,
+            &options.object_path,
+            &options.runtime_archive,
+            &options.foreign_link,
+            shim.as_ref().map(|shim| shim.object.as_path()),
+            &adapter_symbols,
+            &library,
+        )?,
+    }
 
     Ok(HybridArtifacts {
         object: options.object_path.clone(),
         library,
         exports: exported_trampolines(program),
     })
+}
+
+/// Selects exactly the body symbols emitted by a debug native module.
+fn debug_symbols(program: &IrProgram, info: &DebugInfo, executable: bool) -> Vec<String> {
+    let reachable = executable.then(|| reachability::native_functions(program));
+    program
+        .functions
+        .iter()
+        .enumerate()
+        .filter(|(index, function)| {
+            let native = executable
+                || function
+                    .execution
+                    .resolve(kira_runtime_abi::Execution::Runtime)
+                    == kira_runtime_abi::Execution::Native;
+            native
+                && reachable
+                    .as_ref()
+                    .is_none_or(|reachable| reachable.get(*index).copied().unwrap_or(false))
+        })
+        .filter_map(|(index, _)| info.functions.get(index)?.symbol.clone())
+        .collect()
 }
 
 /// The trampoline symbol exported for each `@Native` function, by function id.

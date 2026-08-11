@@ -26,7 +26,7 @@ pub fn render(module: &BindingModule) -> String {
     let _ = writeln!(out, "{GENERATED_HEADER} {}", module.library);
     let _ = writeln!(
         out,
-        "// Edit the header or the `autobind` declaration, not this file."
+        "// Edit the native-library declaration, not this generated file."
     );
 
     for opaque in &module.opaques {

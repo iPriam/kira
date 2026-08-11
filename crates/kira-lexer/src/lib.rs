@@ -262,7 +262,7 @@ impl<'a> Lexer<'a> {
 }
 
 /// Decodes the contents of a string-literal token span into an owned string,
-/// resolving the escapes the lexer accepts (`\n`, `\t`, `\r`, `\"`, `\\`, `\0`).
+/// resolving the escapes the lexer accepts (`\n`, `\t`, `\r`, `\e`, `\"`, `\\`, `\0`).
 ///
 /// `raw` is the full literal text including the surrounding quotes.
 pub fn decode_string_literal(raw: &str) -> String {
@@ -281,6 +281,7 @@ pub fn decode_string_literal(raw: &str) -> String {
             Some('n') => out.push('\n'),
             Some('t') => out.push('\t'),
             Some('r') => out.push('\r'),
+            Some('e') => out.push('\x1b'),
             Some('0') => out.push('\0'),
             Some('"') => out.push('"'),
             Some('\\') => out.push('\\'),
@@ -447,6 +448,7 @@ mod tests {
     #[test]
     fn decodes_escapes() {
         assert_eq!(decode_string_literal("\"a\\nb\""), "a\nb");
+        assert_eq!(decode_string_literal("\"\\e[2K\""), "\x1b[2K");
         assert_eq!(decode_string_literal("\"q\\\"q\""), "q\"q");
         assert_eq!(decode_string_literal("\"plain\""), "plain");
     }

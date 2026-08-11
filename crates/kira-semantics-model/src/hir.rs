@@ -244,6 +244,34 @@ pub struct HirLocal {
     pub native_state: Option<NativeStateTypeId>,
 }
 
+/// A linear `attempt` body.
+///
+/// Each step evaluates one `try` after its setup, branches to that step's
+/// handler on failure, and continues with the success bindings otherwise.
+/// Keeping the steps as a first-class control-flow shape avoids turning a long
+/// source attempt into a recursively nested success tree.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirAttempt {
+    /// The guarded steps, in source order.
+    pub steps: Vec<HirAttemptStep>,
+    /// Statements after the final `try`'s success binding.
+    pub trailing: Vec<HirStmtId>,
+}
+
+/// One linear step in a [`HirAttempt`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirAttemptStep {
+    /// Ordinary statements before the `try`, followed by its hidden result and
+    /// tag bindings.
+    pub setup: Vec<HirStmtId>,
+    /// The boolean test for the result's `Error` variant.
+    pub error_condition: HirExprId,
+    /// The handler dispatch for this step.
+    pub handler: Vec<HirStmtId>,
+    /// The `Ok` payload binding for this step.
+    pub success: Vec<HirStmtId>,
+}
+
 /// A statement in a function body.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirStmt {
@@ -298,6 +326,11 @@ pub enum HirStmt {
         then_body: Vec<HirStmtId>,
         /// Statements run otherwise (empty when there is no `else`).
         else_body: Vec<HirStmtId>,
+    },
+    /// A linear `attempt`/`try`/`handle` region.
+    Attempt {
+        /// The analyzed guarded region.
+        attempt: HirAttempt,
     },
     /// A pre-tested loop.
     ///

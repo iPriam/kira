@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{kira, write_source};
+use crate::{kira, write_isolated_source};
 
 /// How many chained functions the program declares.
 ///
@@ -50,7 +50,7 @@ fn build_directory(source: &Path) -> PathBuf {
 
 #[test]
 fn a_program_split_across_codegen_units_runs_as_one_module() {
-    let path = write_source(&chained_program(CHAIN));
+    let path = write_isolated_source(&chained_program(CHAIN));
     let source = path.to_str().expect("a UTF-8 temp path");
 
     let vm = kira(&["run", "--backend", "vm", source]);

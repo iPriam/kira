@@ -9,6 +9,7 @@ pub enum Command {
     Debug,
     Tokens,
     Ast,
+    Doc,
     Check,
     Lint,
     Test,
@@ -35,11 +36,12 @@ pub enum Command {
 /// the LLVM backend, so a `kira` that could fetch LLVM would be a binary that
 /// had to exist before the thing it installs — `knvm install-llvm` does it,
 /// and `knvm` links no LLVM at all.
-pub const ALL: [Command; 21] = [
+pub const ALL: [Command; 22] = [
     Command::Run,
     Command::Debug,
     Command::Tokens,
     Command::Ast,
+    Command::Doc,
     Command::Check,
     Command::Lint,
     Command::Test,
@@ -78,6 +80,7 @@ impl Command {
             Self::Debug => "debug",
             Self::Tokens => "tokens",
             Self::Ast => "ast",
+            Self::Doc => "doc",
             Self::Check => "check",
             Self::Lint => "lint",
             Self::Test => "test",
@@ -111,12 +114,26 @@ impl Command {
     pub fn arguments(self) -> &'static str {
         match self {
             Self::Run | Self::Build => {
-                " [file|dir] [--backend vm|llvm|hybrid] [--device] [--timings] [--show-notes]"
+                " [file|dir] [--backend vm|llvm|hybrid] [--device] [--timings] [--show-notes] [-- <args...>]"
+            }
+            Self::Debug => {
+                " [file|dir] [--backend vm|llvm|hybrid] [--break name[:pc]] [--batch] [--lldb|--lldb-dap] [--dap-continues n] [-- <args...>]"
             }
             Self::Check => " [file|dir] [--timings] [--show-notes]",
             Self::Shader => " build [--target <name>] [--emit <name>]",
-            Self::Lint | Self::Sync => " [file|dir]",
+            Self::Lint | Self::Sync | Self::Update => " [file|dir]",
+            Self::Ffi => " [file|dir] [--device host|wasm32|wasm64]",
+            Self::Instruments => " [file|dir] [--limit <n>] [--sites <n>]",
+            Self::Package | Self::Export => {
+                " [file|dir] [--backend vm|llvm|hybrid] [--emit-llvm-ir]"
+            }
+            Self::Add => " <name> (--path <dir>|--version <version>|--git <url>) [dir]",
+            Self::Remove => " <name> [dir]",
+            Self::MigrateManifest => " [dir]",
             Self::Live => " [runner] <file> [--backend vm|hybrid] [--watch|--no-watch]",
+            Self::Tokens | Self::Ast => " <file>",
+            Self::Doc => " [file|dir]",
+            Self::New => " [--app|--library] <dir>",
             Self::Help => " [all]",
             _ => "",
         }
@@ -127,12 +144,13 @@ impl Command {
         match self {
             Self::Run => "compile and run a program on the VM",
             Self::Debug => "run a program under the debugger",
-            Self::Tokens => "print a file's tokens",
+            Self::Tokens => "print a file's lexical tokens",
             Self::Ast => "print a file's syntax tree",
+            Self::Doc => "render documented declarations as Markdown",
             Self::Check => "analyze a program without running it",
             Self::Lint => "report what a package's `linter.kira` asks about",
             Self::Test => "build and run a program's tests",
-            Self::Build => "compile to a native binary via LLVM",
+            Self::Build => "compile to an application or library artifact",
             Self::Ffi => "inspect and bind native libraries",
             Self::Instruments => "profile a running program",
             Self::Shader => "build every KSL shader and report what each target emitted",
@@ -141,10 +159,10 @@ impl Command {
             Self::Add => "add a dependency",
             Self::Remove => "remove a dependency",
             Self::Update => "update dependencies",
-            Self::Package => "package a library for distribution",
+            Self::Package => "build a library package for distribution",
             Self::MigrateManifest => "upgrade a manifest to the current format",
             Self::Live => "run with live reload",
-            Self::Export => "export a library for embedding",
+            Self::Export => "build a library export surface for embedding",
             Self::Help => "print this message",
             Self::Version => "print the version",
         }

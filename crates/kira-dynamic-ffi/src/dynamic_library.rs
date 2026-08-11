@@ -44,8 +44,9 @@ pub enum FfiError {
         #[source]
         source: libloading::Error,
     },
-    /// Process-image symbol resolution is not implemented yet.
-    #[error("process-image symbol resolution not yet implemented")]
+    /// The current process image could not be opened for symbol lookup on
+    /// this target.
+    #[error("process-image symbol resolution is unavailable on this target")]
     ProcessLookupUnavailable,
 }
 
@@ -62,9 +63,9 @@ enum Backend {
     /// A separately loaded shared library.
     Library(libloading::Library),
     /// Symbols resolved from the current process image.
-    // TODO: implement via `libloading::os::unix::Library::this()` /
-    // `libloading::os::windows::Library::this()`.
-    Process,
+    Process(libloading::Library),
+    /// Process-image lookup is unavailable on the current target.
+    ProcessUnavailable,
 }
 
 impl DynamicLibrary {
@@ -79,9 +80,11 @@ impl DynamicLibrary {
     /// Open a handle that resolves symbols from the current process image
     /// instead of a separate shared object.
     pub fn open_process() -> DynamicLibrary {
-        DynamicLibrary {
-            inner: Backend::Process,
-        }
+        let inner = match open_process_image() {
+            Ok(library) => Backend::Process(library),
+            Err(_) => Backend::ProcessUnavailable,
+        };
+        DynamicLibrary { inner }
     }
 
     /// Resolve `name` to a symbol of type `T`.
@@ -104,7 +107,17 @@ impl DynamicLibrary {
                     }
                 })
             }
-            Backend::Process => Err(FfiError::ProcessLookupUnavailable),
+            Backend::Process(library) => {
+                // SAFETY: forwarded caller contract — `T` matches the
+                // symbol's real type, per this function's safety docs.
+                unsafe { library.get(name.as_bytes()) }.map_err(|source| {
+                    FfiError::MissingNativeSymbol {
+                        name: name.to_owned(),
+                        source,
+                    }
+                })
+            }
+            Backend::ProcessUnavailable => Err(FfiError::ProcessLookupUnavailable),
         }
     }
 
@@ -158,6 +171,26 @@ fn open_native(path: &std::path::Path) -> Result<libloading::Library, libloading
     Ok(library.into())
 }
 
+/// Gets a handle for the current process image without loading a new module.
+#[cfg(unix)]
+fn open_process_image() -> Result<libloading::Library, FfiError> {
+    Ok(libloading::os::unix::Library::this().into())
+}
+
+/// Gets a handle for the executable that launched the current process.
+#[cfg(windows)]
+fn open_process_image() -> Result<libloading::Library, FfiError> {
+    libloading::os::windows::Library::this()
+        .map(Into::into)
+        .map_err(|_| FfiError::ProcessLookupUnavailable)
+}
+
+/// Process-image lookup is not defined by `libloading` on other targets.
+#[cfg(not(any(unix, windows)))]
+fn open_process_image() -> Result<libloading::Library, FfiError> {
+    Err(FfiError::ProcessLookupUnavailable)
+}
+
 /// The absolute path of the file `path` names, or `None` when it names no file
 /// — which is how a module name resolved through the system search order, and a
 /// library that is simply absent, both present.
@@ -182,7 +215,8 @@ impl std::fmt::Debug for DynamicLibrary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.inner {
             Backend::Library(_) => f.write_str("DynamicLibrary::Library"),
-            Backend::Process => f.write_str("DynamicLibrary::Process"),
+            Backend::Process(_) => f.write_str("DynamicLibrary::Process"),
+            Backend::ProcessUnavailable => f.write_str("DynamicLibrary::ProcessUnavailable"),
         }
     }
 }
@@ -217,5 +251,37 @@ mod tests {
             DynamicLibrary::open(missing),
             Err(FfiError::NativeLibraryLoadFailed(_))
         ));
+    }
+
+    #[test]
+    fn process_image_lookup_is_available_and_reports_missing_symbols() {
+        let process = DynamicLibrary::open_process();
+        // SAFETY: The symbol is intentionally absent, so the test never calls
+        // the function pointer and only checks the lookup error path.
+        let result =
+            unsafe { process.lookup::<unsafe extern "C" fn()>("kira_definitely_no_such_symbol") };
+
+        assert!(matches!(
+            result,
+            Err(FfiError::MissingNativeSymbol { name, .. }) if name == "kira_definitely_no_such_symbol"
+        ));
+        // SAFETY: As above, the optional lookup is only expected to return no
+        // symbol and the returned function pointer is never invoked.
+        let optional = unsafe {
+            process.lookup_optional::<unsafe extern "C" fn()>("kira_definitely_no_such_symbol")
+        };
+        assert!(optional.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_image_resolves_a_symbol_from_the_loaded_process() {
+        let process = DynamicLibrary::open_process();
+        // SAFETY: The test only checks that the platform handle resolves the
+        // standard allocator; it never calls or stores the function pointer.
+        let malloc = unsafe {
+            process.lookup::<unsafe extern "C" fn(usize) -> *mut std::ffi::c_void>("malloc")
+        };
+        assert!(malloc.is_ok());
     }
 }

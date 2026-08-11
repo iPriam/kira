@@ -55,12 +55,23 @@ impl<'a> Codegen<'a> {
 
         // SAFETY: `value` is a function in this live module; the builder is
         // positioned on its entry block before any instruction is built.
-        unsafe {
+        let entry = unsafe {
             let entry = LLVMAppendBasicBlockInContext(self.context, value, c"entry".as_ptr());
             LLVMPositionBuilderAtEnd(self.builder, entry);
-        }
+            entry
+        };
+        self.begin_debug_function(index, value);
 
         let locals = self.allocate_locals(function, value)?;
+        if let Some(debug) = self.debug.as_ref() {
+            debug.declare_locals(
+                index,
+                function.param_count as usize,
+                &function.locals,
+                &locals,
+                entry,
+            );
+        }
         let mut body = FunctionLowering {
             codegen: self,
             function,

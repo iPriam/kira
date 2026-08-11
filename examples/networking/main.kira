@@ -1,0 +1,177 @@
+// Every operation below is started from an async body and joined through Kira's
+// cooperative Task scheduler. The native functions only schedule Tokio work;
+// they never block the Kira task while a socket is doing I/O.
+
+@FFI.Extern { library: kira_network; symbol: kira_network_http1_server; abi: c; }
+function http1Server() -> Int;
+@FFI.Extern { library: kira_network; symbol: kira_network_http1_client; abi: c; }
+function http1Client(port: U16) -> Int;
+
+@FFI.Extern { library: kira_network; symbol: kira_network_http2_server; abi: c; }
+function http2Server() -> Int;
+@FFI.Extern { library: kira_network; symbol: kira_network_http2_client; abi: c; }
+function http2Client(port: U16) -> Int;
+
+@FFI.Extern { library: kira_network; symbol: kira_network_http3_server; abi: c; }
+function http3Server() -> Int;
+@FFI.Extern { library: kira_network; symbol: kira_network_http3_client; abi: c; }
+function http3Client(port: U16) -> Int;
+
+@FFI.Extern { library: kira_network; symbol: kira_network_websocket_server; abi: c; }
+function websocketServer() -> Int;
+@FFI.Extern { library: kira_network; symbol: kira_network_websocket_client; abi: c; }
+function websocketClient(port: U16) -> Int;
+
+@FFI.Extern { library: kira_network; symbol: kira_network_io_roundtrip; abi: c; }
+function ioRoundtrip() -> Int;
+
+@FFI.Extern { library: kira_network; symbol: kira_network_server_port; abi: c; }
+function serverPort(handle: Int) -> Int;
+@FFI.Extern { library: kira_network; symbol: kira_network_poll; abi: c; }
+function networkPoll(handle: Int) -> I32;
+@FFI.Extern { library: kira_network; symbol: kira_network_result; abi: c; }
+function networkResult(handle: Int) -> Int;
+@FFI.Extern { library: kira_network; symbol: kira_network_close; abi: c; }
+function networkClose(handle: Int);
+@FFI.Extern { library: kira_network; symbol: kira_network_cancel; abi: c; }
+function networkCancel(handle: Int);
+
+// Polling is a Kira yield point, so the Kira scheduler keeps driving sibling
+// protocol tasks while Tokio completes the actual socket future.
+async function waitOperation(handle: Int) -> Int {
+    if handle <= 0 {
+        return handle
+    }
+    var state = networkPoll(handle)
+    while state == 0 {
+        taskYield()
+        state = networkPoll(handle)
+    }
+    let value = networkResult(handle)
+    networkClose(handle)
+    return value
+}
+
+async function runHttp1() -> Int {
+    let server = http1Server()
+    if server <= 0 {
+        return server
+    }
+    let port = serverPort(server)
+    if port <= 0 {
+        networkClose(server)
+        return port
+    }
+    let client = http1Client(U16(port))
+    if client <= 0 {
+        networkClose(server)
+        return client
+    }
+    let clientResult = waitOperation(client)
+    if clientResult <= 0 {
+        networkClose(server)
+        return clientResult
+    }
+    return clientResult + waitOperation(server)
+}
+
+async function runHttp2() -> Int {
+    let server = http2Server()
+    if server <= 0 {
+        return server
+    }
+    let port = serverPort(server)
+    if port <= 0 {
+        networkClose(server)
+        return port
+    }
+    let client = http2Client(U16(port))
+    if client <= 0 {
+        networkClose(server)
+        return client
+    }
+    let clientResult = waitOperation(client)
+    if clientResult <= 0 {
+        networkClose(server)
+        return clientResult
+    }
+    return clientResult + waitOperation(server)
+}
+
+async function runHttp3() -> Int {
+    let server = http3Server()
+    if server <= 0 {
+        return server
+    }
+    let port = serverPort(server)
+    if port <= 0 {
+        networkClose(server)
+        return port
+    }
+    let client = http3Client(U16(port))
+    if client <= 0 {
+        networkClose(server)
+        return client
+    }
+    let clientResult = waitOperation(client)
+    if clientResult <= 0 {
+        networkClose(server)
+        return clientResult
+    }
+    return clientResult + waitOperation(server)
+}
+
+async function runWebsocket() -> Int {
+    let server = websocketServer()
+    if server <= 0 {
+        return server
+    }
+    let port = serverPort(server)
+    if port <= 0 {
+        networkClose(server)
+        return port
+    }
+    let client = websocketClient(U16(port))
+    if client <= 0 {
+        networkClose(server)
+        return client
+    }
+    let clientResult = waitOperation(client)
+    if clientResult <= 0 {
+        networkClose(server)
+        return clientResult
+    }
+    return clientResult + waitOperation(server)
+}
+
+async function runIo() -> Int {
+    return waitOperation(ioRoundtrip())
+}
+
+async function runCancellation() -> Int {
+    let handle = ioRoundtrip()
+    if handle <= 0 {
+        return handle
+    }
+    networkCancel(handle)
+    if networkPoll(handle) == -101 {
+        return 1
+    }
+    return -1
+}
+
+async function runAllNetworking() -> Int {
+    let http1 = Task { runHttp1() }
+    let http2 = Task { runHttp2() }
+    let http3 = Task { runHttp3() }
+    let websocket = Task { runWebsocket() }
+    let io = Task { runIo() }
+    let cancellation = Task { runCancellation() }
+    return http1.await + http2.await + http3.await + websocket.await + io.await + cancellation.await
+}
+
+@Main function main() {
+    let all = Task { runAllNetworking() }
+    print(all.await)
+    return
+}

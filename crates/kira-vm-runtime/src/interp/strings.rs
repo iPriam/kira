@@ -136,21 +136,27 @@ impl Vm<'_> {
             return Err(VmError::NotAString);
         };
         let text = self.heap.get(id);
-        // Every argument is a `String`; a receiver that is not one has already
-        // been refused above.
-        let mut written: Vec<&str> = Vec::with_capacity(arguments.len());
-        for &argument in arguments {
-            let Value::Str(argument) = argument else {
-                return Err(VmError::NotAString);
-            };
-            written.push(self.heap.get(argument));
+        // Every argument is a `String`; validate that without building a
+        // temporary `Vec<&str>`. The operation/arity match below can then borrow
+        // each string directly from the heap.
+        if arguments
+            .iter()
+            .any(|argument| !matches!(argument, Value::Str(_)))
+        {
+            return Err(VmError::NotAString);
         }
-        match (op, written.as_slice()) {
-            (StringOp::Contains, [needle]) => Ok(Value::Bool(text.contains(needle))),
-            (StringOp::StartsWith, [prefix]) => Ok(Value::Bool(text.starts_with(prefix))),
-            (StringOp::EndsWith, [suffix]) => Ok(Value::Bool(text.ends_with(suffix))),
-            (StringOp::Replace, [from, to]) => {
-                let replaced = text.replace(from, to);
+        match (op, arguments) {
+            (StringOp::Contains, [Value::Str(needle)]) => {
+                Ok(Value::Bool(text.contains(self.heap.get(*needle))))
+            }
+            (StringOp::StartsWith, [Value::Str(prefix)]) => {
+                Ok(Value::Bool(text.starts_with(self.heap.get(*prefix))))
+            }
+            (StringOp::EndsWith, [Value::Str(suffix)]) => {
+                Ok(Value::Bool(text.ends_with(self.heap.get(*suffix))))
+            }
+            (StringOp::Replace, [Value::Str(from), Value::Str(to)]) => {
+                let replaced = text.replace(self.heap.get(*from), self.heap.get(*to));
                 Ok(Value::Str(self.heap.alloc(replaced)))
             }
             (StringOp::IsInt, []) => Ok(Value::Bool(text.trim().parse::<i64>().is_ok())),
@@ -175,11 +181,12 @@ impl Vm<'_> {
                 let raised = text.to_uppercase();
                 Ok(Value::Str(self.heap.alloc(raised)))
             }
-            (StringOp::Split, [separator]) => {
+            (StringOp::Split, [Value::Str(separator)]) => {
                 // An empty separator would make `split` yield one empty piece
                 // per character boundary plus two ends, which is not a split of
                 // anything. The whole text as one piece is the honest answer to
                 // "split this on nothing".
+                let separator = self.heap.get(*separator);
                 let pieces: Vec<String> = if separator.is_empty() {
                     vec![text.to_owned()]
                 } else {

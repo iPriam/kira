@@ -325,6 +325,25 @@ fn an_instance_still_works_after_a_call_traps() {
     assert_eq!(ui.finish().current, 0);
 }
 
+/// A structurally valid hand-built module may return with an extra operand on
+/// the stack. A persistent instance must reclaim it before reusing scratch for
+/// the next call rather than retaining a stale value between entrypoints.
+#[test]
+fn a_persistent_call_reclaims_extra_return_stack_values() {
+    let mut module = library();
+    let extra_stack = func("extra_stack", 0, 0, vec![I::ConstStr(0), I::ReturnVoid]);
+    module.functions.push(extra_stack);
+    let function = (module.functions.len() - 1) as u32;
+    let mut ui = Instance::load(module).expect("a structurally valid module");
+    let mut host = CapturingHost::new();
+
+    assert_eq!(ui.call(&mut host, function, &[]), Ok(NativeResult::Void));
+    assert_eq!(ui.stats().current, 0);
+    assert_eq!(ui.call(&mut host, function, &[]), Ok(NativeResult::Void));
+    assert_eq!(ui.stats().current, 0);
+    assert_eq!(ui.finish().current, 0);
+}
+
 /// An uncrossable result is refused by name rather than turned into some other
 /// value — and the value it refused is freed, not stranded.
 #[test]

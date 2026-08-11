@@ -61,7 +61,7 @@ use kira_bytecode::module::Module;
 use kira_runtime_abi::{HostCapabilities, NativeArg, NativeResult};
 
 use crate::error::VmError;
-use crate::interp::{Program, Vm, check_signature};
+use crate::interp::{Program, Vm, VmScratch, check_signature};
 use crate::value::{Heap, HeapStats, Value};
 
 /// The name a consumer holds for one object living in an [`Instance`].
@@ -102,6 +102,10 @@ pub struct Instance {
     roots: BTreeMap<RootId, Value>,
     /// The next root id to mint. Only ever increases.
     next_root: u64,
+    /// Reusable interpreter storage returned after each call. Task state is
+    /// deliberately kept inside each VM run, so task handles never cross this
+    /// library boundary.
+    scratch: VmScratch,
 }
 
 impl Instance {
@@ -113,6 +117,7 @@ impl Instance {
             // Zero is never minted, so a zeroed word is never a live handle.
             next_root: 1,
             roots: BTreeMap::new(),
+            scratch: VmScratch::default(),
         }
     }
 
@@ -162,9 +167,12 @@ impl Instance {
 
         // The VM runs on this instance's heap and gives it back, whether the
         // call returned or trapped — so a trap's reclamation lands here too.
-        let mut vm = Vm::new(host, std::mem::take(&mut self.heap));
+        let scratch = std::mem::take(&mut self.scratch);
+        let mut vm = Vm::new_with_scratch(host, std::mem::take(&mut self.heap), scratch);
         let outcome = vm.enter_values(self.program.module(), function_id, lowered);
-        self.heap = vm.into_heap();
+        let (heap, scratch) = vm.into_heap_and_scratch();
+        self.heap = heap;
+        self.scratch = scratch;
 
         self.lift_result(function_id, outcome?)
     }

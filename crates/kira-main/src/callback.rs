@@ -32,7 +32,7 @@ use kira_runtime_abi::{
     NativeStateError, NativeStatePathStep, NativeStateStore, NativeStateToken, NativeStateTypeId,
     NativeStateValue, file_system,
 };
-use kira_vm_runtime::{Program, RunOutcome, VmError};
+use kira_vm_runtime::{Program, RunOutcome, VmError, debug::VmDebugObserver};
 
 use crate::ForeignBinding;
 
@@ -90,9 +90,24 @@ impl ForeignSession {
     /// The invoker is installed for exactly this call and cleared afterwards, so
     /// the sidecar never holds a callback that outlives the session it reaches.
     pub fn run(&self) -> Result<RunOutcome, VmError> {
+        self.run_inner(None)
+    }
+
+    /// Runs the VM entrypoint with an instruction-level debugger attached.
+    pub fn run_with_debug(
+        &self,
+        observer: &mut dyn VmDebugObserver,
+    ) -> Result<RunOutcome, VmError> {
+        self.run_inner(Some(observer))
+    }
+
+    fn run_inner(&self, observer: Option<&mut dyn VmDebugObserver>) -> Result<RunOutcome, VmError> {
         let _active = ActiveSession::install(self);
         let mut host = SessionHost { session: self };
-        self.program.run(&mut host)
+        match observer {
+            Some(observer) => self.program.run_with_debug(&mut host, observer),
+            None => self.program.run(&mut host),
+        }
     }
 
     /// Calls one foreign import through its generated adapter.

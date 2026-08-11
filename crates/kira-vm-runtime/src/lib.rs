@@ -20,14 +20,19 @@
 //! so an object returned by one call has nowhere else to live until the next
 //! one. See [`instance`] for what "balanced" means once a heap outlives a call.
 
+pub mod debug;
 pub mod error;
 pub mod instance;
 pub mod interp;
 pub mod value;
 
+pub use debug::{
+    KiraVmDebugFrame, KiraVmDebugState, KiraVmDebugValue, VmLldbBreakpoint, VmLldbObserver,
+    kira_vm_debug_dump, kira_vm_debug_probe,
+};
 pub use error::{NativeStateOperation, VmError};
 pub use instance::{Instance, RootId};
-pub use interp::{Program, RunOutcome, execute};
+pub use interp::{Program, RunOutcome, execute, execute_with_debug};
 pub use value::{Heap, HeapStats, StrId, Value};
 
 #[cfg(test)]
@@ -37,6 +42,10 @@ mod compiler_tests;
 #[cfg(test)]
 #[path = "foreign_tests.rs"]
 mod foreign_tests;
+
+#[cfg(test)]
+#[path = "frame_cache_tests.rs"]
+mod frame_cache_tests;
 
 #[cfg(test)]
 #[path = "native_state_tests.rs"]
@@ -49,6 +58,7 @@ mod release_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::debug::{VmDebugAction, VmDebugEvent, VmDebugObserver};
     use kira_bytecode::module::{FuncProto, Module};
     use kira_bytecode::op::Instruction as I;
     use kira_runtime_abi::CapturingHost;
@@ -68,6 +78,69 @@ mod tests {
             code,
             releases: kira_bytecode::FrameRelease::EveryLocal,
         }
+    }
+
+    #[derive(Default)]
+    struct DebugProbe {
+        events: Vec<DebugSnapshot>,
+    }
+
+    struct DebugSnapshot {
+        function_name: String,
+        pc: usize,
+        locals: Vec<Value>,
+        stack: Vec<Value>,
+        backtrace: Vec<(u32, usize)>,
+    }
+
+    impl VmDebugObserver for DebugProbe {
+        fn before_instruction(&mut self, event: VmDebugEvent<'_>) -> VmDebugAction {
+            self.events.push(DebugSnapshot {
+                function_name: event.function_name.to_owned(),
+                pc: event.pc,
+                locals: event.locals.to_vec(),
+                stack: event.stack.to_vec(),
+                backtrace: event
+                    .backtrace
+                    .iter()
+                    .map(|frame| (frame.function_id, frame.pc))
+                    .collect(),
+            });
+            VmDebugAction::Continue
+        }
+    }
+
+    #[test]
+    fn debugger_events_expose_the_pre_instruction_frame_state() {
+        let module = Module {
+            exports: Default::default(),
+            foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
+            foreign_callbacks: Vec::new(),
+            functions: vec![func(
+                "main",
+                0,
+                1,
+                vec![I::ConstInt(7), I::StoreLocal(0), I::LoadLocal(0), I::Return],
+            )],
+            main: Some(0),
+            strings: Vec::new(),
+        };
+        let mut host = CapturingHost::new();
+        let mut probe = DebugProbe::default();
+        let outcome = execute_with_debug(&module, &mut host, &mut probe).expect("debug run");
+
+        assert_eq!(outcome.result, Value::Int(7));
+        assert_eq!(probe.events.len(), 4);
+        assert_eq!(probe.events[0].function_name, "main");
+        assert_eq!(probe.events[0].pc, 0);
+        assert_eq!(probe.events[0].locals, [Value::Void]);
+        assert!(probe.events[0].stack.is_empty());
+        assert_eq!(probe.events[0].backtrace, [(0, 0)]);
+        assert_eq!(probe.events[2].locals, [Value::Int(7)]);
+        assert!(probe.events[2].stack.is_empty());
+        assert_eq!(probe.events[3].stack, [Value::Int(7)]);
+        assert_eq!(probe.events[3].locals, [Value::Int(7)]);
     }
 
     /// A host with a native half: answers `shout(n, s)` with `s` repeated `n`
@@ -469,6 +542,55 @@ mod tests {
         };
         let (lines, outcome) = run(&module);
         assert_eq!(lines, ["10"]);
+        assert_eq!(outcome.heap.current, 0);
+    }
+
+    #[test]
+    fn signed_integer_comparisons_keep_their_ordering() {
+        let main = func(
+            "main",
+            0,
+            0,
+            vec![
+                I::ConstInt(4),
+                I::ConstInt(4),
+                I::EqInt,
+                I::Print,
+                I::Pop,
+                I::ConstInt(4),
+                I::ConstInt(4),
+                I::NeInt,
+                I::Print,
+                I::Pop,
+                I::ConstInt(3),
+                I::ConstInt(4),
+                I::LeInt,
+                I::Print,
+                I::Pop,
+                I::ConstInt(5),
+                I::ConstInt(4),
+                I::GtInt,
+                I::Print,
+                I::Pop,
+                I::ConstInt(4),
+                I::ConstInt(4),
+                I::GeInt,
+                I::Print,
+                I::Pop,
+                I::ReturnVoid,
+            ],
+        );
+        let module = Module {
+            exports: Default::default(),
+            foreign_imports: Vec::new(),
+            foreign_aggregates: Default::default(),
+            foreign_callbacks: Vec::new(),
+            functions: vec![main],
+            main: Some(0),
+            strings: vec![],
+        };
+        let (lines, outcome) = run(&module);
+        assert_eq!(lines, ["true", "false", "true", "true", "true"]);
         assert_eq!(outcome.heap.current, 0);
     }
 

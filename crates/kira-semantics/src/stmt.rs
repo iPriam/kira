@@ -6,13 +6,12 @@
 //!
 //! # Desugaring happens here
 //!
-//! Three of the language's statements do not exist below this module. A `for`
-//! becomes the one loop shape the HIR has ([`HirStmt::While`]), and a `switch`
-//! and a `match` both become a chain of [`HirStmt::If`]. So the IR, the
-//! bytecode compiler, the VM, the LLVM backend, and the WASM backend never
-//! learn any of them exists — and none can disagree with the construct it
-//! desugars to on any backend, because by the time a backend sees one, it *is*
-//! that construct.
+//! `for` becomes the one loop shape the HIR has ([`HirStmt::While`]), and a
+//! `switch` and a `match` become chains of [`HirStmt::If`]. `attempt` is the
+//! deliberate exception: it carries a linear sequence of guarded steps into
+//! the HIR and IR so a long run of `try` bindings does not become a deeply
+//! nested success tree. The backends learn that one structured region, but not
+//! any of the source parser's contextual syntax.
 //!
 //! `match` is the case that shows where the limit of a desugar sits: the
 //! control flow costs nothing, but binding a variant's payload needed one new
@@ -46,6 +45,35 @@ impl Analyzer<'_> {
         stmts.iter().any(|&id| self.stmt_definitely_returns(id))
     }
 
+    /// Whether a statement list always leaves the loop it belongs to before
+    /// that loop's back edge — by returning, or by breaking out of it.
+    ///
+    /// This does not descend into a nested loop, for two reasons that point the
+    /// same way: a `break` in one belongs to *that* loop, and a loop may run
+    /// zero times, so neither its breaks nor its returns are certain.
+    pub(crate) fn body_always_exits_loop(&self, stmts: &[HirStmtId]) -> bool {
+        stmts.iter().any(|&id| self.stmt_always_exits_loop(id))
+    }
+
+    fn stmt_always_exits_loop(&self, id: HirStmtId) -> bool {
+        match self.program.stmt(id) {
+            HirStmt::Return { .. } | HirStmt::Break => true,
+            HirStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => self.body_always_exits_loop(then_body) && self.body_always_exits_loop(else_body),
+            HirStmt::Attempt { attempt } => {
+                self.body_always_exits_loop(&attempt.trailing)
+                    && attempt
+                        .steps
+                        .iter()
+                        .all(|step| self.body_always_exits_loop(&step.handler))
+            }
+            _ => false,
+        }
+    }
+
     fn stmt_definitely_returns(&self, id: HirStmtId) -> bool {
         match self.program.stmt(id) {
             HirStmt::Return { .. } => true,
@@ -57,6 +85,13 @@ impl Analyzer<'_> {
                 // An empty else (no `else` written) can fall through, and
                 // `body_definitely_returns` is false for an empty list.
                 self.body_definitely_returns(then_body) && self.body_definitely_returns(else_body)
+            }
+            HirStmt::Attempt { attempt } => {
+                self.body_definitely_returns(&attempt.trailing)
+                    && attempt
+                        .steps
+                        .iter()
+                        .all(|step| self.body_definitely_returns(&step.handler))
             }
             _ => false,
         }
@@ -288,9 +323,14 @@ impl Analyzer<'_> {
             }
             Stmt::While { cond, body, .. } => {
                 let cond_expr = self.analyze_condition(ctx, cond);
+                // The body is the same code twice, so a value it gives away is
+                // gone before the second run — the check the back edge needs.
+                let loop_moves = crate::ownership::LoopMoves::start(ctx);
                 ctx.loop_depth += 1;
                 let loop_body = self.analyze_block(ctx, &body);
                 ctx.loop_depth -= 1;
+                let exits = self.body_always_exits_loop(&loop_body);
+                self.check_loop_back_edge(ctx, loop_moves, exits);
                 let hir = self.program.stmts.alloc(HirStmt::While {
                     cond: cond_expr,
                     body: loop_body,

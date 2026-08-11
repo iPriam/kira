@@ -8,9 +8,13 @@
 
 use kira_bytecode::module::Module;
 use kira_bytecode::op::Instruction;
-use kira_runtime_abi::{HostCapabilities, NativeStatePathStep, TaskExecutor};
+use kira_runtime_abi::{
+    HostCapabilities, NativeStatePathStep, NativeStateToken, NativeStateTypeId, NativeStateValue,
+    TaskExecutor,
+};
 
-use crate::error::{NativeStateOperation, VmError};
+use crate::debug::{VmDebugAction, VmDebugEvent, VmDebugFrame, VmDebugObserver};
+use crate::error::VmError;
 use crate::value::{Heap, Value};
 
 mod arrays;
@@ -20,6 +24,7 @@ mod env;
 mod file_system;
 mod frames;
 mod host;
+mod instructions;
 mod native_state;
 mod operators;
 mod place;
@@ -27,9 +32,9 @@ mod program;
 mod strings;
 
 pub(crate) use self::program::check_signature;
-pub use self::program::{Program, RunOutcome, execute};
+pub use self::program::{Program, RunOutcome, execute, execute_with_debug};
 
-use self::frames::{Frame, Writeback, new_frame};
+use self::frames::{Frame, Writeback};
 use self::place::ResolvedStep;
 
 /// Guards against unbounded recursion turning into unbounded memory use.
@@ -40,6 +45,10 @@ pub(crate) struct Vm<'h> {
     host: &'h mut dyn HostCapabilities,
     pub(crate) heap: Heap,
     stack: Vec<Value>,
+    /// Reusable call-stack storage. Taking this vector for one run preserves
+    /// its capacity across calls on a persistent [`crate::Instance`] without
+    /// borrowing the VM and the dispatch loop at the same time.
+    frames: Vec<Frame>,
     /// Reusable scratch for a dynamic place's resolved steps.
     ///
     /// A `StorePlace`/`ArrayAppend` resolves its path into this buffer once per
@@ -55,6 +64,12 @@ pub(crate) struct Vm<'h> {
     /// mutation of native state, and allocating its path each time would put an
     /// allocation on that path.
     native_path: Vec<NativeStatePathStep>,
+    /// Reusable scratch for arguments of a shared `StringOp` instruction.
+    ///
+    /// Taking this buffer out around the pop/execute sequence keeps the normal
+    /// string-operation path allocation-free while preserving ownership
+    /// cleanup when malformed bytecode traps during argument collection.
+    string_args: Vec<Value>,
     /// Slots the next entered frame should hand back.
     ///
     /// Set immediately before entering and taken by the frame that starts, so
@@ -73,6 +88,56 @@ pub(crate) struct Vm<'h> {
     /// *policy* is not here — the scheduler is generated Kira the IR
     /// synthesizes, so this only answers what each primitive means.
     tasks: TaskExecutor,
+    /// Returned call frames whose local-vector capacity can be reused by the
+    /// next call. Recursive programs otherwise allocate one `Vec<Value>` for
+    /// every invocation even when the same small set of local shapes repeats.
+    frame_cache: Vec<Frame>,
+    /// Reusable writeback descriptors for calls into a native half.
+    ///
+    /// Native writebacks do not need to survive a frame, but their resolved
+    /// paths can be just as allocation-heavy as VM-to-VM writebacks. Keep the
+    /// descriptor vector and each path's capacity on the VM while the native
+    /// call is in progress, then return it cleared for the next crossing.
+    native_writebacks: Vec<Writeback>,
+    /// Temporary buffers used to marshal the next native crossing.
+    native_scratch: NativeCallScratch,
+}
+
+/// Temporary native-call storage detached from [`Vm`] while a host call runs.
+///
+/// The argument trees borrow the VM heap and the lowered arguments borrow those
+/// trees, so keeping these vectors together makes their lifetime relationship
+/// explicit while still allowing every crossing to reuse its allocations.
+#[derive(Default)]
+pub(crate) struct NativeCallScratch {
+    pub(crate) arguments: Vec<Value>,
+    pub(crate) trees: Vec<Option<NativeStateValue>>,
+    pub(crate) native_views: Vec<Option<(NativeStateToken, NativeStateTypeId)>>,
+}
+
+impl NativeCallScratch {
+    pub(crate) fn clear(&mut self) {
+        self.arguments.clear();
+        self.trees.clear();
+        self.native_views.clear();
+    }
+}
+
+/// Reusable interpreter storage that can outlive one call on a persistent
+/// [`crate::Instance`]. The task table is intentionally absent: task handles
+/// are valid only for one run and are recreated for every entry.
+#[derive(Default)]
+pub(crate) struct VmScratch {
+    stack: Vec<Value>,
+    frames: Vec<Frame>,
+    steps: Vec<ResolvedStep>,
+    native_path: Vec<NativeStatePathStep>,
+    string_args: Vec<Value>,
+    pending_capture: Vec<u16>,
+    captured: Vec<(u32, Value)>,
+    frame_cache: Vec<Frame>,
+    native_writebacks: Vec<Writeback>,
+    native_scratch: NativeCallScratch,
 }
 
 impl Vm<'_> {
@@ -84,14 +149,36 @@ impl Vm<'_> {
     /// about to be dropped anyway, but an [`crate::Instance`]'s heap outlives
     /// the call, so a trap that left its frames behind would leak into it.
     fn run(&mut self, module: &Module, entry: Frame) -> Result<Value, VmError> {
-        let mut frames = vec![entry];
-        match self.dispatch(module, &mut frames) {
+        self.run_inner::<false>(module, entry, None)
+    }
+
+    /// Runs with an instruction observer installed.
+    fn run_with_debug(
+        &mut self,
+        module: &Module,
+        entry: Frame,
+        observer: &mut dyn VmDebugObserver,
+    ) -> Result<Value, VmError> {
+        self.run_inner::<true>(module, entry, Some(observer))
+    }
+
+    fn run_inner<const DEBUG: bool>(
+        &mut self,
+        module: &Module,
+        entry: Frame,
+        observer: Option<&mut dyn VmDebugObserver>,
+    ) -> Result<Value, VmError> {
+        let mut frames = std::mem::take(&mut self.frames);
+        frames.push(entry);
+        let result = match self.dispatch_inner::<DEBUG>(module, &mut frames, observer) {
             Ok(value) => Ok(value),
             Err(error) => {
                 self.unwind(&mut frames);
                 Err(error)
             }
-        }
+        };
+        self.frames = frames;
+        result
     }
 
     /// Frees every local of every live frame and everything left on the operand
@@ -100,25 +187,81 @@ impl Vm<'_> {
         for frame in frames.drain(..) {
             self.discard(frame.locals);
         }
-        let leftovers = std::mem::take(&mut self.stack);
-        self.discard(leftovers);
+        // Drain in place so a persistent VM can reuse the operand-stack
+        // capacity after a trap. `Value` is Copy; the heap drop is the only
+        // ownership work needed here.
+        for value in self.stack.drain(..) {
+            self.heap.drop_value(value);
+        }
     }
 
-    fn dispatch(&mut self, module: &Module, frames: &mut Vec<Frame>) -> Result<Value, VmError> {
+    fn dispatch_inner<const DEBUG: bool>(
+        &mut self,
+        module: &Module,
+        frames: &mut Vec<Frame>,
+        mut observer: Option<&mut dyn VmDebugObserver>,
+    ) -> Result<Value, VmError> {
+        // A debug observer borrows the backtrace only for the duration of one
+        // callback. Reuse one buffer across stops so stepping through a large
+        // function does not allocate once per instruction. The non-debug
+        // instantiation keeps the buffer empty, preserving the ordinary run's
+        // allocation-free dispatch path.
+        let mut debug_backtrace = if DEBUG {
+            Vec::with_capacity(frames.len())
+        } else {
+            Vec::new()
+        };
         loop {
             let depth = frames.len() - 1;
-            let frame = &mut frames[depth];
-            let func = &module.functions[frame.func as usize];
-            let instruction = func.code[frame.pc].clone();
-            frame.pc += 1;
+            let function_id = frames[depth].func;
+            let pc = frames[depth].pc;
+            let func = &module.functions[function_id as usize];
+            // The bytecode is immutable for the duration of a run. Borrowing
+            // the instruction avoids cloning path vectors and writeback target
+            // tables on every dispatch iteration; scalar immediates are copied
+            // only in the arms that need them.
+            let instruction = &func.code[pc];
+            if DEBUG && let Some(observer) = observer.as_deref_mut() {
+                debug_backtrace.clear();
+                debug_backtrace.extend(frames.iter().enumerate().rev().map(|(index, frame)| {
+                    let function = &module.functions[frame.func as usize];
+                    VmDebugFrame {
+                        function_id: frame.func,
+                        function_name: &function.name,
+                        pc: if index == depth {
+                            pc
+                        } else {
+                            frame.pc.saturating_sub(1)
+                        },
+                    }
+                }));
+                let event = VmDebugEvent {
+                    function_id,
+                    function_name: &func.name,
+                    pc,
+                    instruction,
+                    code: &func.code,
+                    call_depth: depth,
+                    stack_depth: self.stack.len(),
+                    locals: &frames[depth].locals,
+                    stack: &self.stack,
+                    backtrace: &debug_backtrace,
+                };
+                if matches!(observer.before_instruction(event), VmDebugAction::Stop) {
+                    return Err(VmError::DebuggerStopped);
+                }
+            }
+            frames[depth].pc = pc + 1;
 
             match instruction {
-                Instruction::Return | Instruction::ReturnVoid => {
-                    let result = if matches!(instruction, Instruction::Return) {
-                        self.pop()?
-                    } else {
-                        Value::Void
-                    };
+                Instruction::Return => {
+                    let result = self.pop()?;
+                    if let Some(value) = self.finish_frame(module, frames, result)? {
+                        return Ok(value);
+                    }
+                }
+                Instruction::ReturnVoid => {
+                    let result = Value::Void;
                     if let Some(value) = self.finish_frame(module, frames, result)? {
                         return Ok(value);
                     }
@@ -127,8 +270,8 @@ impl Vm<'_> {
                     if frames.len() >= MAX_CALL_DEPTH {
                         return Err(VmError::CallDepthExceeded);
                     }
-                    let mut callee = new_frame(module, index)?;
-                    if let Err(error) = self.fill_params(module, index, &mut callee) {
+                    let mut callee = self.take_frame(module, *index)?;
+                    if let Err(error) = self.fill_params(module, *index, &mut callee) {
                         // The callee is not on the frame stack yet, so the
                         // unwind cannot see it — the arguments already moved
                         // into its slots are freed here instead.
@@ -137,42 +280,84 @@ impl Vm<'_> {
                     }
                     frames.push(callee);
                 }
-                Instruction::CallNative(id) => self.call_native(module, id, &[], frames)?,
-                Instruction::CallForeign(id) => self.call_foreign(module, id)?,
+                Instruction::CallNative(id) => self.call_native(module, *id, &[], frames)?,
+                Instruction::CallForeign(id) => self.call_foreign(module, *id)?,
+                Instruction::Jump(target) => {
+                    // `func` is already the current function for this
+                    // dispatch turn. Keep the validation guard, but avoid
+                    // re-looking it up through `frame.func` on every loop
+                    // back-edge.
+                    if (*target as usize) >= func.code.len() {
+                        return Err(VmError::BadJump(*target));
+                    }
+                    frames[depth].pc = *target as usize;
+                }
+                // Keep scalar loop shapes in this outer match. Falling
+                // through to `step` would match the same instruction a second
+                // time inside its large semantic dispatcher, which is visible
+                // on every generated counter loop. The helpers retain the
+                // checked ownership behavior used by the general path.
+                Instruction::ConstInt(value) => self.stack.push(Value::Int(*value)),
+                Instruction::ConstFloat(value) => self.stack.push(Value::Float(*value)),
+                Instruction::ConstBool(value) => self.stack.push(Value::Bool(*value)),
+                Instruction::ConstVoid => self.stack.push(Value::Void),
+                Instruction::ConstRawPtrNull => self.stack.push(Value::RawPtr(0)),
+                Instruction::LoadLocal(slot) => {
+                    self.load_local(&frames[depth], *slot);
+                }
+                Instruction::StoreLocal(slot) => {
+                    self.store_local(&mut frames[depth], *slot)?;
+                }
+                Instruction::JumpIfFalse(target) => {
+                    if !self.pop_bool()? {
+                        if (*target as usize) >= func.code.len() {
+                            return Err(VmError::BadJump(*target));
+                        }
+                        frames[depth].pc = *target as usize;
+                    }
+                }
+                Instruction::AddInt => self.add_int()?,
+                Instruction::SubInt => self.sub_int()?,
+                Instruction::MulInt => self.mul_int()?,
+                Instruction::EqInt => self.eq_int()?,
+                Instruction::NeInt => self.ne_int()?,
+                Instruction::LtInt => self.lt_int()?,
+                Instruction::LeInt => self.le_int()?,
+                Instruction::GtInt => self.gt_int()?,
+                Instruction::GeInt => self.ge_int()?,
                 Instruction::CallMut { func, slot, path } => {
                     if frames.len() >= MAX_CALL_DEPTH {
                         return Err(VmError::CallDepthExceeded);
                     }
-                    let mut callee = new_frame(module, func)?;
+                    let mut callee = self.take_frame(module, *func)?;
                     // The writeback place's indices sit on top of the operand
                     // stack, pushed after the arguments; resolve them first so
                     // the arguments are exposed for `fill_params`.
                     let mut steps = Vec::new();
-                    if let Err(error) = self.fill_steps(&path, &mut steps) {
+                    if let Err(error) = self.fill_steps(path, &mut steps) {
                         self.discard(callee.locals);
                         return Err(error);
                     }
-                    if let Err(error) = self.fill_params(module, func, &mut callee) {
+                    if let Err(error) = self.fill_params(module, *func, &mut callee) {
                         self.discard(callee.locals);
                         return Err(error);
                     }
-                    callee.writebacks = vec![Writeback {
+                    callee.writebacks.push(Writeback {
                         param: 0,
-                        slot,
+                        slot: *slot,
                         steps,
-                    }];
+                    });
                     frames.push(callee);
                 }
                 Instruction::CallWriteback { func, targets } => {
                     if frames.len() >= MAX_CALL_DEPTH {
                         return Err(VmError::CallDepthExceeded);
                     }
-                    let mut callee = new_frame(module, func)?;
+                    let mut callee = self.take_frame(module, *func)?;
                     // Every target's place indices sit on top of the operand
                     // stack, pushed after the arguments and targets in order, so
                     // they are resolved back to front — the last target's
                     // indices are the ones on top.
-                    let mut writebacks = Vec::with_capacity(targets.len());
                     let mut failure = None;
                     for target in targets.iter().rev() {
                         let mut steps = Vec::new();
@@ -180,7 +365,7 @@ impl Vm<'_> {
                             failure = Some(error);
                             break;
                         }
-                        writebacks.push(Writeback {
+                        callee.writebacks.push(Writeback {
                             param: target.param,
                             slot: target.slot,
                             steps,
@@ -192,12 +377,11 @@ impl Vm<'_> {
                     }
                     // Back to parameter order, so a return writes the targets in
                     // the order the call declared them.
-                    writebacks.reverse();
-                    if let Err(error) = self.fill_params(module, func, &mut callee) {
+                    callee.writebacks.reverse();
+                    if let Err(error) = self.fill_params(module, *func, &mut callee) {
                         self.discard(callee.locals);
                         return Err(error);
                     }
-                    callee.writebacks = writebacks;
                     frames.push(callee);
                 }
                 Instruction::CallNativeWriteback { func, targets } => {
@@ -206,493 +390,43 @@ impl Vm<'_> {
                     // What differs is where the final values come from: there is
                     // no callee frame to move them out of, so the call returns
                     // them and `call_native` stores them.
-                    let mut writebacks = Vec::with_capacity(targets.len());
-                    for target in targets.iter().rev() {
-                        let mut steps = Vec::new();
-                        self.fill_steps(&target.path, &mut steps)?;
-                        writebacks.push(Writeback {
-                            param: target.param,
-                            slot: target.slot,
-                            steps,
+                    let mut writebacks = std::mem::take(&mut self.native_writebacks);
+                    if writebacks.len() < targets.len() {
+                        writebacks.resize_with(targets.len(), || Writeback {
+                            param: 0,
+                            slot: 0,
+                            steps: Vec::new(),
                         });
                     }
-                    writebacks.reverse();
-                    self.call_native(module, func, &writebacks, frames)?;
+                    let active = &mut writebacks[..targets.len()];
+                    let mut failure = None;
+                    for (writeback, target) in active.iter_mut().zip(targets.iter().rev()) {
+                        writeback.param = target.param;
+                        writeback.slot = target.slot;
+                        if let Err(error) = self.fill_steps(&target.path, &mut writeback.steps) {
+                            failure = Some(error);
+                            break;
+                        }
+                    }
+                    let result = if let Some(error) = failure {
+                        Err(error)
+                    } else {
+                        // Back to parameter order for the returned writebacks.
+                        active.reverse();
+                        self.call_native(module, *func, active, frames)
+                    };
+                    for writeback in active {
+                        writeback.steps.clear();
+                    }
+                    self.native_writebacks = writebacks;
+                    result?;
                 }
                 other => self.step(module, &mut frames[depth], other)?,
             }
         }
     }
 
-    /// Executes one non-control-flow-frame instruction against `frame`.
-    fn step(
-        &mut self,
-        module: &Module,
-        frame: &mut Frame,
-        instruction: Instruction,
-    ) -> Result<(), VmError> {
-        match instruction {
-            Instruction::ConstInt(value) => self.stack.push(Value::Int(value)),
-            Instruction::ConstFloat(value) => self.stack.push(Value::Float(value)),
-            Instruction::ConstBool(value) => self.stack.push(Value::Bool(value)),
-            Instruction::ConstVoid => self.stack.push(Value::Void),
-            Instruction::ConstRawPtrNull => self.stack.push(Value::RawPtr(0)),
-            Instruction::ForeignCallback(id) => self.foreign_callback(module, id)?,
-            Instruction::ConstStr(index) => {
-                let text = module.strings[index as usize].clone();
-                let id = self.heap.alloc(text);
-                self.stack.push(Value::Str(id));
-            }
-            Instruction::LoadLocal(slot) => {
-                let value = frame.locals[slot as usize];
-                let copy = self.heap.copy_value(value);
-                self.stack.push(copy);
-            }
-            Instruction::StoreLocal(slot) => {
-                let value = self.pop()?;
-                // Storing into a local that holds a recovered view writes THROUGH it
-                // into the callback state — except when the incoming value is itself
-                // a view. Rebinding the local to another view (`state =
-                // nativeRecover<T>(other)`, or a slot the compiler reuses for a
-                // second view) replaces what the local names; writing the second
-                // view into the first one's state is both meaningless and
-                // unrepresentable, since a view has no boxed form.
-                let rebinding_a_view = matches!(value, Value::NativeView { .. });
-                if let Value::NativeView { token, type_id } = frame.locals[slot as usize]
-                    && !rebinding_a_view
-                {
-                    let stored = self.heap.into_native_state(value).map_err(|kind| {
-                        VmError::NativeStateValueMismatch {
-                            operation: NativeStateOperation::Store,
-                            kind,
-                        }
-                    })?;
-                    self.host
-                        .native_state_replace(token, type_id, stored)
-                        .map_err(VmError::NativeState)?;
-                } else {
-                    let old = std::mem::replace(&mut frame.locals[slot as usize], value);
-                    self.heap.drop_value(old);
-                }
-            }
-            Instruction::Pop => {
-                let value = self.pop()?;
-                self.heap.drop_value(value);
-            }
-            Instruction::NativeState(type_word) => self.native_state_new(type_word)?,
-            Instruction::NativeUserData => self.native_user_data()?,
-            Instruction::NativeRecover(type_word) => self.native_recover(type_word)?,
-            Instruction::NativeStateFree => self.native_state_free()?,
-            Instruction::Print => {
-                let value = self.pop()?;
-                let line = self
-                    .heap
-                    .format_and_consume(value)
-                    .ok_or(VmError::UnprintableValue)?;
-                self.host.write_line(&line);
-                self.stack.push(Value::Void);
-            }
-            Instruction::NewStruct(count) => {
-                let first = self
-                    .stack
-                    .len()
-                    .checked_sub(count as usize)
-                    .ok_or(VmError::StackUnderflow)?;
-                // The fields were pushed in declaration order, so splitting
-                // them off preserves layout order — and moves them, so nothing
-                // is copied and nothing is left on the stack to double-free.
-                let fields = self.stack.split_off(first);
-                let id = self.heap.alloc_struct(fields);
-                self.stack.push(Value::Struct(id));
-            }
-            Instruction::GetField(index) => {
-                let base = self.pop()?;
-                if let Value::NativeView { token, type_id } = base {
-                    // Read the one field, not the whole state. Recovering the
-                    // state here rebuilt every string, array and struct it holds
-                    // as heap objects — so reading a counter out of a UI batch
-                    // rebuilt its glyph cache, and reading three fields rebuilt
-                    // it three times.
-                    let stored = self
-                        .host
-                        .native_state_read(
-                            token,
-                            type_id,
-                            &[NativeStatePathStep::Field(index.into())],
-                        )
-                        .map_err(VmError::NativeState)?;
-                    // An aggregate stops here as the node it already is. A whole
-                    // widget tree read out of state is one refcount, and the
-                    // reads that walk into it are refcounts too.
-                    let value = self.heap.read_state_node(stored);
-                    self.stack.push(value);
-                    return Ok(());
-                }
-                if let Value::NativeSnapshot(id) = base {
-                    let field = self.read_snapshot_child(
-                        id,
-                        NativeStatePathStep::Field(index.into()),
-                        VmError::NoSuchField { index },
-                    )?;
-                    self.stack.push(field);
-                    return Ok(());
-                }
-                let Value::Struct(id) = base else {
-                    self.heap.drop_value(base);
-                    return Err(VmError::NotAStruct);
-                };
-                let Some(field) = self.heap.field(id, index) else {
-                    // The struct was ours the moment it left the stack; a
-                    // refused projection frees it rather than abandoning it in
-                    // a heap that may outlive this call.
-                    self.heap.drop_value(base);
-                    return Err(VmError::NoSuchField { index });
-                };
-                // The field is copied out before the struct is dropped: the
-                // struct owns its fields, so handing one out without copying
-                // would hand out storage this drop is about to free.
-                let copy = self.heap.copy_value(field);
-                self.heap.drop_value(base);
-                self.stack.push(copy);
-            }
-            Instruction::StoreField { slot, path } => {
-                let value = self.pop()?;
-                // Every step is a constant field index, so the walk reads the
-                // path directly — no scratch buffer, no allocation.
-                if let Err(error) = self.store_field(frame, slot, path.steps(), value) {
-                    // The value was ours the moment it left the stack, so a
-                    // failed write frees it rather than leaking it.
-                    self.heap.drop_value(value);
-                    return Err(error);
-                }
-            }
-            Instruction::StorePlace { slot, path } => {
-                // The value was pushed last, so it comes off first; the indices
-                // are underneath it.
-                let value = self.pop()?;
-                let stored = self.with_steps(|vm, steps| {
-                    vm.fill_steps(&path, steps)?;
-                    vm.store_place(frame, slot, steps, value)
-                });
-                if let Err(error) = stored {
-                    self.heap.drop_value(value);
-                    return Err(error);
-                }
-            }
-            Instruction::ArrayAppend { slot, path } => self.array_append(frame, slot, &path)?,
-            Instruction::NewArray(count) => self.new_array(count)?,
-            Instruction::ArrayGet => self.array_get()?,
-            Instruction::TaskOp(prim) => {
-                // Popped in reverse: the compiler pushed the three operands
-                // deepest-first, so the last pushed is the third.
-                let third = self.pop_int()?;
-                let second = self.pop_int()?;
-                let first = self.pop_int()?;
-                let answer = self.tasks.perform(prim, first, second, third)?;
-                self.stack.push(Value::Int(answer));
-            }
-            Instruction::ArrayGetLocal(slot) => self.array_get_local(frame, slot)?,
-            Instruction::ArrayLen => self.array_len()?,
-            Instruction::StringLen => {
-                let base = self.pop()?;
-                let Value::Str(id) = base else {
-                    self.heap.drop_value(base);
-                    return Err(VmError::NotAString);
-                };
-                // Bytes, not characters — the same units `charAt` and
-                // `substring` index, and the same count the native helper
-                // produces, which is what keeps the two engines agreeing on
-                // text that is not all ASCII.
-                let counted =
-                    i64::try_from(self.heap.get(id).len()).map_err(|_| VmError::ArrayTooLong);
-                // The string is freed on every path out, not just the one that
-                // produced a count.
-                self.heap.drop_value(base);
-                self.stack.push(Value::Int(counted?));
-            }
-            Instruction::StringCharAt => {
-                let index = self.pop()?;
-                let base = self.pop()?;
-                let read = self.read_char_at(base, index);
-                self.stack.push(Value::Int(read?));
-            }
-            Instruction::StringSubstring => {
-                let end = self.pop()?;
-                let start = self.pop()?;
-                let base = self.pop()?;
-                let carved = self.carve_substring(base, start, end);
-                let text = carved?;
-                let id = self.heap.alloc(text);
-                self.stack.push(Value::Str(id));
-            }
-            Instruction::StringIndexOf => {
-                let needle = self.pop()?;
-                let base = self.pop()?;
-                let found = self.find_index_of(base, needle);
-                self.stack.push(Value::Int(found?));
-            }
-            Instruction::StringOp(op) => {
-                // The arguments were pushed in source order, so they come off
-                // reversed; collecting and reversing restores the order the
-                // operation reads them in. The receiver sits under them.
-                let mut arguments = Vec::with_capacity(op.argument_count());
-                for _ in 0..op.argument_count() {
-                    arguments.push(self.pop()?);
-                }
-                arguments.reverse();
-                let base = self.pop()?;
-                let produced = self.perform_string_op(op, base, &arguments)?;
-                self.stack.push(produced);
-            }
-            Instruction::StringOf => {
-                let value = self.pop()?;
-                let text = self
-                    .heap
-                    .format_and_consume(value)
-                    .ok_or(VmError::UnprintableValue)?;
-                let id = self.heap.alloc(text);
-                self.stack.push(Value::Str(id));
-            }
-            Instruction::NewEnum { tag, has_payload } => {
-                // The payload, when present, was pushed last, so it comes off
-                // first and the box takes ownership of it — nothing is copied
-                // and nothing is left on the stack to double-free.
-                let payload = if has_payload { Some(self.pop()?) } else { None };
-                let id = self.heap.alloc_enum(u32::from(tag), payload);
-                self.stack.push(Value::Enum(id));
-            }
-            Instruction::Erase(type_id) => {
-                // The value is taken over by the box, exactly as an enum
-                // payload is: nothing is copied, and nothing is left behind to
-                // be freed twice.
-                let value = self.pop()?;
-                let id = self.heap.alloc_erased(type_id, value);
-                self.stack.push(Value::Erased(id));
-            }
-            Instruction::NewCell => self.new_cell()?,
-            Instruction::CellGet(slot) => self.cell_get(frame, slot)?,
-            Instruction::CellSet(slot) => self.cell_set(frame, slot)?,
-            Instruction::EnumTag => {
-                let base = self.pop()?;
-                if let Value::NativeSnapshot(id) = base {
-                    let tag = self.snapshot_enum_tag(id)?;
-                    self.stack.push(Value::Int(i64::from(tag)));
-                    return Ok(());
-                }
-                let Value::Enum(id) = base else {
-                    self.heap.drop_value(base);
-                    return Err(VmError::NotAnEnum);
-                };
-                let tag = self.heap.enum_tag(id).ok_or(VmError::NotAnEnum);
-                // The box is freed on every path out, not just the one that
-                // found a tag.
-                self.heap.drop_value(base);
-                self.stack.push(Value::Int(i64::from(tag?)));
-            }
-            Instruction::EnumPayload => {
-                // The same shape as `EnumTag`: the enum is consumed, an owned
-                // copy of what was read is pushed, and the box is freed — so
-                // the binding outlives the enum it came from.
-                let base = self.pop()?;
-                if let Value::NativeSnapshot(id) = base {
-                    let payload = self.snapshot_enum_payload(id)?;
-                    self.stack.push(payload);
-                    return Ok(());
-                }
-                let Value::Enum(id) = base else {
-                    self.heap.drop_value(base);
-                    return Err(VmError::NotAnEnum);
-                };
-                let Some(payload) = self.heap.enum_payload(id) else {
-                    // Same rule as `GetField`: a refused projection frees the
-                    // box it popped.
-                    self.heap.drop_value(base);
-                    return Err(VmError::MissingEnumPayload);
-                };
-                self.heap.drop_value(base);
-                self.stack.push(payload);
-            }
-            Instruction::Jump(target) => self.jump(module, frame, target)?,
-            Instruction::JumpIfFalse(target) => {
-                let condition = self.pop_bool()?;
-                if !condition {
-                    self.jump(module, frame, target)?;
-                }
-            }
-            Instruction::Not => {
-                let value = self.pop_bool()?;
-                self.stack.push(Value::Bool(!value));
-            }
-            Instruction::BitNot => {
-                let value = self.pop_int()?;
-                self.stack.push(Value::Int(!value));
-            }
-            Instruction::NegInt => {
-                let value = self.pop_int()?;
-                self.stack.push(Value::Int(value.wrapping_neg()));
-            }
-            Instruction::NegFloat => {
-                let value = self.pop_float()?;
-                self.stack.push(Value::Float(-value));
-            }
-            Instruction::ConvertIntToFloat => {
-                // Signed `i64` to `f64`, round to nearest ties even — Rust's
-                // `as` matches the native `sitofp`.
-                let value = self.pop_int()?;
-                self.stack.push(Value::Float(value as f64));
-            }
-            Instruction::ConvertFloatToBits => {
-                // A reinterpretation: the IEEE-754 bit pattern, unchanged. The
-                // native backend bitcasts, which is the same 64 bits.
-                let value = self.pop_float()?;
-                self.stack.push(Value::Int(value.to_bits() as i64));
-            }
-            Instruction::CStringNew => {
-                let value = self.pop()?;
-                let Value::Str(id) = value else {
-                    self.heap.drop_value(value);
-                    return Err(VmError::NotAString);
-                };
-                let word = kira_runtime_abi::c_storage::retain_text(self.heap.get(id));
-                self.heap.drop_value(value);
-                self.stack.push(Value::RawPtr(word));
-            }
-            Instruction::ArrayElements(element) => {
-                let value = self.pop()?;
-                let Value::Array(id) = value else {
-                    self.heap.drop_value(value);
-                    return Err(VmError::NotAnArray);
-                };
-                let mut bytes = Vec::new();
-                for &item in self.heap.elements(id) {
-                    write_seam_scalar(&mut bytes, element, item)?;
-                }
-                self.heap.drop_value(value);
-                self.stack
-                    .push(Value::RawPtr(kira_runtime_abi::c_storage::retain_bytes(
-                        &bytes,
-                    )));
-            }
-            Instruction::ScalarText => {
-                let value = self.pop()?;
-                let Value::Int(code) = value else {
-                    self.heap.drop_value(value);
-                    return Err(VmError::TypeMismatch {
-                        expected: "a code point to render as text",
-                    });
-                };
-                // A code point outside Unicode, or a surrogate half, has no
-                // scalar and so no text; the empty string is what it renders
-                // as rather than a trap, matching what the native runtime does.
-                let text = u32::try_from(code)
-                    .ok()
-                    .and_then(char::from_u32)
-                    .map(String::from)
-                    .unwrap_or_default();
-                let id = self.heap.alloc(text);
-                self.stack.push(Value::Str(id));
-            }
-            Instruction::MathOp(op) => {
-                let value = self.pop()?;
-                let Value::Float(value) = value else {
-                    self.heap.drop_value(value);
-                    return Err(VmError::TypeMismatch {
-                        expected: "a float to take a maths operation of",
-                    });
-                };
-                self.stack.push(Value::Float(op.apply(value)));
-            }
-            Instruction::ForeignOffset(offset) => {
-                let address = self.pop_foreign_pointer()?;
-                self.stack
-                    .push(Value::RawPtr(address.wrapping_add(u64::from(offset))));
-            }
-            Instruction::ForeignIndex(stride) => {
-                let index = self.pop()?;
-                let Value::Int(index) = index else {
-                    self.heap.drop_value(index);
-                    return Err(VmError::TypeMismatch {
-                        expected: "an integer index into C storage",
-                    });
-                };
-                let address = self.pop_foreign_pointer()?;
-                let step = (index as u64).wrapping_mul(u64::from(stride));
-                self.stack.push(Value::RawPtr(address.wrapping_add(step)));
-            }
-            Instruction::ForeignLoad { offset, ty } => {
-                let address = self.pop_foreign_pointer()?;
-                let size = kira_runtime_abi::scalar_layout(
-                    ty,
-                    kira_runtime_abi::ForeignPointerWidth::HOST,
-                )
-                .size;
-                // SAFETY: the pointer came from the foreign seam, Kira has no
-                // arithmetic to alter one, and the offset and size are the
-                // target's own C layout. A null base is the one case a program
-                // can produce and is refused rather than read.
-                let Some(word) =
-                    (unsafe { kira_runtime_abi::c_storage::read_bytes(address, offset, size) })
-                else {
-                    return Err(VmError::NullForeignRead);
-                };
-                self.stack.push(foreign_scalar_value(ty, word));
-            }
-            Instruction::CLayoutAddress(aggregate) => {
-                let value = self.pop()?;
-                let id = kira_runtime_abi::ForeignAggregateId(aggregate);
-                let bytes = self.heap.aggregate_bytes(
-                    &module.foreign_aggregates,
-                    id,
-                    value,
-                    kira_runtime_abi::ForeignPointerWidth::HOST,
-                );
-                self.heap.drop_value(value);
-                let bytes = bytes.map_err(|_| VmError::TypeMismatch {
-                    expected: "a C-layout struct",
-                })?;
-                self.stack
-                    .push(Value::RawPtr(kira_runtime_abi::c_storage::retain_bytes(
-                        &bytes,
-                    )));
-            }
-            Instruction::FileSystem(op) => self.file_system(op)?,
-            Instruction::Compiler(op) => self.compiler(op)?,
-            Instruction::Env(op) => self.env(op)?,
-            Instruction::ConvertBitsToFloat => {
-                let value = self.pop_int()?;
-                self.stack.push(Value::Float(f64::from_bits(value as u64)));
-            }
-            Instruction::ConvertBits32ToFloat => {
-                let value = self.pop_int()?;
-                // Only the low 32 bits are the pattern; widening happens after
-                // the reinterpretation, because the same bits denote a
-                // different number at the two widths.
-                let bits = u32::try_from(value as u64 & u64::from(u32::MAX)).unwrap_or(0);
-                self.stack
-                    .push(Value::Float(f64::from(f32::from_bits(bits))));
-            }
-            Instruction::ConvertFloatToBits32 => {
-                let value = self.pop_float()?;
-                // Narrow first, then take the pattern: the rounding is part of
-                // the answer, not an accident of the cast. `as f32` is round to
-                // nearest even, the IEEE-754 default the native backend's
-                // `fptrunc` also uses.
-                self.stack
-                    .push(Value::Int(i64::from((value as f32).to_bits())));
-            }
-            Instruction::ConvertFloatToInt => {
-                // Truncate toward zero, saturating out-of-range to
-                // `i64::MIN`/`i64::MAX` and mapping NaN to zero. Rust's saturating
-                // `f64 as i64` is exactly this, and the native backend mirrors it
-                // with a saturating select chain.
-                let value = self.pop_float()?;
-                self.stack.push(Value::Int(value as i64));
-            }
-            arithmetic => self.binary(arithmetic)?,
-        }
-        Ok(())
-    }
-
+    #[inline(always)]
     fn jump(&self, module: &Module, frame: &mut Frame, target: u32) -> Result<(), VmError> {
         let len = module.functions[frame.func as usize].code.len() as u32;
         // A target must land on a real instruction; `len` (one past the end)
@@ -718,8 +452,19 @@ impl Vm<'_> {
         Ok(address)
     }
 
+    #[inline(always)]
     fn pop(&mut self) -> Result<Value, VmError> {
         self.stack.pop().ok_or(VmError::StackUnderflow)
+    }
+
+    /// Runs a callback with the reusable string-argument buffer removed from
+    /// the VM, then returns the empty buffer to the VM for the next operation.
+    fn with_string_args<R>(&mut self, body: impl FnOnce(&mut Self, &mut Vec<Value>) -> R) -> R {
+        let mut arguments = std::mem::take(&mut self.string_args);
+        let result = body(self, &mut arguments);
+        arguments.clear();
+        self.string_args = arguments;
+        result
     }
 
     /// Reports a mismatched operand, freeing it first.
@@ -735,6 +480,7 @@ impl Vm<'_> {
         VmError::TypeMismatch { expected }
     }
 
+    #[inline(always)]
     fn pop_int(&mut self) -> Result<i64, VmError> {
         match self.pop()? {
             Value::Int(value) => Ok(value),
@@ -742,6 +488,7 @@ impl Vm<'_> {
         }
     }
 
+    #[inline(always)]
     fn pop_float(&mut self) -> Result<f64, VmError> {
         match self.pop()? {
             Value::Float(value) => Ok(value),
@@ -749,6 +496,7 @@ impl Vm<'_> {
         }
     }
 
+    #[inline(always)]
     fn pop_bool(&mut self) -> Result<bool, VmError> {
         match self.pop()? {
             Value::Bool(value) => Ok(value),
@@ -756,6 +504,7 @@ impl Vm<'_> {
         }
     }
 
+    #[inline(always)]
     fn pop_str(&mut self) -> Result<crate::value::StrId, VmError> {
         match self.pop()? {
             Value::Str(id) => Ok(id),

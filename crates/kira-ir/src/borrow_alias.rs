@@ -145,6 +145,15 @@ impl Scan<'_> {
                 self.stmts(&then_body);
                 self.stmts(&else_body);
             }
+            HirStmt::Attempt { attempt } => {
+                let attempt = attempt.clone();
+                for step in attempt.steps {
+                    self.stmts(&step.setup);
+                    self.stmts(&step.handler);
+                    self.stmts(&step.success);
+                }
+                self.stmts(&attempt.trailing);
+            }
             HirStmt::While { body, .. } => {
                 let body = body.clone();
                 self.stmts(&body);

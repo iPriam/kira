@@ -81,7 +81,11 @@ pub fn lint(args: &[String]) -> i32 {
             if kira_diagnostics::has_errors(&owned) {
                 return EXIT_FAILURE;
             }
-            let reported = owned.len();
+            // Keep the displayed count aligned with the shared linter API:
+            // compiler diagnostics can be present in this vector, but they
+            // are not lint findings and must not inflate the report count.
+            let lint_summary = kira_linter::summarize(&owned);
+            let reported = lint_summary.errors + lint_summary.warnings + lint_summary.notes;
             if apply {
                 match apply_fixes(&owned, &compiled.sources) {
                     Ok(0) => out!("ok: {path} — nothing to fix"),

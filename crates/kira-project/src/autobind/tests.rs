@@ -164,6 +164,83 @@ fn a_handle_typedef_binds_the_functions_that_take_it() {
     );
 }
 
+/// The same one-header declaration, narrowed to named functions. This is the
+/// mode where reachable C-layout types must be discovered from signatures
+/// rather than from the header's standalone type declarations.
+fn selected_library(headers: &[&str], functions: &[&str]) -> NativeLibrarySpec {
+    let row = NativeTargetSpec::static_archive(host_target(), "lib/libdemo.a");
+    let mut spec = NativeLibrarySpec::new("demo", LinkMode::Static, vec![row])
+        .expect("a well-formed declaration");
+    spec = spec.with_headers(NativeHeaders {
+        entrypoint: headers.first().map(|name| format!("NativeLibs/{name}")),
+        include_dirs: vec!["NativeLibs".to_owned()],
+        defines: Vec::new(),
+    });
+    spec.with_autobind(AutobindSpec {
+        module: Some("demo".to_owned()),
+        headers: headers
+            .iter()
+            .map(|name| format!("NativeLibs/{name}"))
+            .collect(),
+        functions: functions.iter().map(|name| (*name).to_owned()).collect(),
+        mode: AutobindMode::Selected,
+        ..AutobindSpec::default()
+    })
+}
+
+#[test]
+fn nested_pointers_keep_each_c_pointer_layer_in_the_generated_binding() {
+    let package = TempPackage::new("nested-pointers");
+    package.header(
+        "demo.h",
+        "typedef struct demo_engine demo_engine;\n\
+         int demo_create(demo_engine **out);\n\
+         void demo_destroy(demo_engine *engine);\n",
+    );
+    let text = bind(&package, &library(&["demo.h"]));
+
+    assert!(
+        text.contains(
+            "@FFI.Pointer { target: demo_engine; ownership: borrowed; }\n\
+             struct demo_engine_ptr {}"
+        ),
+        "the first pointer layer is named: {text}"
+    );
+    assert!(
+        text.contains(
+            "@FFI.Pointer { target: demo_engine_ptr; ownership: borrowed; }\n\
+             struct demo_engine_ptr_ptr {}"
+        ),
+        "the out-parameter pointer layer is named rather than skipped: {text}"
+    );
+    assert!(
+        text.contains("function demo_create(out: demo_engine_ptr_ptr): I32;"),
+        "the function keeps the nested pointer type: {text}"
+    );
+}
+
+#[test]
+fn selected_functions_pull_defined_pointer_targets_into_the_binding() {
+    let package = TempPackage::new("reachable-record");
+    package.header(
+        "demo.h",
+        "typedef struct demo_row { void *data; unsigned int size; } demo_row;\n\
+         int demo_read(demo_row *row);\n",
+    );
+    let text = bind(&package, &selected_library(&["demo.h"], &["demo_read"]));
+
+    assert!(
+        text.contains(
+            "@FFI.Struct { layout: c; }\nstruct demo_row {\n    var data: RawPtr\n    var size: U32\n}"
+        ),
+        "a defined record reached only through a selected pointer parameter is emitted: {text}"
+    );
+    assert!(
+        text.contains("function demo_read(row: demo_row_ptr): I32;"),
+        "the pointer still carries the record target: {text}"
+    );
+}
+
 #[test]
 fn an_inline_array_becomes_an_ffi_array_typedef_named_for_its_storage() {
     let package = TempPackage::new("array");
