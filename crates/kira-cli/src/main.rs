@@ -5,23 +5,32 @@
 mod build_lock;
 mod command;
 mod compiler_host;
+mod debugger;
+mod dependencies;
 mod diagnostics;
 mod dispatch;
+mod doc;
+mod ffi;
 mod foreign_libs;
 mod hybrid;
 mod hybrid_library;
+mod inspect;
+mod instruments;
 mod library;
 mod live;
+mod migrate;
 mod native;
 mod native_library;
 mod options;
 mod pipeline;
 mod progress;
+mod scaffold;
 mod serve;
 mod shader;
 mod supervisor;
 mod sync;
 mod timings;
+mod update;
 mod wasm;
 
 use command::Command;
@@ -31,6 +40,15 @@ fn main() {
     // whichever engine it happens to be on and both are started below.
     compiler_host::grant();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("__hybrid-debug-host") => {
+            std::process::exit(debugger::run_hybrid_host(&args[1..]));
+        }
+        Some("__vm-debug-host") => {
+            std::process::exit(debugger::run_vm_host(&args[1..]));
+        }
+        _ => {}
+    }
     let Some(verb) = args.first() else {
         // A bare `kira` is a request for orientation, not a mistake: it
         // prints the same screen `kira help` does and succeeds the same way.

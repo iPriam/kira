@@ -18,16 +18,21 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 mod codegen_units;
+mod debug;
+mod dependencies;
 mod exports;
 mod ffi;
 mod ffi_wasm;
 mod foundation;
+mod inspect;
 mod installed_toolchain;
 mod lint_verb;
+mod migration;
 mod modules;
 mod natives;
 mod packages;
 mod programs;
+mod scaffold;
 mod tests_verb;
 mod web;
 
@@ -38,6 +43,23 @@ fn write_source(source: &str) -> PathBuf {
     let pid = std::process::id();
     let path = std::env::temp_dir().join(format!("kira_e2e_{pid}_{unique}.kira"));
     std::fs::write(&path, source).expect("write temp source");
+    path
+}
+
+/// Writes a source whose build directory is private to the test.
+///
+/// Most single-file tests can share the system-temp build directory because
+/// they only inspect their child process. Stress tests that emit native code
+/// and then clean artifacts need a private parent, though: removing one test's
+/// `.kira-build` must not race an LLVM worker belonging to another test.
+fn write_isolated_source(source: &str) -> PathBuf {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let directory = std::env::temp_dir().join(format!("kira_e2e_isolated_{pid}_{unique}"));
+    std::fs::create_dir_all(&directory).expect("isolated temp dir");
+    let path = directory.join("main.kira");
+    std::fs::write(&path, source).expect("write isolated temp source");
     path
 }
 

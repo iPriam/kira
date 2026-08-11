@@ -1,27 +1,13 @@
 //! Host-capability calls made by bytecode instructions.
 
 use kira_bytecode::module::Module;
-use kira_runtime_abi::{
-    ForeignArg, ForeignPointerWidth, ForeignResult, NativeArg, NativeResult, NativeStateToken,
-    NativeStateTypeId, NativeStateValue,
-};
+use kira_runtime_abi::{ForeignArg, ForeignPointerWidth, ForeignResult, NativeArg, NativeResult};
 
+use super::NativeCallScratch;
 use super::Vm;
 use super::frames::{Frame, Writeback};
 use crate::error::VmError;
 use crate::value::{AggregateMismatch, Value};
-
-/// The native-state object a recovered view names in the host store.
-///
-/// A view cannot be handed to the native half as a raw handle: the native call
-/// receives a value tree, and a mutable parameter returns a value tree. The
-/// source is kept beside that tree so the returned tree can be written back to
-/// the state object rather than installed as an ordinary VM value.
-#[derive(Clone, Copy)]
-struct NativeViewSource {
-    token: NativeStateToken,
-    type_id: NativeStateTypeId,
-}
 
 impl Vm<'_> {
     /// Rebuilds every deferred state read sitting at or above `first` on the
@@ -53,6 +39,28 @@ impl Vm<'_> {
         writebacks: &[Writeback],
         frames: &mut [Frame],
     ) -> Result<(), VmError> {
+        let mut scratch = std::mem::take(&mut self.native_scratch);
+        let result = self.call_native_with_scratch(module, id, writebacks, frames, &mut scratch);
+        scratch.clear();
+        self.native_scratch = scratch;
+        result
+    }
+
+    /// Executes one native crossing with its temporary vectors detached from
+    /// the VM. Keeping those buffers outside the VM during the call lets the
+    /// argument trees borrow freely while every success and error path returns
+    /// their capacity through [`Self::call_native`].
+    fn call_native_with_scratch(
+        &mut self,
+        module: &Module,
+        id: u32,
+        writebacks: &[Writeback],
+        frames: &mut [Frame],
+        scratch: &mut NativeCallScratch,
+    ) -> Result<(), VmError> {
+        let arguments = &mut scratch.arguments;
+        let trees = &mut scratch.trees;
+        let native_views = &mut scratch.native_views;
         let proto = module
             .functions
             .get(id as usize)
@@ -73,13 +81,15 @@ impl Vm<'_> {
         // memcpy of the argument words and nothing else — the stack still owns
         // every one of them, and the drop loop below is still what releases
         // them.
-        let arguments: Vec<Value> = self.stack[first..].to_vec();
+        arguments.clear();
+        arguments.extend_from_slice(&self.stack[first..]);
 
         // Every aggregate becomes an owned tree first. `NativeArg::Aggregate`
         // borrows, so the trees have to outlive the argument list built from
         // them; this is where they live for the duration of the call.
-        let mut trees: Vec<Option<NativeStateValue>> = Vec::with_capacity(count);
-        let mut native_views = vec![None; count];
+        trees.clear();
+        native_views.clear();
+        native_views.resize(count, None);
         for (index, value) in arguments.iter().enumerate() {
             let tree = match *value {
                 Value::Struct(_) | Value::Array(_) => Some(
@@ -100,7 +110,7 @@ impl Vm<'_> {
                 // writes through the parameter, the source is used below to
                 // replace the state with the returned tree.
                 Value::NativeView { token, type_id } => {
-                    native_views[index] = Some(NativeViewSource { token, type_id });
+                    native_views[index] = Some((token, type_id));
                     Some(
                         self.host
                             .native_state_recover(token, type_id)
@@ -201,7 +211,7 @@ impl Vm<'_> {
                     return Err(VmError::HandleAtSeam { function: id });
                 };
                 self.host
-                    .native_state_replace(source.token, source.type_id, value)
+                    .native_state_replace(source.0, source.1, value)
                     .map_err(VmError::NativeState)?;
                 continue;
             }

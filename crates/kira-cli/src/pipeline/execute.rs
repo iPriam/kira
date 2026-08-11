@@ -10,7 +10,7 @@ use kira_backend_api::WasmDevice;
 use kira_ir::IrProgram;
 use kira_llvm_backend::NativeLinkInputs;
 use kira_main::StdoutHost;
-use kira_runtime_abi::NativeStateHost;
+use kira_runtime_abi::{NativeStateHost, env};
 
 use super::{EXIT_FAILURE, EXIT_OK};
 use crate::options::CompileOptions;
@@ -46,12 +46,14 @@ pub(super) fn run_hybrid(
     ir: &IrProgram,
     options: &CompileOptions,
     foreign_link: &NativeLinkInputs,
+    program_arguments: &[String],
 ) -> i32 {
     match hybrid::run(
         ir,
         std::path::Path::new(&options.path),
         options.emit_llvm_ir,
         foreign_link,
+        program_arguments,
     ) {
         Ok(code) => code,
         Err(error) => {
@@ -71,6 +73,7 @@ pub(super) fn run_on_vm(
     ir: &IrProgram,
     source: &std::path::Path,
     foreign_link: &NativeLinkInputs,
+    program_arguments: &[String],
 ) -> i32 {
     kira_diagnostics::progress!("compiling bytecode");
     let module = match kira_bytecode::compile(ir) {
@@ -86,13 +89,19 @@ pub(super) fn run_on_vm(
     // thunk C calls lives in it.
     if ir.foreign_imports.is_empty() && ir.foreign_callbacks.is_empty() {
         kira_diagnostics::progress!("running the program");
-        let mut host = NativeStateHost::new(StdoutHost);
-        return match kira_vm_runtime::execute(&module, &mut host) {
-            Ok(_) => EXIT_OK,
-            Err(trap) => {
-                err!("kira: runtime trap: {trap}");
-                EXIT_FAILURE
-            }
+        // SAFETY: the CLI owns this run boundary and does not access the
+        // process environment from another thread while the VM executes.
+        return unsafe {
+            env::with_arguments(program_arguments, || {
+                let mut host = NativeStateHost::new(StdoutHost);
+                match kira_vm_runtime::execute(&module, &mut host) {
+                    Ok(_) => EXIT_OK,
+                    Err(trap) => {
+                        err!("kira: runtime trap: {trap}");
+                        EXIT_FAILURE
+                    }
+                }
+            })
         };
     }
 
@@ -127,7 +136,8 @@ pub(super) fn run_on_vm(
         }
     };
     kira_diagnostics::progress!("running the program");
-    match session.run() {
+    // SAFETY: this is the same CLI-owned run boundary with the adapter loaded.
+    match unsafe { env::with_arguments(program_arguments, || session.run()) } {
         Ok(_) => EXIT_OK,
         Err(trap) => {
             err!("kira: runtime trap: {trap}");
@@ -168,7 +178,7 @@ pub(super) fn run_native(
         return EXIT_FAILURE;
     };
     kira_diagnostics::progress!("running the program");
-    match native::execute(&executable) {
+    match native::execute(&executable, &options.program_arguments) {
         Ok(code) => code,
         Err(error) => {
             err!("kira: {error}");

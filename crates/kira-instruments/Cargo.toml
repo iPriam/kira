@@ -7,3 +7,6 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+kira-vm-runtime.workspace = true

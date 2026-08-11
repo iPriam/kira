@@ -17,7 +17,96 @@ use crate::interp::Vm;
 use crate::value::Value;
 
 impl Vm<'_> {
-    pub(super) fn binary(&mut self, instruction: Instruction) -> Result<(), VmError> {
+    /// Adds two integers without entering the general binary-op matcher.
+    ///
+    /// This is kept as a tiny always-inline helper because integer increments
+    /// are the hottest arithmetic shape in generated loops.
+    #[inline(always)]
+    pub(super) fn add_int(&mut self) -> Result<(), VmError> {
+        let rhs = self.pop_int()?;
+        let lhs = self.pop_int()?;
+        self.stack.push(Value::Int(lhs.wrapping_add(rhs)));
+        Ok(())
+    }
+
+    /// Subtracts two integers without entering the general binary-op matcher.
+    #[inline(always)]
+    pub(super) fn sub_int(&mut self) -> Result<(), VmError> {
+        let rhs = self.pop_int()?;
+        let lhs = self.pop_int()?;
+        self.stack.push(Value::Int(lhs.wrapping_sub(rhs)));
+        Ok(())
+    }
+
+    /// Multiplies two integers without entering the general binary-op matcher.
+    #[inline(always)]
+    pub(super) fn mul_int(&mut self) -> Result<(), VmError> {
+        let rhs = self.pop_int()?;
+        let lhs = self.pop_int()?;
+        self.stack.push(Value::Int(lhs.wrapping_mul(rhs)));
+        Ok(())
+    }
+
+    /// Compares two integers without entering the general binary-op matcher.
+    #[inline(always)]
+    pub(super) fn lt_int(&mut self) -> Result<(), VmError> {
+        let rhs = self.pop_int()?;
+        let lhs = self.pop_int()?;
+        self.stack.push(Value::Bool(lhs < rhs));
+        Ok(())
+    }
+
+    /// Compares two integers for equality without entering the general
+    /// binary-op matcher.
+    #[inline(always)]
+    pub(super) fn eq_int(&mut self) -> Result<(), VmError> {
+        let rhs = self.pop_int()?;
+        let lhs = self.pop_int()?;
+        self.stack.push(Value::Bool(lhs == rhs));
+        Ok(())
+    }
+
+    /// Compares two integers for inequality without entering the general
+    /// binary-op matcher.
+    #[inline(always)]
+    pub(super) fn ne_int(&mut self) -> Result<(), VmError> {
+        let rhs = self.pop_int()?;
+        let lhs = self.pop_int()?;
+        self.stack.push(Value::Bool(lhs != rhs));
+        Ok(())
+    }
+
+    /// Performs a less-than-or-equal integer comparison without entering the
+    /// general binary-op matcher.
+    #[inline(always)]
+    pub(super) fn le_int(&mut self) -> Result<(), VmError> {
+        let rhs = self.pop_int()?;
+        let lhs = self.pop_int()?;
+        self.stack.push(Value::Bool(lhs <= rhs));
+        Ok(())
+    }
+
+    /// Performs a greater-than integer comparison without entering the general
+    /// binary-op matcher.
+    #[inline(always)]
+    pub(super) fn gt_int(&mut self) -> Result<(), VmError> {
+        let rhs = self.pop_int()?;
+        let lhs = self.pop_int()?;
+        self.stack.push(Value::Bool(lhs > rhs));
+        Ok(())
+    }
+
+    /// Performs a greater-than-or-equal integer comparison without entering
+    /// the general binary-op matcher.
+    #[inline(always)]
+    pub(super) fn ge_int(&mut self) -> Result<(), VmError> {
+        let rhs = self.pop_int()?;
+        let lhs = self.pop_int()?;
+        self.stack.push(Value::Bool(lhs >= rhs));
+        Ok(())
+    }
+
+    pub(super) fn binary(&mut self, instruction: &Instruction) -> Result<(), VmError> {
         use Instruction as I;
         match instruction {
             I::AddInt | I::SubInt | I::MulInt | I::DivInt | I::RemInt | I::DivUInt | I::RemUInt => {
@@ -54,7 +143,7 @@ impl Vm<'_> {
     /// `ShrInt` propagates the sign bit, `ShrUInt` fills with zeros, which is
     /// why the compiler picks between them from the *left* operand's spelling
     /// rather than the VM inspecting anything.
-    fn bitwise(&mut self, instruction: Instruction) -> Result<(), VmError> {
+    fn bitwise(&mut self, instruction: &Instruction) -> Result<(), VmError> {
         use Instruction as I;
         let rhs = self.pop_int()?;
         let lhs = self.pop_int()?;
@@ -71,7 +160,7 @@ impl Vm<'_> {
         Ok(())
     }
 
-    fn int_arith(&mut self, instruction: Instruction) -> Result<(), VmError> {
+    fn int_arith(&mut self, instruction: &Instruction) -> Result<(), VmError> {
         use Instruction as I;
         let rhs = self.pop_int()?;
         let lhs = self.pop_int()?;
@@ -113,7 +202,7 @@ impl Vm<'_> {
         Ok(())
     }
 
-    fn float_arith(&mut self, instruction: Instruction) -> Result<(), VmError> {
+    fn float_arith(&mut self, instruction: &Instruction) -> Result<(), VmError> {
         use Instruction as I;
         let rhs = self.pop_float()?;
         let lhs = self.pop_float()?;
@@ -143,7 +232,7 @@ impl Vm<'_> {
         Ok(())
     }
 
-    fn int_compare(&mut self, instruction: Instruction) -> Result<(), VmError> {
+    fn int_compare(&mut self, instruction: &Instruction) -> Result<(), VmError> {
         use Instruction as I;
         let rhs = self.pop_int()?;
         let lhs = self.pop_int()?;
@@ -165,7 +254,7 @@ impl Vm<'_> {
     /// Equality has no unsigned twin and needs none: `==` on two 64-bit
     /// patterns is the same question under either signedness, so `EqInt`
     /// serves both and only the four orderings appear here.
-    fn uint_compare(&mut self, instruction: Instruction) -> Result<(), VmError> {
+    fn uint_compare(&mut self, instruction: &Instruction) -> Result<(), VmError> {
         use Instruction as I;
         let rhs = self.pop_int()? as u64;
         let lhs = self.pop_int()? as u64;
@@ -180,7 +269,7 @@ impl Vm<'_> {
         Ok(())
     }
 
-    fn float_compare(&mut self, instruction: Instruction) -> Result<(), VmError> {
+    fn float_compare(&mut self, instruction: &Instruction) -> Result<(), VmError> {
         use Instruction as I;
         let rhs = self.pop_float()?;
         let lhs = self.pop_float()?;
@@ -197,7 +286,7 @@ impl Vm<'_> {
         Ok(())
     }
 
-    fn bool_compare(&mut self, instruction: Instruction) -> Result<(), VmError> {
+    fn bool_compare(&mut self, instruction: &Instruction) -> Result<(), VmError> {
         let rhs = self.pop_bool()?;
         let lhs = self.pop_bool()?;
         let value = match instruction {
@@ -217,7 +306,7 @@ impl Vm<'_> {
     /// dropped afterwards, as every comparison drops what it consumed; the
     /// comparison itself borrows the heap and takes nothing from it, so the
     /// drops are the only ownership this arm has to get right.
-    fn any_compare(&mut self, instruction: Instruction) -> Result<(), VmError> {
+    fn any_compare(&mut self, instruction: &Instruction) -> Result<(), VmError> {
         let rhs = self.pop()?;
         let lhs = self.pop()?;
         let equal = self.heap.values_equal(lhs, rhs);
@@ -232,7 +321,7 @@ impl Vm<'_> {
         Ok(())
     }
 
-    fn str_compare(&mut self, instruction: Instruction) -> Result<(), VmError> {
+    fn str_compare(&mut self, instruction: &Instruction) -> Result<(), VmError> {
         let (lhs, rhs) = self.pop_two_str()?;
         let equal = self.heap.get(lhs) == self.heap.get(rhs);
         self.heap.free(lhs);

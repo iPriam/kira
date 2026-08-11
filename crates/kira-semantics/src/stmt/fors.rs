@@ -88,6 +88,11 @@ impl Analyzer<'_> {
             ty: Type::Bool,
         });
 
+        // Taken before the loop variable exists, so the variable — rebound at
+        // the top of every iteration — is not one of the locals the back-edge
+        // check can blame.
+        let loop_moves = crate::ownership::LoopMoves::start(ctx);
+
         // The user's variable lives in its own scope: it is visible to the
         // body and gone afterwards.
         ctx.push_scope();
@@ -123,6 +128,8 @@ impl Analyzer<'_> {
         ctx.pop_scope();
         ctx.loop_depth -= 1;
         ctx.pop_scope();
+        let exits = self.body_always_exits_loop(&loop_body);
+        self.check_loop_back_edge(ctx, loop_moves, exits);
 
         let hir = self.program.stmts.alloc(HirStmt::While {
             cond,
@@ -266,6 +273,11 @@ impl Analyzer<'_> {
             ty: Type::Bool,
         });
 
+        // Taken before the loop variable exists, for the reason the range form
+        // states: the variable is rebound every iteration, so its move never
+        // crosses the back edge.
+        let loop_moves = crate::ownership::LoopMoves::start(ctx);
+
         // The user's variable lives in its own scope: visible to the body,
         // gone afterwards.
         ctx.push_scope();
@@ -310,6 +322,8 @@ impl Analyzer<'_> {
         ctx.pop_scope();
         ctx.loop_depth -= 1;
         ctx.pop_scope();
+        let exits = self.body_always_exits_loop(&loop_body);
+        self.check_loop_back_edge(ctx, loop_moves, exits);
 
         let _ = span;
         let hir = self.program.stmts.alloc(HirStmt::While {

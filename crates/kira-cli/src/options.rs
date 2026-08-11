@@ -60,6 +60,9 @@ pub struct CompileOptions {
     /// the program got wrong, and it says it again on every build. The count is
     /// still reported, so nothing is dropped silently.
     pub show_notes: bool,
+    /// Arguments passed to the Kira program after the command-line `--`
+    /// separator. Empty when the invocation did not provide any.
+    pub program_arguments: Vec<String>,
 }
 
 /// The path a `run`/`build`/`check` uses when the invocation names none: the
@@ -109,11 +112,19 @@ impl CompileOptions {
         let mut release = false;
         let mut timings = false;
         let mut show_notes = false;
+        let mut program_arguments = Vec::new();
+        let mut forwarding = false;
 
         let mut index = 0;
         while index < args.len() {
+            if forwarding {
+                program_arguments.push(args[index].clone());
+                index += 1;
+                continue;
+            }
             let argument = args[index].as_str();
             match argument {
+                "--" => forwarding = true,
                 "--backend" => {
                     let value = args
                         .get(index + 1)
@@ -188,6 +199,7 @@ impl CompileOptions {
             release,
             timings,
             show_notes,
+            program_arguments,
         })
     }
 }
@@ -227,6 +239,24 @@ mod tests {
         assert_eq!(options.device, Device::Host);
         assert_eq!(options.path, "main.kira");
         assert!(!options.emit_llvm_ir);
+        assert!(options.program_arguments.is_empty());
+    }
+
+    #[test]
+    fn forwards_arguments_after_the_separator() {
+        let options = CompileOptions::parse(&args(&[
+            "--backend",
+            "vm",
+            "app.kira",
+            "--",
+            "first",
+            "--looks-like-a-flag",
+        ]))
+        .expect("parses");
+        assert_eq!(
+            options.program_arguments,
+            ["first".to_owned(), "--looks-like-a-flag".to_owned()]
+        );
     }
 
     #[test]

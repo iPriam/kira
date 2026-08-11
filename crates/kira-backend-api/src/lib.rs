@@ -176,6 +176,8 @@ pub enum ArtifactKind {
     Bytecode,
     /// A native object file.
     NativeObject,
+    /// Textual LLVM IR emitted for inspection or downstream tooling.
+    LlvmIr,
     /// A native shared/static library.
     NativeLibrary,
     /// A linked executable.

@@ -13,15 +13,15 @@
 
 use kira_semantics_model::OwnershipMode;
 use kira_semantics_model::hir::{
-    Builtin, Callee, HirExpr, HirExprId, HirPlace, HirPlaceStep, HirProgram, HirStmt, HirStmtId,
-    TaskTarget,
+    Builtin, Callee, HirAttempt, HirExpr, HirExprId, HirPlace, HirPlaceStep, HirProgram, HirStmt,
+    HirStmtId, TaskTarget,
 };
 
 use crate::tasks::TaskTargets;
 
 use crate::ir::{
-    IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport, IrFunction, IrPlace, IrPlaceStep,
-    IrProgram, IrStmt, IrWriteback,
+    IrAttempt, IrAttemptStep, IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport, IrFunction,
+    IrPlace, IrPlaceStep, IrProgram, IrStmt, IrWriteback,
 };
 
 /// Lowers an analyzed program to IR.
@@ -186,7 +186,35 @@ impl Lowerer<'_> {
     }
 
     fn lower_stmts(&mut self, stmts: &[HirStmtId]) -> Vec<IrStmt> {
-        stmts.iter().filter_map(|&id| self.lower_stmt(id)).collect()
+        let mut lowered = Vec::new();
+        for &id in stmts {
+            if let HirStmt::Attempt { attempt } = self.hir.stmt(id).clone() {
+                lowered.push(self.lower_attempt(&attempt));
+            } else if let Some(statement) = self.lower_stmt(id) {
+                lowered.push(statement);
+            }
+        }
+        lowered
+    }
+
+    /// Lowers the linear HIR attempt into the backend-facing structured form.
+    fn lower_attempt(&mut self, attempt: &HirAttempt) -> IrStmt {
+        let steps = attempt
+            .steps
+            .iter()
+            .map(|step| IrAttemptStep {
+                setup: self.lower_stmts(&step.setup),
+                error_condition: self.lower_expr(step.error_condition),
+                handler: self.lower_stmts(&step.handler),
+                success: self.lower_stmts(&step.success),
+            })
+            .collect();
+        IrStmt::Attempt {
+            attempt: IrAttempt {
+                steps,
+                trailing: self.lower_stmts(&attempt.trailing),
+            },
+        }
     }
 
     /// Lowers one statement, or nothing when it has already been accounted for.
@@ -229,6 +257,7 @@ impl Lowerer<'_> {
                 then_body: self.lower_stmts(&then_body),
                 else_body: self.lower_stmts(&else_body),
             },
+            HirStmt::Attempt { .. } => return None,
             HirStmt::While { cond, body } => IrStmt::While {
                 cond: self.lower_expr(cond),
                 body: self.lower_stmts(&body),

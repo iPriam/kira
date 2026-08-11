@@ -1,0 +1,199 @@
+// Deliberately broken copy of main.kira for the debugger walkthrough.
+//
+// The three BUG markers are logic faults, not parser/runtime traps:
+//   1. the bulk discount misses the exact threshold (900),
+//   2. tax is calculated at one percentage point too high,
+//   3. bulk shipping is accidentally made free instead of half price.
+// The expected invoice total is still 889, so the final line exposes the
+// failure while the component lines narrow the search to each stage.
+
+struct Policy {
+    let taxRate: Int
+    let bulkThreshold: Int
+    let bulkRate: Int
+    let freeShippingThreshold: Int
+    let shippingFee: Int
+    let riskLimit: Int
+}
+
+struct LineItem {
+    let sku: String
+    let unitPrice: Int
+    let quantity: Int
+}
+
+struct Cart {
+    var items: [LineItem]
+}
+
+struct Invoice {
+    let subtotal: Int
+    let units: Int
+    let discount: Int
+    let taxable: Int
+    let tax: Int
+    let shipping: Int
+    let risk: Int
+    let total: Int
+}
+
+function makePolicy() -> Policy {
+    return Policy {
+        taxRate = 8,
+        bulkThreshold = 900,
+        bulkRate = 10,
+        freeShippingThreshold = 1000,
+        shippingFee = 30,
+        riskLimit = 2
+    }
+}
+
+function makeCart() -> Cart {
+    var cart = Cart { items = [] }
+    cart.items.append(LineItem { sku = "keyboard", unitPrice = 120, quantity = 2 })
+    cart.items.append(LineItem { sku = "monitor", unitPrice = 300, quantity = 2 })
+    cart.items.append(LineItem { sku = "cable", unitPrice = 20, quantity = 3 })
+    return cart
+}
+
+function subtotal(cart: borrow Cart) -> Int {
+    var value = 0
+    for item in cart.items {
+        value = value + item.unitPrice * item.quantity
+    }
+    return value
+}
+
+function units(cart: borrow Cart) -> Int {
+    var value = 0
+    for item in cart.items {
+        value = value + item.quantity
+    }
+    return value
+}
+
+function discountAmount(policy: borrow Policy, subtotalValue: Int) -> Int {
+    // BUG 1: an order exactly at the threshold should receive the discount.
+    if subtotalValue > policy.bulkThreshold {
+        return subtotalValue * policy.bulkRate / 100
+    }
+    return 0
+}
+
+async function calculateTax(base: Int, rate: Int) -> Int {
+    taskYield()
+    // BUG 2: the accidental +1 charges 9% when policy says 8%.
+    return base * (rate + 1) / 100
+}
+
+async function calculateShipping(
+    subtotalValue: Int,
+    unitCount: Int,
+    freeThreshold: Int,
+    fee: Int
+) -> Int {
+    taskYield()
+    if subtotalValue >= freeThreshold {
+        return 0
+    }
+    if unitCount >= 6 {
+        // BUG 3: bulk orders get half price, not free shipping.
+        return 0
+    }
+    return fee
+}
+
+async function calculateRisk(totalValue: Int, unitCount: Int) -> Int {
+    taskYield()
+    var score = 0
+    if totalValue >= 800 {
+        score = score + 2
+    }
+    if unitCount >= 6 {
+        score = score + 1
+    }
+    return score
+}
+
+function makeInvoice(
+    subtotalValue: Int,
+    unitCount: Int,
+    discountValue: Int,
+    taxValue: Int,
+    shippingValue: Int,
+    riskValue: Int
+) -> Invoice {
+    let taxable = subtotalValue - discountValue
+    let total = taxable + taxValue + shippingValue
+    return Invoice {
+        subtotal = subtotalValue,
+        units = unitCount,
+        discount = discountValue,
+        taxable = taxable,
+        tax = taxValue,
+        shipping = shippingValue,
+        risk = riskValue,
+        total = total
+    }
+}
+
+function status(invoice: borrow Invoice, policy: borrow Policy) -> String {
+    if invoice.risk <= policy.riskLimit {
+        return "approved"
+    }
+    return "review"
+}
+
+function printInvoice(invoice: borrow Invoice, policy: borrow Policy) {
+    print("subtotal")
+    print(invoice.subtotal)
+    print("units")
+    print(invoice.units)
+    print("discount")
+    print(invoice.discount)
+    print("taxable")
+    print(invoice.taxable)
+    print("tax")
+    print(invoice.tax)
+    print("shipping")
+    print(invoice.shipping)
+    print("risk")
+    print(invoice.risk)
+    print("total")
+    print(invoice.total)
+    print("status")
+    print(status(invoice, policy))
+    print("expected total")
+    print(889)
+    print(invoice.total == 889 ? "PASS" : "FAIL")
+    return
+}
+
+@Main
+function main() {
+    let policy = makePolicy()
+    let cart = makeCart()
+    let cartSubtotal = subtotal(cart)
+    let cartUnits = units(cart)
+    let discount = discountAmount(policy, cartSubtotal)
+    let taxable = cartSubtotal - discount
+
+    let taxJob = Task { calculateTax(taxable, policy.taxRate) }
+    let shippingJob = Task {
+        calculateShipping(
+            cartSubtotal,
+            cartUnits,
+            policy.freeShippingThreshold,
+            policy.shippingFee
+        )
+    }
+    let tax = taxJob.await
+    let shipping = shippingJob.await
+    let beforeRisk = taxable + tax + shipping
+
+    let riskJob = Task { calculateRisk(beforeRisk, cartUnits) }
+    let risk = riskJob.await
+    let invoice = makeInvoice(cartSubtotal, cartUnits, discount, tax, shipping, risk)
+    printInvoice(invoice, policy)
+    return
+}

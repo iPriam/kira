@@ -1,0 +1,56 @@
+name: Networking
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  network:
+    name: native async networking (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy -p kira-network --all-targets -- -D warnings
+
+      - name: networking tests
+        run: cargo test -p kira-network --all-targets -- --nocapture
+
+      - name: build native networking library
+        run: cargo build -p kira-network
+
+      - name: all protocol loopbacks
+        run: cargo run -p kira-network --example all_protocols
+
+      - name: reusable async protocol example
+        run: cargo run -p kira-network --example async_protocols
+
+      - name: pooled load and cancellation example
+        run: cargo run -p kira-network --example network_load
+
+      - name: Kira VM networking integration
+        run: cargo run -p kira-cli -- run --backend vm examples/networking/main.kira
+
+      - name: Kira LLVM networking integration
+        run: cargo run -p kira-cli -- run --backend llvm examples/networking/main.kira
+
+      - name: Kira hybrid networking integration
+        run: cargo run -p kira-cli -- run --backend hybrid examples/networking/main.kira

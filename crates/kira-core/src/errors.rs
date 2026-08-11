@@ -15,9 +15,6 @@ pub enum CommonError {
     /// The program has no `@Main` entrypoint.
     #[error("missing main entrypoint")]
     MissingMain,
-    /// The requested feature is not implemented yet.
-    #[error("not implemented")]
-    NotImplemented,
     /// The requested compilation target is not supported.
     #[error("unsupported target")]
     UnsupportedTarget,

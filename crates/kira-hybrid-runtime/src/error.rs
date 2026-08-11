@@ -80,16 +80,19 @@ pub enum HybridError {
     /// the wrong signature.
     #[error("the hybrid manifest and the bytecode half disagree: {0}")]
     Mismatch(String),
-    /// A parameter mode the manifest records is one no code path implements.
+    /// A parameter mode the manifest records is outside the hybrid crossing
+    /// contract.
     ///
-    /// v0 has no borrow syntax, so the codegen frees every `String` parameter
-    /// unconditionally. Honouring a borrowed `String` parameter would need the
-    /// callee to *not* free it, which nothing emits — so accepting one here
-    /// would be a double free at the seam. Reject it at load instead.
+    /// The compiler records a read-only borrow of a heap value as an owned
+    /// crossing copy. A hand-edited or stale manifest that records `Borrow` for
+    /// a `String` would instead ask the native trampoline to retain the
+    /// caller's handle while the generated body releases every string
+    /// parameter. Rejecting it at load keeps that mismatch from becoming a
+    /// double free at the first crossing.
     #[error(
         "function `{function}` takes parameter {index} as `{ownership:?}`, which \
-         this runtime does not implement for `String` (v0 passes every string by \
-         value)"
+         this runtime does not support for `String` (read-only borrows cross as \
+         owned copies)"
     )]
     UnsupportedOwnership {
         /// The function whose signature cannot be honoured.

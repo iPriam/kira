@@ -8,8 +8,8 @@
 //!
 //! Diagnostics, on open and on every edit; go-to-definition and
 //! go-to-declaration, served from the reference→definition links the
-//! analyzer records as it resolves names — cross-file included. Hover and
-//! completion are the next things to build on this transport.
+//! analyzer records as it resolves names — cross-file included; and hover and
+//! completion built from those same links plus the parser's declaration tree.
 //!
 //! # Shape
 //!
@@ -26,16 +26,18 @@
 mod analysis;
 mod convert;
 mod documents;
+mod features;
 
 use lsp_server::{Connection, ExtractError, Message, Notification, Request};
 use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification as _,
     PublishDiagnostics,
 };
-use lsp_types::request::{GotoDeclaration, GotoDefinition, Request as _};
+use lsp_types::request::{Completion, GotoDeclaration, GotoDefinition, HoverRequest, Request as _};
 use lsp_types::{
-    DeclarationCapability, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Location, OneOf,
+    CompletionOptions, CompletionParams, CompletionResponse, DeclarationCapability,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    GotoDefinitionParams, GotoDefinitionResponse, HoverParams, Location, OneOf,
     PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
     Uri,
 };
@@ -67,6 +69,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         // both jumps land on the same name token.
         definition_provider: Some(OneOf::Left(true)),
         declaration_provider: Some(DeclarationCapability::Simple(true)),
+        hover_provider: Some(lsp_types::HoverProviderCapability::Simple(true)),
+        completion_provider: Some(CompletionOptions {
+            // A dot changes the completion context from names in scope to
+            // members. The current catalog is deliberately conservative and
+            // still returns useful names for Ctrl+Space everywhere.
+            trigger_characters: Some(vec![".".to_owned()]),
+            ..CompletionOptions::default()
+        }),
         ..ServerCapabilities::default()
     })?;
 
@@ -118,6 +128,40 @@ fn serve(connection: Connection) -> Result<(), Box<dyn std::error::Error>> {
                             Ok(params) => lsp_server::Response::new_ok(
                                 id,
                                 definition(&mut session, &documents, &params),
+                            ),
+                            Err(error) => lsp_server::Response::new_err(
+                                id,
+                                lsp_server::ErrorCode::InvalidParams as i32,
+                                error.to_string(),
+                            ),
+                        };
+                        connection.sender.send(Message::Response(response))?;
+                    }
+                    HoverRequest::METHOD => {
+                        let id = request.id.clone();
+                        let response = match extract_request::<HoverParams>(request) {
+                            Ok(params) => lsp_server::Response::new_ok(
+                                id,
+                                features::hover(&mut session, &documents, &params),
+                            ),
+                            Err(error) => lsp_server::Response::new_err(
+                                id,
+                                lsp_server::ErrorCode::InvalidParams as i32,
+                                error.to_string(),
+                            ),
+                        };
+                        connection.sender.send(Message::Response(response))?;
+                    }
+                    Completion::METHOD => {
+                        let id = request.id.clone();
+                        let response = match extract_request::<CompletionParams>(request) {
+                            Ok(params) => lsp_server::Response::new_ok(
+                                id,
+                                CompletionResponse::Array(features::completion(
+                                    &mut session,
+                                    &documents,
+                                    &params,
+                                )),
                             ),
                             Err(error) => lsp_server::Response::new_err(
                                 id,

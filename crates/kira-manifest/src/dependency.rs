@@ -7,6 +7,15 @@ pub struct DependencySpec {
     pub source: DependencySource,
 }
 
+/// A dependency mutation failed because the manifest already contains the
+/// requested name.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DependencyMutationError {
+    /// The dependency name is already declared.
+    #[error("dependency `{0}` is already declared")]
+    Duplicate(String),
+}
+
 /// Where a dependency comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DependencySource {

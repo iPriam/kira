@@ -1,0 +1,30 @@
+[package]
+name = "kira-network"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Async HTTP/1.1, HTTP/2, HTTP/3, WebSocket, and I/O support for Kira examples"
+include = ["Cargo.toml", "src/**", "examples/**", "include/kira_network.h"]
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+bytes.workspace = true
+futures-util.workspace = true
+h3.workspace = true
+h3-quinn.workspace = true
+http.workspace = true
+http-body.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+quinn.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+
+[lints]
+workspace = true

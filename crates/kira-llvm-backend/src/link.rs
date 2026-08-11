@@ -311,6 +311,55 @@ pub fn link_executable(
     executable: &Path,
 ) -> Result<(), LinkError> {
     let extra = executable_stack_arguments();
+    link_executable_inner(
+        llvm,
+        objects,
+        runtime_archive,
+        foreign_link,
+        shim,
+        executable,
+        extra,
+    )
+}
+
+/// Links a native executable and asks the platform linker to retain a debugger
+/// symbol file alongside the executable.
+pub fn link_executable_debug(
+    llvm: &LlvmInstallation,
+    objects: &[PathBuf],
+    runtime_archive: &Path,
+    foreign_link: &NativeLinkInputs,
+    shim: Option<&Path>,
+    executable: &Path,
+    debug_symbols: &[String],
+) -> Result<(), LinkError> {
+    let mut extra = executable_stack_arguments();
+    // The native object carries portable DWARF plus the platform-native debug
+    // records where the target needs them. `-g` asks the linker for its native
+    // symbol companion (a PDB on Windows), while the object stays beside the
+    // artifact for direct DWARF inspection.
+    extra.push("-g".to_owned());
+    extra.extend(export_debug_symbols(debug_symbols));
+    link_executable_inner(
+        llvm,
+        objects,
+        runtime_archive,
+        foreign_link,
+        shim,
+        executable,
+        extra,
+    )
+}
+
+fn link_executable_inner(
+    llvm: &LlvmInstallation,
+    objects: &[PathBuf],
+    runtime_archive: &Path,
+    foreign_link: &NativeLinkInputs,
+    shim: Option<&Path>,
+    executable: &Path,
+    extra: Vec<String>,
+) -> Result<(), LinkError> {
     link_with(
         llvm,
         objects,
@@ -385,6 +434,61 @@ pub fn link_hybrid_library(
     adapter_symbols: &[String],
     library: &Path,
 ) -> Result<(), LinkError> {
+    link_hybrid_library_inner(
+        llvm,
+        object,
+        runtime_archive,
+        foreign_link,
+        shim,
+        library,
+        HybridLinkOptions {
+            adapter_symbols,
+            debug_symbols: None,
+        },
+    )
+}
+
+/// Links a hybrid native half while retaining its debugger symbols.
+#[allow(clippy::too_many_arguments)]
+pub fn link_hybrid_library_debug(
+    llvm: &LlvmInstallation,
+    object: &Path,
+    runtime_archive: &Path,
+    foreign_link: &NativeLinkInputs,
+    shim: Option<&Path>,
+    adapter_symbols: &[String],
+    library: &Path,
+    debug_symbols: &[String],
+) -> Result<(), LinkError> {
+    link_hybrid_library_inner(
+        llvm,
+        object,
+        runtime_archive,
+        foreign_link,
+        shim,
+        library,
+        HybridLinkOptions {
+            adapter_symbols,
+            debug_symbols: Some(debug_symbols),
+        },
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HybridLinkOptions<'a> {
+    adapter_symbols: &'a [String],
+    debug_symbols: Option<&'a [String]>,
+}
+
+fn link_hybrid_library_inner(
+    llvm: &LlvmInstallation,
+    object: &Path,
+    runtime_archive: &Path,
+    foreign_link: &NativeLinkInputs,
+    shim: Option<&Path>,
+    library: &Path,
+    options: HybridLinkOptions<'_>,
+) -> Result<(), LinkError> {
     let shared_flag = if cfg!(target_os = "macos") {
         "-dynamiclib"
     } else {
@@ -394,8 +498,12 @@ pub fn link_hybrid_library(
     arguments.extend(force_host_symbols());
     // A program with no foreign imports emits no adapters and no foreign marker,
     // so forcing either would fail the link on an undefined symbol.
-    if !adapter_symbols.is_empty() {
-        arguments.extend(force_foreign_symbols(adapter_symbols));
+    if !options.adapter_symbols.is_empty() {
+        arguments.extend(force_foreign_symbols(options.adapter_symbols));
+    }
+    if let Some(debug_symbols) = options.debug_symbols {
+        arguments.push("-g".to_owned());
+        arguments.extend(export_debug_symbols(debug_symbols));
     }
     link_with(
         llvm,
@@ -406,6 +514,19 @@ pub fn link_hybrid_library(
         library,
         &arguments,
     )
+}
+
+/// Exports Kira body names from a Windows native image so LLDB can resolve
+/// them even when the platform linker keeps native debug records in a separate
+/// PDB without translating every subprogram name to the exported symbol.
+fn export_debug_symbols(symbols: &[String]) -> Vec<String> {
+    if !cfg!(target_env = "msvc") {
+        return Vec::new();
+    }
+    symbols
+        .iter()
+        .map(|symbol| format!("-Wl,/export:{symbol}"))
+        .collect()
 }
 
 /// The `-Wl,-u` flags that force every foreign-sidecar symbol a host resolves.
@@ -886,12 +1007,15 @@ fn executable_stack_arguments() -> Vec<String> {
 /// so every relink on Windows produces different bytes and every edit looks
 /// like the native half changed. The tier decision then always says relaunch,
 /// and tier 1 is unreachable on the platform rather than unimplemented.
+/// Incremental PE linking has the same problem for debug addresses: its PDB
+/// contribution table can retain the old object layout, leaving an LLDB
+/// breakpoint thunk and its source line at different PCs.
 ///
 /// `/Brepro` replaces that timestamp with a hash of the content, which is what
 /// makes the comparison mean what it says.
 fn reproducible_link_arguments() -> Vec<String> {
     if cfg!(target_env = "msvc") {
-        vec!["-Wl,/Brepro".to_owned()]
+        vec!["-Wl,/Brepro".to_owned(), "-Wl,/INCREMENTAL:NO".to_owned()]
     } else {
         Vec::new()
     }

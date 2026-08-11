@@ -15,11 +15,12 @@
 use kira_bytecode::module::{FrameRelease, Module};
 use kira_runtime_abi::{HostCapabilities, NativeArg, TaskExecutor};
 
+use crate::debug::VmDebugObserver;
 use crate::error::VmError;
 use crate::value::{Heap, Value};
 
-use super::Vm;
 use super::place::ResolvedStep;
+use super::{Vm, VmScratch};
 
 /// One call frame: its function, program counter, and local slots.
 pub(super) struct Frame {
@@ -57,7 +58,7 @@ pub(super) struct Writeback {
 }
 
 /// A fresh frame for `index`, with every local slot at `Void`.
-pub(super) fn new_frame(module: &Module, index: u32) -> Result<Frame, VmError> {
+fn fresh_frame(module: &Module, index: u32) -> Result<Frame, VmError> {
     let function = module
         .functions
         .get(index as usize)
@@ -78,21 +79,93 @@ impl<'h> Vm<'h> {
     /// belong to one run: [`crate::Instance`] lends the VM a heap that outlives
     /// the call and takes it back afterwards.
     pub(crate) fn new(host: &'h mut dyn HostCapabilities, heap: Heap) -> Self {
+        Self::new_with_scratch(host, heap, VmScratch::default())
+    }
+
+    /// Creates a VM with reusable storage returned by a previous call.
+    pub(crate) fn new_with_scratch(
+        host: &'h mut dyn HostCapabilities,
+        heap: Heap,
+        scratch: VmScratch,
+    ) -> Self {
         Vm {
             host,
             heap,
-            stack: Vec::new(),
-            steps: Vec::new(),
-            native_path: Vec::new(),
-            pending_capture: Vec::new(),
-            captured: Vec::new(),
+            stack: scratch.stack,
+            frames: scratch.frames,
+            steps: scratch.steps,
+            native_path: scratch.native_path,
+            string_args: scratch.string_args,
+            pending_capture: scratch.pending_capture,
+            captured: scratch.captured,
             tasks: TaskExecutor::new(),
+            frame_cache: scratch.frame_cache,
+            native_writebacks: scratch.native_writebacks,
+            native_scratch: scratch.native_scratch,
         }
     }
 
-    /// Gives the heap back, whatever the run did with it.
-    pub(crate) fn into_heap(self) -> Heap {
-        self.heap
+    /// Takes a frame from the per-run cache, growing its locals only when a
+    /// deeper call shape needs more capacity than any frame returned so far.
+    ///
+    /// The cache contains only frames whose heap-bearing locals have already
+    /// been released. Clearing the vector therefore drops no runtime object;
+    /// it only resets the copied scalar state before the frame is retargeted.
+    pub(super) fn take_frame(&mut self, module: &Module, index: u32) -> Result<Frame, VmError> {
+        let function = module
+            .functions
+            .get(index as usize)
+            .ok_or(VmError::UnknownFunction(index))?;
+        let mut frame = match self.frame_cache.pop() {
+            Some(frame) => frame,
+            None => fresh_frame(module, index)?,
+        };
+        frame.func = index;
+        frame.pc = 0;
+        let local_count = function.local_count as usize;
+        if frame.locals.len() != local_count {
+            // Cached frames contain only released heap values. Clearing before
+            // resizing is therefore just a scalar reset, not an ownership
+            // operation; the equal-sized fast path below is already all Void.
+            frame.locals.clear();
+            frame.locals.resize(local_count, Value::Void);
+        }
+        frame.writebacks.clear();
+        frame.capture.clear();
+        Ok(frame)
+    }
+
+    /// Returns the persistent heap and reusable non-task storage after a call.
+    pub(crate) fn into_heap_and_scratch(self) -> (Heap, VmScratch) {
+        let Vm {
+            heap,
+            stack,
+            frames,
+            steps,
+            native_path,
+            string_args,
+            pending_capture,
+            captured,
+            frame_cache,
+            native_writebacks,
+            native_scratch,
+            ..
+        } = self;
+        (
+            heap,
+            VmScratch {
+                stack,
+                frames,
+                steps,
+                native_path,
+                string_args,
+                pending_capture,
+                captured,
+                frame_cache,
+                native_writebacks,
+                native_scratch,
+            },
+        )
     }
 
     /// Runs `function_id` with `args` in its parameter slots, to completion.
@@ -158,7 +231,7 @@ impl<'h> Vm<'h> {
         function_id: u32,
         args: Vec<Value>,
     ) -> Result<Value, VmError> {
-        let mut frame = match new_frame(module, function_id) {
+        let mut frame = match self.take_frame(module, function_id) {
             Ok(frame) => frame,
             Err(error) => {
                 self.discard(args);
@@ -190,6 +263,38 @@ impl<'h> Vm<'h> {
         self.run(module, frame)
     }
 
+    /// Runs `function_id` with an instruction observer installed.
+    pub(crate) fn enter_values_with_debug(
+        &mut self,
+        module: &Module,
+        function_id: u32,
+        args: Vec<Value>,
+        observer: &mut dyn VmDebugObserver,
+    ) -> Result<Value, VmError> {
+        let mut frame = match self.take_frame(module, function_id) {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.discard(args);
+                return Err(error);
+            }
+        };
+        if args.len() > frame.locals.len() {
+            let got = args.len();
+            self.discard(args);
+            self.discard(frame.locals);
+            return Err(VmError::ArityMismatch {
+                function: function_id,
+                expected: module.functions[function_id as usize].param_count,
+                got,
+            });
+        }
+        for (slot, value) in args.into_iter().enumerate() {
+            frame.locals[slot] = value;
+        }
+        frame.capture = std::mem::take(&mut self.pending_capture);
+        self.run_with_debug(module, frame, observer)
+    }
+
     /// Frees a batch of values this VM owns.
     pub(super) fn discard(&mut self, values: impl IntoIterator<Item = Value>) {
         for value in values {
@@ -204,6 +309,7 @@ impl<'h> Vm<'h> {
     /// the caller back a frame holding the slots already written — which it must
     /// free, because a partially filled frame never reaches the frame stack the
     /// unwind walks.
+    #[inline(always)]
     pub(super) fn fill_params(
         &mut self,
         module: &Module,
@@ -211,6 +317,13 @@ impl<'h> Vm<'h> {
         frame: &mut Frame,
     ) -> Result<(), VmError> {
         let param_count = module.functions[index as usize].param_count as usize;
+        if param_count == 0 {
+            return Ok(());
+        }
+        if param_count == 1 {
+            frame.locals[0] = self.pop()?;
+            return Ok(());
+        }
         for slot in (0..param_count).rev() {
             frame.locals[slot] = self.pop()?;
         }
@@ -242,22 +355,65 @@ impl<'h> Vm<'h> {
         let Some(mut finished) = frames.pop() else {
             return Err(VmError::FrameUnderflow);
         };
+        // Most generated functions use the conservative `EveryLocal` release
+        // plan and have no written-through parameters. Their return has no
+        // writeback or capture work to do, so keep this branch ahead of the
+        // general plan walker. It also avoids taking the empty capture vector
+        // and matching the release-plan variants on every ordinary call.
+        if finished.writebacks.is_empty()
+            && finished.capture.is_empty()
+            && matches!(
+                &module.functions[finished.func as usize].releases,
+                FrameRelease::EveryLocal
+            )
+        {
+            for held in &mut finished.locals {
+                let value = std::mem::replace(held, Value::Void);
+                if is_heap_value(&value) {
+                    self.heap.drop_value(value);
+                }
+            }
+            self.frame_cache.push(finished);
+            if frames.is_empty() {
+                // Structural validation cannot prove operand-stack typing. A
+                // hand-built module may return while leaving an extra value on
+                // the stack; reclaim it before a persistent Instance lends
+                // this VM's scratch storage to another call.
+                for value in self.stack.drain(..) {
+                    self.heap.drop_value(value);
+                }
+                return Ok(Some(result));
+            }
+            self.stack.push(result);
+            return Ok(None);
+        }
         // Every target names a distinct parameter, so taking each in turn
         // leaves the rest intact.
-        let writebacks = std::mem::take(&mut finished.writebacks);
-        for writeback in writebacks {
-            let Some(value) = finished
-                .locals
-                .get_mut(writeback.param as usize)
-                .map(|slot| std::mem::replace(slot, Value::Void))
-            else {
-                continue;
-            };
-            if let Err(error) = self.write_back(frames, &writeback, value) {
-                self.discard(finished.locals);
-                self.heap.drop_value(result);
-                return Err(error);
+        if !finished.writebacks.is_empty() {
+            // Keep the outer vector attached to the frame. `take_frame`
+            // clears it for the next call, so retaining its capacity removes
+            // one allocation from every repeated mutable call. The individual
+            // paths remain live until the writebacks have landed, then are
+            // cleared for reuse too.
+            let mut writebacks = std::mem::take(&mut finished.writebacks);
+            for writeback in &mut writebacks {
+                let Some(value) = finished
+                    .locals
+                    .get_mut(writeback.param as usize)
+                    .map(|slot| std::mem::replace(slot, Value::Void))
+                else {
+                    continue;
+                };
+                if let Err(error) = self.write_back(frames, writeback, value) {
+                    self.discard(finished.locals);
+                    self.heap.drop_value(result);
+                    return Err(error);
+                }
             }
+            for writeback in &mut writebacks {
+                writeback.steps.clear();
+            }
+            finished.writebacks = writebacks;
         }
         // Taken before the release walk, for the same reason a writeback is:
         // a captured slot has moved out, so the plan that names it frees the
@@ -273,8 +429,18 @@ impl<'h> Vm<'h> {
             };
             self.captured.push((u32::from(slot), value));
         }
-        match &module.functions[finished.func as usize].releases {
-            FrameRelease::EveryLocal => self.discard(finished.locals),
+        let (cacheable, reset_locals) = match &module.functions[finished.func as usize].releases {
+            FrameRelease::EveryLocal => {
+                for held in &mut finished.locals {
+                    let value = std::mem::replace(held, Value::Void);
+                    if is_heap_value(&value) {
+                        self.heap.drop_value(value);
+                    }
+                }
+                // Every slot was just replaced with Void, so there is no
+                // second scan to perform before caching this frame.
+                (true, false)
+            }
             FrameRelease::Planned(slots) => {
                 for &slot in slots {
                     // A slot past the frame is refused by `Module::validate`
@@ -287,11 +453,38 @@ impl<'h> Vm<'h> {
                     else {
                         continue;
                     };
-                    self.heap.drop_value(held);
+                    if is_heap_value(&held) {
+                        self.heap.drop_value(held);
+                    }
                 }
+                // A planned module is allowed to leave scalar or opaque
+                // values in slots it does not own. Those are safe to retain;
+                // an unplanned heap handle is not.
+                (
+                    finished.locals.iter().all(|value| !is_heap_value(value)),
+                    true,
+                )
             }
+        };
+        // A planned release names every heap-bearing local. Scalar values and
+        // opaque seam words can be reset in place, so only a frame with no
+        // remaining heap handle is safe to retain. If a malformed or older
+        // module leaves one behind, leave this frame out of the cache rather
+        // than making reuse observable.
+        if cacheable {
+            if reset_locals {
+                finished.locals.fill(Value::Void);
+            }
+            self.frame_cache.push(finished);
         }
         if frames.is_empty() {
+            // Structural validation cannot prove operand-stack typing. A
+            // hand-built module may return while leaving an extra value on the
+            // stack; reclaim it before a persistent Instance lends this VM's
+            // scratch storage to another call.
+            for value in self.stack.drain(..) {
+                self.heap.drop_value(value);
+            }
             return Ok(Some(result));
         }
         self.stack.push(result);
@@ -336,4 +529,18 @@ impl<'h> Vm<'h> {
             }
         }
     }
+}
+
+/// Whether dropping `value` releases an object in this VM's heap.
+fn is_heap_value(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Str(_)
+            | Value::Struct(_)
+            | Value::Array(_)
+            | Value::Enum(_)
+            | Value::Erased(_)
+            | Value::Cell(_)
+            | Value::NativeSnapshot(_)
+    )
 }

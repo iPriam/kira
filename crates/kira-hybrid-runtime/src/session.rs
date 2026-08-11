@@ -38,7 +38,7 @@ use kira_runtime_abi::{
     NativeStateError, NativeStatePathStep, NativeStateStore, NativeStateToken, NativeStateTypeId,
     NativeStateValue, file_system, native_state_walk, native_state_walk_mut,
 };
-use kira_vm_runtime::Program;
+use kira_vm_runtime::{Program, debug::VmDebugObserver};
 
 use crate::error::HybridError;
 use crate::foreign;
@@ -258,6 +258,20 @@ impl Session {
     /// anything else — so this dispatches on the engine the manifest records
     /// rather than assuming the bytecode half starts every program.
     pub fn run(&self) -> Result<(), HybridError> {
+        self.run_inner(None)
+    }
+
+    /// Runs the VM half with an instruction-level debugger attached.
+    ///
+    /// If the manifest's entrypoint is native, the observer has no VM frame to
+    /// inspect; that native body remains available to LLDB through the DWARF
+    /// symbols emitted for the hybrid library. The CLI's `debug --lldb` mode
+    /// hosts this same session inside a real LLDB child process.
+    pub fn run_with_debug(&self, observer: &mut dyn VmDebugObserver) -> Result<(), HybridError> {
+        self.run_inner(Some(observer))
+    }
+
+    fn run_inner(&self, observer: Option<&mut dyn VmDebugObserver>) -> Result<(), HybridError> {
         let _active = ActiveSession::install(self);
         // The native half of a hybrid program is a shared library, so it has no
         // emitted `main` to report its heap balance from. The host asks on its
@@ -293,10 +307,11 @@ impl Session {
             _ => {
                 let mut host = Host { session: self };
                 let (program, _, _) = self.current_program();
-                program
-                    .run(&mut host)
-                    .map(|_| ())
-                    .map_err(HybridError::Trap)
+                let result = match observer {
+                    Some(observer) => program.run_with_debug(&mut host, observer),
+                    None => program.run(&mut host),
+                };
+                result.map(|_| ()).map_err(HybridError::Trap)
             }
         }
     }

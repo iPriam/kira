@@ -23,6 +23,7 @@ mod adapter;
 mod boxing;
 mod bridge;
 mod callback;
+mod debug;
 mod elements;
 mod entry;
 mod ffi;
@@ -43,6 +44,7 @@ use std::collections::HashMap;
 use std::ffi::CStr;
 use std::path::Path;
 
+use kira_debug::DebugInfo;
 use kira_ir::{IrFunction, IrProgram};
 use kira_runtime_abi::{Execution, ForeignPointerWidth};
 use kira_semantics_model::Type;
@@ -131,6 +133,33 @@ impl Module {
                 unavailable,
                 unit,
             },
+            None,
+        )
+    }
+
+    /// Lowers a native executable while attaching debug identities and source
+    /// locations from `debug`.
+    pub(crate) fn build_debug(
+        program: &IrProgram,
+        module_name: &str,
+        pointer_width: ForeignPointerWidth,
+        unavailable: &[usize],
+        unit: CodegenUnit,
+        debug: &DebugInfo,
+    ) -> Result<Self, LlvmError> {
+        Self::lower(
+            program,
+            module_name,
+            Plan {
+                kind: ModuleKind::Executable,
+                engines: vec![Execution::Native; program.functions.len()],
+                reachable: crate::reachability::native_functions(program),
+                exports: &NativeExportSurface::default(),
+                pointer_width,
+                unavailable,
+                unit,
+            },
+            Some(debug),
         )
     }
 
@@ -156,6 +185,7 @@ impl Module {
                 unavailable: &[],
                 unit: CodegenUnit::WHOLE,
             },
+            None,
         )
     }
 
@@ -182,6 +212,7 @@ impl Module {
                 unavailable,
                 unit: CodegenUnit::WHOLE,
             },
+            None,
         )
     }
 
@@ -207,11 +238,44 @@ impl Module {
                 unavailable,
                 unit: CodegenUnit::WHOLE,
             },
+            None,
+        )
+    }
+
+    /// Lowers the native half of a hybrid library with native debug metadata.
+    pub(crate) fn build_hybrid_debug(
+        program: &IrProgram,
+        module_name: &str,
+        unavailable: &[usize],
+        debug: &DebugInfo,
+    ) -> Result<Self, LlvmError> {
+        Self::lower(
+            program,
+            module_name,
+            Plan {
+                kind: ModuleKind::HybridLibrary,
+                engines: program
+                    .functions
+                    .iter()
+                    .map(|function| function.execution.resolve(Execution::Runtime))
+                    .collect(),
+                reachable: vec![true; program.functions.len()],
+                exports: &NativeExportSurface::default(),
+                pointer_width: ForeignPointerWidth::HOST,
+                unavailable,
+                unit: CodegenUnit::WHOLE,
+            },
+            Some(debug),
         )
     }
 
     /// Builds the module.
-    fn lower(program: &IrProgram, module_name: &str, plan: Plan<'_>) -> Result<Self, LlvmError> {
+    fn lower(
+        program: &IrProgram,
+        module_name: &str,
+        plan: Plan<'_>,
+        debug_info: Option<&DebugInfo>,
+    ) -> Result<Self, LlvmError> {
         let fast_codegen = needs_fast_codegen(program, &plan);
         let name = c_string(module_name);
         // SAFETY: the context, module, and builder are created together and
@@ -229,7 +293,7 @@ impl Module {
             }
         };
 
-        let mut codegen = Codegen::new(&owned, program, plan)?;
+        let mut codegen = Codegen::new(&owned, program, plan, debug_info)?;
         codegen.lower_program()?;
         owned.verify()?;
         Ok(owned)
@@ -375,12 +439,19 @@ pub(crate) struct Codegen<'a> {
     native_state_leaves: HashMap<(Type, StateLeaf), LLVMValueRef>,
     /// Encode/decode helpers for payload-carrying enum callback state.
     native_state_enum_leaves: HashMap<(kira_semantics_model::EnumId, StateLeaf), Callable>,
+    /// Optional debug builder for an explicitly requested debug build.
+    debug: Option<debug::DebugBuilder>,
 }
 
 impl<'a> Codegen<'a> {
     /// Prepares the module scaffold: types, runtime declarations, and one
     /// declaration per Kira function.
-    fn new(owned: &Module, program: &'a IrProgram, plan: Plan<'_>) -> Result<Self, LlvmError> {
+    fn new(
+        owned: &Module,
+        program: &'a IrProgram,
+        plan: Plan<'_>,
+        debug_info: Option<&DebugInfo>,
+    ) -> Result<Self, LlvmError> {
         let Plan {
             kind,
             engines,
@@ -424,6 +495,9 @@ impl<'a> Codegen<'a> {
             native_state_leaves: HashMap::new(),
             native_state_enum_leaves: HashMap::new(),
             pointer_width,
+            debug: debug_info.map(|info| {
+                debug::DebugBuilder::new(owned.module, owned.context, owned.builder, info)
+            }),
         };
         // Struct types come first: a function signature may name one, and a
         // struct's fields may name a struct declared before it.
@@ -558,6 +632,7 @@ impl<'a> Codegen<'a> {
         // nothing — the same arrangement its call into another unit's Kira
         // function relies on.
         if self.unit.is_first() {
+            self.clear_debug_location();
             self.emit_foreign_adapters()?;
             // And one entry thunk per callback, for the same reason: whatever
             // holds the adapters is what a C library reaches Kira through.
@@ -566,7 +641,7 @@ impl<'a> Codegen<'a> {
         if !self.unit.is_first() {
             return Ok(());
         }
-        match self.kind {
+        let result = match self.kind {
             // A whole program is entered through C `main`.
             ModuleKind::Executable => self.lower_entry_point(),
             // A library is entered by its consumer, so nothing starts it here.
@@ -587,6 +662,29 @@ impl<'a> Codegen<'a> {
                 }
                 Ok(())
             }
+        };
+        if result.is_ok()
+            && let Some(debug) = self.debug.as_mut()
+        {
+            debug.finalize();
+        }
+        result
+    }
+
+    /// Attaches the current Kira source scope before a body is lowered.
+    pub(super) fn begin_debug_function(&self, index: usize, value: LLVMValueRef) {
+        let Some(debug) = self.debug.as_ref() else {
+            return;
+        };
+        debug.attach(index, value);
+        debug.set_location(index);
+    }
+
+    /// Prevents generated adapters and entry trampolines inheriting a Kira
+    /// source line from the last lowered body.
+    fn clear_debug_location(&self) {
+        if let Some(debug) = self.debug.as_ref() {
+            debug.clear_location();
         }
     }
 

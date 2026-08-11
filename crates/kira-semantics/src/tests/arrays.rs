@@ -219,13 +219,13 @@ fn passing_an_array_to_an_owned_parameter_needs_move() {
     assert_eq!(codes(text), vec!["KSEM108"]);
 }
 
-/// There is no array clone. `copy xs` is refused rather than given an
-/// invented deep-copy meaning.
+/// Explicitly copying an array preserves the source and detaches on the first
+/// mutation through the copy.
 #[test]
-fn there_is_no_array_clone() {
-    assert_eq!(
-        codes("@Main function main() { var xs: [Int] = [] let ys = copy xs return }"),
-        vec!["KSEM116"]
+fn copying_an_array_is_allowed() {
+    assert!(
+        diagnostics("@Main function main() { var xs: [Int] = [] let ys = copy xs return }")
+            .is_empty()
     );
 }
 
