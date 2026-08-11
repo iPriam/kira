@@ -32,13 +32,15 @@ cmake_generator = "Ninja"
 targets_to_build = "host;WebAssembly"
 
 [target.x86_64-windows-msvc]
-runner = "windows-2022"
-# The oldest Visual Studio that can link the published bundle. MSVC guarantees
-# compatibility forward only, so whatever toolset builds this bundle is the
-# floor for every developer consuming it — left implicit, the runner image
-# raises that floor whenever it updates and the bundle stops linking on the
-# Visual Studio people already have.
-toolset = "14.44"
+# Floating, because nothing about this image is a decision. MSVC guarantees
+# compatibility forward only, so the toolset that builds a bundle would
+# normally be the oldest Visual Studio that can link it, and every image update
+# would raise that floor under developers who already installed a Visual
+# Studio. `scripts/llvm/build-llvm.ps1` opts out of the STL's toolset-private
+# helpers and `scripts/llvm/check-msvc-portability.ps1` fails the build if any
+# survive, so the floor is a property of the artifact rather than of whichever
+# toolset GitHub ships this month.
+runner = "windows-latest"
 platform = "windows"
 archive = "zip"
 asset = "llvm-22.1.8-x86_64-windows-msvc.zip"

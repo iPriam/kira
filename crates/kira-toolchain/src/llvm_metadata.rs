@@ -62,15 +62,6 @@ pub struct TargetBundle {
     pub archive: String,
     /// The exact published asset filename. The workflow must match this.
     pub asset: String,
-    /// The MSVC toolset the bundle is compiled with, for hosts that have one.
-    ///
-    /// MSVC's compatibility guarantee runs forward — a library built by an
-    /// older toolset links into a newer one, never the reverse — so this is the
-    /// oldest Visual Studio that can consume the published bundle. Left to the
-    /// runner image it is not a decision at all: the image updates its toolset
-    /// in place, and the floor rises under everyone who already installed a
-    /// Visual Studio. `None` on platforms with no MSVC.
-    pub toolset: Option<String>,
 }
 
 /// The compiled-in `llvm-metadata.toml` could not be parsed.
@@ -161,28 +152,28 @@ mod tests {
         );
     }
 
-    /// MSVC compatibility runs forward only, so the toolset that builds the
-    /// Windows bundle is the oldest Visual Studio that can link it. Leaving it
-    /// to the runner image makes that floor rise whenever the image updates,
-    /// which is how a published bundle came to name STL symbols no released
-    /// Visual Studio defined. Every MSVC host records it; nothing else needs to.
+    /// MSVC compatibility runs forward only, so a Windows bundle links on
+    /// nothing older than the toolset that built it unless the build refuses
+    /// the STL's toolset-private helpers and the release proves none survived.
+    /// That pair is what lets the runner image float; drop either half and the
+    /// floor silently becomes whatever GitHub last installed, which is how a
+    /// published bundle came to name STL symbols no released Visual Studio
+    /// defined.
     #[test]
-    fn every_msvc_host_pins_the_toolset_that_sets_its_compatibility_floor() {
-        let metadata = pinned().expect("the pin parses");
-        for (key, bundle) in &metadata.target {
-            if bundle.platform == "windows" {
-                let toolset = bundle
-                    .toolset
-                    .as_deref()
-                    .unwrap_or_else(|| panic!("`{key}` is an MSVC host and pins no toolset"));
-                assert!(!toolset.is_empty(), "`{key}` pins an empty toolset");
-            } else {
-                assert!(
-                    bundle.toolset.is_none(),
-                    "`{key}` is not an MSVC host and has no use for a toolset"
-                );
-            }
-        }
+    fn the_windows_bundle_earns_its_floating_runner() {
+        const BUILD_SCRIPT: &str = include_str!("../../../scripts/llvm/build-llvm.ps1");
+        const RELEASE_WORKFLOW: &str =
+            include_str!("../../../.github/workflows/release-llvm-toolchains.yml");
+        assert!(
+            BUILD_SCRIPT.contains("_USE_STD_VECTOR_ALGORITHMS=0"),
+            "build-llvm.ps1 must opt out of the vectorized STL algorithms, \
+             whose helpers live in the building toolset's own library"
+        );
+        assert!(
+            RELEASE_WORKFLOW.contains("check-msvc-portability.ps1"),
+            "the release workflow must check the built bundle against its \
+             compatibility floor before publishing it"
+        );
     }
 
     /// The pinned LLVM and the `llvm-sys` bindings must never drift apart: the
