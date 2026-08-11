@@ -300,6 +300,12 @@ impl Analyzer<'_> {
                 ..
             } => {
                 let cond_expr = self.analyze_condition(ctx, cond);
+                // The condition may hoist statements of its own — a
+                // construction's defaulted members become `let`s. They belong
+                // here, before the `if`; left queued, the then-block's first
+                // statement would drain them into the branch, and the condition
+                // would read locals nothing had initialized yet.
+                out.extend(ctx.take_pending_stmts());
                 // The two arms are alternatives, so each is analyzed from the
                 // state at the `if` — a move in one is not a move in the other.
                 let mut branch = crate::ownership::BranchMoves::start(ctx);
@@ -323,6 +329,15 @@ impl Analyzer<'_> {
             }
             Stmt::While { cond, body, .. } => {
                 let cond_expr = self.analyze_condition(ctx, cond);
+                // Statements the condition hoisted (a construction's defaulted
+                // members become `let`s) must run before EVERY evaluation of the
+                // condition, not once before the loop and not inside the body
+                // after the first test. The loop that carries them is
+                //
+                //     while true { hoisted…; if cond { body… } else { break } }
+                //
+                // which evaluates them freshly ahead of each test.
+                let cond_prelude = ctx.take_pending_stmts();
                 // The body is the same code twice, so a value it gives away is
                 // gone before the second run — the check the back edge needs.
                 let loop_moves = crate::ownership::LoopMoves::start(ctx);
@@ -331,10 +346,26 @@ impl Analyzer<'_> {
                 ctx.loop_depth -= 1;
                 let exits = self.body_always_exits_loop(&loop_body);
                 self.check_loop_back_edge(ctx, loop_moves, exits);
-                let hir = self.program.stmts.alloc(HirStmt::While {
-                    cond: cond_expr,
-                    body: loop_body,
-                });
+                let hir = if cond_prelude.is_empty() {
+                    self.program.stmts.alloc(HirStmt::While {
+                        cond: cond_expr,
+                        body: loop_body,
+                    })
+                } else {
+                    let always = self.program.exprs.alloc(HirExpr::Bool(true));
+                    let break_stmt = self.program.stmts.alloc(HirStmt::Break);
+                    let test = self.program.stmts.alloc(HirStmt::If {
+                        cond: cond_expr,
+                        then_body: loop_body,
+                        else_body: vec![break_stmt],
+                    });
+                    let mut wrapped = cond_prelude;
+                    wrapped.push(test);
+                    self.program.stmts.alloc(HirStmt::While {
+                        cond: always,
+                        body: wrapped,
+                    })
+                };
                 out.push(hir);
             }
             Stmt::For {

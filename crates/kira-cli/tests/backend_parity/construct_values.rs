@@ -94,3 +94,104 @@ function main() {
     );
     assert_eq!(output, "7\n");
 }
+
+/// A family's value members — required and defaulted alike — read through
+/// `Any Family` in a free function, where nothing is specialized: every read
+/// runs the synthesized tag dispatcher.
+#[test]
+fn family_value_members_read_through_the_family_value() {
+    let output = assert_parity(
+        r#"
+construct Style {
+    @Required let colors: Int
+    let appearance: Int = 2
+}
+
+Style Base {
+    let colors = 7
+}
+
+Style Light {
+    let colors = 9
+    let appearance = 5
+}
+
+function readThrough(style: Any Style) -> Int {
+    return style.appearance + style.colors
+}
+
+@Main
+function main() {
+    print(readThrough(Base {}))
+    print(readThrough(Light {}))
+    return
+}
+"#,
+    );
+    assert_eq!(output, "9\n14\n");
+}
+
+/// A construction inside an `if` condition hoists its defaulted members as
+/// `let`s; they must run before the test, not inside the then-branch after it.
+#[test]
+fn a_construction_in_an_if_condition_initializes_before_the_test() {
+    let output = assert_parity(
+        r#"
+construct Style {
+    @Required let colors: Int
+    let appearance: Int = 2
+}
+
+Style Base {
+    let colors = 7
+}
+
+function readThrough(style: Any Style) -> Int {
+    return style.appearance + style.colors
+}
+
+@Main
+function main() {
+    if readThrough(Base {}) == 9 {
+        print("if-cond-ok")
+    }
+    return
+}
+"#,
+    );
+    assert_eq!(output, "if-cond-ok\n");
+}
+
+/// A construction inside a `while` condition re-initializes its defaulted
+/// members ahead of EVERY test, so the loop neither reads uninitialized locals
+/// on the first pass nor stale ones afterwards.
+#[test]
+fn a_construction_in_a_while_condition_initializes_before_every_test() {
+    let output = assert_parity(
+        r#"
+construct Style {
+    @Required let colors: Int
+    let appearance: Int = 2
+}
+
+Style Base {
+    let colors = 7
+}
+
+function readThrough(style: Any Style) -> Int {
+    return style.appearance + style.colors
+}
+
+@Main
+function main() {
+    var laps = 0
+    while readThrough(Base {}) == 9 && laps < 3 {
+        laps = laps + 1
+    }
+    print(laps)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "3\n");
+}
