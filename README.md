@@ -12,9 +12,10 @@ executable, or split across a hybrid runtime/native boundary. This repository is
 the Rust implementation — the compiler pipeline, the VM, the LLVM and hybrid
 backends, the C-ABI interop layer, and the KSL shader pipeline.
 
-The implementation is young and says so. `kira run`, `check`, `build`, `sync`,
-and `live` work; fifteen further verbs parse and report that they are not
-implemented yet. `kira help all` lists them.
+The implementation is young and says so. The compiler, debugger, instruction
+profiler, FFI inspector, linter, documentation model, package/dependency,
+shader, and live-reload tools are wired through the real pipeline. `kira help`
+lists every available command.
 
 ## Why Kira is interesting
 
@@ -92,16 +93,88 @@ fetch LLVM would have to be built before the bundle it installs.
 
 ## Examples
 
-Twenty-one runnable packages live in `examples/`, each exercising one part of the
+Twenty-two runnable packages live in `examples/`, each exercising one part of the
 language: `hello`, `fib`, `arrays`, `structs`, `classes`, `enums`, `generics`,
 `closures`, `ownership`, `match`, `switch`, `loops`, `strings`, `widths`,
-`bitwise`, `aliases`, `imports`, `attempt`, `library`, `foundation`, and `ffi`.
+`bitwise`, `aliases`, `imports`, `attempt`, `library`, `foundation`, `ffi`, and
+`networking`.
 
 ```bash
 kira run examples/generics
 kira check examples/library
+kira doc examples/library > api.md
 kira run --backend llvm examples/ownership
 ```
+
+## Debugging
+
+`kira debug` exposes the same entrypoint on all three execution backends:
+
+```bash
+kira debug --backend vm --break main examples/hello
+kira debug --backend hybrid --batch --break main examples/ffi
+kira debug --backend llvm --batch --break main examples/hello
+```
+
+The VM and hybrid sessions support `continue`, `step`, `break`, `backtrace`,
+`locals`, `stack`, `disassemble`, and `quit`, and print the mapped Kira source
+line at each stop. The LLVM session launches the real LLDB executable, loads
+the generated DWARF/native debug data (CodeView/PDB on MSVC), and captures the
+stopped thread's frame, source window, variables, backtrace, registers, and
+target CPU instructions; set `KIRA_LLDB` when LLDB is not on `PATH`.
+
+The VM can also be hosted entirely by LLDB:
+
+```bash
+kira debug --backend vm --lldb --batch --break main:2 examples/hello
+```
+
+This exports `kira_vm_debug_probe` from the host. LLDB stops on that native
+frame, and its register arguments carry the current VM function id, bytecode
+PC, opcode, call depth, stack depth, and live local/operand-stack pointers.
+Use `register read` and CPU disassembly in LLDB; on x86-64 the first two
+location fields are the platform argument registers (`rcx`/`rdx` on Windows,
+`rdi`/`rsi` on System V). The Kira VM remains the execution engine—the probe
+is its LLDB ABI, not a translation of bytecode into native code. Every probe
+also publishes the exported `KIRA_VM_DEBUG_STATE` C-shaped snapshot. The
+VM host also maintains the exported `KIRA_VM_DEBUG_TEXT` mirror. Batch LLDB
+reads that mirror at the stop, so decoded local slots, operand-stack values,
+instruction bytes, and the VM backtrace describe the exact stop. On LLDB builds
+with a stable command interpreter, type `continue` to reach the next requested
+stop, then inspect the raw state yourself with `memory read --size 4 --count 16 &KIRA_VM_DEBUG_STATE`
+(the address form is needed by Swift LLDB on Windows,
+which types the exported C global as `void*`). For repeated stops on the Swift
+Windows build, use the DAP command below.
+
+For a real multi-stop VM session on Windows, use LLDB's Debug Adapter Protocol
+frontend. It drives the same native probe but avoids the Swift command
+interpreter's second-`continue` crash:
+
+```bash
+kira debug --backend vm --lldb-dap --dap-continues 2 --break calculateTax:5 examples/debug-lab/buggy.kira
+```
+
+The DAP launch verifies the native breakpoint, stops in one LLDB-owned process,
+and reads the decoded VM state with DAP `evaluate` plus `readMemory`. The
+`--dap-continues` value controls additional real `continue` requests; an IDE or
+other DAP client can launch the same host and arguments when it should own the
+interactive session. The exported probe/state symbols are the runtime ABI.
+
+Use `--lldb` on a hybrid debug run to place the VM host and native shared
+library in one LLDB session:
+
+```bash
+kira debug --backend hybrid --lldb --batch --break fast examples/ffi
+```
+
+The VM half still reports Kira bytecode stops through its portable observer,
+while LLDB resolves `@Native`/runtime symbols in the loaded library and
+provides native frames, registers, DWARF source data, and CPU disassembly. A
+VM-only run without `--lldb` uses the portable Kira debugger; with `--lldb`,
+the probe described above is the LLDB stop surface. On some Windows LLDB builds
+hybrid DLL unwinding is unreliable, so the hybrid launcher omits only the
+automatic backtrace query while retaining frame, register, source, and
+disassembly inspection.
 
 ## Execution model
 
@@ -143,15 +216,17 @@ emits binary rather than source, and it travels in the artifact as hexadecimal,
 eight characters per word. `ksl!` is no builtin: it is an ordinary `comptime
 macro` the engine declares, over the one compile-time call the compiler owns,
 `Ksl.compile(path, target)`. See
-[docs/macros.md](docs/macros.md). The standalone `kira shader` verb is not
-implemented yet.
+[docs/macros.md](docs/macros.md). The standalone `kira shader` verb builds and
+validates these targets directly.
 
 ## Packages and toolchains
 
 A package is declared by a `package.kira` manifest authored in Kira itself.
 `kira sync` resolves the manifests and writes `kira.lock`; a build that finds a
-stale lockfile regenerates it and says so. Dependency commands — `add`,
-`remove`, `update`, `package` — are planned, not built.
+stale lockfile regenerates it and says so. `kira add` and `kira remove` edit
+dependency declarations; `kira sync` then resolves the edited graph and writes
+a fresh lockfile. Updating registry pins, packaging, and manifest migration
+remain separate commands listed by `kira help all`.
 
 Toolchain management is `knvm`: `knvm install`, `knvm use`, `knvm list`,
 `knvm binstall` for the current checkout. See [docs/knvm.md](docs/knvm.md).

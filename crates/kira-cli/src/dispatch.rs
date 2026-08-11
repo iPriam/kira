@@ -1,11 +1,12 @@
 //! Verb dispatch: routes a parsed [`Command`] to its handler.
 //!
-//! Every handler is a stub until its command is implemented; stubs exit 2.
+//! Every parsed command has an explicit handler; usage errors stay at the
+//! handler boundary rather than falling through to a silent no-op.
 
 use crate::command::{ALL, Command};
 use crate::pipeline;
 
-/// Exit code for unimplemented commands and usage errors.
+/// Exit code for unknown commands and usage errors.
 pub const EXIT_UNAVAILABLE: i32 = 2;
 
 /// Dispatch a parsed command. Returns the process exit code.
@@ -15,12 +16,25 @@ pub const EXIT_UNAVAILABLE: i32 = 2;
 pub fn dispatch(command: Command, args: &[String]) -> i32 {
     match command {
         Command::Run => pipeline::run(args),
+        Command::Debug => pipeline::debug(args),
         Command::Build => pipeline::build(args),
+        Command::Package => pipeline::package(args),
+        Command::Export => pipeline::export(args),
         Command::Check => pipeline::check(args),
         Command::Lint => pipeline::lint(args),
         Command::Test => pipeline::test(args),
         Command::Live => pipeline::live(args),
+        Command::Tokens => crate::inspect::tokens(args),
+        Command::Ast => crate::inspect::ast(args),
+        Command::Doc => crate::doc::doc(args),
+        Command::New => crate::scaffold::new(args),
         Command::Sync => crate::sync::sync(args),
+        Command::Add => crate::dependencies::add(args),
+        Command::Remove => crate::dependencies::remove(args),
+        Command::MigrateManifest => crate::migrate::migrate(args),
+        Command::Ffi => crate::ffi::ffi(args),
+        Command::Instruments => crate::instruments::run(args),
+        Command::Update => crate::update::update(args),
         Command::Shader => crate::shader::shader(args),
         Command::Help => {
             let all = args.iter().any(|arg| arg == "all" || arg == "--all");
@@ -31,57 +45,58 @@ pub fn dispatch(command: Command, args: &[String]) -> i32 {
             println!("kira {}", kira_toolchain::RELEASE_VERSION);
             0
         }
-        other => unavailable(other),
     }
 }
 
-fn unavailable(command: Command) -> i32 {
-    eprintln!("kira {}: not yet implemented", command.label());
-    EXIT_UNAVAILABLE
-}
-
-/// Whether a verb has a real handler, or still hits the stub above.
+/// Whether a verb has a real handler.
 ///
-/// Lives beside the `dispatch` match so the two cannot drift apart silently;
-/// the usage screen dims what is not yet real rather than advertising every
-/// verb as equally alive.
+/// Kept beside the dispatch match so adding a parsed command forces its help
+/// status to be considered at the same edit site.
 fn implemented(command: Command) -> bool {
     matches!(
         command,
         Command::Run
+            | Command::Debug
             | Command::Build
             | Command::Check
             | Command::Lint
             | Command::Test
             | Command::Live
+            | Command::Tokens
+            | Command::Ast
+            | Command::Doc
+            | Command::New
             | Command::Sync
+            | Command::Add
+            | Command::Remove
+            | Command::MigrateManifest
+            | Command::Ffi
+            | Command::Instruments
+            | Command::Update
+            | Command::Package
+            | Command::Export
             | Command::Shader
             | Command::Help
             | Command::Version
     )
 }
 
-/// Print top-level usage: the commands that work.
+/// Print top-level usage.
 pub fn print_usage() {
     print_usage_with(false);
 }
 
-/// Print usage; `all` includes the verbs that are parsed but not yet real.
+/// Print usage; `all` is retained for scripts that used the old help spelling.
 ///
-/// The default screen lists only what runs — a front door advertising sixteen
-/// stubs reads as sixteen broken promises. The planned set stays reachable
-/// (`kira help all`) and stays honest: every hidden verb is labeled
-/// unimplemented.
-fn print_usage_with(all: bool) {
+/// All commands now have a handler, so both forms print the same command list.
+fn print_usage_with(_all: bool) {
     let paint = kira_toolchain::Paint::auto_stderr();
     // The note column is aligned by the visible width of `kira <verb><args>` —
     // padding is computed before color is applied, because ANSI escapes
-    // inflate `len()`, and from the rows this screen actually shows, so hiding
-    // the planned set does not pad the short list to the longest hidden name.
+    // inflate `len()`.
     let visible = |kind: &Command| "kira ".len() + kind.label().len() + kind.arguments().len();
     let width = ALL
         .iter()
-        .filter(|kind| all || implemented(**kind))
         .map(visible)
         .max()
         .unwrap_or(0)
@@ -104,29 +119,6 @@ fn print_usage_with(all: bool) {
             "  {}{pad}   {}",
             paint.cyan("kira --version"),
             paint.dim("print the version")
-        );
-    }
-
-    let planned = ALL.into_iter().filter(|kind| !implemented(*kind));
-    if all {
-        eprintln!();
-        for kind in planned {
-            let pad = " ".repeat(width - visible(&kind));
-            eprintln!(
-                "  {}{}{pad}   {}",
-                paint.dim(&format!("kira {}", kind.label())),
-                kind.arguments(),
-                paint.dim(&format!("{} (not yet implemented)", kind.description()))
-            );
-        }
-    } else {
-        let count = planned.count();
-        eprintln!();
-        eprintln!(
-            "{}",
-            paint.dim(&format!(
-                "{count} more commands are planned; `kira help all` lists them."
-            ))
         );
     }
 }

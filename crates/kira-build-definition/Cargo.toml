@@ -7,3 +7,7 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+kira-backend-api.workspace = true
+thiserror.workspace = true

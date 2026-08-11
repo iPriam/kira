@@ -30,7 +30,7 @@ impl FunctionLowering<'_, '_> {
         let callee = self.codegen.runtime.env[usize::from(op.as_byte())];
         let call = self.call(callee, &mut values, c"env");
         match op {
-            EnvOp::Text => Ok(call),
+            EnvOp::Text | EnvOp::ArgumentCount | EnvOp::Argument | EnvOp::Sleep => Ok(call),
             EnvOp::IsSet => Ok(self.byte_to_bool(call)),
         }
     }

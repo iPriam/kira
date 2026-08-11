@@ -1,6 +1,6 @@
 //! Statement, control-flow, place, and jump lowering.
 
-use kira_ir::{IrExprId, IrPlace, IrPlaceStep, IrStmt};
+use kira_ir::{IrAttempt, IrExprId, IrPlace, IrPlaceStep, IrStmt};
 
 use crate::op::{FieldPath, Instruction, PathStep, PlacePath};
 
@@ -64,6 +64,7 @@ impl FnCompiler<'_> {
                 then_body,
                 else_body,
             } => self.compile_if(*cond, then_body, else_body)?,
+            IrStmt::Attempt { attempt } => self.compile_attempt(attempt)?,
             IrStmt::While { cond, body } => self.compile_while(*cond, body)?,
             IrStmt::Break => {
                 let placeholder = self.emit_placeholder_jump();
@@ -73,6 +74,30 @@ impl FnCompiler<'_> {
                 let target = self.innermost_loop()?.continue_target;
                 self.code.push(Instruction::Jump(target));
             }
+        }
+        Ok(())
+    }
+
+    /// Compiles a linear `attempt` region with one common handler exit.
+    ///
+    /// A failed step runs its handler and jumps over every later `try`; a
+    /// successful step falls through to the next setup. This is the bytecode
+    /// form of the typed IR contract and keeps the handler path from executing
+    /// later guarded calls accidentally.
+    fn compile_attempt(&mut self, attempt: &IrAttempt) -> Result<(), CompileError> {
+        let mut handler_exits = Vec::with_capacity(attempt.steps.len());
+        for step in &attempt.steps {
+            self.compile_body(&step.setup)?;
+            self.compile_expr(step.error_condition)?;
+            let to_success = self.emit_placeholder_jump_if_false();
+            self.compile_body(&step.handler)?;
+            handler_exits.push(self.emit_placeholder_jump());
+            self.patch_to_here(to_success)?;
+            self.compile_body(&step.success)?;
+        }
+        self.compile_body(&attempt.trailing)?;
+        for exit in handler_exits {
+            self.patch_to_here(exit)?;
         }
         Ok(())
     }

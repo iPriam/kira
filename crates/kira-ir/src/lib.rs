@@ -20,8 +20,8 @@ pub mod mid;
 mod tasks;
 
 pub use ir::{
-    ConvertKind, IrBinOp, IrCallee, IrExport, IrExpr, IrExprId, IrForeignImport, IrFunction,
-    IrPlace, IrPlaceStep, IrProgram, IrStmt, IrUnOp, IrWriteback,
+    ConvertKind, IrAttempt, IrAttemptStep, IrBinOp, IrCallee, IrExport, IrExpr, IrExprId,
+    IrForeignImport, IrFunction, IrPlace, IrPlaceStep, IrProgram, IrStmt, IrUnOp, IrWriteback,
 };
 pub use lower::lower;
 

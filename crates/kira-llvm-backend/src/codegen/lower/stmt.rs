@@ -49,6 +49,7 @@ impl FunctionLowering<'_, '_> {
                 then_body,
                 else_body,
             } => self.lower_if(*cond, then_body, else_body),
+            IrStmt::Attempt { attempt } => self.lower_attempt(attempt),
             IrStmt::While { cond, body } => self.lower_while(*cond, body),
             IrStmt::Break => {
                 let exit = self.innermost_loop()?.exit;
@@ -61,6 +62,46 @@ impl FunctionLowering<'_, '_> {
                 Ok(())
             }
         }
+    }
+
+    /// Lowers a linear `attempt` region to LLVM basic blocks.
+    ///
+    /// Each handler branch jumps to one common end block, while a successful
+    /// step falls through to the next setup. Keeping the region here as CFG
+    /// construction means the VM bytecode compiler and LLVM backend share the
+    /// same typed IR contract without duplicating semantic analysis.
+    fn lower_attempt(&mut self, attempt: &kira_ir::IrAttempt) -> Result<(), LlvmError> {
+        let function = self.current_function();
+        let end = self.append_block(function, c"attempt.end");
+        for step in &attempt.steps {
+            self.lower_block(&step.setup)?;
+            if self.block_is_terminated() {
+                break;
+            }
+            let condition = self.lower_expr(step.error_condition)?;
+            let failure = self.append_block(function, c"attempt.failure");
+            let success = self.append_block(function, c"attempt.success");
+            // SAFETY: both successors belong to this function and `condition`
+            // is the boolean value produced by the typed attempt condition.
+            unsafe { LLVMBuildCondBr(self.codegen.builder, condition, failure, success) };
+
+            self.position_at(failure);
+            self.lower_block(&step.handler)?;
+            if !self.block_is_terminated() {
+                self.branch_to(end);
+            }
+
+            self.position_at(success);
+            self.lower_block(&step.success)?;
+        }
+        if !self.block_is_terminated() {
+            self.lower_block(&attempt.trailing)?;
+        }
+        if !self.block_is_terminated() {
+            self.branch_to(end);
+        }
+        self.position_at(end);
+        Ok(())
     }
 
     /// The innermost enclosing loop's blocks.

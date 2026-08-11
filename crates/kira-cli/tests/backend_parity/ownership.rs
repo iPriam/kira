@@ -161,6 +161,35 @@ function main() {
     assert_eq!(output, "42\n21\n");
 }
 
+/// Explicit copies of heap-owning values use the same value operations as
+/// ordinary local reads. A string and struct field are independent, while an
+/// array detaches when the copy is written.
+#[test]
+fn copying_heap_values_agrees() {
+    let output = assert_parity(
+        r#"
+struct Boxed {
+    var text: String
+    var items: [Int]
+}
+
+@Main
+function main() {
+    var original = Boxed { text: "keep", items: [1] }
+    var duplicate = copy original
+    duplicate.text = "changed"
+    duplicate.items.append(9)
+    print(original.text)
+    print(original.items.count)
+    print(duplicate.text)
+    print(duplicate.items.count)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "keep\n1\nchanged\n2\n");
+}
+
 /// A moved `String` reaches its callee whole. Strings own heap bytes, so a
 /// backend that got the transfer wrong would print garbage or leak rather than
 /// disagree quietly.

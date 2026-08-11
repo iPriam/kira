@@ -711,16 +711,19 @@ pub(super) fn declare_runtime(module: LLVMModuleRef, types: &Types) -> Runtime {
                 let name = c_string(op.runtime_symbol());
                 declare(&name, types.ptr, &mut [types.ptr, types.i64])
             }),
-            // Appended after the compiler helpers. Each takes one string
-            // handle; `Text` answers with another and `IsSet` with a flag, so
-            // the return type is the one thing that differs between them.
+            // Appended after the compiler helpers. The environment operations
+            // have a few fixed signatures, kept in one table so the native
+            // bridge and the lowering cannot drift apart.
             env: EnvOp::ALL.map(|op| {
                 let name = c_string(op.runtime_symbol());
-                let ret = match op {
-                    EnvOp::Text => types.ptr,
-                    EnvOp::IsSet => types.i8,
+                let (ret, mut params) = match op {
+                    EnvOp::Text => (types.ptr, vec![types.ptr]),
+                    EnvOp::IsSet => (types.i8, vec![types.ptr]),
+                    EnvOp::ArgumentCount => (types.i64, vec![]),
+                    EnvOp::Argument => (types.ptr, vec![types.i64]),
+                    EnvOp::Sleep => (types.void, vec![types.i64]),
                 };
-                declare(&name, ret, &mut [types.ptr])
+                declare(&name, ret, &mut params)
             }),
         }
     }

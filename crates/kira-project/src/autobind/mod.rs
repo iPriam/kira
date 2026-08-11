@@ -22,6 +22,7 @@
 //! headers are read here and nowhere else. It also never decides *when* to run:
 //! the build drives it, once, before semantic analysis.
 
+mod builtin;
 mod cache;
 mod emit;
 mod harvest;
@@ -161,8 +162,12 @@ pub fn plan(
         return Ok(None);
     }
 
-    let headers = resolve_headers(spec, context)?;
-    if headers.is_empty() {
+    let builtin_profile = builtin::profile(spec);
+    let headers = match builtin_profile {
+        Some(_) => Vec::new(),
+        None => resolve_headers(spec, context)?,
+    };
+    if builtin_profile.is_none() && headers.is_empty() {
         return Ok(None);
     }
 
@@ -172,7 +177,10 @@ pub fn plan(
         .unwrap_or_else(|| spec.name().to_owned());
     let output = output_path(autobind.output.as_deref(), &module, context);
     let stamp_file = cache::stamp_path(&context.package_root.join(".kira-build"), spec.name());
-    let arguments = clang_arguments(spec, context, &headers);
+    let arguments = match builtin_profile {
+        Some(profile) => vec![format!("builtin:{profile}")],
+        None => clang_arguments(spec, context, &headers),
+    };
     let stamp = cache::Stamp {
         key: format!(
             "{} {} {} {}",
@@ -184,10 +192,13 @@ pub fn plan(
                 Availability::Optional => "optional",
             }
         ),
-        inputs: headers
-            .iter()
-            .map(|header| cache::describe_input(header))
-            .collect(),
+        inputs: match builtin_profile {
+            Some(profile) => vec![format!("builtin:{profile}:v2")],
+            None => headers
+                .iter()
+                .map(|header| cache::describe_input(header))
+                .collect(),
+        },
     };
     let status = match cache::freshness(&stamp_file, &output, &stamp) {
         cache::Freshness::Current => AutobindStatus::Current,
@@ -227,19 +238,24 @@ pub fn generate(
             message: "the library declares no `autobind` record".to_owned(),
         });
     };
-    // One translation unit including every declared header in order, rather
-    // than one unit per header. A C header set is a sequence, not a set of
-    // independent files: `sokol_glue.h` refuses to compile unless
-    // `sokol_gfx.h` came first, and parsing them apart binds nothing for every
-    // header that depends on its predecessors.
-    let umbrella = write_umbrella(plan)?;
-    let unit = clang
-        .parse(&umbrella, &plan.arguments)
-        .map_err(|source| AutobindError::Parse {
-            library: plan.library.clone(),
-            source,
-        })?;
-    let mut module = harvest::harvest(&unit, &plan.library, autobind, &plan.headers);
+    let mut module = if let Some(profile) = builtin::profile(spec) {
+        builtin::module(profile)
+    } else {
+        // One translation unit including every declared header in order, rather
+        // than one unit per header. A C header set is a sequence, not a set of
+        // independent files: `sokol_glue.h` refuses to compile unless
+        // `sokol_gfx.h` came first, and parsing them apart binds nothing for every
+        // header that depends on its predecessors.
+        let umbrella = write_umbrella(plan)?;
+        let unit =
+            clang
+                .parse(&umbrella, &plan.arguments)
+                .map_err(|source| AutobindError::Parse {
+                    library: plan.library.clone(),
+                    source,
+                })?;
+        harvest::harvest(&unit, &plan.library, autobind, &plan.headers)
+    };
     module.sort();
 
     let text = emit::render(&module);

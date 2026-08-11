@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "1.8.0"
+version = "1.8.1"
 edition = "2024"
 license = "Apache-2.0 WITH LicenseRef-Kira-Runtime-Library-Exception"
 license-file = "LICENSE"
@@ -73,6 +73,21 @@ la-arena = "0.3"
 bumpalo = "3"
 libloading = "0.8"
 libc = "0.2"
+redb = "4.1"
+bytes = "1"
+futures-util = "0.3"
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+hyper = { version = "1.11", features = ["client", "server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "server", "http1", "http2", "tokio"] }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rcgen = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 # LLVM/native backend: the raw LLVM-C API. Pinned to the LLVM 22.1 series that
 # the managed toolchain ships (`llvm-sys` majors track the LLVM major.minor).
 # A hard dependency of the backend: every workspace build needs a managed LLVM

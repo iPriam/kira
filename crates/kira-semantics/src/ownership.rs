@@ -1,7 +1,8 @@
 //! The ownership checker: the semantics half of the two enforcement layers.
 //!
-//! This module owns the `KSEM107`..`KSEM117` band. It answers three questions
-//! about every binding and every argument:
+//! This module owns the `KSEM107`..`KSEM117` band, plus `KSEM250` on a
+//! binding's ownership prefix and `KSEM270` on a move a loop repeats. It
+//! answers four questions about every binding and every argument:
 //!
 //! 1. **Is this value still here?** A local that was moved out is gone;
 //!    touching it again is `KSEM107`, moving it again is `KSEM110`.
@@ -12,6 +13,9 @@
 //! 3. **Is this binding allowed to do that?** A `let` cannot be mutably
 //!    borrowed (`KSEM109`) and a borrowed parameter cannot be moved onward
 //!    (`KSEM111`).
+//! 4. **Will this value still be here next time round?** A loop body runs more
+//!    than once, so one that gives a value away and does not put it back finds
+//!    nothing to give on the next iteration ([`LoopMoves`], `KSEM270`).
 //!
 //! ## Why only one mode reaches a backend
 //!
@@ -68,6 +72,13 @@ pub(crate) struct LocalOwnership {
     /// one — the oracle's use-after-move says "ownership moved here" — and
     /// discarding it now would mean re-deriving it then.
     pub(crate) moved: Option<Span>,
+    /// Whether a loop has already blamed this local for a move its back edge
+    /// would repeat.
+    ///
+    /// Every loop enclosing the offending one sees the same local go from live
+    /// to moved across its own body, so without this one mistake wears one
+    /// diagnostic per level of nesting.
+    pub(crate) loop_reported: bool,
 }
 
 impl LocalOwnership {
@@ -76,6 +87,7 @@ impl LocalOwnership {
         Self {
             mode: OwnershipMode::Owned,
             moved: None,
+            loop_reported: false,
         }
     }
 
@@ -157,6 +169,40 @@ impl BranchMoves {
     }
 }
 
+/// The move state at a loop's head, and the back edge it has to survive.
+///
+/// A branch's arms are alternatives, so [`BranchMoves`] asks which of them ran.
+/// A loop body is the same code *twice*, which asks a different question: a
+/// value the body gives away is already gone when the body starts again. So the
+/// body is analyzed once, from the state at the head, and what matters is the
+/// state it ends in — a local that entered live and leaves moved cannot survive
+/// the jump back.
+///
+/// This is a rule about the back edge rather than a ban on `move` in a loop,
+/// and the difference is exactly the idiom that threads an owned value through
+/// one: `tree = step(move tree)` ends the body live, because assigning to a
+/// binding reinitializes it, so the next iteration finds a value where it left
+/// one.
+pub(crate) struct LoopMoves {
+    /// The state at the head, so a local a *previous* statement gave away is
+    /// not blamed on this loop.
+    before: Vec<Option<Span>>,
+}
+
+impl LoopMoves {
+    /// Records the state at the loop's head, before its body is analyzed.
+    ///
+    /// Taken before the body's own bindings are declared — a `for` variable
+    /// included — so every local this can blame is one that outlives the loop.
+    /// A local declared inside is fresh on each iteration and its move belongs
+    /// to that iteration alone.
+    pub(crate) fn start(ctx: &FnCtx) -> Self {
+        Self {
+            before: ctx.moved_state(),
+        }
+    }
+}
+
 /// What a call-site argument said about ownership, if anything.
 ///
 /// Only `move` and `copy` can be written on an argument; `borrow` is the
@@ -200,13 +246,55 @@ impl Analyzer<'_> {
         false
     }
 
+    /// Reports every value a loop body gave away and did not put back
+    /// (`KSEM270`).
+    ///
+    /// `exits` says the body always leaves the loop before reaching its back
+    /// edge — by returning, or by breaking out of it. The body then runs at
+    /// most once, so a move inside it is as sound as one in straight-line code
+    /// and nothing here applies.
+    ///
+    /// The state is left as the body ended it. A local the loop consumed is
+    /// still consumed afterwards, so code following the loop reports `KSEM107`
+    /// on its own terms rather than inheriting this one's blame.
+    pub(crate) fn check_loop_back_edge(
+        &mut self,
+        ctx: &mut FnCtx,
+        loop_moves: LoopMoves,
+        exits: bool,
+    ) {
+        if exits {
+            return;
+        }
+        for (local, span) in ctx.moves_across(&loop_moves.before) {
+            let name = ctx.local_name(local);
+            self.emit(
+                span,
+                "KSEM270",
+                format!(
+                    "`{name}` is moved inside a loop and has no value again before the next \
+                     iteration, which would move it a second time. Assign the binding again \
+                     (`{name} = …`), or move it after the loop."
+                ),
+            );
+            ctx.mark_loop_move_reported(local);
+        }
+    }
+
     /// Analyzes `move e` / `copy e` written as an expression.
     ///
-    /// `copy` of a non-trivial value is `KSEM116` — the language reserves the
-    /// spelling but has no clone semantics, and inventing one here would be
-    /// inventing language surface. `move` of a bare local marks it moved; a
-    /// `move` of anything else (a temporary, a field read) is accepted and
-    /// consumes nothing, because there is no binding to consume.
+    /// Every value expression handed to a caller is already an owned result:
+    /// local and place reads use the backend's value-copy operation, while
+    /// literals and constructors produce fresh values. `copy` therefore needs
+    /// no separate HIR or bytecode node. Keeping the expression is important,
+    /// though: it makes the ownership intent explicit and prevents the
+    /// surrounding call from treating a named non-trivial local as a move.
+    /// Arrays use the same copy-on-write handle in the VM and native backends,
+    /// so their first mutation remains independent without an eager clone.
+    ///
+    /// `move` of a bare local marks it moved; a `move` of anything else (a
+    /// temporary, a field read) is accepted and consumes nothing, because
+    /// there is no binding to consume.
     pub(crate) fn analyze_ownership_expr(
         &mut self,
         ctx: &mut FnCtx,
@@ -229,19 +317,11 @@ impl Analyzer<'_> {
         expected: Option<Type>,
     ) -> HirExprId {
         let value = self.analyze_expr_expecting(ctx, operand, expected);
-        let ty = self.program.expr(value).type_of();
-        if ty.is_trivially_copyable() {
-            return value;
-        }
-        self.emit(
-            span,
-            "KSEM116",
-            format!(
-                "Kira parsed `copy`, but cloning `{}` is not implemented yet.",
-                self.type_name(ty)
-            ),
-        );
-        self.program.exprs.alloc(HirExpr::Error)
+        // `span` is consumed by the ownership dispatch API for symmetry with
+        // `move`; the copy itself has no diagnostic path now that every
+        // runtime value has a defined copy operation.
+        let _ = span;
+        value
     }
 
     fn analyze_move_expr(

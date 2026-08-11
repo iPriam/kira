@@ -86,6 +86,8 @@ pub fn load(text: &str) -> Result<ProjectManifest, DeclarationError> {
             "kira" => manifest.kira_version = string_value(key, value)?,
             "moduleRoot" => manifest.module_root = Some(string_value(key, value)?),
             "kind" => manifest.kind = kind_value(value)?,
+            "assets" => manifest.assets = string_array_value(key, value)?,
+            "packages" => manifest.packages = string_array_value(key, value)?,
             "dependencies" => manifest.dependencies = dependencies_value(value)?,
             "nativeLibraries" => manifest.native_libraries = native_libraries_value(value)?,
             "defaults" => {
@@ -314,13 +316,39 @@ fn group_end(text: &str, open: usize) -> Option<usize> {
 /// Reads a `"quoted"` value.
 pub(crate) fn string_value(key: &str, value: &str) -> Result<String, DeclarationError> {
     let trimmed = value.trim();
-    trimmed
+    let inner = trimmed
         .strip_prefix('"')
         .and_then(|rest| rest.strip_suffix('"'))
-        .map(str::to_owned)
         .ok_or_else(|| DeclarationError::MalformedValue {
             key: key.to_owned(),
-        })
+        })?;
+    let mut decoded = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            decoded.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => decoded.push('\n'),
+            Some('t') => decoded.push('\t'),
+            Some('r') => decoded.push('\r'),
+            Some('0') => decoded.push('\0'),
+            Some('"') => decoded.push('"'),
+            Some('\\') => decoded.push('\\'),
+            Some(other) => decoded.push(other),
+            None => decoded.push('\\'),
+        }
+    }
+    Ok(decoded)
+}
+
+/// Reads a declaration array whose members are all quoted strings.
+fn string_array_value(key: &str, value: &str) -> Result<Vec<String>, DeclarationError> {
+    array_items(key, value)?
+        .into_iter()
+        .map(|item| string_value(key, item))
+        .collect()
 }
 
 /// Reads the dependency array from a declaration.

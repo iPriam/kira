@@ -30,29 +30,78 @@ use kira_runtime_abi::{NativeStateToken, NativeStateTypeId, NativeStateValue};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StrId(u32);
 
+impl StrId {
+    /// Returns the heap-slot word used by the VM debugger's value view.
+    pub(crate) const fn debug_word(self) -> u64 {
+        self.0 as u64
+    }
+}
+
 /// A handle to a heap-allocated struct value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StructId(u32);
+
+impl StructId {
+    /// Returns the heap-slot word used by the VM debugger's value view.
+    pub(crate) const fn debug_word(self) -> u64 {
+        self.0 as u64
+    }
+}
 
 /// A handle to a heap-allocated array value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArrayId(u32);
 
+impl ArrayId {
+    /// Returns the heap-slot word used by the VM debugger's value view.
+    pub(crate) const fn debug_word(self) -> u64 {
+        self.0 as u64
+    }
+}
+
 /// A handle to a heap-allocated enum value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EnumId(u32);
+
+impl EnumId {
+    /// Returns the heap-slot word used by the VM debugger's value view.
+    pub(crate) const fn debug_word(self) -> u64 {
+        self.0 as u64
+    }
+}
 
 /// A handle to a heap-allocated capture cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CellId(u32);
 
+impl CellId {
+    /// Returns the heap-slot word used by the VM debugger's value view.
+    pub(crate) const fn debug_word(self) -> u64 {
+        self.0 as u64
+    }
+}
+
 /// A handle to a heap-allocated erased (`Any`) value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ErasedId(u32);
 
+impl ErasedId {
+    /// Returns the heap-slot word used by the VM debugger's value view.
+    pub(crate) const fn debug_word(self) -> u64 {
+        self.0 as u64
+    }
+}
+
 /// A handle to a heap-held read of callback state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SnapshotId(u32);
+
+impl SnapshotId {
+    /// Returns the heap-slot word used by the VM debugger's value view.
+    pub(crate) const fn debug_word(self) -> u64 {
+        self.0 as u64
+    }
+}
 
 /// A runtime value on the operand stack or in a local slot.
 #[derive(Debug, Clone, Copy, PartialEq)]

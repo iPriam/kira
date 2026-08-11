@@ -13,9 +13,13 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+kira-debug.workspace = true
 kira-toolchain.workspace = true
+kira-app-generation.workspace = true
 kira-source.workspace = true
 kira-diagnostics.workspace = true
+kira-lexer.workspace = true
+kira-parser.workspace = true
 kira-program-graph.workspace = true
 kira-semantics.workspace = true
 kira-ir.workspace = true
@@ -24,6 +28,9 @@ kira-bytecode.workspace = true
 # The build system: the frontend query and the library/wrapper-crate build both
 # live there, so `kira` drives them rather than owning a second copy.
 kira-build.workspace = true
+kira-instruments.workspace = true
+kira-linter.workspace = true
+kira-doc.workspace = true
 kira-main.workspace = true
 kira-vm-runtime.workspace = true
 kira-runtime-abi.workspace = true
@@ -40,15 +47,14 @@ kira-project.workspace = true
 # Structured target triples and the resolved-library catalog: `kira` picks the
 # build target and resolves each `@FFI.Extern` import's archive against it.
 kira-native-lib-definition.workspace = true
-# Not called from Rust: depending on the native runtime makes cargo build
-# `libkira_native_bridge.a` into the same profile directory as `kira`, which is
-# where the native link step looks for it.
+# Not called from Rust: depending on the native runtime makes cargo build its
+# staticlib. `native::runtime_archive` accepts both the un-hashed profile path
+# and Cargo's hashed `profile/deps` path for package-only CLI builds.
 kira-native-bridge.workspace = true
 # The compiler capability, from both ends. `kira-check` is what `kira` grants a
 # running program; `kira-compiler-bridge` is not called from Rust at all —
-# depending on it makes cargo build `libkira_compiler_bridge.a` beside `kira`,
-# which is where the native link step looks for it when a program checks a
-# package.
+# depending on it makes cargo build its staticlib, and the same archive lookup
+# handles both the workspace and package-only layouts.
 kira-check.workspace = true
 kira-compiler-bridge.workspace = true
 # Not called from Rust: `kira live` starts the desktop runner as a child

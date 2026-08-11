@@ -164,6 +164,9 @@ pub enum VmError {
     /// bug, not a program error).
     #[error("internal fault: instruction dispatch invariant violated")]
     BadDispatch,
+    /// A debugger observer requested that the current run terminate.
+    #[error("debugger stopped execution")]
+    DebuggerStopped,
     /// A struct reached the native seam, which has no layout for one.
     ///
     /// The hybrid split rejects a struct in a `@Native` signature when the
