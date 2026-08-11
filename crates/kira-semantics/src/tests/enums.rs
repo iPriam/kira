@@ -199,6 +199,67 @@ fn passing_a_named_enum_to_an_owned_parameter_needs_move() {
 }
 
 #[test]
+fn a_closure_captures_a_payload_less_enum() {
+    // Copy-ness is structural: a payload-less enum is a tag, which is a word,
+    // which copies exactly as an `Int` does. Refusing the capture nominally left
+    // no way to close over a value that owns nothing — the workaround being to
+    // capture the discriminant as an `Int` and convert it back inside the body,
+    // which is the same copy written where the type system cannot see it.
+    assert!(
+        codes(
+            "enum C { A B }\n\
+             function pick(c: C) -> Int { return 0 }\n\
+             @Main function main() { let e: C = .A\n \
+             let f: () -> Int = { in return pick(e) }\n print(f()) return }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_closure_still_refuses_an_enum_that_owns_storage() {
+    // The structural rule cuts both ways: a variant carrying a `String` owns
+    // heap storage, so capturing one is still the owned capture KSEM117 names.
+    assert_eq!(
+        codes(
+            "enum C { A(String) B }\n\
+             function pick(c: borrow C) -> Int { return 0 }\n\
+             @Main function main() { let e: C = .A(\"x\")\n \
+             let f: () -> Int = { in return pick(e) }\n print(f()) return }"
+        ),
+        vec!["KSEM117"]
+    );
+}
+
+#[test]
+fn a_struct_cannot_take_an_enums_name() {
+    // One type namespace. Without this the struct silently wins every lookup and
+    // the ENUM's uses start failing: `match` reports that its own subject is not
+    // an enum, and naming a variant reports that the type is a class. Neither
+    // mentions the second declaration, which is the only mistake made.
+    assert_eq!(
+        codes(
+            "enum Shape { Round }\n\
+             struct Shape { let x: Int }\n\
+             @Main function main() { return }"
+        ),
+        vec!["KSEM004"]
+    );
+}
+
+#[test]
+fn a_class_cannot_take_an_enums_name() {
+    assert_eq!(
+        codes(
+            "enum Shape { Round }\n\
+             class Shape { let x: Int = 0 }\n\
+             @Main function main() { return }"
+        ),
+        vec!["KSEM004"]
+    );
+}
+
+#[test]
 fn an_enum_cannot_be_printed() {
     assert_eq!(
         codes(
