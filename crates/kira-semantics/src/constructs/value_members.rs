@@ -20,8 +20,8 @@ use super::ConstructVariant;
 use crate::analyze::{Analyzer, FnCtx};
 
 impl Analyzer<'_> {
-    /// The type of a family's `@Required let` member, when it has one by that
-    /// name.
+    /// The type of a family's value member — `@Required let` or typed stored
+    /// member — when it has one by that name.
     pub(crate) fn construct_family_field_member(&self, id: EnumId, name: &str) -> Option<Type> {
         let family = self.construct_family_names.get(&id)?;
         let member = self
@@ -30,6 +30,18 @@ impl Analyzer<'_> {
             .field_members
             .get(name)?;
         Some(member.result)
+    }
+
+    /// The family's name, when `name` is one of its stored members declared
+    /// with no written type — the one kind of member a family value cannot
+    /// read, diagnosed as `KSEM271`.
+    pub(crate) fn construct_family_untyped_member(&self, id: EnumId, name: &str) -> Option<String> {
+        let family = self.construct_family_names.get(&id)?;
+        let info = self.construct_families.get(family)?;
+        info.stored_fields
+            .iter()
+            .any(|field| field.name == name && field.ty.is_none())
+            .then(|| family.clone())
     }
 
     /// Reads a family's `@Required let` member off a family value.

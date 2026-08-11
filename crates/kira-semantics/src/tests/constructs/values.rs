@@ -209,3 +209,60 @@ Style Broken {
         "{diagnostics:?}"
     );
 }
+
+/// A defaulted stored member with a written type is a value member of the
+/// family, readable through `Any Family` anywhere — not only where
+/// specialization happens to substitute the concrete declaration.
+#[test]
+fn a_typed_stored_member_reads_through_the_family_value() {
+    assert!(
+        codes(
+            r#"
+construct Style {
+    @Required let colors: Int
+    let appearance: Int = 2
+}
+
+Style Base {
+    let colors = 7
+}
+
+function readThrough(style: Any Style) -> Int {
+    return style.appearance + style.colors
+}
+
+@Main
+function main() {
+    print(readThrough(Base {}))
+    return
+}
+"#,
+        )
+        .is_empty()
+    );
+}
+
+/// A stored member with no written type has no result type a family-value read
+/// could carry, and the refusal names the member and the fix.
+#[test]
+fn an_untyped_stored_member_read_through_the_family_is_refused() {
+    assert_eq!(
+        library_codes(
+            r#"
+construct Style {
+    @Required let colors: Int
+    let appearance = 2
+}
+
+Style Base {
+    let colors = 7
+}
+
+function readThrough(style: Any Style) -> Int {
+    return style.appearance
+}
+"#,
+        ),
+        vec!["KSEM271"]
+    );
+}

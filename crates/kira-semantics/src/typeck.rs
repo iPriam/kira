@@ -553,13 +553,32 @@ impl Analyzer<'_> {
                         ctx, base_hir, family_id, &name, field_span,
                     );
                 }
-                // A `@Required let` of the family is read the same way, but
-                // dispatches to a stored field or a computed member depending on
-                // what each backed declaration chose to satisfy it with.
+                // A value member of the family — `@Required let` or typed
+                // stored member — is read the same way, but dispatches to a
+                // stored field or a computed member depending on what each
+                // backed declaration chose to satisfy it with.
                 if let Type::Enum(family_id) = base_ty
                     && let Some(result) = self.construct_family_field_member(family_id, &name)
                 {
                     return self.analyze_construct_family_field(base_hir, family_id, &name, result);
+                }
+                // A stored family member with no written type cannot be read
+                // through the family value: nothing says what the read returns.
+                // Named here so the fix — declare the type on the family — is
+                // visible, instead of the generic "has no fields".
+                if let Type::Enum(family_id) = base_ty
+                    && let Some(family) = self.construct_family_untyped_member(family_id, &name)
+                {
+                    self.emit(
+                        field_span,
+                        "KSEM271",
+                        format!(
+                            "`{name}` on construct family `{family}` declares no type, so it \
+                             cannot be read through `Any {family}`; declare it as `let {name}: \
+                             T = …` on the family"
+                        ),
+                    );
+                    return self.program.exprs.alloc(HirExpr::Error);
                 }
                 // A construct's computed bridge member (`value.node`) is read as
                 // a property but runs the member, so it lowers to a method call

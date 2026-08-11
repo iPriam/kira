@@ -482,6 +482,9 @@ impl Analyzer<'_> {
                     ..
                 } => {
                     let cond_expr = self.analyze_condition(ctx, cond);
+                    // The condition's own hoisted statements run before the
+                    // branch, not inside whichever arm drains next.
+                    out.extend(ctx.take_pending_stmts());
                     ctx.push_scope();
                     let mut then_out = Vec::new();
                     self.expand_content_items(ctx, &then_body, acc, slot, name, &mut then_out);

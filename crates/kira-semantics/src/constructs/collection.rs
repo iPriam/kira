@@ -51,19 +51,26 @@ impl<'a> Analyzer<'a> {
                 .filter(|field| field.required)
                 .map(|field| self.interner.resolve(field.name).to_owned())
                 .collect();
-            // A `@Required let` is a *value* obligation, so it is readable
-            // through the family value the way a computed member is. It gets its
-            // own map rather than joining `methods` because it has no AST
-            // function behind it: what discharges it is the backed
-            // declaration's choice of a stored field or a computed member, and
-            // the dispatcher reads whichever that declaration chose. Only
-            // required fields are here, because only those are guaranteed to
-            // exist on every variant (`KSEM201` is what guarantees it).
-            let field_members = required
+            // A family `let` is a *value* obligation, so it is readable through
+            // the family value the way a computed member is. It gets its own map
+            // rather than joining `methods` because it has no AST function
+            // behind it: what discharges it is the backed declaration's choice
+            // of a stored field or a computed member, and the dispatcher reads
+            // whichever that declaration chose. A `@Required let` is guaranteed
+            // on every variant by `KSEM201`; a defaulted stored member is
+            // guaranteed because every backed struct materializes it — the
+            // declaration's own field wins, otherwise the family default is
+            // copied in. A stored member joins only with a written type: with
+            // nothing declared, a family-value read has no result type to
+            // stand on, and `KSEM271` names that at the read site. A child
+            // slot is content wiring, not a value member.
+            let field_members = declaration
+                .fields
                 .iter()
-                .map(|name| {
+                .filter(|field| !field.slot && (field.required || field.ty.is_some()))
+                .map(|field| {
                     (
-                        name.clone(),
+                        self.interner.resolve(field.name).to_owned(),
                         ConstructFamilyField {
                             result: Type::Error,
                             dispatcher: None,
@@ -437,7 +444,8 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// Resolves the written type of every `@Required let` family member.
+    /// Resolves the written type of every family value member — `@Required let`
+    /// and typed stored member alike.
     ///
     /// Runs with the method signatures, after the family enums exist, because a
     /// requirement may name its own family — `@Required let body: Any Widget` on
