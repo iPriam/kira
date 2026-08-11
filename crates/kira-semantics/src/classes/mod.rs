@@ -130,6 +130,14 @@ impl<'a> Analyzer<'a> {
         for (source, declaration) in &declarations {
             self.source = *source;
             let name = self.interner.resolve(declaration.name).to_owned();
+            // One type namespace: a name an enum already took is not available
+            // to a class either. A widget and an enum sharing a name is the
+            // shape this catches — the class wins every lookup, and the enum's
+            // own uses start reporting that it is not an enum.
+            if self.name_taken_by_enum(&name, declaration.name_span, "class") {
+                ids.push(None);
+                continue;
+            }
             // Filed under the declaring package, like every other declaration:
             // two packages may each declare a class of the same name.
             let owner = self.imports.package_of(*source).map(str::to_owned);
