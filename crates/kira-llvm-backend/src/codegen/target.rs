@@ -1,6 +1,6 @@
 //! Target machines — the host's and the Web's — and emitting objects with them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use kira_backend_api::WasmDevice;
 use llvm_sys::core::{LLVMCreateMessage, LLVMDisposeMessage, LLVMSetTarget};
@@ -43,8 +43,41 @@ unsafe fn initialize_targets() {
     REGISTERED.call_once(|| {
         // SAFETY: `Once` runs this body exactly once per process, which is the
         // whole of what `register_targets` requires.
-        unsafe { register_targets() }
+        unsafe {
+            register_targets();
+            llvm_sys::error_handling::LLVMInstallFatalErrorHandler(Some(report_llvm_fatal_error));
+        }
     });
+}
+
+/// Says what happened when LLVM decides to end the process.
+///
+/// LLVM answers a fatal error — an unsupported construct reaching the code
+/// generator, an allocation it cannot satisfy — by writing one line of its own
+/// and calling `exit(1)`. Nothing after that runs: no error travels back up
+/// through this crate, the build prints no diagnostic of its own, and what the
+/// user sees is a compiler that stopped. This is the only place that can speak
+/// before the exit, so it says which unit was being emitted and that the failure
+/// is the compiler's, not the program's.
+///
+/// It cannot return an error instead. The call arrives from C++ with LLVM's own
+/// frames below it, and unwinding through those is undefined; the exit is
+/// LLVM's, and all this owns is the last word before it.
+extern "C" fn report_llvm_fatal_error(reason: *const std::os::raw::c_char) {
+    let detail = if reason.is_null() {
+        "no reason given".to_owned()
+    } else {
+        // SAFETY: LLVM passes a live, NUL-terminated string that outlives this
+        // call, and nothing here keeps a reference to it.
+        unsafe { std::ffi::CStr::from_ptr(reason) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    eprintln!(
+        "kira: LLVM reported a fatal error while generating native code and ended the build:\n\
+         {detail}\n\
+         note: this is a defect in Kira's code generation, not in the program being built"
+    );
 }
 
 /// The registration itself, run under [`initialize_targets`]'s `Once`.
@@ -256,8 +289,15 @@ impl TargetMachine {
     }
 
     /// Emits `module` as an object file at `path`.
+    ///
+    /// Written beside the object and renamed onto it, so `path` only ever holds
+    /// a *finished* object. LLVM creates the file before it fills it, and an
+    /// emission that ends early — a fatal error, a process killed mid-build —
+    /// otherwise leaves a truncated one behind, which the next link reads as an
+    /// object with no symbols in it and reports as the program's fault.
     pub(super) fn emit_object(&self, module: LLVMModuleRef, path: &Path) -> Result<(), LlvmError> {
-        let file = c_string(&path.to_string_lossy());
+        let pending = pending_path(path);
+        let file = c_string(&pending.to_string_lossy());
         self.set_module_layout(module);
         // SAFETY: `module` and `self.machine` are live, its data layout was set
         // just above, and LLVM allocates an owned message only on failure.
@@ -271,11 +311,30 @@ impl TargetMachine {
                 &mut message,
             ) != 0;
             if failed {
-                return Err(LlvmError::Emit(take_message(message)));
+                let detail = take_message(message);
+                let _ = std::fs::remove_file(&pending);
+                return Err(LlvmError::Emit(detail));
             }
         }
-        Ok(())
+        std::fs::rename(&pending, path).map_err(|error| {
+            LlvmError::Emit(format!(
+                "cannot move the emitted object into `{}`: {error}",
+                path.display()
+            ))
+        })
     }
+}
+
+/// Where an object is written before it is complete.
+///
+/// Beside the object it becomes, so the rename that finishes it stays within one
+/// directory and one filesystem, and named after the writing process so two
+/// builds — of two packages, or a build and a `kira test` — never share the
+/// partial file even though the object they produce has the same name.
+fn pending_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".pending-{}", std::process::id()));
+    path.with_file_name(name)
 }
 
 impl Drop for TargetMachine {
