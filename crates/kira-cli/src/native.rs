@@ -12,9 +12,10 @@ use kira_llvm_backend::{
     AdapterSidecarOptions, LlvmError, NativeArtifacts, NativeBuildOptions, NativeLinkInputs,
 };
 
-/// Where a program's build artifacts live: `<source-dir>/.kira-build/`.
+/// Where a program's build artifacts live: its package's `.kira-build/`
+/// ([`kira_project::build_directory`]).
 ///
-/// Artifacts stay beside the program they came from rather than in a shared
+/// Artifacts stay inside the package they came from rather than in a shared
 /// location, so two *programs* can never race for one output path. Two builds
 /// of the **same** program still can — the names are the program's, not the
 /// builder's — which is what the lock below is for: holding it for the life of
@@ -35,10 +36,7 @@ pub struct Artifacts {
 impl Artifacts {
     /// Resolves the artifact layout for `source`, creating the directory.
     pub fn for_source(source: &Path) -> Result<Self, std::io::Error> {
-        let directory = source
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(".kira-build");
+        let directory = kira_project::build_directory(source);
         // Creates the directory as well as locking it, so a caller never has
         // one without the other.
         let lock = crate::build_lock::BuildLock::acquire(&directory)?;
