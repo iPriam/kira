@@ -6,6 +6,8 @@
 
 use kira_toolchain::Channel;
 
+use crate::binstall::BuildProfile;
+
 /// Which version of a toolchain an invocation names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionSpec {
@@ -40,7 +42,10 @@ pub enum KnvmCommand {
         channel: Channel,
     },
     /// Build the enclosing checkout and install it as the dev toolchain.
-    Binstall,
+    Binstall {
+        /// Which cargo profile the toolchain is built with.
+        profile: BuildProfile,
+    },
     /// Build `knvm` and `kira` from the enclosing checkout and put them on PATH.
     Sinstall,
     /// Report the locally installed toolchains.
@@ -209,9 +214,19 @@ pub fn parse(arguments: &[String]) -> Result<KnvmCommand, UsageError> {
         }
         "binstall" => {
             // The checkout is found from the working directory and the channel
-            // is always `dev`, so there is nothing to configure.
-            reject_arguments(rest)?;
-            Ok(KnvmCommand::Binstall)
+            // is always `dev`, so the profile is the only thing to configure.
+            let profile = match rest.first().map(String::as_str) {
+                None => BuildProfile::Release,
+                Some("--debug") => {
+                    reject_arguments(&rest[1..])?;
+                    BuildProfile::Debug
+                }
+                Some(extra) if extra.starts_with("--") => {
+                    return Err(UsageError::UnknownOption(extra.to_string()));
+                }
+                Some(extra) => return Err(UsageError::UnexpectedArgument(extra.to_string())),
+            };
+            Ok(KnvmCommand::Binstall { profile })
         }
         "sinstall" => {
             reject_arguments(rest)?;
@@ -282,7 +297,11 @@ pub fn usage(paint: crate::Paint) -> String {
             "fetch a release and select it",
         ),
         ("install-llvm", " [--force]", "the LLVM the backend links"),
-        ("binstall", "", "this checkout as the dev toolchain"),
+        (
+            "binstall",
+            " [--debug]",
+            "this checkout as the dev toolchain",
+        ),
         ("sinstall", "", "knvm and kira themselves, onto PATH"),
         ("self-update", " [--channel]", "the newest published tools"),
         ("list", " [--remote]", "what is installed, or published"),
@@ -346,6 +365,28 @@ mod tests {
     fn parse_args(arguments: &[&str]) -> Result<KnvmCommand, UsageError> {
         let owned: Vec<String> = arguments.iter().map(|text| (*text).to_string()).collect();
         parse(&owned)
+    }
+
+    /// A dev toolchain is what every downstream project then compiles through,
+    /// so the plain verb has to produce the optimized one.
+    #[test]
+    fn binstall_builds_an_optimized_toolchain_unless_debug_is_asked_for() {
+        assert_eq!(
+            parse_args(&["binstall"]),
+            Ok(KnvmCommand::Binstall {
+                profile: BuildProfile::Release,
+            })
+        );
+        assert_eq!(
+            parse_args(&["binstall", "--debug"]),
+            Ok(KnvmCommand::Binstall {
+                profile: BuildProfile::Debug,
+            })
+        );
+        assert_eq!(
+            parse_args(&["binstall", "--fast"]),
+            Err(UsageError::UnknownOption("--fast".to_string()))
+        );
     }
 
     #[test]

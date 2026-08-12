@@ -35,7 +35,7 @@ pub mod source;
 /// needs one crate. These are `kira-toolchain`'s types, not copies of them.
 pub use kira_toolchain::{Channel, CurrentToolchain, Paint};
 
-pub use binstall::{BinstallError, binstall};
+pub use binstall::{BinstallError, BuildProfile, binstall};
 pub use cli::{DEFAULT_CHANNEL, KnvmCommand, UsageError, VersionSpec, usage};
 pub use digest::{Sha256, checksum_file_name, parse_checksum_file};
 pub use github::{
