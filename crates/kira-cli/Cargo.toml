@@ -67,6 +67,15 @@ kira-desktop-runner.workspace = true
 salsa.workspace = true
 thiserror.workspace = true
 
+# The build-directory lock is the operating system's, so that a killed build
+# releases it and a live one can never have it taken away. Each platform has one
+# call for that and no portable name for either.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
 [dev-dependencies]
 # Test-only upward reference (cargo's one legal cycle): the end-to-end proof
 # that a knvm-installed toolchain resolves its own Foundation has to install
