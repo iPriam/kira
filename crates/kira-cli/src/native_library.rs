@@ -11,13 +11,13 @@
 //! to the Kira native runtime, so the consumer needs no LLVM and no arrangement
 //! with the toolchain.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use kira_build::{Compiled, NativeLibraryArtifacts, NativeLibraryError, NativeLibraryOptions};
 
 use crate::library::LibraryError;
 
-/// Builds `compiled` as a native-engine library beside its source.
+/// Builds `compiled` as a native-engine library into its package's build directory.
 ///
 /// The name and version refusals are [`crate::library`]'s, reused rather than
 /// restated: a library needs both on every engine, and two spellings of "this
@@ -44,20 +44,12 @@ pub fn build(
     let options = NativeLibraryOptions {
         name,
         version,
-        build_directory: build_directory(source),
+        build_directory: kira_project::build_directory(source),
         toolchain_root: kira_build::toolchain_root(),
         runtime_archive: crate::native::runtime_archive(&compiled.ir)?,
         emit_llvm_ir,
     };
     Ok(kira_build::build_native_library(&compiled.ir, &options)?)
-}
-
-/// The `.kira-build` directory beside `source`.
-fn build_directory(source: &Path) -> PathBuf {
-    source
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(".kira-build")
 }
 
 /// Reports what a native library build produced, in the order a consumer needs.
@@ -87,17 +79,6 @@ pub enum NativeLibraryBuildError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_build_directory_is_the_one_every_other_engine_writes_into() {
-        // One package has one build directory whatever it was built for, so a
-        // library built twice for two engines leaves both artifacts side by
-        // side rather than one on top of the other.
-        assert_eq!(
-            build_directory(Path::new("/pkg/src/uifoundation.kira")),
-            Path::new("/pkg/src/.kira-build")
-        );
-    }
 
     #[test]
     fn a_package_with_no_name_is_refused_with_the_vm_engine_s_words() {

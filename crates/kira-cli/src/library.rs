@@ -16,7 +16,7 @@
 //! rather than defaulted, because a crate silently named `main` is worse than a
 //! build that says what it needs.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use kira_build::{Compiled, LibraryArtifacts, LibraryBuildError, LibraryBuildOptions};
 
@@ -57,7 +57,7 @@ pub enum LibraryError {
     Build(#[from] LibraryBuildError),
 }
 
-/// Builds `compiled` as a VM-engine library beside its source.
+/// Builds `compiled` as a VM-engine library into its package's build directory.
 pub fn build(compiled: &Compiled, source: &Path) -> Result<LibraryArtifacts, LibraryError> {
     // Name and version are taken together, because a library needs both and a
     // default for either would be a wrong answer rather than a missing one: a
@@ -74,7 +74,7 @@ pub fn build(compiled: &Compiled, source: &Path) -> Result<LibraryArtifacts, Lib
             name,
         });
     };
-    let directory = build_directory(source);
+    let directory = kira_project::build_directory(source);
     // Held until this build finishes: a library writes the same `.kbc` and the
     // same generated crate every time, so two builders in one package would
     // overwrite each other's artifacts mid-write.
@@ -87,17 +87,6 @@ pub fn build(compiled: &Compiled, source: &Path) -> Result<LibraryArtifacts, Lib
         toolchain_root: kira_build::toolchain_root(),
     };
     Ok(kira_build::build_library(&compiled.ir, &options)?)
-}
-
-/// The `.kira-build` directory beside `source`.
-///
-/// The same layout every other backend writes into, so one package has one
-/// build directory whatever it was built for.
-fn build_directory(source: &Path) -> PathBuf {
-    source
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(".kira-build")
 }
 
 /// Reports what a library build produced, in the order a consumer needs it.
@@ -113,12 +102,6 @@ pub fn report(artifacts: &LibraryArtifacts) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_build_directory_sits_beside_the_source() {
-        let directory = build_directory(Path::new("/pkg/src/uifoundation.kira"));
-        assert_eq!(directory, Path::new("/pkg/src/.kira-build"));
-    }
 
     #[test]
     fn a_bare_file_with_no_package_is_refused_by_name() {
