@@ -33,7 +33,9 @@ fn flat(raw: RawFlatManifest) -> Result<NativeLibrarySpec, NativeLibParseError> 
         let triple = TargetTriple::parse(&target.triple)?;
         rows.push(NativeTargetSpec::static_archive(triple, target.static_lib));
     }
-    Ok(NativeLibrarySpec::new(raw.name, LinkMode::Static, rows)?)
+    let spec = NativeLibrarySpec::new(raw.name, LinkMode::Static, rows)?;
+    spec.validate()?;
+    Ok(spec)
 }
 
 /// Converts the sectioned spelling into the model.
@@ -93,6 +95,9 @@ fn sectioned(raw: RawSectionedManifest) -> Result<NativeLibrarySpec, NativeLibPa
             output: autobinding.output,
         });
     }
+    // Once the sources are on it: a row needs no archive path when Kira builds
+    // the archive itself.
+    spec.validate()?;
     Ok(spec)
 }
 

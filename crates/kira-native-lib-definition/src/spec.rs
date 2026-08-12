@@ -227,6 +227,21 @@ impl NativeArtifact {
     }
 }
 
+/// Where a source-built library's archive lands, relative to its manifest.
+///
+/// One layout for every such library, so a checkout building for two targets
+/// keeps two archives and neither overwrites the other, and the file's name says
+/// which library and which target it is. The spelling follows each platform's
+/// own: `name.lib` where the linker expects that, `libname.a` everywhere else.
+pub fn built_archive_path(library: &str, triple: &TargetTriple) -> String {
+    let file = if triple.os() == "windows" {
+        format!("{library}.lib")
+    } else {
+        format!("lib{library}.a")
+    };
+    format!("generated/native/{triple}/{file}")
+}
+
 /// One target's declaration: the library file to link on it, plus the link
 /// inputs that go beside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,12 +316,13 @@ pub struct NativeLibrarySpec {
 }
 
 impl NativeLibrarySpec {
-    /// Declares and validates a library.
+    /// Declares a library.
     ///
-    /// Rejects a nameless library ([`NativeLibraryError::NamelessLibrary`]), a
-    /// row that contributes nothing at all
-    /// ([`NativeLibraryError::PathlessRow`]), and two rows naming the same
-    /// target ([`NativeLibraryError::DuplicateTarget`]).
+    /// Rejects a nameless library ([`NativeLibraryError::NamelessLibrary`]) and
+    /// two rows naming the same target
+    /// ([`NativeLibraryError::DuplicateTarget`]). Whether a row contributes
+    /// anything to the link line depends on the sources a builder adds after
+    /// this, so that is [`NativeLibrarySpec::validate`]'s question.
     pub fn new(
         name: impl Into<String>,
         link_mode: LinkMode,
@@ -318,22 +334,6 @@ impl NativeLibrarySpec {
         }
         let mut seen = HashSet::with_capacity(targets.len());
         for row in &targets {
-            // A static row that names no archive and contributes no framework,
-            // system library, or flag would put nothing on the link line, so it
-            // can only be a declaration whose path was meant to be there. The
-            // same row under `Dynamic` is the corpus's `dynamicLib: ""`: the
-            // library is found by its own name at link or load time, so there
-            // is nothing missing.
-            if link_mode == LinkMode::Static
-                && row.artifact.path().is_none()
-                && row.attributes.is_empty()
-                && row.defines.is_empty()
-            {
-                return Err(NativeLibraryError::PathlessRow {
-                    library: name.clone(),
-                    triple: row.triple.clone(),
-                });
-            }
             if !seen.insert(row.triple.clone()) {
                 return Err(NativeLibraryError::DuplicateTarget {
                     library: name.clone(),
@@ -350,6 +350,54 @@ impl NativeLibrarySpec {
             autobind: None,
             targets,
         })
+    }
+
+    /// Rejects a row that would put nothing on the link line.
+    ///
+    /// A static row naming no archive, carrying no framework, system library, or
+    /// flag, and building no sources of its own contributes nothing, so it can
+    /// only be a declaration whose path was meant to be there. The same row
+    /// under `Dynamic` is the corpus's `dynamicLib: ""`: the library is found by
+    /// its own name at link or load time, so there is nothing missing.
+    ///
+    /// Separate from [`NativeLibrarySpec::new`] because the answer depends on
+    /// the sources, which a builder adds afterwards — a source-built library
+    /// names no archive anywhere and is complete without one. Every path that
+    /// builds a spec calls this once the spec is whole.
+    pub fn validate(&self) -> Result<(), NativeLibraryError> {
+        if self.link_mode != LinkMode::Static {
+            return Ok(());
+        }
+        for row in &self.targets {
+            if self.archive_path(row).is_none()
+                && row.attributes.is_empty()
+                && row.defines.is_empty()
+            {
+                return Err(NativeLibraryError::PathlessRow {
+                    library: self.name.clone(),
+                    triple: row.triple.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Where `row`'s archive lives, relative to the declaring manifest.
+    ///
+    /// The declared path when the row names one. Otherwise, for a library that
+    /// declares its own C sources, the path **Kira** builds it at: the compiler
+    /// owns that file, so a declaration that already says how to build the
+    /// library does not also have to say where the build lands, once per target.
+    /// Requiring it made a missing line silent — the sources went uncompiled and
+    /// the first word of it was a C function reported undefined by the linker.
+    pub fn archive_path(&self, row: &NativeTargetSpec) -> Option<String> {
+        if let Some(declared) = row.artifact.path() {
+            return Some(declared.to_owned());
+        }
+        if self.sources.is_empty() || self.link_mode != LinkMode::Static {
+            return None;
+        }
+        Some(built_archive_path(&self.name, &row.triple))
     }
 
     /// Marks the library as one the program can be built without on a target
@@ -447,6 +495,7 @@ impl NativeLibrarySpec {
         wanted: Option<&TargetTriple>,
         exists: impl Fn(&Path) -> bool,
     ) -> Result<ResolvedNativeLibrary, NativeLibraryError> {
+        self.validate()?;
         let mut rows = Vec::with_capacity(self.targets.len());
         for row in &self.targets {
             // A runtime library is never linked, and an optional one may be
@@ -454,7 +503,7 @@ impl NativeLibrarySpec {
             let required = self.link_mode != LinkMode::Runtime
                 && self.availability != Availability::Optional
                 && wanted.is_none_or(|wanted| *wanted == row.triple);
-            let artifact = match row.artifact.path() {
+            let artifact = match self.archive_path(row) {
                 Some(relative) => {
                     let located = base_dir.join(relative);
                     if !exists(&located) {
@@ -530,6 +579,8 @@ mod tests {
                 "   ",
             )],
         )
+        .expect("the row is only empty once the sources are known")
+        .validate()
         .expect_err("an empty row is rejected");
         assert_eq!(
             error,
@@ -537,6 +588,53 @@ mod tests {
                 library: "ffimath".to_owned(),
                 triple: triple("aarch64-macos-none"),
             }
+        );
+    }
+
+    /// The same row, for a library that builds its own C: it names no archive
+    /// because Kira owns where the archive goes, so there is nothing missing.
+    #[test]
+    fn a_source_built_library_needs_no_declared_archive() {
+        let spec = NativeLibrarySpec::new(
+            "kirauiappearance",
+            LinkMode::Static,
+            vec![NativeTargetSpec::new(
+                triple("x86_64-windows-msvc"),
+                NativeArtifact::None,
+            )],
+        )
+        .expect("a declared library")
+        .with_sources(vec![
+            "NativeLibs/Appearance/kira_ui_appearance.c".to_owned(),
+        ]);
+        spec.validate().expect("sources are the archive's source");
+        assert_eq!(
+            spec.archive_path(&spec.targets()[0]).as_deref(),
+            Some("generated/native/x86_64-windows-msvc/kirauiappearance.lib")
+        );
+        assert_eq!(
+            built_archive_path("kiratext", &triple("x86_64-linux-gnu")),
+            "generated/native/x86_64-linux-gnu/libkiratext.a"
+        );
+    }
+
+    /// A declared path still wins: a library shipping a prebuilt archive keeps
+    /// linking the one it names.
+    #[test]
+    fn a_declared_archive_is_not_replaced_by_the_built_one() {
+        let spec = NativeLibrarySpec::new(
+            "sokol",
+            LinkMode::Static,
+            vec![NativeTargetSpec::static_archive(
+                triple("x86_64-linux-gnu"),
+                "prebuilt/libsokol.a",
+            )],
+        )
+        .expect("a declared library")
+        .with_sources(vec!["NativeLibs/Sokol/sokol_impl.c".to_owned()]);
+        assert_eq!(
+            spec.archive_path(&spec.targets()[0]).as_deref(),
+            Some("prebuilt/libsokol.a")
         );
     }
 
@@ -693,7 +791,9 @@ mod tests {
                     triple("aarch64-macos-none"),
                     "",
                 )],
-            ),
+            )
+            .expect("a declared library")
+            .validate(),
             Err(NativeLibraryError::PathlessRow { .. })
         ));
     }
