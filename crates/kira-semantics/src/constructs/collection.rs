@@ -183,6 +183,11 @@ impl<'a> Analyzer<'a> {
                     // A construct-backed declaration is a struct like any
                     // other, so where it was written gates who may name it.
                     self.struct_sources.insert(id, source);
+                    // Reserve the defaults slot now, in id order, exactly as
+                    // `collect_structs` does: a function type minted while
+                    // `define_construct` resolves a parameter (which pushes its
+                    // own slot) must not land on this struct's id.
+                    self.struct_defaults.push(Vec::new());
                     declared.push((source, declaration, id));
                 }
                 None => self.emit(
@@ -373,7 +378,12 @@ impl<'a> Analyzer<'a> {
         let families = self.register_family_variant(&family_name, id);
 
         self.program.types.structs_mut().set_fields(id, fields);
-        self.struct_defaults.push(defaults);
+        // The slot was reserved when the id was minted; filling it by index is
+        // what keeps a function-type struct minted between the two passes from
+        // shifting every construct's defaults after it.
+        if let Some(slot) = self.struct_defaults.get_mut(id.index() as usize) {
+            *slot = defaults;
+        }
         self.constructs.insert(
             id,
             ConstructInfo {
