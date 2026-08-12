@@ -20,38 +20,44 @@
 //! Serializing them here fixes all three at once, and a caller never has to
 //! know the rule exists.
 //!
-//! # Waiting rather than failing
+//! # Waiting rather than failing, and saying so
 //!
 //! A second builder waits for the first. Refusing outright would turn a
 //! perfectly ordinary "two things built the same package" into an error a user
 //! has to understand and work around, when the correct behaviour — do them one
 //! after the other — is available and is what they meant.
 //!
-//! # Why a lock file and not a file range lock
+//! A wait is **always reported** before it begins. A compiler that goes quiet
+//! for as long as another build takes, with no line saying what it is waiting
+//! for, is indistinguishable from one that has hung; and the wait is also given
+//! a phase of its own, so `--timings` credits it to waiting rather than to
+//! whichever phase happened to be open.
 //!
-//! Because the thing being protected is a *directory* of artifacts, not one
-//! file's bytes, and because a lock file needs no platform-specific call: an
-//! exclusive create is atomic on every filesystem Kira builds on. The cost is
-//! that a builder killed mid-build leaves the file behind, which is what the
-//! staleness rule below is for.
+//! # The lock is the operating system's, not a timestamp
+//!
+//! The hold is an exclusive lock on the file — `flock` on Unix,
+//! `LockFileEx` on Windows — taken for as long as this process lives. That is
+//! what makes the two failure modes of a lock file impossible rather than
+//! merely unlikely:
+//!
+//! A builder that is killed releases its lock, because the kernel closes its
+//! handles. There is nothing to time out, so a killed build wedges nothing and
+//! the next one starts immediately.
+//!
+//! And a lock is never taken from a builder that still holds it. Deciding by
+//! clock — "this has been held too long, it must be dead" — is a guess, and
+//! when the guess is wrong the result is two linkers in one directory writing
+//! each other's objects: empty `.o` files, a link that fails on symbols that
+//! are really there, and no diagnostic naming any of it. A slow build is slow;
+//! it is not abandoned.
+//!
+//! The file itself is never removed. It is only the thing the lock is attached
+//! to, and removing it while another process waits on that same lock would take
+//! the anchor out from under the waiter.
 
-use std::fs::OpenOptions;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
-
-/// How long to wait for another builder before treating its lock as abandoned.
-///
-/// Long enough that a real build is never mistaken for a dead one — the harness
-/// package alone takes over a minute on a cold cache — and short enough that a
-/// developer whose build was killed is not left waiting on a file nothing will
-/// ever remove.
-const STALE_AFTER: Duration = Duration::from_secs(300);
-
-/// How long to sleep between attempts.
-///
-/// Coarse on purpose: the thing being waited for takes seconds at least, so
-/// polling faster would burn a core to learn nothing sooner.
-const RETRY_EVERY: Duration = Duration::from_millis(50);
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::Path;
 
 /// The lock file's name inside a build directory.
 const LOCK_FILE: &str = ".build-lock";
@@ -59,12 +65,12 @@ const LOCK_FILE: &str = ".build-lock";
 /// An exclusive hold on one package's build directory.
 ///
 /// Released when dropped, including when the build it guards fails or panics —
-/// which is the reason it is a value rather than a pair of calls. A build that
-/// returned early past an unlock would leave every later build waiting for a
-/// process that had already exited.
+/// and released by the kernel if the process dies without dropping anything,
+/// which is what a lock file compared against a clock could not promise.
 #[derive(Debug)]
 pub struct BuildLock {
-    path: PathBuf,
+    /// The locked file. Held open because closing it releases the lock.
+    file: File,
 }
 
 impl BuildLock {
@@ -73,73 +79,178 @@ impl BuildLock {
     /// The directory is created if it does not exist, so a caller does not have
     /// to sequence "make the directory" against "lock it".
     ///
-    /// Never fails for contention: a lock older than [`STALE_AFTER`] belonged to
-    /// a builder that is gone, and is taken over. It fails only when the
-    /// directory itself cannot be written, which a build was going to fail on
-    /// anyway — and it says so there rather than here.
+    /// Never fails for contention: a wait is reported and then waited out. It
+    /// fails only when the directory or the lock file cannot be opened, which a
+    /// build was going to fail on anyway.
     pub fn acquire(directory: &Path) -> Result<BuildLock, std::io::Error> {
         std::fs::create_dir_all(directory)?;
         let path = directory.join(LOCK_FILE);
-        let waiting_since = Instant::now();
-        loop {
-            match OpenOptions::new().create_new(true).write(true).open(&path) {
-                Ok(_) => return Ok(BuildLock { path }),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if is_stale(&path) {
-                        // Best effort: if another waiter removed it first, the
-                        // next create wins the race and this one keeps waiting.
-                        let _ = std::fs::remove_file(&path);
-                        continue;
-                    }
-                    if waiting_since.elapsed() > STALE_AFTER {
-                        // The holder is alive but has been building longer than
-                        // any build should take. Waiting further would hang a
-                        // command with no way out, so the lock is taken.
-                        let _ = std::fs::remove_file(&path);
-                        continue;
-                    }
-                    std::thread::sleep(RETRY_EVERY);
-                }
-                Err(error) => return Err(error),
-            }
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)?;
+
+        if !lock::try_exclusive(&file)? {
+            // Before blocking, not after: the point of the line is that the
+            // silence has a reason, and a line printed once the wait is over
+            // explains a pause the user has already spent.
+            kira_diagnostics::progress!("waiting for another build of this package");
+            eprintln!(
+                "kira: another build of this package is running; waiting for it to finish\n\
+                 note: it holds `{}`",
+                path.display(),
+            );
+            lock::exclusive(&file)?;
         }
+
+        let mut lock = BuildLock { file };
+        lock.record_holder();
+        Ok(lock)
+    }
+
+    /// Writes who holds the lock, for a human who opens the file.
+    ///
+    /// Best effort and never fatal: the hold is the operating system's lock, and
+    /// the contents are a courtesy to whoever is looking at a build directory
+    /// wondering which process to go and find.
+    fn record_holder(&mut self) {
+        let _ = self.file.set_len(0);
+        let _ = writeln!(self.file, "kira build, pid {}", std::process::id());
+        let _ = self.file.flush();
     }
 }
 
 impl Drop for BuildLock {
     fn drop(&mut self) {
-        // Best effort: a lock this process cannot remove is one the staleness
-        // rule collects, and a failure here has no caller left to report to.
-        let _ = std::fs::remove_file(&self.path);
+        // Best effort, and the close that follows releases the lock regardless.
+        // The file stays: it is the lock's anchor, and a waiter is holding on to
+        // it right now.
+        lock::release(&self.file);
     }
 }
 
-/// Whether the lock at `path` was left behind by a builder that is gone.
+/// The one platform-specific part: an exclusive lock on an open file.
 ///
-/// Judged by age rather than by asking whether the writing process still runs:
-/// a pid would have to be written, read, and trusted, and a recycled pid is a
-/// worse answer than a clock. A lock nobody holds is at worst waited on for
-/// [`STALE_AFTER`] once.
-fn is_stale(path: &Path) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        // It went away between the failed create and this check, which means
-        // the holder released it — not stale, just gone.
-        return false;
+/// Two calls each way — try, and wait — because the wait is what has to be
+/// announced, so a caller has to be able to learn that it is about to happen.
+#[cfg(unix)]
+mod lock {
+    use std::fs::File;
+    use std::os::fd::AsRawFd;
+
+    /// Takes the lock if it is free, answering whether it was.
+    pub(super) fn try_exclusive(file: &File) -> Result<bool, std::io::Error> {
+        // SAFETY: `file` is open for the duration of the call, so its
+        // descriptor is valid; `flock` touches nothing else.
+        let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if taken == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            // Held by someone else, which is the answer rather than a failure.
+            Some(libc::EWOULDBLOCK) => Ok(false),
+            _ => Err(error),
+        }
+    }
+
+    /// Waits for the lock however long the holder takes.
+    pub(super) fn exclusive(file: &File) -> Result<(), std::io::Error> {
+        // SAFETY: as above.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            return Ok(());
+        }
+        Err(std::io::Error::last_os_error())
+    }
+
+    /// Releases the lock, for the drop that does not want to wait for the close.
+    pub(super) fn release(file: &File) {
+        // SAFETY: as above; a failed unlock is undone by the close that follows.
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
+/// The Windows half, on `LockFileEx`.
+///
+/// The lock covers one byte at offset zero rather than the whole file, because
+/// the range only has to be the same one on both sides for the two builders to
+/// exclude each other, and a range past the end of a file locks fine — the file
+/// starts empty and the holder writes its pid into it afterwards.
+#[cfg(windows)]
+mod lock {
+    use std::fs::File;
+    use std::os::windows::io::AsRawHandle;
+
+    use windows_sys::Win32::Foundation::{ERROR_LOCK_VIOLATION, HANDLE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, UnlockFileEx,
     };
-    let Ok(modified) = metadata.modified() else {
-        return false;
-    };
-    match SystemTime::now().duration_since(modified) {
-        Ok(age) => age > STALE_AFTER,
-        // Modified in the future: a clock skew or a copied tree. Treat it as
-        // fresh, because the one thing worse than waiting is two linkers.
-        Err(_) => false,
+    use windows_sys::Win32::System::IO::OVERLAPPED;
+
+    /// The one byte both sides lock.
+    const RANGE: u32 = 1;
+
+    /// Takes the lock if it is free, answering whether it was.
+    pub(super) fn try_exclusive(file: &File) -> Result<bool, std::io::Error> {
+        let mut overlapped = OVERLAPPED::default();
+        // SAFETY: `file` is open for the duration of the call, so its handle is
+        // valid; `overlapped` is a live zeroed structure of the size the call
+        // expects and is not used after it returns.
+        let taken = unsafe {
+            LockFileEx(
+                file.as_raw_handle() as HANDLE,
+                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                0,
+                RANGE,
+                0,
+                &mut overlapped,
+            )
+        };
+        if taken != 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(ERROR_LOCK_VIOLATION as i32) {
+            return Ok(false);
+        }
+        Err(error)
+    }
+
+    /// Waits for the lock however long the holder takes.
+    pub(super) fn exclusive(file: &File) -> Result<(), std::io::Error> {
+        let mut overlapped = OVERLAPPED::default();
+        // SAFETY: as above.
+        let taken = unsafe {
+            LockFileEx(
+                file.as_raw_handle() as HANDLE,
+                LOCKFILE_EXCLUSIVE_LOCK,
+                0,
+                RANGE,
+                0,
+                &mut overlapped,
+            )
+        };
+        if taken != 0 {
+            return Ok(());
+        }
+        Err(std::io::Error::last_os_error())
+    }
+
+    /// Releases the lock, for the drop that does not want to wait for the close.
+    pub(super) fn release(file: &File) {
+        let mut overlapped = OVERLAPPED::default();
+        // SAFETY: as above; a failed unlock is undone by the close that follows.
+        unsafe { UnlockFileEx(file.as_raw_handle() as HANDLE, 0, RANGE, 0, &mut overlapped) };
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::time::Duration;
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -157,12 +268,11 @@ mod tests {
         let lock = BuildLock::acquire(&dir).expect("a fresh directory locks");
         assert!(dir.join(LOCK_FILE).exists());
         drop(lock);
-        assert!(
-            !dir.join(LOCK_FILE).exists(),
-            "a dropped lock must leave nothing behind, or the next build waits"
-        );
-        // And the directory locks again immediately.
+        // The file stays — it is the lock's anchor — and the directory locks
+        // again immediately, which is the property that matters.
+        assert!(dir.join(LOCK_FILE).exists());
         let _second = BuildLock::acquire(&dir).expect("the directory locks again");
+        drop(_second);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -172,41 +282,57 @@ mod tests {
     fn acquiring_creates_the_directory() {
         let dir = scratch("create");
         assert!(!dir.exists());
-        let _lock = BuildLock::acquire(&dir).expect("a missing directory is created");
+        let lock = BuildLock::acquire(&dir).expect("a missing directory is created");
         assert!(dir.exists());
+        drop(lock);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A lock left by a builder that died is taken over rather than waited on
-    /// forever — otherwise one killed build wedges a checkout permanently.
+    /// A lock file left behind by a builder that is gone holds nothing: the
+    /// kernel released the lock when that process died, so the next build takes
+    /// it without waiting and without any staleness rule to get wrong.
     #[test]
-    fn an_abandoned_lock_is_taken_over() {
-        let dir = scratch("stale");
+    fn a_lock_file_left_behind_holds_nothing() {
+        let dir = scratch("abandoned");
         std::fs::create_dir_all(&dir).expect("scratch");
-        let path = dir.join(LOCK_FILE);
-        std::fs::write(&path, b"").expect("a lock file");
-        let old = SystemTime::now() - STALE_AFTER - Duration::from_secs(60);
+        std::fs::write(dir.join(LOCK_FILE), b"kira build, pid 999999\n").expect("a lock file");
+
         let file = OpenOptions::new()
+            .read(true)
             .write(true)
-            .open(&path)
+            .open(dir.join(LOCK_FILE))
             .expect("the lock file opens");
-        file.set_modified(old).expect("an old timestamp");
+        assert!(
+            lock::try_exclusive(&file).expect("locking answers"),
+            "a file nobody holds locks immediately"
+        );
+        lock::release(&file);
         drop(file);
 
-        assert!(is_stale(&path), "a lock this old is abandoned");
-        let _lock = BuildLock::acquire(&dir).expect("an abandoned lock is taken over");
+        let lock = BuildLock::acquire(&dir).expect("an abandoned lock file is taken over");
+        drop(lock);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A fresh lock is not mistaken for an abandoned one, which would put two
-    /// linkers in one directory — the exact thing this prevents.
+    /// A held lock is reported as held rather than taken. This is the property
+    /// the old timestamp rule could not offer: no elapsed time makes a live
+    /// holder's lock available, so two builders can never be in one directory.
     #[test]
-    fn a_fresh_lock_is_not_stale() {
-        let dir = scratch("fresh");
-        std::fs::create_dir_all(&dir).expect("scratch");
-        let path = dir.join(LOCK_FILE);
-        std::fs::write(&path, b"").expect("a lock file");
-        assert!(!is_stale(&path));
+    fn a_held_lock_is_never_available() {
+        let dir = scratch("held");
+        let held = BuildLock::acquire(&dir).expect("the directory locks");
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(dir.join(LOCK_FILE))
+            .expect("the lock file opens");
+        assert!(
+            !lock::try_exclusive(&file).expect("locking answers"),
+            "a lock this process holds must not be available to another opener"
+        );
+        drop(file);
+        drop(held);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
