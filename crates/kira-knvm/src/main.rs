@@ -83,7 +83,7 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
                 }
             }
         }
-        KnvmCommand::Binstall => {
+        KnvmCommand::Binstall { profile } => {
             let start = match std::env::current_dir() {
                 Ok(directory) => directory,
                 Err(error) => {
@@ -91,7 +91,7 @@ fn run(command: KnvmCommand, paint: kira_knvm::Paint) -> i32 {
                     return EXIT_FAILED;
                 }
             };
-            match kira_knvm::binstall(&toolchains_root, &start) {
+            match kira_knvm::binstall(&toolchains_root, &start, profile) {
                 Ok(installed) => {
                     let state = if installed.already_installed {
                         "rebuilt"

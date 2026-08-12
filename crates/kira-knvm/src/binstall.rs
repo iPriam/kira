@@ -1,11 +1,17 @@
 //! Building this checkout into an installed dev toolchain.
 //!
 //! `knvm binstall` is the developer's install route: it compiles the compiler
-//! out of the checkout it is run inside (dev profile), shapes the result into
-//! the same tree a release archive unpacks to — `bin/kira` with `foundation/`
-//! beside it — and lands it on the `dev` channel through the same
-//! staging/validate/rename pipeline a release install uses. Installing selects
-//! it, so `kira` dispatches to the fresh build immediately.
+//! out of the checkout it is run inside, shapes the result into the same tree a
+//! release archive unpacks to — `bin/kira` with `foundation/` beside it — and
+//! lands it on the `dev` channel through the same staging/validate/rename
+//! pipeline a release install uses. Installing selects it, so `kira` dispatches
+//! to the fresh build immediately.
+//!
+//! It builds OPTIMIZED by default. A dev toolchain is what every project in the
+//! tree then compiles through, and an unoptimized compiler turns a UI library's
+//! build from one minute into eight — the cost lands on every downstream build,
+//! all day, not on the one command that produced it. `--debug` stages the
+//! unoptimized build for the case that wants it: debugging the compiler itself.
 //!
 //! Running it again replaces the installed tree. A dev toolchain names a
 //! moving target, so "already installed" would mean "silently stale" — the
@@ -25,6 +31,34 @@ use crate::install::{
 
 /// The manifest that marks the bundled Foundation as a real Kira package.
 const PACKAGE_MANIFEST_FILE_NAME: &str = "package.kira";
+
+/// Which cargo profile a dev toolchain is built with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BuildProfile {
+    /// Optimized, the way an installed toolchain is shipped.
+    #[default]
+    Release,
+    /// Unoptimized and with debug info, for working on the compiler itself.
+    Debug,
+}
+
+impl BuildProfile {
+    /// The cargo flags this profile adds to `cargo build`.
+    fn cargo_flags(self) -> &'static [&'static str] {
+        match self {
+            BuildProfile::Release => &["--release"],
+            BuildProfile::Debug => &[],
+        }
+    }
+
+    /// The directory under `target/` cargo writes this profile's artifacts to.
+    fn target_subdirectory(self) -> &'static str {
+        match self {
+            BuildProfile::Release => "release",
+            BuildProfile::Debug => "debug",
+        }
+    }
+}
 
 /// Why a checkout could not be built into an installed toolchain.
 #[derive(Debug, thiserror::Error)]
@@ -114,7 +148,11 @@ const BUILD_PACKAGES: [&str; 5] = [
 /// `start` is where the checkout search begins — the working directory, for the
 /// binary. The build's stdout and stderr are inherited, so a compile error
 /// lands in front of the user rather than in a captured buffer.
-pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, BinstallError> {
+pub fn binstall(
+    toolchains_root: &Path,
+    start: &Path,
+    profile: BuildProfile,
+) -> Result<Installed, BinstallError> {
     let checkout = enclosing_checkout(start).ok_or_else(|| BinstallError::NotACheckout {
         start: start.to_path_buf(),
     })?;
@@ -129,6 +167,7 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
     }
     let mut build = Command::new("cargo");
     build.arg("build");
+    build.args(profile.cargo_flags());
     for package in BUILD_PACKAGES {
         build.args(["-p", package]);
     }
@@ -145,14 +184,16 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
 
     // The same archive again, cross-built for emscripten, since a Web build
     // links against a bridge compiled for wasm32 rather than the host's.
-    let cross = Command::new("cargo")
-        .args([
-            "build",
-            "-p",
-            "kira-native-bridge",
-            "--target",
-            "wasm32-unknown-emscripten",
-        ])
+    let mut cross_build = Command::new("cargo");
+    cross_build.args([
+        "build",
+        "-p",
+        "kira-native-bridge",
+        "--target",
+        "wasm32-unknown-emscripten",
+    ]);
+    cross_build.args(profile.cargo_flags());
+    let cross = cross_build
         .current_dir(&checkout)
         .status()
         .map_err(|error| match error.kind() {
@@ -165,18 +206,18 @@ pub fn binstall(toolchains_root: &Path, start: &Path) -> Result<Installed, Binst
         return Err(BinstallError::BuildFailed { checkout });
     }
 
-    let debug_dir = target_dir(&checkout).join("debug");
-    let compiler = debug_dir.join(executable_name(PRIMARY_BINARY));
-    let language_server = debug_dir.join(executable_name(LANGUAGE_SERVER_BINARY));
-    let desktop_runner = debug_dir.join(executable_name(DESKTOP_RUNNER_BINARY));
+    let built_dir = target_dir(&checkout).join(profile.target_subdirectory());
+    let compiler = built_dir.join(executable_name(PRIMARY_BINARY));
+    let language_server = built_dir.join(executable_name(LANGUAGE_SERVER_BINARY));
+    let desktop_runner = built_dir.join(executable_name(DESKTOP_RUNNER_BINARY));
     // Under the names cargo wrote them: `<name>.lib` under MSVC. The Web
     // archive keeps its Unix spelling on every host, because emscripten wrote
     // that one rather than the host toolchain.
-    let host_archive = debug_dir.join(static_archive_name("kira_native_bridge"));
-    let compiler_archive = debug_dir.join(static_archive_name("kira_compiler_bridge"));
+    let host_archive = built_dir.join(static_archive_name("kira_native_bridge"));
+    let compiler_archive = built_dir.join(static_archive_name("kira_compiler_bridge"));
     let wasm_archive = target_dir(&checkout)
         .join("wasm32-unknown-emscripten")
-        .join("debug")
+        .join(profile.target_subdirectory())
         .join("libkira_native_bridge.a");
     for artifact in [
         &compiler,
@@ -352,11 +393,11 @@ mod tests {
     fn the_runtime_archives_crate_is_built_rather_than_assumed() {
         assert!(
             BUILD_PACKAGES.contains(&"kira-native-bridge"),
-            "the staticlib is staged from `target/debug`, so it has to be built there"
+            "the staticlib is staged from the profile directory, so it has to be built there"
         );
         assert!(
             BUILD_PACKAGES.contains(&"kira-compiler-bridge"),
-            "the compiler staticlib is staged from `target/debug`, so it has to be built there"
+            "the compiler staticlib is staged from the profile directory, so it has to be built there"
         );
         assert!(BUILD_PACKAGES.contains(&"kira-cli"));
         assert!(BUILD_PACKAGES.contains(&"kira-lsp"));

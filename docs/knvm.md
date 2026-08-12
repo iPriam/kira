@@ -8,6 +8,7 @@ knvm install latest
 knvm install 1.7.3 --channel dev
 knvm install-llvm
 knvm binstall
+knvm binstall --debug
 knvm sinstall
 knvm self-update
 knvm list
@@ -220,7 +221,7 @@ outcome of an update, and a scheduled run must not go red on it.
 
 `knvm binstall` is the developer route: run inside a Kira checkout, it builds
 `kira`, `kira-language-server`, `kira-desktop-runner`, and both host runtime
-archives with cargo (dev profile), cross-builds the Web runtime archive, and
+archives with cargo, cross-builds the Web runtime archive, and
 shapes them into the same tree a release unpacks to with the checkout's
 `foundation/` beside them. It installs that tree on the `dev` channel, named by
 the workspace's `[workspace.package] version`. The LLVM backend is a hard part
@@ -228,6 +229,12 @@ of every kira, so `binstall` discovers the managed LLVM and refuses up front —
 naming the provisioning route — when no bundle exists. It goes through the same
 staging, validation, and rename-into-place pipeline as a release install, and
 selects what it lands, so `kira` dispatches to the fresh build immediately.
+
+The build is optimized. A dev toolchain is what every project on the machine
+then compiles through, and an unoptimized compiler is several times slower at
+every one of those builds — the cost lands all day, not on the one command that
+produced it. `knvm binstall --debug` stages the unoptimized build instead, for
+the case that wants it: debugging the compiler itself.
 
 Running it again replaces the installed tree. A dev toolchain names a moving
 target, so `binstall` never answers "already installed" — that would mean

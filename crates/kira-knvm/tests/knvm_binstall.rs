@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use kira_knvm::{BinstallError, Channel, binstall, read_current};
+use kira_knvm::{BinstallError, BuildProfile, Channel, binstall, read_current};
 use kira_toolchain::{executable_name, static_archive_name};
 
 /// A temp directory that removes itself, so a failing assert cannot leak a tree.
@@ -55,7 +55,8 @@ fn repository_root() -> PathBuf {
 fn binstall_installs_this_checkout_as_the_selected_dev_toolchain() {
     let root = TempTree::create("root");
 
-    let installed = binstall(root.path(), &repository_root()).expect("binstall from this checkout");
+    let installed = binstall(root.path(), &repository_root(), BuildProfile::Debug)
+        .expect("binstall from this checkout");
 
     assert_eq!(installed.channel, Channel::Dev);
     assert!(
@@ -122,14 +123,14 @@ fn a_second_binstall_replaces_the_previous_build() {
     let root = TempTree::create("root");
     let checkout = repository_root();
 
-    let first = binstall(root.path(), &checkout).expect("first binstall");
+    let first = binstall(root.path(), &checkout, BuildProfile::Debug).expect("first binstall");
     assert!(!first.already_installed);
 
     // A witness the replacement must not carry over.
     let witness = first.root.join("stale-witness");
     std::fs::write(&witness, "from the first build").expect("write the witness");
 
-    let second = binstall(root.path(), &checkout).expect("second binstall");
+    let second = binstall(root.path(), &checkout, BuildProfile::Debug).expect("second binstall");
     assert!(second.already_installed, "the rebuild must say it replaced");
     assert_eq!(second.root, first.root);
     assert!(
@@ -155,7 +156,7 @@ fn binstall_refuses_a_directory_that_is_not_a_checkout() {
     // A Rust workspace without a Foundation is not a Kira checkout.
     std::fs::write(elsewhere.path().join("Cargo.toml"), "[workspace]\n").expect("write manifest");
 
-    let error = binstall(root.path(), elsewhere.path())
+    let error = binstall(root.path(), elsewhere.path(), BuildProfile::Debug)
         .expect_err("a directory without the checkout markers cannot be binstalled");
     assert!(
         matches!(error, BinstallError::NotACheckout { .. }),
