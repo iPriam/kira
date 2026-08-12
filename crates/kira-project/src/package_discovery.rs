@@ -54,6 +54,58 @@ pub const MANIFEST_FILE_NAMES: [&str; 4] = [
     REPO_MANIFEST_FILE_NAME,
 ];
 
+/// The directory name build artifacts are written into.
+pub const BUILD_DIR_NAME: &str = ".kira-build";
+
+/// The directory a build of `source` writes its artifacts into.
+///
+/// **The package's own root**, because the artifacts belong to the package and
+/// not to whichever of its directories happens to hold the entrypoint. An
+/// application's entry file lives in `app/`, so deriving the directory from the
+/// file put every object, executable, and bytecode file the package produces
+/// inside `app/` — beside its sources, in the directory a developer reads and an
+/// editor lists, and under a name no part of the package declares.
+///
+/// A file with no package above it keeps its own directory: a bare `.kira`
+/// handed to `kira` is a program in its own right, and there is no root to
+/// prefer.
+///
+/// Found by the same upward walk [`manifest_for`] uses, by existence alone: the
+/// two must agree on which directory is the root, and a manifest that cannot be
+/// parsed is reported by whoever needed its contents rather than by moving this
+/// build's output somewhere else.
+pub fn build_directory(source: &std::path::Path) -> std::path::PathBuf {
+    package_root(source)
+        .unwrap_or_else(|| source_directory(source).to_path_buf())
+        .join(BUILD_DIR_NAME)
+}
+
+/// The root of the package governing `source`, if a manifest sits above it.
+pub fn package_root(source: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut directory = Some(source_directory(source));
+    while let Some(current) = directory {
+        if MANIFEST_FILE_NAMES
+            .iter()
+            .any(|file_name| current.join(file_name).is_file())
+        {
+            return Some(current.to_path_buf());
+        }
+        directory = current.parent();
+    }
+    None
+}
+
+/// Where to start walking up from: the directory itself, or the file's own.
+fn source_directory(source: &std::path::Path) -> &std::path::Path {
+    if source.is_dir() {
+        return source;
+    }
+    source
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."))
+}
+
 /// True when the manifest at `path` is a `package.kira` declaration manifest.
 pub fn is_declaration_manifest(path: &str) -> bool {
     std::path::Path::new(path)
@@ -731,5 +783,68 @@ mod tests {
         assert!(!is_misplaced_bind_types_file(std::path::Path::new(
             "pkg/app/Core/Widget.kira"
         )));
+    }
+
+    /// A scratch package tree: a manifest at the root, sources one level down.
+    fn package_tree(tag: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "kira-build-directory-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("app")).expect("a package tree");
+        std::fs::write(root.join(DECLARATION_MANIFEST_FILE_NAME), b"Package P {}\n")
+            .expect("a manifest");
+        root
+    }
+
+    /// The artifacts belong to the package, so they go at its root — never in
+    /// `app/`, which holds the entrypoint and nothing the build produces.
+    #[test]
+    fn the_build_directory_is_the_package_root() {
+        let root = package_tree("root");
+        assert_eq!(
+            build_directory(&root.join("app").join("main.kira")),
+            root.join(BUILD_DIR_NAME)
+        );
+        // The same answer from a directory argument, and from a source nested
+        // deeper than the entrypoint.
+        assert_eq!(build_directory(&root), root.join(BUILD_DIR_NAME));
+        std::fs::create_dir_all(root.join("app").join("Core")).expect("a nested directory");
+        assert_eq!(
+            build_directory(&root.join("app").join("Core").join("Widget.kira")),
+            root.join(BUILD_DIR_NAME)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A bare file with no package above it keeps its own directory: there is no
+    /// root to prefer, and a program handed to `kira` directly is its own.
+    #[test]
+    fn a_file_outside_any_package_builds_beside_itself() {
+        let directory = std::env::temp_dir().join(format!(
+            "kira-build-directory-bare-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a scratch directory");
+        assert_eq!(
+            build_directory(&directory.join("hello.kira")),
+            directory.join(BUILD_DIR_NAME)
+        );
+        assert_eq!(package_root(&directory.join("hello.kira")), None);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A path with no directory part at all resolves against the working
+    /// directory rather than joining the build directory onto nothing.
+    #[test]
+    fn a_relative_file_name_builds_in_the_working_directory() {
+        assert_eq!(
+            build_directory(std::path::Path::new("hello.kira")),
+            std::path::Path::new(".").join(BUILD_DIR_NAME)
+        );
     }
 }

@@ -14,7 +14,8 @@ use super::*;
 /// A library package: `package.kira` plus one source file with no `@Main`.
 ///
 /// Returns the source path. Each package gets its own directory, as every
-/// parity case does, because `.kira-build` artifacts land beside the source.
+/// parity case does, because a package's `.kira-build` is at its root and two
+/// packages sharing a root would share one.
 fn write_library(source: &str) -> PathBuf {
     let path = write_source(source);
     let directory = path.parent().expect("package directory");

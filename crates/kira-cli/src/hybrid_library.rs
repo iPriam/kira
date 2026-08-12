@@ -12,13 +12,13 @@
 //! whose report tells the author where that file is and that it travels with
 //! their program.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use kira_build::{Compiled, HybridLibraryArtifacts, HybridLibraryError, HybridLibraryOptions};
 
 use crate::library::LibraryError;
 
-/// Builds `compiled` as a hybrid-engine library beside its source.
+/// Builds `compiled` as a hybrid-engine library into its package's build directory.
 ///
 /// The name and version refusals are [`crate::library`]'s, reused rather than
 /// restated: a library needs both on every engine.
@@ -41,7 +41,7 @@ pub fn build(
         ));
     };
 
-    let directory = build_directory(source);
+    let directory = kira_project::build_directory(source);
     // Held until this build finishes: a hybrid library writes a `.kbc`, a
     // manifest and a shared library under one name, and a second builder would
     // replace one of the three while the first was still writing another.
@@ -56,14 +56,6 @@ pub fn build(
         emit_llvm_ir,
     };
     Ok(kira_build::build_hybrid_library(&compiled.ir, &options)?)
-}
-
-/// The `.kira-build` directory beside `source`.
-fn build_directory(source: &Path) -> PathBuf {
-    source
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(".kira-build")
 }
 
 /// Reports what a hybrid library build produced.
@@ -105,14 +97,6 @@ pub enum HybridLibraryBuildError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_build_directory_is_the_one_every_other_engine_writes_into() {
-        assert_eq!(
-            build_directory(Path::new("/pkg/src/uifoundation.kira")),
-            Path::new("/pkg/src/.kira-build")
-        );
-    }
 
     #[test]
     fn a_package_with_no_version_is_refused_with_the_other_engines_words() {

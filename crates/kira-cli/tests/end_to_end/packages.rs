@@ -328,7 +328,9 @@ fn manifest_llvm_default_runs_natively_but_an_explicit_vm_still_wins() {
     );
     let app = tree.path().join("app");
     let app_arg = app.to_str().expect("UTF-8 temp path");
-    let artifacts = app.join("app/.kira-build");
+    // At the package root, not in `app/`: the artifacts belong to the package
+    // rather than to the directory its entrypoint happens to sit in.
+    let artifacts = app.join(".kira-build");
 
     let default_run = kira(&["run", "--emit-llvm-ir", app_arg]);
     assert!(
@@ -373,7 +375,7 @@ fn an_explicit_vm_backend_outranks_a_manifest_wasm32_target() {
     );
     let app = tree.path().join("app");
     let app_arg = app.to_str().expect("UTF-8 temp path");
-    let web_artifact = app.join("app/.kira-build/web/main.js");
+    let web_artifact = app.join(".kira-build/web/main.js");
 
     let output = kira(&["build", "--backend", "vm", app_arg]);
     let stderr = String::from_utf8_lossy(&output.stderr);
