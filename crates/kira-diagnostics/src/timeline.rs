@@ -14,11 +14,24 @@
 //! has to be asked for. So it is a separate, independently installed listener
 //! with the same feed.
 //!
-//! Phases do not nest. The stream is linear by construction — every reporter
-//! names the work it is *about to start* — so a phase ends when the next begins,
-//! and the last one ends when the recording is taken.
+//! # A build is not one thread
+//!
+//! A phase ends when the *same thread* opens the next one. That is what makes
+//! this readable on a build that emits its codegen units in parallel: eight
+//! threads each name the unit they are working on, and each unit is credited
+//! with its own span rather than with whatever the last thread to speak was
+//! doing.
+//!
+//! What a phase is credited with is **wall-clock**: the span from its first
+//! start to its last end, with the gaps between repeats removed. Two phases that
+//! ran at once therefore both claim the same seconds, and the rows can add up to
+//! more than the total — which is the truth about a parallel build, and the
+//! reason [`Report::concurrent`] says so rather than leaving a reader to work
+//! out why the percentages exceed a hundred.
 
+use std::collections::HashMap;
 use std::sync::Mutex;
+use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
 /// One phase's share of a build.
@@ -26,7 +39,7 @@ use std::time::{Duration, Instant};
 pub struct Recorded {
     /// The phase line as it was reported.
     pub name: String,
-    /// How long it ran, summed over every time it was entered.
+    /// The wall-clock time this phase was running, on any thread.
     pub elapsed: Duration,
     /// How many times it was entered.
     pub hits: usize,
@@ -46,37 +59,53 @@ pub struct Report {
     /// whose parts do not add up to its total is a report that hides the part
     /// nobody named.
     pub unattributed: Duration,
+    /// Whether two phases ever ran at the same time.
+    ///
+    /// True for any build that emits its codegen units in parallel. When it is,
+    /// the rows overlap each other and sum to more than [`Report::total`].
+    pub concurrent: bool,
 }
 
 /// The recorder, or `None` when nobody asked for timings.
 static RECORDER: Mutex<Option<Recorder>> = Mutex::new(None);
 
+/// One phase's run on one thread.
+struct Span {
+    name: String,
+    began: Instant,
+    ended: Instant,
+}
+
 /// Accumulating state between [`start`] and [`take`].
 struct Recorder {
     started: Instant,
-    /// The phase currently running and when it began.
-    open: Option<(String, Instant)>,
-    /// Every phase entered so far, in first-seen order.
-    phases: Vec<Recorded>,
+    /// The phase each thread is currently running, and when it began.
+    open: HashMap<ThreadId, (String, Instant)>,
+    /// Every phase run that has finished.
+    spans: Vec<Span>,
 }
 
 impl Recorder {
-    /// Closes the open phase at `now`, crediting it with its duration.
-    fn close(&mut self, now: Instant) {
-        let Some((name, began)) = self.open.take() else {
+    /// Closes `thread`'s open phase at `now`.
+    fn close(&mut self, thread: ThreadId, now: Instant) {
+        let Some((name, began)) = self.open.remove(&thread) else {
             return;
         };
-        let elapsed = now.saturating_duration_since(began);
-        match self.phases.iter_mut().find(|phase| phase.name == name) {
-            Some(phase) => {
-                phase.elapsed += elapsed;
-                phase.hits += 1;
-            }
-            None => self.phases.push(Recorded {
+        self.spans.push(Span {
+            name,
+            began,
+            ended: now,
+        });
+    }
+
+    /// Closes every thread's open phase at `now`.
+    fn close_all(&mut self, now: Instant) {
+        for (_thread, (name, began)) in self.open.drain() {
+            self.spans.push(Span {
                 name,
-                elapsed,
-                hits: 1,
-            }),
+                began,
+                ended: now,
+            });
         }
     }
 }
@@ -89,26 +118,28 @@ pub fn start() {
     if let Ok(mut slot) = RECORDER.lock() {
         *slot = Some(Recorder {
             started: Instant::now(),
-            open: None,
-            phases: Vec::new(),
+            open: HashMap::new(),
+            spans: Vec::new(),
         });
     }
 }
 
-/// Records that `phase` has started, ending whichever phase was running.
+/// Records that `phase` has started, ending whichever phase this thread was
+/// running.
 ///
 /// Called from [`progress::report`](crate::progress::report), so no reporter
 /// knows this exists.
 pub fn mark(phase: &str) {
     let now = Instant::now();
+    let thread = std::thread::current().id();
     let Ok(mut slot) = RECORDER.lock() else {
         return;
     };
     let Some(recorder) = slot.as_mut() else {
         return;
     };
-    recorder.close(now);
-    recorder.open = Some((phase.to_owned(), now));
+    recorder.close(thread, now);
+    recorder.open.insert(thread, (phase.to_owned(), now));
 }
 
 /// Ends the recording and returns it, or `None` when none was running.
@@ -119,21 +150,72 @@ pub fn mark(phase: &str) {
 pub fn take() -> Option<Report> {
     let now = Instant::now();
     let mut recorder = RECORDER.lock().ok()?.take()?;
-    recorder.close(now);
+    recorder.close_all(now);
     let total = now.saturating_duration_since(recorder.started);
-    let mut phases = recorder.phases;
+    let spans = recorder.spans;
+
+    // First seen first, so a report keeps the build's own order underneath the
+    // sort by duration and two phases of equal length do not swap between runs.
+    let mut order: Vec<&str> = Vec::new();
+    let mut runs: HashMap<&str, Vec<(Instant, Instant)>> = HashMap::new();
+    for span in &spans {
+        let entry = runs.entry(span.name.as_str()).or_insert_with(|| {
+            order.push(span.name.as_str());
+            Vec::new()
+        });
+        entry.push((span.began, span.ended));
+    }
+
+    let mut phases: Vec<Recorded> = order
+        .into_iter()
+        .map(|name| {
+            let intervals = &runs[name];
+            Recorded {
+                name: name.to_owned(),
+                elapsed: covered(intervals.clone()),
+                hits: intervals.len(),
+            }
+        })
+        .collect();
     phases.sort_by(|left, right| {
         right
             .elapsed
             .cmp(&left.elapsed)
             .then_with(|| left.name.cmp(&right.name))
     });
+
     let claimed: Duration = phases.iter().map(|phase| phase.elapsed).sum();
+    let everything: Vec<(Instant, Instant)> =
+        spans.iter().map(|span| (span.began, span.ended)).collect();
+    let covered_by_anything = covered(everything);
     Some(Report {
         total,
         phases,
-        unattributed: total.saturating_sub(claimed),
+        unattributed: total.saturating_sub(covered_by_anything),
+        concurrent: claimed > covered_by_anything,
     })
+}
+
+/// How much wall-clock time a set of intervals covers, counting an instant that
+/// two of them share only once.
+fn covered(mut intervals: Vec<(Instant, Instant)>) -> Duration {
+    intervals.sort_by_key(|&(began, _)| began);
+    let mut total = Duration::ZERO;
+    let mut open: Option<(Instant, Instant)> = None;
+    for (began, ended) in intervals {
+        match open {
+            Some((start, end)) if began <= end => open = Some((start, end.max(ended))),
+            Some((start, end)) => {
+                total += end.saturating_duration_since(start);
+                open = Some((began, ended));
+            }
+            None => open = Some((began, ended)),
+        }
+    }
+    if let Some((start, end)) = open {
+        total += end.saturating_duration_since(start);
+    }
+    total
 }
 
 /// Whether a recording is running.
@@ -210,6 +292,7 @@ mod tests {
         mark("two");
         let report = take().expect("a recording");
         let claimed: Duration = report.phases.iter().map(|phase| phase.elapsed).sum();
+        assert!(!report.concurrent);
         assert_eq!(claimed + report.unattributed, report.total);
     }
 
@@ -234,5 +317,59 @@ mod tests {
         let report = take().expect("a recording");
         let names: Vec<&str> = report.phases.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["second build"]);
+    }
+
+    /// The property the parallel backend depends on: a phase is closed by the
+    /// thread that opened it, so a worker's span is its own work and not the
+    /// gap until some other worker happened to speak next.
+    #[test]
+    fn a_worker_is_credited_with_its_own_phase_and_not_another_thread_s() {
+        let _exclusive = exclusive();
+        start();
+        mark("the main thread");
+        std::thread::scope(|scope| {
+            for unit in 0..4 {
+                scope.spawn(move || {
+                    mark(&format!("unit {unit}"));
+                    std::thread::sleep(Duration::from_millis(40));
+                });
+            }
+        });
+        let report = take().expect("a recording");
+        for unit in 0..4 {
+            let recorded = report
+                .phases
+                .iter()
+                .find(|phase| phase.name == format!("unit {unit}"))
+                .expect("every worker's phase");
+            assert!(
+                recorded.elapsed >= Duration::from_millis(30),
+                "{recorded:?}",
+            );
+        }
+        // Four phases of 40ms inside a scope that took about 40ms: they
+        // overlapped, and the report says so instead of hiding it.
+        assert!(report.concurrent, "{report:?}");
+        assert!(report.total < Duration::from_millis(160), "{report:?}");
+    }
+
+    /// A phase entered twice covers both runs, not the gap between them.
+    #[test]
+    fn a_repeated_phase_does_not_claim_the_time_between_its_runs() {
+        let _exclusive = exclusive();
+        start();
+        mark("work");
+        std::thread::sleep(Duration::from_millis(10));
+        mark("idle");
+        std::thread::sleep(Duration::from_millis(40));
+        mark("work");
+        std::thread::sleep(Duration::from_millis(10));
+        let report = take().expect("a recording");
+        let work = report
+            .phases
+            .iter()
+            .find(|phase| phase.name == "work")
+            .expect("the repeated phase");
+        assert!(work.elapsed < Duration::from_millis(40), "{work:?}");
     }
 }

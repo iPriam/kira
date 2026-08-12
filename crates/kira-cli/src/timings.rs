@@ -87,6 +87,15 @@ fn print(report: &Report) {
         share(report.unattributed, report.total),
         paint.dim("(unattributed)"),
     );
+    // Said once, at the bottom, for the build that needs it: eight codegen
+    // units emitted at once each claim the same seconds, so the rows sum past
+    // the total and the reader is owed the reason.
+    if report.concurrent {
+        err!(
+            "  {}",
+            paint.dim("phases overlapped: rows are wall-clock and sum past the total"),
+        );
+    }
 }
 
 #[cfg(test)]
