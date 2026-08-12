@@ -374,7 +374,6 @@ fn emit_codegen_units(
         if let Some(path) = &options.ir_path {
             module.write_ir(path)?;
         }
-        kira_diagnostics::progress!("emitting object");
         module.emit_object(&options.object_path, options.optimize)?;
         return Ok(paths);
     }
@@ -536,7 +535,6 @@ pub fn build_adapter_sidecar(
         &options.module_name,
         &options.unavailable_imports,
     )?;
-    kira_diagnostics::progress!("emitting object");
     module.emit_object(&options.object_path, false)?;
     let llvm = kira_toolchain::discover(None)?;
     // Both the adapters and the callback thunks: a thunk is referenced by
@@ -617,7 +615,6 @@ pub fn build_native_library(
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
-    kira_diagnostics::progress!("emitting object");
     module.emit_object(&options.object_path, options.optimize)?;
 
     if options.archive_path.is_none() && options.shared_library_path.is_none() {
@@ -697,7 +694,6 @@ fn build_hybrid_library_inner(
     if let Some(path) = &options.ir_path {
         module.write_ir(path)?;
     }
-    kira_diagnostics::progress!("emitting object");
     module.emit_object(&options.object_path, options.optimize)?;
 
     let library = options

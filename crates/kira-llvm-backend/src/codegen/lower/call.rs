@@ -190,17 +190,10 @@ impl FunctionLowering<'_, '_> {
         temporaries: Vec<(LLVMValueRef, Type)>,
     ) -> Result<(), LlvmError> {
         for (pointer, ty) in temporaries {
-            let llvm_type = self.codegen.llvm_type(ty)?;
-            // SAFETY: `pointer` is a live alloca holding a value of `llvm_type`.
-            let value = unsafe {
-                LLVMBuildLoad2(
-                    self.codegen.builder,
-                    llvm_type,
-                    pointer,
-                    c"lent.temp".as_ptr(),
-                )
-            };
-            self.drop_value(value, ty)?;
+            // Through the temporary's own storage: it is dead after this, so
+            // loading it only to hand the value back through memory is work
+            // with nobody to read it.
+            self.codegen.release_at(pointer, ty)?;
             self.codegen.lifetime_end(pointer);
         }
         Ok(())

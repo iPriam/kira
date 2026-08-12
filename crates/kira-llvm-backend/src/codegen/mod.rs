@@ -28,6 +28,7 @@ mod elements;
 mod entry;
 mod ffi;
 mod foreign_scalar;
+mod glue;
 mod library;
 mod lower;
 mod native_state;
@@ -339,7 +340,20 @@ impl Module {
 
     /// Emits a native object file for the host into `path`.
     pub(crate) fn emit_object(&self, path: &Path, optimize: bool) -> Result<(), LlvmError> {
+        let unit = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("object");
+        kira_diagnostics::progress!("creating LLVM target machine for {unit}");
         let machine = TargetMachine::host(optimize, self.fast_codegen)?;
+        if optimize {
+            kira_diagnostics::progress!("inlining value glue for {unit}");
+            machine.always_inline(self.module)?;
+        }
+        kira_diagnostics::progress!(
+            "emitting object with LLVM for {unit} (fast-codegen={})",
+            self.fast_codegen
+        );
         machine.emit_object(self.module, path)
     }
 
@@ -431,6 +445,9 @@ pub(crate) struct Codegen<'a> {
     /// `(element type, leaf)`. Memoized so two arrays of the same element share
     /// one leaf. See [`elements`].
     element_leaves: HashMap<(Type, Leaf), LLVMValueRef>,
+    /// The slots a copy or drop site hands its value to the leaf in, one pair
+    /// per `(function, type)`. See [`glue`].
+    scratch_slots: glue::ScratchSlots,
     /// The rebuild that carries one generic instantiation into another, one per
     /// `(from, to)`. `None` records a pair that needs no rebuild at all, so the
     /// answer is computed once either way. See [`widening`].
@@ -491,6 +508,7 @@ impl<'a> Codegen<'a> {
             string_counter: 0,
             target_data,
             element_leaves: HashMap::new(),
+            scratch_slots: glue::ScratchSlots::new(),
             widen_leaves: HashMap::new(),
             native_state_leaves: HashMap::new(),
             native_state_enum_leaves: HashMap::new(),

@@ -7,6 +7,10 @@
 //! helpers call ([`super::elements`]), and a leaf is emitted with no function
 //! body in scope. Everything here needs is the builder, the runtime
 //! declarations, and the program's type table.
+//!
+//! The walks are emitted into those leaves and nowhere else: a site calls the
+//! leaf instead of expanding the walk again. See [`super::glue`], which is what
+//! every site outside this module goes through.
 
 use kira_semantics_model::{StructId, Type};
 use llvm_sys::core::*;
@@ -31,35 +35,53 @@ impl Codegen<'_> {
             .ok_or(crate::LlvmError::Unsupported("an element of a non-array"))
     }
 
-    /// Produces an independent copy of `value`, mirroring the VM's
+    /// Takes a share of everything the value at `at` owns, mirroring the VM's
     /// `Heap::copy_value`.
     ///
-    /// Deep, field by field: a struct's copy clones every string it reaches, so
-    /// no two live values share a handle and neither drop frees the other's.
-    /// Scalars and structs of scalars copy for free — LLVM's `insertvalue`
-    /// chain folds away — so the walk only costs anything where it must.
-    pub(super) fn copy_value(
+    /// # A copy is a retain
+    ///
+    /// Every arm below leaves the bits alone: a `String`, an array, an enum, an
+    /// `Any` and a cell all copy by raising the share count of the object the
+    /// handle already names, and a struct copies by doing that to each of its
+    /// fields. So a copy never produces different bits from the ones it was
+    /// given — the caller keeps the value it had, and this is only the counting.
+    ///
+    /// # By pointer, not by value
+    ///
+    /// A struct's field is reached with a `getelementptr` rather than by
+    /// extracting it from the whole struct. A generated style struct is
+    /// thousands of bytes, and at the code-generation level a development build
+    /// uses, LLVM lowers a load of one into a move per field — so a walk that
+    /// took the struct by value would spend more on loading it than on the
+    /// counts it came to raise.
+    ///
+    /// The walk, not the site: this is emitted once per type, into that type's
+    /// retain leaf. Fields go back through [`Codegen::retain_at`], so each
+    /// field's own walk is a call to *its* leaf rather than more of this one.
+    pub(super) fn retain_at_walk(
         &mut self,
-        value: LLVMValueRef,
+        at: LLVMValueRef,
         ty: Type,
-    ) -> Result<LLVMValueRef, crate::LlvmError> {
+    ) -> Result<(), crate::LlvmError> {
         if !self.owns_heap(ty) {
-            return Ok(value);
+            return Ok(());
         }
         match ty {
-            Type::String => self.copy_shared(value, self.types.string_box, "str"),
+            Type::String => {
+                let handle = self.load_handle(at, "str");
+                self.copy_shared(handle, self.types.string_box, "str");
+                Ok(())
+            }
             Type::Struct(id) => {
-                let field_types = self.field_types(id)?;
-                let mut copy = value;
-                for (index, field_ty) in field_types.into_iter().enumerate() {
+                let struct_type = self.llvm_type(ty)?;
+                for (index, field_ty) in self.field_types(id)?.into_iter().enumerate() {
                     if !self.owns_heap(field_ty) {
                         continue;
                     }
-                    let field = self.extract_field(value, index as u32);
-                    let copied = self.copy_value(field, field_ty)?;
-                    copy = self.insert_field(copy, copied, index as u32);
+                    let field = self.field_pointer(struct_type, at, index as u32);
+                    self.retain_at(field, field_ty)?;
                 }
-                Ok(copy)
+                Ok(())
             }
             // A copy takes a share of the array and walks nothing: the elements
             // are copied only if one of the two arrays is written, by the
@@ -67,13 +89,25 @@ impl Codegen<'_> {
             // leaf goes instead. See `kira-native-bridge`'s `array` module.
             // Reading an array is most of what a frame does, and doing it
             // eagerly here was 78% of one.
-            Type::Array(_) => self.copy_shared(value, self.types.array_header, "array"),
-            Type::Enum(_) => self.copy_shared(value, self.types.enum_box, "enum"),
+            Type::Array(_) => {
+                let handle = self.load_handle(at, "array");
+                self.copy_shared(handle, self.types.array_header, "array");
+                Ok(())
+            }
+            Type::Enum(_) => {
+                let handle = self.load_handle(at, "enum");
+                self.copy_shared(handle, self.types.enum_box, "enum");
+                Ok(())
+            }
             // An erased value copies exactly as an enum does, because its box
             // *is* an enum box: one more share of the same object. Nothing may
             // write through an `Any`, so two holders can observe nothing a deep
             // copy would have hidden — the same argument the enum arm rests on.
-            Type::Any => self.copy_shared(value, self.types.enum_box, "any"),
+            Type::Any => {
+                let handle = self.load_handle(at, "any");
+                self.copy_shared(handle, self.types.enum_box, "any");
+                Ok(())
+            }
             // A cell copies as an enum does, because its box *is* an enum box —
             // and here the sharing is the point rather than an optimization
             // nobody can observe. A closure and the frame that declared the
@@ -81,10 +115,35 @@ impl Codegen<'_> {
             // independent. This is the one arm of this function that does not
             // preserve value semantics, because the type it copies does not
             // have them.
-            Type::Cell(_) => self.copy_shared(value, self.types.enum_box, "cell"),
+            Type::Cell(_) => {
+                let handle = self.load_handle(at, "cell");
+                self.copy_shared(handle, self.types.enum_box, "cell");
+                Ok(())
+            }
             // `owns_heap` is only true for the cases above.
             _ => Err(crate::LlvmError::Unsupported("a copy of an unowned value")),
         }
+    }
+
+    /// Reads the handle a shared value is, out of the storage holding it.
+    fn load_handle(&self, at: LLVMValueRef, name: &str) -> LLVMValueRef {
+        let name = c_string(&format!("{name}.handle"));
+        // SAFETY: `at` addresses storage holding a handle, which is a `ptr`,
+        // and the builder is on a live block.
+        unsafe { LLVMBuildLoad2(self.builder, self.types.ptr, at, name.as_ptr()) }
+    }
+
+    /// The address of field `index` inside the struct at `at`.
+    pub(super) fn field_pointer(
+        &self,
+        struct_type: LLVMTypeRef,
+        at: LLVMValueRef,
+        index: u32,
+    ) -> LLVMValueRef {
+        let name = c_string(&format!("field.{index}.ptr"));
+        // SAFETY: `at` addresses a value of `struct_type`, which has more than
+        // `index` fields — the index came from that struct's own definition.
+        unsafe { LLVMBuildStructGEP2(self.builder, struct_type, at, index, name.as_ptr()) }
     }
 
     /// Whether two values of `ty` are structurally equal, as an `i1`.
@@ -97,7 +156,15 @@ impl Codegen<'_> {
     ///
     /// Neither operand is consumed. A comparison reads and takes nothing, so a
     /// caller still owns both afterwards.
-    pub(in crate::codegen) fn equal_values(
+    ///
+    /// By pointer for the same reason [`Codegen::retain_at_walk`] is: a struct's
+    /// field is compared where it lies rather than by loading the struct around
+    /// it twice.
+    ///
+    /// The walk, emitted into a type's equality leaf. A struct field goes back
+    /// through [`Codegen::equal_at`], which is where the recursion becomes a
+    /// call — see [`super::glue`].
+    pub(super) fn equal_at_walk(
         &mut self,
         left: LLVMValueRef,
         right: LLVMValueRef,
@@ -108,26 +175,28 @@ impl Codegen<'_> {
             // A float compares as IEEE says, so `NaN` equals nothing: the same
             // rule `EqFloat` follows, and the VM's arm alongside it.
             Type::Float(_) => {
+                let (a, b) = self.load_operands(left, right, ty)?;
                 // SAFETY: both operands are `double` and the builder is live.
                 Ok(unsafe {
                     LLVMBuildFCmp(
                         builder,
                         llvm_sys::LLVMRealPredicate::LLVMRealOEQ,
-                        left,
-                        right,
+                        a,
+                        b,
                         c"eq.float".as_ptr(),
                     )
                 })
             }
             Type::Int(_) | Type::Bool | Type::RawPtr => {
+                let (a, b) = self.load_operands(left, right, ty)?;
                 // SAFETY: both operands share one integer type and the builder
                 // is live.
                 Ok(unsafe {
                     LLVMBuildICmp(
                         builder,
                         llvm_sys::LLVMIntPredicate::LLVMIntEQ,
-                        left,
-                        right,
+                        a,
+                        b,
                         c"eq.scalar".as_ptr(),
                     )
                 })
@@ -135,21 +204,24 @@ impl Codegen<'_> {
             // The helper consumes what it compares, so each side is cloned for
             // it: the values themselves belong to whoever called this.
             Type::String => {
-                let (a, b) = (self.copy_value(left, ty)?, self.copy_value(right, ty)?);
+                self.retain_at_walk(left, ty)?;
+                self.retain_at_walk(right, ty)?;
+                let (a, b) = self.load_operands(left, right, ty)?;
                 let equal = self.call(self.runtime.str_eq, &mut [a, b], c"eq.str");
                 Ok(self.truthy(equal))
             }
             Type::Struct(id) => {
+                let struct_type = self.llvm_type(ty)?;
                 let field_types = self.field_types(id)?;
                 // An empty struct is a value with nothing to disagree about.
                 let mut all = self.const_bool(true);
                 for (index, field_ty) in field_types.into_iter().enumerate() {
                     let index = index as u32;
                     let (a, b) = (
-                        self.extract_field(left, index),
-                        self.extract_field(right, index),
+                        self.field_pointer(struct_type, left, index),
+                        self.field_pointer(struct_type, right, index),
                     );
-                    let equal = self.equal_values(a, b, field_ty)?;
+                    let equal = self.equal_at(a, b, field_ty)?;
                     // SAFETY: both are `i1` and the builder is live. `and`
                     // rather than a branch chain: a field comparison has no
                     // side effect to skip, so there is nothing to short-circuit
@@ -165,15 +237,13 @@ impl Codegen<'_> {
                 let element = self.element_of(ty)?;
                 let esize = self.abi_size(element)?;
                 let eq = self.element_eq(element)?;
-                let equal = self.call(
-                    self.runtime.array_eq,
-                    &mut [left, right, esize, eq],
-                    c"eq.array",
-                );
+                let (a, b) = self.load_operands(left, right, ty)?;
+                let equal = self.call(self.runtime.array_eq, &mut [a, b, esize, eq], c"eq.array");
                 Ok(self.truthy(equal))
             }
             Type::Enum(_) | Type::Any => {
-                let equal = self.call(self.runtime.any_eq, &mut [left, right], c"eq.enum");
+                let (a, b) = self.load_operands(left, right, ty)?;
+                let equal = self.call(self.runtime.any_eq, &mut [a, b], c"eq.enum");
                 Ok(self.truthy(equal))
             }
             // Nothing else can be inside an erased value: `Void`, `Error`,
@@ -186,11 +256,32 @@ impl Codegen<'_> {
         }
     }
 
-    /// Releases whatever heap storage `value` owns, mirroring the VM's
-    /// `Heap::drop_value`.
-    pub(super) fn drop_value(
+    /// Reads both sides of a comparison out of the storage holding them.
+    fn load_operands(
+        &self,
+        left: LLVMValueRef,
+        right: LLVMValueRef,
+        ty: Type,
+    ) -> Result<(LLVMValueRef, LLVMValueRef), crate::LlvmError> {
+        let llvm_type = self.llvm_type(ty)?;
+        // SAFETY: both address a live value of `llvm_type` and the builder is
+        // on a live block.
+        Ok(unsafe {
+            (
+                LLVMBuildLoad2(self.builder, llvm_type, left, c"eq.a".as_ptr()),
+                LLVMBuildLoad2(self.builder, llvm_type, right, c"eq.b".as_ptr()),
+            )
+        })
+    }
+
+    /// Releases whatever heap storage the value at `at` owns, mirroring the
+    /// VM's `Heap::drop_value`.
+    ///
+    /// Emitted once per type into that type's free leaf, and by pointer,
+    /// exactly as [`Codegen::retain_at_walk`] is.
+    pub(super) fn release_at_walk(
         &mut self,
-        value: LLVMValueRef,
+        at: LLVMValueRef,
         ty: Type,
     ) -> Result<(), crate::LlvmError> {
         if !self.owns_heap(ty) {
@@ -199,16 +290,18 @@ impl Codegen<'_> {
         match ty {
             Type::String => {
                 let last = self.runtime.str_free;
-                self.drop_shared(value, self.types.string_box, &mut [], last, "str")
+                let handle = self.load_handle(at, "str");
+                self.drop_shared(handle, self.types.string_box, &mut [], last, "str");
+                Ok(())
             }
             Type::Struct(id) => {
-                let field_types = self.field_types(id)?;
-                for (index, field_ty) in field_types.into_iter().enumerate() {
+                let struct_type = self.llvm_type(ty)?;
+                for (index, field_ty) in self.field_types(id)?.into_iter().enumerate() {
                     if !self.owns_heap(field_ty) {
                         continue;
                     }
-                    let field = self.extract_field(value, index as u32);
-                    self.drop_value(field, field_ty)?;
+                    let field = self.field_pointer(struct_type, at, index as u32);
+                    self.release_at(field, field_ty)?;
                 }
                 Ok(())
             }
@@ -217,17 +310,21 @@ impl Codegen<'_> {
                 let esize = self.abi_size(element)?;
                 let free = self.element_free(element)?;
                 let last = self.runtime.array_free;
+                let handle = self.load_handle(at, "array");
                 self.drop_shared(
-                    value,
+                    handle,
                     self.types.array_header,
                     &mut [esize, free],
                     last,
                     "array",
-                )
+                );
+                Ok(())
             }
             Type::Enum(_) => {
                 let last = self.runtime.enum_free;
-                self.drop_shared(value, self.types.enum_box, &mut [], last, "enum")
+                let handle = self.load_handle(at, "enum");
+                self.drop_shared(handle, self.types.enum_box, &mut [], last, "enum");
+                Ok(())
             }
             // The box carries the payload kind that says what it owns, so
             // `kira_rt_enum_free` reclaims an erased `String` or struct without
@@ -236,7 +333,9 @@ impl Codegen<'_> {
             // the type: the free is driven by the value, as it is on the VM.
             Type::Any => {
                 let last = self.runtime.enum_free;
-                self.drop_shared(value, self.types.enum_box, &mut [], last, "any")
+                let handle = self.load_handle(at, "any");
+                self.drop_shared(handle, self.types.enum_box, &mut [], last, "any");
+                Ok(())
             }
             // The last release reclaims whatever the payload kind says the box
             // owns, exactly as an enum's does. A cell holding a closure that
@@ -245,7 +344,9 @@ impl Codegen<'_> {
             // module rather than defended against here.
             Type::Cell(_) => {
                 let last = self.runtime.cell_free;
-                self.drop_shared(value, self.types.enum_box, &mut [], last, "cell")
+                let handle = self.load_handle(at, "cell");
+                self.drop_shared(handle, self.types.enum_box, &mut [], last, "cell");
+                Ok(())
             }
             _ => Err(crate::LlvmError::Unsupported("a drop of an unowned value")),
         }
@@ -258,12 +359,7 @@ impl Codegen<'_> {
     /// There is no slow path to fall back to — a copy is a count away from
     /// free — which is why this is emitted whole rather than as a fast path in
     /// front of a call, and why the object's layout is a type this module knows.
-    fn copy_shared(
-        &mut self,
-        value: LLVMValueRef,
-        object: LLVMTypeRef,
-        name: &str,
-    ) -> Result<LLVMValueRef, crate::LlvmError> {
+    fn copy_shared(&mut self, value: LLVMValueRef, object: LLVMTypeRef, name: &str) {
         let function = self.current_function();
         let (bump, done) = (
             self.append_block(function, &c_string(&format!("{name}.copy.bump"))),
@@ -296,7 +392,6 @@ impl Codegen<'_> {
             LLVMBuildBr(self.builder, done);
             LLVMPositionBuilderAtEnd(self.builder, done);
         }
-        Ok(value)
     }
 
     /// Releases one hold on a shared object, emitted inline, with the last
@@ -312,7 +407,7 @@ impl Codegen<'_> {
         rest: &mut [LLVMValueRef],
         release: Callable,
         name: &str,
-    ) -> Result<(), crate::LlvmError> {
+    ) {
         let function = self.current_function();
         let (held, last, lower, done) = (
             self.append_block(function, &c_string(&format!("{name}.drop.held"))),
@@ -369,7 +464,6 @@ impl Codegen<'_> {
             LLVMBuildBr(self.builder, done);
             LLVMPositionBuilderAtEnd(self.builder, done);
         }
-        Ok(())
     }
 
     /// Whether a handle names an object with a share count in it.
@@ -579,6 +673,48 @@ impl Codegen<'_> {
                 c"temporary.count".as_ptr(),
             );
             LLVMBuildArrayAlloca(self.builder, llvm_type, count, name.as_ptr())
+        }
+    }
+
+    /// The largest zero a first-class store is still the cheaper way to write.
+    ///
+    /// Two machine words: a `String` handle, a `(ptr, len)` pair, a small
+    /// struct of scalars. Past that, an aggregate store is lowered field by
+    /// field and a `memset` is one instruction whatever the size.
+    const INLINE_ZERO_BYTES: u64 = 16;
+
+    /// Writes `ty`'s zero over the storage at `pointer`.
+    ///
+    /// A struct's zero is all-zero bytes — that is what `LLVMConstNull` means
+    /// for every field type Kira puts in one — so a large struct is zeroed with
+    /// a `memset` rather than with a store of the constant. LLVM lowers an
+    /// aggregate store field by field, and a generated UI body declares
+    /// hundreds of style structs: the prologue alone reached a quarter of a
+    /// megabyte of `movq $0`, which is code LLVM has to select, allocate, and
+    /// emit before the function does anything at all.
+    pub(super) fn store_zero(
+        &self,
+        pointer: LLVMValueRef,
+        zero: LLVMValueRef,
+        llvm_type: LLVMTypeRef,
+    ) {
+        // SAFETY: `llvm_type` belongs to this module's context, whose data
+        // layout was set when the module was created.
+        let size = unsafe { llvm_sys::target::LLVMABISizeOfType(self.target_data, llvm_type) };
+        if size <= Self::INLINE_ZERO_BYTES {
+            // SAFETY: `zero` has `llvm_type` and `pointer` addresses storage
+            // for it; the builder is on a live block.
+            unsafe { LLVMBuildStore(self.builder, zero, pointer) };
+            return;
+        }
+        // SAFETY: as above, plus `pointer` addresses `size` bytes — it is an
+        // allocation of exactly `llvm_type` — and the alignment is the one LLVM
+        // gives that type on this target.
+        unsafe {
+            let align = llvm_sys::target::LLVMABIAlignmentOfType(self.target_data, llvm_type);
+            let byte = LLVMConstInt(self.types.i8, 0, 0);
+            let length = LLVMConstInt(self.types.i64, size, 0);
+            LLVMBuildMemSet(self.builder, pointer, byte, length, align);
         }
     }
 

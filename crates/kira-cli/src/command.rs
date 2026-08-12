@@ -114,7 +114,7 @@ impl Command {
     pub fn arguments(self) -> &'static str {
         match self {
             Self::Run | Self::Build => {
-                " [file|dir] [--backend vm|llvm|hybrid] [--device] [--timings] [--show-notes] [-- <args...>]"
+                " [file|dir] [--backend vm|llvm|hybrid] [--device] [--release] [--emit-llvm-ir] [--timings] [--show-notes] [-- <args...>]"
             }
             Self::Debug => {
                 " [file|dir] [--backend vm|llvm|hybrid] [--break name[:pc]] [--batch] [--lldb|--lldb-dap] [--dap-continues n] [-- <args...>]"
