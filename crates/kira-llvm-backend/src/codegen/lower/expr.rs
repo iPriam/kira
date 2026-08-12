@@ -194,24 +194,28 @@ impl FunctionLowering<'_, '_> {
     ) -> Result<LLVMValueRef, LlvmError> {
         if let Some(handle) = self.borrowed_local_handle(base)? {
             let slot = self.element_slot(handle, index, ty)?;
-            let llvm_type = self.codegen.llvm_type(ty)?;
-            // SAFETY: `slot` points at a live element of `llvm_type`, bounds
-            // checked by the runtime, and the builder is on a live block.
-            let element =
-                unsafe { LLVMBuildLoad2(self.codegen.builder, llvm_type, slot, c"elem".as_ptr()) };
-            return self.copy_value(element, ty);
+            return self.read_owned(slot, ty);
         }
         let base_ty = self.type_of(base);
         let base_value = self.lower_expr(base)?;
         let slot = self.element_slot(base_value, index, ty)?;
-        let llvm_type = self.codegen.llvm_type(ty)?;
-        // SAFETY: `slot` points at a live element of `llvm_type`, bounds-checked
-        // by the runtime, and the builder is on a live block.
-        let element =
-            unsafe { LLVMBuildLoad2(self.codegen.builder, llvm_type, slot, c"elem".as_ptr()) };
-        let copy = self.copy_value(element, ty)?;
+        let copy = self.read_owned(slot, ty)?;
         self.drop_value(base_value, base_ty)?;
         Ok(copy)
+    }
+
+    /// Reads a value of `ty` out of `slot`, taking a share of what it owns.
+    ///
+    /// The share is taken **through the slot**, before the read: a copy raises
+    /// counts and changes no bits, so the value loaded afterwards is the copy.
+    /// Retaining first is what keeps a large struct to a single load — spilling
+    /// the loaded value back into a scratch slot for the walk would double it.
+    fn read_owned(&mut self, slot: LLVMValueRef, ty: Type) -> Result<LLVMValueRef, LlvmError> {
+        self.codegen.retain_at(slot, ty)?;
+        let llvm_type = self.codegen.llvm_type(ty)?;
+        // SAFETY: `slot` addresses a live value of `llvm_type` and the builder
+        // is on a live block.
+        Ok(unsafe { LLVMBuildLoad2(self.codegen.builder, llvm_type, slot, c"owned".as_ptr()) })
     }
 
     /// The handle a place holds, read without copying what holds it.
@@ -574,13 +578,8 @@ impl FunctionLowering<'_, '_> {
         {
             return self.load_native_state_local(slot, type_id, ty);
         }
-        let llvm_type = self.codegen.llvm_type(ty)?;
         let pointer = self.local_pointer(slot)?;
-        let name = c_string(&format!("local.{slot}.read"));
-        // SAFETY: `pointer` is this slot's alloca of `llvm_type`.
-        let value =
-            unsafe { LLVMBuildLoad2(self.codegen.builder, llvm_type, pointer, name.as_ptr()) };
-        self.copy_value(value, ty)
+        self.read_owned(pointer, ty)
     }
 
     /// Builds a struct value from its fields.
@@ -619,12 +618,71 @@ impl FunctionLowering<'_, '_> {
         if let Some(value) = self.field_of_borrowed_element(base, index, ty)? {
             return Ok(value);
         }
+        // A base that names storage is read through it. Lowering it as a value
+        // first would load the whole struct to reach one field of it, then copy
+        // and drop everything else in it — and a generated style struct is
+        // thousands of bytes, which at a development build's code-generation
+        // level is a move per field, three times over, for one read.
         let base_ty = self.type_of(base);
+        if matches!(base_ty, Type::Struct(_))
+            && let Some(pointer) = self.addressable(base)?
+        {
+            let struct_type = self.codegen.llvm_type(base_ty)?;
+            let field = self.codegen.field_pointer(struct_type, pointer, index);
+            return self.read_owned(field, ty);
+        }
         let base_value = self.lower_expr(base)?;
         let field = self.extract_field(base_value, index)?;
         let copy = self.copy_value(field, ty)?;
         self.drop_value(base_value, base_ty)?;
         Ok(copy)
+    }
+
+    /// The storage `expr` names, when it names storage this frame can address.
+    ///
+    /// A local slot, or a struct field of one, however deeply nested. Nothing
+    /// else: an expression that computes a value has no address, and a place
+    /// behind an array or an enum is reached through the runtime rather than
+    /// through a `getelementptr` on this frame.
+    ///
+    /// Reading through the address is only sound because nothing between the
+    /// walk and the read can write the slot — the walk is a chain of
+    /// `getelementptr`, which evaluates nothing.
+    fn addressable(&mut self, expr: IrExprId) -> Result<Option<LLVMValueRef>, LlvmError> {
+        match *self.codegen.program.expr(expr) {
+            IrExpr::Local(slot) => {
+                // A callback-state local holds a token rather than the value,
+                // and a written-through parameter is already a pointer the
+                // caller owns; both are read through their own paths.
+                if self
+                    .function
+                    .native_state_locals
+                    .get(slot as usize)
+                    .copied()
+                    .flatten()
+                    .is_some()
+                {
+                    return Ok(None);
+                }
+                Ok(Some(self.local_pointer(slot)?))
+            }
+            IrExpr::Field { base, index, .. } => {
+                let base_ty = self.type_of(base);
+                if !matches!(base_ty, Type::Struct(_)) {
+                    return Ok(None);
+                }
+                let Some(pointer) = self.addressable(base)? else {
+                    return Ok(None);
+                };
+                let struct_type = self.codegen.llvm_type(base_ty)?;
+                Ok(Some(self.codegen.field_pointer(
+                    struct_type,
+                    pointer,
+                    index,
+                )))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Reads one field of an array element without copying the element.
@@ -678,18 +736,8 @@ impl FunctionLowering<'_, '_> {
                 name.as_ptr(),
             )
         };
-        let llvm_type = self.codegen.llvm_type(ty)?;
-        // SAFETY: the field pointer addresses a live value of `llvm_type`.
-        let field = unsafe {
-            LLVMBuildLoad2(
-                self.codegen.builder,
-                llvm_type,
-                field_ptr,
-                c"elem.field".as_ptr(),
-            )
-        };
         // The element still owns its field, so the reader gets a copy of that
         // one field — never of the element around it.
-        Ok(Some(self.copy_value(field, ty)?))
+        Ok(Some(self.read_owned(field_ptr, ty)?))
     }
 }

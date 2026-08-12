@@ -34,6 +34,7 @@ use crate::LlvmError;
 
 use super::Codegen;
 use super::c_string;
+use super::types::Callable;
 
 /// Which leaf is being emitted, for the two that share a shape.
 ///
@@ -41,8 +42,21 @@ use super::c_string;
 /// keyed by it — one entry per `(element type, leaf)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum Leaf {
-    /// `(src, dst)`: write an independent copy of `*src` to `*dst`.
+    /// `(src, dst)`: make `*dst`, which already holds a bitwise copy of `*src`,
+    /// independently owned.
+    ///
+    /// Every caller in `kira-native-bridge` copies the bytes across first — see
+    /// `array::make_unique` and `enums::clone_aggregate` — and a Kira copy
+    /// raises share counts without changing bits, so what remains for this leaf
+    /// is to take a share of everything the destination now names. `src` is
+    /// therefore read by nobody, and stays in the signature because it is the
+    /// runtime's `ElemClone`.
     Clone,
+    /// `(at)`: take a share of everything `*at` owns.
+    ///
+    /// The compiler's own half of [`Leaf::Clone`]: generated code has an
+    /// address for the value it is copying and no use for the second parameter.
+    Retain,
     /// `(at)`: release whatever `*at` owns.
     Free,
     /// `(a, b) -> i8`: whether `*a` and `*b` are structurally equal.
@@ -103,6 +117,44 @@ impl Codegen<'_> {
         self.element_leaf(ty, Leaf::Eq)
     }
 
+    /// The leaf for `ty`, paired with its signature so it can be *called*.
+    ///
+    /// [`Codegen::element_clone`] and [`Codegen::element_free`] hand a leaf to
+    /// the runtime as a function pointer, where a null one means "nothing to
+    /// do". A caller that means to call the leaf itself needs a real function,
+    /// so this is only for a type that owns heap storage — the one case where
+    /// the two clone and free leaves are never null.
+    pub(super) fn leaf_callable(&mut self, ty: Type, leaf: Leaf) -> Result<Callable, LlvmError> {
+        debug_assert!(
+            leaf == Leaf::Eq || self.program.types.owns_heap(ty),
+            "a callable clone or free leaf for a type that owns nothing"
+        );
+        let value = self.element_leaf(ty, leaf)?;
+        Ok(Callable {
+            ty: self.leaf_signature(leaf),
+            value,
+        })
+    }
+
+    /// The LLVM signature every leaf of one kind shares.
+    ///
+    /// Through memory, because that is what the runtime's array helpers can
+    /// call: they hold element slots, not values. It is also what keeps a
+    /// struct's walk off a load of the whole struct — see [`super::glue`].
+    fn leaf_signature(&self, leaf: Leaf) -> LLVMTypeRef {
+        let mut params = match leaf {
+            Leaf::Clone | Leaf::Eq => vec![self.types.ptr, self.types.ptr],
+            Leaf::Retain | Leaf::Free => vec![self.types.ptr],
+        };
+        let returns = match leaf {
+            Leaf::Eq => self.types.i8,
+            Leaf::Clone | Leaf::Retain | Leaf::Free => self.types.void,
+        };
+        // SAFETY: every type belongs to this module's context and `params`
+        // outlives the call, which copies it.
+        unsafe { LLVMFunctionType(returns, params.as_mut_ptr(), params.len() as u32, 0) }
+    }
+
     fn element_leaf(&mut self, ty: Type, leaf: Leaf) -> Result<LLVMValueRef, LlvmError> {
         // An element that owns nothing needs no clone or free leaf, and saying
         // so with a null pointer is what lets the runtime skip its loop for
@@ -148,76 +200,53 @@ impl Codegen<'_> {
         let ordinal = self.element_leaves.len() as u32;
         let name = c_string(&match leaf {
             Leaf::Clone => format!("kira.elem.clone.{ordinal}"),
+            Leaf::Retain => format!("kira.elem.retain.{ordinal}"),
             Leaf::Free => format!("kira.elem.free.{ordinal}"),
             Leaf::Eq => format!("kira.elem.eq.{ordinal}"),
         });
-        let mut params = match leaf {
-            Leaf::Clone | Leaf::Eq => vec![self.types.ptr, self.types.ptr],
-            Leaf::Free => vec![self.types.ptr],
-        };
-        let returns = match leaf {
-            Leaf::Eq => self.types.i8,
-            Leaf::Clone | Leaf::Free => self.types.void,
-        };
+        let signature = self.leaf_signature(leaf);
 
-        // SAFETY: every type belongs to this module's context; `params`
-        // outlives the `LLVMFunctionType` call; and the block is appended to
-        // the function just created.
+        // SAFETY: the signature belongs to this module's context, and the block
+        // is appended to the function just created.
         let (function, entry) = unsafe {
-            let signature = LLVMFunctionType(returns, params.as_mut_ptr(), params.len() as u32, 0);
             let function = LLVMAddFunction(self.module, name.as_ptr(), signature);
             // Internal: a leaf is this module's own, never part of its ABI.
             LLVMSetLinkage(function, llvm_sys::LLVMLinkage::LLVMInternalLinkage);
             let entry = LLVMAppendBasicBlockInContext(self.context, function, c"entry".as_ptr());
             (function, entry)
         };
+        self.mark_always_inline(function);
 
         (function, entry)
     }
 
-    /// The body of one leaf: load, act, and (for a clone) store back.
+    /// The body of one leaf: the walk for `ty`, entered through the parameters.
     fn emit_leaf_body(
         &mut self,
         ty: Type,
         leaf: Leaf,
         function: LLVMValueRef,
     ) -> Result<(), LlvmError> {
-        let llvm_type = self.llvm_type(ty)?;
         // SAFETY: the parameters exist — the signature was just built with
         // them — and the builder is positioned on the entry block.
         let src = unsafe { LLVMGetParam(function, 0) };
 
         match leaf {
+            // The destination already holds the bytes (see [`Leaf::Clone`]), so
+            // the copy is finished by taking a share of what they name.
             Leaf::Clone => {
                 // SAFETY: `dst` is the second parameter of a two-parameter
-                // signature; both point at element slots of `llvm_type`.
+                // signature, addressing an element slot of this type.
                 let dst = unsafe { LLVMGetParam(function, 1) };
-                // SAFETY: `src` points at a live element of `llvm_type`.
-                let value =
-                    unsafe { LLVMBuildLoad2(self.builder, llvm_type, src, c"elem".as_ptr()) };
-                let copied = self.copy_value(value, ty)?;
-                // SAFETY: `dst` points at a slot of `llvm_type` and `copied`
-                // has that type.
-                unsafe { LLVMBuildStore(self.builder, copied, dst) };
+                self.retain_at_walk(dst, ty)?;
             }
-            Leaf::Free => {
-                // SAFETY: `src` points at a live element of `llvm_type`.
-                let value =
-                    unsafe { LLVMBuildLoad2(self.builder, llvm_type, src, c"elem".as_ptr()) };
-                self.drop_value(value, ty)?;
-            }
+            Leaf::Retain => self.retain_at_walk(src, ty)?,
+            Leaf::Free => self.release_at_walk(src, ty)?,
             Leaf::Eq => {
-                // SAFETY: `b` is the second parameter of a two-parameter
-                // signature; both point at live values of `llvm_type`.
+                // SAFETY: `other` is the second parameter of a two-parameter
+                // signature, addressing a live value of this type.
                 let other = unsafe { LLVMGetParam(function, 1) };
-                // SAFETY: both point at live values of `llvm_type`.
-                let (left, right) = unsafe {
-                    (
-                        LLVMBuildLoad2(self.builder, llvm_type, src, c"elem.a".as_ptr()),
-                        LLVMBuildLoad2(self.builder, llvm_type, other, c"elem.b".as_ptr()),
-                    )
-                };
-                let equal = self.equal_values(left, right, ty)?;
+                let equal = self.equal_at_walk(src, other, ty)?;
                 // SAFETY: `equal` is an `i1`; the seam speaks `i8`, and the
                 // builder is on an unterminated block of this function.
                 unsafe {
