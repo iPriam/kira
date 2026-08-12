@@ -1,11 +1,14 @@
 //! Building a native library's declared C sources into the archive it links.
 //!
-//! A `NativeLibrary` declaration says two things about the same library: how to
-//! build it (`sources`, `Headers { includeDirs, defines }`) and where the built
-//! archive lives per target (`NativeTarget { staticLib }`). Until this module
-//! existed only the second half was ever read — [`super::native_libraries`]
-//! located the archive on disk and linked whatever it found, with no relationship
-//! to the C it was supposedly built from.
+//! A `NativeLibrary` declaration says how to build the library (`sources`,
+//! `Headers { includeDirs, defines }`), and may also say where the built archive
+//! lives per target (`NativeTarget { staticLib }`). Until this module existed
+//! only the second half was ever read — [`super::native_libraries`] located the
+//! archive on disk and linked whatever it found, with no relationship to the C it
+//! was supposedly built from.
+//!
+//! A declaration that names no archive is complete: `built_archive_path` says
+//! where Kira puts one it builds itself.
 //!
 //! That gap is quiet and it bites hard. Editing a `.c` file changes nothing: the
 //! stale archive still links, so either a symbol you just wrote comes back
@@ -98,7 +101,7 @@ pub fn ensure_archive_current(
     let Some(row) = spec.targets().iter().find(|row| row.triple() == target) else {
         return Ok(());
     };
-    let Some(relative) = row.artifact().path() else {
+    let Some(relative) = spec.archive_path(row) else {
         return Ok(());
     };
     let archive = base_dir.join(relative);
