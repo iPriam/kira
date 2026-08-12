@@ -195,3 +195,46 @@ function main() {
     );
     assert_eq!(output, "3\n");
 }
+
+/// A function-typed construct parameter mints its function-type struct while
+/// the construct's fields resolve — between the pass that mints construct ids
+/// and the pass that records their defaults. Every construct declared after it
+/// must keep its own defaults rather than inheriting a neighbor's.
+#[test]
+fn a_function_typed_construct_parameter_leaves_later_defaults_aligned() {
+    let output = assert_parity(
+        r#"
+construct Widget {
+    @Required let body: Int
+}
+
+Widget Sliding(value: Float, onChange: (Float) -> Void) {
+    let body: Int = 1
+}
+
+construct Style {
+    @Required let colors: Int
+    let appearance: Int = 2
+}
+
+Style Base {
+    let colors = 7
+}
+
+function ignoreFloat(value: Float) {
+    let ignored = value + 0.0
+    return
+}
+
+@Main
+function main() {
+    let style = Base {}
+    print(style.colors + style.appearance)
+    let s = Sliding(value: 0.5, onChange: ignoreFloat)
+    print(s.body)
+    return
+}
+"#,
+    );
+    assert_eq!(output, "9\n1\n");
+}
