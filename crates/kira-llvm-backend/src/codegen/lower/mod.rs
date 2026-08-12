@@ -120,26 +120,27 @@ impl<'a> Codegen<'a> {
             let name = c_string(&format!("local.{slot}"));
             // SAFETY: the builder sits on the function's entry block, and every
             // type and value below comes from this module's context.
-            unsafe {
-                let alloca = LLVMBuildAlloca(self.builder, llvm_type, name.as_ptr());
-                let initial = if (slot as u32) < function.param_count {
-                    // Parameters take ownership of the caller's argument, just
-                    // as the VM moves arguments into the callee's slots.
-                    LLVMGetParam(value, slot as u32)
-                } else if function
-                    .native_state_locals
-                    .get(slot)
-                    .copied()
-                    .flatten()
-                    .is_some()
-                {
-                    LLVMConstInt(self.types.i64, 0, 0)
-                } else {
-                    self.zero_value(ty)?
-                };
-                LLVMBuildStore(self.builder, initial, alloca);
-                locals.push(alloca);
+            let alloca = unsafe { LLVMBuildAlloca(self.builder, llvm_type, name.as_ptr()) };
+            let native_state = function
+                .native_state_locals
+                .get(slot)
+                .copied()
+                .flatten()
+                .is_some();
+            if (slot as u32) < function.param_count {
+                // Parameters take ownership of the caller's argument, just as
+                // the VM moves arguments into the callee's slots.
+                // SAFETY: `value` is this function and the parameter has the
+                // slot's type.
+                unsafe { LLVMBuildStore(self.builder, LLVMGetParam(value, slot as u32), alloca) };
+            } else if native_state {
+                // SAFETY: `i64` belongs to this module's context.
+                unsafe { LLVMBuildStore(self.builder, LLVMConstInt(self.types.i64, 0, 0), alloca) };
+            } else {
+                let zero = self.zero_value(ty)?;
+                self.store_zero(alloca, zero, llvm_type);
             }
+            locals.push(alloca);
         }
         Ok(locals)
     }

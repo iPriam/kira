@@ -229,6 +229,32 @@ impl TargetMachine {
         }
     }
 
+    /// Folds every `alwaysinline` function back into its callers.
+    ///
+    /// Copy and drop are emitted once per type and called (see
+    /// [`super::glue`]), which is what keeps a development build's module small
+    /// enough for LLVM to get through quickly. A release build wants the walk
+    /// where it is used instead — a share count is a handful of instructions,
+    /// and a call around it is most of its cost — so this puts it back. It is
+    /// the only IR pass this backend runs, and it is run for exactly this.
+    pub(super) fn always_inline(&self, module: LLVMModuleRef) -> Result<(), LlvmError> {
+        use llvm_sys::transforms::pass_builder::*;
+
+        let passes = c_string("always-inline");
+        // SAFETY: `module` and `self.machine` are live; the options are created
+        // and disposed here, and LLVM allocates an error only on failure.
+        unsafe {
+            let options = LLVMCreatePassBuilderOptions();
+            let error = LLVMRunPasses(module, passes.as_ptr(), self.machine, options);
+            LLVMDisposePassBuilderOptions(options);
+            if !error.is_null() {
+                let detail = take_message(llvm_sys::error::LLVMGetErrorMessage(error));
+                return Err(LlvmError::Emit(detail));
+            }
+        }
+        Ok(())
+    }
+
     /// Emits `module` as an object file at `path`.
     pub(super) fn emit_object(&self, module: LLVMModuleRef, path: &Path) -> Result<(), LlvmError> {
         let file = c_string(&path.to_string_lossy());

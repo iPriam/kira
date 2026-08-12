@@ -329,12 +329,10 @@ impl FunctionLowering<'_, '_> {
         for &slot in plan.slots() {
             let ty = self.local_type(slot)?;
             let pointer = self.local_pointer(slot)?;
-            let llvm_type = self.codegen.llvm_type(ty)?;
-            // SAFETY: `pointer` is a live alloca holding a value of `llvm_type`.
-            let held = unsafe {
-                LLVMBuildLoad2(self.codegen.builder, llvm_type, pointer, c"drop".as_ptr())
-            };
-            self.drop_value(held, ty)?;
+            // The slot itself, not a load of it: a drop reads its value through
+            // a pointer anyway, and the frame is about to end, so nothing reads
+            // the slot again.
+            self.codegen.release_at(pointer, ty)?;
         }
         // SAFETY: the builder is positioned on an unterminated block, and
         // `value` matches the function's return type when present.
