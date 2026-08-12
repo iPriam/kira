@@ -100,8 +100,8 @@ one. It passes with `current.toml` deleted.
 
 ## binstall: the developer loop is closed
 
-`knvm binstall` builds the enclosing checkout (`cargo build -p kira-cli`, dev
-profile), stages the compiler and the checkout's `foundation/` into the
+`knvm binstall` builds the enclosing checkout optimized (`--debug` for the
+unoptimized build), stages the compiler and the checkout's `foundation/` into the
 release-install pipeline, and lands it on `dev` as the selected toolchain. A
 second run replaces the tree — never "already installed", which for a dev
 build would mean silently stale. This is what makes knvm usable day to day

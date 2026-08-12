@@ -62,11 +62,13 @@ knvm binstall
 kira --help
 ```
 
-`knvm binstall` installs the built compiler under
-`~/.kira/toolchains/dev/<version>/` and points the `kira` launcher at it. The
+`knvm binstall` builds the compiler optimized, installs it under
+`~/.kira/toolchains/dev/<version>/`, and points the `kira` launcher at it. The
 launcher dispatches to the *installed* toolchain, so a `cargo build` alone does
 not change what `kira` runs — rerun `knvm binstall` after compiler changes, or
-invoke `./target/debug/kira` directly.
+invoke `./target/release/kira` directly. `knvm binstall --debug` stages the
+unoptimized build, for debugging the compiler itself: it compiles faster and
+then compiles every project it builds several times slower.
 
 Run the checked-in examples:
 
