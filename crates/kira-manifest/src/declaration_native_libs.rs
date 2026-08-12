@@ -103,6 +103,9 @@ fn library_value(value: &str) -> Result<NativeLibrarySpec, DeclarationError> {
     if let Some(autobind) = autobind {
         spec = spec.with_autobind(autobind);
     }
+    // Once the sources are on it: a row needs no archive path when Kira builds
+    // the archive itself.
+    spec.validate()?;
     Ok(spec)
 }
 
